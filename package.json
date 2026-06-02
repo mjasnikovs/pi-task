@@ -1,11 +1,15 @@
 {
     "name": "@mjasnikovs/pi-task",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Deterministic spec-orchestration for local models, with bundled web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
-    "files": ["dist", "README.md", "LICENSE"],
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE"
+    ],
     "scripts": {
         "build": "tsc -p tsconfig.build.json",
         "lint": "prettier --log-level warn --write 'src/**/*.ts' && eslint --fix . && tsc --noEmit",
@@ -38,13 +42,22 @@
         "typescript": "6.0.3",
         "typescript-eslint": "8.58.2"
     },
-    "keywords": ["pi", "pi-extension", "coding-agent", "task-orchestration", "local-llm"],
+    "keywords": [
+        "pi-package",
+        "pi",
+        "pi-extension",
+        "coding-agent",
+        "task-orchestration",
+        "local-llm"
+    ],
     "repository": {
         "type": "git",
-        "url": "github:mjasnikovs/pi-task"
+        "url": "git+https://github.com/mjasnikovs/pi-task.git"
     },
     "license": "MIT",
     "pi": {
-        "extensions": ["src/index.ts"]
+        "extensions": [
+            "dist/index.js"
+        ]
     }
 }
