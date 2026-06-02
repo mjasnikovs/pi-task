@@ -1,0 +1,80 @@
+/**
+ * Task file parsing and formatting.
+ *
+ * Pure functions for parsing YAML front matter, extracting sections, and
+ * normalising task IDs. No I/O.
+ */
+
+import {PHASE_INDEX, type TaskFrontMatter} from './task-types.js'
+
+const FRONT_MATTER_KEYS: (keyof TaskFrontMatter)[] = [
+    'id',
+    'state',
+    'phase',
+    'created_at',
+    'updated_at',
+    'title',
+    'reason'
+]
+
+// ─── Front matter ────────────────────────────────────────────────────────────
+
+export function emitFrontMatter(fm: TaskFrontMatter): string {
+    const lines = ['---']
+    for (const k of FRONT_MATTER_KEYS) {
+        const v = fm[k]
+        if (v === undefined || v === '') {
+            if (k === 'reason') continue
+        }
+        lines.push(`${k}: ${typeof v === 'string' ? v : String(v)}`)
+    }
+    lines.push('---')
+    return lines.join('\n')
+}
+
+export function parseFrontMatter(content: string): TaskFrontMatter | null {
+    const m = /^---\n([\s\S]*?)\n---\n?/.exec(content)
+    if (!m) return null
+    const obj: Record<string, string> = {}
+    for (const line of m[1].split('\n')) {
+        const kv = /^([a-z_]+):\s*(.*)$/.exec(line)
+        if (kv) obj[kv[1]] = kv[2]
+    }
+    if (!obj.id || !obj.state || !obj.phase || !obj.created_at) return null
+    if ((PHASE_INDEX as Record<string, number>)[obj.phase] === undefined) {
+        return null
+    }
+    return {
+        id: obj.id,
+        state: obj.state as TaskFrontMatter['state'],
+        phase: obj.phase as TaskFrontMatter['phase'],
+        created_at: obj.created_at,
+        updated_at: obj.updated_at ?? obj.created_at,
+        title: obj.title ?? '',
+        reason: obj.reason || undefined
+    }
+}
+
+// ─── Section helpers ─────────────────────────────────────────────────────────
+
+function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function sectionRegex(heading: string): RegExp {
+    return new RegExp(`(^## ${escapeRegex(heading)}\\s*\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm')
+}
+
+export function extractSection(body: string, heading: string): string | null {
+    const m = sectionRegex(heading).exec(body)
+    return m ? m[2].trim() : null
+}
+
+// ─── Task ID helpers ─────────────────────────────────────────────────────────
+
+export function normaliseTaskId(input: string): string {
+    const trimmed = input.trim()
+    if (/^TASK_\d{4,}$/.test(trimmed)) return trimmed
+    if (/^\d+$/.test(trimmed)) return `TASK_${trimmed.padStart(4, '0')}`
+    return trimmed
+}

@@ -1,0 +1,50 @@
+{
+    "name": "@mjasnikovs/pi-task",
+    "version": "0.2.0",
+    "description": "Deterministic spec-orchestration for local models, with bundled web/docs/fetch/worker subagent tools.",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": ["dist", "README.md", "LICENSE"],
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json",
+        "lint": "prettier --log-level warn --write 'src/**/*.ts' && eslint --fix . && tsc --noEmit",
+        "test": "bun test src/",
+        "prepublishOnly": "bun run build"
+    },
+    "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "0.75.5",
+        "@earendil-works/pi-agent-core": "0.75.5",
+        "@earendil-works/pi-tui": "0.75.5"
+    },
+    "dependencies": {
+        "@mozilla/readability": "^0.6.0",
+        "@sinclair/typebox": "0.34.49",
+        "jsdom": "^29.1.1",
+        "turndown": "^7.2.4"
+    },
+    "devDependencies": {
+        "@earendil-works/pi-coding-agent": "0.75.5",
+        "@earendil-works/pi-agent-core": "0.75.5",
+        "@earendil-works/pi-tui": "0.75.5",
+        "@eslint/js": "10.0.1",
+        "@sinclair/typebox": "0.34.49",
+        "@types/bun": "1.3.12",
+        "@types/jsdom": "^28.0.3",
+        "@types/turndown": "^5.0.6",
+        "eslint": "10.2.1",
+        "globals": "17.5.0",
+        "prettier": "3.8.3",
+        "typescript": "6.0.3",
+        "typescript-eslint": "8.58.2"
+    },
+    "keywords": ["pi", "pi-extension", "coding-agent", "task-orchestration", "local-llm"],
+    "repository": {
+        "type": "git",
+        "url": "github:mjasnikovs/pi-task"
+    },
+    "license": "MIT",
+    "pi": {
+        "extensions": ["src/index.ts"]
+    }
+}

@@ -1,0 +1,276 @@
+/**
+ * Child process runner for the pi-task orchestrator.
+ *
+ * Thin wrapper layer over the unified `runChild` in `shared/child-process.ts`.
+ * Provides JSON event-stream parsing, loop detection, and context-usage tracking
+ * for phase-level child pi invocations.
+ */
+
+import {spawn} from 'node:child_process'
+import {getPiInvocation} from '../shared/pi-invocation.js'
+import {
+    runChild as runChildUnified,
+    type SpawnFn,
+    type ContextSnapshot,
+    type ToolCall,
+    type LoopHit,
+    CHILD_BASE_ARGS
+} from '../shared/child-process.js'
+import {LoopDetector} from './loop-detector.js'
+import {readSection, setTaskSection} from './task-file.js'
+
+// ─── Loop detection constants ────────────────────────────────────────────────
+// Defined here (not in phases.ts) to avoid a circular dependency:
+//   phases.ts → child-runner.ts → phases.ts
+
+export const LOOP_WINDOW = 20
+export const LOOP_THRESHOLD = 5
+export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 restarts)
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface PhaseRunResult {
+    text: string
+    exitCode: number
+    stderr: string
+    loopHit?: LoopHit
+}
+
+// ─── Spawn helpers ───────────────────────────────────────────────────────────
+
+export function childArgs(tools: string, prompt: string): string[] {
+    // `--mode json` puts the child into the structured event stream the
+    // unified runner parses in `mode: 'json-events'`. Without it the child
+    // emits plain text, every line fails JSON.parse, finalText stays empty,
+    // and every phase fails with "X child produced no output". Was silently
+    // dropped in the 4e34f96 split-refactor; do not remove again.
+    //
+    // An empty `tools` string means "no tools at all" — emit `--no-tools`
+    // instead of `--tools ''` (which pi would reject). Used by pure-judgment
+    // phases like critique-triage that should reason only over the text we
+    // hand them, never spend time reading the repo.
+    const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
+    return [...CHILD_BASE_ARGS, '--mode', 'json', ...toolFlags, prompt]
+}
+
+// Sentinel error thrown when the user dismisses a grill-me dialog.
+// Defined here (not in failure-classifier.ts) to avoid circular dependency.
+export const USER_CANCELLED = '__user_cancelled__'
+
+// ─── Core child runner (JSON event-stream mode) ─────────────────────────────
+
+/**
+ * Run a child pi process with JSON event-stream output, loop detection, and
+ * context-usage tracking. This is the typed convenience wrapper used by
+ * phase-level code.
+ */
+export async function runChild(
+    cwd: string,
+    tools: string,
+    prompt: string,
+    signal: AbortSignal,
+    onLine?: (line: string) => void,
+    onContextUsage?: (snapshot: ContextSnapshot) => void,
+    onToolCall?: (call: ToolCall) => LoopHit | null,
+    spawnFn?: SpawnFn
+): Promise<PhaseRunResult> {
+    const invocation = getPiInvocation(childArgs(tools, prompt))
+    let loopHit: LoopHit | undefined
+
+    const result = await runChildUnified(
+        spawnFn ?? (spawn as unknown as SpawnFn),
+        invocation,
+        cwd,
+        signal,
+        {
+            mode: 'json-events',
+            onLine,
+            onContextUsage,
+            onToolCall: call => {
+                if (!onToolCall) return null
+                const hit = onToolCall(call)
+                if (hit && !loopHit) {
+                    loopHit = hit
+                }
+                return hit // propagate to unified runner so it can kill
+            }
+        }
+    )
+
+    return {
+        text: result.text ?? result.stdout.trim(),
+        exitCode: result.exitCode,
+        stderr: result.stderr.trim(),
+        loopHit
+    }
+}
+
+// ─── Phase-level wrappers ────────────────────────────────────────────────────
+
+interface PhaseDeps {
+    cwd: string
+    taskId: string
+    signal: AbortSignal
+    onChildOutput?: (line: string) => void
+    onContextUsage?: (snapshot: ContextSnapshot) => void
+    /**
+     * Record a sub-step duration under the currently running top-level phase.
+     * The orchestrator rebinds this between phases so each call lands in the
+     * right phase's children array. Phases that don't care can ignore it.
+     */
+    recordSubStep?: (label: string, ms: number) => void
+    spawn?: SpawnFn
+}
+
+export type {PhaseDeps}
+
+/** Run a child pi and return its assistant text. Throws if exit code != 0. */
+export async function runPhaseChild(
+    deps: PhaseDeps,
+    name: string,
+    tools: string,
+    prompt: string
+): Promise<string> {
+    const r = await runChild(
+        deps.cwd,
+        tools,
+        prompt,
+        deps.signal,
+        deps.onChildOutput,
+        deps.onContextUsage,
+        undefined,
+        deps.spawn
+    )
+    if (r.exitCode !== 0) {
+        throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+    }
+    if (r.text.trim().length === 0) {
+        throw new Error(`${name} child produced no output`)
+    }
+    return r.text
+}
+
+function formatLoopHint(hit: LoopHit): string {
+    const argsStr = JSON.stringify(hit.call.args)
+    return (
+        `[SYSTEM NOTE: Your prior attempt called ${hit.call.name}(${argsStr}) `
+        + `${hit.count} times in the last ${hit.windowSize} tool calls — you appeared to be `
+        + `stuck in a loop. Avoid repeating that exact call; if you've already seen its result, `
+        + `work from memory or pick a different angle.]`
+    )
+}
+
+export function prependHint(hint: string | null, prompt: string): string {
+    return hint === null ? prompt : `${hint}\n\n${prompt}`
+}
+
+async function appendLoopEvent(
+    cwd: string,
+    taskId: string,
+    phase: string,
+    hit: LoopHit,
+    strike: number,
+    outcome: 'restarted with hint' | 'phase failed'
+): Promise<void> {
+    const ts = new Date().toISOString()
+    const argsStr = JSON.stringify(hit.call.args)
+    const line =
+        `- ${ts}  ${phase}  strike ${strike}/${MAX_LOOP_RESTARTS + 1}  `
+        + `${hit.call.name}(${argsStr}) ×${hit.count} in last ${hit.windowSize} calls  → ${outcome}`
+    const existing = (await readSection(cwd, taskId, 'loop events')) ?? ''
+    const next = existing ? `${existing}\n${line}` : line
+    await setTaskSection(cwd, taskId, 'loop events', next)
+}
+
+/**
+ * Run a phase child with loop detection. On a detected loop, kill and re-spawn
+ * with a hint that names the offending call. Cap at MAX_LOOP_RESTARTS restarts;
+ * the (MAX_LOOP_RESTARTS+1)th loop throws LoopExhaustedError.
+ */
+export async function runPhaseWithLoopGuard(
+    deps: PhaseDeps,
+    name: string,
+    tools: string,
+    buildPrompt: (loopHint: string | null) => string
+): Promise<string> {
+    const loopHistory: LoopHit[] = []
+    for (let strike = 0; strike <= MAX_LOOP_RESTARTS; strike++) {
+        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
+        const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
+        const hint = strike === 0 ? null : formatLoopHint(loopHistory[strike - 1])
+        const prompt = buildPrompt(hint)
+        const r = await runChild(
+            deps.cwd,
+            tools,
+            prompt,
+            deps.signal,
+            deps.onChildOutput,
+            deps.onContextUsage,
+            call => detector.record(call),
+            deps.spawn
+        )
+        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
+        if (r.loopHit) {
+            const isLastStrike = strike === MAX_LOOP_RESTARTS
+            loopHistory.push(r.loopHit)
+            await appendLoopEvent(
+                deps.cwd,
+                deps.taskId,
+                name,
+                r.loopHit,
+                strike + 1,
+                isLastStrike ? 'phase failed' : 'restarted with hint'
+            )
+            if (isLastStrike) throw new LoopExhaustedError(name, loopHistory)
+            continue
+        }
+        if (r.exitCode !== 0) {
+            throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+        }
+        if (r.text.trim().length === 0) {
+            throw new Error(`${name} child produced no output`)
+        }
+        return r.text
+    }
+    throw new LoopExhaustedError(name, loopHistory)
+}
+
+/**
+ * Run a child up to twice; the second attempt gets `emphasized=true` to escalate
+ * the prompt. On success, return the validator's value; on two failures, throw
+ * the caller-supplied error built from the last problem string.
+ */
+export async function runWithEmphasisRetry<T>(
+    deps: PhaseDeps,
+    name: string,
+    tools: string,
+    build: (retryProblem: string | null) => string,
+    validate: (text: string) => {ok: true; value: T} | {ok: false; problem: string},
+    onFail: (problem: string) => Error
+): Promise<T> {
+    let lastProblem = 'unknown'
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const text = await runPhaseChild(
+            deps,
+            name,
+            tools,
+            build(attempt === 0 ? null : lastProblem)
+        )
+        const result = validate(text)
+        if (result.ok) return result.value
+        lastProblem = result.problem
+    }
+    throw onFail(lastProblem)
+}
+
+// ─── LoopExhaustedError ──────────────────────────────────────────────────────
+
+export class LoopExhaustedError extends Error {
+    constructor(
+        public readonly phase: string,
+        public readonly history: LoopHit[]
+    ) {
+        super(`loop detected ${history.length} times in ${phase}`)
+        this.name = 'LoopExhaustedError'
+    }
+}

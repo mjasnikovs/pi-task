@@ -1,0 +1,20 @@
+module.exports = {
+    experimentalTernaries: true,
+    experimentalOperatorPosition: 'start',
+    printWidth: 100,
+    tabWidth: 4,
+    useTabs: false,
+    semi: false,
+    singleQuote: true,
+    quoteProps: 'as-needed',
+    jsxSingleQuote: true,
+    trailingComma: 'none',
+    bracketSpacing: false,
+    objectWrap: 'preserve',
+    bracketSameLine: false,
+    arrowParens: 'avoid',
+    proseWrap: 'always',
+    htmlWhitespaceSensitivity: 'strict',
+    endOfLine: 'lf',
+    singleAttributePerLine: true
+}

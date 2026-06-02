@@ -1,0 +1,84 @@
+/**
+ * pi-worker — minimal subagent tool.
+ *
+ * Spawns a sandboxed child `pi --print` for each call, returns its stdout.
+ * Child has read+grep+find+ls only (no bash, write, or edit) — no skills,
+ * extensions, prompt templates, context files, or session storage. Cannot
+ * recurse into another worker.
+ */
+
+import type {AgentToolResult} from '@earendil-works/pi-agent-core'
+import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
+import {Text} from '@earendil-works/pi-tui'
+import {Type} from '@sinclair/typebox'
+import {runWorker} from './pi-worker-core.js'
+import {textResult} from './shared.js'
+
+const RENDER_PROMPT_MAX = 120
+
+interface WorkerDetails {
+    exitCode: number
+}
+
+const WorkerParams = Type.Object({
+    prompt: Type.String({description: 'Task for the worker to perform.'})
+})
+
+export function registerPiWorker(pi: ExtensionAPI): void {
+    pi.registerTool({
+        name: 'pi-worker',
+        label: 'Pi Worker',
+        description:
+            'Dispatch an isolated child Pi to investigate a question and return its '
+            + 'conclusion — not the raw evidence. Use when answering requires reading '
+            + 'multiple files, running several greps, or scanning large command output '
+            + 'you do not need verbatim.\n'
+            + '\n'
+            + 'Good fits:\n'
+            + '- "Where/how is X handled in this repo?" across unfamiliar code\n'
+            + '- Audits and pattern scans across many files ("every place we log PII")\n'
+            + '- Summarising long test output, logs, or shell output\n'
+            + '- Parallel fan-out: dispatch several workers in one turn for independent questions\n'
+            + '\n'
+            + 'Skip when:\n'
+            + '- You already know the exact file — call `read` directly\n'
+            + '- The task needs writes/edits (worker is read-only)\n'
+            + '- The task needs the web — use `pi-worker-search` / `pi-worker-fetch`',
+        parameters: WorkerParams,
+        executionMode: 'parallel',
+
+        async execute(
+            _toolCallId,
+            params,
+            signal,
+            _onUpdate,
+            ctx
+        ): Promise<AgentToolResult<WorkerDetails>> {
+            const result = await runWorker({prompt: params.prompt, cwd: ctx.cwd, signal})
+
+            if (result.aborted) {
+                return textResult('Worker aborted.', {exitCode: result.exitCode})
+            }
+
+            if (result.exitCode !== 0) {
+                const tail = result.stderr.slice(-500) || '(no stderr)'
+                return textResult(`Worker exited ${result.exitCode}.\n${tail}`, {
+                    exitCode: result.exitCode
+                })
+            }
+
+            return textResult(result.text || '(no output)', {exitCode: result.exitCode})
+        },
+
+        renderCall(args, theme) {
+            const prompt = args.prompt.replace(/\s+/g, ' ').trim()
+            const truncated =
+                prompt.length > RENDER_PROMPT_MAX ?
+                    `${prompt.slice(0, RENDER_PROMPT_MAX - 1)}…`
+                :   prompt
+            const head = theme.fg('toolTitle', theme.bold('pi-worker '))
+            const body = theme.fg('accent', truncated)
+            return new Text(head + body, 0, 0)
+        }
+    })
+}

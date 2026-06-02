@@ -1,0 +1,66 @@
+import js from '@eslint/js'
+import globals from 'globals'
+import tseslint from 'typescript-eslint'
+
+export default tseslint.config(
+    {ignores: ['dist', 'node_modules']},
+    {
+        extends: [js.configs.recommended, ...tseslint.configs.recommended],
+        files: ['**/*.ts'],
+        languageOptions: {
+            sourceType: 'module',
+            ecmaVersion: 2020,
+            globals: {
+                ...globals.node,
+                Bun: 'readonly'
+            },
+
+            parserOptions: {
+                tsconfigRootDir: import.meta.dirname,
+                projectService: {
+                    allowDefaultProject: ['eslint.config.mjs', '.prettierrc.cjs'],
+                    defaultProject: 'tsconfig.json'
+                }
+            }
+        },
+        rules: {
+            '@typescript-eslint/no-unsafe-call': 'warn',
+            '@typescript-eslint/no-unsafe-member-access': 'warn',
+            '@typescript-eslint/require-await': 'warn',
+            '@typescript-eslint/no-unsafe-argument': 'warn',
+            '@typescript-eslint/no-misused-promises': 'warn',
+
+            '@typescript-eslint/no-unused-vars': [
+                'warn',
+                {
+                    args: 'all',
+                    argsIgnorePattern: '^_',
+                    caughtErrors: 'all',
+                    caughtErrorsIgnorePattern: '^_',
+                    destructuredArrayIgnorePattern: '^_',
+                    varsIgnorePattern: '^_',
+                    ignoreRestSiblings: true
+                }
+            ],
+
+            '@typescript-eslint/unbound-method': 'warn',
+            '@typescript-eslint/no-floating-promises': 'warn',
+            '@typescript-eslint/no-explicit-any': 'error',
+            'linebreak-style': ['error', 'unix'],
+            quotes: ['error', 'single', {allowTemplateLiterals: true}],
+            semi: ['error', 'never'],
+            'no-tabs': 0,
+            'object-curly-spacing': [2, 'never'],
+            'array-bracket-spacing': [2, 'never'],
+            'computed-property-spacing': [2, 'never'],
+            'brace-style': [2, '1tbs'],
+            'keyword-spacing': [2],
+            'eol-last': [2],
+            'no-trailing-spaces': [2],
+            'no-redeclare': 2,
+            'no-shadow': [2, {allow: ['_']}],
+            properties: 0,
+            camelcase: 0
+        }
+    }
+)
