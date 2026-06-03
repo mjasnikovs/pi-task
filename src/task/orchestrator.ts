@@ -312,6 +312,67 @@ export class TaskRunner {
     }
 }
 
+// ─── runSingleTask ────────────────────────────────────────────────────────────
+
+export interface RunSingleTaskOptions {
+    /** Await the session going idle after the spec is delivered, so the caller
+     *  blocks until the agent has implemented it. Default false. */
+    waitForImplementation?: boolean
+    /** Test seam: spawn function forwarded to TaskRunner. */
+    spawnFn?: SpawnFn
+}
+
+export interface RunSingleTaskResult {
+    taskId: string
+    ok: boolean
+    sessionCancelled: boolean
+}
+
+/**
+ * Run one prompt through the full single-task pipeline in a fresh session and
+ * deliver its spec. With waitForImplementation, block until the agent finishes
+ * implementing the delivered spec. Success is read off the produced task file's
+ * front-matter state (TaskRunner.run never throws).
+ */
+export async function runSingleTask(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    rawPrompt: string,
+    opts: RunSingleTaskOptions = {}
+): Promise<RunSingleTaskResult> {
+    let taskId = ''
+    const result = await ctx.newSession({
+        withSession: async newCtx => {
+            const runner = new TaskRunner(
+                newCtx,
+                cwd,
+                rawPrompt,
+                undefined,
+                async spec => {
+                    await newCtx.sendUserMessage(spec)
+                    if (opts.waitForImplementation) await newCtx.waitForIdle()
+                },
+                opts.spawnFn
+            )
+            await runner.run()
+            taskId = runner.taskId
+        }
+    })
+    if (result.cancelled) {
+        return {taskId, ok: false, sessionCancelled: true}
+    }
+    let ok = false
+    if (taskId) {
+        try {
+            const {frontMatter} = await readTaskFile(cwd, taskId)
+            ok = frontMatter.state === 'completed'
+        } catch {
+            ok = false
+        }
+    }
+    return {taskId, ok, sessionCancelled: false}
+}
+
 // ─── Command handlers ────────────────────────────────────────────────────────
 
 async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -323,15 +384,8 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
         ctx.ui.notify('Type your prompt after /task (use @ for file completion).', 'info')
         return
     }
-    const result = await ctx.newSession({
-        withSession: async newCtx => {
-            const runner = new TaskRunner(newCtx, cwd, raw, undefined, async spec => {
-                await newCtx.sendUserMessage(spec)
-            })
-            await runner.run()
-        }
-    })
-    if (result.cancelled) {
+    const {sessionCancelled} = await runSingleTask(ctx, cwd, raw)
+    if (sessionCancelled) {
         ctx.ui.notify('Could not start a fresh session for /task.', 'warning')
     }
 }

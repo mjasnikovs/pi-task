@@ -1,0 +1,137 @@
+/**
+ * AUTO-file I/O & parsing for /task-auto.
+ *
+ * Thin layer over task-io/task-parsers: a TASK_AUTO_NNNN.md is a normal task
+ * file (same front matter) whose body holds feature prompt, clarifications, and
+ * a markdown checkbox list of task titles. The checkboxes are the resume cursor.
+ */
+import * as fsp from 'node:fs/promises'
+import * as path from 'node:path'
+import {tasksDir, ensureTasksDir, readTaskFile, setTaskSection} from './task-io.js'
+import {extractSection, parseFrontMatter} from './task-parsers.js'
+import {RESUMABLE_STATES} from './task-types.js'
+
+const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
+const MAX_TASKS = 30
+
+export interface TaskEntry {
+    index: number
+    title: string
+    done: boolean
+    producedId?: string
+}
+
+export async function allocateAutoId(cwd: string): Promise<string> {
+    await ensureTasksDir(cwd)
+    const entries = await fsp.readdir(tasksDir(cwd))
+    let max = 0
+    for (const e of entries) {
+        const m = AUTO_FILE_RE.exec(e)
+        if (m) {
+            const n = parseInt(m[1].slice('TASK_AUTO_'.length), 10)
+            if (n > max) max = n
+        }
+    }
+    return `TASK_AUTO_${String(max + 1).padStart(4, '0')}`
+}
+
+/** Parse a decompose-phase model output into a clean list of titles. */
+export function parseDecomposeList(raw: string): string[] {
+    const out: string[] = []
+    for (const line of raw.split('\n')) {
+        const m = /^\s*(?:-\s*\[\s*[xX ]?\s*\]\s*|-\s+|\d+[.)]\s+)(.+?)\s*$/.exec(line)
+        if (m && m[1].trim().length > 0) out.push(m[1].trim())
+        if (out.length >= MAX_TASKS) break
+    }
+    return out
+}
+
+const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/
+const PRODUCED_ID_RE = /^(TASK_\d{4,})\s{2,}(.+)$/
+
+/** Parse the "## tasks" checkbox list. */
+export function parseTaskList(body: string): TaskEntry[] {
+    const section = extractSection(body, 'tasks')
+    if (section === null) return []
+    const entries: TaskEntry[] = []
+    let index = 0
+    for (const line of section.split('\n')) {
+        const m = CHECKBOX_RE.exec(line.trim())
+        if (!m) continue
+        const done = m[1].toLowerCase() === 'x'
+        const rest = m[2].trim()
+        if (done) {
+            const idm = PRODUCED_ID_RE.exec(rest)
+            if (idm) {
+                entries.push({index, title: idm[2].trim(), done: true, producedId: idm[1]})
+            } else {
+                entries.push({index, title: rest, done: true})
+            }
+        } else {
+            entries.push({index, title: rest, done: false})
+        }
+        index++
+    }
+    return entries
+}
+
+/** Build the initial AUTO-file body. */
+export function buildAutoBody(feature: string, clarifications: string, titles: string[]): string {
+    const tasks = titles.map(t => `- [ ] ${t}`).join('\n')
+    return (
+        `\n## feature prompt\n\n${feature.trim() || '(none)'}\n\n`
+        + `## clarifications\n\n${clarifications.trim() || '(none)'}\n\n`
+        + `## tasks\n\n${tasks}\n`
+    )
+}
+
+/** Check off the Nth checkbox line, stamping the produced TASK_NNNN id. */
+export async function checkOffTask(
+    cwd: string,
+    id: string,
+    index: number,
+    producedId: string,
+    title: string
+): Promise<void> {
+    const {body} = await readTaskFile(cwd, id)
+    const section = extractSection(body, 'tasks') ?? ''
+    const lines = section.split('\n')
+    let seen = -1
+    for (let i = 0; i < lines.length; i++) {
+        if (!CHECKBOX_RE.test(lines[i].trim())) continue
+        seen++
+        if (seen === index) {
+            lines[i] = producedId ? `- [x] ${producedId}  ${title}` : `- [x] ${title}`
+            break
+        }
+    }
+    if (seen < index) {
+        throw new Error(
+            `checkOffTask: index ${index} out of range in ${id} (only ${seen + 1} checkboxes found)`
+        )
+    }
+    await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
+}
+
+/** Find the most-recently-updated resumable TASK_AUTO_* file, or null. */
+export async function findResumableAuto(cwd: string): Promise<string | null> {
+    await ensureTasksDir(cwd)
+    const entries = await fsp.readdir(tasksDir(cwd))
+    const candidates: Array<{id: string; mtime: number}> = []
+    for (const f of entries) {
+        const m = AUTO_FILE_RE.exec(f)
+        if (!m) continue
+        try {
+            const raw = await fsp.readFile(path.join(tasksDir(cwd), f), 'utf8')
+            const fm = parseFrontMatter(raw)
+            if (!fm) continue
+            if (!RESUMABLE_STATES.includes(fm.state)) continue
+            const st = await fsp.stat(path.join(tasksDir(cwd), f))
+            candidates.push({id: m[1], mtime: st.mtimeMs})
+        } catch {
+            /* skip unreadable */
+        }
+    }
+    candidates.sort((a, b) => b.mtime - a.mtime)
+    return candidates.length > 0 ? candidates[0].id : null
+}

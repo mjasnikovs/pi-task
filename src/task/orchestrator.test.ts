@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {TaskRunner} from './orchestrator.js'
+import {TaskRunner, runSingleTask} from './orchestrator.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
 import {agentEndResponse, fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
@@ -366,6 +366,62 @@ VERIFIED-TOOLING
             expect(refineCalled).toBe(false)
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
+        })
+    })
+})
+
+function happyScripts() {
+    return {
+        refine: REFINED_FIXTURE,
+        researchFiles: RESEARCH_FILES,
+        researchApis: RESEARCH_APIS,
+        researchContext: RESEARCH_CONTEXT,
+        researchTooling: RESEARCH_TOOLING,
+        verifyTooling: VERIFY_TOOLING_OUT,
+        grillGen: NO_QUESTIONS,
+        compose: COMPOSE_SPEC,
+        critique: COMPOSE_SPEC
+    }
+}
+
+describe('runSingleTask', () => {
+    test('runSingleTask: default delivers spec without an extra idle wait (parity with /task)', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const order: string[] = []
+            const mutable = ctx as unknown as Record<string, unknown>
+            mutable.sendUserMessage = async () => {
+                order.push('send')
+            }
+            mutable.waitForIdle = async () => {
+                order.push('idle')
+            }
+            const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(ok).toBe(true)
+            expect(taskId).toBe('TASK_0001')
+            expect(order).toEqual(['send'])
+        })
+    })
+
+    test('runSingleTask: waitForImplementation awaits idle after delivering the spec', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const order: string[] = []
+            const mutable = ctx as unknown as Record<string, unknown>
+            mutable.sendUserMessage = async () => {
+                order.push('send')
+            }
+            mutable.waitForIdle = async () => {
+                order.push('idle')
+            }
+            const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(ok).toBe(true)
+            expect(order).toEqual(['send', 'idle'])
         })
     })
 })

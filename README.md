@@ -61,6 +61,9 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-list` | Open the task list in an editor dialog. |
 | `/task-resume [id]` | Resume the most recent (or named) unfinished task. |
 | `/task-cancel` | Cancel the running task (soft-terminal — still resumable). |
+| `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
+| `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
+| `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
 
 ## The pipeline
 
@@ -73,6 +76,32 @@ pi install npm:@mjasnikovs/pi-task
 | **critique** | `spec` | Triages the draft; if it isn't already clean, rewrites it. The triage pass skips the expensive rewrite when the draft already holds up. |
 
 The finished spec is delivered to your main `pi` conversation via `sendUserMessage`, so you keep working in the same chat — no context handoff, no copy-paste.
+
+## Orchestrating multiple tasks — `/task-auto`
+
+A real feature is usually several tasks, not one. `/task-auto` is a thin planner on top of the single-task pipeline:
+
+```
+/task-auto add multi-tenant billing
+        │
+        ▼
+  ┌──────────┐   ┌──────────┐   ┌─────────────┐
+  │ clarify  │──▶│ decompose│──▶│ TASK_AUTO_…  │   resumable list of task titles
+  │ gray     │   │ → titles │   │ .md (titles) │
+  │ areas    │   └──────────┘   └──────┬───────┘
+  └──────────┘                         │
+                          ┌────────────▼─────────────┐
+                          │  for each unchecked title │
+                          │   → full /task pipeline    │  (spec + implement)
+                          │   → wait until it finishes │
+                          │   → check the box, next    │
+                          └────────────────────────────┘
+```
+
+- **It only produces titles.** All the depth — refine, research, grill, compose, critique — is `/task`'s job, run fresh per title. `/task-auto` never researches or specs anything itself.
+- **Clarify first.** It asks the few clarifying questions whose answers change how the feature splits, then decomposes the answers into an ordered list of task titles written to `.pi-tasks/TASK_AUTO_NNNN.md`.
+- **Sequential, blocking.** Each title runs through `/task` to a spec, the spec is implemented, and the loop waits for that to finish before starting the next title. No overlap.
+- **Crash- and cancel-safe.** Progress is the markdown checkboxes in the AUTO file. `/task-auto-resume` (no id) automatically picks up the active run at the first unchecked title. If a title's `/task` run fails, the loop stops and leaves the run resumable.
 
 ## Bundled tools
 
