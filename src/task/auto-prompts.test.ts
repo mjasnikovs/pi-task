@@ -1,12 +1,21 @@
 import {expect, test} from 'bun:test'
 import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
 
-test('clarify prompt embeds the feature and demands a numbered list + NONE', () => {
-    const p = AUTO_CLARIFY_PROMPT('add billing')
+test('clarify prompt embeds the feature, asks for ONE question + SUGGESTED + NONE', () => {
+    const p = AUTO_CLARIFY_PROMPT('add billing', '')
     expect(p).toContain('add billing')
-    expect(p).toContain('clarifying questions')
-    expect(p).toMatch(/numbered list/i)
-    expect(p).toContain('NONE') // matches parseGrillQuestions empty signal
+    expect(p).toContain('clarifying question')
+    expect(p).toMatch(/single numbered line/i)
+    expect(p).toContain('SUGGESTED:') // matches parseClarifyList default-answer signal
+    expect(p).toContain('NONE') // matches parseClarifyList empty signal
+    expect(p).toContain('(none yet)') // empty prior-Q&A placeholder
+})
+
+test('clarify prompt carries the prior Q&A so the next question can adapt', () => {
+    const p = AUTO_CLARIFY_PROMPT('build a frontend', 'Q1: SSR or SPA?\nA1: React SPA')
+    expect(p).toContain('ANSWERS SO FAR:')
+    expect(p).toContain('A1: React SPA')
+    expect(p).not.toContain('(none yet)')
 })
 
 test('decompose prompt embeds feature + clarifications and demands a checkbox list', () => {

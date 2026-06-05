@@ -326,6 +326,15 @@ export interface RunSingleTaskResult {
     taskId: string
     ok: boolean
     sessionCancelled: boolean
+    /**
+     * The session context the caller must use for any work after this call. A
+     * successful run replaces the session via ctx.newSession(), which leaves the
+     * caller's original ctx stale — this is the fresh replacement ctx and callers
+     * MUST adopt it (using the original throws "stale ctx"). On cancellation no
+     * replacement happened, so this is the original, still-live ctx. Optional
+     * only so test fakes that don't model session replacement can omit it.
+     */
+    ctx?: ExtensionCommandContext
 }
 
 /**
@@ -341,8 +350,13 @@ export async function runSingleTask(
     opts: RunSingleTaskOptions = {}
 ): Promise<RunSingleTaskResult> {
     let taskId = ''
+    // The newSession replacement ctx, captured so the caller can keep driving the
+    // UI after the original ctx is torn down. Defaults to the original for the
+    // cancellation path (where no replacement occurs).
+    let freshCtx: ExtensionCommandContext = ctx
     const result = await ctx.newSession({
         withSession: async newCtx => {
+            freshCtx = newCtx
             const runner = new TaskRunner(
                 newCtx,
                 cwd,
@@ -359,7 +373,8 @@ export async function runSingleTask(
         }
     })
     if (result.cancelled) {
-        return {taskId, ok: false, sessionCancelled: true}
+        // No replacement happened — the original ctx is still live.
+        return {taskId, ok: false, sessionCancelled: true, ctx}
     }
     let ok = false
     if (taskId) {
@@ -370,7 +385,7 @@ export async function runSingleTask(
             ok = false
         }
     }
-    return {taskId, ok, sessionCancelled: false}
+    return {taskId, ok, sessionCancelled: false, ctx: freshCtx}
 }
 
 // ─── Command handlers ────────────────────────────────────────────────────────

@@ -143,6 +143,12 @@ describe('TaskRunner — happy path', () => {
     test('grill auto-answer: ui.input never called when ANSWER: is returned', async () => {
         await withTmpTaskDir(async cwd => {
             const handle = makeFakeCtx(cwd)
+            // grill-gen is re-called after every answer (open-ended interview);
+            // the model signals "done" by emitting NONE. Emit one question per
+            // call, then NONE — a constant non-NONE response would never let the
+            // loop terminate.
+            const grillQuestions = ['1. should we use bun?', '1. should we lint tests?']
+            let genCall = 0
             const spawn = scriptedSpawn({
                 refine: REFINED_FIXTURE,
                 researchFiles: RESEARCH_FILES,
@@ -150,7 +156,7 @@ describe('TaskRunner — happy path', () => {
                 researchContext: RESEARCH_CONTEXT,
                 researchTooling: RESEARCH_TOOLING,
                 verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: '1. should we use bun?\n2. should we lint tests?',
+                grillGen: () => grillQuestions[genCall++] ?? 'NONE',
                 grillAuto: 'ANSWER: yes',
                 compose: COMPOSE_SPEC,
                 critique: COMPOSE_SPEC
@@ -387,41 +393,43 @@ function happyScripts() {
 describe('runSingleTask', () => {
     test('runSingleTask: default delivers spec without an extra idle wait (parity with /task)', async () => {
         await withTmpTaskDir(async cwd => {
-            const {ctx} = makeFakeCtx(cwd)
-            const order: string[] = []
-            const mutable = ctx as unknown as Record<string, unknown>
-            mutable.sendUserMessage = async () => {
-                order.push('send')
-            }
-            mutable.waitForIdle = async () => {
-                order.push('idle')
-            }
+            // The spec is delivered through the *replacement* session, so assert
+            // on the shared call log rather than patching the (soon-stale) ctx.
+            const {ctx, captured} = makeFakeCtx(cwd)
             const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
                 spawnFn: scriptedSpawn(happyScripts())
             })
             expect(ok).toBe(true)
             expect(taskId).toBe('TASK_0001')
-            expect(order).toEqual(['send'])
+            expect(captured.calls).toEqual(['send'])
         })
     })
 
     test('runSingleTask: waitForImplementation awaits idle after delivering the spec', async () => {
         await withTmpTaskDir(async cwd => {
-            const {ctx} = makeFakeCtx(cwd)
-            const order: string[] = []
-            const mutable = ctx as unknown as Record<string, unknown>
-            mutable.sendUserMessage = async () => {
-                order.push('send')
-            }
-            mutable.waitForIdle = async () => {
-                order.push('idle')
-            }
+            const {ctx, captured} = makeFakeCtx(cwd)
             const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
                 spawnFn: scriptedSpawn(happyScripts())
             })
             expect(ok).toBe(true)
-            expect(order).toEqual(['send', 'idle'])
+            expect(captured.calls).toEqual(['send', 'idle'])
+        })
+    })
+
+    test('runSingleTask: returns the fresh replacement ctx; the original is stale', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            // The run replaced the session, so the handed-back ctx is a new, live
+            // object — not the original, which now throws on use.
+            expect(res.ctx).toBeDefined()
+            expect(res.ctx).not.toBe(ctx)
+            expect(() => ctx.ui.notify('x', 'info')).toThrow(/stale/)
+            // The replacement ctx is live.
+            expect(() => res.ctx!.ui.notify('ok', 'info')).not.toThrow()
         })
     })
 })

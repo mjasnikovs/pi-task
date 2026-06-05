@@ -7,6 +7,33 @@
 
 export const MAX_GRILL_QUESTIONS = 10
 
+/**
+ * Qwen3 "soft switch": placing `/no_think` in the prompt disables the model's
+ * <think> reasoning trace for that turn and persists across the tool-call loop
+ * within the same child session.
+ *
+ * On a local reasoning model decode is the bottleneck (~50 t/s here) while
+ * prefill is ~10x faster, so cost is dominated by *generated* tokens. A runaway
+ * think trace can be 10k+ tokens — minutes — even when the phase's real output
+ * is a short list or a one-word verdict (an observed triage spent ~384s
+ * thinking to emit "CLEAN"). Stripping the monologue does NOT limit the model's
+ * exploration: it still calls every tool it wants and takes every step it
+ * needs — it just stops narrating between actions.
+ *
+ * We strip thinking from the mechanical / exploration phases (refine, the four
+ * research workers, verify-tooling, triage) and keep it ON for the judgment
+ * phases (compose, grill, critique rewrite) where the reasoning earns its
+ * decode cost. pi's `--thinking off` flag is a no-op for this provider
+ * (`supportsReasoningEffort: false` in models.json), so the in-prompt soft
+ * switch is the reliable control.
+ */
+export const NO_THINK = '/no_think'
+
+/** Append the Qwen3 `/no_think` soft switch to a prompt. See {@link NO_THINK}. */
+export function appendNoThink(prompt: string): string {
+    return `${prompt}\n\n${NO_THINK}`
+}
+
 const REFINE_PROMPT = (
     raw: string
 ) => `You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.
@@ -140,26 +167,37 @@ ${refined}`
 
 const GRILL_GEN_PROMPT = (
     refined: string,
-    research: string
-) => `You are preparing clarifying questions for the user, based on a refined task description and the research that follows.
+    research: string,
+    priorQA: string
+) => `You are preparing clarifying questions for the user, based on a refined task description, the research that follows, and the answers gathered so far. Ask ONE question at a time.
+
+Output the SINGLE most important clarifying question that REMAINS — the one whose answer most changes the work — or NONE if no genuine ambiguity is left.
 
 Start from the KNOWN-UNKNOWNS bullets in the task. Add any new ambiguity surfaced by the research. Drop any unknowns the research already resolved.
+
+ACCOUNT FOR THE ANSWERS SO FAR — read carefully:
+- Never re-ask something already answered below.
+- If an answer introduced a NEW fork or contradicts an assumption in the task/research (e.g. the user chose a tool or approach the task did not anticipate), ask about the most important consequence of that choice next.
+- Drop questions the answers have made irrelevant.
 
 SCOPE RULES — read carefully:
 - Questions must clarify the EXISTING scope. Do NOT propose new deliverables, enhancements, modernizations, or "while I'm here" cleanups.
 - Forbidden patterns: "should I also…", "should we modernize…", "do you want me to update X while I'm at it…", "should I integrate Y…", "would you like guidance on Z…".
 - Allowed patterns: "by 'X' do you mean A or B?", "should failure mode Y be treated as Z?", "which of <files matching the task> applies here?".
-- If the refined task + research leave no genuine ambiguity, output zero questions. Zero questions is a valid and preferred outcome. Do not pad.
+- If nothing genuinely ambiguous remains, output NONE. Zero questions is a valid and preferred outcome. Do not pad.
 
 Output format — read carefully:
-- If you have questions: emit them as a plain numbered list, one per line, at most ${MAX_GRILL_QUESTIONS}, no preamble.
-- If you have zero questions: emit the single literal token NONE on its own line. Do NOT emit empty output — an empty response is treated as a crash, not as "no questions". The NONE sentinel is the only way to signal an intentional empty list.
+- One question as a single numbered line: "1. ...", and nothing else.
+- If no question remains: emit the single literal token NONE on its own line. Do NOT emit empty output — an empty response is treated as a crash, not as "no questions". The NONE sentinel is the only way to signal an intentional empty list.
 
 Refined task:
 ${refined}
 
 Research:
-${research}`
+${research}
+
+Answers so far:
+${priorQA.trim() || '(none yet)'}`
 
 const GRILL_AUTO_ANSWER_PROMPT = (
     refined: string,

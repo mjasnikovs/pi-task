@@ -774,45 +774,36 @@ describe('phaseGrill', () => {
         })
     })
 
-    test('auto-answers fan out in parallel (all spawns initiate before any close)', async () => {
-        // The key invariant: in the parallel implementation, all N auto-answer
-        // child spawns must be created synchronously (during the .map iteration)
-        // BEFORE any of their responses drain on the microtask queue. A
-        // sequential implementation would await each spawn's close before
-        // calling the next, so only 1 auto-answer spawn would ever be in flight.
-        //
-        // We detect this by counting spawn() calls that happen before the first
-        // 'close' event has fired. Parallel ⇒ counter == N. Sequential ⇒ 1.
+    test('asks questions sequentially, feeding each answer into the next grill-gen', async () => {
+        // Adaptive interview: grill-gen is re-called after every answer, with the
+        // prior Q&A in its prompt, and emits one question at a time until NONE.
         await withTmpTaskDir(async cwd => {
-            const N = 3
-            let firstAutoCloseFired = false
-            let autoSpawnsBeforeFirstClose = 0
-            let totalAutoSpawns = 0
+            let genCall = 0
+            const genPrompts: string[] = []
 
             const spawn: SpawnFn = (_cmd: string, args: ReadonlyArray<string>) => {
                 const proc = makeProc()
                 const prompt = args[args.length - 1]
                 const isAuto = prompt.includes('pre-answering a clarifying question')
                 const isGen = prompt.includes('preparing clarifying questions')
-
-                if (isAuto) {
-                    totalAutoSpawns++
-                    if (!firstAutoCloseFired) autoSpawnsBeforeFirstClose++
-                }
+                if (isGen) genPrompts.push(prompt)
 
                 queueMicrotask(() => {
-                    const text =
-                        isAuto ? 'ANSWER: yes'
-                        : isGen ?
-                            '1. should we use bun?\n2. should we lint tests?\n3. should we report counts?'
-                        :   'noop'
+                    let text: string
+                    if (isAuto) {
+                        text = 'ANSWER: yes'
+                    } else if (isGen) {
+                        const qs = ['1. should we use bun?', '1. should we lint tests?', 'NONE']
+                        text = qs[genCall++] ?? 'NONE'
+                    } else {
+                        text = 'noop'
+                    }
                     const evt = {
                         type: 'agent_end',
                         messages: [{role: 'assistant', content: [{type: 'text', text}]}]
                     }
                     proc.stdout!.emit('data', Buffer.from(JSON.stringify(evt) + '\n'))
                     proc.emit('close', 0)
-                    if (isAuto) firstAutoCloseFired = true
                 })
                 return proc
             }
@@ -825,23 +816,24 @@ describe('phaseGrill', () => {
                 'research-notes'
             )
 
-            expect(totalAutoSpawns).toBe(N)
-            expect(autoSpawnsBeforeFirstClose).toBe(N)
-            // Output ordering must still be deterministic (Q1, Q2, Q3) even
-            // though the underlying spawns ran concurrently.
+            // Two questions asked in order, then NONE stops the loop (3 gen calls).
+            expect(genCall).toBe(3)
             expect(out).toContain('Q1: should we use bun?')
             expect(out).toContain('Q2: should we lint tests?')
-            expect(out).toContain('Q3: should we report counts?')
+            // The 2nd grill-gen prompt carried the 1st Q&A — proof of adaptivity.
+            expect(genPrompts[1]).toContain('should we use bun?')
+            expect(genPrompts[1]).toContain('yes')
         })
     })
 
-    test('phaseGrill records gen / auto-answers / user input sub-step timings', async () => {
+    test('phaseGrill records per-iteration gen / auto-answer sub-step timings', async () => {
         await withTmpTaskDir(async cwd => {
             const subSteps: Array<{label: string; ms: number}> = []
+            // iter0: gen(Q1) + auto(answered); iter1: gen returns NONE → stop.
             const spawn = fakeSpawnQueue([
-                agentEndResponse('1. is bun ok?\n2. lint tests too?'),
+                agentEndResponse('1. is bun ok?'),
                 agentEndResponse('ANSWER: yes'),
-                agentEndResponse('ANSWER: yes')
+                agentEndResponse('NONE')
             ])
             await phaseGrill(
                 {
@@ -858,8 +850,7 @@ describe('phaseGrill', () => {
             )
             const labels = subSteps.map(s => s.label)
             expect(labels).toContain('gen')
-            expect(labels).toContain('auto-answers')
-            expect(labels).toContain('user input')
+            expect(labels).toContain('auto-answer')
             for (const s of subSteps) {
                 expect(s.ms).toBeGreaterThanOrEqual(0)
             }

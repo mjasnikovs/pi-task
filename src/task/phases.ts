@@ -24,9 +24,12 @@ import {
     COMPOSE_PROMPT,
     CRITIQUE_PROMPT,
     CRITIQUE_TRIAGE_PROMPT,
-    VERIFY_TOOLING_PROMPT
+    VERIFY_TOOLING_PROMPT,
+    MAX_GRILL_QUESTIONS,
+    appendNoThink
 } from './prompts.js'
 import {setTaskSection, updateTaskFrontMatter, type PhaseName} from './task-file.js'
+import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {type WidgetState} from './widget.js'
 import {
     parseVerifyBlock,
@@ -34,6 +37,7 @@ import {
     parseAutoAnswer,
     parseVerifyToolingOutput,
     validateSpecShape,
+    stripSpecPreamble,
     deriveTitle,
     isCritiqueClean,
     type AutoAnswer
@@ -49,7 +53,7 @@ import {
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
-export {MAX_GRILL_QUESTIONS} from './prompts.js'
+export {MAX_GRILL_QUESTIONS}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -115,7 +119,9 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 // ─── Phase functions ─────────────────────────────────────────────────────────
 
 export const phaseRefine = (deps: PhaseDeps, raw: string) =>
-    runPhaseWithLoopGuard(deps, 'refine', 'read', hint => prependHint(hint, REFINE_PROMPT(raw)))
+    runPhaseWithLoopGuard(deps, 'refine', 'read', hint =>
+        prependHint(hint, appendNoThink(REFINE_PROMPT(raw)))
+    )
 
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {
     const commands = extractToolingCommands(research)
@@ -130,7 +136,7 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
             deps,
             'verify-tooling',
             'read,bash',
-            VERIFY_TOOLING_PROMPT(toolingList)
+            appendNoThink(VERIFY_TOOLING_PROMPT(toolingList))
         )
     } catch {
         return replaceToolingWithVerified(research, commands)
@@ -268,11 +274,10 @@ export async function phaseResearch(
     }
 
     // Per-worker timing split into wait (spawn → first byte) and work (first
-    // byte → exit). When workers fan out concurrently and the upstream model
-    // API caps concurrency, the queued workers spend most of their elapsed
-    // time waiting for a slot — the wait/work split makes that visible
-    // instead of the previous Promise.all-relative wall-clock that conflated
-    // the two.
+    // byte → exit). The workers run sequentially below, so each split is a clean
+    // per-worker measurement — waitMs the worker's own cold-start, workMs its
+    // generation+tool-call cost — not a Promise.all-relative wall-clock that
+    // conflates the two.
     const recordWorker = <T extends {waitMs: number; workMs: number}>(
         label: string,
         p: Promise<T>
@@ -283,61 +288,62 @@ export async function phaseResearch(
             return r
         })
 
-    const [files, apis, context, tooling] = await Promise.all([
-        recordWorker(
-            'worker:files',
+    // Run the four workers ONE AT A TIME. Settled by an A/B on the local
+    // llama.cpp backend (single GPU, same task/model) — and the answer flips
+    // with thinking:
+    //   - thinking ON → parallel wins: long decodes batch well, 4 concurrent
+    //     finish in ~max(worker), not the sum.
+    //   - /no_think   → sequential wins: with short decodes the batching upside
+    //     is gone, but 4 concurrent streams still split the one GPU and slow
+    //     each other ~4x (context worker measured 27s solo vs 128s under load),
+    //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
+    // Every worker runs /no_think (below), so sequential is the faster regime.
+    // Do NOT switch this back to Promise.all without re-running that A/B.
+    //
+    // `/no_think` is the big win: these are agentic exploration loops, and on a
+    // reasoning model the child would otherwise emit a full <think> trace at
+    // every tool step ("let me read X next…") — the single largest decode sink
+    // in the pipeline. Stripping it cut each worker's decode 3-8x in the A/B.
+    // The worker still calls as many tools as it wants; it just stops narrating
+    // between them. See appendNoThink. Result order (files, apis, context,
+    // tooling) is preserved for assembly.
+    const workerSpecs: Array<{label: string; prompt: string; tools?: string}> = [
+        {
+            label: 'worker:files',
+            prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
+        },
+        {label: 'worker:apis', prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined))},
+        {
+            label: 'worker:context',
+            prompt: appendNoThink(promptHeader + RESEARCH_CONTEXT_PROMPT(refined)),
+            // Context owns architectural understanding, not path discovery —
+            // FILES handles that. Dropping `find`/`ls` keeps the worker from
+            // spawning long enumeration loops whose output then inflates
+            // prefill on every subsequent round.
+            tools: 'read,grep'
+        },
+        {
+            label: 'worker:tooling',
+            prompt: appendNoThink(promptHeader + RESEARCH_TOOLING_PROMPT(refined))
+        }
+    ]
+
+    const workerResults: Array<Awaited<ReturnType<typeof runWorker>>> = []
+    for (const spec of workerSpecs) {
+        const r = await recordWorker(
+            spec.label,
             runWorker({
-                prompt: promptHeader + RESEARCH_FILES_PROMPT(refined),
-                cwd: deps.cwd,
-                signal: deps.signal,
-                spawn: deps.spawn
-            }).then(r => {
-                updateProgress()
-                return r
-            })
-        ),
-        recordWorker(
-            'worker:apis',
-            runWorker({
-                prompt: promptHeader + RESEARCH_APIS_PROMPT(refined),
-                cwd: deps.cwd,
-                signal: deps.signal,
-                spawn: deps.spawn
-            }).then(r => {
-                updateProgress()
-                return r
-            })
-        ),
-        recordWorker(
-            'worker:context',
-            runWorker({
-                prompt: promptHeader + RESEARCH_CONTEXT_PROMPT(refined),
+                prompt: spec.prompt,
                 cwd: deps.cwd,
                 signal: deps.signal,
                 spawn: deps.spawn,
-                // Context owns architectural understanding, not path discovery
-                // — FILES handles that. Dropping `find`/`ls` keeps the worker
-                // from spawning long enumeration loops whose output then
-                // inflates prefill on every subsequent round.
-                tools: 'read,grep'
-            }).then(r => {
-                updateProgress()
-                return r
-            })
-        ),
-        recordWorker(
-            'worker:tooling',
-            runWorker({
-                prompt: promptHeader + RESEARCH_TOOLING_PROMPT(refined),
-                cwd: deps.cwd,
-                signal: deps.signal,
-                spawn: deps.spawn
-            }).then(r => {
-                updateProgress()
-                return r
+                ...(spec.tools ? {tools: spec.tools} : {})
             })
         )
-    ])
+        updateProgress()
+        workerResults.push(r)
+    }
+    const [files, apis, context, tooling] = workerResults
 
     const sections = [
         {name: 'FILES', result: files},
@@ -483,65 +489,68 @@ export async function phaseGrill(
     refined: string,
     research: string
 ): Promise<string> {
-    const tGenStart = Date.now()
-    const raw = await runPhaseWithLoopGuard(deps, 'grill-gen', 'read', hint =>
-        prependHint(hint, GRILL_GEN_PROMPT(refined, research))
-    )
-    deps.recordSubStep?.('gen', Date.now() - tGenStart)
-    const questions = parseGrillQuestions(raw)
-    if (questions.length === 0) return '(no questions produced)'
-
-    // Auto-answers are independent — generate them concurrently before the UI
-    // loop. The user-input loop below still runs sequentially (the user can
-    // only answer one prompt at a time), but the LLM-spawning work no longer
-    // blocks each iteration. For N questions this turns ~N × cold-start time
-    // into ~1 × cold-start time.
-    const tAutoStart = Date.now()
-    let doneCount = 0
-    widgetState.lastLine = `auto-answering 0/${questions.length} done…`
-    const autos = await Promise.all(
-        questions.map((q, i) =>
-            phaseAutoAnswer(deps, refined, research, q).then(r => {
-                doneCount++
-                widgetState.lastLine = `auto-answering ${doneCount}/${questions.length} done (Q${i + 1})`
-                return r
-            })
-        )
-    )
-    deps.recordSubStep?.('auto-answers', Date.now() - tAutoStart)
-
+    // Sequential & adaptive: ask one question at a time, feeding every answer
+    // back into the next grill-gen call so later questions react to earlier ones
+    // (drop resolved unknowns, surface forks an answer introduced). Each question
+    // still gets a research-backed auto-answer — answered cheaply (skip the user)
+    // or surfaced as a pre-filled recommendation. The model emits NONE when
+    // nothing ambiguous remains. Kept in sync with /task-auto's clarify dialog.
     const theme = ctx.ui.theme
-    const tInputStart = Date.now()
-    const out: string[] = []
-    for (let i = 0; i < questions.length; i++) {
-        const q = questions[i]
-        const auto = autos[i]
-        out.push(`Q${i + 1}: ${q}`)
+    const out: string[] = [] // human-facing Q&A transcript (with auto-worker debug lines)
+    const qa: string[] = [] // compact Q&A fed back into the next question
+    // Open-ended: keep asking until the model emits NONE or the user dismisses.
+    for (let n = 0; ; n++) {
+        const tGenStart = Date.now()
+        const raw = await runPhaseWithLoopGuard(deps, 'grill-gen', 'read', hint =>
+            prependHint(hint, GRILL_GEN_PROMPT(refined, research, qa.join('\n')))
+        )
+        deps.recordSubStep?.('gen', Date.now() - tGenStart)
+        const questions = parseGrillQuestions(raw)
+        if (questions.length === 0) break // NONE / nothing left to ask
+        const q = questions[0]
+
+        widgetState.lastLine = `auto-answering Q${n + 1}…`
+        const tAutoStart = Date.now()
+        const auto = await phaseAutoAnswer(deps, refined, research, q)
+        deps.recordSubStep?.('auto-answer', Date.now() - tAutoStart)
+
+        // Render markdown (bold/code) for the displayed prompt; keep plain text
+        // for the editable default and the persisted file.
+        const shownQ = renderInlineMarkdown(q, theme)
+        const plainQ = stripInlineMarkdown(q)
+        out.push(`Q${n + 1}: ${plainQ}`)
         const rawTrim = auto.raw.trim()
         out.push(
             `  (auto-worker raw: ${rawTrim.length === 0 ? '(empty)' : rawTrim.replace(/\n/g, ' ⏎ ')})`
         )
+
+        let answer: string
         if (auto.kind === 'answered') {
-            out.push(`A${i + 1}: ${auto.text} (auto)`)
-            continue
-        }
-        const title =
-            auto.suggested ?
-                `${q}\n${theme.fg('muted', 'Recommended:')}\n\n${theme.fg('text', auto.suggested)}\n\n${theme.fg('muted', 'press Enter to accept')}`
-            :   `${q}\n${theme.fg('muted', '(no recommendation — please answer)')}`
-        widgetState.lastLine = `awaiting Q${i + 1}`
-        const a = await ctx.ui.input(title, auto.suggested)
-        if (a === undefined) throw new Error(USER_CANCELLED)
-        const typed = a.trim()
-        if (typed.length === 0 && auto.suggested) {
-            out.push(`A${i + 1}: ${auto.suggested} (accepted recommendation)`)
-        } else if (typed.length === 0) {
-            out.push(`A${i + 1}: (skipped)`)
+            answer = stripInlineMarkdown(auto.text)
+            out.push(`A${n + 1}: ${answer} (auto)`)
         } else {
-            out.push(`A${i + 1}: ${typed}`)
+            const plainSuggested =
+                auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
+            const title =
+                auto.suggested ?
+                    `${shownQ}\n${theme.fg('muted', 'Recommended:')}\n\n${renderInlineMarkdown(auto.suggested, theme)}\n\n${theme.fg('muted', 'press Enter to accept')}`
+                :   `${shownQ}\n${theme.fg('muted', '(no recommendation — please answer)')}`
+            widgetState.lastLine = `awaiting Q${n + 1}`
+            const a = await ctx.ui.input(title, plainSuggested)
+            if (a === undefined) throw new Error(USER_CANCELLED)
+            const typed = a.trim()
+            if (typed.length === 0 && plainSuggested) {
+                answer = `${plainSuggested} (accepted recommendation)`
+            } else if (typed.length === 0) {
+                answer = '(skipped)'
+            } else {
+                answer = typed
+            }
+            out.push(`A${n + 1}: ${answer}`)
         }
+        qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer}`)
     }
-    deps.recordSubStep?.('user input', Date.now() - tInputStart)
+    if (out.length === 0) return '(no questions produced)'
     return out.join('\n')
 }
 
@@ -557,8 +566,12 @@ export async function phaseCompose(
         'read',
         problem => COMPOSE_PROMPT(refined, research, qa, problem),
         text => {
-            const problem = validateSpecShape(text)
-            return problem ? {ok: false, problem} : {ok: true, value: text}
+            // Trim any "here's the spec:" preamble before validating, so a
+            // strippable lead-in doesn't burn a full retry — and the stored
+            // value starts at GOAL.
+            const stripped = stripSpecPreamble(text)
+            const problem = validateSpecShape(stripped)
+            return problem ? {ok: false, problem} : {ok: true, value: stripped}
         },
         problem => new Error(`compose_invalid: ${problem}`)
     )
@@ -594,7 +607,7 @@ export async function phaseCritique(
                 deps,
                 'critique-triage',
                 '',
-                CRITIQUE_TRIAGE_PROMPT(spec, refined, qa)
+                appendNoThink(CRITIQUE_TRIAGE_PROMPT(spec, refined, qa))
             )
         } catch {
             verdict = null
@@ -613,10 +626,15 @@ export async function phaseCritique(
             'critique',
             'read',
             problem => CRITIQUE_PROMPT(spec, refined, qa, problem !== null, triageDefects),
-            text =>
-                parseVerifyBlock(text) ?
-                    {ok: true, value: text}
-                :   {ok: false, problem: 'no_verify_block'},
+            text => {
+                // The rewrite (thinking on) sometimes prepends narration before
+                // GOAL; the prompt forbids it but this validator only checks for
+                // a VERIFY block. Strip it so the delivered spec starts at GOAL.
+                const stripped = stripSpecPreamble(text)
+                return parseVerifyBlock(stripped) ?
+                        {ok: true, value: stripped}
+                    :   {ok: false, problem: 'no_verify_block'}
+            },
             () => new Error('no_verify_block')
         )
     } finally {

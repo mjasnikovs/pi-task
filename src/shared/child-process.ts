@@ -115,6 +115,14 @@ export function runChild(
         })
 
         let firstByteFired = false
+        // json-events lines can split across data chunks; this holds the trailing
+        // partial line between chunks so events spanning a boundary still parse.
+        // In json-events mode we deliberately do NOT accumulate the full raw
+        // stream: a long-running child emits hundreds of MB of events and
+        // `stdout += chunk` would overflow V8's max string length (≈512MB),
+        // crashing the process. We only need the parsed text, so we drop the raw
+        // bytes once drained.
+        let lineBuffer = ''
         proc.stdout?.on('data', (d: Buffer) => {
             if (!firstByteFired) {
                 firstByteFired = true
@@ -122,15 +130,21 @@ export function runChild(
             }
             if (discardStdout) return
             const chunk = d.toString()
-            stdout += chunk
             if (isJsonEvents) {
-                drainJsonEvents(chunk, opts as RunChildJsonEventsOptions)
+                lineBuffer = drainJsonEvents(lineBuffer + chunk, opts as RunChildJsonEventsOptions)
+            } else {
+                stdout += chunk
             }
         })
         proc.stderr?.on('data', (d: Buffer) => {
             stderr += d.toString()
         })
         proc.on('close', (code: number | null) => {
+            // Flush a final event that wasn't newline-terminated.
+            if (isJsonEvents && lineBuffer.trim().length > 0) {
+                drainJsonEvents(lineBuffer + '\n', opts as RunChildJsonEventsOptions)
+                lineBuffer = ''
+            }
             const text = isJsonEvents ? (finalText || textDeltaAccum).trim() : undefined
             resolve({stdout, stderr, exitCode: code ?? 0, aborted, text})
         })
@@ -152,8 +166,13 @@ export function runChild(
 
         // ─── JSON event-stream processing ──────────────────────────────────
 
-        function drainJsonEvents(chunk: string, jsonOpts: RunChildJsonEventsOptions): void {
-            let buf = chunk
+        /**
+         * Parse every complete (newline-terminated) JSON line in `buf` and
+         * return the trailing partial line, which the caller carries into the
+         * next chunk. This avoids both losing events that span a chunk boundary
+         * and buffering the entire stream.
+         */
+        function drainJsonEvents(buf: string, jsonOpts: RunChildJsonEventsOptions): string {
             let nl: number
             while ((nl = buf.indexOf('\n')) !== -1) {
                 const line = buf.slice(0, nl).trim()
@@ -168,6 +187,7 @@ export function runChild(
                     // Non-JSON line (startup banner, etc.) — ignore.
                 }
             }
+            return buf
         }
 
         function handleEvent(

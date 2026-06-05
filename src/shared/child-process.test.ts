@@ -1,9 +1,27 @@
 import {describe, expect, test} from 'bun:test'
 import {runChild, summarizeToolArgs} from './child-process.js'
-import {fakeSpawnSimple, fakeSpawnQueue, agentEndResponse} from '../test-utils/fake-spawn.js'
-import type {LoopHit} from './child-process.js'
+import {
+    fakeSpawnSimple,
+    fakeSpawnQueue,
+    agentEndResponse,
+    makeProc
+} from '../test-utils/fake-spawn.js'
+import type {LoopHit, SpawnFn} from './child-process.js'
 
 const noopInvocation = {command: 'pi', args: ['--print']}
+
+/** Spawn fake that emits each given raw string as its own stdout 'data' chunk,
+ *  then closes. Lets tests control exactly where chunk boundaries fall. */
+function fakeSpawnChunks(chunks: string[], exitCode = 0): SpawnFn {
+    return (() => {
+        const p = makeProc()
+        queueMicrotask(() => {
+            for (const c of chunks) p.stdout!.emit('data', Buffer.from(c))
+            p.emit('close', exitCode)
+        })
+        return p
+    }) as unknown as SpawnFn
+}
 
 describe('runChild text mode', () => {
     test('collects stdout, stderr, exitCode', async () => {
@@ -105,6 +123,48 @@ describe('runChild json-events mode', () => {
         expect(snapshots).toHaveLength(1)
         expect(snapshots[0].tokens).toBe(1000)
         expect(snapshots[0].contextWindow).toBe(200000)
+    })
+
+    test('parses an event whose JSON is split across two data chunks', async () => {
+        const line = JSON.stringify(agentEndResponse('split answer').events[0]) + '\n'
+        const mid = Math.floor(line.length / 2)
+        const spawn = fakeSpawnChunks([line.slice(0, mid), line.slice(mid)])
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events'
+        })
+        expect(result.text).toBe('split answer')
+    })
+
+    test('flushes a final event that is not newline-terminated', async () => {
+        // No trailing '\n' — the event only completes at close.
+        const line = JSON.stringify(agentEndResponse('no newline').events[0])
+        const spawn = fakeSpawnChunks([line])
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events'
+        })
+        expect(result.text).toBe('no newline')
+    })
+
+    test('does not buffer the raw stream into stdout (prevents string-length overflow)', async () => {
+        // A large multi-chunk json-events stream must not accumulate in stdout.
+        const deltas = Array.from({length: 50}, (_, i) => ({
+            type: 'message_update',
+            assistantMessageEvent: {type: 'text_delta', delta: `x${i} `}
+        }))
+        const chunks = [
+            JSON.stringify({type: 'message_update', assistantMessageEvent: {type: 'text_start'}})
+                + '\n',
+            ...deltas.map(e => JSON.stringify(e) + '\n')
+        ]
+        const spawn = fakeSpawnChunks(chunks)
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events'
+        })
+        // Text is still assembled from the deltas…
+        expect(result.text).toContain('x0')
+        expect(result.text).toContain('x49')
+        // …but the raw event bytes were dropped, not buffered.
+        expect(result.stdout).toBe('')
     })
 
     test('onToolCall returning a LoopHit triggers process kill and sets aborted', async () => {

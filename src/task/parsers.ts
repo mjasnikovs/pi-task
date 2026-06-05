@@ -16,9 +16,16 @@ export type AutoAnswer =
     | {kind: 'answered'; text: string; raw: string}
     | {kind: 'unknown'; suggested?: string; raw: string}
 
+/** One /task-auto clarify question with its model-recommended default answer. */
+export interface ClarifyQuestion {
+    question: string
+    suggested?: string
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const GRILL_LINE_RE = /^\s*\d+[.)]\s+(.+)$/
+export const SUGGESTED_LINE_RE = /^\s*SUGGESTED:\s*(.*)$/i
 export const TITLE_MAX_CHARS = 120
 
 // ─── Verify block parser ─────────────────────────────────────────────────────
@@ -54,6 +61,54 @@ export function parseGrillQuestions(raw: string): string[] {
         const m = GRILL_LINE_RE.exec(line)
         if (m) out.push(m[1].trim())
         if (out.length >= MAX_GRILL_QUESTIONS) break
+    }
+    return out
+}
+
+// ─── Clarify (/task-auto) parser ─────────────────────────────────────────────
+
+// Matches a "SUGGESTED:" marker anywhere in a string (not just line-start), so
+// we can recover a recommendation the model wrote inline on the question line
+// (e.g. "1. ...so this must be resolved. SUGGESTED: use polling.") rather than
+// on its own line.
+const INLINE_SUGGESTED_RE = /\bSUGGESTED:\s*/i
+
+/** Split a question line's text into the question and any inline SUGGESTED default. */
+function splitInlineSuggested(text: string): ClarifyQuestion {
+    const m = INLINE_SUGGESTED_RE.exec(text)
+    if (!m) return {question: text.trim()}
+    const question = text.slice(0, m.index).trim()
+    const suggested = text.slice(m.index + m[0].length).trim()
+    return suggested.length > 0 ? {question, suggested} : {question}
+}
+
+// Parses the /task-auto clarify output: a numbered question list where each
+// question carries a "SUGGESTED: <default>" recommendation — either on its own
+// line below the question, or inline at the end of the question line. The first
+// SUGGESTED for a question wins; later ones are ignored. The literal token NONE
+// (its own line) means "no clarification needed" → [].
+//
+// Question/suggested text is returned VERBATIM (markdown intact). Inline
+// markdown is rendered for display / stripped for storage at the call site via
+// the helpers in inline-markdown.ts.
+export function parseClarifyList(raw: string): ClarifyQuestion[] {
+    if (/^\s*NONE\s*$/m.test(raw)) return []
+    const out: ClarifyQuestion[] = []
+    for (const line of raw.split('\n')) {
+        const q = GRILL_LINE_RE.exec(line)
+        if (q) {
+            if (out.length >= MAX_GRILL_QUESTIONS) break
+            out.push(splitInlineSuggested(q[1].trim()))
+            continue
+        }
+        const s = SUGGESTED_LINE_RE.exec(line)
+        if (s && out.length > 0) {
+            const suggested = s[1].trim()
+            const last = out[out.length - 1]
+            if (suggested.length > 0 && last.suggested === undefined) {
+                last.suggested = suggested
+            }
+        }
     }
     return out
 }
@@ -129,6 +184,27 @@ export function isCritiqueClean(text: string): boolean {
 }
 
 // ─── Spec shape validator ────────────────────────────────────────────────────
+
+/**
+ * Drop any preamble the model emitted before the spec's GOAL header. The
+ * thinking model sometimes narrates ("Now I have all the context. Here's the
+ * rewritten spec:") before GOAL — the prompts forbid it, but the critique
+ * validator only checks for a VERIFY block, so it leaked into the delivered
+ * spec. We slice from the first line that begins a GOAL section so the spec
+ * starts at GOAL. No GOAL line → returned unchanged (validation then flags it).
+ */
+export function stripSpecPreamble(spec: string): string {
+    const lines = spec.split('\n')
+    const idx = lines.findIndex(l => /^GOAL\b/i.test(l))
+    if (idx <= 0) return spec
+    // Only strip plain narration. If the lead-in is a markdown fence or a
+    // cat-heredoc wrapper, leave it untouched — that's a malformation
+    // validateSpecShape must reject (and compose must retry on), not something
+    // to silently unwrap into a passing spec.
+    const preamble = lines.slice(0, idx)
+    if (preamble.some(l => /^\s*```/.test(l) || /^\s*cat\s*<</.test(l))) return spec
+    return lines.slice(idx).join('\n')
+}
 
 export function validateSpecShape(spec: string): string | null {
     const trimmed = spec.trim()

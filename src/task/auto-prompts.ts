@@ -4,24 +4,47 @@
  */
 
 /**
- * Clarify: output MUST match parseGrillQuestions — a numbered list, or the
- * literal token NONE when no clarification is needed.
+ * Clarify: asks ONE question at a time. Output MUST match parseClarifyList — a
+ * single numbered question followed by a "SUGGESTED: <default>" line, or the
+ * literal token NONE when no clarification remains. priorQA carries the
+ * questions already answered so each next question adapts to them.
  */
-export const AUTO_CLARIFY_PROMPT = (feature: string): string =>
-    `You are planning how to split a feature into separate implementation tasks.
+export const AUTO_CLARIFY_PROMPT = (feature: string, priorQA: string): string =>
+    `You are planning how to split a feature into separate implementation tasks, one clarifying question at a time.
 
 FEATURE REQUEST:
 ${feature.trim()}
 
-List ONLY the clarifying questions whose answers would change how this feature
-is split into tasks (scope boundaries, which subsystems are in/out, ordering,
-key technical choices that fork the task breakdown). Skip anything /task will
-naturally resolve per-task during its own research.
+ANSWERS SO FAR:
+${priorQA.trim() || '(none yet)'}
+
+You may use the read tool to inspect the repo and any referenced docs so your
+question and recommendation are grounded in what already exists.
+
+Output the SINGLE most important clarifying question that REMAINS — the one whose
+answer would most change HOW this feature is split into tasks (scope boundaries,
+which subsystems are in/out, ordering, the cross-cutting technical choices that
+fork the breakdown). Account for the answers so far:
+- Never re-ask something already answered above.
+- If an answer introduced a new fork or contradicts an assumption (for example,
+  the user chose a framework or tool the request did not anticipate), ask about
+  the most important consequence of that choice next — how it is built, what
+  extra dependencies it pulls in, how it changes the other subsystems.
+- When the feature spans multiple subsystems, work through its forks one at a
+  time (file/blob storage, client/rendering strategy, auth and session model,
+  real-time vs polling transport, search, deployment).
+- Skip anything /task will naturally resolve per-task during its own research.
+
+Also propose the single most sensible default answer for this question, inferred
+from the repo, the referenced docs, and any stated philosophy or constraints —
+concrete and decisive, shown to the user as a recommendation they can accept or
+override.
 
 OUTPUT FORMAT (exact):
-- A numbered list, one question per line: "1. ...", "2. ...".
-- Keep it short — only genuinely decision-changing questions, at most a handful.
-- If no clarification is needed, output exactly:
+- One clarifying question as a single numbered line: "1. ...".
+- On the NEXT line (never inline), a line that begins with "SUGGESTED: <your recommended default>".
+- Put the core question in **bold**, followed by a short one-line rationale in plain prose. Backticks around code/identifiers are fine. Avoid other markdown (headings, bullet lists, links).
+- Only when the spec already pins down every choice that would change the task breakdown — nothing decision-changing is left to ask — output exactly:
 NONE`
 
 /**

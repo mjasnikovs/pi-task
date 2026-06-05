@@ -2,8 +2,10 @@ import {describe, expect, test} from 'bun:test'
 import {
     parseVerifyBlock,
     parseGrillQuestions,
+    parseClarifyList,
     parseAutoAnswer,
     validateSpecShape,
+    stripSpecPreamble,
     deriveTitle,
     isCritiqueClean
 } from './parsers.js'
@@ -108,6 +110,85 @@ describe('parseGrillQuestions', () => {
     })
 })
 
+describe('parseClarifyList', () => {
+    test('pairs each question with its SUGGESTED default', () => {
+        const out = parseClarifyList(
+            '1. Where do photos live?\nSUGGESTED: local disk via Bun file APIs\n'
+                + '2. Auth model?\nSUGGESTED: cookie sessions'
+        )
+        expect(out).toEqual([
+            {question: 'Where do photos live?', suggested: 'local disk via Bun file APIs'},
+            {question: 'Auth model?', suggested: 'cookie sessions'}
+        ])
+    })
+
+    test('a question without a SUGGESTED line has no default', () => {
+        const out = parseClarifyList('1. Which store?\n2. Cache?\nSUGGESTED: Redis')
+        expect(out).toEqual([{question: 'Which store?'}, {question: 'Cache?', suggested: 'Redis'}])
+    })
+
+    test('only the first SUGGESTED after a question attaches', () => {
+        const out = parseClarifyList('1. Q\nSUGGESTED: first\nSUGGESTED: second')
+        expect(out).toEqual([{question: 'Q', suggested: 'first'}])
+    })
+
+    test('ignores a SUGGESTED line before any question', () => {
+        const out = parseClarifyList('SUGGESTED: stray\n1. Real?')
+        expect(out).toEqual([{question: 'Real?'}])
+    })
+
+    test('treats lone NONE as zero questions', () => {
+        expect(parseClarifyList('NONE')).toEqual([])
+        expect(parseClarifyList('preamble\nNONE\nnoise')).toEqual([])
+    })
+
+    test('caps at MAX_GRILL_QUESTIONS (10) keeping each suggestion', () => {
+        const text = Array.from(
+            {length: 20},
+            (_, i) => `${i + 1}. q${i + 1}\nSUGGESTED: s${i + 1}`
+        ).join('\n')
+        const out = parseClarifyList(text)
+        expect(out.length).toBe(10)
+        expect(out[9]).toEqual({question: 'q10', suggested: 's10'})
+    })
+
+    test('splits a SUGGESTED that the model wrote inline on the question line', () => {
+        const out = parseClarifyList(
+            '1. Real-time or polling? This must be resolved. SUGGESTED: REST polling with a cursor.'
+        )
+        expect(out).toEqual([
+            {
+                question: 'Real-time or polling? This must be resolved.',
+                suggested: 'REST polling with a cursor.'
+            }
+        ])
+    })
+
+    test('still parses a SUGGESTED on its own line', () => {
+        const out = parseClarifyList('1. Real-time or polling?\nSUGGESTED: REST polling')
+        expect(out).toEqual([{question: 'Real-time or polling?', suggested: 'REST polling'}])
+    })
+
+    test('inline SUGGESTED takes precedence over a later own-line SUGGESTED', () => {
+        const out = parseClarifyList('1. Q? SUGGESTED: inline wins\nSUGGESTED: own line loses')
+        expect(out).toEqual([{question: 'Q?', suggested: 'inline wins'}])
+    })
+
+    test('preserves markdown verbatim (rendering/stripping happens at the call site)', () => {
+        const out = parseClarifyList(
+            '1. **What transport should messaging use?** Native `WebSockets` or polling?\n'
+                + 'SUGGESTED: **Native WebSockets** via `Bun.serve`'
+        )
+        expect(out).toEqual([
+            {
+                question:
+                    '**What transport should messaging use?** Native `WebSockets` or polling?',
+                suggested: '**Native WebSockets** via `Bun.serve`'
+            }
+        ])
+    })
+})
+
 describe('parseAutoAnswer', () => {
     test('parses ANSWER: line as answered', () => {
         const r = parseAutoAnswer('ANSWER: npm')
@@ -145,6 +226,40 @@ describe('parseAutoAnswer', () => {
         const r = parseAutoAnswer('')
         expect(r.kind).toBe('unknown')
         if (r.kind === 'unknown') expect(r.suggested).toBeUndefined()
+    })
+})
+
+describe('stripSpecPreamble', () => {
+    test('drops narration before the GOAL header', () => {
+        const s =
+            'Now I have all the context. Here\'s the rewritten spec:\n\nGOAL\n  do x\nVERIFY:\n```sh\nls\n```'
+        expect(stripSpecPreamble(s)).toBe('GOAL\n  do x\nVERIFY:\n```sh\nls\n```')
+    })
+
+    test('leaves a clean GOAL-first spec untouched', () => {
+        const s = 'GOAL\n  do x\nCONSTRAINTS\n- y'
+        expect(stripSpecPreamble(s)).toBe(s)
+    })
+
+    test('returns unchanged when there is no GOAL line', () => {
+        const s = 'just some text\nno goal here'
+        expect(stripSpecPreamble(s)).toBe(s)
+    })
+
+    test('does NOT unwrap a fenced spec (leaves it for validateSpecShape to reject)', () => {
+        const s = '```sh\nGOAL\n…\n```'
+        expect(stripSpecPreamble(s)).toBe(s)
+    })
+
+    test('does NOT unwrap a cat-heredoc spec', () => {
+        const s = "cat << 'EOF' > spec.md\nGOAL\n…"
+        expect(stripSpecPreamble(s)).toBe(s)
+    })
+
+    test('a stripped preamble then passes validateSpecShape', () => {
+        const s =
+            'Here is the spec:\nGOAL\nx\nCONSTRAINTS\n- y\nACCEPTANCE\n- w\nVERIFY:\n```sh\nls\n```'
+        expect(validateSpecShape(stripSpecPreamble(s))).toBeNull()
     })
 })
 
