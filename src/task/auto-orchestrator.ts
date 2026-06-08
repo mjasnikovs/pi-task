@@ -226,6 +226,8 @@ function defaultDeps(
 // ─── Loop ────────────────────────────────────────────────────────────────────
 
 let cancelRequested = false
+let autoRunning = false
+
 export function requestAutoCancel(): void {
     cancelRequested = true
 }
@@ -311,12 +313,14 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         ctx.ui.notify('Describe the feature after /task-auto (use @ for file completion).', 'info')
         return
     }
+    autoRunning = true
     const abort = new AbortController()
     const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
     let id: string | null
     try {
         id = await planAuto(ctx, cwd, raw, deps)
     } catch (err) {
+        autoRunning = false
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === USER_CANCELLED) {
             ctx.ui.notify('/task-auto cancelled.', 'warning')
@@ -325,8 +329,20 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         ctx.ui.notify(`/task-auto planning failed: ${msg}`, 'error')
         return
     }
-    if (!id) return
+    if (!id) {
+        autoRunning = false
+        return
+    }
+    // Check for a cancel that was requested during the planning phase before the
+    // loop resets the flag.
+    if (cancelRequested) {
+        cancelRequested = false
+        autoRunning = false
+        ctx.ui.notify('/task-auto cancelled.', 'warning')
+        return
+    }
     await runAutoLoop(ctx, cwd, id, deps)
+    autoRunning = false
 }
 
 async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -339,14 +355,20 @@ async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext)
     }
     ctx.ui.notify(`Resuming ${id}…`, 'info')
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
+    autoRunning = true
     const abort = new AbortController()
     // Resume only runs the loop (runTask); no planning children, so the loader
     // title is unused here — pass the id for clarity if that ever changes.
     await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
+    autoRunning = false
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
 async function handleTaskAutoCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
+    if (!autoRunning) {
+        ctx.ui.notify('No /task-auto loop is running.', 'info')
+        return
+    }
     requestAutoCancel()
     ctx.ui.notify('Stopping /task-auto after the current task…', 'warning')
 }
