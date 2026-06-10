@@ -88,4 +88,15 @@ describe('html()', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('Add to Home Screen')
     })
+
+    it('keeps long toast messages readable on narrow phone screens', () => {
+        const out = html('ws://localhost:7600/ws')
+        const m = out.match(/\.toast \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        const rule = m![1]
+        // Without a width cap + wrapping, a long error toast (pinned right) runs
+        // off the left edge of a phone screen and is unreadable.
+        expect(rule).toContain('max-width')
+        expect(rule).toMatch(/overflow-wrap|word-break/)
+    })
 })
