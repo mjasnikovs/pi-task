@@ -53,7 +53,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         {
             mode: 'json-events',
             onFirstByte: () => (tFirstByte = Date.now()),
-            onToolCall: (call) => loopDetector.record(call)
+            onToolCall: call => loopDetector.record(call)
         },
         input.spawn
     )

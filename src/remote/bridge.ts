@@ -1,4 +1,8 @@
-import type {ExtensionAPI, ExtensionCommandContext, ExtensionContext} from '@earendil-works/pi-coding-agent'
+import type {
+    ExtensionAPI,
+    ExtensionCommandContext,
+    ExtensionContext
+} from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 

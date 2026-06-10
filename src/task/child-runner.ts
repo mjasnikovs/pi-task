@@ -150,7 +150,9 @@ export async function runPhaseChild(
         throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
     }
     if (r.text.trim().length === 0) {
-        throw new Error(`${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`)
+        throw new Error(
+            `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+        )
     }
     return r.text
 }
@@ -233,7 +235,9 @@ export async function runPhaseWithLoopGuard(
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
         if (r.text.trim().length === 0) {
-            throw new Error(`${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`)
+            throw new Error(
+                `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+            )
         }
         return r.text
     }
