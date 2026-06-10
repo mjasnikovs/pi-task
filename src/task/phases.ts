@@ -298,25 +298,23 @@ export async function phaseResearch(
     //     is gone, but 4 concurrent streams still split the one GPU and slow
     //     each other ~4x (context worker measured 27s solo vs 128s under load),
     //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
-    // Every worker runs /no_think (below), so sequential is the faster regime.
     // Do NOT switch this back to Promise.all without re-running that A/B.
     //
-    // `/no_think` is the big win: these are agentic exploration loops, and on a
-    // reasoning model the child would otherwise emit a full <think> trace at
-    // every tool step ("let me read X next…") — the single largest decode sink
-    // in the pipeline. Stripping it cut each worker's decode 3-8x in the A/B.
-    // The worker still calls as many tools as it wants; it just stops narrating
-    // between them. See appendNoThink. Result order (files, apis, context,
-    // tooling) is preserved for assembly.
+    // NOTE: `/no_think` is intentionally NOT applied to research workers.
+    // Several local reasoning models (Qwen3.6, DeepSeek-R1) ignore the
+    // directive — they still emit thinking but the confused stopping logic
+    // causes them to burn their entire output budget on tool calls without
+    // producing text. Letting the model think freely produces proper output.
+    // Result order (files, apis, context, tooling) is preserved for assembly.
     const workerSpecs: Array<{label: string; prompt: string; tools?: string}> = [
         {
             label: 'worker:files',
-            prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
+            prompt: promptHeader + RESEARCH_FILES_PROMPT(refined)
         },
-        {label: 'worker:apis', prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined))},
+        {label: 'worker:apis', prompt: promptHeader + RESEARCH_APIS_PROMPT(refined)},
         {
             label: 'worker:context',
-            prompt: appendNoThink(promptHeader + RESEARCH_CONTEXT_PROMPT(refined)),
+            prompt: promptHeader + RESEARCH_CONTEXT_PROMPT(refined),
             // Context owns architectural understanding, not path discovery —
             // FILES handles that. Dropping `find`/`ls` keeps the worker from
             // spawning long enumeration loops whose output then inflates
@@ -325,7 +323,7 @@ export async function phaseResearch(
         },
         {
             label: 'worker:tooling',
-            prompt: appendNoThink(promptHeader + RESEARCH_TOOLING_PROMPT(refined))
+            prompt: promptHeader + RESEARCH_TOOLING_PROMPT(refined)
         }
     ]
 
