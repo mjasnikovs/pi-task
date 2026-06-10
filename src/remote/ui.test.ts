@@ -63,4 +63,29 @@ describe('html()', () => {
         expect(out).toContain('id="prompt-card"')
         expect(out).toContain('id="status-panel"')
     })
+
+    it('renders a notification bell toggle in the header', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('id="bell"')
+        expect(out).toContain('piRemoteNotify')
+    })
+
+    it('guards notifications on permission, secure context, and backgrounded tab', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('Notification.permission')
+        expect(out).toContain('window.isSecureContext')
+        expect(out).toContain('document.hidden')
+    })
+
+    it('uses the agreed titles for the three notification events', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('pi needs your input')
+        expect(out).toContain('Task finished')
+        expect(out).toContain('Agent error')
+    })
+
+    it('warns iOS users to add to Home Screen', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('Add to Home Screen')
+    })
 })

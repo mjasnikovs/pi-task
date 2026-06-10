@@ -53,6 +53,12 @@ export function html(wsUrl: string): string {
     }
     #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em; }
     #header .status { color: var(--subtext0); font-size: 11px; }
+    #header .hgroup { display: flex; align-items: center; gap: 10px; }
+    #bell {
+      background: none; border: none; color: var(--subtext1); cursor: pointer;
+      font-size: 15px; line-height: 1; padding: 2px; font-family: inherit;
+    }
+    #bell:hover { color: var(--text); }
     #chat-log {
       flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px;
       display: flex; flex-direction: column; gap: 8px;
@@ -212,7 +218,10 @@ export function html(wsUrl: string): string {
   <div id="context-bar"><div id="context-bar-fill"></div></div>
   <div id="header">
     <span class="title">pi-task remote</span>
-    <span class="status" id="client-status">connecting…</span>
+    <div class="hgroup">
+      <span class="status" id="client-status">connecting…</span>
+      <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x1F515;</button>
+    </div>
   </div>
   <div id="chat-log"></div>
   <div id="status-panel"></div>
@@ -487,6 +496,59 @@ export function html(wsUrl: string): string {
       setTimeout(function () { t.remove(); }, 4000);
     }
 
+    const bell = document.getElementById('bell');
+    const NOTIFY_KEY = 'piRemoteNotify';
+
+    function notifyEnabled() {
+      return localStorage.getItem(NOTIFY_KEY) === '1'
+        && typeof Notification !== 'undefined'
+        && Notification.permission === 'granted';
+    }
+
+    function updateBell() {
+      // 🔔 when armed, 🔕 when off/unavailable.
+      bell.textContent = notifyEnabled() ? '\\u{1F514}' : '\\u{1F515}';
+    }
+
+    // Why notifications can't be enabled here, or null if they can.
+    function notifyEnvIssue() {
+      if (typeof Notification === 'undefined') return "This browser doesn't support notifications.";
+      if (!window.isSecureContext) return 'Notifications need HTTPS. Open the Tailscale https:// URL, or open via localhost.';
+      const isIOS = /iP(hone|ad|od)/i.test(navigator.userAgent);
+      const standalone = navigator.standalone === true
+        || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+      if (isIOS && !standalone) return 'On iOS: Share \\u2192 Add to Home Screen first, then enable notifications.';
+      return null;
+    }
+
+    bell.addEventListener('click', function () {
+      // Turning OFF always works regardless of environment.
+      if (localStorage.getItem(NOTIFY_KEY) === '1') {
+        localStorage.setItem(NOTIFY_KEY, '0'); updateBell(); return;
+      }
+      const issue = notifyEnvIssue();
+      if (issue) { showToast(issue, 'warning'); return; }
+      Notification.requestPermission().then(function (perm) {
+        if (perm === 'granted') { localStorage.setItem(NOTIFY_KEY, '1'); }
+        else { showToast('Notifications blocked in browser settings.', 'warning'); }
+        updateBell();
+      });
+    });
+
+    // Fire a browser notification, but only when armed, in a secure context,
+    // and the tab is backgrounded (foreground already has the in-page UI).
+    function notify(title, body, tag) {
+      if (!notifyEnabled()) return;
+      if (!window.isSecureContext) return;
+      if (!document.hidden) return;
+      try {
+        const n = new Notification(title, { body: body || '', tag: tag });
+        n.onclick = function () { window.focus(); n.close(); };
+      } catch (e) { /* constructor unsupported (e.g. iOS without SW) */ }
+    }
+
+    updateBell();
+
     function answer(value) {
       if (activePromptId === null) return;
       ws.send(JSON.stringify({ type: 'prompt_answer', id: activePromptId, value: value }));
@@ -667,6 +729,7 @@ export function html(wsUrl: string): string {
             streamText = '';
           }
           addBubble('error', msg.message || 'Error');
+          notify('Agent error', msg.message || 'Error', 'pi-error');
           setEnabled(true);
           break;
         case 'agent_end':
@@ -674,6 +737,7 @@ export function html(wsUrl: string): string {
           currentBubble = null;
           streamText = '';
           setEnabled(true);
+          notify('Task finished', '', 'pi-end');
           if (msg.contextUsage && msg.contextUsage.percent != null) {
             contextFill.style.width = msg.contextUsage.percent + '%';
           }
@@ -683,6 +747,7 @@ export function html(wsUrl: string): string {
           break;
         case 'prompt':
           showPrompt(msg);
+          notify('pi needs your input', msg.question, 'pi-prompt');
           break;
         case 'prompt_resolved':
           if (activePromptId === msg.id) closePrompt();
