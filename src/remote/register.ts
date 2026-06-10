@@ -1,6 +1,6 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {broadcast} from './broadcast.js'
-import {getBridge} from './bridge.js'
+import {getBridge, dispatchRemoteLine} from './bridge.js'
 import {setupEvents} from './events.js'
 import {HistoryBuffer} from './history.js'
 import {html} from './ui.js'
@@ -37,6 +37,7 @@ export function registerRemote(pi: ExtensionAPI): void {
                         :   newCtx.sendUserMessage(text))
                     }
                     bindNewSession(newCtx)
+                    getBridge().currentCtx = newCtx
                 }
             })
     }
@@ -83,25 +84,31 @@ export function registerRemote(pi: ExtensionAPI): void {
             }
 
             bindNewSession(ctx)
+            getBridge().currentCtx = ctx
 
             try {
                 S.server = await startServer(
                     text => {
-                        if (text.startsWith('/')) {
-                            if (text === '/new') {
-                                S.newSession?.().catch(() => {})
-                            }
+                        if (text === '/new') {
+                            S.newSession?.().catch(() => {})
                             return
                         }
-                        // Persist remote-typed messages: they arrive via sendUserMessage
-                        // with source "extension", which the interactive input handler
-                        // skips, so record them here for reconnect/history.
-                        history.addUserMessage(text)
-                        if (isAgentIdle()) {
-                            S.send?.(text)
-                        } else {
-                            S.send?.(text, {deliverAs: 'followUp'})
-                        }
+                        // Slash commands route to the bridge's command registry;
+                        // plain lines fall through to onPlain and go to the agent.
+                        dispatchRemoteLine(text, {
+                            onPlain: plain => {
+                                // Persist remote-typed messages: they arrive via
+                                // sendUserMessage with source "extension", which the
+                                // interactive input handler skips, so record them
+                                // here for reconnect/history.
+                                history.addUserMessage(plain)
+                                if (isAgentIdle()) {
+                                    S.send?.(plain)
+                                } else {
+                                    S.send?.(plain, {deliverAs: 'followUp'})
+                                }
+                            }
+                        })
                     },
                     wsUrl => html(wsUrl),
                     () => history.getEntries()
