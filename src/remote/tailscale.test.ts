@@ -13,9 +13,10 @@ interface Call {
 }
 
 // Records every command and returns canned output keyed by a subcommand label.
-function recordingRun(
-    map: Record<string, {stdout?: string; stderr?: string; exitCode?: number}>
-): {run: Run; calls: Call[]} {
+function recordingRun(map: Record<string, {stdout?: string; stderr?: string; exitCode?: number}>): {
+    run: Run
+    calls: Call[]
+} {
     const calls: Call[] = []
     const run: Run = async (cmd, args) => {
         calls.push({cmd, args})
@@ -164,7 +165,9 @@ describe('planRemoteUrls()', () => {
     it('foreign-conflict → http + conflict hint', () => {
         const plan = planRemoteUrls(http, {state: 'foreign-conflict', host: 'h.ts.net'})
         expect(plan.primaryUrl).toBe(http)
-        expect(plan.hintLines.join('\n')).toContain('already used by another tailscale serve config')
+        expect(plan.hintLines.join('\n')).toContain(
+            'already used by another tailscale serve config'
+        )
     })
     it('certs-disabled → http + admin hint', () => {
         const plan = planRemoteUrls(http, {state: 'certs-disabled', host: 'h.ts.net'})

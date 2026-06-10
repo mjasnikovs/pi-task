@@ -40,7 +40,8 @@ export function serve443Target(json: string): string | undefined {
     } catch {
         return undefined
     }
-    const web = (parsed as {Web?: Record<string, {Handlers?: Record<string, {Proxy?: string}>}>}).Web
+    const web = (parsed as {Web?: Record<string, {Handlers?: Record<string, {Proxy?: string}>}>})
+        .Web
     if (!web) return undefined
     for (const key of Object.keys(web)) {
         if (key.endsWith(':443')) return web[key]?.Handlers?.['/']?.Proxy
@@ -64,7 +65,10 @@ async function tailscaleHost(run: Run): Promise<string | undefined> {
 /** Ensure Tailscale serves https://<host> → http://127.0.0.1:<port>. Mutates only
  *  when needed and never touches a serve config we didn't create. Best-effort:
  *  returns a non-served state rather than throwing. */
-export async function ensureTailscaleServe(port: number, run: Run = defaultRun): Promise<ServeResult> {
+export async function ensureTailscaleServe(
+    port: number,
+    run: Run = defaultRun
+): Promise<ServeResult> {
     const host = await tailscaleHost(run)
     if (!host) return {state: 'unavailable'}
 
