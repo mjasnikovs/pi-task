@@ -1,7 +1,7 @@
 {
     "name": "@mjasnikovs/pi-task",
-    "version": "0.2.3",
-    "description": "Deterministic spec-orchestration for local models, with bundled web/docs/fetch/worker subagent tools.",
+    "version": "0.3.0",
+    "description": "Deterministic spec-orchestration for local models, with a bundled real-time remote web view and web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -52,7 +52,9 @@
         "pi-extension",
         "coding-agent",
         "task-orchestration",
-        "local-llm"
+        "local-llm",
+        "remote",
+        "web"
     ],
     "repository": {
         "type": "git",
