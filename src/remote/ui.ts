@@ -204,7 +204,8 @@ export function html(wsUrl: string): string {
       font-size: 12px; font-weight: 500; padding: 8px 10px; }
     #prompt-card button.cancel:hover { color: var(--red); filter: none; }
     #prompt-card button.cancel.armed { background: var(--red); color: var(--crust); font-weight: 700; }
-    .toast { position: fixed; top: 12px; right: 12px; padding: 8px 12px; border-radius: 6px;
+    .toast { position: fixed; top: 12px; right: 12px; max-width: calc(100vw - 24px);
+      padding: 8px 12px; border-radius: 6px; overflow-wrap: anywhere; word-break: break-word;
       background: var(--surface1); color: var(--text); z-index: 60; }
     .toast.warning { background: var(--peach); color: var(--crust); }
     .toast.error { background: var(--red); color: var(--crust); }
