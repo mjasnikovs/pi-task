@@ -6,9 +6,17 @@ describe('html()', () => {
         expect(typeof html('ws://localhost:7600/ws')).toBe('string')
     })
 
-    it('embeds the wsUrl in the output', () => {
+    it('embeds the wsUrl as a fallback in the output', () => {
         const out = html('ws://192.168.1.5:7601/ws')
         expect(out).toContain('ws://192.168.1.5:7601/ws')
+    })
+
+    it('derives the WebSocket URL from the page origin so LAN and Tailscale URLs both connect', () => {
+        const out = html('ws://192.168.1.5:7601/ws')
+        // WS must follow whatever host served the page, not a baked-in IP.
+        expect(out).toContain('location.host')
+        expect(out).toContain('\'wss://\'')
+        expect(out).toContain('\'ws://\'')
     })
 
     it('contains required DOM element ids', () => {
@@ -28,6 +36,15 @@ describe('html()', () => {
     it('contains Catppuccin Mocha base color', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('#1e1e2e')
+    })
+
+    it('emits a syntactically valid <script> (no unescaped newlines etc.)', () => {
+        const out = html('ws://1.2.3.4:8800/ws')
+        const m = out.match(/<script>([\s\S]*?)<\/script>/)
+        expect(m).not.toBeNull()
+        // A syntax error anywhere kills the whole script, leaving the client stuck
+        // at "connecting…". Parsing the body catches stray literal newlines/tokens.
+        expect(() => new Function(m![1])).not.toThrow()
     })
 
     it('contains WebSocket connect() call', () => {

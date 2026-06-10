@@ -161,6 +161,53 @@ export function registerBridgeCommand(pi: ExtensionAPI, name: string, def: Bridg
     pi.registerCommand(name, wrapped as never)
 }
 
+/** Start a new session in response to a remote `/new`. Reads the freshest
+ *  command-capable ctx (currentCtx) at call time and mirrors dispatchRemoteLine's
+ *  guards: a missing, non-command, or stale ctx toasts instead of crashing.
+ *
+ *  The crash this prevents: a captured ctx goes stale after a *local* /new (a
+ *  replacement we don't initiate, so we never get a withSession to rebind), and
+ *  ctx.newSession() then throws *synchronously* from assertActive — a sync throw
+ *  that a bare `.catch()` on the result would miss. `rebind` runs as withSession
+ *  with the fresh post-replacement ctx. */
+/** The richer context the runtime passes to a `newSession` withSession callback
+ *  (it carries sendUserMessage, unlike a plain command ctx). Derived from the
+ *  newSession signature since the package root doesn't re-export the type. */
+type NewSessionOptions = NonNullable<Parameters<ExtensionCommandContext['newSession']>[0]>
+type ReplacedSessionContext = Parameters<NonNullable<NewSessionOptions['withSession']>>[0]
+
+export function dispatchRemoteNewSession(rebind: (ctx: ReplacedSessionContext) => void): void {
+    const b = getBridge()
+    const ctx = b.currentCtx
+    if (!ctx) {
+        publishNotify('Start a session before running /new remotely.', 'warning')
+        return
+    }
+    // A bare event-scoped ctx lacks newSession; a stale command ctx still has it
+    // but throws on call — the try/catch below covers that case.
+    if (typeof (ctx as {waitForIdle?: unknown}).waitForIdle !== 'function') {
+        publishNotify(
+            'Session changed locally — run any task command in the terminal once to re-enable remote /new.',
+            'warning'
+        )
+        return
+    }
+    const toastErr = (err: unknown) =>
+        publishNotify(`/new failed: ${(err as Error).message}`, 'error')
+    try {
+        const result = ctx.newSession({
+            // eslint-disable-next-line @typescript-eslint/require-await
+            withSession: async newCtx => {
+                b.currentCtx = newCtx
+                rebind(newCtx)
+            }
+        })
+        if (result instanceof Promise) result.catch(toastErr)
+    } catch (err) {
+        toastErr(err)
+    }
+}
+
 /** Handle one line typed in a browser. Returns true if it was consumed as a
  *  slash command (registered or unknown); false if it's a plain chat line that
  *  the caller should forward via onPlain. */

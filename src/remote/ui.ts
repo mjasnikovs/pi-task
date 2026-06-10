@@ -205,7 +205,14 @@ export function html(wsUrl: string): string {
   </div>
   <div id="viewer"><span class="close" id="viewer-close">&#x2715;</span><div id="viewer-body"></div></div>
   <script>
-    const WS_URL = ${JSON.stringify(wsUrl)};
+    // Connect the WebSocket back to whatever host served this page (LAN or
+    // Tailscale), not a server-baked IP — otherwise opening the LAN URL on a
+    // non-Tailscale device tries to reach the Tailscale IP and hangs. Fall back
+    // to the server-provided URL only if location is somehow unavailable.
+    const FALLBACK_WS_URL = ${JSON.stringify(wsUrl)};
+    const WS_URL = (location && location.host)
+      ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'
+      : FALLBACK_WS_URL;
     const chatLog = document.getElementById('chat-log');
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('send');
@@ -582,7 +589,7 @@ export function html(wsUrl: string): string {
           break;
         case 'widget':
           if (msg.lines && msg.lines.length) {
-            statusPanel.textContent = msg.lines.join('\n');
+            statusPanel.textContent = msg.lines.join('\\n');
             statusPanel.style.display = 'block';
           } else {
             statusPanel.style.display = 'none';

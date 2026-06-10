@@ -64,7 +64,7 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/remote` | Start a LAN web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
+| `/remote` | Show the QR code & URLs for the always-on web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
 
@@ -106,7 +106,7 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 
 ## Remote — drive a task from your phone
 
-`/remote` starts a local HTTP + WebSocket server and prints a QR code. Open the URL on any device on the same LAN and you get a live view of the session: streaming output, tool calls, and the `/task` status block (phase, elapsed, context). It's bidirectional — the browser can:
+The remote server is **always on** — it starts automatically with each session, with nothing taking up screen space. Run `/remote` any time to pop a QR code and the connection URLs: a **Tailscale** line and a **LAN** line when both are available (the QR encodes the Tailscale-preferred one). Open the URL on any device that can reach the host and you get a live view of the session: streaming output, tool calls, and the `/task` status block (phase, elapsed, context). It's bidirectional — the browser can:
 
 - **Answer grill / `/task-auto` clarify questions.** Each question appears as a card with the recommended default pre-filled (Accept), a free-text box (Submit), Skip, or Cancel task.
 - **Start and control tasks.** Type `/task …`, `/task-auto …`, `/task-cancel`, `/task-resume`, etc. — they run on the host.
@@ -114,7 +114,7 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 
 Prompts use a **first-answer-wins race**: the same question shows in the local TUI *and* every connected browser, and whoever answers first wins — the other surfaces dismiss. With nobody connected, `/task` behaves exactly as before; the remote path is purely additive.
 
-`/remote stop` shuts the server down. There is **no authentication** — it's a personal LAN tool. Don't expose the port to untrusted networks.
+`/remote stop` shuts the server down for the rest of the session (it comes back on the next session start). There is **no authentication** — it's a personal LAN/Tailscale tool. Don't expose the port to untrusted networks.
 
 ## Bundled tools
 

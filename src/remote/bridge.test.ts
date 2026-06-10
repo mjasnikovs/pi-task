@@ -7,7 +7,8 @@ import {
     publishNotify,
     publishViewer,
     registerBridgeCommand,
-    dispatchRemoteLine
+    dispatchRemoteLine,
+    dispatchRemoteNewSession
 } from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 
@@ -218,6 +219,77 @@ test('dispatchRemoteLine toasts when an async command handler rejects', async ()
                 && (m as {message?: string}).message?.includes('boom')
         )
     ).toBe(true)
+})
+
+test('dispatchRemoteNewSession does not throw when newSession is stale (sync throw)', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    // A stale command ctx still LOOKS command-capable (waitForIdle is a function)
+    // but newSession() throws synchronously from assertActive — this is the crash.
+    b.currentCtx = {
+        waitForIdle: () => {},
+        newSession: () => {
+            throw new Error('This extension ctx is stale after session replacement')
+        }
+    } as never
+    let rebound = false
+    expect(() =>
+        dispatchRemoteNewSession(() => {
+            rebound = true
+        })
+    ).not.toThrow()
+    expect(rebound).toBe(false)
+    expect(
+        b.sent.some(
+            m =>
+                (m as {type: string; message?: string}).type === 'notify'
+                && (m as {message?: string}).message?.includes('stale')
+        )
+    ).toBe(true)
+})
+
+test('dispatchRemoteNewSession toasts when currentCtx is null', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.currentCtx = null
+    dispatchRemoteNewSession(() => {})
+    expect(b.sent.some(m => (m as {type: string}).type === 'notify')).toBe(true)
+})
+
+test('dispatchRemoteNewSession toasts guidance when ctx is not command-capable', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.currentCtx = {hasUI: true} as never // no waitForIdle
+    let called = false
+    dispatchRemoteNewSession(() => (called = true))
+    expect(called).toBe(false)
+    expect(
+        b.sent.some(
+            m =>
+                (m as {type: string; message?: string}).type === 'notify'
+                && (m as {message?: string}).message?.includes('Session changed locally')
+        )
+    ).toBe(true)
+})
+
+test('dispatchRemoteNewSession invokes newSession and rebinds via withSession', async () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    const newCtx = {waitForIdle: () => {}} as never
+    let withSessionCb: ((ctx: never) => unknown) | undefined
+    b.currentCtx = {
+        waitForIdle: () => {},
+        newSession: (opts: {withSession?: (ctx: never) => unknown}) => {
+            withSessionCb = opts.withSession
+            return Promise.resolve({cancelled: false})
+        }
+    } as never
+    let reboundWith: unknown
+    dispatchRemoteNewSession(ctx => (reboundWith = ctx))
+    expect(withSessionCb).toBeDefined()
+    await withSessionCb!(newCtx)
+    expect(reboundWith).toBe(newCtx)
+    expect(b.currentCtx).toBe(newCtx)
 })
 
 test('registerBridgeCommand records the handler and forwards to pi.registerCommand', () => {

@@ -252,7 +252,7 @@ describe('stripSpecPreamble', () => {
     })
 
     test('does NOT unwrap a cat-heredoc spec', () => {
-        const s = "cat << 'EOF' > spec.md\nGOAL\n…"
+        const s = 'cat << \'EOF\' > spec.md\nGOAL\n…'
         expect(stripSpecPreamble(s)).toBe(s)
     })
 

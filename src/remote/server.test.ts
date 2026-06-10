@@ -1,5 +1,5 @@
 import {describe, it, expect, afterEach, test} from 'bun:test'
-import {startServer} from './server.js'
+import {startServer, getLocalIPs, formatAddresses} from './server.js'
 import type {ServerHandle} from './server.js'
 import WebSocket from 'ws'
 import {getBridge, answerPrompt} from './bridge.js'
@@ -12,6 +12,74 @@ afterEach(() => {
     const b = getBridge()
     b.pending.clear()
     b.activePrompt = null
+})
+
+describe('getLocalIPs', () => {
+    const v4 = (address: string, internal = false) => ({
+        address,
+        family: 'IPv4' as const,
+        internal,
+        netmask: '255.255.255.0',
+        mac: '00:00:00:00:00:00',
+        cidr: null
+    })
+
+    it('separates the Tailscale address from the LAN address', () => {
+        const ips = getLocalIPs({
+            tailscale0: [v4('100.92.14.7')],
+            eth0: [v4('192.168.1.42')],
+            lo: [v4('127.0.0.1', true)]
+        })
+        expect(ips.tailscale).toBe('100.92.14.7')
+        expect(ips.lan).toBe('192.168.1.42')
+        expect(ips.primary).toBe('100.92.14.7')
+    })
+
+    it('falls back to LAN as primary when there is no Tailscale interface', () => {
+        const ips = getLocalIPs({
+            eth0: [v4('192.168.1.42')],
+            lo: [v4('127.0.0.1', true)]
+        })
+        expect(ips.tailscale).toBeUndefined()
+        expect(ips.lan).toBe('192.168.1.42')
+        expect(ips.primary).toBe('192.168.1.42')
+    })
+
+    it('ignores internal interfaces and defaults primary to loopback', () => {
+        const ips = getLocalIPs({lo: [v4('127.0.0.1', true)]})
+        expect(ips.tailscale).toBeUndefined()
+        expect(ips.lan).toBeUndefined()
+        expect(ips.primary).toBe('127.0.0.1')
+    })
+
+    it('does not treat the Tailscale address as the LAN address', () => {
+        const ips = getLocalIPs({tailscale0: [v4('100.92.14.7')]})
+        expect(ips.tailscale).toBe('100.92.14.7')
+        expect(ips.lan).toBeUndefined()
+    })
+})
+
+describe('formatAddresses', () => {
+    it('labels both Tailscale and LAN full URLs', () => {
+        const addrs = formatAddresses(
+            {tailscale: '100.92.14.7', lan: '192.168.1.42', primary: '100.92.14.7'},
+            8800
+        )
+        expect(addrs).toEqual([
+            {label: 'Tailscale', url: 'http://100.92.14.7:8800'},
+            {label: 'LAN', url: 'http://192.168.1.42:8800'}
+        ])
+    })
+
+    it('emits only the LAN line when Tailscale is absent', () => {
+        const addrs = formatAddresses({lan: '192.168.1.42', primary: '192.168.1.42'}, 8800)
+        expect(addrs).toEqual([{label: 'LAN', url: 'http://192.168.1.42:8800'}])
+    })
+
+    it('falls back to a single unlabeled primary URL when no interfaces resolve', () => {
+        const addrs = formatAddresses({primary: '127.0.0.1'}, 8801)
+        expect(addrs).toEqual([{label: '', url: 'http://127.0.0.1:8801'}])
+    })
 })
 
 describe('startServer', () => {

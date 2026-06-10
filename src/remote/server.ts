@@ -6,28 +6,66 @@ import type {Turn} from './history.js'
 import {getBridge, answerPrompt} from './bridge.js'
 import {isClientMessage} from './protocol.js'
 
+export interface LocalIPs {
+    /** Tailscale (tailscale0) IPv4 address, if the interface is up. */
+    tailscale?: string
+    /** First non-internal, non-Tailscale IPv4 address (the LAN address). */
+    lan?: string
+    /** Address used for the QR code / primary URL: Tailscale, else LAN, else loopback. */
+    primary: string
+}
+
+export interface AddressLine {
+    /** Network label (e.g. 'Tailscale', 'LAN'); empty for the loopback fallback. */
+    label: string
+    /** Full http:// URL for that address. */
+    url: string
+}
+
 export interface ServerHandle {
     port: number
+    /** Primary address (Tailscale-preferred); the one the QR encodes. */
     ip: string
+    /** All resolved addresses, for displaying both Tailscale and LAN URLs. */
+    ips: LocalIPs
     stop(): void
     onFirstConnect: (() => void) | null
 }
 
 type MessageCallback = (text: string) => void
 
-function getLocalIP(): string {
-    const nets = networkInterfaces()
-    // Prefer Tailscale when available
+export function getLocalIPs(nets = networkInterfaces()): LocalIPs {
+    // Prefer Tailscale when available.
+    let tailscale: string | undefined
     for (const net of nets['tailscale0'] ?? []) {
-        if (net.family === 'IPv4') return net.address
-    }
-    for (const iface of Object.values(nets)) {
-        if (!iface) continue
-        for (const net of iface) {
-            if (net.family === 'IPv4' && !net.internal) return net.address
+        if (net.family === 'IPv4') {
+            tailscale = net.address
+            break
         }
     }
-    return '127.0.0.1'
+    // LAN = first non-internal IPv4 that isn't the Tailscale interface.
+    let lan: string | undefined
+    for (const [name, iface] of Object.entries(nets)) {
+        if (!iface || name === 'tailscale0') continue
+        for (const net of iface) {
+            if (net.family === 'IPv4' && !net.internal) {
+                lan = net.address
+                break
+            }
+        }
+        if (lan) break
+    }
+    return {tailscale, lan, primary: tailscale ?? lan ?? '127.0.0.1'}
+}
+
+/** Build the labeled URL lines shown under the QR code. Both Tailscale and LAN
+ *  when present; a single unlabeled primary URL when neither resolves. */
+export function formatAddresses(ips: LocalIPs, port: number): AddressLine[] {
+    const out: AddressLine[] = []
+    if (ips.tailscale) out.push({label: 'Tailscale', url: `http://${ips.tailscale}:${port}`})
+    if (ips.lan) out.push({label: 'LAN', url: `http://${ips.lan}:${port}`})
+    if (out.length === 0) out.push({label: '', url: `http://${ips.primary}:${port}`})
+    return out
 }
 
 async function tryBind(port: number): Promise<boolean> {
@@ -53,7 +91,8 @@ export async function startServer(
     getHistory: () => Turn[]
 ): Promise<ServerHandle> {
     const port = await findPort(8800, 100)
-    const ip = getLocalIP()
+    const ips = getLocalIPs()
+    const ip = ips.primary
     const wsUrl = `ws://${ip}:${port}/ws`
 
     const httpServer = createServer((req, res) => {
@@ -72,6 +111,7 @@ export async function startServer(
     const handle: ServerHandle = {
         port,
         ip,
+        ips,
         onFirstConnect: null,
         stop() {
             wss.close()
