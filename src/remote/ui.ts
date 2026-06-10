@@ -54,7 +54,7 @@ export function html(wsUrl: string): string {
     #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em; }
     #header .status { color: var(--subtext0); font-size: 11px; }
     #chat-log {
-      flex: 1; overflow-y: auto; padding: 16px;
+      flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px;
       display: flex; flex-direction: column; gap: 8px;
     }
     #chat-log::-webkit-scrollbar { width: 6px; }
@@ -96,9 +96,10 @@ export function html(wsUrl: string): string {
     .tool-call[open] > summary::before { content: "▼  "; }
     .tool-call.error > summary { color: var(--red); }
     .tool-call pre {
-      padding: 8px 12px; overflow-x: auto; overflow-y: auto;
+      padding: 8px 12px; overflow-y: auto;
       color: var(--subtext1); font-size: 11px; max-height: 280px;
       border-top: 1px solid var(--surface0);
+      white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
     }
     .code-block {
       background: var(--crust); border: 1px solid var(--surface0);
@@ -180,7 +181,8 @@ export function html(wsUrl: string): string {
     .toast.warning { background: var(--peach); color: var(--crust); }
     .toast.error { background: var(--red); color: var(--crust); }
     #viewer { position: fixed; inset: 24px; background: var(--mantle); border: 1px solid var(--surface2);
-      border-radius: 8px; padding: 16px; overflow: auto; white-space: pre-wrap; display: none; z-index: 70; }
+      border-radius: 8px; padding: 16px; overflow: auto; white-space: pre-wrap;
+      overflow-wrap: anywhere; word-break: break-word; display: none; z-index: 70; }
     #viewer .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--subtext0); }
   </style>
 </head>

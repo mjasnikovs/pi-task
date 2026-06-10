@@ -40,8 +40,8 @@ import {
     type PhaseName,
     RESUMABLE_STATES
 } from './task-file.js'
-import {startWidget, WIDGET_KEY, type WidgetState} from './widget.js'
-import {publishViewer, publishNotify, registerBridgeCommand} from '../remote/bridge.js'
+import {startWidget, type WidgetState} from './widget.js'
+import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {parseVerifyBlock} from './parsers.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
@@ -270,17 +270,12 @@ export class TaskRunner {
             await advance('done')
             if (parseVerifyBlock(this._pc.spec) === null) throw new Error('no_verify_block')
             await updateTaskFrontMatter(cwd, id, {state: 'completed', phase: 'done'})
-            this._stopWidget?.()
-            try {
-                ctx.ui.setWidget(WIDGET_KEY, undefined)
-            } catch {
-                /* stale ctx */
-            }
+            this._disposeWidget()
             await setTaskSection(cwd, id, 'phase timings', formatTimings(this._timings))
             await setTaskSection(cwd, id, 'handoff', `handoff_at: ${new Date().toISOString()}`)
             await this._deliverSpec(ctx)
         } catch (err) {
-            this._stopWidget?.()
+            this._disposeWidget()
             // Persist whatever timings we collected so failed runs are still
             // useful for analysis. Best-effort — never mask the original error.
             if (this._timings.length > 0) {
@@ -292,9 +287,18 @@ export class TaskRunner {
             }
             await handleFailure(err, ctx, cwd, id, this._abort.signal.aborted)
         } finally {
-            this._stopWidget?.()
+            this._disposeWidget()
             clearActiveTask(this)
         }
+    }
+
+    /** Stop the phase widget — clearing both the terminal and remote surfaces —
+     *  exactly once. Nulling the disposer makes repeat calls no-ops, so the
+     *  failure flash that handleFailure sets after the catch isn't wiped by the
+     *  finally block's call. */
+    private _disposeWidget(): void {
+        this._stopWidget?.()
+        this._stopWidget = null
     }
 
     private async _deliverSpec(ctx: ExtensionCommandContext): Promise<void> {
@@ -319,6 +323,8 @@ export interface RunSingleTaskOptions {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
     waitForImplementation?: boolean
+    /** Resume an existing task by ID instead of starting a new one. */
+    resumeId?: string
     /** Test seam: spawn function forwarded to TaskRunner. */
     spawnFn?: SpawnFn
 }
@@ -358,11 +364,12 @@ export async function runSingleTask(
     const result = await ctx.newSession({
         withSession: async newCtx => {
             freshCtx = newCtx
+            getBridge().currentCtx = newCtx // keep remote dispatch ctx fresh across session replacement
             const runner = new TaskRunner(
                 newCtx,
                 cwd,
                 rawPrompt,
-                undefined,
+                opts.resumeId,
                 async spec => {
                     await newCtx.sendUserMessage(spec)
                     if (opts.waitForImplementation) await newCtx.waitForIdle()
@@ -481,8 +488,10 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         }
         id = candidates[0].id
     }
-    const runner = new TaskRunner(ctx, cwd, '', id)
-    await runner.run()
+    const {sessionCancelled} = await runSingleTask(ctx, cwd, '', {resumeId: id})
+    if (sessionCancelled) {
+        ctx.ui.notify('Could not start a fresh session for /task-resume.', 'warning')
+    }
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await

@@ -75,7 +75,16 @@ test('startWidget mirrors the rendered lines to the bridge', () => {
         ui: {theme: {fg: (_: string, s: string) => s}, setWidget: () => {}}
     } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
     const stop = startWidget(ctx, () => state)
-    stop()
     expect(b.activeWidgets.has(WIDGET_KEY)).toBe(true)
     expect(b.sent.some(m => (m as {type: string}).type === 'widget')).toBe(true)
+    stop()
+    // Stopping must clear the remote widget too, otherwise the browser keeps
+    // showing the status panel after handoff. (Symmetric with startAutoLoader.)
+    expect(b.activeWidgets.has(WIDGET_KEY)).toBe(false)
+    expect(
+        b.sent.some(m => {
+            const w = m as {type: string; key?: string; lines?: unknown}
+            return w.type === 'widget' && w.key === WIDGET_KEY && w.lines === null
+        })
+    ).toBe(true)
 })

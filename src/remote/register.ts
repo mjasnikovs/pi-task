@@ -1,6 +1,6 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {broadcast} from './broadcast.js'
-import {getBridge, dispatchRemoteLine, dispatchRemoteNewSession} from './bridge.js'
+import {getBridge, dispatchRemoteLine, dispatchRemoteNewSession, makeShimmedCtx} from './bridge.js'
 import {setupEvents} from './events.js'
 import {HistoryBuffer} from './history.js'
 import {html} from './ui.js'
@@ -24,20 +24,12 @@ const S = _g.__piRemote!
 export function registerRemote(pi: ExtensionAPI): void {
     const history = new HistoryBuffer(20)
 
-    /** Start the always-on remote server once; later calls return the live handle.
-     *  Plain chat works immediately via S.send; remote slash commands and /new
-     *  bind once any command supplies a command-capable ctx (see dispatchRemoteLine). */
     async function ensureServer(): Promise<ServerHandle> {
         if (S.server) return S.server
         S.server = await startServer(
             text => {
                 if (text === '/new') {
-                    // Route through the bridge's freshest command ctx with the same
-                    // crash-safe guards as remote slash commands. The withSession
-                    // rebind keeps S.send pointed at the new session's ctx.
                     dispatchRemoteNewSession(newCtx => {
-                        // newCtx.sendUserMessage bypasses the stale runtime check
-                        // (returns a Promise we deliberately discard).
                         S.send = (msg, opts) => {
                             void (opts ?
                                 newCtx.sendUserMessage(msg, opts)
@@ -46,14 +38,8 @@ export function registerRemote(pi: ExtensionAPI): void {
                     })
                     return
                 }
-                // Slash commands route to the bridge's command registry;
-                // plain lines fall through to onPlain and go to the agent.
                 dispatchRemoteLine(text, {
                     onPlain: plain => {
-                        // Persist remote-typed messages: they arrive via
-                        // sendUserMessage with source "extension", which the
-                        // interactive input handler skips, so record them
-                        // here for reconnect/history.
                         history.addUserMessage(plain)
                         if (isAgentIdle()) {
                             S.send?.(plain)
@@ -70,18 +56,18 @@ export function registerRemote(pi: ExtensionAPI): void {
     }
 
     pi.on('session_start', (_event, ctx) => {
-        // Update shared send with fresh pi on each session (survives /new re-evaluation)
         S.send = (text, opts) => (opts ? pi.sendUserMessage(text, opts) : pi.sendUserMessage(text))
         setupEvents(pi, history, broadcast)
-        // Always-on: bring the remote server up automatically so no /remote is
-        // needed. Plain chat flows immediately via S.send; the local widget shows
-        // the reachable URLs. Run /remote to view the QR or fully enable remote
-        // slash commands.
-        // NOTE: we deliberately do NOT seed bridge.currentCtx here. The event ctx
-        // is the base ExtensionContext (no waitForIdle/newSession), so storing it
-        // would make a later remote /task throw. currentCtx is only ever set from
-        // a real command ctx: the /remote handler, registerBridgeCommand, and the
-        // remote-/new withSession rebind. See dispatchRemoteLine's capability guard.
+        // Seed a shimmed ctx so commands that don't need newSession (/task-list,
+        // /task-cancel, /task-auto-cancel) work immediately from the remote without
+        // any terminal interaction. Only overwrite if null or already shimmed —
+        // a real command ctx captured from a prior terminal command must survive
+        // session_start (it's updated via withSession or registerBridgeCommand,
+        // not replaced here).
+        const b = getBridge()
+        if (!b.currentCtx || (b.currentCtx as unknown as Record<string, unknown>)['__piRemoteShimmed'] === true) {
+            b.currentCtx = makeShimmedCtx(ctx)
+        }
         void ensureServer().catch(err =>
             ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')
         )
@@ -111,18 +97,15 @@ export function registerRemote(pi: ExtensionAPI): void {
                 return
             }
 
-            // Capture this command-capable ctx so remote slash commands and /new
-            // work (the always-on auto-start can only bind plain chat).
+            // Upgrade from shimmed ctx to a real command-capable ctx.
             getBridge().currentCtx = ctx
 
             try {
                 const server = await ensureServer()
 
-                // QR keeps encoding only the primary (Tailscale-preferred) URL.
                 const primaryUrl = `http://${server.ip}:${server.port}`
                 const qr = await qrLines(primaryUrl)
 
-                // Labeled, block-aligned address lines: Tailscale + LAN when present.
                 const addrs = formatAddresses(server.ips, server.port)
                 const labelW = addrs.reduce((m, a) => Math.max(m, a.label.length), 0)
                 const addrLines = addrs.map(a =>
@@ -136,8 +119,6 @@ export function registerRemote(pi: ExtensionAPI): void {
                     const visWidth = qr.reduce((max, l) => Math.max(max, stripAnsi(l).length), 0)
                     const overlayWidth = Math.max(visWidth, addrWidth + 4, 36)
 
-                    // Fire-and-forget: don't await so the command handler returns immediately
-                    // (avoids "Working" lock if user runs /new before dismissing)
                     ctx.ui
                         .custom<void>(
                             (_tui, _theme, _kb, done) => ({

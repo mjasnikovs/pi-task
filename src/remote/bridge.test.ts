@@ -8,7 +8,8 @@ import {
     publishViewer,
     registerBridgeCommand,
     dispatchRemoteLine,
-    dispatchRemoteNewSession
+    dispatchRemoteNewSession,
+    makeShimmedCtx
 } from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 
@@ -184,25 +185,19 @@ test('dispatchRemoteLine sends plain lines to onPlain', () => {
     expect(plain).toBe('hello there')
 })
 
-test('dispatchRemoteLine toasts a guidance message when currentCtx is not command-capable', () => {
+test('dispatchRemoteLine invokes the command with the seeded (shimmed) ctx', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
-    // A bare event-scoped ctx (no waitForIdle) must not be invoked as a command.
-    b.currentCtx = {hasUI: true} as never
-    let called = false
-    b.commands.set('task', () => {
-        called = true
+    // session_start seeds a shimmed, command-capable ctx, so commands run against
+    // it immediately — no terminal interaction required.
+    b.currentCtx = makeShimmedCtx({isIdle: () => true} as never)
+    let receivedCtx: unknown
+    b.commands.set('task', (_args, ctx) => {
+        receivedCtx = ctx
     })
     const handled = dispatchRemoteLine('/task go', {onPlain: () => {}})
     expect(handled).toBe(true)
-    expect(called).toBe(false)
-    expect(
-        b.sent.some(
-            m =>
-                (m as {type: string; message?: string}).type === 'notify'
-                && (m as {message?: string}).message?.includes('Session changed locally')
-        )
-    ).toBe(true)
+    expect(typeof (receivedCtx as {waitForIdle?: unknown}).waitForIdle).toBe('function')
 })
 
 test('dispatchRemoteLine toasts when an async command handler rejects', async () => {
@@ -256,18 +251,20 @@ test('dispatchRemoteNewSession toasts when currentCtx is null', () => {
     expect(b.sent.some(m => (m as {type: string}).type === 'notify')).toBe(true)
 })
 
-test('dispatchRemoteNewSession toasts guidance when ctx is not command-capable', () => {
+test('dispatchRemoteNewSession toasts the shim\'s actionable error when only a shimmed ctx is available', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
-    b.currentCtx = {hasUI: true} as never // no waitForIdle
-    let called = false
-    dispatchRemoteNewSession(() => (called = true))
-    expect(called).toBe(false)
+    // A shimmed ctx is command-capable but its newSession throws a clear, actionable
+    // message; dispatchRemoteNewSession surfaces it as a toast and does not rebind.
+    b.currentCtx = makeShimmedCtx({isIdle: () => true} as never)
+    let rebound = false
+    dispatchRemoteNewSession(() => (rebound = true))
+    expect(rebound).toBe(false)
     expect(
         b.sent.some(
             m =>
                 (m as {type: string; message?: string}).type === 'notify'
-                && (m as {message?: string}).message?.includes('Session changed locally')
+                && (m as {message?: string}).message?.includes('Run /remote in the terminal once')
         )
     ).toBe(true)
 })

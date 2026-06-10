@@ -131,7 +131,15 @@ export function startWidget(
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
     ;(timer as unknown as {unref?: () => void}).unref?.()
-    return () => clearInterval(timer)
+    return () => {
+        clearInterval(timer)
+        try {
+            ctx.ui.setWidget(WIDGET_KEY, undefined)
+        } catch {
+            /* stale ctx */
+        }
+        publishWidget(WIDGET_KEY, undefined)
+    }
 }
 
 // ─── Auto-planning loader ──────────────────────────────────────────────────

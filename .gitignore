@@ -2,3 +2,9 @@ node_modules/
 dist/
 plans/
 docs/superpowers/specs/
+
+# Docs-worker test fixtures live under a node_modules/ (and a dist/) dir on
+# purpose — the resolver walks real node_modules layouts. Keep them tracked.
+# These negations must come after the ignore rules above to take effect.
+!src/workers/__fixtures__/node_modules/
+!src/workers/__fixtures__/node_modules/**

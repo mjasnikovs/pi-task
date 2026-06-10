@@ -1,5 +1,6 @@
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {CHILD_BASE_ARGS, runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {LoopDetector} from '../task/loop-detector.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -44,11 +45,16 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     const invocation = getPiInvocation([...childArgs, input.prompt])
     const tStart = Date.now()
     let tFirstByte: number | null = null
+    const loopDetector = new LoopDetector(20, 5)
     const result = await runChildDefault(
         invocation,
         input.cwd,
         input.signal,
-        {mode: 'json-events', onFirstByte: () => (tFirstByte = Date.now())},
+        {
+            mode: 'json-events',
+            onFirstByte: () => (tFirstByte = Date.now()),
+            onToolCall: (call) => loopDetector.record(call)
+        },
         input.spawn
     )
     const tEnd = Date.now()

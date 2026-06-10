@@ -1,4 +1,4 @@
-import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI, ExtensionCommandContext, ExtensionContext} from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 
@@ -139,6 +139,40 @@ export function publishViewer(title: string, text: string): void {
     getBridge().broadcast({type: 'viewer', title, text})
 }
 
+// ─── Shimmed ctx ─────────────────────────────────────────────────────────────
+
+const SHIMMED_MARKER = '__piRemoteShimmed'
+
+/**
+ * Wraps an event-scoped ExtensionContext so it can be used as a command ctx
+ * for commands that don't need newSession (e.g. /task-resume, /task-list,
+ * /task-cancel, /task-auto-cancel).
+ *
+ * - waitForIdle: polls ctx.isIdle() instead of the real runtime hook.
+ * - newSession: throws a clear error so /task, /task-auto, /task-auto-resume
+ *   show a helpful message rather than a confusing TypeError.
+ *
+ * The shim is replaced by a real ExtensionCommandContext the first time the
+ * user runs any /task* or /remote command in the terminal.
+ */
+export function makeShimmedCtx(ctx: ExtensionContext): ExtensionCommandContext {
+    const shim = Object.create(ctx) as ExtensionCommandContext
+    ;(shim as unknown as Record<string, unknown>)[SHIMMED_MARKER] = true
+    shim.waitForIdle = async () => {
+        while (!ctx.isIdle()) {
+            await new Promise<void>(r => setTimeout(r, 100))
+        }
+    }
+    // newSession is not available from an event ctx. Return a function that
+    // throws a clear message so the error toast is actionable.
+    ;(shim as unknown as {newSession: () => never}).newSession = (): never => {
+        throw new Error(
+            'Run /remote in the terminal once to enable /task, /task-auto, and /new from remote.'
+        )
+    }
+    return shim
+}
+
 interface BridgeCommandDef {
     description: string
     handler: (args: string, ctx: ExtensionCommandContext) => unknown
@@ -162,17 +196,8 @@ export function registerBridgeCommand(pi: ExtensionAPI, name: string, def: Bridg
 }
 
 /** Start a new session in response to a remote `/new`. Reads the freshest
- *  command-capable ctx (currentCtx) at call time and mirrors dispatchRemoteLine's
- *  guards: a missing, non-command, or stale ctx toasts instead of crashing.
- *
- *  The crash this prevents: a captured ctx goes stale after a *local* /new (a
- *  replacement we don't initiate, so we never get a withSession to rebind), and
- *  ctx.newSession() then throws *synchronously* from assertActive — a sync throw
- *  that a bare `.catch()` on the result would miss. `rebind` runs as withSession
- *  with the fresh post-replacement ctx. */
-/** The richer context the runtime passes to a `newSession` withSession callback
- *  (it carries sendUserMessage, unlike a plain command ctx). Derived from the
- *  newSession signature since the package root doesn't re-export the type. */
+ *  command-capable ctx (currentCtx) at call time. If only a shimmed ctx is
+ *  available, the newSession shim throws a clear error. */
 type NewSessionOptions = NonNullable<Parameters<ExtensionCommandContext['newSession']>[0]>
 type ReplacedSessionContext = Parameters<NonNullable<NewSessionOptions['withSession']>>[0]
 
@@ -180,16 +205,7 @@ export function dispatchRemoteNewSession(rebind: (ctx: ReplacedSessionContext) =
     const b = getBridge()
     const ctx = b.currentCtx
     if (!ctx) {
-        publishNotify('Start a session before running /new remotely.', 'warning')
-        return
-    }
-    // A bare event-scoped ctx lacks newSession; a stale command ctx still has it
-    // but throws on call — the try/catch below covers that case.
-    if (typeof (ctx as {waitForIdle?: unknown}).waitForIdle !== 'function') {
-        publishNotify(
-            'Session changed locally — run any task command in the terminal once to re-enable remote /new.',
-            'warning'
-        )
+        publishNotify('No session context available — restart pi and try again.', 'warning')
         return
     }
     const toastErr = (err: unknown) =>
@@ -226,17 +242,8 @@ export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) 
         return true
     }
     if (!b.currentCtx) {
-        publishNotify('Start a session before running commands remotely.', 'warning')
-        return true
-    }
-    // Command handlers need a command-capable ctx (waitForIdle/newSession). A bare
-    // event-scoped ExtensionContext lacks those; if currentCtx is one (e.g. nothing
-    // command-capable has been captured yet), toast instead of throwing a TypeError.
-    if (typeof (b.currentCtx as {waitForIdle?: unknown}).waitForIdle !== 'function') {
-        publishNotify(
-            'Session changed locally — run any task command in the terminal once to re-enable remote commands.',
-            'warning'
-        )
+        // Shouldn't happen after session_start seeds a shimmed ctx, but guard anyway.
+        publishNotify(`/${name}: no session context yet — restart pi.`, 'warning')
         return true
     }
     // Invoke synchronously so the call happens immediately, but surface both
