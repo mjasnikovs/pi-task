@@ -41,6 +41,7 @@ import {
     RESUMABLE_STATES
 } from './task-file.js'
 import {startWidget, WIDGET_KEY, type WidgetState} from './widget.js'
+import {publishViewer, publishNotify, registerBridgeCommand} from '../remote/bridge.js'
 import {parseVerifyBlock} from './parsers.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
@@ -437,6 +438,7 @@ async function handleTaskList(_args: string, ctx: ExtensionCommandContext): Prom
         '',
         'resume: /task-resume <id>   (eligible: in_progress, pending, cancelled, failed)'
     )
+    publishViewer('Tasks', lines.join('\n'))
     await ctx.ui.editor('Tasks', lines.join('\n'))
 }
 
@@ -450,6 +452,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
             await fsp.access(taskFilePath(cwd, id))
         } catch {
             ctx.ui.notify(`${id} not found in .pi-tasks/`, 'error')
+            publishNotify(`${id} not found in .pi-tasks/`, 'error')
             return
         }
     } else {
@@ -473,6 +476,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         candidates.sort((a, b) => b.mtime - a.mtime)
         if (candidates.length === 0) {
             ctx.ui.notify('No resumable tasks.', 'info')
+            publishNotify('No resumable tasks.', 'info')
             return
         }
         id = candidates[0].id
@@ -485,29 +489,31 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
 async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Promise<void> {
     if (!activeTask) {
         ctx.ui.notify('No task is running.', 'info')
+        publishNotify('No task is running.', 'info')
         return
     }
     activeTask.cancel()
     ctx.ui.notify(`Cancelling ${activeTask.taskId}…`, 'warning')
+    publishNotify(`Cancelling ${activeTask.taskId}…`, 'warning')
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 export function registerTask(pi: ExtensionAPI): void {
     piApi = pi
-    pi.registerCommand('task', {
+    registerBridgeCommand(pi, 'task', {
         description: 'Start a new task. Usage: /task <prompt>',
         handler: handleTask
     })
-    pi.registerCommand('task-list', {
+    registerBridgeCommand(pi, 'task-list', {
         description: 'List tasks in this project.',
         handler: handleTaskList
     })
-    pi.registerCommand('task-resume', {
+    registerBridgeCommand(pi, 'task-resume', {
         description: 'Resume a task. Usage: /task-resume [id]',
         handler: handleTaskResume
     })
-    pi.registerCommand('task-cancel', {
+    registerBridgeCommand(pi, 'task-cancel', {
         description: 'Cancel the currently running task.',
         handler: handleTaskCancel
     })

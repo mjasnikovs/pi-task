@@ -1,5 +1,6 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {broadcast} from './broadcast.js'
+import {getBridge} from './bridge.js'
 import {setupEvents} from './events.js'
 import {HistoryBuffer} from './history.js'
 import {html} from './ui.js'
@@ -40,10 +41,11 @@ export function registerRemote(pi: ExtensionAPI): void {
             })
     }
 
-    pi.on('session_start', (_event, _ctx) => {
+    pi.on('session_start', (_event, ctx) => {
         // Update shared send with fresh pi on each session (survives /new re-evaluation)
         S.send = (text, opts) => (opts ? pi.sendUserMessage(text, opts) : pi.sendUserMessage(text))
         setupEvents(pi, history, broadcast)
+        getBridge().currentCtx = ctx as unknown as ExtensionCommandContext
     })
 
     pi.on('session_shutdown', (event, _ctx) => {

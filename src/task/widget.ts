@@ -7,6 +7,7 @@
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-file.js'
+import {publishWidget} from '../remote/bridge.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -118,11 +119,14 @@ export function startWidget(
     if (!ctx.hasUI) return () => {}
     const render = () => {
         const s = getState()
+        const lines = s ? buildWidgetLines(s, ctx.ui.theme) : undefined
+        const plain = s ? buildWidgetLines(s, undefined) : undefined // un-themed for the wire
         try {
-            ctx.ui.setWidget(WIDGET_KEY, s ? buildWidgetLines(s, ctx.ui.theme) : undefined)
+            ctx.ui.setWidget(WIDGET_KEY, lines)
         } catch {
             /* stale ctx */
         }
+        publishWidget(WIDGET_KEY, plain)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -172,11 +176,14 @@ export function startAutoLoader(
     if (!ctx.hasUI) return () => {}
     const render = () => {
         const s = getState()
+        const lines = s ? buildAutoLoaderLines(s, ctx.ui.theme) : undefined
+        const plain = s ? buildAutoLoaderLines(s, undefined) : undefined
         try {
-            ctx.ui.setWidget(AUTO_WIDGET_KEY, s ? buildAutoLoaderLines(s, ctx.ui.theme) : undefined)
+            ctx.ui.setWidget(AUTO_WIDGET_KEY, lines)
         } catch {
             /* stale ctx */
         }
+        publishWidget(AUTO_WIDGET_KEY, plain)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -188,6 +195,7 @@ export function startAutoLoader(
         } catch {
             /* stale ctx */
         }
+        publishWidget(AUTO_WIDGET_KEY, undefined)
     }
 }
 
@@ -208,14 +216,20 @@ export function flashTerminalWidget(
         line = theme.fg('error', `✘ ${taskId} failed${reason ? ': ' + reason : ''}`)
         clearMs = FAIL_CLEAR_MS
     }
+    const plainLine =
+        state === 'cancelled' ?
+            `⚠ ${taskId} cancelled`
+        :   `✘ ${taskId} failed${reason ? ': ' + reason : ''}`
     try {
         ctx.ui.setWidget(WIDGET_KEY, [line])
+        publishWidget(WIDGET_KEY, [plainLine])
     } catch {
         /* stale ctx */
     }
     setTimeout(() => {
         try {
             ctx.ui.setWidget(WIDGET_KEY, undefined)
+            publishWidget(WIDGET_KEY, undefined)
         } catch {
             /* stale ctx */
         }

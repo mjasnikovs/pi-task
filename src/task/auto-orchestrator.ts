@@ -25,7 +25,7 @@ import {writeTaskFile, readTaskFile, updateTaskFrontMatter} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
-import {SessionUI} from '../remote/bridge.js'
+import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 
 /**
@@ -383,15 +383,15 @@ async function handleTaskAutoCancel(_args: string, ctx: ExtensionCommandContext)
 // ─── Registration ────────────────────────────────────────────────────────────
 
 export function registerTaskAuto(pi: ExtensionAPI): void {
-    pi.registerCommand('task-auto', {
+    registerBridgeCommand(pi, 'task-auto', {
         description: 'Plan a feature into tasks and run them. Usage: /task-auto <feature>',
         handler: handleTaskAuto
     })
-    pi.registerCommand('task-auto-resume', {
+    registerBridgeCommand(pi, 'task-auto-resume', {
         description: 'Resume the active /task-auto run.',
         handler: handleTaskAutoResume
     })
-    pi.registerCommand('task-auto-cancel', {
+    registerBridgeCommand(pi, 'task-auto-cancel', {
         description: 'Stop the running /task-auto loop after the current task.',
         handler: handleTaskAutoCancel
     })
