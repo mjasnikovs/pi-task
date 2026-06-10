@@ -45,6 +45,12 @@ export interface ContextMessage {
     contextUsage: ContextUsage
 }
 
+/** Tells the browser to wipe the transcript/widgets/prompt when a new session
+ *  starts, so it reflects the fresh session instead of the previous one. */
+export interface ResetMessage {
+    type: 'reset'
+}
+
 /** Server → browser messages added by the integration. The existing
  *  history / text_delta / tool_* / agent_* / client_count / user_message messages are
  *  emitted ad hoc by events.ts / server.ts and are not enumerated here. */
@@ -55,6 +61,7 @@ export type ServerMessage =
     | NotifyMessage
     | ViewerMessage
     | ContextMessage
+    | ResetMessage
 
 /** Browser → server messages. */
 export interface ClientChatMessage {

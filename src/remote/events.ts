@@ -1,6 +1,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
 import {getBridge} from './bridge.js'
+import {pushNotify} from './push.js'
 import type {ContextUsage} from './protocol.js'
 import type {HistoryBuffer, ToolSummary} from './history.js'
 
@@ -36,6 +37,7 @@ export function setupEvents(
                 const message = errorMessage || 'Request failed'
                 history.addError(message)
                 broadcastFn({type: 'agent_error', message})
+                void pushNotify('Agent error', message, 'pi-error').catch(() => {})
             }
         }
     })
@@ -87,6 +89,7 @@ export function setupEvents(
         getBridge().lastContextUsage = contextUsage as ContextUsage
         history.addAssistantTurn(currentText, [...currentTools])
         broadcastFn({type: 'agent_end', contextUsage})
+        void pushNotify('Task finished', '', 'pi-end').catch(() => {})
         currentText = ''
         currentTools.length = 0
     })

@@ -65,6 +65,13 @@ export function registerRemote(pi: ExtensionAPI): void {
 
     pi.on('session_start', (_event, ctx) => {
         S.send = (text, opts) => (opts ? pi.sendUserMessage(text, opts) : pi.sendUserMessage(text))
+        // A new session (incl. /new and the /task handoff's newSession) means the
+        // browser is showing a stale transcript/widgets — wipe both ends.
+        const bridge = getBridge()
+        bridge.activeWidgets.clear()
+        bridge.activePrompt = null
+        bridge.lastContextUsage = null
+        broadcast({type: 'reset'})
         setupEvents(pi, history, broadcast)
         // Seed a shimmed ctx so commands that don't need newSession (/task-list,
         // /task-cancel, /task-auto-cancel) work immediately from the remote without
@@ -72,12 +79,12 @@ export function registerRemote(pi: ExtensionAPI): void {
         // a real command ctx captured from a prior terminal command must survive
         // session_start (it's updated via withSession or registerBridgeCommand,
         // not replaced here).
-        const b = getBridge()
         if (
-            !b.currentCtx
-            || (b.currentCtx as unknown as Record<string, unknown>)['__piRemoteShimmed'] === true
+            !bridge.currentCtx
+            || (bridge.currentCtx as unknown as Record<string, unknown>)['__piRemoteShimmed']
+                === true
         ) {
-            b.currentCtx = makeShimmedCtx(ctx)
+            bridge.currentCtx = makeShimmedCtx(ctx)
         }
         void ensureServer().catch(err =>
             ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')

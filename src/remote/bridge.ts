@@ -4,6 +4,7 @@ import type {
     ExtensionContext
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
+import {pushNotify} from './push.js'
 import type {ContextUsage, PromptMessage, ServerMessage} from './protocol.js'
 
 export interface BridgeState {
@@ -100,6 +101,8 @@ export class SessionUI {
         }
         b.activePrompt = prompt
         b.broadcast(prompt)
+        // Reaches a backgrounded/suspended phone, which the in-page UI can't.
+        void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
         // Local: resolves to a value/undefined, or undefined on abort. Swallow
         // the rejection some implementations throw on abort so it never leaks.

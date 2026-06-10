@@ -212,7 +212,8 @@ export function html(wsUrl: string): string {
       font-size: 12px; font-weight: 500; padding: 8px 10px; }
     #prompt-card button.cancel:hover { color: var(--red); filter: none; }
     #prompt-card button.cancel.armed { background: var(--red); color: var(--crust); font-weight: 700; }
-    .toast { position: fixed; top: 12px; right: 12px; max-width: calc(100vw - 24px);
+    .toast { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px);
+      right: calc(env(safe-area-inset-right, 0px) + 12px); max-width: calc(100vw - 24px);
       padding: 8px 12px; border-radius: 6px; overflow-wrap: anywhere; word-break: break-word;
       background: var(--surface1); color: var(--text); z-index: 60; }
     .toast.warning { background: var(--peach); color: var(--crust); }
@@ -228,7 +229,7 @@ export function html(wsUrl: string): string {
   <div id="header">
     <span class="title">pi-task remote</span>
     <div class="hgroup">
-      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span><span id="client-label">connecting&#x2026;</span></span>
+      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span></span>
       <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
     </div>
   </div>
@@ -268,17 +269,28 @@ export function html(wsUrl: string): string {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
     }
     const connDot = document.getElementById('conn-dot');
-    const clientLabel = document.getElementById('client-label');
     // state: 'connecting' (○ yellow) | 'up' (● green) | 'down' (● red)
-    function setConn(state, label) {
+    function setConn(state) {
       connDot.textContent = state === 'connecting' ? '\\u25CB' : '\\u25CF';
       connDot.className = 'cdot' + (state === 'up' ? ' up' : state === 'down' ? ' down' : '');
-      if (label !== undefined) clientLabel.textContent = label;
     }
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
     const cmdSuggestions = document.getElementById('cmd-suggestions');
     const statusPanel = document.getElementById('status-panel');
+    // Widgets are keyed (e.g. 'pi-tasks', 'pi-task-auto'); track them per key so a
+    // clear for one key can't be masked by a stale message from another.
+    const widgets = {};
+    function renderWidgets() {
+      let all = [];
+      for (const k in widgets) if (widgets[k] && widgets[k].length) all = all.concat(widgets[k]);
+      if (all.length) {
+        statusPanel.textContent = all.join('\\n');
+        statusPanel.style.display = 'block';
+      } else {
+        statusPanel.style.display = 'none';
+      }
+    }
     const promptCard = document.getElementById('prompt-card');
     const promptQ = document.getElementById('prompt-q');
     const promptRec = document.getElementById('prompt-rec');
@@ -296,6 +308,7 @@ export function html(wsUrl: string): string {
     let streamText = '';
     let autoScroll = true;
     let reconnectDelay = 1000;
+    let reconnectAnim = null;
     let ws = null;
 
     const BT = String.fromCharCode(96);
@@ -561,26 +574,65 @@ export function html(wsUrl: string): string {
       }
       const issue = notifyEnvIssue();
       if (issue) { showToast(issue, 'warning'); return; }
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        showToast('This browser doesn\\u2019t support push notifications.', 'warning'); return;
+      }
       Notification.requestPermission().then(function (perm) {
-        if (perm === 'granted') { localStorage.setItem(NOTIFY_KEY, '1'); }
-        else { showToast('Notifications blocked in browser settings.', 'warning'); }
-        updateBell();
+        if (perm !== 'granted') {
+          showToast('Notifications blocked in browser settings.', 'warning');
+          updateBell(); return;
+        }
+        subscribePush().then(function (ok) {
+          if (ok) { localStorage.setItem(NOTIFY_KEY, '1'); showToast('Notifications on.', 'info'); }
+          else { showToast('Could not register for notifications.', 'warning'); }
+          updateBell();
+        }).catch(function (e) {
+          showToast('Notification setup failed: ' + (e && e.message ? e.message : e), 'warning');
+          updateBell();
+        });
       });
     });
 
-    // Fire a browser notification, but only when armed, in a secure context,
-    // and the tab is backgrounded (foreground already has the in-page UI).
-    function notify(title, body, tag) {
-      if (!notifyEnabled()) return;
-      if (!window.isSecureContext) return;
-      if (!document.hidden) return;
-      try {
-        const n = new Notification(title, { body: body || '', tag: tag });
-        n.onclick = function () { window.focus(); n.close(); };
-      } catch (e) { /* constructor unsupported (e.g. iOS without SW) */ }
+    // VAPID public key (base64url) -> Uint8Array for applicationServerKey.
+    function urlB64ToUint8Array(base64) {
+      const pad = '='.repeat((4 - base64.length % 4) % 4);
+      const b64 = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(b64);
+      const arr = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+      return arr;
+    }
+
+    // Register the service worker, subscribe via the Push API, and hand the
+    // subscription to the server. The server (not the page) sends notifications,
+    // so they arrive even when this PWA is backgrounded/suspended on iOS.
+    function subscribePush() {
+      return navigator.serviceWorker.register('/sw.js')
+        .then(function () { return navigator.serviceWorker.ready; })
+        .then(function (reg) {
+          return fetch('/push-key').then(function (r) { return r.text(); }).then(function (key) {
+            return reg.pushManager.getSubscription().then(function (existing) {
+              return existing || reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlB64ToUint8Array(key.trim())
+              });
+            });
+          });
+        })
+        .then(function (subscription) {
+          return fetch('/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(subscription)
+          }).then(function (res) { return res.ok; });
+        });
     }
 
     updateBell();
+    // Self-heal: if notifications were enabled before, re-register the
+    // subscription on load (the server keeps subscriptions in memory and may
+    // have restarted, and browsers can rotate the subscription).
+    if (notifyEnabled()) { subscribePush().catch(function () {}); }
 
     function answer(value) {
       if (activePromptId === null) return;
@@ -762,7 +814,6 @@ export function html(wsUrl: string): string {
             streamText = '';
           }
           addBubble('error', msg.message || 'Error');
-          notify('Agent error', msg.message || 'Error', 'pi-error');
           setEnabled(true);
           break;
         case 'agent_end':
@@ -770,7 +821,6 @@ export function html(wsUrl: string): string {
           currentBubble = null;
           streamText = '';
           setEnabled(true);
-          notify('Task finished', '', 'pi-end');
           setContextBar(msg.contextUsage);
           break;
         case 'context':
@@ -778,22 +828,18 @@ export function html(wsUrl: string): string {
           setContextBar(msg.contextUsage);
           break;
         case 'client_count':
-          setConn('up', msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected');
+          setConn('up');
           break;
         case 'prompt':
           showPrompt(msg);
-          notify('pi needs your input', msg.question, 'pi-prompt');
           break;
         case 'prompt_resolved':
           if (activePromptId === msg.id) closePrompt();
           break;
         case 'widget':
-          if (msg.lines && msg.lines.length) {
-            statusPanel.textContent = msg.lines.join('\\n');
-            statusPanel.style.display = 'block';
-          } else {
-            statusPanel.style.display = 'none';
-          }
+          if (msg.lines && msg.lines.length) widgets[msg.key] = msg.lines;
+          else delete widgets[msg.key];
+          renderWidgets();
           break;
         case 'notify':
           showToast(msg.message, msg.level);
@@ -801,6 +847,16 @@ export function html(wsUrl: string): string {
         case 'viewer':
           viewerBody.textContent = msg.text;
           viewer.style.display = 'block';
+          break;
+        case 'reset':
+          // A new session started — wipe the previous session's transcript.
+          chatLog.innerHTML = '';
+          hideThinking();
+          currentBubble = null; streamText = '';
+          closePrompt();
+          for (const k in widgets) delete widgets[k];
+          renderWidgets();
+          contextFill.style.width = '0%';
           break;
       }
     }
@@ -841,9 +897,10 @@ export function html(wsUrl: string): string {
     function connect() {
       ws = new WebSocket(WS_URL);
       ws.addEventListener('open', () => {
+        if (reconnectAnim) { clearInterval(reconnectAnim); reconnectAnim = null; }
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
-        setConn('up', 'connected');
+        setConn('up');
         setEnabled(true);
       });
       ws.addEventListener('message', (e) => {
@@ -851,9 +908,21 @@ export function html(wsUrl: string): string {
       });
       ws.addEventListener('close', () => {
         setEnabled(false);
-        setConn('down', 'disconnected');
+        setConn('down');
         reconnectOverlay.classList.add('visible');
-        reconnectMsg.textContent = 'reconnecting in ' + (reconnectDelay / 1000) + 's…';
+        // Animate the same braille spinner used elsewhere, with a live countdown.
+        const until = Date.now() + reconnectDelay;
+        let frame = 0;
+        const paint = () => {
+          const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+          const glyph = SPIN[frame++ % SPIN.length];
+          reconnectMsg.textContent = left > 0
+            ? glyph + '  connection lost — retrying in ' + left + 's'
+            : glyph + '  reconnecting…';
+        };
+        if (reconnectAnim) clearInterval(reconnectAnim);
+        paint();
+        reconnectAnim = setInterval(paint, 90);
         setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);
       });
     }
