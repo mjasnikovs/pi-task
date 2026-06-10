@@ -185,10 +185,13 @@ export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) 
         publishNotify('Start a session before running commands remotely.', 'warning')
         return true
     }
-    try {
-        void handler(args, b.currentCtx)
-    } catch (err) {
-        publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
-    }
+    // Wrap in Promise.resolve so both sync throws and async rejections from the
+    // (often async) command handler surface as a toast instead of crashing or
+    // becoming an unhandled rejection.
+    Promise.resolve()
+        .then(() => handler(args, b.currentCtx!))
+        .catch((err: unknown) => {
+            publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
+        })
     return true
 }

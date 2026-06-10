@@ -161,6 +161,22 @@ test('dispatchRemoteLine sends plain lines to onPlain', () => {
     expect(plain).toBe('hello there')
 })
 
+test('dispatchRemoteLine toasts when an async command handler rejects', async () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.currentCtx = {} as never
+    b.commands.set('task', () => Promise.reject(new Error('boom')))
+    dispatchRemoteLine('/task go', {onPlain: () => {}})
+    await new Promise(r => setTimeout(r, 0)) // let the rejection settle
+    expect(
+        b.sent.some(
+            m =>
+                (m as {type: string; message?: string}).type === 'notify' &&
+                (m as {message?: string}).message?.includes('boom')
+        )
+    ).toBe(true)
+})
+
 test('registerBridgeCommand records the handler and forwards to pi.registerCommand', () => {
     const b = getBridge()
     const registered: string[] = []
