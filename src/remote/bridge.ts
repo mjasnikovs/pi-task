@@ -16,7 +16,7 @@ export interface BridgeState {
     currentCtx: ExtensionCommandContext | null
     /** Broadcast sink — swapped in tests. */
     broadcast: (msg: ServerMessage) => void
-    /** Test-only capture of broadcast messages. */
+    /** @internal Test-only capture of broadcast messages; empty in production. */
     sent: ServerMessage[]
 }
 
@@ -55,7 +55,7 @@ export interface AskSpec {
     question: string
     /** Plain recommended default (prefilled in both surfaces), if any. */
     recommended?: string
-    /** Whether a Skip affordance applies (no recommendation present). */
+    /** Whether the browser card shows a Skip button (answers with empty string). */
     allowSkip: boolean
 }
 

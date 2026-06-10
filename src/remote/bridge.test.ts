@@ -1,5 +1,6 @@
 import {afterEach, expect, test} from 'bun:test'
 import {getBridge, answerPrompt, SessionUI} from './bridge.js'
+import {broadcast as wsBroadcast} from './broadcast.js'
 
 // Reset the singleton between tests.
 afterEach(() => {
@@ -9,6 +10,7 @@ afterEach(() => {
     b.activeWidgets.clear()
     b.sent.length = 0
     b.nextId = 0
+    b.broadcast = msg => wsBroadcast(msg) // restore production default
 })
 
 // Minimal fake ctx whose ui.input is controllable + abortable.
