@@ -32,6 +32,19 @@ export interface ViewerMessage {
     text: string
 }
 
+export interface ContextUsage {
+    tokens?: number
+    contextWindow?: number
+    percent?: number
+}
+
+/** Seeds the context-usage bar for a freshly-connected client (the live value is
+ *  otherwise only carried on agent_end). */
+export interface ContextMessage {
+    type: 'context'
+    contextUsage: ContextUsage
+}
+
 /** Server → browser messages added by the integration. The existing
  *  history / text_delta / tool_* / agent_* / client_count / user_message messages are
  *  emitted ad hoc by events.ts / server.ts and are not enumerated here. */
@@ -41,6 +54,7 @@ export type ServerMessage =
     | WidgetMessage
     | NotifyMessage
     | ViewerMessage
+    | ContextMessage
 
 /** Browser → server messages. */
 export interface ClientChatMessage {

@@ -1,5 +1,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
+import {getBridge} from './bridge.js'
+import type {ContextUsage} from './protocol.js'
 import type {HistoryBuffer, ToolSummary} from './history.js'
 
 export function setupEvents(
@@ -81,6 +83,8 @@ export function setupEvents(
     pi.on('agent_end', (_event, ctx) => {
         const contextUsage = ctx.getContextUsage()
         setAgentIdle(true)
+        // Remember it so a browser that connects mid-session gets its bar seeded.
+        getBridge().lastContextUsage = contextUsage as ContextUsage
         history.addAssistantTurn(currentText, [...currentTools])
         broadcastFn({type: 'agent_end', contextUsage})
         currentText = ''

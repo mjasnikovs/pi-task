@@ -263,6 +263,9 @@ export function html(wsUrl: string): string {
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const contextFill = document.getElementById('context-bar-fill');
+    function setContextBar(usage) {
+      if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
+    }
     const connDot = document.getElementById('conn-dot');
     const clientLabel = document.getElementById('client-label');
     // state: 'connecting' (○ yellow) | 'up' (● green) | 'down' (● red)
@@ -767,9 +770,11 @@ export function html(wsUrl: string): string {
           streamText = '';
           setEnabled(true);
           notify('Task finished', '', 'pi-end');
-          if (msg.contextUsage && msg.contextUsage.percent != null) {
-            contextFill.style.width = msg.contextUsage.percent + '%';
-          }
+          setContextBar(msg.contextUsage);
+          break;
+        case 'context':
+          // Seeds the bar for a client that joined mid-session.
+          setContextBar(msg.contextUsage);
           break;
         case 'client_count':
           setConn('up', msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected');
