@@ -6,7 +6,8 @@ import {HistoryBuffer} from './history.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
-import {getTailscaleHttps, planRemoteUrls} from './tailscale.js'
+import {ensureTailscaleServe, teardownTailscaleServe, planRemoteUrls} from './tailscale.js'
+import type {ServeResult} from './tailscale.js'
 import {isAgentIdle} from './state.js'
 import type {ServerHandle} from './server.js'
 
@@ -16,9 +17,10 @@ import type {ServerHandle} from './server.js'
 type Shared = {
     server: ServerHandle | null
     send: ((text: string, opts?: {deliverAs: 'followUp'}) => void) | null
+    serveResult: ServeResult | null
 }
 const _g = globalThis as unknown as Record<string, Shared | undefined>
-if (!_g.__piRemote) _g.__piRemote = {server: null, send: null}
+if (!_g.__piRemote) _g.__piRemote = {server: null, send: null, serveResult: null}
 
 const S = _g.__piRemote!
 
@@ -53,6 +55,11 @@ export function registerRemote(pi: ExtensionAPI): void {
             wsUrl => html(wsUrl),
             () => history.getEntries()
         )
+        // Hands-off HTTPS: point Tailscale serve at our port so phones get a
+        // secure context. Best-effort — any failure degrades to the http URL.
+        S.serveResult = await ensureTailscaleServe(S.server.port).catch(
+            (): ServeResult => ({state: 'unavailable'})
+        )
         return S.server
     }
 
@@ -80,8 +87,11 @@ export function registerRemote(pi: ExtensionAPI): void {
     pi.on('session_shutdown', (event, _ctx) => {
         if (event.reason === 'quit') {
             if (S.server) {
+                const port = S.server.port
                 S.server.stop()
                 S.server = null
+                S.serveResult = null
+                void teardownTailscaleServe(port).catch(() => {})
             }
             S.send = null
         }
@@ -92,8 +102,11 @@ export function registerRemote(pi: ExtensionAPI): void {
         handler: async (args, ctx) => {
             if (args.trim() === 'stop') {
                 if (S.server) {
+                    const port = S.server.port
                     S.server.stop()
                     S.server = null
+                    S.serveResult = null
+                    void teardownTailscaleServe(port).catch(() => {})
                     ctx.ui.notify('Remote server stopped', 'info')
                 } else {
                     ctx.ui.notify('Remote server is not running', 'warning')
@@ -108,8 +121,8 @@ export function registerRemote(pi: ExtensionAPI): void {
                 const server = await ensureServer()
 
                 const httpPrimary = `http://${server.ip}:${server.port}`
-                const ts = await getTailscaleHttps()
-                const plan = planRemoteUrls(httpPrimary, server.port, ts)
+                const result: ServeResult = S.serveResult ?? {state: 'unavailable'}
+                const plan = planRemoteUrls(httpPrimary, result)
                 const primaryUrl = plan.primaryUrl
                 const qr = await qrLines(primaryUrl)
 
