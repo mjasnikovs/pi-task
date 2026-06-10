@@ -8,8 +8,8 @@ export function html(wsUrl: string): string {
     const iconUrl = `data:image/svg+xml,${iconSvg}`
     const manifest = encodeURIComponent(
         JSON.stringify({
-            name: 'pi remote',
-            short_name: 'pi remote',
+            name: 'pi-task remote',
+            short_name: 'pi-task remote',
             display: 'standalone',
             background_color: '#1e1e2e',
             theme_color: '#1e1e2e',
@@ -23,11 +23,11 @@ export function html(wsUrl: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="pi remote">
+  <meta name="apple-mobile-web-app-title" content="pi-task remote">
   <meta name="theme-color" content="#1e1e2e">
   <link rel="apple-touch-icon" href="${iconUrl}">
   <link rel="manifest" href="data:application/manifest+json,${manifest}">
-  <title>pi remote</title>
+  <title>pi-task remote</title>
   <style>
     :root {
       --base: #1e1e2e; --mantle: #181825; --crust: #11111b;
@@ -211,7 +211,7 @@ export function html(wsUrl: string): string {
 <body>
   <div id="context-bar"><div id="context-bar-fill"></div></div>
   <div id="header">
-    <span class="title">pi remote</span>
+    <span class="title">pi-task remote</span>
     <span class="status" id="client-status">connecting…</span>
   </div>
   <div id="chat-log"></div>
