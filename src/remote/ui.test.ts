@@ -71,18 +71,20 @@ describe('html()', () => {
         expect(out).toContain('piRemoteNotify')
     })
 
-    it('guards notifications on permission, secure context, and backgrounded tab', () => {
+    it('guards enabling notifications on permission and secure context', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('Notification.permission')
         expect(out).toContain('window.isSecureContext')
-        expect(out).toContain('document.hidden')
     })
 
-    it('uses the agreed titles for the three notification events', () => {
+    it('registers a service worker and a push subscription (works on iOS)', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('pi needs your input')
-        expect(out).toContain('Task finished')
-        expect(out).toContain('Agent error')
+        expect(out).toContain('serviceWorker.register(\'/sw.js\')')
+        expect(out).toContain('pushManager.subscribe')
+        expect(out).toContain('/push-key')
+        expect(out).toContain('/subscribe')
+        // The broken in-page constructor must NOT be used to deliver notifications.
+        expect(out).not.toContain('new Notification(')
     })
 
     it('warns iOS users to add to Home Screen', () => {
@@ -115,6 +117,15 @@ describe('html()', () => {
         // off the left edge of a phone screen and is unreadable.
         expect(rule).toContain('max-width')
         expect(rule).toMatch(/overflow-wrap|word-break/)
+    })
+
+    it('keeps the toast below the iOS status bar (safe-area inset)', () => {
+        const out = html('ws://localhost:7600/ws')
+        const m = out.match(/\.toast \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        // viewport-fit=cover makes a position:fixed toast ignore body padding and
+        // render up under the notch/battery/wifi icons unless it adds the inset.
+        expect(m![1]).toContain('env(safe-area-inset-top')
     })
 
     it('gives the header title a small Catppuccin glitch animation', () => {

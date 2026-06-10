@@ -5,6 +5,9 @@ import {addClient, removeClient, clientCount, broadcast, sendTo} from './broadca
 import type {Turn} from './history.js'
 import {getBridge, answerPrompt} from './bridge.js'
 import {isClientMessage} from './protocol.js'
+import {swJs} from './sw.js'
+import {publicKey, addSubscription, getSubscriptions, logPush} from './push.js'
+import type {PushSubscriptionJSON} from './push.js'
 
 export interface LocalIPs {
     /** Tailscale (tailscale0) IPv4 address, if the interface is up. */
@@ -100,6 +103,31 @@ export async function startServer(
             const body = getHtml(wsUrl)
             res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'})
             res.end(body)
+        } else if (req.method === 'GET' && req.url === '/sw.js') {
+            res.writeHead(200, {'Content-Type': 'text/javascript; charset=utf-8'})
+            res.end(swJs())
+        } else if (req.method === 'GET' && req.url === '/push-key') {
+            res.writeHead(200, {'Content-Type': 'text/plain; charset=utf-8'})
+            res.end(publicKey())
+        } else if (req.method === 'POST' && req.url === '/subscribe') {
+            const chunks: Buffer[] = []
+            req.on('data', c => chunks.push(c as Buffer))
+            req.on('end', () => {
+                try {
+                    const sub = JSON.parse(Buffer.concat(chunks).toString()) as PushSubscriptionJSON
+                    if (!sub || typeof sub.endpoint !== 'string') throw new Error('no endpoint')
+                    addSubscription(sub)
+                    logPush(
+                        `subscribe ${new URL(sub.endpoint).host} (total ${getSubscriptions().length})`
+                    )
+                    res.writeHead(201)
+                    res.end('ok')
+                } catch {
+                    logPush('subscribe REJECTED (malformed body)')
+                    res.writeHead(400)
+                    res.end('bad subscription')
+                }
+            })
         } else {
             res.writeHead(404)
             res.end('Not found')

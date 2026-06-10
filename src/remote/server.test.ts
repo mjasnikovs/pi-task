@@ -3,6 +3,7 @@ import {startServer, getLocalIPs, formatAddresses} from './server.js'
 import type {ServerHandle} from './server.js'
 import WebSocket from 'ws'
 import {getBridge, answerPrompt} from './bridge.js'
+import {clearSubscriptions, getSubscriptions} from './push.js'
 
 let handle: ServerHandle | null = null
 
@@ -159,6 +160,66 @@ describe('startServer', () => {
         handle.stop()
         handle = null
         await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow()
+    })
+
+    it('GET /sw.js serves the service worker as JavaScript', async () => {
+        handle = await startServer(
+            () => {},
+            () => '<html></html>',
+            () => []
+        )
+        const res = await fetch(`http://127.0.0.1:${handle.port}/sw.js`)
+        expect(res.status).toBe(200)
+        expect(res.headers.get('content-type')).toContain('javascript')
+        const body = await res.text()
+        expect(body).toContain('push')
+        expect(body).toContain('showNotification')
+    })
+
+    it('GET /push-key returns the VAPID public key', async () => {
+        handle = await startServer(
+            () => {},
+            () => '<html></html>',
+            () => []
+        )
+        const res = await fetch(`http://127.0.0.1:${handle.port}/push-key`)
+        expect(res.status).toBe(200)
+        const key = await res.text()
+        expect(key.length).toBeGreaterThan(20)
+    })
+
+    it('POST /subscribe stores the subscription and returns 201', async () => {
+        clearSubscriptions()
+        handle = await startServer(
+            () => {},
+            () => '<html></html>',
+            () => []
+        )
+        const subscription = {
+            endpoint: 'https://push.example/abc',
+            keys: {p256dh: 'p', auth: 'a'}
+        }
+        const res = await fetch(`http://127.0.0.1:${handle.port}/subscribe`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(subscription)
+        })
+        expect(res.status).toBe(201)
+        expect(getSubscriptions().map(s => s.endpoint)).toContain('https://push.example/abc')
+    })
+
+    it('POST /subscribe rejects a malformed body with 400', async () => {
+        handle = await startServer(
+            () => {},
+            () => '<html></html>',
+            () => []
+        )
+        const res = await fetch(`http://127.0.0.1:${handle.port}/subscribe`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: 'not json{'
+        })
+        expect(res.status).toBe(400)
     })
 })
 
