@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-326%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-533%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -114,6 +114,26 @@ The remote server is **always on** — it starts automatically with each session
 
 Prompts use a **first-answer-wins race**: the same question shows in the local TUI *and* every connected browser, and whoever answers first wins — the other surfaces dismiss. With nobody connected, `/task` behaves exactly as before; the remote path is purely additive.
 
+### Push notifications
+
+Tap the bell (◯ → ◉) in the remote header to get pushed a notification — even with the app backgrounded or the phone locked — when:
+
+- a **grill / clarify question** needs answering (*"pi needs your input"*),
+- a **task finishes** (*"Task finished"*), or
+- the agent hits an **error** (*"Agent error"*).
+
+Delivery is **server → push service → device** over the [Web Push](https://developer.mozilla.org/en-US/docs/Web/API/Push_API) standard (service worker + VAPID), so it reaches a suspended device. It works on desktop browsers and on iOS home-screen PWAs.
+
+**iOS setup** (these are Apple's requirements, not ours):
+
+1. Open the **HTTPS** Tailscale URL (`/remote` lists it). iOS only allows push from a secure context — the plain `http://` LAN URL won't work.
+2. **Share → Add to Home Screen**, then open the app from that icon. iOS only permits notifications for installed PWAs.
+3. Launch the app, **tap the bell**, and **Allow** when prompted.
+
+The subscription is kept in memory, so after restarting `pi` just reload the app (it re-subscribes automatically) or tap the bell again. Notifications are suppressed while the app is focused in the foreground — the in-page UI already shows the prompt there.
+
+VAPID keys are generated once and persisted to `${XDG_DATA_HOME:-~/.local/share}/pi-task/vapid.json` (deleting them invalidates existing subscriptions). The JWT contact (`sub`) defaults to the project URL; override it with `PI_REMOTE_PUSH_SUBJECT` (e.g. your own `mailto:you@domain.com`). To debug delivery, set `PI_REMOTE_PUSH_DEBUG=1` and tail `/tmp/pi-task-push.log` — it records each push and the **push-service HTTP status** (`201` delivered, `403`/`400` token/key problem, `410` stale subscription).
+
 `/remote stop` shuts the server down for the rest of the session (it comes back on the next session start). There is **no authentication** — it's a personal LAN/Tailscale tool. Don't expose the port to untrusted networks.
 
 ## Bundled tools
@@ -148,6 +168,10 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 | --- | --- | --- |
 | `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required for web search. |
 | `XDG_CACHE_HOME` | `pi-worker-docs` | Overrides the docs cache location (defaults to `~/.cache`). |
+| `XDG_DATA_HOME` | remote push | Where the VAPID keypair is stored (defaults to `~/.local/share`). |
+| `PI_REMOTE_PUSH_SUBJECT` | remote push | VAPID JWT `sub` contact. Defaults to the project URL; set your own `mailto:you@domain.com` or `https://…`. |
+| `PI_REMOTE_PUSH_DEBUG` | remote push | When set (e.g. `1`), logs push delivery and push-service HTTP status. Off by default. |
+| `PI_REMOTE_PUSH_LOG` | remote push | Path for the debug log (defaults to `/tmp/pi-task-push.log`). |
 
 Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your `.gitignore` if you don't want them checked in.
 
@@ -155,7 +179,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 326 tests across 28 files
+bun test src/      # 533 tests across 45 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
