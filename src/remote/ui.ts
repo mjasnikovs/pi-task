@@ -170,12 +170,33 @@ export function html(wsUrl: string): string {
     #status-panel { padding: 6px 12px; border-bottom: 1px solid var(--surface1);
       color: var(--subtext1); white-space: pre-wrap; font-size: 13px; display: none; }
     #prompt-card { position: fixed; left: 0; right: 0; bottom: 0; background: var(--mantle);
-      border-top: 2px solid var(--mauve); padding: 14px; display: none; z-index: 50; }
-    #prompt-card .q { color: var(--text); margin-bottom: 8px; white-space: pre-wrap; }
+      border-top: 2px solid var(--mauve); padding: 16px 14px calc(16px + env(safe-area-inset-bottom, 0px));
+      display: none; z-index: 50; max-height: 80dvh; overflow-y: auto; }
+    #prompt-card .q-label { color: var(--mauve); font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+    #prompt-card .q { color: var(--text); margin-bottom: 12px; white-space: pre-wrap;
+      font-size: 15px; line-height: 1.5; }
+    #prompt-card .rec-panel { background: var(--surface0); border-left: 3px solid var(--green);
+      border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+    #prompt-card .rec-label { color: var(--green); font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+    #prompt-card .rec-text { color: var(--text); font-size: 15px; line-height: 1.5;
+      white-space: pre-wrap; overflow-wrap: anywhere; }
     #prompt-card textarea { width: 100%; background: var(--surface0); color: var(--text);
-      border: 1px solid var(--surface2); border-radius: 6px; padding: 8px; }
-    #prompt-card .row { display: flex; gap: 8px; margin-top: 8px; }
-    #prompt-card button { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; }
+      border: 1px solid var(--surface2); border-radius: 6px; padding: 10px; font-size: 15px;
+      font-family: inherit; line-height: 1.5; resize: vertical; margin-bottom: 4px; }
+    #prompt-card .row { display: flex; gap: 8px; margin-top: 12px; align-items: center;
+      flex-wrap: wrap; }
+    #prompt-card button { padding: 11px 16px; border-radius: 8px; border: none; cursor: pointer;
+      font-family: inherit; font-size: 14px; font-weight: 600; transition: filter .15s ease; }
+    #prompt-card button:hover { filter: brightness(1.08); }
+    #prompt-card button.primary { background: var(--green); color: var(--crust);
+      font-weight: 700; flex: 1; min-width: 160px; }
+    #prompt-card button.secondary { background: var(--surface1); color: var(--text); }
+    #prompt-card button.cancel { margin-left: auto; background: transparent; color: var(--subtext0);
+      font-size: 12px; font-weight: 500; padding: 8px 10px; }
+    #prompt-card button.cancel:hover { color: var(--red); filter: none; }
+    #prompt-card button.cancel.armed { background: var(--red); color: var(--crust); font-weight: 700; }
     .toast { position: fixed; top: 12px; right: 12px; padding: 8px 12px; border-radius: 6px;
       background: var(--surface1); color: var(--text); z-index: 60; }
     .toast.warning { background: var(--peach); color: var(--crust); }
@@ -201,8 +222,13 @@ export function html(wsUrl: string): string {
   </div>
   <div id="reconnect-overlay"><span id="reconnect-msg">reconnecting…</span></div>
   <div id="prompt-card">
+    <div class="q-label">pi needs your input</div>
     <div class="q" id="prompt-q"></div>
-    <textarea id="prompt-input" rows="2"></textarea>
+    <div class="rec-panel" id="prompt-rec" style="display:none">
+      <div class="rec-label">Recommended answer</div>
+      <div class="rec-text" id="prompt-rec-text"></div>
+    </div>
+    <textarea id="prompt-input" rows="3" placeholder="Type your answer…" style="display:none"></textarea>
     <div class="row" id="prompt-buttons"></div>
   </div>
   <div id="viewer"><span class="close" id="viewer-close">&#x2715;</span><div id="viewer-body"></div></div>
@@ -226,12 +252,16 @@ export function html(wsUrl: string): string {
     const statusPanel = document.getElementById('status-panel');
     const promptCard = document.getElementById('prompt-card');
     const promptQ = document.getElementById('prompt-q');
+    const promptRec = document.getElementById('prompt-rec');
+    const promptRecText = document.getElementById('prompt-rec-text');
     const promptInput = document.getElementById('prompt-input');
     const promptButtons = document.getElementById('prompt-buttons');
     const viewer = document.getElementById('viewer');
     const viewerBody = document.getElementById('viewer-body');
     document.getElementById('viewer-close').onclick = function () { viewer.style.display = 'none'; };
     let activePromptId = null;
+    let activeRecommended = '';
+    let cancelArmTimer = null;
     const toolCallMap = {};
     let currentBubble = null;
     let streamText = '';
@@ -466,33 +496,93 @@ export function html(wsUrl: string): string {
       activePromptId = null;
       promptCard.style.display = 'none';
       promptInput.value = '';
+      promptInput.style.display = 'none';
+      promptRec.style.display = 'none';
+      if (cancelArmTimer) { clearTimeout(cancelArmTimer); cancelArmTimer = null; }
       setEnabled(true);
     }
 
-    function makeBtn(label, bg, onClick) {
+    function makeBtn(label, cls, onClick) {
       const btn = document.createElement('button');
       btn.textContent = label;
-      btn.style.background = bg;
+      if (cls) btn.className = cls;
       btn.onclick = onClick;
       return btn;
+    }
+
+    // "Cancel task" aborts the whole run, so it's deliberately small and needs a
+    // two-step confirm: first tap arms it, second tap (within 3s) confirms.
+    function makeCancelBtn() {
+      const btn = makeBtn('Cancel task', 'cancel', null);
+      let armed = false;
+      btn.onclick = function () {
+        if (armed) { answer(undefined); return; }
+        armed = true;
+        btn.classList.add('armed');
+        btn.textContent = 'Tap again to cancel';
+        if (cancelArmTimer) clearTimeout(cancelArmTimer);
+        cancelArmTimer = setTimeout(function () {
+          armed = false;
+          btn.classList.remove('armed');
+          btn.textContent = 'Cancel task';
+          cancelArmTimer = null;
+        }, 3000);
+      };
+      return btn;
+    }
+
+    function renderButtons(buttons) {
+      promptButtons.innerHTML = '';
+      for (let i = 0; i < buttons.length; i++) promptButtons.appendChild(buttons[i]);
+      promptButtons.appendChild(makeCancelBtn());
+    }
+
+    // Manual-entry view: editable textarea + Submit, reachable from the
+    // recommendation view via "Answer manually".
+    function showManualEntry(prefill) {
+      promptRec.style.display = 'none';
+      promptInput.style.display = 'block';
+      promptInput.value = prefill || '';
+      renderButtons([
+        makeBtn('Submit answer', 'primary', function () { answer(promptInput.value); }),
+        makeBtn('← Back', 'secondary', function () { showRecommendation(); })
+      ]);
+      promptInput.focus();
+    }
+
+    // Recommendation view (Mode A): show the suggested answer and let the user
+    // accept it in one tap or switch to manual entry.
+    function showRecommendation() {
+      promptInput.style.display = 'none';
+      promptRec.style.display = 'block';
+      renderButtons([
+        makeBtn('✓ Accept recommended', 'primary', function () { answer(''); }),
+        makeBtn('✎ Answer manually', 'secondary', function () { showManualEntry(activeRecommended); })
+      ]);
     }
 
     function showPrompt(msg) {
       activePromptId = msg.id;
       promptQ.textContent = msg.question;
-      promptInput.value = msg.recommended || '';
-      promptButtons.innerHTML = '';
-      promptButtons.appendChild(makeBtn('Submit', 'var(--green)', function () { answer(promptInput.value); }));
+      activeRecommended = msg.recommended || '';
       if (msg.recommended) {
-        promptButtons.appendChild(makeBtn('Accept', 'var(--blue)', function () { answer(''); }));
+        // Mode A: there's a recommendation — lead with "Accept recommended".
+        promptRecText.textContent = msg.recommended;
+        showRecommendation();
+      } else {
+        // Mode B: no recommendation — the user must type an answer (or skip).
+        promptRec.style.display = 'none';
+        promptInput.style.display = 'block';
+        promptInput.value = '';
+        const buttons = [makeBtn('Submit answer', 'primary', function () { answer(promptInput.value); })];
+        if (msg.allowSkip) {
+          buttons.push(makeBtn('Skip question', 'secondary', function () { answer(''); }));
+        }
+        renderButtons(buttons);
+        promptInput.focus();
       }
-      if (msg.allowSkip) {
-        promptButtons.appendChild(makeBtn('Skip', 'var(--surface2)', function () { answer(''); }));
-      }
-      promptButtons.appendChild(makeBtn('Cancel task', 'var(--red)', function () { answer(undefined); }));
       promptCard.style.display = 'block';
       setEnabled(false);
-      promptInput.focus();
     }
 
     function handleMsg(msg) {
