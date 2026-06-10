@@ -192,7 +192,8 @@ export function html(wsUrl: string): string {
     #prompt-card button:hover { filter: brightness(1.08); }
     #prompt-card button.primary { background: var(--green); color: var(--crust);
       font-weight: 700; flex: 1; min-width: 160px; }
-    #prompt-card button.secondary { background: var(--surface1); color: var(--text); }
+    #prompt-card button.secondary { background: var(--surface1); color: var(--text);
+      flex: 1; min-width: 160px; }
     #prompt-card button.cancel { margin-left: auto; background: transparent; color: var(--subtext0);
       font-size: 12px; font-weight: 500; padding: 8px 10px; }
     #prompt-card button.cancel:hover { color: var(--red); filter: none; }
