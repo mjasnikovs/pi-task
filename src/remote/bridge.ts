@@ -4,7 +4,7 @@ import type {
     ExtensionContext
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
-import type {PromptMessage, ServerMessage} from './protocol.js'
+import type {ContextUsage, PromptMessage, ServerMessage} from './protocol.js'
 
 export interface BridgeState {
     /** promptId → resolver that settles the remote side of an ask() race. */
@@ -13,6 +13,8 @@ export interface BridgeState {
     activePrompt: PromptMessage | null
     /** Last lines pushed per widget key (replayed to late joiners). */
     activeWidgets: Map<string, string[]>
+    /** Most recent context-window usage (replayed to seed late joiners' bar), or null. */
+    lastContextUsage: ContextUsage | null
     nextId: number
     /** Command name → handler, populated as pi-task registers its commands. */
     commands: Map<string, (args: string, ctx: ExtensionCommandContext) => unknown>
@@ -32,6 +34,7 @@ export function getBridge(): BridgeState {
             pending: new Map(),
             activePrompt: null,
             activeWidgets: new Map(),
+            lastContextUsage: null,
             nextId: 0,
             commands: new Map(),
             currentCtx: null,

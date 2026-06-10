@@ -1,6 +1,7 @@
 import {describe, it, expect, beforeEach} from 'bun:test'
 import {setupEvents} from './events.js'
 import {HistoryBuffer} from './history.js'
+import {getBridge} from './bridge.js'
 
 // Minimal mock ExtensionAPI
 function makePiMock() {
@@ -42,6 +43,15 @@ describe('setupEvents', () => {
         expect(captured).toContainEqual({
             type: 'agent_end',
             contextUsage: {tokens: 5000, contextWindow: 100000, percent: 5}
+        })
+    })
+
+    it('stores the latest contextUsage on the bridge so late joiners can be seeded', () => {
+        pi.emit('agent_end', {type: 'agent_end'})
+        expect(getBridge().lastContextUsage).toEqual({
+            tokens: 5000,
+            contextWindow: 100000,
+            percent: 5
         })
     })
 

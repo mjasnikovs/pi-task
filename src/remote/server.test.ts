@@ -12,6 +12,7 @@ afterEach(() => {
     const b = getBridge()
     b.pending.clear()
     b.activePrompt = null
+    b.lastContextUsage = null
 })
 
 describe('getLocalIPs', () => {
@@ -184,6 +185,22 @@ test('connecting browser receives the active prompt on handshake', async () => {
     ws.close()
     srv.stop()
     b.activePrompt = null
+})
+
+test('connecting browser receives the last context usage on handshake', async () => {
+    const b = getBridge()
+    b.lastContextUsage = {tokens: 12000, contextWindow: 100000, percent: 12}
+    const srv = await startServer(
+        () => {},
+        () => '<html></html>',
+        () => []
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
+    const ctxMsg = await once(ws, 'context')
+    expect(ctxMsg.contextUsage).toEqual({tokens: 12000, contextWindow: 100000, percent: 12})
+    ws.close()
+    srv.stop()
+    b.lastContextUsage = null
 })
 
 test('prompt_answer frame resolves the pending prompt', async () => {

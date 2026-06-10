@@ -42,7 +42,7 @@ export function html(wsUrl: string): string {
       font-family: ui-monospace, monospace; height: 100dvh;
       display: flex; flex-direction: column; overflow: hidden;
       padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-               env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+               0px env(safe-area-inset-left, 0px);
     }
     #context-bar { height: 4px; background: var(--surface0); flex-shrink: 0; }
     #context-bar-fill { height: 100%; background: var(--mauve); width: 0%; transition: width 0.4s ease; }
@@ -51,14 +51,27 @@ export function html(wsUrl: string): string {
       display: flex; justify-content: space-between; align-items: center;
       font-size: 13px; flex-shrink: 0; border-bottom: 1px solid var(--surface0);
     }
-    #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em; }
-    #header .status { color: var(--subtext0); font-size: 11px; }
+    #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em;
+      position: relative; animation: glitch 5s steps(1) infinite; }
+    @keyframes glitch {
+      0%, 88%, 100% { text-shadow: none; transform: translate(0, 0); }
+      90% { text-shadow: -1px 0 var(--red), 1px 0 var(--teal); transform: translate(1px, -1px); }
+      92% { text-shadow: 1px 0 var(--red), -1px 0 var(--blue); transform: translate(-1px, 1px); }
+      94% { text-shadow: -1px 0 var(--blue), 1px 0 var(--red); transform: translate(1px, 0); }
+      96% { text-shadow: 1px 0 var(--teal), -1px 0 var(--red); transform: translate(-1px, 0); }
+    }
+    @media (prefers-reduced-motion: reduce) { #header .title { animation: none; } }
+    #header .status { color: var(--subtext0); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+    #header .cdot { color: var(--yellow); }
+    #header .cdot.up { color: var(--green); }
+    #header .cdot.down { color: var(--red); }
     #header .hgroup { display: flex; align-items: center; gap: 10px; }
     #bell {
       background: none; border: none; color: var(--subtext1); cursor: pointer;
       font-size: 15px; line-height: 1; padding: 2px; font-family: inherit;
     }
     #bell:hover { color: var(--text); }
+    #bell.on { color: var(--mauve); }
     #chat-log {
       flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px;
       display: flex; flex-direction: column; gap: 8px;
@@ -77,17 +90,11 @@ export function html(wsUrl: string): string {
       max-width: 100%; border: 1px solid var(--red); font-size: 12px;
     }
     .bubble.thinking {
-      display: flex; gap: 5px; align-items: center; padding: 12px 14px;
+      display: flex; gap: 5px; align-items: center; padding: 10px 14px;
     }
-    .bubble.thinking .dot {
-      width: 7px; height: 7px; border-radius: 50%; background: var(--subtext0);
-      animation: thinking-bounce 1.2s infinite ease-in-out both;
-    }
-    .bubble.thinking .dot:nth-child(1) { animation-delay: -0.24s; }
-    .bubble.thinking .dot:nth-child(2) { animation-delay: -0.12s; }
-    @keyframes thinking-bounce {
-      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-      40% { transform: scale(1); opacity: 1; }
+    .bubble.thinking .spinner {
+      color: var(--mauve); font-size: 15px; line-height: 1;
+      font-family: ui-monospace, monospace;
     }
     .tool-call {
       background: var(--crust); border-radius: 6px; align-self: flex-start;
@@ -96,6 +103,7 @@ export function html(wsUrl: string): string {
     .tool-call summary {
       padding: 6px 10px; color: var(--subtext1); cursor: pointer;
       user-select: none; list-style: none;
+      overflow-wrap: anywhere; word-break: break-word;
     }
     .tool-call summary::-webkit-details-marker { display: none; }
     .tool-call summary::before { content: "▶  "; }
@@ -126,7 +134,7 @@ export function html(wsUrl: string): string {
     .hl-num { color: var(--blue); }
     .hl-fn  { color: var(--yellow); }
     #input-bar {
-      background: var(--mantle); padding: 10px 16px;
+      background: var(--mantle); padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
       display: flex; gap: 8px; flex-shrink: 0;
       border-top: 1px solid var(--surface0);
       position: relative;
@@ -220,8 +228,8 @@ export function html(wsUrl: string): string {
   <div id="header">
     <span class="title">pi-task remote</span>
     <div class="hgroup">
-      <span class="status" id="client-status">connecting…</span>
-      <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x1F515;</button>
+      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span><span id="client-label">connecting&#x2026;</span></span>
+      <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
     </div>
   </div>
   <div id="chat-log"></div>
@@ -256,7 +264,17 @@ export function html(wsUrl: string): string {
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const contextFill = document.getElementById('context-bar-fill');
-    const clientStatus = document.getElementById('client-status');
+    function setContextBar(usage) {
+      if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
+    }
+    const connDot = document.getElementById('conn-dot');
+    const clientLabel = document.getElementById('client-label');
+    // state: 'connecting' (○ yellow) | 'up' (● green) | 'down' (● red)
+    function setConn(state, label) {
+      connDot.textContent = state === 'connecting' ? '\\u25CB' : '\\u25CF';
+      connDot.className = 'cdot' + (state === 'up' ? ' up' : state === 'down' ? ' down' : '');
+      if (label !== undefined) clientLabel.textContent = label;
+    }
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
     const cmdSuggestions = document.getElementById('cmd-suggestions');
@@ -458,16 +476,28 @@ export function html(wsUrl: string): string {
     }
 
     let thinkingEl = null;
+    let spinTimer = null;
+    let spinIdx = 0;
+    const SPIN = '\\u280B\\u2819\\u2839\\u2838\\u283C\\u2834\\u2826\\u2827\\u2807\\u280F';
     function showThinking() {
       if (!thinkingEl) {
         thinkingEl = document.createElement('div');
         thinkingEl.className = 'bubble assistant thinking';
-        thinkingEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+        thinkingEl.innerHTML = '<span class="spinner"></span>';
+      }
+      if (!spinTimer) {
+        var sp = thinkingEl.firstChild;
+        sp.textContent = SPIN[spinIdx % SPIN.length];
+        spinTimer = setInterval(function () {
+          spinIdx = (spinIdx + 1) % SPIN.length;
+          sp.textContent = SPIN[spinIdx];
+        }, 90);
       }
       chatLog.appendChild(thinkingEl); // append (or move) to bottom
       scrollBottom();
     }
     function hideThinking() {
+      if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
       if (thinkingEl) thinkingEl.remove();
     }
 
@@ -507,8 +537,10 @@ export function html(wsUrl: string): string {
     }
 
     function updateBell() {
-      // 🔔 when armed, 🔕 when off/unavailable.
-      bell.textContent = notifyEnabled() ? '\\u{1F514}' : '\\u{1F515}';
+      // ◉ (mauve) when armed, ◯ (dim) when off/unavailable.
+      var on = notifyEnabled();
+      bell.textContent = on ? '\\u25C9' : '\\u25EF';
+      bell.classList.toggle('on', on);
     }
 
     // Why notifications can't be enabled here, or null if they can.
@@ -739,12 +771,14 @@ export function html(wsUrl: string): string {
           streamText = '';
           setEnabled(true);
           notify('Task finished', '', 'pi-end');
-          if (msg.contextUsage && msg.contextUsage.percent != null) {
-            contextFill.style.width = msg.contextUsage.percent + '%';
-          }
+          setContextBar(msg.contextUsage);
+          break;
+        case 'context':
+          // Seeds the bar for a client that joined mid-session.
+          setContextBar(msg.contextUsage);
           break;
         case 'client_count':
-          clientStatus.textContent = msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected';
+          setConn('up', msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected');
           break;
         case 'prompt':
           showPrompt(msg);
@@ -809,7 +843,7 @@ export function html(wsUrl: string): string {
       ws.addEventListener('open', () => {
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
-        clientStatus.textContent = 'connected';
+        setConn('up', 'connected');
         setEnabled(true);
       });
       ws.addEventListener('message', (e) => {
@@ -817,6 +851,7 @@ export function html(wsUrl: string): string {
       });
       ws.addEventListener('close', () => {
         setEnabled(false);
+        setConn('down', 'disconnected');
         reconnectOverlay.classList.add('visible');
         reconnectMsg.textContent = 'reconnecting in ' + (reconnectDelay / 1000) + 's…';
         setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);

@@ -59,6 +59,7 @@ describe('html()', () => {
         expect(out).toContain('case \'widget\'')
         expect(out).toContain('case \'notify\'')
         expect(out).toContain('case \'viewer\'')
+        expect(out).toContain('case \'context\'')
         expect(out).toContain('prompt_answer')
         expect(out).toContain('id="prompt-card"')
         expect(out).toContain('id="status-panel"')
@@ -98,5 +99,52 @@ describe('html()', () => {
         // off the left edge of a phone screen and is unreadable.
         expect(rule).toContain('max-width')
         expect(rule).toMatch(/overflow-wrap|word-break/)
+    })
+
+    it('gives the header title a small Catppuccin glitch animation', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('@keyframes glitch')
+        const m = out.match(/#header \.title \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        expect(m![1]).toContain('animation')
+    })
+
+    it('uses monochrome terminal glyphs (not emoji) for the bell toggle', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).not.toContain('1F514') // 🔔
+        expect(out).not.toContain('1F515') // 🔕
+        expect(out).not.toContain('🔔')
+        expect(out).not.toContain('🔕')
+        expect(out).toContain('25C9') // ◉ notifications on
+        expect(out).toContain('25EF') // ◯ notifications off
+    })
+
+    it('renders a colored connection-status dot with a separate label', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('id="conn-dot"')
+        expect(out).toContain('id="client-label"')
+        expect(out).toContain('25CF') // ● connected / disconnected
+        expect(out).toContain('25CB') // ○ connecting
+    })
+
+    it('uses a terminal braille spinner (not bouncing dots) for the thinking indicator', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('class="spinner"')
+        expect(out).not.toContain('thinking-bounce')
+        expect(out).toContain('280B') // a braille spinner frame
+    })
+
+    it('anchors the input bar to the bottom safe-area so there is no gap', () => {
+        const out = html('ws://localhost:7600/ws')
+        const m = out.match(/#input-bar \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        expect(m![1]).toContain('env(safe-area-inset-bottom')
+    })
+
+    it('wraps long tool-call summaries so they stay inside the box', () => {
+        const out = html('ws://localhost:7600/ws')
+        const m = out.match(/\.tool-call summary \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        expect(m![1]).toMatch(/overflow-wrap|word-break/)
     })
 })

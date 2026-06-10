@@ -129,6 +129,9 @@ export async function startServer(
             sendTo(ws, {type: 'widget', key, lines})
         }
         if (bridge.activePrompt) sendTo(ws, bridge.activePrompt)
+        if (bridge.lastContextUsage) {
+            sendTo(ws, {type: 'context', contextUsage: bridge.lastContextUsage})
+        }
         broadcast({type: 'client_count', count: clientCount()})
 
         ws.on('message', data => {

@@ -126,7 +126,7 @@ export function registerRemote(pi: ExtensionAPI): void {
                 const primaryUrl = plan.primaryUrl
                 const qr = await qrLines(primaryUrl)
 
-                const addrs = formatAddresses(server.ips, server.port)
+                const addrs = [...plan.urlLines, ...formatAddresses(server.ips, server.port)]
                 const labelW = addrs.reduce((m, a) => Math.max(m, a.label.length), 0)
                 const addrLines = [
                     ...addrs.map(a => (a.label ? `${a.label.padEnd(labelW)}  ${a.url}` : a.url)),
