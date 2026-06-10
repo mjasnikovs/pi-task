@@ -353,12 +353,19 @@ export function html(wsUrl: string): string {
     }
 
     const COMMANDS = [
-      { name: '/new',         desc: 'Start a new session' },
-      { name: '/clear',       desc: 'Clear the conversation' },
-      { name: '/compact',     desc: 'Compact context to save tokens' },
-      { name: '/help',        desc: 'Show available commands' },
-      { name: '/fast',        desc: 'Toggle fast mode' },
-      { name: '/remote stop', desc: 'Stop the remote server' },
+      { name: '/task',             desc: 'Start a new task' },
+      { name: '/task-list',        desc: 'List tasks in this project' },
+      { name: '/task-resume',      desc: 'Resume a task' },
+      { name: '/task-cancel',      desc: 'Cancel the currently running task' },
+      { name: '/task-auto',        desc: 'Plan a feature into tasks and run them' },
+      { name: '/task-auto-resume', desc: 'Resume the active /task-auto run' },
+      { name: '/task-auto-cancel', desc: 'Stop the running /task-auto loop after the current task' },
+      { name: '/new',              desc: 'Start a new session' },
+      { name: '/clear',            desc: 'Clear the conversation' },
+      { name: '/compact',          desc: 'Compact context to save tokens' },
+      { name: '/help',             desc: 'Show available commands' },
+      { name: '/fast',             desc: 'Toggle fast mode' },
+      { name: '/remote stop',      desc: 'Stop the remote server' },
     ];
     let cmdActive = [];
     let cmdIndex = -1;
