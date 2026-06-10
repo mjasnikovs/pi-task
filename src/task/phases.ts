@@ -359,7 +359,9 @@ export async function phaseResearch(
             )
         }
         if (result.text.trim().length === 0) {
-            throw new Error(`Research ${name} worker produced no output`)
+            throw new Error(
+                `Research ${name} worker produced no output (exit ${result.exitCode}, ${result.waitMs}ms wait + ${result.workMs}ms work${result.stderr ? ': ' + result.stderr.slice(-300) : ''})`
+            )
         }
     }
 

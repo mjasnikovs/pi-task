@@ -55,7 +55,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     const waitMs = tFirstByte === null ? tEnd - tStart : tFirstByte - tStart
     const workMs = tFirstByte === null ? 0 : tEnd - tFirstByte
     return {
-        text: result.text ?? '',
+        text: result.text || '',
         exitCode: result.exitCode,
         stderr: result.stderr.trim(),
         aborted: result.aborted,
