@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test'
-import {getBridge, answerPrompt, SessionUI, publishWidget, publishNotify, publishViewer} from './bridge.js'
+import {getBridge, answerPrompt, SessionUI, publishWidget, publishNotify, publishViewer, registerBridgeCommand, dispatchRemoteLine} from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 
 // Reset the singleton between tests.
@@ -11,6 +11,8 @@ afterEach(() => {
     b.sent.length = 0
     b.nextId = 0
     b.broadcast = msg => wsBroadcast(msg) // restore production default
+    b.commands.clear()
+    b.currentCtx = null
 })
 
 // Minimal fake ctx whose ui.input is controllable + abortable.
@@ -123,4 +125,49 @@ test('publishViewer broadcasts a viewer message', () => {
         title: 'Tasks',
         text: 'TASK_0001 completed\nTASK_0002 pending'
     })
+})
+
+test('dispatchRemoteLine routes a registered slash command to its handler', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    let called: {args: string} | null = null
+    const ctx = {hasUI: true} as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    b.currentCtx = ctx
+    b.commands.set('task', (args, _ctx) => {
+        called = {args}
+    })
+    const handled = dispatchRemoteLine('/task add retries', {
+        onPlain: () => {}
+    })
+    expect(handled).toBe(true)
+    expect(called).toEqual({args: 'add retries'})
+})
+
+test('dispatchRemoteLine toasts on unknown slash command', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.currentCtx = {} as never
+    const handled = dispatchRemoteLine('/bogus xyz', {onPlain: () => {}})
+    expect(handled).toBe(true)
+    expect(b.sent.some(m => (m as {type: string}).type === 'notify')).toBe(true)
+})
+
+test('dispatchRemoteLine sends plain lines to onPlain', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    let plain = ''
+    const handled = dispatchRemoteLine('hello there', {onPlain: t => (plain = t)})
+    expect(handled).toBe(false)
+    expect(plain).toBe('hello there')
+})
+
+test('registerBridgeCommand records the handler and forwards to pi.registerCommand', () => {
+    const b = getBridge()
+    const registered: string[] = []
+    const pi = {
+        registerCommand: (name: string) => registered.push(name)
+    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionAPI
+    registerBridgeCommand(pi, 'task-cancel', {description: 'x', handler: () => {}})
+    expect(registered).toContain('task-cancel')
+    expect(b.commands.has('task-cancel')).toBe(true)
 })

@@ -1,4 +1,4 @@
-import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 
@@ -136,4 +136,59 @@ export function publishNotify(message: string, level: 'info' | 'warning' | 'erro
 
 export function publishViewer(title: string, text: string): void {
     getBridge().broadcast({type: 'viewer', title, text})
+}
+
+interface BridgeCommandDef {
+    description: string
+    handler: (args: string, ctx: ExtensionCommandContext) => unknown
+    // pass-through for any other registerCommand options
+    [k: string]: unknown
+}
+
+/** Register a command with pi AND record it in the bridge so remote slash lines
+ *  can invoke it. Use in place of pi.registerCommand for task commands. */
+export function registerBridgeCommand(
+    pi: ExtensionAPI,
+    name: string,
+    def: BridgeCommandDef
+): void {
+    const b = getBridge()
+    const wrapped: BridgeCommandDef = {
+        ...def,
+        handler: (args: string, ctx: ExtensionCommandContext) => {
+            b.currentCtx = ctx // keep latest live ctx for remote dispatch
+            return def.handler(args, ctx)
+        }
+    }
+    b.commands.set(name, wrapped.handler)
+    pi.registerCommand(name, wrapped as never)
+}
+
+/** Handle one line typed in a browser. Returns true if it was consumed as a
+ *  slash command (registered or unknown); false if it's a plain chat line that
+ *  the caller should forward via onPlain. */
+export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) => void}): boolean {
+    const b = getBridge()
+    if (!text.startsWith('/')) {
+        opts.onPlain(text)
+        return false
+    }
+    const space = text.indexOf(' ')
+    const name = (space === -1 ? text.slice(1) : text.slice(1, space)).trim()
+    const args = space === -1 ? '' : text.slice(space + 1).trim()
+    const handler = b.commands.get(name)
+    if (!handler) {
+        publishNotify(`Unknown command: /${name}`, 'warning')
+        return true
+    }
+    if (!b.currentCtx) {
+        publishNotify('Start a session before running commands remotely.', 'warning')
+        return true
+    }
+    try {
+        void handler(args, b.currentCtx)
+    } catch (err) {
+        publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
+    }
+    return true
 }
