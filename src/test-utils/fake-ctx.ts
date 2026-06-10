@@ -72,6 +72,7 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
             }
         const ctx = {
             cwd,
+            hasUI: true,
             ui: {
                 theme: {
                     fg: (_role: string, text: string) => text,

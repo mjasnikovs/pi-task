@@ -19,6 +19,7 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile} from './task-io.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
+import {getBridge, answerPrompt} from '../remote/bridge.js'
 
 describe('extractToolingCommands', () => {
     test('parses single-column entry', () => {
@@ -727,6 +728,7 @@ describe('phaseAutoAnswer enrichment', () => {
 // touches `ctx` beyond reading `ui.theme` lazily, and not at all when there
 // are zero questions.
 const stubCtx = {
+    hasUI: true,
     ui: {
         theme: {fg: (_: string, s: string) => s},
         input: async () => undefined,
@@ -855,6 +857,46 @@ describe('phaseGrill', () => {
                 expect(s.ms).toBeGreaterThanOrEqual(0)
             }
         })
+    })
+
+    test('phaseGrill completes from a remote answer when local input never resolves', async () => {
+        const b = getBridge()
+        b.broadcast = () => {} // no real WS
+        // Local input that never settles → only a remote answer can resolve ask().
+        const noLocalCtx = {
+            hasUI: true,
+            ui: {
+                theme: {fg: (_: string, s: string) => s},
+                input: () => new Promise<string | undefined>(() => {}),
+                notify: () => undefined
+            }
+        } as unknown as ExtensionCommandContext
+        // Poll the bridge and answer each question as soon as it goes active.
+        const poll = setInterval(() => {
+            if (b.activePrompt) answerPrompt(b.activePrompt.id, 'remote pick')
+        }, 5)
+        try {
+            await withTmpTaskDir(async cwd => {
+                // grill-gen: one question; auto-answer: UNKNOWN: (forces user/ask path); grill-gen: NONE
+                const spawn = fakeSpawnQueue([
+                    agentEndResponse('1. which bundler?'),
+                    agentEndResponse('UNKNOWN:'),
+                    agentEndResponse('NONE')
+                ])
+                const out = await phaseGrill(
+                    {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                    noLocalCtx,
+                    {taskId: 'TASK_TEST', title: 't', phase: 'grill', startedAt: 0},
+                    'refined-task',
+                    'research-notes'
+                )
+                expect(out).toContain('remote pick')
+            })
+        } finally {
+            clearInterval(poll)
+            b.activePrompt = null
+            b.pending.clear()
+        }
     })
 })
 

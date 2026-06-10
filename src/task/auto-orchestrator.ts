@@ -25,6 +25,7 @@ import {writeTaskFile, readTaskFile, updateTaskFrontMatter} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {SessionUI} from '../remote/bridge.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 
 /**
@@ -86,6 +87,7 @@ export async function planAuto(
     // with the model's recommended default pre-filled (Enter to accept, type to
     // override); we never auto-answer. The model emits NONE when nothing remains.
     const theme = ctx.ui.theme
+    const ui = new SessionUI(ctx)
     // Inline any @file spec the user referenced so clarify/decompose reason over
     // the real content, not a one-line "Implement @file" that reads as trivial.
     const featureForModel = await expandFeatureMentions(cwd, feature)
@@ -109,7 +111,12 @@ export async function planAuto(
             suggested ?
                 `${shownQ}\n${theme.fg('muted', 'Recommended:')}\n\n${renderInlineMarkdown(suggested, theme)}\n\n${theme.fg('muted', 'press Enter to accept')}`
             :   `${shownQ}\n${theme.fg('muted', '(no recommendation — please answer)')}`
-        const a = await ctx.ui.input(title, plainSuggested)
+        const a = await ui.ask({
+            localTitle: title,
+            question: plainQ,
+            recommended: plainSuggested,
+            allowSkip: plainSuggested === undefined
+        })
         if (a === undefined) {
             ctx.ui.notify('/task-auto cancelled.', 'warning')
             return null
