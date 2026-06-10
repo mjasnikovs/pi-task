@@ -96,11 +96,12 @@ export class SessionUI {
 
         // Local: resolves to a value/undefined, or undefined on abort. Swallow
         // the rejection some implementations throw on abort so it never leaks.
-        const local: Promise<string | undefined> = this.ctx.hasUI ?
-            this.ctx.ui.input(spec.localTitle, spec.recommended, {signal: ac.signal}).catch(
-                () => undefined
-            )
-        :   new Promise<string | undefined>(() => {})
+        const local: Promise<string | undefined> =
+            this.ctx.hasUI ?
+                this.ctx.ui
+                    .input(spec.localTitle, spec.recommended, {signal: ac.signal})
+                    .catch(() => undefined)
+            :   new Promise<string | undefined>(() => {})
 
         try {
             const winner = await Promise.race([
@@ -147,11 +148,7 @@ interface BridgeCommandDef {
 
 /** Register a command with pi AND record it in the bridge so remote slash lines
  *  can invoke it. Use in place of pi.registerCommand for task commands. */
-export function registerBridgeCommand(
-    pi: ExtensionAPI,
-    name: string,
-    def: BridgeCommandDef
-): void {
+export function registerBridgeCommand(pi: ExtensionAPI, name: string, def: BridgeCommandDef): void {
     const b = getBridge()
     const wrapped: BridgeCommandDef = {
         ...def,

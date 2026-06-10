@@ -1,5 +1,14 @@
 import {afterEach, expect, test} from 'bun:test'
-import {getBridge, answerPrompt, SessionUI, publishWidget, publishNotify, publishViewer, registerBridgeCommand, dispatchRemoteLine} from './bridge.js'
+import {
+    getBridge,
+    answerPrompt,
+    SessionUI,
+    publishWidget,
+    publishNotify,
+    publishViewer,
+    registerBridgeCommand,
+    dispatchRemoteLine
+} from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 
 // Reset the singleton between tests.
@@ -41,7 +50,9 @@ test('remote answer wins and aborts the local dialog', async () => {
     b.broadcast = msg => b.sent.push(msg)
     let aborted = false
     const ui = new SessionUI(
-        fakeCtx({onInput: (_resolve, signal) => signal?.addEventListener('abort', () => (aborted = true))}),
+        fakeCtx({
+            onInput: (_resolve, signal) => signal?.addEventListener('abort', () => (aborted = true))
+        }),
         b
     )
     const p = ui.ask({localTitle: 'Q', question: 'Q', recommended: 'pg', allowSkip: false})
@@ -57,9 +68,9 @@ test('local answer wins and broadcasts prompt_resolved', async () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
     const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local-answer')}), b)
-    await expect(
-        ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})
-    ).resolves.toBe('local-answer')
+    await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe(
+        'local-answer'
+    )
     expect(b.pending.size).toBe(0)
     expect(b.sent.some(m => (m as {type: string}).type === 'prompt_resolved')).toBe(true)
 })
@@ -130,17 +141,19 @@ test('publishViewer broadcasts a viewer message', () => {
 test('dispatchRemoteLine routes a registered slash command to its handler', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
-    let called: {args: string} | null = null
-    const ctx = {hasUI: true} as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    const calls: Array<{args: string}> = []
+    const ctx = {
+        hasUI: true
+    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
     b.currentCtx = ctx
     b.commands.set('task', (args, _ctx) => {
-        called = {args}
+        calls.push({args})
     })
     const handled = dispatchRemoteLine('/task add retries', {
         onPlain: () => {}
     })
     expect(handled).toBe(true)
-    expect(called).toEqual({args: 'add retries'})
+    expect(calls).toEqual([{args: 'add retries'}])
 })
 
 test('dispatchRemoteLine toasts on unknown slash command', () => {
@@ -171,8 +184,8 @@ test('dispatchRemoteLine toasts when an async command handler rejects', async ()
     expect(
         b.sent.some(
             m =>
-                (m as {type: string; message?: string}).type === 'notify' &&
-                (m as {message?: string}).message?.includes('boom')
+                (m as {type: string; message?: string}).type === 'notify'
+                && (m as {message?: string}).message?.includes('boom')
         )
     ).toBe(true)
 })
