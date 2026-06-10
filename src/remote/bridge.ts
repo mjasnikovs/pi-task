@@ -185,13 +185,16 @@ export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) 
         publishNotify('Start a session before running commands remotely.', 'warning')
         return true
     }
-    // Wrap in Promise.resolve so both sync throws and async rejections from the
-    // (often async) command handler surface as a toast instead of crashing or
-    // becoming an unhandled rejection.
-    Promise.resolve()
-        .then(() => handler(args, b.currentCtx!))
-        .catch((err: unknown) => {
-            publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
-        })
+    // Invoke synchronously so the call happens immediately, but surface both
+    // sync throws and async rejections from the (often async) command handler
+    // as a toast instead of crashing or becoming an unhandled rejection.
+    const toastErr = (err: unknown) =>
+        publishNotify(`/${name} failed: ${(err as Error).message}`, 'error')
+    try {
+        const result = handler(args, b.currentCtx)
+        if (result instanceof Promise) result.catch(toastErr)
+    } catch (err) {
+        toastErr(err)
+    }
     return true
 }
