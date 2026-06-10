@@ -34,4 +34,16 @@ describe('html()', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('new WebSocket(WS_URL)')
     })
+
+    it('includes prompt card, status panel, and the new message handlers', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain("case 'prompt'")
+        expect(out).toContain("case 'prompt_resolved'")
+        expect(out).toContain("case 'widget'")
+        expect(out).toContain("case 'notify'")
+        expect(out).toContain("case 'viewer'")
+        expect(out).toContain('prompt_answer')
+        expect(out).toContain('id="prompt-card"')
+        expect(out).toContain('id="status-panel"')
+    })
 })

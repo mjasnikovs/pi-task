@@ -166,6 +166,22 @@ export function html(wsUrl: string): string {
       background: var(--green); animation: blink 1s step-end infinite; margin-left: 1px;
     }
     @keyframes blink { 50% { opacity: 0; } }
+    #status-panel { padding: 6px 12px; border-bottom: 1px solid var(--surface1);
+      color: var(--subtext1); white-space: pre-wrap; font-size: 13px; display: none; }
+    #prompt-card { position: fixed; left: 0; right: 0; bottom: 0; background: var(--mantle);
+      border-top: 2px solid var(--mauve); padding: 14px; display: none; z-index: 50; }
+    #prompt-card .q { color: var(--text); margin-bottom: 8px; white-space: pre-wrap; }
+    #prompt-card textarea { width: 100%; background: var(--surface0); color: var(--text);
+      border: 1px solid var(--surface2); border-radius: 6px; padding: 8px; }
+    #prompt-card .row { display: flex; gap: 8px; margin-top: 8px; }
+    #prompt-card button { padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; }
+    .toast { position: fixed; top: 12px; right: 12px; padding: 8px 12px; border-radius: 6px;
+      background: var(--surface1); color: var(--text); z-index: 60; }
+    .toast.warning { background: var(--peach); color: var(--crust); }
+    .toast.error { background: var(--red); color: var(--crust); }
+    #viewer { position: fixed; inset: 24px; background: var(--mantle); border: 1px solid var(--surface2);
+      border-radius: 8px; padding: 16px; overflow: auto; white-space: pre-wrap; display: none; z-index: 70; }
+    #viewer .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--subtext0); }
   </style>
 </head>
 <body>
@@ -175,12 +191,19 @@ export function html(wsUrl: string): string {
     <span class="status" id="client-status">connecting…</span>
   </div>
   <div id="chat-log"></div>
+  <div id="status-panel"></div>
   <div id="input-bar">
     <div id="cmd-suggestions"></div>
     <textarea id="input" placeholder="type a message… (/ for commands)" rows="1" disabled></textarea>
     <button id="send" disabled>Send</button>
   </div>
   <div id="reconnect-overlay"><span id="reconnect-msg">reconnecting…</span></div>
+  <div id="prompt-card">
+    <div class="q" id="prompt-q"></div>
+    <textarea id="prompt-input" rows="2"></textarea>
+    <div class="row" id="prompt-buttons"></div>
+  </div>
+  <div id="viewer"><span class="close" id="viewer-close">&#x2715;</span><div id="viewer-body"></div></div>
   <script>
     const WS_URL = ${JSON.stringify(wsUrl)};
     const chatLog = document.getElementById('chat-log');
@@ -191,6 +214,15 @@ export function html(wsUrl: string): string {
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
     const cmdSuggestions = document.getElementById('cmd-suggestions');
+    const statusPanel = document.getElementById('status-panel');
+    const promptCard = document.getElementById('prompt-card');
+    const promptQ = document.getElementById('prompt-q');
+    const promptInput = document.getElementById('prompt-input');
+    const promptButtons = document.getElementById('prompt-buttons');
+    const viewer = document.getElementById('viewer');
+    const viewerBody = document.getElementById('viewer-body');
+    document.getElementById('viewer-close').onclick = function () { viewer.style.display = 'none'; };
+    let activePromptId = null;
     const toolCallMap = {};
     let currentBubble = null;
     let streamText = '';
@@ -395,8 +427,56 @@ export function html(wsUrl: string): string {
     }
 
     function setEnabled(on) {
-      inputEl.disabled = !on;
-      sendBtn.disabled = !on;
+      const allow = on && activePromptId === null;
+      inputEl.disabled = !allow;
+      sendBtn.disabled = !allow;
+    }
+
+    function showToast(message, level) {
+      const t = document.createElement('div');
+      t.className = 'toast ' + (level || 'info');
+      t.textContent = message;
+      document.body.appendChild(t);
+      setTimeout(function () { t.remove(); }, 4000);
+    }
+
+    function answer(value) {
+      if (activePromptId === null) return;
+      ws.send(JSON.stringify({ type: 'prompt_answer', id: activePromptId, value: value }));
+      closePrompt();
+    }
+
+    function closePrompt() {
+      activePromptId = null;
+      promptCard.style.display = 'none';
+      promptInput.value = '';
+      setEnabled(true);
+    }
+
+    function makeBtn(label, bg, onClick) {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.style.background = bg;
+      btn.onclick = onClick;
+      return btn;
+    }
+
+    function showPrompt(msg) {
+      activePromptId = msg.id;
+      promptQ.textContent = msg.question;
+      promptInput.value = msg.recommended || '';
+      promptButtons.innerHTML = '';
+      promptButtons.appendChild(makeBtn('Submit', 'var(--green)', function () { answer(promptInput.value); }));
+      if (msg.recommended) {
+        promptButtons.appendChild(makeBtn('Accept', 'var(--blue)', function () { answer(''); }));
+      }
+      if (msg.allowSkip) {
+        promptButtons.appendChild(makeBtn('Skip', 'var(--surface2)', function () { answer(''); }));
+      }
+      promptButtons.appendChild(makeBtn('Cancel task', 'var(--red)', function () { answer(undefined); }));
+      promptCard.style.display = 'block';
+      setEnabled(false);
+      promptInput.focus();
     }
 
     function handleMsg(msg) {
@@ -493,6 +573,27 @@ export function html(wsUrl: string): string {
           break;
         case 'client_count':
           clientStatus.textContent = msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected';
+          break;
+        case 'prompt':
+          showPrompt(msg);
+          break;
+        case 'prompt_resolved':
+          if (activePromptId === msg.id) closePrompt();
+          break;
+        case 'widget':
+          if (msg.lines && msg.lines.length) {
+            statusPanel.textContent = msg.lines.join('\n');
+            statusPanel.style.display = 'block';
+          } else {
+            statusPanel.style.display = 'none';
+          }
+          break;
+        case 'notify':
+          showToast(msg.message, msg.level);
+          break;
+        case 'viewer':
+          viewerBody.textContent = msg.text;
+          viewer.style.display = 'block';
           break;
       }
     }
