@@ -277,6 +277,19 @@ export function html(wsUrl: string): string {
     const reconnectMsg = document.getElementById('reconnect-msg');
     const cmdSuggestions = document.getElementById('cmd-suggestions');
     const statusPanel = document.getElementById('status-panel');
+    // Widgets are keyed (e.g. 'pi-tasks', 'pi-task-auto'); track them per key so a
+    // clear for one key can't be masked by a stale message from another.
+    const widgets = {};
+    function renderWidgets() {
+      let all = [];
+      for (const k in widgets) if (widgets[k] && widgets[k].length) all = all.concat(widgets[k]);
+      if (all.length) {
+        statusPanel.textContent = all.join('\\n');
+        statusPanel.style.display = 'block';
+      } else {
+        statusPanel.style.display = 'none';
+      }
+    }
     const promptCard = document.getElementById('prompt-card');
     const promptQ = document.getElementById('prompt-q');
     const promptRec = document.getElementById('prompt-rec');
@@ -294,6 +307,7 @@ export function html(wsUrl: string): string {
     let streamText = '';
     let autoScroll = true;
     let reconnectDelay = 1000;
+    let reconnectAnim = null;
     let ws = null;
 
     const BT = String.fromCharCode(96);
@@ -786,12 +800,9 @@ export function html(wsUrl: string): string {
           if (activePromptId === msg.id) closePrompt();
           break;
         case 'widget':
-          if (msg.lines && msg.lines.length) {
-            statusPanel.textContent = msg.lines.join('\\n');
-            statusPanel.style.display = 'block';
-          } else {
-            statusPanel.style.display = 'none';
-          }
+          if (msg.lines && msg.lines.length) widgets[msg.key] = msg.lines;
+          else delete widgets[msg.key];
+          renderWidgets();
           break;
         case 'notify':
           showToast(msg.message, msg.level);
@@ -799,6 +810,16 @@ export function html(wsUrl: string): string {
         case 'viewer':
           viewerBody.textContent = msg.text;
           viewer.style.display = 'block';
+          break;
+        case 'reset':
+          // A new session started — wipe the previous session's transcript.
+          chatLog.innerHTML = '';
+          hideThinking();
+          currentBubble = null; streamText = '';
+          closePrompt();
+          for (const k in widgets) delete widgets[k];
+          renderWidgets();
+          contextFill.style.width = '0%';
           break;
       }
     }
@@ -839,6 +860,7 @@ export function html(wsUrl: string): string {
     function connect() {
       ws = new WebSocket(WS_URL);
       ws.addEventListener('open', () => {
+        if (reconnectAnim) { clearInterval(reconnectAnim); reconnectAnim = null; }
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
         setConn('up');
@@ -851,7 +873,19 @@ export function html(wsUrl: string): string {
         setEnabled(false);
         setConn('down');
         reconnectOverlay.classList.add('visible');
-        reconnectMsg.textContent = 'reconnecting in ' + (reconnectDelay / 1000) + 's…';
+        // Animate the same braille spinner used elsewhere, with a live countdown.
+        const until = Date.now() + reconnectDelay;
+        let frame = 0;
+        const paint = () => {
+          const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+          const glyph = SPIN[frame++ % SPIN.length];
+          reconnectMsg.textContent = left > 0
+            ? glyph + '  connection lost — retrying in ' + left + 's'
+            : glyph + '  reconnecting…';
+        };
+        if (reconnectAnim) clearInterval(reconnectAnim);
+        paint();
+        reconnectAnim = setInterval(paint, 90);
         setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);
       });
     }

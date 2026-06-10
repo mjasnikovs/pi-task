@@ -90,6 +90,22 @@ describe('html()', () => {
         expect(out).toContain('Add to Home Screen')
     })
 
+    it('shows a live countdown on the reconnect overlay', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('id="reconnect-msg"')
+        expect(out).toContain('retrying in')
+    })
+
+    it('clears the remote view on a reset message (new session)', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('case \'reset\'')
+    })
+
+    it('tracks widgets per key so clears are reliable', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('renderWidgets')
+    })
+
     it('keeps long toast messages readable on narrow phone screens', () => {
         const out = html('ws://localhost:7600/ws')
         const m = out.match(/\.toast \{([^}]*)\}/)
