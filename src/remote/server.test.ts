@@ -1,13 +1,17 @@
-import {describe, it, expect, afterEach} from 'bun:test'
+import {describe, it, expect, afterEach, test} from 'bun:test'
 import {startServer} from './server.js'
 import type {ServerHandle} from './server.js'
 import WebSocket from 'ws'
+import {getBridge, answerPrompt} from './bridge.js'
 
 let handle: ServerHandle | null = null
 
 afterEach(() => {
     handle?.stop()
     handle = null
+    const b = getBridge()
+    b.pending.clear()
+    b.activePrompt = null
 })
 
 describe('startServer', () => {
@@ -87,4 +91,66 @@ describe('startServer', () => {
         handle = null
         await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow()
     })
+})
+
+function once(ws: WebSocket, type: string): Promise<Record<string, unknown>> {
+    return new Promise(resolve => {
+        ws.on('message', d => {
+            const m = JSON.parse(d.toString())
+            if (m.type === type) resolve(m)
+        })
+    })
+}
+
+test('connecting browser receives the active prompt on handshake', async () => {
+    const b = getBridge()
+    b.activePrompt = {type: 'prompt', id: '42', question: 'Which DB?', allowSkip: false}
+    const handle = await startServer(
+        () => {},
+        () => '<html></html>',
+        () => []
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/ws`)
+    const prompt = await once(ws, 'prompt')
+    expect(prompt.id).toBe('42')
+    ws.close()
+    handle.stop()
+    b.activePrompt = null
+})
+
+test('prompt_answer frame resolves the pending prompt', async () => {
+    const b = getBridge()
+    let resolved: string | undefined = 'UNSET'
+    b.pending.set('99', v => (resolved = v))
+    const handle = await startServer(
+        () => {},
+        () => '<html></html>',
+        () => []
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'prompt_answer', id: '99', value: 'sqlite'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(resolved).toBe('sqlite')
+    ws.close()
+    handle.stop()
+})
+
+test('plain message is ignored while a prompt is pending', async () => {
+    const b = getBridge()
+    b.activePrompt = {type: 'prompt', id: '7', question: 'q', allowSkip: false}
+    let got = ''
+    const handle = await startServer(
+        text => (got = text),
+        () => '<html></html>',
+        () => []
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'message', text: 'should be dropped'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(got).toBe('')
+    ws.close()
+    handle.stop()
+    b.activePrompt = null
 })

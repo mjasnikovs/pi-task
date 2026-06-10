@@ -3,6 +3,8 @@ import {networkInterfaces} from 'node:os'
 import {WebSocketServer} from 'ws'
 import {addClient, removeClient, clientCount, broadcast, sendTo} from './broadcast.js'
 import type {Turn} from './history.js'
+import {getBridge, answerPrompt} from './bridge.js'
+import {isClientMessage} from './protocol.js'
 
 export interface ServerHandle {
     port: number
@@ -82,17 +84,29 @@ export async function startServer(
         handle.onFirstConnect?.()
         handle.onFirstConnect = null
         sendTo(ws, {type: 'history', turns: getHistory()})
+        const bridge = getBridge()
+        for (const [key, lines] of bridge.activeWidgets) {
+            sendTo(ws, {type: 'widget', key, lines})
+        }
+        if (bridge.activePrompt) sendTo(ws, bridge.activePrompt)
         broadcast({type: 'client_count', count: clientCount()})
 
         ws.on('message', data => {
+            let msg: unknown
             try {
-                const msg = JSON.parse(data.toString()) as {type: string; text?: string}
-                if (msg.type === 'message' && typeof msg.text === 'string') {
-                    onMessage(msg.text)
-                }
+                msg = JSON.parse(data.toString())
             } catch {
-                // ignore malformed JSON
+                return // ignore malformed JSON
             }
+            if (!isClientMessage(msg)) return
+            if (msg.type === 'prompt_answer') {
+                answerPrompt(msg.id, msg.value)
+                return
+            }
+            // type === 'message': ignore while a prompt is pending (composer is
+            // disabled in the browser; this is the server-side guard).
+            if (getBridge().activePrompt) return
+            onMessage(msg.text)
         })
 
         ws.on('close', () => {
