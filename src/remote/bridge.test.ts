@@ -151,7 +151,8 @@ test('dispatchRemoteLine routes a registered slash command to its handler', () =
     b.broadcast = msg => b.sent.push(msg)
     const calls: Array<{args: string}> = []
     const ctx = {
-        hasUI: true
+        hasUI: true,
+        waitForIdle: () => {}
     } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
     b.currentCtx = ctx
     b.commands.set('task', (args, _ctx) => {
@@ -182,10 +183,31 @@ test('dispatchRemoteLine sends plain lines to onPlain', () => {
     expect(plain).toBe('hello there')
 })
 
+test('dispatchRemoteLine toasts a guidance message when currentCtx is not command-capable', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    // A bare event-scoped ctx (no waitForIdle) must not be invoked as a command.
+    b.currentCtx = {hasUI: true} as never
+    let called = false
+    b.commands.set('task', () => {
+        called = true
+    })
+    const handled = dispatchRemoteLine('/task go', {onPlain: () => {}})
+    expect(handled).toBe(true)
+    expect(called).toBe(false)
+    expect(
+        b.sent.some(
+            m =>
+                (m as {type: string; message?: string}).type === 'notify'
+                && (m as {message?: string}).message?.includes('Session changed locally')
+        )
+    ).toBe(true)
+})
+
 test('dispatchRemoteLine toasts when an async command handler rejects', async () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
-    b.currentCtx = {} as never
+    b.currentCtx = {waitForIdle: () => {}} as never
     b.commands.set('task', () => Promise.reject(new Error('boom')))
     dispatchRemoteLine('/task go', {onPlain: () => {}})
     await new Promise(r => setTimeout(r, 0)) // let the rejection settle

@@ -182,6 +182,16 @@ export function dispatchRemoteLine(text: string, opts: {onPlain: (text: string) 
         publishNotify('Start a session before running commands remotely.', 'warning')
         return true
     }
+    // Command handlers need a command-capable ctx (waitForIdle/newSession). A bare
+    // event-scoped ExtensionContext lacks those; if currentCtx is one (e.g. nothing
+    // command-capable has been captured yet), toast instead of throwing a TypeError.
+    if (typeof (b.currentCtx as {waitForIdle?: unknown}).waitForIdle !== 'function') {
+        publishNotify(
+            'Session changed locally — run any task command in the terminal once to re-enable remote commands.',
+            'warning'
+        )
+        return true
+    }
     // Invoke synchronously so the call happens immediately, but surface both
     // sync throws and async rejections from the (often async) command handler
     // as a toast instead of crashing or becoming an unhandled rejection.

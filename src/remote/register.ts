@@ -42,11 +42,15 @@ export function registerRemote(pi: ExtensionAPI): void {
             })
     }
 
-    pi.on('session_start', (_event, ctx) => {
+    pi.on('session_start', (_event, _ctx) => {
         // Update shared send with fresh pi on each session (survives /new re-evaluation)
         S.send = (text, opts) => (opts ? pi.sendUserMessage(text, opts) : pi.sendUserMessage(text))
         setupEvents(pi, history, broadcast)
-        getBridge().currentCtx = ctx as unknown as ExtensionCommandContext
+        // NOTE: we deliberately do NOT seed bridge.currentCtx here. The event ctx
+        // is the base ExtensionContext (no waitForIdle/newSession), so storing it
+        // would make a later remote /task throw. currentCtx is only ever set from
+        // a real command ctx: the /remote handler, registerBridgeCommand, and the
+        // remote-/new withSession rebind. See dispatchRemoteLine's capability guard.
     })
 
     pi.on('session_shutdown', (event, _ctx) => {
