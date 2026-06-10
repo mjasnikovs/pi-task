@@ -98,7 +98,12 @@ export async function runChild(
     )
 
     return {
-        text: result.text ?? result.stdout.trim(),
+        // Use `||` (not `??`) so an empty string from json-events mode falls
+        // back to raw stdout. Without this, a child that exits 0 but emits no
+        // assistant text (e.g. model API error swallowed in json mode) always
+        // fails with the unhelpful "X child produced no output" — the raw
+        // stdout/stderr that might contain the real error is discarded.
+        text: result.text || result.stdout.trim(),
         exitCode: result.exitCode,
         stderr: result.stderr.trim(),
         loopHit
@@ -145,7 +150,7 @@ export async function runPhaseChild(
         throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
     }
     if (r.text.trim().length === 0) {
-        throw new Error(`${name} child produced no output`)
+        throw new Error(`${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`)
     }
     return r.text
 }
@@ -228,7 +233,7 @@ export async function runPhaseWithLoopGuard(
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
         if (r.text.trim().length === 0) {
-            throw new Error(`${name} child produced no output`)
+            throw new Error(`${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`)
         }
         return r.text
     }
