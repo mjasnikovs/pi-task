@@ -156,27 +156,31 @@ describe('teardownTailscaleServe()', () => {
 
 describe('planRemoteUrls()', () => {
     const http = 'http://100.83.115.70:8800'
-    it('served → https url, no hint', () => {
+    it('served → https url as primary + labeled HTTPS line, no hint', () => {
         expect(planRemoteUrls(http, {state: 'served', url: 'https://h.ts.net'})).toEqual({
             primaryUrl: 'https://h.ts.net',
+            urlLines: [{label: 'HTTPS', url: 'https://h.ts.net'}],
             hintLines: []
         })
     })
-    it('foreign-conflict → http + conflict hint', () => {
+    it('foreign-conflict → http, no url line + conflict hint', () => {
         const plan = planRemoteUrls(http, {state: 'foreign-conflict', host: 'h.ts.net'})
         expect(plan.primaryUrl).toBe(http)
+        expect(plan.urlLines).toEqual([])
         expect(plan.hintLines.join('\n')).toContain(
             'already used by another tailscale serve config'
         )
     })
-    it('certs-disabled → http + admin hint', () => {
+    it('certs-disabled → http, no url line + admin hint', () => {
         const plan = planRemoteUrls(http, {state: 'certs-disabled', host: 'h.ts.net'})
         expect(plan.primaryUrl).toBe(http)
+        expect(plan.urlLines).toEqual([])
         expect(plan.hintLines.join('\n')).toContain('admin console')
     })
-    it('unavailable → http, no hint', () => {
+    it('unavailable → http, no url line, no hint', () => {
         expect(planRemoteUrls(http, {state: 'unavailable'})).toEqual({
             primaryUrl: http,
+            urlLines: [],
             hintLines: []
         })
     })

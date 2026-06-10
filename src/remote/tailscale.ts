@@ -14,6 +14,8 @@ export type ServeResult =
 export interface RemoteUrlPlan {
     /** URL to encode in the QR and announce; the https one when serve is live. */
     primaryUrl: string
+    /** Labeled URL lines to add to the address list (e.g. the HTTPS URL when served). */
+    urlLines: {label: string; url: string}[]
     /** Extra lines to print under the URLs (empty when nothing to suggest). */
     hintLines: string[]
 }
@@ -103,10 +105,15 @@ export async function teardownTailscaleServe(port: number, run: Run = defaultRun
 export function planRemoteUrls(httpPrimary: string, result: ServeResult): RemoteUrlPlan {
     switch (result.state) {
         case 'served':
-            return {primaryUrl: result.url, hintLines: []}
+            return {
+                primaryUrl: result.url,
+                urlLines: [{label: 'HTTPS', url: result.url}],
+                hintLines: []
+            }
         case 'foreign-conflict':
             return {
                 primaryUrl: httpPrimary,
+                urlLines: [],
                 hintLines: [
                     'HTTPS: port 443 is already used by another tailscale serve config; not touching it.',
                     '  Free it (tailscale serve --https=443 off) to enable phone notifications.'
@@ -115,11 +122,12 @@ export function planRemoteUrls(httpPrimary: string, result: ServeResult): Remote
         case 'certs-disabled':
             return {
                 primaryUrl: httpPrimary,
+                urlLines: [],
                 hintLines: [
                     'HTTPS (for phone notifications): enable HTTPS in the Tailscale admin console, then restart the remote.'
                 ]
             }
         case 'unavailable':
-            return {primaryUrl: httpPrimary, hintLines: []}
+            return {primaryUrl: httpPrimary, urlLines: [], hintLines: []}
     }
 }
