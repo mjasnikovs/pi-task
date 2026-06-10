@@ -50,6 +50,7 @@ import {
     USER_CANCELLED,
     type PhaseDeps
 } from './child-runner.js'
+import {SessionUI} from '../remote/bridge.js'
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
@@ -496,6 +497,7 @@ export async function phaseGrill(
     // or surfaced as a pre-filled recommendation. The model emits NONE when
     // nothing ambiguous remains. Kept in sync with /task-auto's clarify dialog.
     const theme = ctx.ui.theme
+    const ui = new SessionUI(ctx)
     const out: string[] = [] // human-facing Q&A transcript (with auto-worker debug lines)
     const qa: string[] = [] // compact Q&A fed back into the next question
     // Open-ended: keep asking until the model emits NONE or the user dismisses.
@@ -531,12 +533,17 @@ export async function phaseGrill(
         } else {
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
-            const title =
+            const localTitle =
                 auto.suggested ?
                     `${shownQ}\n${theme.fg('muted', 'Recommended:')}\n\n${renderInlineMarkdown(auto.suggested, theme)}\n\n${theme.fg('muted', 'press Enter to accept')}`
                 :   `${shownQ}\n${theme.fg('muted', '(no recommendation — please answer)')}`
             widgetState.lastLine = `awaiting Q${n + 1}`
-            const a = await ctx.ui.input(title, plainSuggested)
+            const a = await ui.ask({
+                localTitle,
+                question: plainQ,
+                recommended: plainSuggested,
+                allowSkip: plainSuggested === undefined
+            })
             if (a === undefined) throw new Error(USER_CANCELLED)
             const typed = a.trim()
             if (typed.length === 0 && plainSuggested) {

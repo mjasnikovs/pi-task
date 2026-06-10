@@ -3,8 +3,12 @@ import {
     buildAutoLoaderLines,
     formatContextDetail,
     WIDGET_LAST_LINE_MAX,
-    type AutoLoaderState
+    type AutoLoaderState,
+    type WidgetState,
+    startWidget,
+    WIDGET_KEY
 } from './widget.js'
+import {getBridge} from '../remote/bridge.js'
 
 describe('buildAutoLoaderLines', () => {
     const base: AutoLoaderState = {
@@ -58,4 +62,20 @@ describe('formatContextDetail', () => {
     test('returns null when there is nothing to show', () => {
         expect(formatContextDetail({tokens: 0, contextWindow: 0, percent: 0})).toBeNull()
     })
+})
+
+test('startWidget mirrors the rendered lines to the bridge', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.sent.length = 0
+    b.activeWidgets.clear()
+    const state: WidgetState = {taskId: 'TASK_0001', title: 'demo', phase: 'grill', startedAt: 0}
+    const ctx = {
+        hasUI: true,
+        ui: {theme: {fg: (_: string, s: string) => s}, setWidget: () => {}}
+    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    const stop = startWidget(ctx, () => state)
+    stop()
+    expect(b.activeWidgets.has(WIDGET_KEY)).toBe(true)
+    expect(b.sent.some(m => (m as {type: string}).type === 'widget')).toBe(true)
 })

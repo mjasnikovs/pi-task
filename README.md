@@ -64,6 +64,7 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
+| `/remote` | Start a LAN web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
 
@@ -102,6 +103,18 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 - **Clarify first.** It asks the few clarifying questions whose answers change how the feature splits, then decomposes the answers into an ordered list of task titles written to `.pi-tasks/TASK_AUTO_NNNN.md`.
 - **Sequential, blocking.** Each title runs through `/task` to a spec, the spec is implemented, and the loop waits for that to finish before starting the next title. No overlap.
 - **Crash- and cancel-safe.** Progress is the markdown checkboxes in the AUTO file. `/task-auto-resume` (no id) automatically picks up the active run at the first unchecked title. If a title's `/task` run fails, the loop stops and leaves the run resumable.
+
+## Remote — drive a task from your phone
+
+`/remote` starts a local HTTP + WebSocket server and prints a QR code. Open the URL on any device on the same LAN and you get a live view of the session: streaming output, tool calls, and the `/task` status block (phase, elapsed, context). It's bidirectional — the browser can:
+
+- **Answer grill / `/task-auto` clarify questions.** Each question appears as a card with the recommended default pre-filled (Accept), a free-text box (Submit), Skip, or Cancel task.
+- **Start and control tasks.** Type `/task …`, `/task-auto …`, `/task-cancel`, `/task-resume`, etc. — they run on the host.
+- **Send plain messages** to the agent.
+
+Prompts use a **first-answer-wins race**: the same question shows in the local TUI *and* every connected browser, and whoever answers first wins — the other surfaces dismiss. With nobody connected, `/task` behaves exactly as before; the remote path is purely additive.
+
+`/remote stop` shuts the server down. There is **no authentication** — it's a personal LAN tool. Don't expose the port to untrusted networks.
 
 ## Bundled tools
 
