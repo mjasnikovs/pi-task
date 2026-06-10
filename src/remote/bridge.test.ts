@@ -95,6 +95,14 @@ test('no UI (headless): only remote can answer', async () => {
     await expect(p).resolves.toBe('remote-only')
 })
 
+test('remote off (no server, default broadcast): resolves from local, no crash', async () => {
+    // afterEach restores the production wsBroadcast, which iterates the (empty)
+    // client set — this proves ask() is a clean no-op on the wire when nobody is
+    // connected and still resolves from the local input alone.
+    const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local')}))
+    await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
+})
+
 test('publishWidget broadcasts lines and records the active widget', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
