@@ -184,6 +184,35 @@ describe('runChild json-events mode', () => {
         })
         expect(result.aborted).toBe(true)
     })
+
+    test('falls back to stderr when no text events are produced (exit 0)', async () => {
+        // Simulates a model API error that exits 0 with no assistant text but
+        // an error message on stderr. The stderr should surface as the text so
+        // the caller sees the real error instead of "child produced no output".
+        const spawn = fakeSpawnSimple('', 0, 'model backend error: connection reset')
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events'
+        })
+        expect(result.text).toBe('model backend error: connection reset')
+        expect(result.exitCode).toBe(0)
+    })
+
+    test('text_delta accumulation takes precedence over stderr', async () => {
+        // When both text_delta and stderr exist, text_delta wins.
+        const spawn = fakeSpawnQueue([
+            {
+                events: [
+                    {type: 'message_update', assistantMessageEvent: {type: 'text_start'}},
+                    {type: 'message_update', assistantMessageEvent: {type: 'text_delta', delta: 'real output'}}
+                ],
+                stderr: 'some warning'
+            }
+        ])
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events'
+        })
+        expect(result.text).toBe('real output')
+    })
 })
 
 describe('summarizeToolArgs', () => {

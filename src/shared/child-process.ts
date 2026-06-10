@@ -145,7 +145,15 @@ export function runChild(
                 drainJsonEvents(lineBuffer + '\n', opts as RunChildJsonEventsOptions)
                 lineBuffer = ''
             }
-            const text = isJsonEvents ? (finalText || textDeltaAccum).trim() : undefined
+            let text: string | undefined
+            if (isJsonEvents) {
+                const extracted = (finalText || textDeltaAccum).trim()
+                // When json-events mode extracts no text but stderr has content,
+                // surface the stderr as the text so the caller sees the real error
+                // instead of the generic "X child produced no output". Without this,
+                // a model API crash that exits 0 with an error on stderr is invisible.
+                text = extracted.length > 0 ? extracted : (stderr.trim() || undefined)
+            }
             resolve({stdout, stderr, exitCode: code ?? 0, aborted, text})
         })
         proc.on('error', () => {
