@@ -89,6 +89,14 @@ describe('html()', () => {
         expect(out).toContain('Add to Home Screen')
     })
 
+    it('gives the header title a small Catppuccin glitch animation', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('@keyframes glitch')
+        const m = out.match(/#header \.title \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        expect(m![1]).toContain('animation')
+    })
+
     it('uses monochrome terminal glyphs (not emoji) for the bell toggle', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).not.toContain('1F514') // 🔔

@@ -51,7 +51,16 @@ export function html(wsUrl: string): string {
       display: flex; justify-content: space-between; align-items: center;
       font-size: 13px; flex-shrink: 0; border-bottom: 1px solid var(--surface0);
     }
-    #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em; }
+    #header .title { font-weight: bold; color: var(--mauve); letter-spacing: 0.05em;
+      position: relative; animation: glitch 5s steps(1) infinite; }
+    @keyframes glitch {
+      0%, 88%, 100% { text-shadow: none; transform: translate(0, 0); }
+      90% { text-shadow: -1px 0 var(--red), 1px 0 var(--teal); transform: translate(1px, -1px); }
+      92% { text-shadow: 1px 0 var(--red), -1px 0 var(--blue); transform: translate(-1px, 1px); }
+      94% { text-shadow: -1px 0 var(--blue), 1px 0 var(--red); transform: translate(1px, 0); }
+      96% { text-shadow: 1px 0 var(--teal), -1px 0 var(--red); transform: translate(-1px, 0); }
+    }
+    @media (prefers-reduced-motion: reduce) { #header .title { animation: none; } }
     #header .status { color: var(--subtext0); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
     #header .cdot { color: var(--yellow); }
     #header .cdot.up { color: var(--green); }
