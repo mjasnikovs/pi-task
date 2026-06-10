@@ -228,7 +228,7 @@ export function html(wsUrl: string): string {
   <div id="header">
     <span class="title">pi-task remote</span>
     <div class="hgroup">
-      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span><span id="client-label">connecting&#x2026;</span></span>
+      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span></span>
       <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
     </div>
   </div>
@@ -268,12 +268,10 @@ export function html(wsUrl: string): string {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
     }
     const connDot = document.getElementById('conn-dot');
-    const clientLabel = document.getElementById('client-label');
     // state: 'connecting' (○ yellow) | 'up' (● green) | 'down' (● red)
-    function setConn(state, label) {
+    function setConn(state) {
       connDot.textContent = state === 'connecting' ? '\\u25CB' : '\\u25CF';
       connDot.className = 'cdot' + (state === 'up' ? ' up' : state === 'down' ? ' down' : '');
-      if (label !== undefined) clientLabel.textContent = label;
     }
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
@@ -778,7 +776,7 @@ export function html(wsUrl: string): string {
           setContextBar(msg.contextUsage);
           break;
         case 'client_count':
-          setConn('up', msg.count + ' client' + (msg.count === 1 ? '' : 's') + ' connected');
+          setConn('up');
           break;
         case 'prompt':
           showPrompt(msg);
@@ -843,7 +841,7 @@ export function html(wsUrl: string): string {
       ws.addEventListener('open', () => {
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
-        setConn('up', 'connected');
+        setConn('up');
         setEnabled(true);
       });
       ws.addEventListener('message', (e) => {
@@ -851,7 +849,7 @@ export function html(wsUrl: string): string {
       });
       ws.addEventListener('close', () => {
         setEnabled(false);
-        setConn('down', 'disconnected');
+        setConn('down');
         reconnectOverlay.classList.add('visible');
         reconnectMsg.textContent = 'reconnecting in ' + (reconnectDelay / 1000) + 's…';
         setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);

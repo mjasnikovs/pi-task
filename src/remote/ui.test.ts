@@ -119,10 +119,12 @@ describe('html()', () => {
         expect(out).toContain('25EF') // ◯ notifications off
     })
 
-    it('renders a colored connection-status dot with a separate label', () => {
+    it('renders a colored connection-status dot with no text label', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('id="conn-dot"')
-        expect(out).toContain('id="client-label"')
+        expect(out).not.toContain('id="client-label"')
+        expect(out).not.toContain('client connected')
+        expect(out).not.toContain('clients connected')
         expect(out).toContain('25CF') // ● connected / disconnected
         expect(out).toContain('25CB') // ○ connecting
     })
