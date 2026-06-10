@@ -6,6 +6,7 @@ import {HistoryBuffer} from './history.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
+import {getTailscaleHttps, planRemoteUrls} from './tailscale.js'
 import {isAgentIdle} from './state.js'
 import type {ServerHandle} from './server.js'
 
@@ -65,7 +66,10 @@ export function registerRemote(pi: ExtensionAPI): void {
         // session_start (it's updated via withSession or registerBridgeCommand,
         // not replaced here).
         const b = getBridge()
-        if (!b.currentCtx || (b.currentCtx as unknown as Record<string, unknown>)['__piRemoteShimmed'] === true) {
+        if (
+            !b.currentCtx
+            || (b.currentCtx as unknown as Record<string, unknown>)['__piRemoteShimmed'] === true
+        ) {
             b.currentCtx = makeShimmedCtx(ctx)
         }
         void ensureServer().catch(err =>
@@ -103,14 +107,18 @@ export function registerRemote(pi: ExtensionAPI): void {
             try {
                 const server = await ensureServer()
 
-                const primaryUrl = `http://${server.ip}:${server.port}`
+                const httpPrimary = `http://${server.ip}:${server.port}`
+                const ts = await getTailscaleHttps()
+                const plan = planRemoteUrls(httpPrimary, server.port, ts)
+                const primaryUrl = plan.primaryUrl
                 const qr = await qrLines(primaryUrl)
 
                 const addrs = formatAddresses(server.ips, server.port)
                 const labelW = addrs.reduce((m, a) => Math.max(m, a.label.length), 0)
-                const addrLines = addrs.map(a =>
-                    a.label ? `${a.label.padEnd(labelW)}  ${a.url}` : a.url
-                )
+                const addrLines = [
+                    ...addrs.map(a => (a.label ? `${a.label.padEnd(labelW)}  ${a.url}` : a.url)),
+                    ...plan.hintLines
+                ]
                 const addrWidth = addrLines.reduce((m, l) => Math.max(m, l.length), 0)
 
                 if (ctx.mode === 'tui') {
