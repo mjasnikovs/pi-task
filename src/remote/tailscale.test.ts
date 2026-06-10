@@ -1,104 +1,180 @@
 import {describe, it, expect} from 'bun:test'
-import {getTailscaleHttps, planRemoteUrls} from './tailscale.js'
+import {
+    ensureTailscaleServe,
+    teardownTailscaleServe,
+    planRemoteUrls,
+    serve443Target
+} from './tailscale.js'
 import type {Run} from './tailscale.js'
 
-// Build a fake `run` that returns canned output keyed by the first CLI arg.
-function fakeRun(map: Record<string, {stdout?: string; stderr?: string; exitCode?: number}>): Run {
-    return async (_cmd, args) => {
-        const key = args[0] === 'serve' ? 'serve' : args[0]
-        const r = map[key] ?? {exitCode: 1}
-        return {stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0}
-    }
+interface Call {
+    cmd: string
+    args: string[]
 }
 
-const STATUS_OK = JSON.stringify({Self: {DNSName: 'omarchy-1.tailaa4e75.ts.net.'}})
+// Records every command and returns canned output keyed by a subcommand label.
+function recordingRun(
+    map: Record<string, {stdout?: string; stderr?: string; exitCode?: number}>
+): {run: Run; calls: Call[]} {
+    const calls: Call[] = []
+    const run: Run = async (cmd, args) => {
+        calls.push({cmd, args})
+        let key: string
+        if (args[0] === 'status') key = 'status'
+        else if (args[0] === 'serve' && args[1] === 'status') key = 'serve-status'
+        else if (args[0] === 'serve' && args.includes('off')) key = 'serve-off'
+        else if (args[0] === 'serve') key = 'serve-set'
+        else key = args[0]
+        const r = map[key] ?? {exitCode: 0}
+        return {stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0}
+    }
+    return {run, calls}
+}
 
-describe('getTailscaleHttps()', () => {
-    it('returns unavailable when tailscale status fails', async () => {
-        const res = await getTailscaleHttps(fakeRun({status: {exitCode: 1}}))
-        expect(res.state).toBe('unavailable')
+const HOST = 'omarchy-1.tailaa4e75.ts.net'
+const STATUS_OK = JSON.stringify({Self: {DNSName: HOST + '.'}})
+const served = (target: string) =>
+    JSON.stringify({Web: {[`${HOST}:443`]: {Handlers: {'/': {Proxy: target}}}}})
+
+describe('serve443Target()', () => {
+    it('returns the / proxy target of the :443 handler', () => {
+        expect(serve443Target(served('http://127.0.0.1:8800'))).toBe('http://127.0.0.1:8800')
+    })
+    it('returns undefined for "No serve config" (not JSON)', () => {
+        expect(serve443Target('No serve config')).toBeUndefined()
+    })
+    it('returns undefined for malformed JSON', () => {
+        expect(serve443Target('{bad')).toBeUndefined()
+    })
+    it('returns undefined when there is no :443 handler', () => {
+        const json = JSON.stringify({Web: {[`${HOST}:80`]: {Handlers: {'/': {Proxy: 'x'}}}}})
+        expect(serve443Target(json)).toBeUndefined()
+    })
+})
+
+describe('ensureTailscaleServe()', () => {
+    it('returns unavailable when status fails (and probes nothing else)', async () => {
+        const {run, calls} = recordingRun({status: {exitCode: 1}})
+        expect(await ensureTailscaleServe(8800, run)).toEqual({state: 'unavailable'})
+        expect(calls.map(c => c.args[0])).toEqual(['status'])
     })
 
-    it('returns unavailable when there is no Self.DNSName', async () => {
-        const res = await getTailscaleHttps(fakeRun({status: {stdout: '{"Self":{}}'}}))
-        expect(res.state).toBe('unavailable')
-    })
-
-    it('returns served and strips the trailing dot when serve has an https handler', async () => {
-        const res = await getTailscaleHttps(
-            fakeRun({
-                status: {stdout: STATUS_OK},
-                serve: {
-                    stdout: 'https://omarchy-1.tailaa4e75.ts.net\n|-- / proxy http://127.0.0.1:8800'
-                }
-            })
-        )
-        expect(res).toEqual({
+    it('is idempotent: served + no serve-set when :443 already points at our port', async () => {
+        const {run, calls} = recordingRun({
+            status: {stdout: STATUS_OK},
+            'serve-status': {stdout: served('http://127.0.0.1:8800')}
+        })
+        expect(await ensureTailscaleServe(8800, run)).toEqual({
             state: 'served',
-            host: 'omarchy-1.tailaa4e75.ts.net',
-            url: 'https://omarchy-1.tailaa4e75.ts.net'
+            url: `https://${HOST}`
+        })
+        expect(calls.some(c => c.args.includes('--bg'))).toBe(false)
+    })
+
+    it('foreign-conflict + no mutation when :443 points elsewhere', async () => {
+        const {run, calls} = recordingRun({
+            status: {stdout: STATUS_OK},
+            'serve-status': {stdout: served('http://127.0.0.1:9999')}
+        })
+        expect(await ensureTailscaleServe(8800, run)).toEqual({
+            state: 'foreign-conflict',
+            host: HOST
+        })
+        expect(calls.some(c => c.args.includes('--bg'))).toBe(false)
+    })
+
+    it('certs-disabled + no serve-set when no handler and certs off', async () => {
+        const {run, calls} = recordingRun({
+            status: {stdout: STATUS_OK},
+            'serve-status': {stdout: 'No serve config'},
+            cert: {
+                stderr: 'HTTPS cert support is not enabled/configured for your tailnet.',
+                exitCode: 1
+            }
+        })
+        expect(await ensureTailscaleServe(8800, run)).toEqual({
+            state: 'certs-disabled',
+            host: HOST
+        })
+        expect(calls.some(c => c.args.includes('--bg'))).toBe(false)
+    })
+
+    it('sets up serve and returns served when no handler and certs enabled', async () => {
+        const {run, calls} = recordingRun({
+            status: {stdout: STATUS_OK},
+            'serve-status': {stdout: 'No serve config'},
+            cert: {stdout: 'Usage: tailscale cert [flags] <domain>', exitCode: 1},
+            'serve-set': {exitCode: 0}
+        })
+        expect(await ensureTailscaleServe(8800, run)).toEqual({
+            state: 'served',
+            url: `https://${HOST}`
+        })
+        const setCall = calls.find(c => c.args.includes('--bg'))
+        expect(setCall?.args).toEqual(['serve', '--bg', '--https=443', 'http://127.0.0.1:8800'])
+    })
+
+    it('certs-disabled when the serve-set command itself fails', async () => {
+        const {run} = recordingRun({
+            status: {stdout: STATUS_OK},
+            'serve-status': {stdout: 'No serve config'},
+            cert: {stdout: 'Usage: tailscale cert', exitCode: 1},
+            'serve-set': {exitCode: 1}
+        })
+        expect(await ensureTailscaleServe(8800, run)).toEqual({
+            state: 'certs-disabled',
+            host: HOST
         })
     })
+})
 
-    it('returns certs-disabled when serve is empty and cert support is off', async () => {
-        const res = await getTailscaleHttps(
-            fakeRun({
-                status: {stdout: STATUS_OK},
-                serve: {stdout: 'No serve config'},
-                cert: {
-                    stderr: 'HTTPS cert support is not enabled/configured for your tailnet.',
-                    exitCode: 1
-                }
-            })
-        )
-        expect(res).toEqual({state: 'certs-disabled', host: 'omarchy-1.tailaa4e75.ts.net'})
+describe('teardownTailscaleServe()', () => {
+    it('issues serve off when :443 points at our port', async () => {
+        const {run, calls} = recordingRun({
+            'serve-status': {stdout: served('http://127.0.0.1:8800')}
+        })
+        await teardownTailscaleServe(8800, run)
+        const off = calls.find(c => c.args.includes('off'))
+        expect(off?.args).toEqual(['serve', '--https=443', 'off'])
     })
 
-    it('returns not-served when certs are enabled but no serve handler exists', async () => {
-        const res = await getTailscaleHttps(
-            fakeRun({
-                status: {stdout: STATUS_OK},
-                serve: {stdout: 'No serve config'},
-                cert: {stdout: 'Usage: tailscale cert [flags] <domain>', exitCode: 1}
-            })
-        )
-        expect(res).toEqual({state: 'not-served', host: 'omarchy-1.tailaa4e75.ts.net'})
+    it('does nothing when :443 points elsewhere', async () => {
+        const {run, calls} = recordingRun({
+            'serve-status': {stdout: served('http://127.0.0.1:9999')}
+        })
+        await teardownTailscaleServe(8800, run)
+        expect(calls.some(c => c.args.includes('off'))).toBe(false)
+    })
+
+    it('does nothing when there is no serve config', async () => {
+        const {run, calls} = recordingRun({'serve-status': {stdout: 'No serve config'}})
+        await teardownTailscaleServe(8800, run)
+        expect(calls.some(c => c.args.includes('off'))).toBe(false)
     })
 })
 
 describe('planRemoteUrls()', () => {
     const http = 'http://100.83.115.70:8800'
-
-    it('prefers the https url and adds no hint when served', () => {
-        const plan = planRemoteUrls(http, 8800, {
-            state: 'served',
-            host: 'h.ts.net',
-            url: 'https://h.ts.net'
+    it('served → https url, no hint', () => {
+        expect(planRemoteUrls(http, {state: 'served', url: 'https://h.ts.net'})).toEqual({
+            primaryUrl: 'https://h.ts.net',
+            hintLines: []
         })
-        expect(plan.primaryUrl).toBe('https://h.ts.net')
-        expect(plan.hintLines).toEqual([])
     })
-
-    it('keeps http and hints the serve command when not-served', () => {
-        const plan = planRemoteUrls(http, 8800, {state: 'not-served', host: 'h.ts.net'})
+    it('foreign-conflict → http + conflict hint', () => {
+        const plan = planRemoteUrls(http, {state: 'foreign-conflict', host: 'h.ts.net'})
         expect(plan.primaryUrl).toBe(http)
-        expect(plan.hintLines.join('\n')).toContain(
-            'tailscale serve --bg --https=443 http://127.0.0.1:8800'
-        )
+        expect(plan.hintLines.join('\n')).toContain('already used by another tailscale serve config')
     })
-
-    it('keeps http and hints the admin step when certs-disabled', () => {
-        const plan = planRemoteUrls(http, 8800, {state: 'certs-disabled', host: 'h.ts.net'})
+    it('certs-disabled → http + admin hint', () => {
+        const plan = planRemoteUrls(http, {state: 'certs-disabled', host: 'h.ts.net'})
         expect(plan.primaryUrl).toBe(http)
         expect(plan.hintLines.join('\n')).toContain('admin console')
-        expect(plan.hintLines.join('\n')).toContain(
-            'tailscale serve --bg --https=443 http://127.0.0.1:8800'
-        )
     })
-
-    it('keeps http and adds no hint when unavailable', () => {
-        const plan = planRemoteUrls(http, 8800, {state: 'unavailable'})
-        expect(plan.primaryUrl).toBe(http)
-        expect(plan.hintLines).toEqual([])
+    it('unavailable → http, no hint', () => {
+        expect(planRemoteUrls(http, {state: 'unavailable'})).toEqual({
+            primaryUrl: http,
+            hintLines: []
+        })
     })
 })
