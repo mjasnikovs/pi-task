@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test'
-import {getBridge, answerPrompt, SessionUI} from './bridge.js'
+import {getBridge, answerPrompt, SessionUI, publishWidget, publishNotify, publishViewer} from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 
 // Reset the singleton between tests.
@@ -80,4 +80,47 @@ test('no UI (headless): only remote can answer', async () => {
     const p = ui.ask({localTitle: 'Q', question: 'Q', allowSkip: false})
     answerPrompt(b.activePrompt!.id, 'remote-only')
     await expect(p).resolves.toBe('remote-only')
+})
+
+test('publishWidget broadcasts lines and records the active widget', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    publishWidget('pi-tasks', ['TASK_0001 · demo', 'phase 3/5 grill · 0:12'])
+    expect(b.activeWidgets.get('pi-tasks')).toEqual(['TASK_0001 · demo', 'phase 3/5 grill · 0:12'])
+    expect(b.sent).toContainEqual({
+        type: 'widget',
+        key: 'pi-tasks',
+        lines: ['TASK_0001 · demo', 'phase 3/5 grill · 0:12']
+    })
+})
+
+test('publishWidget with undefined clears the active widget', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    b.activeWidgets.set('pi-tasks', ['x'])
+    publishWidget('pi-tasks', undefined)
+    expect(b.activeWidgets.has('pi-tasks')).toBe(false)
+    expect(b.sent).toContainEqual({type: 'widget', key: 'pi-tasks', lines: null})
+})
+
+test('publishNotify broadcasts a notify message', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    publishNotify('Cancelling TASK_0001…', 'warning')
+    expect(b.sent).toContainEqual({
+        type: 'notify',
+        message: 'Cancelling TASK_0001…',
+        level: 'warning'
+    })
+})
+
+test('publishViewer broadcasts a viewer message', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    publishViewer('Tasks', 'TASK_0001 completed\nTASK_0002 pending')
+    expect(b.sent).toContainEqual({
+        type: 'viewer',
+        title: 'Tasks',
+        text: 'TASK_0001 completed\nTASK_0002 pending'
+    })
 })

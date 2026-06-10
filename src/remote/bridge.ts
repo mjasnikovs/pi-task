@@ -116,3 +116,24 @@ export class SessionUI {
         }
     }
 }
+
+/** Mirror a status widget to browsers and remember it for late joiners.
+ *  `lines === undefined` clears the widget (broadcast as `lines: null`). */
+export function publishWidget(key: string, lines: string[] | undefined): void {
+    const b = getBridge()
+    if (lines === undefined) {
+        b.activeWidgets.delete(key)
+        b.broadcast({type: 'widget', key, lines: null})
+        return
+    }
+    b.activeWidgets.set(key, lines)
+    b.broadcast({type: 'widget', key, lines})
+}
+
+export function publishNotify(message: string, level: 'info' | 'warning' | 'error'): void {
+    getBridge().broadcast({type: 'notify', message, level})
+}
+
+export function publishViewer(title: string, text: string): void {
+    getBridge().broadcast({type: 'viewer', title, text})
+}
