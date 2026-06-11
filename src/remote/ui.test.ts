@@ -199,9 +199,23 @@ describe('html()', () => {
 
     it('uses a terminal braille spinner (not bouncing dots) for the thinking indicator', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('class="spinner"')
+        expect(out).toContain('class="spinner spin"')
         expect(out).not.toContain('thinking-bounce')
         expect(out).toContain('280B') // a braille spinner frame
+    })
+
+    it('uses the braille spinner for the stream cursor, not a green blinking block', () => {
+        const out = html('ws://localhost:7600/ws')
+        // The trailing stream cursor must share the spinner ('.spin') so it animates
+        // as a braille glyph, not a green blinking square.
+        expect(out).toContain("cursor.className = 'cursor spin'")
+        const m = out.match(/\.cursor \{([^}]*)\}/)
+        expect(m).not.toBeNull()
+        const rule = m![1]
+        expect(rule).not.toContain('var(--green)')
+        expect(rule).not.toContain('animation')
+        // The old blink keyframes are gone.
+        expect(out).not.toContain('@keyframes blink')
     })
 
     it('anchors the input bar to the bottom safe-area so there is no gap', () => {

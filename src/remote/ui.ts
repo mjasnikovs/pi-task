@@ -176,11 +176,12 @@ export function html(wsUrl: string): string {
       font-size: 13px; z-index: 100; letter-spacing: 0.03em;
     }
     #reconnect-overlay.visible { display: flex; }
+    /* Trailing stream indicator: the same braille spinner as the thinking bubble,
+       inline at the end of the streaming text (not a green blinking block). */
     .cursor {
-      display: inline-block; width: 7px; height: 1em; vertical-align: text-bottom;
-      background: var(--green); animation: blink 1s step-end infinite; margin-left: 1px;
+      color: var(--mauve); margin-left: 2px;
+      font-family: ui-monospace, monospace;
     }
-    @keyframes blink { 50% { opacity: 0; } }
     #status-panel { padding: 6px 12px; border-bottom: 1px solid var(--surface1);
       color: var(--subtext1); white-space: pre-wrap; font-size: 13px; display: none; }
     #prompt-card { position: fixed; left: 0; right: 0; bottom: 0; background: var(--mantle);
@@ -493,26 +494,40 @@ export function html(wsUrl: string): string {
     let spinTimer = null;
     let spinIdx = 0;
     const SPIN = '\\u280B\\u2819\\u2839\\u2838\\u283C\\u2834\\u2826\\u2827\\u2807\\u280F';
+    // One braille ticker drives every '.spin' element — the thinking bubble AND the
+    // trailing stream cursor — so they share the same frame and look identical.
+    function spinPaint() {
+      const g = SPIN[spinIdx % SPIN.length];
+      const els = document.getElementsByClassName('spin');
+      for (let i = 0; i < els.length; i++) els[i].textContent = g;
+    }
+    function startSpin() {
+      spinPaint();
+      if (spinTimer) return;
+      spinTimer = setInterval(function () {
+        spinIdx = (spinIdx + 1) % SPIN.length;
+        spinPaint();
+      }, 90);
+    }
+    // Stop the ticker once nothing on screen needs spinning.
+    function stopSpinIfIdle() {
+      if (spinTimer && !document.querySelector('.spin')) {
+        clearInterval(spinTimer); spinTimer = null;
+      }
+    }
     function showThinking() {
       if (!thinkingEl) {
         thinkingEl = document.createElement('div');
         thinkingEl.className = 'bubble assistant thinking';
-        thinkingEl.innerHTML = '<span class="spinner"></span>';
-      }
-      if (!spinTimer) {
-        var sp = thinkingEl.firstChild;
-        sp.textContent = SPIN[spinIdx % SPIN.length];
-        spinTimer = setInterval(function () {
-          spinIdx = (spinIdx + 1) % SPIN.length;
-          sp.textContent = SPIN[spinIdx];
-        }, 90);
+        thinkingEl.innerHTML = '<span class="spinner spin"></span>';
       }
       chatLog.appendChild(thinkingEl); // append (or move) to bottom
+      startSpin();
       scrollBottom();
     }
     function hideThinking() {
-      if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
       if (thinkingEl) thinkingEl.remove();
+      stopSpinIfIdle();
     }
 
     function addToolCall(toolName, argsStr, isError) {
@@ -575,11 +590,12 @@ export function html(wsUrl: string): string {
         currentBubble = document.createElement('div');
         currentBubble.className = 'bubble assistant';
         const cursor = document.createElement('span');
-        cursor.className = 'cursor';
+        cursor.className = 'cursor spin';
         currentBubble.appendChild(cursor);
         currentBubble.insertBefore(document.createTextNode(live.text), cursor);
         chatLog.appendChild(currentBubble);
         streamText = live.text;
+        startSpin();
         scrollBottom();
       }
     }
@@ -821,9 +837,10 @@ export function html(wsUrl: string): string {
             currentBubble = document.createElement('div');
             currentBubble.className = 'bubble assistant';
             const cursor = document.createElement('span');
-            cursor.className = 'cursor';
+            cursor.className = 'cursor spin';
             currentBubble.appendChild(cursor);
             chatLog.appendChild(currentBubble);
+            startSpin();
           }
           streamText += msg.delta;
           {
@@ -837,6 +854,7 @@ export function html(wsUrl: string): string {
             const c = currentBubble.querySelector('.cursor');
             if (c) c.remove();
             if (streamText) setContent(currentBubble, streamText);
+            stopSpinIfIdle();
           }
           break;
         case 'tool_start': {
@@ -871,6 +889,7 @@ export function html(wsUrl: string): string {
             if (streamText) setContent(currentBubble, streamText);
             currentBubble = null;
             streamText = '';
+            stopSpinIfIdle();
           }
           addBubble('error', msg.message || 'Error');
           setEnabled(true);
