@@ -1,7 +1,6 @@
 import {describe, it, expect, beforeEach} from 'bun:test'
 import {setupEvents} from './events.js'
-import {HistoryBuffer} from './history.js'
-import {getBridge} from './bridge.js'
+import {getState, _setSink, reset, snapshot} from './session-state.js'
 
 // Minimal mock ExtensionAPI
 function makePiMock() {
@@ -23,48 +22,44 @@ const mockCtx = {
 
 describe('setupEvents', () => {
     let pi: ReturnType<typeof makePiMock>
-    let history: HistoryBuffer
-    const captured: unknown[] = []
+    let captured: unknown[] = []
 
     beforeEach(() => {
+        reset()
+        captured = []
+        _setSink(msg => captured.push(msg))
         pi = makePiMock()
-        history = new HistoryBuffer()
-        captured.length = 0
-        setupEvents(pi as never, history, msg => captured.push(msg))
+        setupEvents(pi as never)
     })
 
-    it('broadcasts agent_start on agent_start event', () => {
+    it('broadcasts agent_start and opens a live turn', () => {
         pi.emit('agent_start', {type: 'agent_start'})
         expect(captured).toContainEqual({type: 'agent_start'})
+        expect(getState().agentRunning).toBe(true)
     })
 
-    it('broadcasts agent_end with contextUsage on agent_end event', () => {
+    it('broadcasts agent_end with contextUsage and stores it on the state', () => {
+        pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('agent_end', {type: 'agent_end'})
         expect(captured).toContainEqual({
             type: 'agent_end',
             contextUsage: {tokens: 5000, contextWindow: 100000, percent: 5}
         })
+        expect(snapshot().context).toEqual({tokens: 5000, contextWindow: 100000, percent: 5})
     })
 
-    it('stores the latest contextUsage on the bridge so late joiners can be seeded', () => {
-        pi.emit('agent_end', {type: 'agent_end'})
-        expect(getBridge().lastContextUsage).toEqual({
-            tokens: 5000,
-            contextWindow: 100000,
-            percent: 5
-        })
-    })
-
-    it('broadcasts text_delta for text_delta assistant events', () => {
+    it('accumulates text_delta into the live turn', () => {
+        pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('message_update', {
             type: 'message_update',
             message: {},
             assistantMessageEvent: {type: 'text_delta', delta: 'hello'}
         })
         expect(captured).toContainEqual({type: 'text_delta', delta: 'hello'})
+        expect(getState().live?.text).toBe('hello')
     })
 
-    it('does not broadcast text_delta for non-text events', () => {
+    it('does not emit text_delta for non-text events', () => {
         pi.emit('message_update', {
             type: 'message_update',
             message: {},
@@ -81,6 +76,7 @@ describe('setupEvents', () => {
     })
 
     it('broadcasts tool_start on tool_execution_start', () => {
+        pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('tool_execution_start', {
             type: 'tool_execution_start',
             toolCallId: 'id1',
@@ -95,7 +91,7 @@ describe('setupEvents', () => {
         })
     })
 
-    it('broadcasts tool_end on tool_execution_end and saves to history', () => {
+    it('broadcasts tool_end on tool_execution_end and records it on the live turn', () => {
         pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('tool_execution_end', {
             type: 'tool_execution_end',
@@ -111,15 +107,21 @@ describe('setupEvents', () => {
             result: 'output',
             isError: false
         })
+        expect(getState().live?.tools).toContainEqual({
+            toolName: 'bash',
+            args: undefined,
+            result: 'output',
+            isError: false
+        })
     })
 
-    it('saves user message to history and broadcasts user_message on input', () => {
+    it('records a user turn and broadcasts user_message on interactive input', () => {
         pi.emit('input', {type: 'input', text: 'do the thing', images: [], source: 'interactive'})
-        expect(history.getEntries()).toContainEqual({role: 'user', text: 'do the thing', tools: []})
+        expect(snapshot().turns).toContainEqual({role: 'user', text: 'do the thing', tools: []})
         expect(captured).toContainEqual({type: 'user_message', text: 'do the thing'})
     })
 
-    it('broadcasts agent_error and records it in history on error events', () => {
+    it('broadcasts agent_error and records it in the transcript on error events', () => {
         pi.emit('message_update', {
             type: 'message_update',
             message: {},
@@ -130,7 +132,7 @@ describe('setupEvents', () => {
             }
         })
         expect(captured).toContainEqual({type: 'agent_error', message: 'Connection error.'})
-        expect(history.getEntries()).toContainEqual({
+        expect(snapshot().turns).toContainEqual({
             role: 'assistant',
             text: 'Connection error.',
             tools: [],
@@ -147,10 +149,10 @@ describe('setupEvents', () => {
         expect(
             captured.find((m: unknown) => (m as {type?: string}).type === 'agent_error')
         ).toBeUndefined()
-        expect(history.getEntries()).toEqual([])
+        expect(snapshot().turns).toEqual([])
     })
 
-    it('saves assistant turn to history on agent_end', () => {
+    it('commits the assistant turn to the transcript on agent_end', () => {
         pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('message_update', {
             type: 'message_update',
@@ -158,7 +160,7 @@ describe('setupEvents', () => {
             assistantMessageEvent: {type: 'text_delta', delta: 'sure!'}
         })
         pi.emit('agent_end', {type: 'agent_end'})
-        const entries = history.getEntries()
-        expect(entries.find(e => e.role === 'assistant' && e.text === 'sure!')).toBeTruthy()
+        const turns = snapshot().turns
+        expect(turns.find(e => e.role === 'assistant' && e.text === 'sure!')).toBeTruthy()
     })
 })
