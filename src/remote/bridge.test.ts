@@ -49,7 +49,7 @@ function fakeCtx(opts: {
 
 test('remote answer wins and aborts the local dialog', async () => {
     const b = getBridge()
-    _setSink(msg => b.sent.push(msg)) // prompt/prompt_resolved flow through SessionState
+    _setSink(msg => b.sent.push(msg as never)) // prompt/prompt_resolved flow through SessionState
     let aborted = false
     const ui = new SessionUI(
         fakeCtx({
@@ -68,7 +68,7 @@ test('remote answer wins and aborts the local dialog', async () => {
 
 test('local answer wins and broadcasts prompt_resolved', async () => {
     const b = getBridge()
-    _setSink(msg => b.sent.push(msg))
+    _setSink(msg => b.sent.push(msg as never))
     const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local-answer')}), b)
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe(
         'local-answer'
@@ -79,7 +79,7 @@ test('local answer wins and broadcasts prompt_resolved', async () => {
 
 test('first answer wins; duplicate answerPrompt is a no-op', async () => {
     const b = getBridge()
-    _setSink(msg => b.sent.push(msg))
+    _setSink(msg => b.sent.push(msg as never))
     const ui = new SessionUI(fakeCtx({onInput: () => {}}), b)
     const p = ui.ask({localTitle: 'Q', question: 'Q', allowSkip: false})
     const id = getState().prompt!.id
@@ -90,7 +90,7 @@ test('first answer wins; duplicate answerPrompt is a no-op', async () => {
 
 test('no UI (headless): only remote can answer', async () => {
     const b = getBridge()
-    _setSink(msg => b.sent.push(msg))
+    _setSink(msg => b.sent.push(msg as never))
     const ui = new SessionUI(fakeCtx({hasUI: false}), b)
     const p = ui.ask({localTitle: 'Q', question: 'Q', allowSkip: false})
     answerPrompt(getState().prompt!.id, 'remote-only')
