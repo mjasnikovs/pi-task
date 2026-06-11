@@ -111,7 +111,7 @@ describe('html()', () => {
         const m = out.match(/case 'snapshot':[\s\S]*?break;/)
         expect(m).not.toBeNull()
         const handler = m![0]
-        expect(handler).toContain("chatLog.innerHTML = ''")
+        expect(handler).toContain('chatLog.innerHTML = \'\'')
         expect(handler).toContain('renderTurn')
         expect(handler).toContain('renderLiveTurn')
         expect(handler).toContain('renderWidgets()')
@@ -123,7 +123,7 @@ describe('html()', () => {
         // strand an orphan (the old two-/task-widget bug).
         expect(out).toContain('taskWidgetLines')
         expect(out).not.toContain('widgets[msg.key]')
-        expect(out).not.toContain("delete widgets[")
+        expect(out).not.toContain('delete widgets[')
         // The widget delta no longer carries a key.
         const m = out.match(/case 'widget':[\s\S]*?break;/)
         expect(m).not.toBeNull()
@@ -132,7 +132,21 @@ describe('html()', () => {
 
     it('no longer ships a separate history replay (snapshot subsumes it)', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).not.toContain("case 'history'")
+        expect(out).not.toContain('case \'history\'')
+    })
+
+    it('renders tool results null-safely so a missing result cannot blank the view', () => {
+        const out = html('ws://localhost:7600/ws')
+        // A null/undefined result must not reach `JSON.stringify(...).slice()`, whose
+        // `undefined.slice` throws and aborts the snapshot rebuild mid-clear.
+        expect(out).toContain('function toolResultText')
+        expect(out).toContain('result == null')
+        // The unguarded pattern must be gone from both the snapshot and the live path.
+        expect(out).not.toContain('JSON.stringify(tool.result, null, 2)')
+        expect(out).not.toContain('JSON.stringify(msg.result, null, 2)')
+        // The snapshot rebuild must guard each turn so one bad turn can't blank all.
+        const m = out.match(/case 'snapshot':[\s\S]*?break;/)
+        expect(m![0]).toContain('try { renderTurn(t)')
     })
 
     it('keeps long toast messages readable on narrow phone screens', () => {

@@ -535,13 +535,22 @@ export function html(wsUrl: string): string {
       sendBtn.disabled = !allow;
     }
 
+    // Stringify a tool result safely. A null/undefined result (e.g. a tool that
+    // hasn't produced output) must NOT become the JS value undefined, whose
+    // .slice() throws — a throw here aborts the whole snapshot rebuild after the
+    // log was already cleared, blanking the transcript on reconnect.
+    function toolResultText(result) {
+      if (result == null) return '';
+      const r = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      return (r == null ? '' : r).slice(0, 8000);
+    }
+
     // Render one finished tool call with its result body.
     function renderTool(tool) {
       const argsStr = typeof tool.args === 'string' ? tool.args : JSON.stringify(tool.args);
       const d = addToolCall(tool.toolName, argsStr, tool.isError);
       const pre = document.createElement('pre');
-      const r = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2);
-      pre.textContent = r.slice(0, 8000);
+      pre.textContent = toolResultText(tool.result);
       d.appendChild(pre);
       return d;
     }
@@ -787,8 +796,10 @@ export function html(wsUrl: string): string {
           hideThinking();
           currentBubble = null; streamText = '';
           for (const k in toolCallMap) delete toolCallMap[k];
-          for (const t of (msg.turns || [])) renderTurn(t);
-          if (msg.live) renderLiveTurn(msg.live);
+          // Per-turn try/catch: one malformed turn must never abort the rebuild
+          // and leave the (already-cleared) transcript blank.
+          for (const t of (msg.turns || [])) { try { renderTurn(t); } catch (e) {} }
+          if (msg.live) { try { renderLiveTurn(msg.live); } catch (e) {} }
           taskWidgetLines = (msg.taskWidget && msg.taskWidget.length) ? msg.taskWidget : null;
           renderWidgets();
           if (msg.context) setContextBar(msg.context); else contextFill.style.width = '0%';
@@ -839,8 +850,7 @@ export function html(wsUrl: string): string {
           if (d) {
             if (msg.isError) d.classList.add('error');
             const pre = document.createElement('pre');
-            const r = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2);
-            pre.textContent = r.slice(0, 8000);
+            pre.textContent = toolResultText(msg.result);
             d.appendChild(pre);
             delete toolCallMap[msg.toolCallId];
           }
