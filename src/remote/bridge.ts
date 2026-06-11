@@ -5,17 +5,12 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
-import type {ContextUsage, PromptMessage, ServerMessage} from './protocol.js'
+import {setPrompt, clearPrompt} from './session-state.js'
+import type {PromptMessage, ServerMessage} from './protocol.js'
 
 export interface BridgeState {
     /** promptId → resolver that settles the remote side of an ask() race. */
     pending: Map<string, (value: string | undefined) => void>
-    /** The prompt currently awaiting an answer (replayed to late joiners), or null. */
-    activePrompt: PromptMessage | null
-    /** Last lines pushed per widget key (replayed to late joiners). */
-    activeWidgets: Map<string, string[]>
-    /** Most recent context-window usage (replayed to seed late joiners' bar), or null. */
-    lastContextUsage: ContextUsage | null
     nextId: number
     /** Command name → handler, populated as pi-task registers its commands. */
     commands: Map<string, (args: string, ctx: ExtensionCommandContext) => unknown>
@@ -33,9 +28,6 @@ export function getBridge(): BridgeState {
     if (!g.__piBridge) {
         g.__piBridge = {
             pending: new Map(),
-            activePrompt: null,
-            activeWidgets: new Map(),
-            lastContextUsage: null,
             nextId: 0,
             commands: new Map(),
             currentCtx: null,
@@ -99,8 +91,7 @@ export class SessionUI {
             recommended: spec.recommended,
             allowSkip: spec.allowSkip
         }
-        b.activePrompt = prompt
-        b.broadcast(prompt)
+        setPrompt(prompt)
         // Reaches a backgrounded/suspended phone, which the in-page UI can't.
         void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
@@ -122,23 +113,9 @@ export class SessionUI {
             return winner.v
         } finally {
             b.pending.delete(id)
-            b.activePrompt = null
-            b.broadcast({type: 'prompt_resolved', id})
+            clearPrompt(id)
         }
     }
-}
-
-/** Mirror a status widget to browsers and remember it for late joiners.
- *  `lines === undefined` clears the widget (broadcast as `lines: null`). */
-export function publishWidget(key: string, lines: string[] | undefined): void {
-    const b = getBridge()
-    if (lines === undefined) {
-        b.activeWidgets.delete(key)
-        b.broadcast({type: 'widget', key, lines: null})
-        return
-    }
-    b.activeWidgets.set(key, lines)
-    b.broadcast({type: 'widget', key, lines})
 }
 
 export function publishNotify(message: string, level: 'info' | 'warning' | 'error'): void {

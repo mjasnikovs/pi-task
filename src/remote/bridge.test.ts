@@ -3,7 +3,6 @@ import {
     getBridge,
     answerPrompt,
     SessionUI,
-    publishWidget,
     publishNotify,
     publishViewer,
     registerBridgeCommand,
@@ -12,18 +11,19 @@ import {
     makeShimmedCtx
 } from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
+import {getState, _setSink, reset} from './session-state.js'
 
-// Reset the singleton between tests.
+// Reset the singletons between tests.
 afterEach(() => {
     const b = getBridge()
     b.pending.clear()
-    b.activePrompt = null
-    b.activeWidgets.clear()
     b.sent.length = 0
     b.nextId = 0
     b.broadcast = msg => wsBroadcast(msg) // restore production default
     b.commands.clear()
     b.currentCtx = null
+    reset()
+    _setSink(wsBroadcast) // restore production default for the session-state sink
 })
 
 // Minimal fake ctx whose ui.input is controllable + abortable.
@@ -49,7 +49,7 @@ function fakeCtx(opts: {
 
 test('remote answer wins and aborts the local dialog', async () => {
     const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
+    _setSink(msg => b.sent.push(msg)) // prompt/prompt_resolved flow through SessionState
     let aborted = false
     const ui = new SessionUI(
         fakeCtx({
@@ -58,17 +58,17 @@ test('remote answer wins and aborts the local dialog', async () => {
         b
     )
     const p = ui.ask({localTitle: 'Q', question: 'Q', recommended: 'pg', allowSkip: false})
-    const promptId = b.activePrompt!.id
+    const promptId = getState().prompt!.id
     answerPrompt(promptId, 'mysql')
     await expect(p).resolves.toBe('mysql')
     expect(aborted).toBe(true)
     expect(b.sent.some(m => (m as {type: string}).type === 'prompt_resolved')).toBe(true)
-    expect(b.activePrompt).toBeNull()
+    expect(getState().prompt).toBeNull()
 })
 
 test('local answer wins and broadcasts prompt_resolved', async () => {
     const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
+    _setSink(msg => b.sent.push(msg))
     const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local-answer')}), b)
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe(
         'local-answer'
@@ -79,10 +79,10 @@ test('local answer wins and broadcasts prompt_resolved', async () => {
 
 test('first answer wins; duplicate answerPrompt is a no-op', async () => {
     const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
+    _setSink(msg => b.sent.push(msg))
     const ui = new SessionUI(fakeCtx({onInput: () => {}}), b)
     const p = ui.ask({localTitle: 'Q', question: 'Q', allowSkip: false})
-    const id = b.activePrompt!.id
+    const id = getState().prompt!.id
     answerPrompt(id, 'first')
     answerPrompt(id, 'second') // already removed from pending → ignored
     await expect(p).resolves.toBe('first')
@@ -90,10 +90,10 @@ test('first answer wins; duplicate answerPrompt is a no-op', async () => {
 
 test('no UI (headless): only remote can answer', async () => {
     const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
+    _setSink(msg => b.sent.push(msg))
     const ui = new SessionUI(fakeCtx({hasUI: false}), b)
     const p = ui.ask({localTitle: 'Q', question: 'Q', allowSkip: false})
-    answerPrompt(b.activePrompt!.id, 'remote-only')
+    answerPrompt(getState().prompt!.id, 'remote-only')
     await expect(p).resolves.toBe('remote-only')
 })
 
@@ -103,27 +103,6 @@ test('remote off (no server, default broadcast): resolves from local, no crash',
     // connected and still resolves from the local input alone.
     const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local')}))
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
-})
-
-test('publishWidget broadcasts lines and records the active widget', () => {
-    const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
-    publishWidget('pi-tasks', ['TASK_0001 · demo', 'phase 3/5 grill · 0:12'])
-    expect(b.activeWidgets.get('pi-tasks')).toEqual(['TASK_0001 · demo', 'phase 3/5 grill · 0:12'])
-    expect(b.sent).toContainEqual({
-        type: 'widget',
-        key: 'pi-tasks',
-        lines: ['TASK_0001 · demo', 'phase 3/5 grill · 0:12']
-    })
-})
-
-test('publishWidget with undefined clears the active widget', () => {
-    const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
-    b.activeWidgets.set('pi-tasks', ['x'])
-    publishWidget('pi-tasks', undefined)
-    expect(b.activeWidgets.has('pi-tasks')).toBe(false)
-    expect(b.sent).toContainEqual({type: 'widget', key: 'pi-tasks', lines: null})
 })
 
 test('publishNotify broadcasts a notify message', () => {
