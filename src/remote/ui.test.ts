@@ -103,9 +103,36 @@ describe('html()', () => {
         expect(out).toContain('case \'reset\'')
     })
 
-    it('tracks widgets per key so clears are reliable', () => {
+    it('reconciles a full snapshot on (re)connect by replacing the whole view', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('renderWidgets')
+        // The snapshot handler is the heart of the sync rebuild: it must wipe the
+        // transcript and rebuild from server truth so reconnects never duplicate or
+        // strand stale content.
+        const m = out.match(/case 'snapshot':[\s\S]*?break;/)
+        expect(m).not.toBeNull()
+        const handler = m![0]
+        expect(handler).toContain("chatLog.innerHTML = ''")
+        expect(handler).toContain('renderTurn')
+        expect(handler).toContain('renderLiveTurn')
+        expect(handler).toContain('renderWidgets()')
+    })
+
+    it('uses a single task-widget slot, not a per-key map', () => {
+        const out = html('ws://localhost:7600/ws')
+        // One slot means a cleared widget always disappears; a per-key map could
+        // strand an orphan (the old two-/task-widget bug).
+        expect(out).toContain('taskWidgetLines')
+        expect(out).not.toContain('widgets[msg.key]')
+        expect(out).not.toContain("delete widgets[")
+        // The widget delta no longer carries a key.
+        const m = out.match(/case 'widget':[\s\S]*?break;/)
+        expect(m).not.toBeNull()
+        expect(m![0]).not.toContain('msg.key')
+    })
+
+    it('no longer ships a separate history replay (snapshot subsumes it)', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).not.toContain("case 'history'")
     })
 
     it('keeps long toast messages readable on narrow phone screens', () => {

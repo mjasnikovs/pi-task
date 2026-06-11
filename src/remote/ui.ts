@@ -280,12 +280,13 @@ export function html(wsUrl: string): string {
     const statusPanel = document.getElementById('status-panel');
     // Widgets are keyed (e.g. 'pi-tasks', 'pi-task-auto'); track them per key so a
     // clear for one key can't be masked by a stale message from another.
-    const widgets = {};
+    // Single authoritative task-widget slot. The snapshot and the live 'widget'
+    // delta both set this; null hides the panel. (No more per-key map that could
+    // strand an orphaned widget on screen.)
+    let taskWidgetLines = null;
     function renderWidgets() {
-      let all = [];
-      for (const k in widgets) if (widgets[k] && widgets[k].length) all = all.concat(widgets[k]);
-      if (all.length) {
-        statusPanel.textContent = all.join('\\n');
+      if (taskWidgetLines && taskWidgetLines.length) {
+        statusPanel.textContent = taskWidgetLines.join('\\n');
         statusPanel.style.display = 'block';
       } else {
         statusPanel.style.display = 'none';
@@ -532,6 +533,46 @@ export function html(wsUrl: string): string {
       sendBtn.disabled = !allow;
     }
 
+    // Render one finished tool call with its result body.
+    function renderTool(tool) {
+      const argsStr = typeof tool.args === 'string' ? tool.args : JSON.stringify(tool.args);
+      const d = addToolCall(tool.toolName, argsStr, tool.isError);
+      const pre = document.createElement('pre');
+      const r = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2);
+      pre.textContent = r.slice(0, 8000);
+      d.appendChild(pre);
+      return d;
+    }
+
+    // Render one committed transcript turn (user / assistant / error).
+    function renderTurn(t) {
+      if (t.error) { addBubble('error', t.text); return; }
+      addBubble(t.role, t.text);
+      for (const tool of (t.tools || [])) renderTool(tool);
+    }
+
+    // Render the in-progress assistant turn carried by a snapshot: finished tools,
+    // then still-running tools (kept in toolCallMap so a later tool_end fills them),
+    // then the partial streamed text as the live bubble so streaming continues.
+    function renderLiveTurn(live) {
+      for (const tool of (live.tools || [])) renderTool(tool);
+      for (const at of (live.activeTools || [])) {
+        const argsStr = typeof at.args === 'string' ? at.args : JSON.stringify(at.args);
+        toolCallMap[at.toolCallId] = addToolCall(at.toolName, argsStr, false);
+      }
+      if (live.text) {
+        currentBubble = document.createElement('div');
+        currentBubble.className = 'bubble assistant';
+        const cursor = document.createElement('span');
+        cursor.className = 'cursor';
+        currentBubble.appendChild(cursor);
+        currentBubble.insertBefore(document.createTextNode(live.text), cursor);
+        chatLog.appendChild(currentBubble);
+        streamText = live.text;
+        scrollBottom();
+      }
+    }
+
     function showToast(message, level) {
       const t = document.createElement('div');
       t.className = 'toast ' + (level || 'info');
@@ -735,19 +776,25 @@ export function html(wsUrl: string): string {
 
     function handleMsg(msg) {
       switch (msg.type) {
-        case 'history':
-          for (const t of (msg.turns || [])) {
-            if (t.error) { addBubble('error', t.text); continue; }
-            addBubble(t.role, t.text);
-            for (const tool of (t.tools || [])) {
-              const d = addToolCall(tool.toolName, JSON.stringify(tool.args), tool.isError);
-              const pre = document.createElement('pre');
-              const r = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2);
-              pre.textContent = r.slice(0, 8000);
-              d.appendChild(pre);
-            }
-          }
+        case 'snapshot': {
+          // Authoritative full state on every (re)connect: replace the WHOLE view.
+          // This is what kills duplicated transcript / stale-orphaned widgets —
+          // whatever was on screen is discarded and rebuilt from server truth.
+          chatLog.innerHTML = '';
+          closePrompt();
+          hideThinking();
+          currentBubble = null; streamText = '';
+          for (const k in toolCallMap) delete toolCallMap[k];
+          for (const t of (msg.turns || [])) renderTurn(t);
+          if (msg.live) renderLiveTurn(msg.live);
+          taskWidgetLines = (msg.taskWidget && msg.taskWidget.length) ? msg.taskWidget : null;
+          renderWidgets();
+          if (msg.context) setContextBar(msg.context); else contextFill.style.width = '0%';
+          if (msg.prompt) showPrompt(msg.prompt);
+          setEnabled(!msg.agentRunning && !msg.prompt);
+          if (msg.agentRunning && !msg.live) showThinking();
           break;
+        }
         case 'agent_start':
           autoScroll = true;
           streamText = '';
@@ -837,8 +884,7 @@ export function html(wsUrl: string): string {
           if (activePromptId === msg.id) closePrompt();
           break;
         case 'widget':
-          if (msg.lines && msg.lines.length) widgets[msg.key] = msg.lines;
-          else delete widgets[msg.key];
+          taskWidgetLines = (msg.lines && msg.lines.length) ? msg.lines : null;
           renderWidgets();
           break;
         case 'notify':
@@ -854,7 +900,7 @@ export function html(wsUrl: string): string {
           hideThinking();
           currentBubble = null; streamText = '';
           closePrompt();
-          for (const k in widgets) delete widgets[k];
+          taskWidgetLines = null;
           renderWidgets();
           contextFill.style.width = '0%';
           break;
