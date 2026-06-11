@@ -60,15 +60,14 @@ export function parseTaskList(body: string): TaskEntry[] {
         if (!m) continue
         const done = m[1].toLowerCase() === 'x'
         const rest = m[2].trim()
-        if (done) {
-            const idm = PRODUCED_ID_RE.exec(rest)
-            if (idm) {
-                entries.push({index, title: idm[2].trim(), done: true, producedId: idm[1]})
-            } else {
-                entries.push({index, title: rest, done: true})
-            }
+        // A line carries a stamped TASK_NNNN id both when done (the completed
+        // inner task) and when merely started — an unchecked, stamped line is an
+        // in-progress entry whose inner task can be resumed.
+        const idm = PRODUCED_ID_RE.exec(rest)
+        if (idm) {
+            entries.push({index, title: idm[2].trim(), done, producedId: idm[1]})
         } else {
-            entries.push({index, title: rest, done: false})
+            entries.push({index, title: rest, done})
         }
         index++
     }
@@ -85,13 +84,13 @@ export function buildAutoBody(feature: string, clarifications: string, titles: s
     )
 }
 
-/** Check off the Nth checkbox line, stamping the produced TASK_NNNN id. */
-export async function checkOffTask(
+/** Rewrite the Nth checkbox line of the "## tasks" section in place. */
+async function rewriteTaskLine(
     cwd: string,
     id: string,
     index: number,
-    producedId: string,
-    title: string
+    render: () => string,
+    label: string
 ): Promise<void> {
     const {body} = await readTaskFile(cwd, id)
     const section = extractSection(body, 'tasks') ?? ''
@@ -101,16 +100,55 @@ export async function checkOffTask(
         if (!CHECKBOX_RE.test(lines[i].trim())) continue
         seen++
         if (seen === index) {
-            lines[i] = producedId ? `- [x] ${producedId}  ${title}` : `- [x] ${title}`
+            lines[i] = render()
             break
         }
     }
     if (seen < index) {
         throw new Error(
-            `checkOffTask: index ${index} out of range in ${id} (only ${seen + 1} checkboxes found)`
+            `${label}: index ${index} out of range in ${id} (only ${seen + 1} checkboxes found)`
         )
     }
     await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
+}
+
+/** Check off the Nth checkbox line, stamping the produced TASK_NNNN id. */
+export async function checkOffTask(
+    cwd: string,
+    id: string,
+    index: number,
+    producedId: string,
+    title: string
+): Promise<void> {
+    await rewriteTaskLine(
+        cwd,
+        id,
+        index,
+        () => (producedId ? `- [x] ${producedId}  ${title}` : `- [x] ${title}`),
+        'checkOffTask'
+    )
+}
+
+/**
+ * Stamp the inner TASK_NNNN id onto the Nth (still-unchecked) entry the moment
+ * the inner task is allocated. This links the AUTO entry to its in-progress
+ * inner task so /task-auto-resume can continue it from its saved phase instead
+ * of starting a brand-new task — matching how /task-resume behaves.
+ */
+export async function stampTaskInProgress(
+    cwd: string,
+    id: string,
+    index: number,
+    producedId: string,
+    title: string
+): Promise<void> {
+    await rewriteTaskLine(
+        cwd,
+        id,
+        index,
+        () => `- [ ] ${producedId}  ${title}`,
+        'stampTaskInProgress'
+    )
 }
 
 /** Find the most-recently-updated resumable TASK_AUTO_* file, or null. */

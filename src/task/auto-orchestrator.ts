@@ -19,6 +19,7 @@ import {
     parseDecomposeList,
     parseTaskList,
     checkOffTask,
+    stampTaskInProgress,
     findResumableAuto
 } from './auto-io.js'
 import {writeTaskFile, readTaskFile, updateTaskFrontMatter} from './task-io.js'
@@ -37,7 +38,13 @@ export interface AutoDeps {
     runTask: (
         ctx: ExtensionCommandContext,
         cwd: string,
-        title: string
+        title: string,
+        opts?: {
+            /** Resume this inner task id instead of allocating a fresh one. */
+            resumeId?: string
+            /** Called with the inner task id once its file exists, before phases. */
+            onStart?: (taskId: string) => void | Promise<void>
+        }
     ) => Promise<RunSingleTaskResult>
     /** Snapshot the working tree into one commit after a task passes. */
     commit: (cwd: string, message: string) => Promise<CommitResult>
@@ -225,7 +232,12 @@ function defaultDeps(
                 stopLoader()
             }
         },
-        runTask: (c, cwd2, t) => runSingleTask(c, cwd2, t, {waitForImplementation: true}),
+        runTask: (c, cwd2, t, opts) =>
+            runSingleTask(c, cwd2, t, {
+                waitForImplementation: true,
+                resumeId: opts?.resumeId,
+                onStart: opts?.onStart
+            }),
         commit: (cwd2, message) => gitCommitAll(cwd2, message, signal)
     }
 }
@@ -269,7 +281,18 @@ export async function runAutoLoop(
                 `${id}: task ${next.index + 1}/${entries.length} — ${next.title}`,
                 'info'
             )
-            const res = await deps.runTask(active, cwd, next.title)
+            // If this entry already has a stamped inner id, it was started in a
+            // previous (interrupted) run — resume it from its saved phase rather
+            // than spawning a fresh task. Otherwise stamp the freshly-allocated id
+            // onto the entry the moment it exists, so an interruption here is
+            // resumable too. This mirrors /task-resume's continue-don't-restart.
+            const res = await deps.runTask(active, cwd, next.title, {
+                resumeId: next.producedId,
+                onStart:
+                    next.producedId ? undefined : (
+                        innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)
+                    )
+            })
             active = res.ctx ?? active
             if (res.sessionCancelled) {
                 active.ui.notify(

@@ -62,6 +62,16 @@ test('parseTaskList: checked line marks done and captures producedId', () => {
     expect(entries[1]).toEqual({index: 1, title: 'Task B', done: false})
 })
 
+test('parseTaskList: unchecked line with a stamped id captures producedId, stays undone', () => {
+    // An in-progress entry: the inner task was allocated (id stamped) but not yet
+    // completed. Resume must see this id so it continues the task instead of
+    // starting a fresh one.
+    const body = '## tasks\n\n- [ ] TASK_0006  Task A\n- [ ] Task B\n'
+    const entries = parseTaskList(body)
+    expect(entries[0]).toEqual({index: 0, title: 'Task A', done: false, producedId: 'TASK_0006'})
+    expect(entries[1]).toEqual({index: 1, title: 'Task B', done: false})
+})
+
 test('parseTaskList: ignores non-checkbox lines inside the section', () => {
     const body = '## tasks\n\n- [ ] Real\nsome note\n- [x] TASK_0001  Done one\n'
     expect(parseTaskList(body).map(e => e.title)).toEqual(['Real', 'Done one'])

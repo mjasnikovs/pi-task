@@ -382,6 +382,104 @@ test('runAutoLoop: resume skips already-checked tasks', async () => {
     })
 })
 
+test('runAutoLoop: resumes an in-progress inner task instead of starting fresh', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Task A was started (inner TASK_0006 stamped) but interrupted before it
+        // completed; B never started. Resume must continue TASK_0006, not spawn a
+        // brand-new inner task for A.
+        const body =
+            '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n- [ ] TASK_0006  A\n- [ ] B\n'
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), body)
+        const resumeIds: Array<string | undefined> = []
+        let fresh = 7
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, _title, opts) => {
+                resumeIds.push(opts?.resumeId)
+                const taskId = opts?.resumeId ?? `TASK_000${fresh++}`
+                return Promise.resolve({taskId, ok: true, sessionCancelled: false})
+            },
+            commit: () => Promise.resolve({committed: true})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // A resumed via its stamped id; B (no stamp) starts fresh.
+        expect(resumeIds).toEqual(['TASK_0006', undefined])
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})
+
+test('runAutoLoop: stamps the inner task id at start so an interruption is resumable', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            // Allocate the inner id, stamp it via onStart, then simulate the session
+            // dying mid-pipeline (sessionCancelled) before the task is checked off.
+            runTask: async (_c, _cwd, _title, opts) => {
+                await opts?.onStart?.('TASK_0009')
+                return {taskId: '', ok: false, sessionCancelled: true}
+            },
+            commit: () => Promise.resolve({committed: true})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // The entry is left undone but now carries the inner id, so a later
+        // /task-auto-resume can continue TASK_0009 rather than start over.
+        const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
+        expect(entries[0]).toEqual({index: 0, title: 'A', done: false, producedId: 'TASK_0009'})
+    })
+})
+
+test('runAutoLoop: interrupt then resume continues the same inner task, never starts new', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+
+        // ── Run 1: task A's inner pipeline starts (allocates TASK_0006, stamped)
+        //    but the session dies before A completes. ──────────────────────────
+        const seen1: Array<string | undefined> = []
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', {
+            runChild: () => Promise.resolve(''),
+            runTask: async (_c, _cwd, _title, opts) => {
+                seen1.push(opts?.resumeId)
+                await opts?.onStart?.('TASK_0006')
+                return {taskId: '', ok: false, sessionCancelled: true}
+            },
+            commit: () => Promise.resolve({committed: true})
+        })
+        expect(seen1).toEqual([undefined]) // A had no prior id -> fresh start, stamped
+
+        // ── Run 2: /task-auto-resume picks up where it left off. A must resume
+        //    TASK_0006 (not a new id); then B runs fresh. ──────────────────────
+        const seen2: Array<string | undefined> = []
+        let fresh = 7
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, _title, opts) => {
+                seen2.push(opts?.resumeId)
+                return Promise.resolve({
+                    taskId: opts?.resumeId ?? `TASK_000${fresh++}`,
+                    ok: true,
+                    sessionCancelled: false
+                })
+            },
+            commit: () => Promise.resolve({committed: true})
+        })
+        expect(seen2).toEqual(['TASK_0006', undefined])
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body)).toEqual([
+            {index: 0, title: 'A', done: true, producedId: 'TASK_0006'},
+            {index: 1, title: 'B', done: true, producedId: 'TASK_0007'}
+        ])
+    })
+})
+
 test('expandFeatureMentions: inlines a referenced @file, leaves the original text', async () => {
     await withTmpTaskDir(async dir => {
         await fsp.writeFile(path.join(dir, 'spec.md'), '# Spec\n\nBuild the thing.\n')

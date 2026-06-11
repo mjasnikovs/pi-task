@@ -74,6 +74,7 @@ export class TaskRunner {
     private readonly _rawPrompt: string
     private readonly _resumeId: string | undefined
     private readonly _sendSpec: ((spec: string) => Promise<void>) | undefined
+    private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
 
     private readonly _abort = new AbortController()
     private readonly _startedAt: number
@@ -97,13 +98,15 @@ export class TaskRunner {
         rawPrompt: string,
         resumeId?: string,
         sendSpec?: (spec: string) => Promise<void>,
-        spawnFn?: SpawnFn
+        spawnFn?: SpawnFn,
+        onStart?: (taskId: string) => void | Promise<void>
     ) {
         this._ctx = ctx
         this._cwd = cwd
         this._rawPrompt = rawPrompt
         this._resumeId = resumeId
         this._sendSpec = sendSpec
+        this._onStart = onStart
         this._startedAt = Date.now()
 
         // We'll populate id/title/phase lazily in run().
@@ -213,6 +216,11 @@ export class TaskRunner {
                 `\n## raw prompt\n\n${this._rawPrompt.trim() || '(none)'}\n`
             )
         }
+
+        // Surface the resolved id now that the task file exists, so callers (e.g.
+        // the /task-auto loop) can link this run to their own bookkeeping before
+        // any phase work — and recover it if the session dies mid-pipeline.
+        if (this._onStart) await this._onStart(id)
 
         // Register as active.
         this._widgetState.taskId = id
@@ -327,6 +335,10 @@ export interface RunSingleTaskOptions {
     resumeId?: string
     /** Test seam: spawn function forwarded to TaskRunner. */
     spawnFn?: SpawnFn
+    /** Called with the resolved task id once its file exists, before any phase
+     *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
+     *  interrupted run can be resumed instead of restarted. */
+    onStart?: (taskId: string) => void | Promise<void>
 }
 
 export interface RunSingleTaskResult {
@@ -374,7 +386,8 @@ export async function runSingleTask(
                     await newCtx.sendUserMessage(spec)
                     if (opts.waitForImplementation) await newCtx.waitForIdle()
                 },
-                opts.spawnFn
+                opts.spawnFn,
+                opts.onStart
             )
             await runner.run()
             taskId = runner.taskId
