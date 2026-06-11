@@ -125,7 +125,7 @@ describe('startServer', () => {
         })
         expect(received[0]).toMatchObject({
             type: 'snapshot',
-            turns: [{role: 'user', text: 'hi', tools: []}]
+            turns: [{role: 'user', text: 'hi'}]
         })
     })
 

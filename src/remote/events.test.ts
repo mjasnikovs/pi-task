@@ -56,7 +56,7 @@ describe('setupEvents', () => {
             assistantMessageEvent: {type: 'text_delta', delta: 'hello'}
         })
         expect(captured).toContainEqual({type: 'text_delta', delta: 'hello'})
-        expect(getState().live?.text).toBe('hello')
+        expect(getState().live?.parts).toContainEqual({kind: 'text', text: 'hello'})
     })
 
     it('does not emit text_delta for non-text events', () => {
@@ -93,6 +93,12 @@ describe('setupEvents', () => {
 
     it('broadcasts tool_end on tool_execution_end and records it on the live turn', () => {
         pi.emit('agent_start', {type: 'agent_start'})
+        pi.emit('tool_execution_start', {
+            type: 'tool_execution_start',
+            toolCallId: 'id1',
+            toolName: 'bash',
+            args: {command: 'ls'}
+        })
         pi.emit('tool_execution_end', {
             type: 'tool_execution_end',
             toolCallId: 'id1',
@@ -107,17 +113,20 @@ describe('setupEvents', () => {
             result: 'output',
             isError: false
         })
-        expect(getState().live?.tools).toContainEqual({
+        expect(getState().live?.parts).toContainEqual({
+            kind: 'tool',
+            toolCallId: 'id1',
             toolName: 'bash',
-            args: undefined,
+            args: {command: 'ls'},
             result: 'output',
-            isError: false
+            isError: false,
+            done: true
         })
     })
 
     it('records a user turn and broadcasts user_message on interactive input', () => {
         pi.emit('input', {type: 'input', text: 'do the thing', images: [], source: 'interactive'})
-        expect(snapshot().turns).toContainEqual({role: 'user', text: 'do the thing', tools: []})
+        expect(snapshot().turns).toContainEqual({role: 'user', text: 'do the thing'})
         expect(captured).toContainEqual({type: 'user_message', text: 'do the thing'})
     })
 
@@ -135,7 +144,6 @@ describe('setupEvents', () => {
         expect(snapshot().turns).toContainEqual({
             role: 'assistant',
             text: 'Connection error.',
-            tools: [],
             error: true
         })
     })
@@ -161,6 +169,7 @@ describe('setupEvents', () => {
         })
         pi.emit('agent_end', {type: 'agent_end'})
         const turns = snapshot().turns
-        expect(turns.find(e => e.role === 'assistant' && e.text === 'sure!')).toBeTruthy()
+        const assistant = turns.find(e => e.role === 'assistant')
+        expect(assistant?.parts).toContainEqual({kind: 'text', text: 'sure!'})
     })
 })

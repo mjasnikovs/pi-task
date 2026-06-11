@@ -4,6 +4,7 @@ import {
     _setSink,
     agentStart,
     appendText,
+    textEnd,
     startTool,
     endTool,
     agentEnd,
@@ -29,32 +30,46 @@ beforeEach(() => {
 describe('session-state mutators', () => {
     it('agentStart opens a live turn and broadcasts agent_start', () => {
         agentStart()
-        expect(getState().live).toEqual({text: '', tools: [], activeTools: []})
+        expect(getState().live).toEqual({parts: [], textOpen: false})
         expect(getState().agentRunning).toBe(true)
         expect(captured).toContainEqual({type: 'agent_start'})
     })
 
-    it('appendText accumulates into live.text and broadcasts the delta', () => {
+    it('appendText accumulates into the open text part and broadcasts the delta', () => {
         agentStart()
         appendText('he')
         appendText('llo')
-        expect(getState().live?.text).toBe('hello')
+        expect(getState().live?.parts).toEqual([{kind: 'text', text: 'hello'}])
         expect(captured).toContainEqual({type: 'text_delta', delta: 'llo'})
     })
 
-    it('endTool moves an active tool into completed tools', () => {
+    it('endTool fills the tool part in place, preserving order and args', () => {
         agentStart()
+        appendText('let me check')
         startTool('t1', 'bash', {command: 'ls'})
-        expect(getState().live?.activeTools).toHaveLength(1)
+        // The tool part sits AFTER the text part, in order, still running.
+        expect(getState().live?.parts).toEqual([
+            {kind: 'text', text: 'let me check'},
+            {
+                kind: 'tool',
+                toolCallId: 't1',
+                toolName: 'bash',
+                args: {command: 'ls'},
+                result: undefined,
+                isError: false,
+                done: false
+            }
+        ])
         endTool('t1', 'bash', 'output', false)
-        expect(getState().live?.activeTools).toHaveLength(0)
-        // args captured at startTool must survive onto the completed tool, or the
-        // tool summary renders "bash: undefined" after the turn is committed.
-        expect(getState().live?.tools).toContainEqual({
+        // Same part, now completed — args captured at start survive, no reordering.
+        expect(getState().live?.parts[1]).toEqual({
+            kind: 'tool',
+            toolCallId: 't1',
             toolName: 'bash',
             args: {command: 'ls'},
             result: 'output',
-            isError: false
+            isError: false,
+            done: true
         })
         expect(captured).toContainEqual({
             type: 'tool_end',
@@ -63,6 +78,18 @@ describe('session-state mutators', () => {
             result: 'output',
             isError: false
         })
+    })
+
+    it('keeps text segments separate across a text_end / tool boundary', () => {
+        agentStart()
+        appendText('first')
+        textEnd()
+        appendText('second') // new segment, not merged into "first"
+        const parts = getState().live?.parts ?? []
+        expect(parts).toEqual([
+            {kind: 'text', text: 'first'},
+            {kind: 'text', text: 'second'}
+        ])
     })
 
     it('setTaskWidget([]) clears the slot to null', () => {
@@ -97,9 +124,19 @@ describe('snapshot()', () => {
         expect(snap.context).toEqual({tokens: 100, contextWindow: 1000, percent: 10})
         const last = snap.turns[snap.turns.length - 1]
         expect(last.role).toBe('assistant')
-        expect(last.text).toBe('sure')
-        expect(last.tools).toHaveLength(1)
-        expect(last.tools[0].args).toEqual({command: 'ls'}) // args survive into the committed turn
+        // Ordered parts: text, then the tool, in sequence — not a merged blob.
+        expect(last.parts).toEqual([
+            {kind: 'text', text: 'sure'},
+            {
+                kind: 'tool',
+                toolCallId: 't1',
+                toolName: 'bash',
+                args: {command: 'ls'},
+                result: 'ok',
+                isError: false,
+                done: true
+            }
+        ])
     })
 
     it('reflects an in-progress turn so a mid-stream joiner sees partial state', () => {
@@ -108,19 +145,20 @@ describe('snapshot()', () => {
         startTool('t2', 'read', {path: 'x'})
         const snap = snapshot()
         expect(snap.agentRunning).toBe(true)
-        expect(snap.live?.text).toBe('thinking...')
-        expect(snap.live?.activeTools).toHaveLength(1)
+        expect(snap.live?.parts[0]).toEqual({kind: 'text', text: 'thinking...'})
+        const toolPart = snap.live?.parts[1]
+        expect(toolPart?.kind).toBe('tool')
+        expect((toolPart as {done: boolean}).done).toBe(false)
     })
 
     it('carries the user transcript and an error turn', () => {
         addUserTurn('do it')
         addError('boom')
         const snap = snapshot()
-        expect(snap.turns).toContainEqual({role: 'user', text: 'do it', tools: []})
+        expect(snap.turns).toContainEqual({role: 'user', text: 'do it'})
         expect(snap.turns).toContainEqual({
             role: 'assistant',
             text: 'boom',
-            tools: [],
             error: true
         })
     })

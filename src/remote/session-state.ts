@@ -12,22 +12,15 @@
 
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {HistoryBuffer} from './history.js'
-import type {Turn, ToolSummary} from './history.js'
+import type {Turn, Part, ToolPart} from './history.js'
 import type {ContextUsage, PromptMessage} from './protocol.js'
 
-export interface ActiveTool {
-    toolCallId: string
-    toolName: string
-    args: unknown
-}
-
 export interface LiveTurn {
-    /** Streamed assistant text so far this turn. */
-    text: string
-    /** Tools that have finished this turn. */
-    tools: ToolSummary[]
-    /** Tools still in flight, in start order. */
-    activeTools: ActiveTool[]
+    /** Ordered assistant content (text segments + tool calls) for this run. */
+    parts: Part[]
+    /** Is the trailing text part still accumulating deltas? Closed by text_end /
+     *  a tool start, so the next text begins a fresh segment (separate bubble). */
+    textOpen: boolean
 }
 
 export interface SnapshotMessage {
@@ -76,7 +69,7 @@ export function _setSink(fn: (msg: unknown) => void): void {
 }
 
 function ensureLive(s: SessionState): LiveTurn {
-    if (!s.live) s.live = {text: '', tools: [], activeTools: []}
+    if (!s.live) s.live = {parts: [], textOpen: false}
     return s.live
 }
 
@@ -84,24 +77,43 @@ function ensureLive(s: SessionState): LiveTurn {
 
 export function agentStart(): void {
     const s = getState()
-    s.live = {text: '', tools: [], activeTools: []}
+    s.live = {parts: [], textOpen: false}
     s.agentRunning = true
     s.sink({type: 'agent_start'})
 }
 
 export function appendText(delta: string): void {
     const s = getState()
-    ensureLive(s).text += delta
+    const live = ensureLive(s)
+    const last = live.parts[live.parts.length - 1]
+    if (live.textOpen && last && last.kind === 'text') {
+        last.text += delta
+    } else {
+        live.parts.push({kind: 'text', text: delta})
+        live.textOpen = true
+    }
     s.sink({type: 'text_delta', delta})
 }
 
 export function textEnd(): void {
-    getState().sink({type: 'text_end'})
+    const s = getState()
+    if (s.live) s.live.textOpen = false // next text starts a new segment
+    s.sink({type: 'text_end'})
 }
 
 export function startTool(toolCallId: string, toolName: string, args: unknown): void {
     const s = getState()
-    ensureLive(s).activeTools.push({toolCallId, toolName, args})
+    const live = ensureLive(s)
+    live.textOpen = false
+    live.parts.push({
+        kind: 'tool',
+        toolCallId,
+        toolName,
+        args,
+        result: undefined,
+        isError: false,
+        done: false
+    })
     s.sink({type: 'tool_start', toolCallId, toolName, args})
 }
 
@@ -117,17 +129,31 @@ export function endTool(
 ): void {
     const s = getState()
     const live = ensureLive(s)
-    // Recover the args captured at tool_start — tool_end doesn't carry them, and
-    // the committed/snapshot tool summary needs them or it renders "name: undefined".
-    const started = live.activeTools.find(t => t.toolCallId === toolCallId)
-    live.activeTools = live.activeTools.filter(t => t.toolCallId !== toolCallId)
-    live.tools.push({toolName, args: started ? started.args : undefined, result, isError})
+    const part = live.parts.find(
+        (p): p is ToolPart => p.kind === 'tool' && p.toolCallId === toolCallId
+    )
+    if (part) {
+        part.result = result
+        part.isError = isError
+        part.done = true
+    } else {
+        // tool_end without a matching start (shouldn't happen) — append a done tool.
+        live.parts.push({
+            kind: 'tool',
+            toolCallId,
+            toolName,
+            args: undefined,
+            result,
+            isError,
+            done: true
+        })
+    }
     s.sink({type: 'tool_end', toolCallId, toolName, result, isError})
 }
 
 export function agentEnd(context: ContextUsage): void {
     const s = getState()
-    if (s.live) s.history.addAssistantTurn(s.live.text, s.live.tools)
+    if (s.live) s.history.addAssistantTurn(s.live.parts)
     s.live = null
     s.agentRunning = false
     s.context = context
@@ -191,10 +217,7 @@ export function snapshot(): SnapshotMessage {
     return {
         type: 'snapshot',
         turns: s.history.getEntries(),
-        live:
-            s.live ?
-                {text: s.live.text, tools: [...s.live.tools], activeTools: [...s.live.activeTools]}
-            :   null,
+        live: s.live ? {parts: [...s.live.parts], textOpen: s.live.textOpen} : null,
         agentRunning: s.agentRunning,
         taskWidget: s.taskWidget,
         prompt: s.prompt,

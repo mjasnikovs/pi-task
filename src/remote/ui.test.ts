@@ -135,6 +135,20 @@ describe('html()', () => {
         expect(out).not.toContain('case \'history\'')
     })
 
+    it('renders an assistant turn as ordered parts (text + tools interleaved)', () => {
+        const out = html('ws://localhost:7600/ws')
+        // A turn must render its `parts` in sequence so the layout matches the
+        // terminal — not one merged text blob with tools dumped at the end.
+        const m = out.match(/function renderTurn\(t\) \{[\s\S]*?\n {4}\}/)
+        expect(m).not.toBeNull()
+        const body = m![0]
+        expect(body).toContain('t.parts')
+        expect(body).toContain("p.kind === 'text'")
+        expect(body).toContain('renderToolPart')
+        // The old flat-tools rendering is gone.
+        expect(out).not.toContain('for (const tool of (t.tools')
+    })
+
     it('renders tool results null-safely so a missing result cannot blank the view', () => {
         const out = html('ws://localhost:7600/ws')
         // A null/undefined result must not reach `JSON.stringify(...).slice()`, whose
@@ -208,7 +222,7 @@ describe('html()', () => {
         const out = html('ws://localhost:7600/ws')
         // The trailing stream cursor must share the spinner ('.spin') so it animates
         // as a braille glyph, not a green blinking square.
-        expect(out).toContain("cursor.className = 'cursor spin'")
+        expect(out).toContain('cursor.className = \'cursor spin\'')
         const m = out.match(/\.cursor \{([^}]*)\}/)
         expect(m).not.toBeNull()
         const rule = m![1]

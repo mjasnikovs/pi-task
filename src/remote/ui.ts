@@ -560,43 +560,58 @@ export function html(wsUrl: string): string {
       return (r == null ? '' : r).slice(0, 8000);
     }
 
-    // Render one finished tool call with its result body.
-    function renderTool(tool) {
-      const argsStr = typeof tool.args === 'string' ? tool.args : JSON.stringify(tool.args);
-      const d = addToolCall(tool.toolName, argsStr, tool.isError);
-      const pre = document.createElement('pre');
-      pre.textContent = toolResultText(tool.result);
-      d.appendChild(pre);
+    // Render one tool part from the ordered parts list (running or finished).
+    function renderToolPart(p) {
+      const argsStr = typeof p.args === 'string' ? p.args : JSON.stringify(p.args);
+      const d = addToolCall(p.toolName, argsStr, p.isError);
+      if (p.done) {
+        const pre = document.createElement('pre');
+        pre.textContent = toolResultText(p.result);
+        d.appendChild(pre);
+      } else {
+        toolCallMap[p.toolCallId] = d; // a later tool_end delta fills the result
+      }
       return d;
     }
 
-    // Render one committed transcript turn (user / assistant / error).
+    // Render one committed transcript turn. Assistant turns are an ordered list of
+    // parts (text segments + tool calls), so the layout matches the terminal's
+    // interleaving instead of one merged blob with tools dumped at the end.
     function renderTurn(t) {
       if (t.error) { addBubble('error', t.text); return; }
-      addBubble(t.role, t.text);
-      for (const tool of (t.tools || [])) renderTool(tool);
+      if (t.role === 'user') { addBubble('user', t.text); return; }
+      for (const p of (t.parts || [])) {
+        if (p.kind === 'text') { if (p.text) addBubble('assistant', p.text); }
+        else renderToolPart(p);
+      }
     }
 
-    // Render the in-progress assistant turn carried by a snapshot: finished tools,
-    // then still-running tools (kept in toolCallMap so a later tool_end fills them),
-    // then the partial streamed text as the live bubble so streaming continues.
+    // Render the in-progress assistant turn from a snapshot, preserving order. The
+    // trailing OPEN text segment becomes the live streaming bubble (cursor + spin)
+    // so subsequent text_delta frames keep flowing into it.
     function renderLiveTurn(live) {
-      for (const tool of (live.tools || [])) renderTool(tool);
-      for (const at of (live.activeTools || [])) {
-        const argsStr = typeof at.args === 'string' ? at.args : JSON.stringify(at.args);
-        toolCallMap[at.toolCallId] = addToolCall(at.toolName, argsStr, false);
-      }
-      if (live.text) {
-        currentBubble = document.createElement('div');
-        currentBubble.className = 'bubble assistant';
-        const cursor = document.createElement('span');
-        cursor.className = 'cursor spin';
-        currentBubble.appendChild(cursor);
-        currentBubble.insertBefore(document.createTextNode(live.text), cursor);
-        chatLog.appendChild(currentBubble);
-        streamText = live.text;
-        startSpin();
-        scrollBottom();
+      const parts = live.parts || [];
+      for (let i = 0; i < parts.length; i++) {
+        const p = parts[i];
+        const last = i === parts.length - 1;
+        if (p.kind === 'text') {
+          if (last && live.textOpen) {
+            currentBubble = document.createElement('div');
+            currentBubble.className = 'bubble assistant';
+            const cursor = document.createElement('span');
+            cursor.className = 'cursor spin';
+            currentBubble.appendChild(cursor);
+            if (p.text) currentBubble.insertBefore(document.createTextNode(p.text), cursor);
+            chatLog.appendChild(currentBubble);
+            streamText = p.text || '';
+            startSpin();
+            scrollBottom();
+          } else if (p.text) {
+            addBubble('assistant', p.text);
+          }
+        } else {
+          renderToolPart(p);
+        }
       }
     }
 
@@ -854,6 +869,10 @@ export function html(wsUrl: string): string {
             const c = currentBubble.querySelector('.cursor');
             if (c) c.remove();
             if (streamText) setContent(currentBubble, streamText);
+            // Close this message's bubble so the next text segment (after a tool or
+            // the next message) starts a fresh bubble — matching the terminal.
+            currentBubble = null;
+            streamText = '';
             stopSpinIfIdle();
           }
           break;

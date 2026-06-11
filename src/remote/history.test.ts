@@ -10,35 +10,45 @@ describe('HistoryBuffer', () => {
     it('addUserMessage appends a user Turn', () => {
         const buf = new HistoryBuffer()
         buf.addUserMessage('hello')
-        expect(buf.getEntries()).toEqual([{role: 'user', text: 'hello', tools: []}])
+        expect(buf.getEntries()).toEqual([{role: 'user', text: 'hello'}])
     })
 
-    it('addAssistantTurn appends an assistant Turn', () => {
+    it('addAssistantTurn appends an assistant Turn with ordered parts', () => {
         const buf = new HistoryBuffer()
-        const tools = [
-            {toolName: 'bash', args: {command: 'ls'}, result: 'file.txt', isError: false}
+        const parts = [
+            {kind: 'text' as const, text: 'let me check'},
+            {
+                kind: 'tool' as const,
+                toolCallId: 't1',
+                toolName: 'bash',
+                args: {command: 'ls'},
+                result: 'file.txt',
+                isError: false,
+                done: true
+            },
+            {kind: 'text' as const, text: 'done'}
         ]
-        buf.addAssistantTurn('done', tools)
-        expect(buf.getEntries()).toEqual([{role: 'assistant', text: 'done', tools}])
+        buf.addAssistantTurn(parts)
+        expect(buf.getEntries()).toEqual([{role: 'assistant', parts}])
     })
 
     it('addError appends an assistant Turn flagged as error', () => {
         const buf = new HistoryBuffer()
         buf.addError('Connection error.')
         expect(buf.getEntries()).toEqual([
-            {role: 'assistant', text: 'Connection error.', tools: [], error: true}
+            {role: 'assistant', text: 'Connection error.', error: true}
         ])
     })
 
     it('respects limit: evicts oldest entry', () => {
         const buf = new HistoryBuffer(3)
         buf.addUserMessage('a')
-        buf.addAssistantTurn('b', [])
+        buf.addAssistantTurn([{kind: 'text', text: 'b'}])
         buf.addUserMessage('c')
         buf.addUserMessage('d') // evicts "a"
         const entries = buf.getEntries()
         expect(entries.length).toBe(3)
-        expect(entries[0].text).toBe('b')
+        expect(entries[0].parts?.[0]).toEqual({kind: 'text', text: 'b'})
         expect(entries[2].text).toBe('d')
     })
 
@@ -46,7 +56,7 @@ describe('HistoryBuffer', () => {
         const buf = new HistoryBuffer()
         buf.addUserMessage('test')
         const entries = buf.getEntries()
-        entries.push({role: 'user', text: 'injected', tools: []})
+        entries.push({role: 'user', text: 'injected'})
         expect(buf.getEntries().length).toBe(1)
     })
 })
