@@ -1,6 +1,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
 import {pushNotify} from './push.js'
+import {publishNotify} from './bridge.js'
 import type {ContextUsage} from './protocol.js'
 import {
     agentStart,
@@ -66,5 +67,15 @@ export function setupEvents(pi: ExtensionAPI): void {
         if (event.source === 'interactive' && typeof event.text === 'string') {
             addUserTurn(event.text)
         }
+    })
+
+    // Context-window compaction (incl. the auto-compaction triggered by a context
+    // overflow) is invisible to a remote viewer otherwise — mirror it as a toast so
+    // they see the same "compacting…" status the terminal shows.
+    pi.on('session_before_compact', (_event, _ctx) => {
+        publishNotify('Context full — compacting…', 'warning')
+    })
+    pi.on('session_compact', (_event, _ctx) => {
+        publishNotify('Context compacted', 'info')
     })
 }

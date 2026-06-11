@@ -1,6 +1,7 @@
 import {describe, it, expect, beforeEach} from 'bun:test'
 import {setupEvents} from './events.js'
 import {getState, _setSink, reset, snapshot} from './session-state.js'
+import {getBridge} from './bridge.js'
 
 // Minimal mock ExtensionAPI
 function makePiMock() {
@@ -171,5 +172,26 @@ describe('setupEvents', () => {
         const turns = snapshot().turns
         const assistant = turns.find(e => e.role === 'assistant')
         expect(assistant?.parts).toContainEqual({kind: 'text', text: 'sure!'})
+    })
+
+    it('mirrors context compaction to the remote as toasts', () => {
+        const b = getBridge()
+        const prev = b.broadcast
+        const toasts: unknown[] = []
+        b.broadcast = msg => {
+            toasts.push(msg)
+        }
+        try {
+            pi.emit('session_before_compact', {type: 'session_before_compact'})
+            pi.emit('session_compact', {type: 'session_compact'})
+        } finally {
+            b.broadcast = prev
+        }
+        expect(toasts).toContainEqual({
+            type: 'notify',
+            message: 'Context full — compacting…',
+            level: 'warning'
+        })
+        expect(toasts).toContainEqual({type: 'notify', message: 'Context compacted', level: 'info'})
     })
 })
