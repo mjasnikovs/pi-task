@@ -34,9 +34,14 @@ export function registerPiWorkerSearch(
         name: 'pi-worker-search',
         label: 'Pi Worker Search',
         description:
-            'Search the web via Brave Search. Returns a compact markdown list of '
-            + 'up to 10 results (title, URL, snippet). Use this to find candidate '
-            + 'URLs, then call `pi-worker-fetch` on the URL you want to read. '
+            'Search the live web via Brave Search. CALL THIS BEFORE ANSWERING any '
+            + 'question about current or version-specific external facts: '
+            + 'library/framework versions and their APIs, latest releases, recently '
+            + 'shipped features, current events, prices, or who currently holds a '
+            + 'role. Your built-in knowledge is out of date — do NOT answer such '
+            + 'questions from memory and do NOT shell out with bash to guess. Returns '
+            + 'a compact markdown list of up to 10 results (title, URL, snippet); then '
+            + 'call `pi-worker-fetch` on the URL you want to read. '
             + 'Requires BRAVE_SEARCH_API_KEY env var.',
         parameters: Params,
         executionMode: 'parallel',
