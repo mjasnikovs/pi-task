@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/pipeline.svg" alt="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable." width="820"/>
+
 # 🧩 pi-task
 
 **Deterministic spec-orchestration for local models — with bundled web, docs, fetch, and worker sub-agent tools.**
@@ -9,10 +11,6 @@
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 [![tests](https://img.shields.io/badge/tests-559%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
-
-<br/>
-
-<img src="./assets/pipeline.svg" alt="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable." width="820"/>
 
 </div>
 
