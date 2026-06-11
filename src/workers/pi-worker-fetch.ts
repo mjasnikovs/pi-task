@@ -50,10 +50,11 @@ export function registerPiWorkerFetch(
         name: 'pi-worker-fetch',
         label: 'Pi Worker Fetch',
         description:
-            'Fetch an HTML page, clean it to markdown, and hand it to an isolated '
-            + 'child Pi session that extracts ONLY content answering `query`. '
-            + 'Returns the focused answer. Use after `pi-worker-search` (or with a '
-            + 'known URL) to avoid stuffing raw HTML into the main context.',
+            'Fetch a web page or text resource (HTML, markdown, plain text, JSON, '
+            + 'XML/feeds), clean HTML to markdown, and hand it to an isolated child '
+            + 'Pi session that extracts ONLY content answering `query`. Returns the '
+            + 'focused answer. Use after `pi-worker-search` (or with a known URL) to '
+            + 'avoid stuffing raw content into the main context.',
         parameters: Params,
         executionMode: 'parallel',
 

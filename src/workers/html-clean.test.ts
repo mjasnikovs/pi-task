@@ -75,7 +75,7 @@ test('fetchAndClean fetches, cleans, returns result', async () => {
     }
 })
 
-test('fetchAndClean rejects non-HTML content types', async () => {
+test('fetchAndClean rejects binary content types', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (() =>
         Promise.resolve(
@@ -86,7 +86,148 @@ test('fetchAndClean rejects non-HTML content types', async () => {
         )) as unknown as typeof fetch
 
     try {
-        await expect(fetchAndClean('https://example.com/doc.pdf')).rejects.toThrow(/not HTML/i)
+        await expect(fetchAndClean('https://example.com/doc.pdf')).rejects.toThrow(
+            /not a text or HTML/i
+        )
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean passes text/markdown through raw, without HTML cleaning', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            new Response('# Title\n\nsome **bold** text\n', {
+                status: 200,
+                headers: {'content-type': 'text/markdown; charset=utf-8'}
+            })
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/llms.txt')
+        expect(result.markdown).toContain('# Title')
+        expect(result.markdown).toContain('**bold**')
+        expect(result.title).toBe('example.com')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean passes text/plain through raw', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            new Response('User-agent: *\nDisallow: /private\n', {
+                status: 200,
+                headers: {'content-type': 'text/plain'}
+            })
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/robots.txt')
+        expect(result.markdown).toContain('Disallow: /private')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean passes application/json through raw', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            new Response('{"name":"pi","version":"1.0"}', {
+                status: 200,
+                headers: {'content-type': 'application/json'}
+            })
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/api')
+        expect(result.markdown).toContain('"name":"pi"')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean treats a missing content-type as raw text', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            // Blob with empty type → Response sends no content-type header.
+            new Response(new Blob(['plain llms content'], {type: ''}), {status: 200})
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/llms.txt')
+        expect(result.markdown).toContain('plain llms content')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean cleans application/xhtml+xml as HTML', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            new Response(fixture('article-clean.html'), {
+                status: 200,
+                headers: {'content-type': 'application/xhtml+xml'}
+            })
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/post')
+        expect(result.markdown).toContain('first paragraph')
+        expect(result.markdown).not.toContain('menu menu menu')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean honors the charset declared in content-type', async () => {
+    const originalFetch = globalThis.fetch
+    // 0x63 = 'c', 0xe9 = 'é' in ISO-8859-1 (would be a replacement char as UTF-8).
+    const body = new Uint8Array([0x63, 0xe9])
+    globalThis.fetch = (() =>
+        Promise.resolve(
+            new Response(body, {
+                status: 200,
+                headers: {'content-type': 'text/plain; charset=iso-8859-1'}
+            })
+        )) as unknown as typeof fetch
+
+    try {
+        const result = await fetchAndClean('https://example.com/latin')
+        expect(result.markdown).toContain('cé')
+        expect(result.markdown).not.toContain('�')
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('fetchAndClean sends a User-Agent carrying the current package version', async () => {
+    const pkg = JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf8')) as {
+        version: string
+    }
+    const pkgVersion = pkg.version
+
+    const originalFetch = globalThis.fetch
+    let sentUA = ''
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        sentUA = headers.get('user-agent') ?? ''
+        return Promise.resolve(
+            new Response('<html><body><p>hi there friend</p></body></html>', {
+                status: 200,
+                headers: {'content-type': 'text/html'}
+            })
+        )
+    }) as unknown as typeof fetch
+
+    try {
+        await fetchAndClean('https://example.com/x')
+        expect(sentUA).toContain(pkgVersion)
     } finally {
         globalThis.fetch = originalFetch
     }
