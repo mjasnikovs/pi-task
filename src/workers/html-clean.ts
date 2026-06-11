@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
 import {dirname, join} from 'node:path'
-import {JSDOM} from 'jsdom'
+import {parseHTML} from 'linkedom'
 import {Readability} from '@mozilla/readability'
 import TurndownService from 'turndown'
 
@@ -18,24 +18,24 @@ const turndown = new TurndownService({
 })
 
 export function cleanHtml(html: string, baseUrl: string): CleanResult {
-    const dom = new JSDOM(html, {url: baseUrl})
-    const reader = new Readability(dom.window.document)
+    const {document} = parseHTML(html)
+    const reader = new Readability(document)
     const parsed = reader.parse()
 
     if (parsed && parsed.content) {
         return {
-            title: parsed.title || dom.window.document.title || new URL(baseUrl).hostname,
+            title: parsed.title || document.title || new URL(baseUrl).hostname,
             markdown: turndown.turndown(parsed.content).trim(),
             finalUrl: baseUrl
         }
     }
 
     // Fallback: turndown the body
-    const body = dom.window.document.body
+    const body = document.body
     const bodyHtml = body ? body.innerHTML : ''
     const markdown = turndown.turndown(bodyHtml).trim()
     return {
-        title: dom.window.document.title || new URL(baseUrl).hostname,
+        title: document.title || new URL(baseUrl).hostname,
         markdown,
         finalUrl: baseUrl
     }
@@ -87,7 +87,12 @@ function decoderFor(contentType: string): TextDecoder {
     const charset = match?.[1]?.trim().replace(/^["']|["']$/g, '')
     if (charset) {
         try {
-            return new TextDecoder(charset, {fatal: false})
+            // The runtime accepts any charset label string; the type is narrowed
+            // to a known-encoding union by Bun/Node's lib (DOM's looser signature
+            // is no longer pulled in transitively). Cast to the actual param type.
+            return new TextDecoder(charset as ConstructorParameters<typeof TextDecoder>[0], {
+                fatal: false
+            })
         } catch {
             // Unknown/unsupported label — fall through to UTF-8.
         }
