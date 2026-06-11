@@ -32,6 +32,12 @@ describe('HistoryBuffer', () => {
         expect(buf.getEntries()).toEqual([{role: 'assistant', parts}])
     })
 
+    it('addSystemNote appends a system Turn', () => {
+        const buf = new HistoryBuffer()
+        buf.addSystemNote('Context compacted')
+        expect(buf.getEntries()).toEqual([{role: 'system', text: 'Context compacted'}])
+    })
+
     it('addError appends an assistant Turn flagged as error', () => {
         const buf = new HistoryBuffer()
         buf.addError('Connection error.')

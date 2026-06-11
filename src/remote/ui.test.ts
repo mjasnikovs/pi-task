@@ -143,10 +143,20 @@ describe('html()', () => {
         expect(m).not.toBeNull()
         const body = m![0]
         expect(body).toContain('t.parts')
-        expect(body).toContain("p.kind === 'text'")
+        expect(body).toContain('p.kind === \'text\'')
         expect(body).toContain('renderToolPart')
         // The old flat-tools rendering is gone.
         expect(out).not.toContain('for (const tool of (t.tools')
+    })
+
+    it('renders persistent system notes (e.g. context compaction) inline', () => {
+        const out = html('ws://localhost:7600/ws')
+        // A system note must render both live (delta) and from the snapshot (a
+        // role:'system' turn), as a muted inline divider that survives reconnect.
+        expect(out).toContain('case \'system_note\'')
+        expect(out).toContain('function addSystemLine')
+        expect(out).toContain('t.role === \'system\'')
+        expect(out).toContain('.sysnote')
     })
 
     it('renders tool results null-safely so a missing result cannot blank the view', () => {

@@ -174,6 +174,14 @@ export function addError(message: string): void {
     s.sink({type: 'agent_error', message})
 }
 
+/** A persistent inline note (committed to the transcript so it survives reconnect)
+ *  plus a live delta so connected clients render it immediately. */
+export function addSystemNote(text: string): void {
+    const s = getState()
+    s.history.addSystemNote(text)
+    s.sink({type: 'system_note', text})
+}
+
 /** The single task-widget slot. Empty/undefined lines clear it. */
 export function setTaskWidget(lines: string[] | null | undefined): void {
     const s = getState()

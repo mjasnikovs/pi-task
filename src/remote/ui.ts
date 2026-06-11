@@ -89,6 +89,13 @@ export function html(wsUrl: string): string {
       background: var(--crust); color: var(--red); align-self: stretch;
       max-width: 100%; border: 1px solid var(--red); font-size: 12px;
     }
+    /* Persistent inline system note (e.g. context compaction) — a muted centered
+       divider, distinct from chat bubbles. */
+    .sysnote {
+      align-self: center; color: var(--subtext0); font-size: 11px;
+      font-family: ui-monospace, monospace; letter-spacing: 0.5px;
+      padding: 2px 10px; opacity: 0.85;
+    }
     .bubble.thinking {
       display: flex; gap: 5px; align-items: center; padding: 10px 14px;
     }
@@ -574,11 +581,22 @@ export function html(wsUrl: string): string {
       return d;
     }
 
+    // A muted, centered system note (e.g. "Context compacted").
+    function addSystemLine(text) {
+      const el = document.createElement('div');
+      el.className = 'sysnote';
+      el.textContent = text;
+      chatLog.appendChild(el);
+      scrollBottom();
+      return el;
+    }
+
     // Render one committed transcript turn. Assistant turns are an ordered list of
     // parts (text segments + tool calls), so the layout matches the terminal's
     // interleaving instead of one merged blob with tools dumped at the end.
     function renderTurn(t) {
       if (t.error) { addBubble('error', t.text); return; }
+      if (t.role === 'system') { addSystemLine(t.text); return; }
       if (t.role === 'user') { addBubble('user', t.text); return; }
       for (const p of (t.parts || [])) {
         if (p.kind === 'text') { if (p.text) addBubble('assistant', p.text); }
@@ -899,6 +917,9 @@ export function html(wsUrl: string): string {
         }
         case 'user_message':
           addBubble('user', msg.text);
+          break;
+        case 'system_note':
+          addSystemLine(msg.text);
           break;
         case 'agent_error':
           hideThinking();

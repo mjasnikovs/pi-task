@@ -12,7 +12,8 @@ import {
     endTool,
     agentEnd,
     addUserTurn,
-    addError
+    addError,
+    addSystemNote
 } from './session-state.js'
 
 /** Mirror pi agent events into the authoritative SessionState. Each handler
@@ -76,6 +77,8 @@ export function setupEvents(pi: ExtensionAPI): void {
         publishNotify('Context full — compacting…', 'warning')
     })
     pi.on('session_compact', (_event, _ctx) => {
-        publishNotify('Context compacted', 'info')
+        // Persistent inline note so it's still visible after a reconnect, not just a
+        // transient toast.
+        addSystemNote('Context compacted')
     })
 }

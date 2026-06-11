@@ -174,7 +174,7 @@ describe('setupEvents', () => {
         expect(assistant?.parts).toContainEqual({kind: 'text', text: 'sure!'})
     })
 
-    it('mirrors context compaction to the remote as toasts', () => {
+    it('mirrors context compaction to the remote (toast + persistent note)', () => {
         const b = getBridge()
         const prev = b.broadcast
         const toasts: unknown[] = []
@@ -187,11 +187,15 @@ describe('setupEvents', () => {
         } finally {
             b.broadcast = prev
         }
+        // Attention toast on start (transient).
         expect(toasts).toContainEqual({
             type: 'notify',
             message: 'Context full — compacting…',
             level: 'warning'
         })
-        expect(toasts).toContainEqual({type: 'notify', message: 'Context compacted', level: 'info'})
+        // Completion is a persistent transcript note: a live delta now…
+        expect(captured).toContainEqual({type: 'system_note', text: 'Context compacted'})
+        // …and committed so it survives a reconnect.
+        expect(snapshot().turns).toContainEqual({role: 'system', text: 'Context compacted'})
     })
 })

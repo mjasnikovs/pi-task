@@ -21,8 +21,8 @@ export interface ToolPart {
 export type Part = TextPart | ToolPart
 
 export interface Turn {
-    role: 'user' | 'assistant'
-    /** User message text, or error text. Assistant content lives in `parts`. */
+    role: 'user' | 'assistant' | 'system'
+    /** User text, error text, or a system note. Assistant content lives in `parts`. */
     text?: string
     /** Ordered assistant content (text + tools). */
     parts?: Part[]
@@ -47,6 +47,11 @@ export class HistoryBuffer {
 
     addError(text: string): void {
         this._push({role: 'assistant', text, error: true})
+    }
+
+    /** A persistent, inline system note (e.g. "Context compacted"). */
+    addSystemNote(text: string): void {
+        this._push({role: 'system', text})
     }
 
     getEntries(): Turn[] {
