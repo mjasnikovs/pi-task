@@ -2,8 +2,8 @@ import {createServer} from 'node:http'
 import {networkInterfaces} from 'node:os'
 import {WebSocketServer} from 'ws'
 import {addClient, removeClient, clientCount, broadcast, sendTo} from './broadcast.js'
-import type {Turn} from './history.js'
-import {getBridge, answerPrompt} from './bridge.js'
+import {answerPrompt} from './bridge.js'
+import {getState, snapshot} from './session-state.js'
 import {isClientMessage} from './protocol.js'
 import {swJs} from './sw.js'
 import {publicKey, addSubscription, getSubscriptions, logPush} from './push.js'
@@ -90,8 +90,7 @@ async function findPort(start: number, max: number): Promise<number> {
 
 export async function startServer(
     onMessage: MessageCallback,
-    getHtml: (wsUrl: string) => string,
-    getHistory: () => Turn[]
+    getHtml: (wsUrl: string) => string
 ): Promise<ServerHandle> {
     const port = await findPort(8800, 100)
     const ips = getLocalIPs()
@@ -151,15 +150,8 @@ export async function startServer(
         addClient(ws)
         handle.onFirstConnect?.()
         handle.onFirstConnect = null
-        sendTo(ws, {type: 'history', turns: getHistory()})
-        const bridge = getBridge()
-        for (const [key, lines] of bridge.activeWidgets) {
-            sendTo(ws, {type: 'widget', key, lines})
-        }
-        if (bridge.activePrompt) sendTo(ws, bridge.activePrompt)
-        if (bridge.lastContextUsage) {
-            sendTo(ws, {type: 'context', contextUsage: bridge.lastContextUsage})
-        }
+        // One authoritative snapshot — the client replaces its whole view with it.
+        sendTo(ws, snapshot())
         broadcast({type: 'client_count', count: clientCount()})
 
         ws.on('message', data => {
@@ -176,7 +168,7 @@ export async function startServer(
             }
             // type === 'message': ignore while a prompt is pending (composer is
             // disabled in the browser; this is the server-side guard).
-            if (getBridge().activePrompt) return
+            if (getState().prompt) return
             onMessage(msg.text)
         })
 

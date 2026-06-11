@@ -2,7 +2,8 @@ import {describe, it, expect, afterEach, test} from 'bun:test'
 import {startServer, getLocalIPs, formatAddresses} from './server.js'
 import type {ServerHandle} from './server.js'
 import WebSocket from 'ws'
-import {getBridge, answerPrompt} from './bridge.js'
+import {getBridge} from './bridge.js'
+import {reset, setPrompt, setContext, addUserTurn} from './session-state.js'
 import {clearSubscriptions, getSubscriptions} from './push.js'
 
 let handle: ServerHandle | null = null
@@ -12,8 +13,7 @@ afterEach(() => {
     handle = null
     const b = getBridge()
     b.pending.clear()
-    b.activePrompt = null
-    b.lastContextUsage = null
+    reset()
 })
 
 describe('getLocalIPs', () => {
@@ -88,8 +88,7 @@ describe('startServer', () => {
     it('starts on a port >= 8800', async () => {
         handle = await startServer(
             () => {},
-            wsUrl => `<html>${wsUrl}</html>`,
-            () => []
+            wsUrl => `<html>${wsUrl}</html>`
         )
         expect(handle.port).toBeGreaterThanOrEqual(8800)
         expect(handle.port).toBeLessThan(8900)
@@ -98,8 +97,7 @@ describe('startServer', () => {
     it('HTTP GET / serves the HTML with WS url embedded', async () => {
         handle = await startServer(
             () => {},
-            wsUrl => `WSURL:${wsUrl}`,
-            () => []
+            wsUrl => `WSURL:${wsUrl}`
         )
         const res = await fetch(`http://127.0.0.1:${handle.port}/`)
         const body = await res.text()
@@ -108,12 +106,11 @@ describe('startServer', () => {
         expect(body).toContain(`:${handle.port}/ws`)
     })
 
-    it('WebSocket connects and receives history message', async () => {
-        const turns = [{role: 'user' as const, text: 'hi', tools: []}]
+    it('WebSocket connects and receives a snapshot reflecting the transcript', async () => {
+        addUserTurn('hi')
         handle = await startServer(
             () => {},
-            _wsUrl => `<html></html>`,
-            () => turns
+            _wsUrl => `<html></html>`
         )
         const received: unknown[] = []
         await new Promise<void>((resolve, reject) => {
@@ -126,15 +123,17 @@ describe('startServer', () => {
             ws.on('error', reject)
             setTimeout(() => reject(new Error('timeout')), 3000)
         })
-        expect(received[0]).toMatchObject({type: 'history', turns})
+        expect(received[0]).toMatchObject({
+            type: 'snapshot',
+            turns: [{role: 'user', text: 'hi', tools: []}]
+        })
     })
 
     it('calls onMessage callback with parsed text when browser sends message', async () => {
         const messages: string[] = []
         handle = await startServer(
             text => messages.push(text),
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         await new Promise<void>((resolve, reject) => {
             const ws = new WebSocket(`ws://127.0.0.1:${handle!.port}/ws`)
@@ -153,8 +152,7 @@ describe('startServer', () => {
     it('stop() closes the server', async () => {
         handle = await startServer(
             () => {},
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         const port = handle.port
         handle.stop()
@@ -165,8 +163,7 @@ describe('startServer', () => {
     it('GET /sw.js serves the service worker as JavaScript', async () => {
         handle = await startServer(
             () => {},
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         const res = await fetch(`http://127.0.0.1:${handle.port}/sw.js`)
         expect(res.status).toBe(200)
@@ -179,8 +176,7 @@ describe('startServer', () => {
     it('GET /push-key returns the VAPID public key', async () => {
         handle = await startServer(
             () => {},
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         const res = await fetch(`http://127.0.0.1:${handle.port}/push-key`)
         expect(res.status).toBe(200)
@@ -192,8 +188,7 @@ describe('startServer', () => {
         clearSubscriptions()
         handle = await startServer(
             () => {},
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         const subscription = {
             endpoint: 'https://push.example/abc',
@@ -211,8 +206,7 @@ describe('startServer', () => {
     it('POST /subscribe rejects a malformed body with 400', async () => {
         handle = await startServer(
             () => {},
-            () => '<html></html>',
-            () => []
+            () => '<html></html>'
         )
         const res = await fetch(`http://127.0.0.1:${handle.port}/subscribe`, {
             method: 'POST',
@@ -232,36 +226,32 @@ function once(ws: WebSocket, type: string): Promise<Record<string, unknown>> {
     })
 }
 
-test('connecting browser receives the active prompt on handshake', async () => {
-    const b = getBridge()
-    b.activePrompt = {type: 'prompt', id: '42', question: 'Which DB?', allowSkip: false}
+test('the connect snapshot carries the active prompt', async () => {
+    setPrompt({type: 'prompt', id: '42', question: 'Which DB?', allowSkip: false})
     const srv = await startServer(
         () => {},
-        () => '<html></html>',
-        () => []
+        () => '<html></html>'
     )
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
-    const prompt = await once(ws, 'prompt')
-    expect(prompt.id).toBe('42')
+    const snap = await once(ws, 'snapshot')
+    expect((snap.prompt as {id: string}).id).toBe('42')
     ws.close()
     srv.stop()
-    b.activePrompt = null
+    reset()
 })
 
-test('connecting browser receives the last context usage on handshake', async () => {
-    const b = getBridge()
-    b.lastContextUsage = {tokens: 12000, contextWindow: 100000, percent: 12}
+test('the connect snapshot carries the last context usage', async () => {
+    setContext({tokens: 12000, contextWindow: 100000, percent: 12})
     const srv = await startServer(
         () => {},
-        () => '<html></html>',
-        () => []
+        () => '<html></html>'
     )
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
-    const ctxMsg = await once(ws, 'context')
-    expect(ctxMsg.contextUsage).toEqual({tokens: 12000, contextWindow: 100000, percent: 12})
+    const snap = await once(ws, 'snapshot')
+    expect(snap.context).toEqual({tokens: 12000, contextWindow: 100000, percent: 12})
     ws.close()
     srv.stop()
-    b.lastContextUsage = null
+    reset()
 })
 
 test('prompt_answer frame resolves the pending prompt', async () => {
@@ -270,8 +260,7 @@ test('prompt_answer frame resolves the pending prompt', async () => {
     b.pending.set('99', v => (resolved = v))
     const srv = await startServer(
         () => {},
-        () => '<html></html>',
-        () => []
+        () => '<html></html>'
     )
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
     await new Promise(r => ws.on('open', r))
@@ -283,13 +272,11 @@ test('prompt_answer frame resolves the pending prompt', async () => {
 })
 
 test('plain message is ignored while a prompt is pending', async () => {
-    const b = getBridge()
-    b.activePrompt = {type: 'prompt', id: '7', question: 'q', allowSkip: false}
+    setPrompt({type: 'prompt', id: '7', question: 'q', allowSkip: false})
     let got = ''
     const srv = await startServer(
         text => (got = text),
-        () => '<html></html>',
-        () => []
+        () => '<html></html>'
     )
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
     await new Promise(r => ws.on('open', r))
@@ -298,5 +285,5 @@ test('plain message is ignored while a prompt is pending', async () => {
     expect(got).toBe('')
     ws.close()
     srv.stop()
-    b.activePrompt = null
+    reset()
 })
