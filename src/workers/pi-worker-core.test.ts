@@ -1,6 +1,10 @@
 import {describe, expect, test} from 'bun:test'
 import {runWorker} from './pi-worker-core.js'
-import {agentEndResponse, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
+import {agentEndResponse, fakeSpawnByPrompt, fakeSpawnQueue} from '../test-utils/fake-spawn.js'
+
+// A tool call the model wrote as text instead of invoking — never executed.
+const LEAKED =
+    '<tool_call>\n<function=bash>\n<parameter=command>grep foo</parameter>\n</function>\n</tool_call>'
 
 describe('runWorker', () => {
     test('returns text, exitCode, stderr', async () => {
@@ -57,6 +61,23 @@ describe('runWorker', () => {
         const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
         expect(r.workMs).toBe(0)
         expect(r.waitMs).toBeGreaterThanOrEqual(0)
+    })
+
+    test('re-prompts on a leaked tool call and returns the clean retry', async () => {
+        const spawn = fakeSpawnQueue([agentEndResponse(LEAKED), agentEndResponse('clean output')])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.text).toBe('clean output')
+        expect(r.leakedToolCall).toBeUndefined()
+    })
+
+    test('flags the result when every attempt leaks a tool call', async () => {
+        const spawn = fakeSpawnQueue([
+            agentEndResponse(LEAKED),
+            agentEndResponse(LEAKED),
+            agentEndResponse(LEAKED)
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.leakedToolCall).toBeTruthy()
     })
 
     test('input.tools overrides the default tool set', async () => {

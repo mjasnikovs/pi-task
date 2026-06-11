@@ -5,6 +5,7 @@ import {
     runPhaseWithLoopGuard,
     runWithEmphasisRetry,
     LoopExhaustedError,
+    LeakedToolCallError,
     childArgs
 } from './child-runner.js'
 import {fakeSpawnSimple, agentEndResponse, fakeSpawnQueue} from '../test-utils/fake-spawn.js'
@@ -254,6 +255,150 @@ describe('runPhaseWithLoopGuard', () => {
                 )
             ).rejects.toBeInstanceOf(LoopExhaustedError)
         })
+    })
+})
+
+// A tool call the child model wrote as plain text (wrong dialect) instead of
+// invoking — never executed, leaked into the assistant answer.
+const LEAKED = [
+    'Let me check the file.',
+    '<tool_call>',
+    '<function=bash>',
+    '<parameter=command>grep -n "z.object" src/Auth.tsx</parameter>',
+    '</function>',
+    '</tool_call>'
+].join('\n')
+
+/** Queue agent_end texts in order while capturing each call's final prompt arg. */
+function capturingQueue(texts: ReadonlyArray<string>): {spawn: SpawnFn; prompts: string[]} {
+    const prompts: string[] = []
+    let i = 0
+    const spawn = ((_cmd: string, args: ReadonlyArray<string>) => {
+        prompts.push(String(args[args.length - 1]))
+        const text = texts[Math.min(i, texts.length - 1)]
+        i++
+        const p = new EventEmitter() as EventEmitter & ProcLike
+        p.stdout = new EventEmitter()
+        p.stderr = new EventEmitter()
+        p.killed = false
+        p.kill = () => {
+            p.killed = true
+            return true
+        }
+        queueMicrotask(() => {
+            p.stdout?.emit(
+                'data',
+                Buffer.from(
+                    JSON.stringify({
+                        type: 'agent_end',
+                        messages: [{role: 'assistant', content: [{type: 'text', text}]}]
+                    }) + '\n'
+                )
+            )
+            p.emit('close', 0)
+        })
+        return p
+    }) as unknown as SpawnFn
+    return {spawn, prompts}
+}
+
+describe('leaked tool-call guard', () => {
+    test('runPhaseWithLoopGuard restarts with a correction hint when the child leaks a call', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnQueue([
+                agentEndResponse(LEAKED),
+                agentEndResponse('clean refined content')
+            ])
+            const builds: Array<string | null> = []
+            const out = await runPhaseWithLoopGuard(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'refine',
+                'read',
+                hint => {
+                    builds.push(hint)
+                    return 'PROMPT'
+                }
+            )
+            expect(out).toBe('clean refined content')
+            expect(builds.length).toBe(2)
+            expect(builds[0]).toBeNull()
+            expect(builds[1]).toContain('SYSTEM NOTE')
+            expect(builds[1]).toMatch(/tool call/i)
+        })
+    })
+
+    test('runPhaseWithLoopGuard throws LeakedToolCallError when every attempt leaks', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnQueue([
+                agentEndResponse(LEAKED),
+                agentEndResponse(LEAKED),
+                agentEndResponse(LEAKED)
+            ])
+            await expect(
+                runPhaseWithLoopGuard(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'refine',
+                    'read',
+                    () => 'PROMPT'
+                )
+            ).rejects.toBeInstanceOf(LeakedToolCallError)
+        })
+    })
+
+    test('runPhaseChild re-prompts with the hint appended and returns the clean retry', async () => {
+        const {spawn, prompts} = capturingQueue([LEAKED, 'clean tooling output'])
+        const out = await runPhaseChild(
+            depsWith(spawn),
+            'verify-tooling',
+            'read',
+            'ORIGINAL PROMPT'
+        )
+        expect(out).toBe('clean tooling output')
+        expect(prompts.length).toBe(2)
+        expect(prompts[0]).toBe('ORIGINAL PROMPT')
+        expect(prompts[1]).toContain('SYSTEM NOTE')
+        expect(prompts[1]).toContain('ORIGINAL PROMPT')
+    })
+
+    test('runPhaseChild throws LeakedToolCallError when every attempt leaks', async () => {
+        await expect(
+            runPhaseChild(
+                depsWith(
+                    fakeSpawnQueue([
+                        agentEndResponse(LEAKED),
+                        agentEndResponse(LEAKED),
+                        agentEndResponse(LEAKED)
+                    ])
+                ),
+                'verify-tooling',
+                'read',
+                'prompt'
+            )
+        ).rejects.toBeInstanceOf(LeakedToolCallError)
     })
 })
 

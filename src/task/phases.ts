@@ -361,6 +361,12 @@ export async function phaseResearch(
         if (result.text.trim().length === 0) {
             throw new Error(`Research ${name} worker produced no output`)
         }
+        if (result.leakedToolCall) {
+            throw new Error(
+                `Research ${name} worker wrote a tool call as text instead of invoking it `
+                    + `(${result.leakedToolCall.trim()}) — it never ran`
+            )
+        }
     }
 
     return `FILES\n${files.text}\n\nAPIS\n${apis.text}\n\nCONTEXT\n${context.text}\n\nTOOLING\n${tooling.text}`

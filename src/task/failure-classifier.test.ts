@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
 import {classifyFailure} from './failure-classifier.js'
-import {LoopExhaustedError, USER_CANCELLED} from './child-runner.js'
+import {LoopExhaustedError, LeakedToolCallError, USER_CANCELLED} from './child-runner.js'
 
 describe('classifyFailure', () => {
     test('USER_CANCELLED message → cancelled', () => {
@@ -24,6 +24,15 @@ describe('classifyFailure', () => {
         expect(c.state).toBe('failed')
         expect(c.flash).toBe('loop_detected')
         expect(c.reason).toMatch(/loop detected 3× in refine/)
+    })
+
+    test('LeakedToolCallError → failed with leaked_tool_call flash', () => {
+        const err = new LeakedToolCallError('refine', '<tool_call>')
+        const c = classifyFailure(err, false)
+        expect(c.state).toBe('failed')
+        expect(c.flash).toBe('leaked_tool_call')
+        expect(c.reason).toMatch(/refine/)
+        expect(c.notify).toMatch(/tool call/i)
     })
 
     test('no_verify_block → failed with matching flash', () => {

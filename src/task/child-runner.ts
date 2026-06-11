@@ -17,6 +17,11 @@ import {
     CHILD_BASE_ARGS
 } from '../shared/child-process.js'
 import {LoopDetector} from './loop-detector.js'
+import {
+    detectLeakedToolCall,
+    leakedToolCallHint,
+    MAX_LEAK_RETRIES
+} from '../shared/leaked-tool-call.js'
 import {readSection, setTaskSection} from './task-file.js'
 
 // ─── Loop detection constants ────────────────────────────────────────────────
@@ -26,6 +31,7 @@ import {readSection, setTaskSection} from './task-file.js'
 export const LOOP_WINDOW = 20
 export const LOOP_THRESHOLD = 5
 export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 restarts)
+// MAX_LEAK_RETRIES lives in shared/leaked-tool-call.ts (imported above).
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -34,6 +40,8 @@ export interface PhaseRunResult {
     exitCode: number
     stderr: string
     loopHit?: LoopHit
+    /** Set when the assistant text contains an unexecuted, leaked tool call. */
+    leakedToolCall?: string
 }
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
@@ -97,16 +105,22 @@ export async function runChild(
         }
     )
 
+    // Use `||` (not `??`) so an empty string from json-events mode falls
+    // back to raw stdout. Without this, a child that exits 0 but emits no
+    // assistant text (e.g. model API error swallowed in json mode) always
+    // fails with the unhelpful "X child produced no output" — the raw
+    // stdout/stderr that might contain the real error is discarded.
+    const text = result.text || result.stdout.trim()
     return {
-        // Use `||` (not `??`) so an empty string from json-events mode falls
-        // back to raw stdout. Without this, a child that exits 0 but emits no
-        // assistant text (e.g. model API error swallowed in json mode) always
-        // fails with the unhelpful "X child produced no output" — the raw
-        // stdout/stderr that might contain the real error is discarded.
-        text: result.text || result.stdout.trim(),
+        text,
         exitCode: result.exitCode,
         stderr: result.stderr.trim(),
-        loopHit
+        loopHit,
+        // A tool call the model wrote as text (wrong dialect) never executed and
+        // sailed past the structured-event guards above; flag it so the wrappers
+        // can re-prompt instead of accepting the unexecuted call. Only meaningful
+        // when the run otherwise succeeded — a loop kill truncates text mid-stream.
+        leakedToolCall: loopHit ? undefined : (detectLeakedToolCall(text) ?? undefined)
     }
 }
 
@@ -129,32 +143,50 @@ interface PhaseDeps {
 
 export type {PhaseDeps}
 
-/** Run a child pi and return its assistant text. Throws if exit code != 0. */
+/**
+ * Run a child pi and return its assistant text. Throws if exit code != 0.
+ *
+ * If the child leaks a tool call as plain text (wrong dialect — never executed),
+ * re-prompt with a correction hint up to MAX_LEAK_RETRIES times; if it keeps
+ * leaking, throw LeakedToolCallError rather than returning the unexecuted call.
+ */
 export async function runPhaseChild(
     deps: PhaseDeps,
     name: string,
     tools: string,
     prompt: string
 ): Promise<string> {
-    const r = await runChild(
-        deps.cwd,
-        tools,
-        prompt,
-        deps.signal,
-        deps.onChildOutput,
-        deps.onContextUsage,
-        undefined,
-        deps.spawn
-    )
-    if (r.exitCode !== 0) {
-        throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
-    }
-    if (r.text.trim().length === 0) {
-        throw new Error(
-            `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+    let hint: string | null = null
+    for (let attempt = 0; attempt <= MAX_LEAK_RETRIES; attempt++) {
+        const r = await runChild(
+            deps.cwd,
+            tools,
+            prependHint(hint, prompt),
+            deps.signal,
+            deps.onChildOutput,
+            deps.onContextUsage,
+            undefined,
+            deps.spawn
         )
+        if (r.exitCode !== 0) {
+            throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+        }
+        if (r.text.trim().length === 0) {
+            throw new Error(
+                `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+            )
+        }
+        if (r.leakedToolCall) {
+            if (attempt === MAX_LEAK_RETRIES) {
+                throw new LeakedToolCallError(name, r.leakedToolCall)
+            }
+            hint = leakedToolCallHint(r.leakedToolCall)
+            continue
+        }
+        return r.text
     }
-    return r.text
+    // Unreachable: the loop returns clean text or throws on the final leak.
+    throw new LeakedToolCallError(name, '(unknown)')
 }
 
 function formatLoopHint(hit: LoopHit): string {
@@ -201,11 +233,12 @@ export async function runPhaseWithLoopGuard(
     buildPrompt: (loopHint: string | null) => string
 ): Promise<string> {
     const loopHistory: LoopHit[] = []
+    // Carries the correction hint (loop OR leaked-tool-call) into the next strike.
+    let nextHint: string | null = null
     for (let strike = 0; strike <= MAX_LOOP_RESTARTS; strike++) {
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
-        const hint = strike === 0 ? null : formatLoopHint(loopHistory[strike - 1])
-        const prompt = buildPrompt(hint)
+        const prompt = buildPrompt(nextHint)
         const r = await runChild(
             deps.cwd,
             tools,
@@ -229,6 +262,7 @@ export async function runPhaseWithLoopGuard(
                 isLastStrike ? 'phase failed' : 'restarted with hint'
             )
             if (isLastStrike) throw new LoopExhaustedError(name, loopHistory)
+            nextHint = formatLoopHint(r.loopHit)
             continue
         }
         if (r.exitCode !== 0) {
@@ -238,6 +272,13 @@ export async function runPhaseWithLoopGuard(
             throw new Error(
                 `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
             )
+        }
+        if (r.leakedToolCall) {
+            if (strike === MAX_LOOP_RESTARTS) {
+                throw new LeakedToolCallError(name, r.leakedToolCall)
+            }
+            nextHint = leakedToolCallHint(r.leakedToolCall)
+            continue
         }
         return r.text
     }
@@ -281,5 +322,25 @@ export class LoopExhaustedError extends Error {
     ) {
         super(`loop detected ${history.length} times in ${phase}`)
         this.name = 'LoopExhaustedError'
+    }
+}
+
+// ─── LeakedToolCallError ─────────────────────────────────────────────────────
+
+/**
+ * Thrown when a phase child repeatedly wrote a tool call as plain text (a markup
+ * dialect pi's harness didn't parse) instead of invoking it. The call never ran,
+ * so the phase output is untrustworthy — fail loudly rather than check it off.
+ */
+export class LeakedToolCallError extends Error {
+    constructor(
+        public readonly phase: string,
+        public readonly marker: string
+    ) {
+        super(
+            `${phase} child wrote a tool call as text instead of invoking it `
+                + `(${marker.trim()}) — it never ran`
+        )
+        this.name = 'LeakedToolCallError'
     }
 }

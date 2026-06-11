@@ -6,7 +6,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {updateTaskFrontMatter} from './task-file.js'
 import {flashTerminalWidget} from './widget.js'
-import {LoopExhaustedError, USER_CANCELLED} from './child-runner.js'
+import {LoopExhaustedError, LeakedToolCallError, USER_CANCELLED} from './child-runner.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,15 @@ export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
             reason: `loop detected ${err.history.length}× in ${err.phase}`,
             flash: 'loop_detected',
             notify: `failed: ${err.phase} loop detected ${err.history.length}×. Resume to retry.`,
+            level: 'error'
+        }
+    }
+    if (err instanceof LeakedToolCallError) {
+        return {
+            state: 'failed',
+            reason: `leaked tool call in ${err.phase}: ${err.marker.trim()}`,
+            flash: 'leaked_tool_call',
+            notify: `failed: ${err.phase} wrote a tool call as text instead of running it — it never executed. Resume to retry.`,
             level: 'error'
         }
     }

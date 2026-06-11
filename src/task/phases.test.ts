@@ -96,6 +96,37 @@ REJECTED
     })
 })
 
+describe('phaseResearch leaked tool-call guard', () => {
+    test('throws a clear error when a worker keeps leaking a tool call as text', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // Every spawn leaks, so each worker exhausts its re-prompts and comes
+            // back flagged — the phase must fail loudly, not pass the XML through.
+            const leaked =
+                '<tool_call>\n<function=bash>\n<parameter=command>grep foo</parameter>\n</function>\n</tool_call>'
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(leaked))
+            await expect(
+                phaseResearch(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'a refined goal with no mentions',
+                    {getFileInventory: async () => ''}
+                )
+            ).rejects.toThrow(/tool call|leaked/i)
+        })
+    })
+})
+
 describe('phaseResearch enrichment DI', () => {
     test('docsRaw is called for backtick-quoted packages in the refined text', async () => {
         await withTmpTaskDir(async cwd => {
