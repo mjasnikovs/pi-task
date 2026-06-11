@@ -516,7 +516,9 @@ export function html(wsUrl: string): string {
     }
 
     function addToolCall(toolName, argsStr, isError) {
-      const label = (toolName + ': ' + argsStr).slice(0, 64);
+      // argsStr can be undefined (no args / JSON.stringify(undefined)); don't let
+      // that render as the literal "name: undefined" in the collapsed summary.
+      const label = (toolName + (argsStr ? ': ' + argsStr : '')).slice(0, 64);
       const d = document.createElement('details');
       d.className = 'tool-call' + (isError ? ' error' : '');
       const s = document.createElement('summary');

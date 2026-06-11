@@ -117,8 +117,11 @@ export function endTool(
 ): void {
     const s = getState()
     const live = ensureLive(s)
+    // Recover the args captured at tool_start — tool_end doesn't carry them, and
+    // the committed/snapshot tool summary needs them or it renders "name: undefined".
+    const started = live.activeTools.find(t => t.toolCallId === toolCallId)
     live.activeTools = live.activeTools.filter(t => t.toolCallId !== toolCallId)
-    live.tools.push({toolName, args: undefined, result, isError})
+    live.tools.push({toolName, args: started ? started.args : undefined, result, isError})
     s.sink({type: 'tool_end', toolCallId, toolName, result, isError})
 }
 

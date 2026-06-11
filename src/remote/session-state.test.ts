@@ -48,9 +48,11 @@ describe('session-state mutators', () => {
         expect(getState().live?.activeTools).toHaveLength(1)
         endTool('t1', 'bash', 'output', false)
         expect(getState().live?.activeTools).toHaveLength(0)
+        // args captured at startTool must survive onto the completed tool, or the
+        // tool summary renders "bash: undefined" after the turn is committed.
         expect(getState().live?.tools).toContainEqual({
             toolName: 'bash',
-            args: undefined,
+            args: {command: 'ls'},
             result: 'output',
             isError: false
         })
@@ -97,6 +99,7 @@ describe('snapshot()', () => {
         expect(last.role).toBe('assistant')
         expect(last.text).toBe('sure')
         expect(last.tools).toHaveLength(1)
+        expect(last.tools[0].args).toEqual({command: 'ls'}) // args survive into the committed turn
     })
 
     it('reflects an in-progress turn so a mid-stream joiner sees partial state', () => {
