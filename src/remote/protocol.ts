@@ -14,9 +14,9 @@ export interface PromptResolvedMessage {
     id: string
 }
 
+/** The single task-widget slot. `lines: null` clears it. */
 export interface WidgetMessage {
     type: 'widget'
-    key: string
     lines: string[] | null
 }
 
@@ -51,9 +51,13 @@ export interface ResetMessage {
     type: 'reset'
 }
 
-/** Server → browser messages added by the integration. The existing
- *  history / text_delta / tool_* / agent_* / client_count / user_message messages are
- *  emitted ad hoc by events.ts / server.ts and are not enumerated here. */
+/** The full authoritative state sent to a (re)connecting client. Defined in
+ *  session-state.ts (its serializer); re-exported here as part of the wire type. */
+export type {SnapshotMessage} from './session-state.js'
+
+/** Server → browser messages. The live text_delta / tool_* / agent_* /
+ *  client_count / user_message deltas are emitted by the SessionState mutators
+ *  and not all enumerated here; the snapshot below carries the full state. */
 export type ServerMessage =
     | PromptMessage
     | PromptResolvedMessage
@@ -62,6 +66,7 @@ export type ServerMessage =
     | ViewerMessage
     | ContextMessage
     | ResetMessage
+    | import('./session-state.js').SnapshotMessage
 
 /** Browser → server messages. */
 export interface ClientChatMessage {
