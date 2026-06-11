@@ -5,10 +5,9 @@ import {
     WIDGET_LAST_LINE_MAX,
     type AutoLoaderState,
     type WidgetState,
-    startWidget,
-    WIDGET_KEY
+    startWidget
 } from './widget.js'
-import {getBridge} from '../remote/bridge.js'
+import {getState, _setSink, reset} from '../remote/session-state.js'
 
 describe('buildAutoLoaderLines', () => {
     const base: AutoLoaderState = {
@@ -64,27 +63,26 @@ describe('formatContextDetail', () => {
     })
 })
 
-test('startWidget mirrors the rendered lines to the bridge', () => {
-    const b = getBridge()
-    b.broadcast = msg => b.sent.push(msg)
-    b.sent.length = 0
-    b.activeWidgets.clear()
+test('startWidget mirrors the rendered lines to the single task slot', () => {
+    reset()
+    const sent: unknown[] = []
+    _setSink(msg => sent.push(msg))
     const state: WidgetState = {taskId: 'TASK_0001', title: 'demo', phase: 'grill', startedAt: 0}
     const ctx = {
         hasUI: true,
         ui: {theme: {fg: (_: string, s: string) => s}, setWidget: () => {}}
     } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
     const stop = startWidget(ctx, () => state)
-    expect(b.activeWidgets.has(WIDGET_KEY)).toBe(true)
-    expect(b.sent.some(m => (m as {type: string}).type === 'widget')).toBe(true)
+    expect(getState().taskWidget).not.toBeNull()
+    expect(sent.some(m => (m as {type: string}).type === 'widget')).toBe(true)
     stop()
-    // Stopping must clear the remote widget too, otherwise the browser keeps
+    // Stopping must clear the remote slot too, otherwise the browser keeps
     // showing the status panel after handoff. (Symmetric with startAutoLoader.)
-    expect(b.activeWidgets.has(WIDGET_KEY)).toBe(false)
+    expect(getState().taskWidget).toBeNull()
     expect(
-        b.sent.some(m => {
-            const w = m as {type: string; key?: string; lines?: unknown}
-            return w.type === 'widget' && w.key === WIDGET_KEY && w.lines === null
+        sent.some(m => {
+            const w = m as {type: string; lines?: unknown}
+            return w.type === 'widget' && w.lines === null
         })
     ).toBe(true)
 })

@@ -1,8 +1,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
-import {broadcast} from './broadcast.js'
 import {getBridge, dispatchRemoteLine, dispatchRemoteNewSession, makeShimmedCtx} from './bridge.js'
 import {setupEvents} from './events.js'
-import {HistoryBuffer} from './history.js'
+import {reset, addUserTurn} from './session-state.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
@@ -25,8 +24,6 @@ if (!_g.__piRemote) _g.__piRemote = {server: null, send: null, serveResult: null
 const S = _g.__piRemote!
 
 export function registerRemote(pi: ExtensionAPI): void {
-    const history = new HistoryBuffer(20)
-
     async function ensureServer(): Promise<ServerHandle> {
         if (S.server) return S.server
         S.server = await startServer(
@@ -43,7 +40,7 @@ export function registerRemote(pi: ExtensionAPI): void {
                 }
                 dispatchRemoteLine(text, {
                     onPlain: plain => {
-                        history.addUserMessage(plain)
+                        addUserTurn(plain)
                         if (isAgentIdle()) {
                             S.send?.(plain)
                         } else {
@@ -52,8 +49,7 @@ export function registerRemote(pi: ExtensionAPI): void {
                     }
                 })
             },
-            wsUrl => html(wsUrl),
-            () => history.getEntries()
+            wsUrl => html(wsUrl)
         )
         // Hands-off HTTPS: point Tailscale serve at our port so phones get a
         // secure context. Best-effort — any failure degrades to the http URL.
@@ -66,13 +62,11 @@ export function registerRemote(pi: ExtensionAPI): void {
     pi.on('session_start', (_event, ctx) => {
         S.send = (text, opts) => (opts ? pi.sendUserMessage(text, opts) : pi.sendUserMessage(text))
         // A new session (incl. /new and the /task handoff's newSession) means the
-        // browser is showing a stale transcript/widgets — wipe both ends.
+        // browser is showing a stale transcript/widgets — wipe the authoritative
+        // state and tell connected clients to clear.
         const bridge = getBridge()
-        bridge.activeWidgets.clear()
-        bridge.activePrompt = null
-        bridge.lastContextUsage = null
-        broadcast({type: 'reset'})
-        setupEvents(pi, history, broadcast)
+        reset()
+        setupEvents(pi)
         // Seed a shimmed ctx so commands that don't need newSession (/task-list,
         // /task-cancel, /task-auto-cancel) work immediately from the remote without
         // any terminal interaction. Only overwrite if null or already shimmed —

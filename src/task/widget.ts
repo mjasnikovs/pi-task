@@ -7,7 +7,7 @@
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-file.js'
-import {publishWidget} from '../remote/bridge.js'
+import {setTaskWidget} from '../remote/session-state.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -126,7 +126,7 @@ export function startWidget(
         } catch {
             /* stale ctx */
         }
-        publishWidget(WIDGET_KEY, plain)
+        setTaskWidget(plain)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -138,7 +138,7 @@ export function startWidget(
         } catch {
             /* stale ctx */
         }
-        publishWidget(WIDGET_KEY, undefined)
+        setTaskWidget(undefined)
     }
 }
 
@@ -191,7 +191,7 @@ export function startAutoLoader(
         } catch {
             /* stale ctx */
         }
-        publishWidget(AUTO_WIDGET_KEY, plain)
+        setTaskWidget(plain)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -203,7 +203,7 @@ export function startAutoLoader(
         } catch {
             /* stale ctx */
         }
-        publishWidget(AUTO_WIDGET_KEY, undefined)
+        setTaskWidget(undefined)
     }
 }
 
@@ -230,14 +230,14 @@ export function flashTerminalWidget(
         :   `✘ ${taskId} failed${reason ? ': ' + reason : ''}`
     try {
         ctx.ui.setWidget(WIDGET_KEY, [line])
-        publishWidget(WIDGET_KEY, [plainLine])
+        setTaskWidget([plainLine])
     } catch {
         /* stale ctx */
     }
     setTimeout(() => {
         try {
             ctx.ui.setWidget(WIDGET_KEY, undefined)
-            publishWidget(WIDGET_KEY, undefined)
+            setTaskWidget(undefined)
         } catch {
             /* stale ctx */
         }

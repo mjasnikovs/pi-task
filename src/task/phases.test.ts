@@ -20,6 +20,7 @@ import {writeTaskFile} from './task-io.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
 import {getBridge, answerPrompt} from '../remote/bridge.js'
+import {getState, _setSink, reset} from '../remote/session-state.js'
 
 describe('extractToolingCommands', () => {
     test('parses single-column entry', () => {
@@ -861,7 +862,7 @@ describe('phaseGrill', () => {
 
     test('phaseGrill completes from a remote answer when local input never resolves', async () => {
         const b = getBridge()
-        b.broadcast = () => {} // no real WS
+        _setSink(() => {}) // prompt flows through SessionState; no real WS
         // Local input that never settles → only a remote answer can resolve ask().
         const noLocalCtx = {
             hasUI: true,
@@ -873,7 +874,8 @@ describe('phaseGrill', () => {
         } as unknown as ExtensionCommandContext
         // Poll the bridge and answer each question as soon as it goes active.
         const poll = setInterval(() => {
-            if (b.activePrompt) answerPrompt(b.activePrompt.id, 'remote pick')
+            const p = getState().prompt
+            if (p) answerPrompt(p.id, 'remote pick')
         }, 5)
         try {
             await withTmpTaskDir(async cwd => {
@@ -894,7 +896,7 @@ describe('phaseGrill', () => {
             })
         } finally {
             clearInterval(poll)
-            b.activePrompt = null
+            reset()
             b.pending.clear()
         }
     })
