@@ -220,7 +220,7 @@ describe('startServer', () => {
 function once(ws: WebSocket, type: string): Promise<Record<string, unknown>> {
     return new Promise(resolve => {
         ws.on('message', d => {
-            const m = JSON.parse(d.toString())
+            const m = JSON.parse(d.toString()) as Record<string, unknown>
             if (m.type === type) resolve(m)
         })
     })

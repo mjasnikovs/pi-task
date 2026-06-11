@@ -54,7 +54,8 @@ describe('loadOrCreateVapidKeys', () => {
         writeFileSync(file, 'not json{')
         const keys = loadOrCreateVapidKeys(file)
         expect(typeof keys.publicKey).toBe('string')
-        expect(JSON.parse(readFileSync(file, 'utf8')).publicKey).toBe(keys.publicKey)
+        const stored = JSON.parse(readFileSync(file, 'utf8')) as {publicKey: string}
+        expect(stored.publicKey).toBe(keys.publicKey)
     })
 })
 

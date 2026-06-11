@@ -1,11 +1,6 @@
 import {describe, expect, test} from 'bun:test'
 import {runChild, summarizeToolArgs} from './child-process.js'
-import {
-    fakeSpawnSimple,
-    fakeSpawnQueue,
-    agentEndResponse,
-    makeProc
-} from '../test-utils/fake-spawn.js'
+import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
 import type {LoopHit, SpawnFn} from './child-process.js'
 
 const noopInvocation = {command: 'pi', args: ['--print']}

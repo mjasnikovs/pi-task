@@ -38,8 +38,8 @@ export interface FakeCtxHandle {
         /** Ordered log of sendUserMessage ('send') / waitForIdle ('idle') calls. */
         calls: string[]
     }
-    queueInput(value: string | undefined): void
-    queueEditor(value: string | undefined): void
+    queueInput: (value: string | undefined) => void
+    queueEditor: (value: string | undefined) => void
 }
 
 // Matches the message the real extension runtime throws from a stale ctx.
@@ -129,10 +129,10 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         ctx: makeCtx(),
         cwd,
         captured,
-        queueInput(value: string | undefined) {
+        queueInput: (value: string | undefined) => {
             inputQueue.push(value)
         },
-        queueEditor(value: string | undefined) {
+        queueEditor: (value: string | undefined) => {
             editorQueue.push(value)
         }
     }

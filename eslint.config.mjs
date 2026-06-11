@@ -62,5 +62,14 @@ export default tseslint.config(
             properties: 0,
             camelcase: 0
         }
+    },
+    {
+        // Test mocks deliberately mark methods `async` to match the real
+        // async signatures they stand in for, even when the fake body has
+        // no `await`. That's intentional, so don't flag it here.
+        files: ['**/*.test.ts', 'src/test-utils/**/*.ts'],
+        rules: {
+            '@typescript-eslint/require-await': 'off'
+        }
     }
 )
