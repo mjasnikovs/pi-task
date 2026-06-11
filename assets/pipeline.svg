@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 396" width="900" height="396" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique phases, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e7681"/>
+    </marker>
+    <style>
+      .title  { font-size:17px; font-weight:600; fill:#e6edf3; }
+      .cap    { font-size:11.5px; fill:#8b949e; }
+      .num    { font-size:11px; font-weight:700; }
+      .code   { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+      .foot   { font-size:11.5px; fill:#768390; font-style:italic; }
+    </style>
+  </defs>
+
+  <rect x="6" y="6" width="888" height="384" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- input -->
+  <rect x="220" y="32" width="460" height="38" rx="19" fill="#161b22" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="450" y="57" text-anchor="middle" class="code" font-size="14"><tspan fill="#a371f7" font-weight="700">/task</tspan><tspan fill="#c9d1d9" dx="7">add rate-limiting to the public API</tspan></text>
+  <line x1="450" y1="70" x2="450" y2="106" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- phase row -->
+  <!-- refine -->
+  <g>
+    <rect x="32" y="118" width="150" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="32" y="118" width="5" height="72" rx="2.5" fill="#58a6ff"/>
+    <text x="50" y="138" class="num" fill="#58a6ff">1</text>
+    <text x="107" y="161" text-anchor="middle" class="title">refine</text>
+  </g>
+  <text x="107" y="210" text-anchor="middle" class="cap">sharpen the</text>
+  <text x="107" y="225" text-anchor="middle" class="cap">raw prompt</text>
+
+  <!-- research -->
+  <g>
+    <rect x="203.5" y="118" width="150" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="203.5" y="118" width="5" height="72" rx="2.5" fill="#39c5cf"/>
+    <text x="221.5" y="138" class="num" fill="#39c5cf">2</text>
+    <text x="278.5" y="161" text-anchor="middle" class="title">research</text>
+  </g>
+  <text x="278.5" y="210" text-anchor="middle" class="cap">parallel sub-agents:</text>
+  <text x="278.5" y="225" text-anchor="middle" class="cap">files · APIs ·</text>
+  <text x="278.5" y="240" text-anchor="middle" class="cap">context · tooling</text>
+
+  <!-- grill -->
+  <g>
+    <rect x="375" y="118" width="150" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="375" y="118" width="5" height="72" rx="2.5" fill="#d29922"/>
+    <text x="393" y="138" class="num" fill="#d29922">3</text>
+    <text x="450" y="161" text-anchor="middle" class="title">grill</text>
+  </g>
+  <text x="450" y="210" text-anchor="middle" class="cap">clarifying Q&amp;A</text>
+  <text x="450" y="225" text-anchor="middle" class="cap">(auto, or you answer)</text>
+
+  <!-- compose -->
+  <g>
+    <rect x="546.5" y="118" width="150" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="546.5" y="118" width="5" height="72" rx="2.5" fill="#3fb950"/>
+    <text x="564.5" y="138" class="num" fill="#3fb950">4</text>
+    <text x="621.5" y="161" text-anchor="middle" class="title">compose</text>
+  </g>
+  <text x="621.5" y="210" text-anchor="middle" class="cap">assemble</text>
+  <text x="621.5" y="225" text-anchor="middle" class="cap">the spec</text>
+
+  <!-- critique -->
+  <g>
+    <rect x="718" y="118" width="150" height="72" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="718" y="118" width="5" height="72" rx="2.5" fill="#a371f7"/>
+    <text x="736" y="138" class="num" fill="#a371f7">5</text>
+    <text x="793" y="161" text-anchor="middle" class="title">critique</text>
+  </g>
+  <text x="793" y="210" text-anchor="middle" class="cap">triage, rewrite</text>
+  <text x="793" y="225" text-anchor="middle" class="cap">if not clean</text>
+
+  <!-- inter-phase arrows -->
+  <line x1="182"   y1="154" x2="201.5" y2="154" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="353.5" y1="154" x2="373"   y2="154" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="525"   y1="154" x2="544.5" y2="154" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="696.5" y1="154" x2="716"   y2="154" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- to result -->
+  <line x1="450" y1="252" x2="450" y2="292" stroke="#6e7681" stroke-width="1.5" marker-end="url(#ah)"/>
+
+  <!-- result -->
+  <rect x="120" y="296" width="660" height="48" rx="12" fill="#0f261a" stroke="#2ea043" stroke-width="1.5"/>
+  <text x="450" y="318" text-anchor="middle" font-size="14" font-weight="600" fill="#e6edf3">final spec  →  delivered to your main <tspan class="code" fill="#7ee787">pi</tspan> session</text>
+  <text x="450" y="334" text-anchor="middle" class="cap">same chat — no handoff, no copy-paste</text>
+
+  <!-- footnote -->
+  <text x="450" y="372" text-anchor="middle" class="foot">every phase boundary is persisted to <tspan class="code" font-style="normal">.pi-tasks/TASK_NNNN.md</tspan> — crash-safe &amp; resumable</text>
+</svg>

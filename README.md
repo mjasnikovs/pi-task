@@ -7,8 +7,12 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-533%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-559%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
+
+<br/>
+
+<img src="./assets/pipeline.svg" alt="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable." width="820"/>
 
 </div>
 
@@ -16,24 +20,7 @@
 
 ## What it does
 
-Local models drift. Ask one to plan a non-trivial change and it skips context, hallucinates APIs, and forgets what you actually asked. `pi-task` fixes this by **not trusting a single prompt** — it drives your request through a fixed, persisted pipeline of small, verifiable steps, then hands the main session a clean spec to execute.
-
-```
-/task add rate-limiting to the public API
-        │
-        ▼
-  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-  │  refine  │──▶│ research │──▶│  grill   │──▶│ compose  │──▶│ critique │
-  └──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
-   sharpen the    parallel        clarifying     assemble        triage +
-   raw prompt     sub-agents:     questions      the spec        rewrite if
-                  files · APIs ·  (auto- or                      the draft
-                  context ·       you answer)                    isn't clean
-                  tooling
-        │
-        ▼
-  final spec ──▶ main pi session   (you keep working in the same chat)
-```
+Local models drift. Ask one to plan a non-trivial change and it skips context, hallucinates APIs, and forgets what you actually asked. `pi-task` fixes this by **not trusting a single prompt** — it drives your request through a fixed, persisted pipeline of small, verifiable steps (shown above), then hands the main session a clean spec to execute.
 
 Every phase boundary is written to `.pi-tasks/TASK_NNNN.md`, so a task survives a crash, a restart, or a `/task-cancel` — pick it back up with `/task-resume`.
 
@@ -51,7 +38,7 @@ Every phase boundary is written to `.pi-tasks/TASK_NNNN.md`, so a task survives 
 pi install npm:@mjasnikovs/pi-task
 ```
 
-> Requires [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (the Earendil coding agent) ≥ 0.75.
+> Requires [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (the Earendil coding agent) ≥ 0.78.
 
 ## Slash commands
 
@@ -82,22 +69,11 @@ The finished spec is delivered to your main `pi` conversation via `sendUserMessa
 
 A real feature is usually several tasks, not one. `/task-auto` is a thin planner on top of the single-task pipeline:
 
-```
-/task-auto add multi-tenant billing
-        │
-        ▼
-  ┌──────────┐   ┌──────────┐   ┌─────────────┐
-  │ clarify  │──▶│ decompose│──▶│ TASK_AUTO_…  │   resumable list of task titles
-  │ gray     │   │ → titles │   │ .md (titles) │
-  │ areas    │   └──────────┘   └──────┬───────┘
-  └──────────┘                         │
-                          ┌────────────▼─────────────┐
-                          │  for each unchecked title │
-                          │   → full /task pipeline    │  (spec + implement)
-                          │   → wait until it finishes │
-                          │   → check the box, next    │
-                          └────────────────────────────┘
-```
+<div align="center">
+
+<img src="./assets/task-auto.svg" alt="/task-auto plans a feature: it clarifies the gray areas, decomposes the answers into an ordered list of task titles written to TASK_AUTO_NNNN.md, then runs each unchecked title through the full /task pipeline one at a time, ticking the box before moving on." width="820"/>
+
+</div>
 
 - **It only produces titles.** All the depth — refine, research, grill, compose, critique — is `/task`'s job, run fresh per title. `/task-auto` never researches or specs anything itself.
 - **Clarify first.** It asks the few clarifying questions whose answers change how the feature splits, then decomposes the answers into an ordered list of task titles written to `.pi-tasks/TASK_AUTO_NNNN.md`.
@@ -149,9 +125,9 @@ Runs a Brave Search query and returns a compact markdown list (title · URL · s
 > **Requires** `BRAVE_SEARCH_API_KEY` (also accepted as `BRAVE_API_KEY`). Grab a free key at [api.search.brave.com/app/keys](https://api.search.brave.com/app/keys).
 
 ### `pi-worker-fetch`
-Fetches a URL, cleans the HTML to markdown ([Readability](https://github.com/mozilla/readability) + [Turndown](https://github.com/mixmark-io/turndown)), then hands it to an isolated child that extracts **only** the content answering your `query`. The parent never sees the raw page.
+Fetches a URL, cleans HTML to markdown ([Readability](https://github.com/mozilla/readability) + [Turndown](https://github.com/mixmark-io/turndown)), then hands it to an isolated child that extracts **only** the content answering your `query`. The parent never sees the raw page.
 
-- Only `text/html` responses — PDFs, JSON, etc. return a clear error.
+- HTML is cleaned; text formats (plain text, markdown, JSON, XML/feeds, `llms.txt`, …) pass through verbatim. Binary responses — PDFs, images, octet-streams — return a clear error.
 - Bodies over 2 MB are rejected.
 - The extraction child runs with `--no-tools` to mitigate visible-text prompt injection.
 
@@ -179,7 +155,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 533 tests across 45 files
+bun test src/      # 559 tests across 46 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```

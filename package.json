@@ -7,6 +7,7 @@
     "types": "./dist/index.d.ts",
     "files": [
         "dist",
+        "assets",
         "README.md",
         "LICENSE"
     ],
