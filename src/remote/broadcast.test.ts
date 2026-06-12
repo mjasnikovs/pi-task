@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach} from 'bun:test'
-import {addClient, removeClient, clientCount, broadcast, sendTo} from './broadcast.js'
+import {addClient, removeClient, broadcast, sendTo} from './broadcast.js'
 
 function mockWs(open = true) {
     const sent: string[] = []
@@ -16,26 +16,6 @@ function mockWs(open = true) {
 describe('broadcast', () => {
     beforeEach(() => {
         // Each test adds/removes its own clients; counts are relative
-    })
-
-    it('clientCount starts at 0 after remove all', () => {
-        expect(clientCount()).toBeGreaterThanOrEqual(0)
-    })
-
-    it('addClient increases count', () => {
-        const {ws} = mockWs()
-        const before = clientCount()
-        addClient(ws)
-        expect(clientCount()).toBe(before + 1)
-        removeClient(ws)
-    })
-
-    it('removeClient decreases count', () => {
-        const {ws} = mockWs()
-        addClient(ws)
-        const after = clientCount()
-        removeClient(ws)
-        expect(clientCount()).toBe(after - 1)
     })
 
     it('broadcast sends JSON to open clients', () => {

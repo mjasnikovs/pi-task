@@ -1,7 +1,7 @@
 import {createServer} from 'node:http'
 import {networkInterfaces} from 'node:os'
 import {WebSocketServer} from 'ws'
-import {addClient, removeClient, clientCount, broadcast, sendTo} from './broadcast.js'
+import {addClient, removeClient, sendTo} from './broadcast.js'
 import {answerPrompt} from './bridge.js'
 import {getState, snapshot} from './session-state.js'
 import {isClientMessage} from './protocol.js'
@@ -152,7 +152,6 @@ export async function startServer(
         handle.onFirstConnect = null
         // One authoritative snapshot — the client replaces its whole view with it.
         sendTo(ws, snapshot())
-        broadcast({type: 'client_count', count: clientCount()})
 
         ws.on('message', data => {
             let msg: unknown
@@ -174,7 +173,6 @@ export async function startServer(
 
         ws.on('close', () => {
             removeClient(ws)
-            broadcast({type: 'client_count', count: clientCount()})
         })
     })
 

@@ -14,10 +14,6 @@ export function removeClient(ws: WebSocket): void {
     clients.delete(ws)
 }
 
-export function clientCount(): number {
-    return clients.size
-}
-
 export function broadcast(msg: unknown): void {
     const json = JSON.stringify(msg)
     for (const ws of clients) {

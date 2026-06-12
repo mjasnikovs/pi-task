@@ -26,8 +26,7 @@ describe('html()', () => {
             'chat-log',
             'input',
             'send',
-            'reconnect-overlay',
-            'client-status'
+            'reconnect-overlay'
         ]) {
             expect(out).toContain(`id="${id}"`)
         }
@@ -211,14 +210,12 @@ describe('html()', () => {
         expect(out).toContain('25EF') // ◯ notifications off
     })
 
-    it('renders a colored connection-status dot with no text label', () => {
+    it('has no connection-status dot or client counter', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('id="conn-dot"')
-        expect(out).not.toContain('id="client-label"')
-        expect(out).not.toContain('client connected')
-        expect(out).not.toContain('clients connected')
-        expect(out).toContain('25CF') // ● connected / disconnected
-        expect(out).toContain('25CB') // ○ connecting
+        expect(out).not.toContain('id="conn-dot"')
+        expect(out).not.toContain('id="client-status"')
+        expect(out).not.toContain('client_count')
+        expect(out).not.toContain('setConn')
     })
 
     it('uses a terminal braille spinner (not bouncing dots) for the thinking indicator', () => {

@@ -61,10 +61,6 @@ export function html(wsUrl: string): string {
       96% { text-shadow: 1px 0 var(--teal), -1px 0 var(--red); transform: translate(-1px, 0); }
     }
     @media (prefers-reduced-motion: reduce) { #header .title { animation: none; } }
-    #header .status { color: var(--subtext0); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
-    #header .cdot { color: var(--yellow); }
-    #header .cdot.up { color: var(--green); }
-    #header .cdot.down { color: var(--red); }
     #header .hgroup { display: flex; align-items: center; gap: 10px; }
     #bell {
       background: none; border: none; color: var(--subtext1); cursor: pointer;
@@ -237,7 +233,6 @@ export function html(wsUrl: string): string {
   <div id="header">
     <span class="title">pi-task remote</span>
     <div class="hgroup">
-      <span class="status" id="client-status"><span class="cdot" id="conn-dot">&#x25CB;</span></span>
       <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
     </div>
   </div>
@@ -275,12 +270,6 @@ export function html(wsUrl: string): string {
     const contextFill = document.getElementById('context-bar-fill');
     function setContextBar(usage) {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
-    }
-    const connDot = document.getElementById('conn-dot');
-    // state: 'connecting' (○ yellow) | 'up' (● green) | 'down' (● red)
-    function setConn(state) {
-      connDot.textContent = state === 'connecting' ? '\\u25CB' : '\\u25CF';
-      connDot.className = 'cdot' + (state === 'up' ? ' up' : state === 'down' ? ' down' : '');
     }
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
@@ -945,9 +934,6 @@ export function html(wsUrl: string): string {
           // Seeds the bar for a client that joined mid-session.
           setContextBar(msg.contextUsage);
           break;
-        case 'client_count':
-          setConn('up');
-          break;
         case 'prompt':
           showPrompt(msg);
           break;
@@ -1017,7 +1003,6 @@ export function html(wsUrl: string): string {
         if (reconnectAnim) { clearInterval(reconnectAnim); reconnectAnim = null; }
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
-        setConn('up');
         setEnabled(true);
       });
       ws.addEventListener('message', (e) => {
@@ -1025,7 +1010,6 @@ export function html(wsUrl: string): string {
       });
       ws.addEventListener('close', () => {
         setEnabled(false);
-        setConn('down');
         reconnectOverlay.classList.add('visible');
         // Animate the same braille spinner used elsewhere, with a live countdown.
         const until = Date.now() + reconnectDelay;
