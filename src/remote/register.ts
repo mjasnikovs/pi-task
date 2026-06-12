@@ -1,4 +1,5 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
+import {getConfig} from '../config/config.js'
 import {getBridge, dispatchRemoteLine, dispatchRemoteNewSession, makeShimmedCtx} from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn} from './session-state.js'
@@ -80,9 +81,11 @@ export function registerRemote(pi: ExtensionAPI): void {
         ) {
             bridge.currentCtx = makeShimmedCtx(ctx)
         }
-        void ensureServer().catch(err =>
-            ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')
-        )
+        if (getConfig().remote) {
+            void ensureServer().catch(err =>
+                ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')
+            )
+        }
     })
 
     pi.on('session_shutdown', (event, _ctx) => {
@@ -99,8 +102,12 @@ export function registerRemote(pi: ExtensionAPI): void {
     })
 
     pi.registerCommand('remote', {
-        description: 'Show the remote QR code & URLs (the server is always running)',
+        description: 'Show the remote QR code & URLs.',
         handler: async (args, ctx) => {
+            if (!getConfig().remote) {
+                ctx.ui.notify('Remote is disabled — enable it in /task-config.', 'info')
+                return
+            }
             if (args.trim() === 'stop') {
                 if (S.server) {
                     const port = S.server.port

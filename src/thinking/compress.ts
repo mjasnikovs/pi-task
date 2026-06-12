@@ -1,4 +1,5 @@
 import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
+import {getConfig} from '../config/config.js'
 import {
     collectCompressible,
     MIN_THINKING_CHARS,
@@ -95,6 +96,7 @@ const pct = (from: number, to: number): number => Math.round((100 * (from - to))
 
 export function registerThinkingCompression(pi: ExtensionAPI): void {
     pi.on('message_end', async (event, ctx) => {
+        if (!getConfig().compressReasoning) return
         const message = event.message as AssistantMessageLike
         const targets = collectCompressible(message, MIN_THINKING_CHARS)
         if (targets.length === 0) return

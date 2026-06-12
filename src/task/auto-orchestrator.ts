@@ -27,6 +27,7 @@ import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
+import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 
 /**
@@ -238,7 +239,10 @@ function defaultDeps(
                 resumeId: opts?.resumeId,
                 onStart: opts?.onStart
             }),
-        commit: (cwd2, message) => gitCommitAll(cwd2, message, signal)
+        commit: (cwd2, message) =>
+            getConfig().autoCommit ?
+                gitCommitAll(cwd2, message, signal)
+            :   Promise.resolve({committed: false, reason: 'auto-commit disabled'})
     }
 }
 
