@@ -26,7 +26,6 @@ export interface ClarifyQuestion {
 
 export const GRILL_LINE_RE = /^\s*\d+[.)]\s+(.+)$/
 export const SUGGESTED_LINE_RE = /^\s*SUGGESTED:\s*(.*)$/i
-export const TITLE_MAX_CHARS = 120
 
 // ─── Verify block parser ─────────────────────────────────────────────────────
 
@@ -235,9 +234,7 @@ export function deriveTitle(refined: string): string {
                 if (line.length === 0) continue
                 const headerCheck = line.replace(/^#+\s+/, '')
                 if (/^(CONSTRAINTS|KNOWN-UNKNOWNS)\s*:?\s*$/i.test(headerCheck)) break
-                return line.length > TITLE_MAX_CHARS ?
-                        line.slice(0, TITLE_MAX_CHARS - 1) + '…'
-                    :   line
+                return line
             }
             break
         }
@@ -247,7 +244,7 @@ export function deriveTitle(refined: string): string {
         if (line.length === 0) continue
         line = line.replace(/^#+\s+/, '').replace(/^GOAL\s*:?\s*/i, '')
         if (line.length === 0) continue
-        return line.length > TITLE_MAX_CHARS ? line.slice(0, TITLE_MAX_CHARS - 1) + '…' : line
+        return line
     }
     return '(untitled)'
 }
