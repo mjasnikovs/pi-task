@@ -21,13 +21,7 @@ describe('html()', () => {
 
     it('contains required DOM element ids', () => {
         const out = html('ws://localhost:7600/ws')
-        for (const id of [
-            'context-bar-fill',
-            'chat-log',
-            'input',
-            'send',
-            'reconnect-overlay'
-        ]) {
+        for (const id of ['context-bar-fill', 'chat-log', 'input', 'send', 'reconnect-overlay']) {
             expect(out).toContain(`id="${id}"`)
         }
     })
