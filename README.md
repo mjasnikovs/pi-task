@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./assets/pipeline.svg" alt="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable." width="820"/>
+<img src="https://cdn.jsdelivr.net/npm/@mjasnikovs/pi-task/assets/pipeline.svg" alt="pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable." width="820"/>
 
-# <img src="./assets/pi-logo.svg" alt="" height="30" align="top"/> pi-task
+# <img src="https://cdn.jsdelivr.net/npm/@mjasnikovs/pi-task/assets/pi-logo.svg" alt="" height="30" align="top"/> pi-task
 
 **Deterministic spec-orchestration for local models — with bundled web, docs, fetch, and worker sub-agent tools.**
 
@@ -69,7 +69,7 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 
 <div align="center">
 
-<img src="./assets/task-auto.svg" alt="/task-auto plans a feature: it clarifies the gray areas, decomposes the answers into an ordered list of task titles written to TASK_AUTO_NNNN.md, then runs each unchecked title through the full /task pipeline one at a time, ticking the box before moving on." width="820"/>
+<img src="https://cdn.jsdelivr.net/npm/@mjasnikovs/pi-task/assets/task-auto.svg" alt="/task-auto plans a feature: it clarifies the gray areas, decomposes the answers into an ordered list of task titles written to TASK_AUTO_NNNN.md, then runs each unchecked title through the full /task pipeline one at a time, ticking the box before moving on." width="820"/>
 
 </div>
 
