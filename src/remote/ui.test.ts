@@ -64,6 +64,20 @@ describe('html()', () => {
         expect(out).toContain('id="status-panel"')
     })
 
+    it('does not optimistically render the sender\'s own user bubble', () => {
+        // The server records remote-typed messages via addUserTurn, which
+        // broadcasts a user_message back to ALL clients — including the sender.
+        // If sendMessage ALSO renders the bubble locally, the sender sees it
+        // twice. User bubbles must come solely from the user_message delta.
+        const out = html('ws://localhost:7600/ws')
+        const start = out.indexOf('function sendMessage()')
+        const end = out.indexOf('sendBtn.addEventListener', start)
+        expect(start).toBeGreaterThan(-1)
+        expect(end).toBeGreaterThan(start)
+        const sendBody = out.slice(start, end)
+        expect(sendBody).not.toContain('addBubble(')
+    })
+
     it('renders a notification bell toggle in the header', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain('id="bell"')

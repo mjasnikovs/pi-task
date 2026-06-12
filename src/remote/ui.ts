@@ -973,9 +973,9 @@ export function html(wsUrl: string): string {
       cmdActive = []; cmdIndex = -1; renderSuggestions();
       // Slash commands are handled server-side and produce no chat turn.
       if (text.startsWith('/')) return;
-      // Optimistic echo: remote-typed messages arrive as source "extension",
-      // which the server does not broadcast back, so render locally now.
-      addBubble('user', text);
+      // The server records the message via addUserTurn and broadcasts a
+      // user_message back to every client (us included), which renders the
+      // bubble. Don't render it here too, or the sender sees it twice.
       setEnabled(false);
       showThinking();
     }
