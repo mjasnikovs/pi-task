@@ -3,10 +3,12 @@ import {registerTask} from './task/orchestrator.js'
 import {registerTaskAuto} from './task/auto-orchestrator.js'
 import {registerWorkers} from './workers/index.js'
 import {registerRemote} from './remote/register.js'
+import {registerContextCompression} from './context/compress.js'
 
 export default function (pi: ExtensionAPI): void {
     registerTask(pi)
     registerTaskAuto(pi)
     registerWorkers(pi)
     registerRemote(pi)
+    registerContextCompression(pi)
 }
