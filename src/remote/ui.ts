@@ -118,6 +118,7 @@ export function html(wsUrl: string): string {
       border-top: 1px solid var(--surface0);
       white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
     }
+    .tool-spin { color: var(--mauve); margin-left: 6px; font-family: ui-monospace, monospace; font-size: 13px; }
     .code-block {
       background: var(--crust); border: 1px solid var(--surface0);
       border-radius: 6px; overflow: hidden; margin: 4px 0;
@@ -565,7 +566,11 @@ export function html(wsUrl: string): string {
         pre.textContent = toolResultText(p.result);
         d.appendChild(pre);
       } else {
-        toolCallMap[p.toolCallId] = d; // a later tool_end delta fills the result
+        const sp = document.createElement('span');
+        sp.className = 'tool-spin spin';
+        d.querySelector('summary').appendChild(sp);
+        startSpin();
+        toolCallMap[p.toolCallId] = d;
       }
       return d;
     }
@@ -886,12 +891,19 @@ export function html(wsUrl: string): string {
         case 'tool_start': {
           hideThinking();
           const argsStr = typeof msg.args === 'string' ? msg.args : JSON.stringify(msg.args);
-          toolCallMap[msg.toolCallId] = addToolCall(msg.toolName, argsStr, false);
+          const d = addToolCall(msg.toolName, argsStr, false);
+          const sp = document.createElement('span');
+          sp.className = 'tool-spin spin';
+          d.querySelector('summary').appendChild(sp);
+          startSpin();
+          toolCallMap[msg.toolCallId] = d;
           break;
         }
         case 'tool_end': {
           const d = toolCallMap[msg.toolCallId];
           if (d) {
+            const sp = d.querySelector('.tool-spin');
+            if (sp) { sp.remove(); stopSpinIfIdle(); }
             if (msg.isError) d.classList.add('error');
             const pre = document.createElement('pre');
             pre.textContent = toolResultText(msg.result);
