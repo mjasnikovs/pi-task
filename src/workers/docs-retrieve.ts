@@ -15,7 +15,7 @@ export interface RetrieveOptions {
     contentBudget?: number
 }
 
-const DEFAULT_LIMIT = 8
+const DEFAULT_LIMIT = 50
 const DEFAULT_BUDGET = 24_000
 const MIN_TOKEN_LEN = 2
 const FALLBACK_DTS_CHARS = 12_000

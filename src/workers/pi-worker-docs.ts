@@ -15,6 +15,7 @@ import {type SpawnFn, runChild, CHILD_BASE_ARGS} from '../shared/child-process.j
 import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {textResult} from './shared.js'
+import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
 const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
 
@@ -23,11 +24,11 @@ const RENDER_QUERY_MAX = 100
 const Params = Type.Object({
     module: Type.String({
         description:
-            'Bare npm module name (e.g. "zod", "@scope/name", "react/jsx-runtime"). Must be installed in the project\'s node_modules.'
+            'Bare npm module name (e.g. "zod", "@scope/name", "react/jsx-runtime"), OR "." to look up the current project\'s own source code. npm packages must be installed in node_modules.'
     }),
     query: Type.String({
         description:
-            'What to extract from the module\'s docs. The child pi reads ranked chunks and returns ONLY content answering this.'
+            'What to extract from the docs. The child pi reads ranked chunks and returns ONLY content answering this.'
     })
 })
 
@@ -80,11 +81,20 @@ export function registerPiWorkerDocs(
             + '~/.cache/pi-worker/docs.sqlite, keyed by exact installed version; the '
             + 'registry lookup is best-effort and silently absent when offline.\n'
             + '\n'
+            + 'Pass module: "." to look up the CURRENT PROJECT\'S OWN SOURCE CODE instead '
+            + 'of an npm package. USE THIS when asked about what a function, class, type, '
+            + 'or module in this project does or exports — e.g. "what does orchestrator.ts '
+            + 'export?", "how does the requireAuth middleware work?", "what props does '
+            + 'ListingCard accept?". The project source is indexed from git-tracked .ts/.tsx '
+            + 'files and cached by max file mtime — always reflects the current state of '
+            + 'the working tree.\n'
+            + '\n'
             + 'Good fits:\n'
             + '- "What does library X export?" / "How does function Y work?"\n'
             + '- Confirming generic shapes, overload sets, exported types\n'
             + '- Pulling README configuration prose without burning context on raw markdown\n'
             + '- Checking the current latest published version of a package\n'
+            + '- "What does src/X.ts export?" / "How does this project\'s Y function work?"\n'
             + '\n'
             + 'Skip when:\n'
             + '- You need docs for a specific newer version than what is installed — use pi-worker-fetch on the upstream docs site',
@@ -104,6 +114,82 @@ export function registerPiWorkerDocs(
                     (globalThis.Bun.spawn as unknown as SpawnFn)
                 :   ((await import('node:child_process')).spawn as unknown as SpawnFn))
 
+            // ── Project source lookup ───────────────────────────────────────
+            if (params.module === '.') {
+                const openCache = internals.openCache ?? defaultOpenCache
+                let cache
+                let cacheError: string | undefined
+                try {
+                    cache = openCache()
+                } catch (err) {
+                    cacheError = err instanceof Error ? err.message : String(err)
+                }
+
+                if (!cache) {
+                    return textResult(
+                        `Project docs unavailable: cache open failed (${cacheError}).`,
+                        {}
+                    )
+                }
+
+                const retrieveChunks = internals.retrieveChunks ?? defaultRetrieveChunks
+                const projectResult = projectDocsRaw(cache, ctx.cwd, params.query, retrieveChunks)
+
+                if (projectResult.kind === 'error') {
+                    return textResult(`Project docs error: ${projectResult.message}`, {})
+                }
+                if (projectResult.kind === 'no_chunks') {
+                    return textResult(
+                        `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
+                        {hitCache: projectResult.hitCache, indexedFiles: projectResult.filesIngested}
+                    )
+                }
+
+                const {projectName, chunks, hitCache, filesIngested, indexingMs} = projectResult
+                const baseDetails: DocsDetails = {
+                    hitCache,
+                    chunksRetrieved: chunks.length,
+                    indexedFiles: filesIngested,
+                    indexingMs
+                }
+                const concatenated = chunks.map(c => c.content).join('\n\n')
+                const prompt = buildProjectPrompt(projectName, params.query, concatenated)
+                const invocation = getPiInvocation([...CHILD_ARGS, prompt])
+                const child = await runChild(spawn, invocation, ctx.cwd, signal)
+
+                if (child.aborted) {
+                    return textResult('Project docs lookup aborted.', {
+                        ...baseDetails,
+                        aborted: true,
+                        childExitCode: child.exitCode
+                    })
+                }
+                if (child.exitCode !== 0) {
+                    const tail = child.stderr.trim().slice(-500) || '(no stderr)'
+                    return textResult(`Worker exited ${child.exitCode}.\n${tail}`, {
+                        ...baseDetails,
+                        childExitCode: child.exitCode
+                    })
+                }
+
+                const parsed = parseChildOutput(child.stdout)
+                const verified =
+                    parsed.excerpt ?
+                        isExcerptInContent(parsed.excerpt, concatenated)
+                    :   undefined
+                const text = formatResultText(
+                    {name: projectName, version: 'local', root: ctx.cwd, entryDts: null, readme: null},
+                    parsed,
+                    verified
+                )
+                return textResult(text, {
+                    ...baseDetails,
+                    childExitCode: 0,
+                    excerptVerified: verified
+                })
+            }
+
+            // ── npm package lookup (existing path) ──────────────────────────
             const rawResult = await docsRaw({
                 pkg: params.module,
                 query: params.query,
@@ -210,8 +296,9 @@ export function registerPiWorkerDocs(
             const query = args.query.replace(/\s+/g, ' ').trim()
             const truncated =
                 query.length > RENDER_QUERY_MAX ? `${query.slice(0, RENDER_QUERY_MAX - 1)}…` : query
+            const label = args.module === '.' ? 'project' : args.module
             let text = theme.fg('toolTitle', theme.bold('pi-worker-docs '))
-            text += theme.fg('accent', args.module)
+            text += theme.fg('accent', label)
             text += `\n${theme.fg('dim', `  query: ${truncated}`)}`
             return new Text(text, 0, 0)
         }
