@@ -298,6 +298,15 @@ export function summarizeToolArgs(toolName: string, args: unknown): string {
     if (toolName === 'bash' && typeof a.command === 'string') {
         return a.command.replace(/\s+/g, ' ').trim()
     }
+    if (
+        toolName === 'pi-worker-docs' &&
+        typeof a.module === 'string' &&
+        typeof a.query === 'string'
+    ) {
+        const q = a.query.replace(/\s+/g, ' ').trim()
+        const truncated = q.length > 60 ? q.slice(0, 59) + '…' : q
+        return `${a.module} "${truncated}"`
+    }
     if (typeof a.file_path === 'string') return a.file_path
     if (typeof a.path === 'string') return a.path
     if (typeof a.filePath === 'string') return a.filePath
