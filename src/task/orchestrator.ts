@@ -222,6 +222,14 @@ export class TaskRunner {
         // any phase work — and recover it if the session dies mid-pipeline.
         if (this._onStart) await this._onStart(id)
 
+        // Wire up per-task debug log (<cwd>/.pi-tasks/TASK_XXXX-debug.log).
+        const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
+        this._deps.logDebug = (msg: string) => {
+            const line = `${new Date().toISOString()} ${msg}\n`
+            fsp.appendFile(debugLogPath, line).catch(() => {/* ignore */})
+        }
+        this._deps.logDebug(`run: start phase=${resumePhase}`)
+
         // Register as active.
         this._widgetState.taskId = id
         this._widgetState.title = title
@@ -255,6 +263,7 @@ export class TaskRunner {
                     continue
                 }
                 await advance(phase.name)
+                this._deps.logDebug?.(`phase:${phase.name}: start`)
                 const children: TimingEntry[] = []
                 this._currentPhaseChildren = children
                 const phaseStart = Date.now()
@@ -262,12 +271,10 @@ export class TaskRunner {
                 try {
                     out = await phase.run(this._deps, this._pc)
                 } finally {
-                    this._timings.push({
-                        label: phase.name,
-                        ms: Date.now() - phaseStart,
-                        children
-                    })
+                    const phaseMs = Date.now() - phaseStart
+                    this._timings.push({label: phase.name, ms: phaseMs, children})
                     this._currentPhaseChildren = null
+                    this._deps.logDebug?.(`phase:${phase.name}: done ms=${phaseMs}`)
                 }
                 await setTaskSection(cwd, id, phase.section, out)
                 this._pc[phase.field] = out

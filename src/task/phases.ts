@@ -161,6 +161,8 @@ export interface PhaseResearchDeps {
     searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
 }
 
+const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
+
 export async function phaseResearch(
     deps: PhaseDeps,
     refined: string,
@@ -308,12 +310,17 @@ export async function phaseResearch(
     // The worker still calls as many tools as it wants; it just stops narrating
     // between them. See appendNoThink. Result order (files, apis, context,
     // tooling) is preserved for assembly.
-    const workerSpecs: Array<{label: string; prompt: string; tools?: string}> = [
+    const workerSpecs: Array<{label: string; prompt: string; tools?: string; extensions?: string[]}> = [
         {
             label: 'worker:files',
             prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
         },
-        {label: 'worker:apis', prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined))},
+        {
+            label: 'worker:apis',
+            prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined)),
+            tools: 'read,grep,find,ls,pi-worker-docs',
+            extensions: [DOCS_EXTENSION_PATH]
+        },
         {
             label: 'worker:context',
             prompt: appendNoThink(promptHeader + RESEARCH_CONTEXT_PROMPT(refined)),
@@ -331,6 +338,7 @@ export async function phaseResearch(
 
     const workerResults: Array<Awaited<ReturnType<typeof runWorker>>> = []
     for (const spec of workerSpecs) {
+        deps.logDebug?.(`${spec.label}: start`)
         const r = await recordWorker(
             spec.label,
             runWorker({
@@ -338,8 +346,18 @@ export async function phaseResearch(
                 cwd: deps.cwd,
                 signal: deps.signal,
                 spawn: deps.spawn,
-                ...(spec.tools ? {tools: spec.tools} : {})
+                ...(spec.tools ? {tools: spec.tools} : {}),
+                ...(spec.extensions ? {extensions: spec.extensions} : {}),
+                onLine: line => {
+                    deps.logDebug?.(`${spec.label}: ${line}`)
+                    deps.onChildOutput?.(`${spec.label}: ${line}`)
+                }
             })
+        )
+        deps.logDebug?.(
+            `${spec.label}: done exit=${r.exitCode} wait=${r.waitMs}ms work=${r.workMs}ms`
+                + (r.stderr ? ` stderr=${r.stderr.slice(0, 300)}` : '')
+                + (r.leakedToolCall ? ` leaked=${r.leakedToolCall.trim().slice(0, 80)}` : '')
         )
         updateProgress()
         workerResults.push(r)

@@ -23,6 +23,10 @@ export interface RunWorkerInput {
     spawn?: SpawnFn
     /** Comma-separated tool whitelist passed to `pi --tools`. Defaults to read,grep,find,ls. */
     tools?: string
+    /** Extension entry-point paths to load via `-e <path>` before CHILD_BASE_ARGS. */
+    extensions?: string[]
+    /** Called for each tool execution start and text-writing event inside the worker. */
+    onLine?: (line: string) => void
 }
 
 export interface RunWorkerResult {
@@ -52,7 +56,8 @@ export interface RunWorkerResult {
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
     const tools = input.tools ?? DEFAULT_TOOLS
-    const baseArgs = [...CHILD_BASE_ARGS, '--mode', 'json', '--tools', tools]
+    const extensionArgs = (input.extensions ?? []).flatMap(e => ['-e', e])
+    const baseArgs = [...extensionArgs, ...CHILD_BASE_ARGS, '--mode', 'json', '--tools', tools]
     let hint: string | null = null
     for (let attempt = 0; ; attempt++) {
         const prompt = hint === null ? input.prompt : `${hint}\n\n${input.prompt}`
@@ -67,7 +72,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             {
                 mode: 'json-events',
                 onFirstByte: () => (tFirstByte = Date.now()),
-                onToolCall: call => loopDetector.record(call)
+                onToolCall: call => loopDetector.record(call),
+                onLine: input.onLine
             },
             input.spawn
         )

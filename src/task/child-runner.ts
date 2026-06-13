@@ -139,6 +139,8 @@ interface PhaseDeps {
      */
     recordSubStep?: (label: string, ms: number) => void
     spawn?: SpawnFn
+    /** Write a timestamped line to the per-task debug log. Fire-and-forget. */
+    logDebug?: (msg: string) => void
 }
 
 export type {PhaseDeps}

@@ -103,7 +103,9 @@ ${refined}`
 
 const RESEARCH_APIS_PROMPT = (
     refined: string
-) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools to identify the commands, functions, types, and interfaces the agent will use for the following task.
+) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools — and \`pi-worker-docs\` for installed npm packages — to identify the commands, functions, types, and interfaces the agent will use for the following task.
+
+NPM PACKAGES — use pi-worker-docs, NOT file reads: for any third-party npm package (e.g. "zod", "hono", "drizzle-orm"), call \`pi-worker-docs(module, query)\` to get its type signatures and API surface. Do NOT open node_modules source files directly — those reads are expensive and produce far more noise than the tool. The tool returns a compact, focused excerpt in a fraction of the token cost.
 
 APIS owns symbols and commands BY NAME ONLY. Do NOT include any file path or path fragment — no \`package.json\`, no \`./src/foo.ts\`, no \`package.json#scripts.lint\`. If the symbol is a script defined in package.json, write the invocation (\`npm run lint\`), not its location. If the symbol is a config file, it does not belong in APIS at all — it belongs in FILES.
 
