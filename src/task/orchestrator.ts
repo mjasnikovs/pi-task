@@ -45,6 +45,7 @@ import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '..
 import {parseVerifyBlock} from './spec-validation.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
+import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
 
 // ─── Module-level state ──────────────────────────────────────────────────────
@@ -118,10 +119,7 @@ export class TaskRunner {
             startedAt: this._startedAt
         }
 
-        const parentContextWindow =
-            ((ctx as unknown as {model?: {contextWindow?: number}}).model?.contextWindow as
-                | number
-                | undefined) ?? 0
+        const parentContextWindow = getParentContextWindow(ctx)
 
         this._deps = {
             cwd,
@@ -132,18 +130,11 @@ export class TaskRunner {
                 this._widgetState.lastLine = line
             },
             onContextUsage: snapshot => {
-                const prev = this._widgetState.contextUsage
-                const cw =
-                    snapshot.contextWindow > 0 ?
-                        snapshot.contextWindow
-                    :   prev?.contextWindow || parentContextWindow
-                const percent =
-                    cw > 0 ? Math.min(100, (snapshot.tokens / cw) * 100) : snapshot.percent
-                this._widgetState.contextUsage = {
-                    tokens: snapshot.tokens,
-                    contextWindow: cw,
-                    percent
-                }
+                this._widgetState.contextUsage = resolveContextUsage(
+                    snapshot,
+                    this._widgetState.contextUsage,
+                    parentContextWindow
+                )
             },
             recordSubStep: (label: string, ms: number) => {
                 if (this._currentPhaseChildren) {

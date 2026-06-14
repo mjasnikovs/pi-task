@@ -15,6 +15,12 @@ concept get that concept recorded here.
   sessions, tracking context/widget state, and persisting for resumability.
   `task/orchestrator.ts` runs a single task; `task/auto-orchestrator.ts` plans a
   feature into many tasks and runs them one at a time.
+  > `runSingleTask`/`TaskRunner` is the shared core: `auto-orchestrator`'s loop
+  > calls it per task (`deps.runTask`), so there is no separate "task-runner
+  > base" to extract. `PhaseDeps` (phase callbacks) and `AutoDeps`
+  > (runChild/runTask/commit) are deliberately different abstractions. Their one
+  > real overlap — mirroring child context_usage into the widget — lives in
+  > `task/context-usage.ts` (`getParentContextWindow`, `resolveContextUsage`).
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).

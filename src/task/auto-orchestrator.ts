@@ -29,6 +29,7 @@ import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
 import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
+import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 
 /**
  * Injectable seams so the planner and loop are testable without spawning pi.
@@ -189,10 +190,7 @@ function defaultDeps(
     // output line and context usage, exactly like the single-task phase widget.
     let lastLine: string | undefined
     let contextUsage: ContextSnapshot | undefined
-    const parentContextWindow =
-        ((ctx as unknown as {model?: {contextWindow?: number}}).model?.contextWindow as
-            | number
-            | undefined) ?? 0
+    const parentContextWindow = getParentContextWindow(ctx)
     const phaseDeps: PhaseDeps = {
         cwd,
         taskId: '',
@@ -201,12 +199,7 @@ function defaultDeps(
             lastLine = line
         },
         onContextUsage: snapshot => {
-            const cw =
-                snapshot.contextWindow > 0 ?
-                    snapshot.contextWindow
-                :   contextUsage?.contextWindow || parentContextWindow
-            const percent = cw > 0 ? Math.min(100, (snapshot.tokens / cw) * 100) : snapshot.percent
-            contextUsage = {tokens: snapshot.tokens, contextWindow: cw, percent}
+            contextUsage = resolveContextUsage(snapshot, contextUsage, parentContextWindow)
         }
     }
     return {
