@@ -28,10 +28,3 @@ export function sendTo(ws: WebSocket, msg: unknown): void {
         ws.send(JSON.stringify(msg))
     }
 }
-
-export function hasConnectedClients(): boolean {
-    for (const ws of clients) {
-        if (ws.readyState === ws.OPEN) return true
-    }
-    return false
-}

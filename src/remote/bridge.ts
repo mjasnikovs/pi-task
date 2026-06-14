@@ -3,7 +3,7 @@ import type {
     ExtensionCommandContext,
     ExtensionContext
 } from '@earendil-works/pi-coding-agent'
-import {broadcast as wsBroadcast, hasConnectedClients} from './broadcast.js'
+import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
 import {setPrompt, clearPrompt} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
@@ -95,9 +95,10 @@ export class SessionUI {
             allowSkip: spec.allowSkip
         }
         setPrompt(prompt)
-        // Reaches a backgrounded/suspended phone, which the in-page UI can't.
-        if (!hasConnectedClients())
-            void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
+        // Reaches a backgrounded/suspended phone, which the in-page UI can't. The
+        // service worker drops the banner if a window is visible+focused (sw.ts),
+        // so we always push and let delivery-time visibility decide.
+        void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
         // Local: resolves to a value/undefined, or undefined on abort. Swallow
         // the rejection some implementations throw on abort so it never leaks.

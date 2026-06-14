@@ -2,7 +2,6 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
 import {pushNotify} from './push.js'
 import {publishNotify} from './bridge.js'
-import {hasConnectedClients} from './broadcast.js'
 import type {ContextUsage} from './protocol.js'
 import {
     agentStart,
@@ -38,8 +37,10 @@ export function setupEvents(pi: ExtensionAPI): void {
             if (errorMessage || ae.reason === 'error') {
                 const message = errorMessage || 'Request failed'
                 addError(message)
-                if (!hasConnectedClients())
-                    void pushNotify('Agent error', message, 'pi-error').catch(() => {})
+                // Always push; the service worker suppresses the banner when a
+                // window is actually visible+focused (sw.ts), which is the only
+                // reliable foreground signal — an open WebSocket is not one.
+                void pushNotify('Agent error', message, 'pi-error').catch(() => {})
             }
         }
     })
@@ -63,7 +64,7 @@ export function setupEvents(pi: ExtensionAPI): void {
     pi.on('agent_end', (_event, ctx) => {
         setAgentIdle(true)
         agentEnd(ctx.getContextUsage() as ContextUsage)
-        if (!hasConnectedClients()) void pushNotify('Task finished', '', 'pi-end').catch(() => {})
+        void pushNotify('Task finished', '', 'pi-end').catch(() => {})
     })
 
     pi.on('input', (event, _ctx) => {
