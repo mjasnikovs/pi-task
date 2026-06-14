@@ -360,11 +360,10 @@ describe('deriveTitle', () => {
         )
     })
 
-    test('truncates with ellipsis when over 120 chars', () => {
+    test('keeps long titles intact (no truncation at storage)', () => {
         const long = 'x'.repeat(200)
         const title = deriveTitle(`GOAL\n${long}`)
-        expect(title.length).toBe(120)
-        expect(title.endsWith('…')).toBe(true)
+        expect(title).toBe(long)
     })
 
     test('falls back to first non-empty line when no GOAL section', () => {
