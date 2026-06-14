@@ -16,12 +16,15 @@ export type AutoAnswer =
 export interface ClarifyQuestion {
     question: string
     suggested?: string
+    /** Secondary option for a binary "A or B?" fork; mirrors grill's ALT line. */
+    alt?: string
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const GRILL_LINE_RE = /^\s*\d+[.)]\s+(.+)$/
 export const SUGGESTED_LINE_RE = /^\s*SUGGESTED:\s*(.*)$/i
+export const ALT_LINE_RE = /^\s*ALT:\s*(.*)$/i
 
 // ─── Grill questions parser ──────────────────────────────────────────────────
 
@@ -46,14 +49,31 @@ export function parseGrillQuestions(raw: string): string[] {
 // (e.g. "1. ...so this must be resolved. SUGGESTED: use polling.") rather than
 // on its own line.
 const INLINE_SUGGESTED_RE = /\bSUGGESTED:\s*/i
+const INLINE_ALT_RE = /\bALT:\s*/i
 
-/** Split a question line's text into the question and any inline SUGGESTED default. */
+/**
+ * Split a question line's text into the question, any inline SUGGESTED default,
+ * and any inline ALT secondary option (the model may write both on one line:
+ * "1. A or B? SUGGESTED: A ALT: B").
+ */
 function splitInlineSuggested(text: string): ClarifyQuestion {
     const m = INLINE_SUGGESTED_RE.exec(text)
     if (!m) return {question: text.trim()}
     const question = text.slice(0, m.index).trim()
-    const suggested = text.slice(m.index + m[0].length).trim()
-    return suggested.length > 0 ? {question, suggested} : {question}
+    let rest = text.slice(m.index + m[0].length)
+    let alt: string | undefined
+    const altM = INLINE_ALT_RE.exec(rest)
+    if (altM) {
+        const altText = rest.slice(altM.index + altM[0].length).trim()
+        if (altText.length > 0) alt = altText
+        rest = rest.slice(0, altM.index)
+    }
+    const suggested = rest.trim()
+    return {
+        question,
+        ...(suggested.length > 0 && {suggested}),
+        ...(alt !== undefined && {alt})
+    }
 }
 
 // Parses the /task-auto clarify output: a numbered question list where each
@@ -81,6 +101,15 @@ export function parseClarifyList(raw: string): ClarifyQuestion[] {
             const last = out[out.length - 1]
             if (suggested.length > 0 && last.suggested === undefined) {
                 last.suggested = suggested
+            }
+            continue
+        }
+        const altLine = ALT_LINE_RE.exec(line)
+        if (altLine && out.length > 0) {
+            const alt = altLine[1].trim()
+            const last = out[out.length - 1]
+            if (alt.length > 0 && last.alt === undefined) {
+                last.alt = alt
             }
         }
     }

@@ -121,6 +121,26 @@ describe('parseClarifyList', () => {
             }
         ])
     })
+
+    test('pairs a binary fork with its SUGGESTED and ALT options on their own lines', () => {
+        const out = parseClarifyList('1. npm or pnpm?\nSUGGESTED: npm\nALT: pnpm')
+        expect(out).toEqual([{question: 'npm or pnpm?', suggested: 'npm', alt: 'pnpm'}])
+    })
+
+    test('only the first ALT after a question attaches', () => {
+        const out = parseClarifyList('1. A or B?\nSUGGESTED: A\nALT: B\nALT: C')
+        expect(out).toEqual([{question: 'A or B?', suggested: 'A', alt: 'B'}])
+    })
+
+    test('splits inline SUGGESTED and ALT written on the question line', () => {
+        const out = parseClarifyList('1. npm or pnpm? SUGGESTED: npm ALT: pnpm')
+        expect(out).toEqual([{question: 'npm or pnpm?', suggested: 'npm', alt: 'pnpm'}])
+    })
+
+    test('an open-ended question has no alt', () => {
+        const out = parseClarifyList('1. Where do photos live?\nSUGGESTED: local disk')
+        expect(out).toEqual([{question: 'Where do photos live?', suggested: 'local disk'}])
+    })
 })
 
 describe('parseAutoAnswer', () => {

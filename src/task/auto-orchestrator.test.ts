@@ -51,7 +51,7 @@ test('planAuto: asks clarify questions, records answers, writes AUTO file with t
     })
 })
 
-test('planAuto: pre-fills the recommended default and shows it in the prompt', async () => {
+test('planAuto: offers the recommendation as placeholder and in the title', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueInput} = makeFakeCtx(dir)
         queueInput('') // empty -> accept the recommendation
@@ -63,10 +63,30 @@ test('planAuto: pre-fills the recommended default and shows it in the prompt', a
         // The suggestion is offered as the input default and surfaced in the title.
         expect(captured.inputs).toHaveLength(1)
         expect(captured.inputs[0].default).toBe('local disk via Bun file APIs')
-        expect(captured.inputs[0].title).toContain('Recommended:')
+        // Compact form: the recommendation is shown on its own line, with no
+        // verbose "Recommended:" / "press Enter to accept" scaffolding.
+        expect(captured.inputs[0].title).toContain('local disk via Bun file APIs')
+        expect(captured.inputs[0].title).not.toContain('Recommended:')
         // Empty input records the recommendation as accepted.
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: local disk via Bun file APIs (accepted recommendation)')
+    })
+})
+
+test('planAuto: a binary fork offers two options (A/B) like the grill dialog', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured, queueInput} = makeFakeCtx(dir)
+        queueInput('B') // pick the alternative by its label
+        const d = seqDeps(['1. npm or pnpm?\nSUGGESTED: npm\nALT: pnpm'], '- [ ] Task A')
+        const id = await planAuto(ctx, dir, 'set up tooling', d)
+        // Both options surface in the title, labelled A/B; the primary is the
+        // editable default (the alt rides along as the remote's second button).
+        expect(captured.inputs[0].title).toContain('A: npm')
+        expect(captured.inputs[0].title).toContain('B: pnpm')
+        expect(captured.inputs[0].default).toBe('npm')
+        // Typing the bare letter "B" maps back to the alt option's full text.
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toContain('A1: pnpm')
     })
 })
 

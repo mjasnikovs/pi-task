@@ -93,8 +93,12 @@ export async function planAuto(
     // clarify — sequential & adaptive: ask one question at a time, feeding every
     // answer back into the next call so later questions react to earlier ones
     // (e.g. a framework choice reshapes what gets asked). Each question is shown
-    // with the model's recommended default pre-filled (Enter to accept, type to
-    // override); we never auto-answer. The model emits NONE when nothing remains.
+    // exactly like /task's grill dialog: a binary fork offers two options (A/B),
+    // otherwise the model's recommendation is shown as the input placeholder and
+    // in the title. Nothing is pre-filled into the editor — submitting an empty
+    // field is what accepts the recommendation (see the typed.length === 0 branch
+    // below); typing overrides it. We never auto-answer; the model emits NONE when
+    // nothing remains.
     const theme = ctx.ui.theme
     const ui = new SessionUI(ctx)
     // Inline any @file spec the user referenced so clarify/decompose reason over
@@ -110,32 +114,48 @@ export async function planAuto(
         )
         const parsed = parseClarifyList(qRaw)
         if (parsed.length === 0) break // NONE / nothing left to ask
-        const {question, suggested} = parsed[0]
+        const {question, suggested, alt} = parsed[0]
         // Render markdown (bold/code) for the displayed prompt; keep plain text
         // for the editable default and the persisted file.
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = stripInlineMarkdown(question)
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
+        const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
+        // Compact A/B presentation, identical to /task's grill dialog: a binary
+        // fork shows both options labelled A/B; a single recommendation shows just
+        // the default; an open question shows the bare prompt. No verbose
+        // "Recommended:" / "press Enter to accept" scaffolding.
         const title =
-            suggested ?
-                `${shownQ}\n${theme.fg('muted', 'Recommended:')}\n\n${renderInlineMarkdown(suggested, theme)}\n\n${theme.fg('muted', 'press Enter to accept')}`
-            :   `${shownQ}\n${theme.fg('muted', '(no recommendation — please answer)')}`
+            plainSuggested ?
+                plainAlt ?
+                    `${shownQ}\nA: ${renderInlineMarkdown(suggested!, theme)}\nB: ${renderInlineMarkdown(alt!, theme)}`
+                :   `${shownQ}\n${renderInlineMarkdown(suggested!, theme)}`
+            :   shownQ
         const a = await ui.ask({
             localTitle: title,
             question: plainQ,
             recommended: plainSuggested,
-            allowSkip: plainSuggested === undefined
+            ...(plainAlt !== undefined && {recommended2: plainAlt}),
+            allowSkip: plainSuggested === undefined && plainAlt === undefined
         })
         if (a === undefined) {
             ctx.ui.notify('/task-auto cancelled.', 'warning')
             return null
         }
         const typed = a.trim()
+        // Two-option mode labels the choices "A:"/"B:", so a user (local TUI or
+        // remote "Manual answer") naturally types the bare letter to pick. Map it
+        // back to the option's full text. Mirrors phaseGrill's answer mapping.
+        const twoOption = plainSuggested !== undefined && plainAlt !== undefined
         let answer: string
         if (typed.length === 0 && plainSuggested) {
             answer = `${plainSuggested} (accepted recommendation)`
         } else if (typed.length === 0) {
             answer = '(skipped)'
+        } else if (twoOption && /^a[.)]?$/i.test(typed)) {
+            answer = plainSuggested!
+        } else if (twoOption && /^b[.)]?$/i.test(typed)) {
+            answer = plainAlt!
         } else {
             answer = typed
         }
