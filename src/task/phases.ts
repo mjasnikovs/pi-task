@@ -575,10 +575,19 @@ export async function phaseGrill(
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
             const typed = a.trim()
+            // Two-option mode labels the choices "A:"/"B:", so a user (local TUI
+            // or remote "Manual answer") naturally types the bare letter to pick.
+            // Map it back to the option's full text — storing the literal "A"
+            // leaves the next grill-gen call a dangling reference it can't decode.
+            const twoOption = plainSuggested !== undefined && plainAlt !== undefined
             if (typed.length === 0 && plainSuggested) {
                 answer = plainSuggested
             } else if (typed.length === 0) {
                 answer = '(skipped)'
+            } else if (twoOption && /^a[.)]?$/i.test(typed)) {
+                answer = plainSuggested!
+            } else if (twoOption && /^b[.)]?$/i.test(typed)) {
+                answer = plainAlt!
             } else {
                 answer = typed
             }

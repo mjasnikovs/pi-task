@@ -891,6 +891,62 @@ describe('phaseGrill', () => {
         })
     })
 
+    test('two-option grill: typing the bare letter "A"/"B" selects that option, not the literal letter', async () => {
+        // The two-option prompt labels its choices "A:" / "B:", which trains the
+        // user to type the letter to pick. Records must store the chosen option's
+        // full text so the next grill-gen call can reason over it — storing the
+        // bare "A" leaves a dangling reference the model can't decode.
+        const pick = (letter: string) =>
+            ({
+                hasUI: true,
+                ui: {
+                    theme: {fg: (_: string, s: string) => s},
+                    input: async () => letter,
+                    notify: () => undefined
+                }
+            }) as unknown as ExtensionCommandContext
+
+        await withTmpTaskDir(async cwd => {
+            // gen → one binary question; auto → UNKNOWN + ALT (two-option mode); gen → NONE.
+            const twoOption = () =>
+                fakeSpawnQueue([
+                    agentEndResponse('1. return mustChangePassword true or false?'),
+                    agentEndResponse('UNKNOWN: return false\nALT: return true and force a change'),
+                    agentEndResponse('NONE')
+                ])
+
+            const outA = await phaseGrill(
+                {
+                    cwd,
+                    taskId: 'TASK_TEST',
+                    signal: new AbortController().signal,
+                    spawn: twoOption()
+                },
+                pick('A'),
+                stubWidgetState,
+                'refined-task',
+                'research-notes'
+            )
+            expect(outA).toContain('A1: return false')
+            expect(outA).not.toMatch(/A1: A\b/)
+
+            const outB = await phaseGrill(
+                {
+                    cwd,
+                    taskId: 'TASK_TEST',
+                    signal: new AbortController().signal,
+                    spawn: twoOption()
+                },
+                pick('B'),
+                stubWidgetState,
+                'refined-task',
+                'research-notes'
+            )
+            expect(outB).toContain('A1: return true and force a change')
+            expect(outB).not.toMatch(/A1: B\b/)
+        })
+    })
+
     test('phaseGrill completes from a remote answer when local input never resolves', async () => {
         const b = getBridge()
         _setSink(() => {}) // prompt flows through SessionState; no real WS
