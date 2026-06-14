@@ -6,7 +6,12 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
-import {LoopExhaustedError, LeakedToolCallError, USER_CANCELLED} from './child-runner.js'
+import {
+    LoopExhaustedError,
+    LeakedToolCallError,
+    ModelError,
+    USER_CANCELLED
+} from './child-runner.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,15 @@ export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
             reason: `leaked tool call in ${err.phase}: ${err.marker.trim()}`,
             flash: 'leaked_tool_call',
             notify: `failed: ${err.phase} wrote a tool call as text instead of running it — it never executed. Resume to retry.`,
+            level: 'error'
+        }
+    }
+    if (err instanceof ModelError) {
+        return {
+            state: 'failed',
+            reason: `model_error in ${err.phase}: ${err.cause.slice(0, 160)}`,
+            flash: 'model_error',
+            notify: `failed: ${err.phase} — model error: ${err.cause.slice(0, 120)}. Restart the model, then resume.`,
             level: 'error'
         }
     }

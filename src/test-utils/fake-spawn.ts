@@ -117,3 +117,28 @@ export function agentEndResponse(text: string, exitCode = 0): SpawnResponseJsonE
         exitCode
     }
 }
+
+/**
+ * Convenience: a model-failure agent_end — stopReason "error" with the real
+ * cause in errorMessage and empty text content, exactly as pi emits when the
+ * provider/local model dies after its own retries (see agent.js handleRunFailure).
+ * Note exitCode defaults to 0: pi exits cleanly even on a model error.
+ */
+export function agentErrorResponse(errorMessage: string, exitCode = 0): SpawnResponseJsonEvents {
+    return {
+        events: [
+            {
+                type: 'agent_end',
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: [{type: 'text', text: ''}],
+                        stopReason: 'error',
+                        errorMessage
+                    }
+                ]
+            }
+        ],
+        exitCode
+    }
+}

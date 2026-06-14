@@ -42,6 +42,8 @@ export interface PhaseRunResult {
     loopHit?: LoopHit
     /** Set when the assistant text contains an unexecuted, leaked tool call. */
     leakedToolCall?: string
+    /** Set when the child's final turn failed with stopReason "error" (model/provider failure). */
+    modelError?: string
 }
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
@@ -116,6 +118,7 @@ export async function runChild(
         exitCode: result.exitCode,
         stderr: result.stderr.trim(),
         loopHit,
+        modelError: result.modelError,
         // A tool call the model wrote as text (wrong dialect) never executed and
         // sailed past the structured-event guards above; flag it so the wrappers
         // can re-prompt instead of accepting the unexecuted call. Only meaningful
@@ -172,6 +175,11 @@ export async function runPhaseChild(
         )
         if (r.exitCode !== 0) {
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+        }
+        if (r.modelError) {
+            // The model/provider failed (pi exited 0 with an stopReason "error"
+            // turn). Surface the real cause and fail fast — pi already retried.
+            throw new ModelError(name, r.modelError)
         }
         if (r.text.trim().length === 0) {
             // An empty completion (exit 0, no assistant text, no stderr) is almost
@@ -278,6 +286,11 @@ export async function runPhaseWithLoopGuard(
         if (r.exitCode !== 0) {
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
+        if (r.modelError) {
+            // The model/provider failed (pi exited 0 with a stopReason "error"
+            // turn). Surface the real cause and fail fast — pi already retried.
+            throw new ModelError(name, r.modelError)
+        }
         if (r.text.trim().length === 0) {
             // An empty completion (exit 0, no assistant text, no stderr) is almost
             // always transient — a model/API error swallowed inside --mode json,
@@ -340,6 +353,29 @@ export class LoopExhaustedError extends Error {
     ) {
         super(`loop detected ${history.length} times in ${phase}`)
         this.name = 'LoopExhaustedError'
+    }
+}
+
+// ─── ModelError ──────────────────────────────────────────────────────────────
+
+/**
+ * Thrown when a phase child's final turn failed with stopReason "error" — the
+ * model/provider died (local model disconnect, fetch failed, socket hang up,
+ * provider 5xx) after pi exhausted its own internal retries. pi reports this as
+ * an agent_end with empty assistant text, which would otherwise surface as the
+ * misleading "produced no output"; this names the real cause instead.
+ *
+ * Fail-fast: not retried at the pi-task layer. pi already retried the retryable
+ * cases; re-spawning a fresh child against the same dead endpoint only burns
+ * time and buries the real error. Restart the model/provider, then resume.
+ */
+export class ModelError extends Error {
+    constructor(
+        public readonly phase: string,
+        public readonly cause: string
+    ) {
+        super(`${phase} child: model error — ${cause}`)
+        this.name = 'ModelError'
     }
 }
 

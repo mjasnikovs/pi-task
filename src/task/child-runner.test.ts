@@ -6,9 +6,15 @@ import {
     runWithEmphasisRetry,
     LoopExhaustedError,
     LeakedToolCallError,
+    ModelError,
     childArgs
 } from './child-runner.js'
-import {fakeSpawnSimple, agentEndResponse, fakeSpawnQueue} from '../test-utils/fake-spawn.js'
+import {
+    fakeSpawnSimple,
+    agentEndResponse,
+    agentErrorResponse,
+    fakeSpawnQueue
+} from '../test-utils/fake-spawn.js'
 import type {ProcLike, SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile} from './task-io.js'
@@ -167,6 +173,20 @@ describe('runPhaseChild', () => {
         ).rejects.toThrow(/refine child failed.*kaboom/)
     })
 
+    test('throws ModelError (fail-fast, no retry) when the child reports a model error', async () => {
+        // A model/provider failure arrives as a stopReason "error" agent_end with
+        // empty text — previously masked as "produced no output". The second queued
+        // response would only be reached on a retry; getting ModelError proves we
+        // fail fast and surface the real cause instead.
+        const spawn = fakeSpawnQueue([
+            agentErrorResponse('connection lost'),
+            agentEndResponse('should not be reached')
+        ])
+        const p = runPhaseChild(depsWith(spawn), 'refine', 'read', 'prompt')
+        await expect(p).rejects.toBeInstanceOf(ModelError)
+        await expect(p).rejects.toThrow(/model error — connection lost/)
+    })
+
     test('retries an empty completion and returns the clean output from a later attempt', async () => {
         // First spawn produces no assistant text (transient empty turn), the
         // retry succeeds. Without the empty-output retry this would fail the phase.
@@ -272,6 +292,38 @@ describe('runPhaseWithLoopGuard', () => {
             expect(builds.length).toBe(2)
             // Empty output carries no hint — the restart sees a null hint, not a SYSTEM NOTE.
             expect(builds[1]).toBeNull()
+        })
+    })
+
+    test('throws ModelError (fail-fast) when the child reports a model error', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // The local model disconnected mid-run (the TASK_0005 root cause). The
+            // second response would only be reached on a restart — ModelError proves
+            // we fail fast on the real cause rather than restarting into a dead model.
+            const spawn = fakeSpawnQueue([
+                agentErrorResponse('socket hang up'),
+                agentEndResponse('should not be reached')
+            ])
+            const p = runPhaseWithLoopGuard(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'refine',
+                'read',
+                () => 'PROMPT'
+            )
+            await expect(p).rejects.toBeInstanceOf(ModelError)
+            await expect(p).rejects.toThrow(/model error — socket hang up/)
         })
     })
 

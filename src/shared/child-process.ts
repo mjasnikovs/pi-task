@@ -38,6 +38,14 @@ export interface ChildResult {
     aborted: boolean
     /** Extracted assistant text (only populated in json-events mode). */
     text?: string
+    /**
+     * The model-failure cause, when the child's final turn carried
+     * stopReason "error" (provider/connection failure after pi exhausted its
+     * own retries). pi emits this as an agent_end whose assistant message has
+     * empty text, so without it the phase would mis-report "produced no output".
+     * Only populated in json-events mode.
+     */
+    modelError?: string
 }
 
 // ─── JSON event-stream types (for mode: 'json-events') ──────────────────────
@@ -101,6 +109,13 @@ export type RunChildOptions = RunChildTextOptions | RunChildJsonEventsOptions
 export class JsonEventSink {
     /** Final assistant text from the agent_end event, if one arrived. */
     finalText = ''
+    /**
+     * Set when the final assistant turn carried stopReason "error" — i.e. the
+     * model/provider failed (disconnect, fetch failed, socket hang up, 5xx)
+     * after pi exhausted its internal retries. Holds the provider's errorMessage
+     * so callers can report the real cause instead of an empty completion.
+     */
+    modelError: string | undefined = undefined
     private textDeltaAccum = ''
     // json-events lines can split across data chunks; this holds the trailing
     // partial line between feeds so events spanning a boundary still parse. We
@@ -178,7 +193,21 @@ export class JsonEventSink {
         if (t === 'agent_end' && Array.isArray(evt.messages)) {
             for (let i = evt.messages.length - 1; i >= 0; i--) {
                 const m = evt.messages[i] as Record<string, unknown> | undefined
-                if (m && m.role === 'assistant' && Array.isArray(m.content)) {
+                if (!m || m.role !== 'assistant') continue
+                // A model failure (disconnect, fetch failed, socket hang up, 5xx
+                // after pi's own retries) arrives as an assistant message with
+                // stopReason "error" and the real cause in errorMessage — but
+                // EMPTY text content. Capture it so the phase reports the actual
+                // failure instead of the useless "produced no output".
+                if (
+                    m.stopReason === 'error'
+                    && typeof m.errorMessage === 'string'
+                    && m.errorMessage.length > 0
+                    && this.modelError === undefined
+                ) {
+                    this.modelError = m.errorMessage
+                }
+                if (Array.isArray(m.content)) {
                     const texts: string[] = []
                     for (const c of m.content as Array<Record<string, unknown>>) {
                         if (c?.type === 'text' && typeof c.text === 'string') {
@@ -272,7 +301,14 @@ export function runChild(
         proc.on('close', (code: number | null) => {
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
-            resolve({stdout, stderr, exitCode: code ?? 0, aborted, text})
+            resolve({
+                stdout,
+                stderr,
+                exitCode: code ?? 0,
+                aborted,
+                text,
+                modelError: sink?.modelError
+            })
         })
         proc.on('error', () => {
             resolve({stdout, stderr, exitCode: 1, aborted})

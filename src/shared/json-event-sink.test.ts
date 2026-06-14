@@ -26,6 +26,39 @@ describe('JsonEventSink', () => {
         expect(s.text).toBe('hello world')
     })
 
+    test('captures modelError from a stopReason "error" agent_end with empty text', () => {
+        // pi's handleRunFailure emits the failure as an agent_end whose assistant
+        // message has empty text + stopReason "error" + errorMessage. The sink must
+        // surface the cause so callers report it instead of "produced no output".
+        const s = sink()
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: [{type: 'text', text: ''}],
+                        stopReason: 'error',
+                        errorMessage: 'other side closed'
+                    }
+                ]
+            })
+        )
+        expect(s.text).toBe('')
+        expect(s.modelError).toBe('other side closed')
+    })
+
+    test('leaves modelError undefined on a normal successful agent_end', () => {
+        const s = sink()
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [{role: 'assistant', content: [{type: 'text', text: 'done'}]}]
+            })
+        )
+        expect(s.modelError).toBeUndefined()
+    })
+
     test('accumulates text_delta when there is no agent_end', () => {
         const s = sink()
         s.feed(line({type: 'message_update', assistantMessageEvent: {type: 'text_start'}}))
