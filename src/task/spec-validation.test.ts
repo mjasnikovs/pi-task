@@ -72,7 +72,7 @@ describe('parseVerifyBlock', () => {
 describe('stripSpecPreamble', () => {
     test('drops narration before the GOAL header', () => {
         const s =
-            'Now I have all the context. Here\'s the rewritten spec:\n\nGOAL\n  do x\nVERIFY:\n```sh\nls\n```'
+            "Now I have all the context. Here's the rewritten spec:\n\nGOAL\n  do x\nVERIFY:\n```sh\nls\n```"
         expect(stripSpecPreamble(s)).toBe('GOAL\n  do x\nVERIFY:\n```sh\nls\n```')
     })
 
@@ -92,7 +92,7 @@ describe('stripSpecPreamble', () => {
     })
 
     test('does NOT unwrap a cat-heredoc spec', () => {
-        const s = 'cat << \'EOF\' > spec.md\nGOAL\n…'
+        const s = "cat << 'EOF' > spec.md\nGOAL\n…"
         expect(stripSpecPreamble(s)).toBe(s)
     })
 
@@ -118,7 +118,7 @@ describe('validateSpecShape', () => {
     })
 
     test('reports cat heredoc at start', () => {
-        expect(validateSpecShape('cat << \'EOF\' > spec.md\nGOAL\n')).toBe(
+        expect(validateSpecShape("cat << 'EOF' > spec.md\nGOAL\n")).toBe(
             'spec is wrapped in a cat heredoc'
         )
     })

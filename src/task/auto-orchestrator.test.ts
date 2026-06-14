@@ -259,7 +259,7 @@ test('runAutoLoop: runs each title in order, checks boxes, completes', async () 
     })
 })
 
-test('runAutoLoop: adopts each task\'s replacement ctx; never touches a stale one', async () => {
+test("runAutoLoop: adopts each task's replacement ctx; never touches a stale one", async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(

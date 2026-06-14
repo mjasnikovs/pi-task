@@ -42,12 +42,12 @@ function buildFtsQuery(tokens: string[]): string {
 function fallbackChunks(cache: CacheHandle, name: string, version: string): RetrievedChunk[] {
     const dts = cache.db
         .prepare(
-            'SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = \'dts\' ORDER BY file_path, id LIMIT 1'
+            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = 'dts' ORDER BY file_path, id LIMIT 1"
         )
         .all(name, version) as ChunkRow[]
     const readme = cache.db
         .prepare(
-            'SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = \'readme\' ORDER BY id LIMIT 1'
+            "SELECT file_path, kind, content, 0 AS rank FROM chunks WHERE name = ? AND version = ? AND kind = 'readme' ORDER BY id LIMIT 1"
         )
         .all(name, version) as ChunkRow[]
     const out: RetrievedChunk[] = []

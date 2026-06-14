@@ -295,7 +295,7 @@ test('dispatchRemoteNewSession toasts when currentCtx is null', () => {
     expect(b.sent.some(m => (m as {type: string}).type === 'notify')).toBe(true)
 })
 
-test('dispatchRemoteNewSession toasts the shim\'s actionable error when only a shimmed ctx is available', () => {
+test("dispatchRemoteNewSession toasts the shim's actionable error when only a shimmed ctx is available", () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
     // A shimmed ctx is command-capable but its newSession throws a clear, actionable

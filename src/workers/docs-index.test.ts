@@ -19,7 +19,7 @@ test('ensureIndexed walks tiny-pkg and writes chunks for .d.ts + README', () => 
 
         const chunks = cache.db
             .prepare(
-                'SELECT file_path, kind, content FROM chunks WHERE name = \'tiny-pkg\' AND version = \'1.0.0\' ORDER BY id'
+                "SELECT file_path, kind, content FROM chunks WHERE name = 'tiny-pkg' AND version = '1.0.0' ORDER BY id"
             )
             .all() as {file_path: string; kind: string; content: string}[]
         expect(chunks.length).toBe(result.chunksWritten)
@@ -74,7 +74,7 @@ test('ensureIndexed re-ingests when content hash changes', () => {
         expect(r2.contentHash).not.toBe(hash1)
 
         const chunks = cache.db
-            .prepare('SELECT content FROM chunks WHERE name = \'mut-pkg\' AND version = \'1.0.0\'')
+            .prepare("SELECT content FROM chunks WHERE name = 'mut-pkg' AND version = '1.0.0'")
             .all() as {content: string}[]
         expect(chunks.length).toBeGreaterThan(0)
         expect(chunks.some(c => c.content.includes('v1'))).toBe(false)
@@ -92,7 +92,7 @@ test('ensureIndexed chunks .d.ts on top-level declarations', () => {
         ensureIndexed(cache, pkg)
         const chunks = cache.db
             .prepare(
-                'SELECT content FROM chunks WHERE name = \'tiny-pkg\' AND kind = \'dts\' AND file_path = \'index.d.ts\' ORDER BY id'
+                "SELECT content FROM chunks WHERE name = 'tiny-pkg' AND kind = 'dts' AND file_path = 'index.d.ts' ORDER BY id"
             )
             .all() as {content: string}[]
         expect(chunks.length).toBeGreaterThanOrEqual(4)
@@ -113,7 +113,7 @@ test('ensureIndexed chunks README on H1/H2 headings', () => {
         ensureIndexed(cache, pkg)
         const chunks = cache.db
             .prepare(
-                'SELECT content FROM chunks WHERE name = \'tiny-pkg\' AND kind = \'readme\' ORDER BY id'
+                "SELECT content FROM chunks WHERE name = 'tiny-pkg' AND kind = 'readme' ORDER BY id"
             )
             .all() as {content: string}[]
         expect(chunks.length).toBeGreaterThanOrEqual(4)
@@ -132,7 +132,7 @@ test('ensureIndexed handles a package with neither .d.ts nor README', () => {
         expect(r.chunksWritten).toBe(0)
         expect(r.filesIngested).toBe(0)
         const row = cache.db
-            .prepare('SELECT count(*) AS c FROM packages WHERE name = \'empty-pkg\'')
+            .prepare("SELECT count(*) AS c FROM packages WHERE name = 'empty-pkg'")
             .get() as {c: number} | null
         expect(row?.c).toBe(1)
         const second = ensureIndexed(cache, pkg)
@@ -149,7 +149,7 @@ test('ensureIndexed walks nested .d.ts files (huge-pkg/lib/types.d.ts)', () => {
         ensureIndexed(cache, pkg)
         const filePaths = (
             cache.db
-                .prepare('SELECT DISTINCT file_path FROM chunks WHERE name = \'huge-pkg\'')
+                .prepare("SELECT DISTINCT file_path FROM chunks WHERE name = 'huge-pkg'")
                 .all() as {file_path: string}[]
         ).map(r => r.file_path)
         expect(filePaths).toContain('index.d.ts')

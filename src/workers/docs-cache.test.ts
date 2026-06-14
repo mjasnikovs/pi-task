@@ -6,7 +6,7 @@ test('openCache(":memory:") creates an in-memory DB with bootstrapped schema', (
     try {
         const tables = cache.db
             .prepare(
-                'SELECT name FROM sqlite_master WHERE type IN (\'table\',\'trigger\') ORDER BY name'
+                "SELECT name FROM sqlite_master WHERE type IN ('table','trigger') ORDER BY name"
             )
             .all() as {name: string}[]
         const names = tables.map(t => t.name)

@@ -635,7 +635,7 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
         const msg = err instanceof Error ? err.message : String(err)
         if (msg !== 'no_verify_block') throw err
         p.ctx.ui.notify(
-            'Critique couldn\'t produce a VERIFY block — using compose draft. Edit the spec manually if needed.',
+            "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",
             'warning'
         )
         return p.spec

@@ -178,7 +178,7 @@ describe('parseAutoAnswer', () => {
 
     test('does not surface a preamble heading (trailing colon) as the suggestion', () => {
         const r = parseAutoAnswer(
-            'This is a concrete implementation decision with trade-offs. Here\'s the analysis:'
+            "This is a concrete implementation decision with trade-offs. Here's the analysis:"
         )
         expect(r.kind).toBe('unknown')
         if (r.kind === 'unknown') expect(r.suggested).toBeUndefined()
@@ -201,7 +201,7 @@ describe('autoAnswerHasTag', () => {
 
     test('false when the model wrote free-form prose with no tag', () => {
         expect(
-            autoAnswerHasTag('This is a concrete implementation decision. Here\'s the analysis:')
+            autoAnswerHasTag("This is a concrete implementation decision. Here's the analysis:")
         ).toBe(false)
         expect(autoAnswerHasTag('')).toBe(false)
     })

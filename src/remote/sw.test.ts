@@ -4,13 +4,13 @@ import {swJs} from './sw.js'
 describe('swJs()', () => {
     it('handles push events by showing a notification', () => {
         const out = swJs()
-        expect(out).toContain('addEventListener(\'push\'')
+        expect(out).toContain("addEventListener('push'")
         expect(out).toContain('showNotification')
     })
 
     it('focuses or opens a window when a notification is clicked', () => {
         const out = swJs()
-        expect(out).toContain('addEventListener(\'notificationclick\'')
+        expect(out).toContain("addEventListener('notificationclick'")
         expect(out).toContain('openWindow')
     })
 

@@ -15,8 +15,8 @@ describe('html()', () => {
         const out = html('ws://192.168.1.5:7601/ws')
         // WS must follow whatever host served the page, not a baked-in IP.
         expect(out).toContain('location.host')
-        expect(out).toContain('\'wss://\'')
-        expect(out).toContain('\'ws://\'')
+        expect(out).toContain("'wss://'")
+        expect(out).toContain("'ws://'")
     })
 
     it('contains required DOM element ids', () => {
@@ -47,18 +47,18 @@ describe('html()', () => {
 
     it('includes prompt card, status panel, and the new message handlers', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('case \'prompt\'')
-        expect(out).toContain('case \'prompt_resolved\'')
-        expect(out).toContain('case \'widget\'')
-        expect(out).toContain('case \'notify\'')
-        expect(out).toContain('case \'viewer\'')
-        expect(out).toContain('case \'context\'')
+        expect(out).toContain("case 'prompt'")
+        expect(out).toContain("case 'prompt_resolved'")
+        expect(out).toContain("case 'widget'")
+        expect(out).toContain("case 'notify'")
+        expect(out).toContain("case 'viewer'")
+        expect(out).toContain("case 'context'")
         expect(out).toContain('prompt_answer')
         expect(out).toContain('id="prompt-card"')
         expect(out).toContain('id="status-panel"')
     })
 
-    it('does not optimistically render the sender\'s own user bubble', () => {
+    it("does not optimistically render the sender's own user bubble", () => {
         // The server records remote-typed messages via addUserTurn, which
         // broadcasts a user_message back to ALL clients — including the sender.
         // If sendMessage ALSO renders the bubble locally, the sender sees it
@@ -86,7 +86,7 @@ describe('html()', () => {
 
     it('registers a service worker and a push subscription (works on iOS)', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('serviceWorker.register(\'/sw.js\')')
+        expect(out).toContain("serviceWorker.register('/sw.js')")
         expect(out).toContain('pushManager.subscribe')
         expect(out).toContain('/push-key')
         expect(out).toContain('/subscribe')
@@ -107,7 +107,7 @@ describe('html()', () => {
 
     it('clears the remote view on a reset message (new session)', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).toContain('case \'reset\'')
+        expect(out).toContain("case 'reset'")
     })
 
     it('reconciles a full snapshot on (re)connect by replacing the whole view', () => {
@@ -118,7 +118,7 @@ describe('html()', () => {
         const m = out.match(/case 'snapshot':[\s\S]*?break;/)
         expect(m).not.toBeNull()
         const handler = m![0]
-        expect(handler).toContain('chatLog.innerHTML = \'\'')
+        expect(handler).toContain("chatLog.innerHTML = ''")
         expect(handler).toContain('renderTurn')
         expect(handler).toContain('renderLiveTurn')
         expect(handler).toContain('renderWidgets()')
@@ -139,7 +139,7 @@ describe('html()', () => {
 
     it('no longer ships a separate history replay (snapshot subsumes it)', () => {
         const out = html('ws://localhost:7600/ws')
-        expect(out).not.toContain('case \'history\'')
+        expect(out).not.toContain("case 'history'")
     })
 
     it('renders an assistant turn as ordered parts (text + tools interleaved)', () => {
@@ -150,7 +150,7 @@ describe('html()', () => {
         expect(m).not.toBeNull()
         const body = m![0]
         expect(body).toContain('t.parts')
-        expect(body).toContain('p.kind === \'text\'')
+        expect(body).toContain("p.kind === 'text'")
         expect(body).toContain('renderToolPart')
         // The old flat-tools rendering is gone.
         expect(out).not.toContain('for (const tool of (t.tools')
@@ -160,9 +160,9 @@ describe('html()', () => {
         const out = html('ws://localhost:7600/ws')
         // A system note must render both live (delta) and from the snapshot (a
         // role:'system' turn), as a muted inline divider that survives reconnect.
-        expect(out).toContain('case \'system_note\'')
+        expect(out).toContain("case 'system_note'")
         expect(out).toContain('function addSystemLine')
-        expect(out).toContain('t.role === \'system\'')
+        expect(out).toContain("t.role === 'system'")
         expect(out).toContain('.sysnote')
     })
 
@@ -237,7 +237,7 @@ describe('html()', () => {
         const out = html('ws://localhost:7600/ws')
         // The trailing stream cursor must share the spinner ('.spin') so it animates
         // as a braille glyph, not a green blinking square.
-        expect(out).toContain('cursor.className = \'cursor spin\'')
+        expect(out).toContain("cursor.className = 'cursor spin'")
         const m = out.match(/\.cursor \{([^}]*)\}/)
         expect(m).not.toBeNull()
         const rule = m![1]
