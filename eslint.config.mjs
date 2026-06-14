@@ -46,6 +46,7 @@ export default tseslint.config(
             '@typescript-eslint/unbound-method': 'warn',
             '@typescript-eslint/no-floating-promises': 'warn',
             '@typescript-eslint/no-explicit-any': 'error',
+            'no-empty': ['error', {allowEmptyCatch: true}],
             'linebreak-style': ['error', 'unix'],
             quotes: ['error', 'single', {allowTemplateLiterals: true}],
             semi: ['error', 'never'],
