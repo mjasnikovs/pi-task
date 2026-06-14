@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach} from 'bun:test'
-import {mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
+import {mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {
@@ -7,6 +7,8 @@ import {
     addSubscription,
     getSubscriptions,
     clearSubscriptions,
+    loadSubscriptions,
+    subscriptionsStorePath,
     deliver,
     logPush,
     pushLogPath,
@@ -60,7 +62,21 @@ describe('loadOrCreateVapidKeys', () => {
 })
 
 describe('subscription store', () => {
-    beforeEach(() => clearSubscriptions())
+    // addSubscription/clearSubscriptions now mirror to disk under data-home;
+    // point that at a temp dir so the suite never touches the real store.
+    let dir: string
+    let prevXdg: string | undefined
+    beforeEach(() => {
+        prevXdg = process.env.XDG_DATA_HOME
+        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        process.env.XDG_DATA_HOME = dir
+        clearSubscriptions()
+    })
+    afterEach(() => {
+        if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+        else process.env.XDG_DATA_HOME = prevXdg
+        rmSync(dir, {recursive: true, force: true})
+    })
 
     it('stores an added subscription', () => {
         addSubscription(sub('https://push/1'))
@@ -145,7 +161,19 @@ describe('logPush', () => {
 })
 
 describe('deliver', () => {
-    beforeEach(() => clearSubscriptions())
+    let dir: string
+    let prevXdg: string | undefined
+    beforeEach(() => {
+        prevXdg = process.env.XDG_DATA_HOME
+        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        process.env.XDG_DATA_HOME = dir
+        clearSubscriptions()
+    })
+    afterEach(() => {
+        if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+        else process.env.XDG_DATA_HOME = prevXdg
+        rmSync(dir, {recursive: true, force: true})
+    })
 
     it('sends the payload to every subscription', async () => {
         addSubscription(sub('https://push/1'))
@@ -182,5 +210,52 @@ describe('deliver', () => {
         const result = await deliver(getSubscriptions(), 'x', send)
         expect(result.removed).toEqual([])
         expect(getSubscriptions()).toHaveLength(1)
+    })
+})
+
+describe('subscription persistence', () => {
+    let dir: string
+    let prevXdg: string | undefined
+    beforeEach(() => {
+        prevXdg = process.env.XDG_DATA_HOME
+        dir = mkdtempSync(path.join(tmpdir(), 'subs-'))
+        process.env.XDG_DATA_HOME = dir
+        clearSubscriptions()
+    })
+    afterEach(() => {
+        if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+        else process.env.XDG_DATA_HOME = prevXdg
+        rmSync(dir, {recursive: true, force: true})
+    })
+
+    it('mirrors added subscriptions to disk under data-home', () => {
+        addSubscription(sub('https://push/keep'))
+        const file = subscriptionsStorePath()
+        expect(file).toBe(path.join(dir, 'pi-task', 'subscriptions.json'))
+        expect(existsSync(file)).toBe(true)
+        const stored = JSON.parse(readFileSync(file, 'utf8')) as PushSubscriptionJSON[]
+        expect(stored.map(s => s.endpoint)).toEqual(['https://push/keep'])
+    })
+
+    it('reloads persisted subscriptions on a fresh process (survives a restart)', () => {
+        // Simulate what a rebuilt server sees on boot: an empty in-memory store
+        // and a subscriptions file left by the previous process.
+        const file = subscriptionsStorePath()
+        mkdirSync(path.dirname(file), {recursive: true})
+        writeFileSync(file, JSON.stringify([sub('https://push/a'), sub('https://push/b')]))
+        expect(loadSubscriptions()).toBe(2)
+        expect(
+            getSubscriptions()
+                .map(s => s.endpoint)
+                .sort()
+        ).toEqual(['https://push/a', 'https://push/b'])
+    })
+
+    it('ignores a corrupt subscriptions file (best-effort)', () => {
+        const file = subscriptionsStorePath()
+        mkdirSync(path.dirname(file), {recursive: true})
+        writeFileSync(file, 'not json{')
+        expect(loadSubscriptions()).toBe(0)
+        expect(getSubscriptions()).toHaveLength(0)
     })
 })

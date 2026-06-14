@@ -15,12 +15,27 @@ export interface VapidKeys {
     privateKey: string
 }
 
-/** Where the VAPID keypair is persisted. Follows the repo's XDG convention
- *  (see workers/docs-core.ts), but under data-home so it survives cache clears —
- *  losing these keys invalidates every existing browser subscription. */
+/** Resolve the XDG data-home base. Under data-home (not cache) so the files it
+ *  roots survive cache clears. Follows the repo's XDG convention; see
+ *  workers/docs-core.ts. */
+function dataHome(): string {
+    return process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), '.local', 'share')
+}
+
+/** Where the VAPID keypair is persisted — losing these keys invalidates every
+ *  existing browser subscription. */
 export function vapidStorePath(): string {
-    const base = process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), '.local', 'share')
-    return path.join(base, 'pi-task', 'vapid.json')
+    return path.join(dataHome(), 'pi-task', 'vapid.json')
+}
+
+/** Where browser push subscriptions are mirrored to disk (next to vapid.json).
+ *  Without this, a server restart — e.g. after a rebuild — silently drops every
+ *  device: the in-memory store is empty, and a backgrounded/suspended PWA won't
+ *  re-register until the user next foregrounds it, which is exactly when the push
+ *  is no longer useful. The in-memory store stays authoritative within a process;
+ *  this is its durable mirror. */
+export function subscriptionsStorePath(): string {
+    return path.join(dataHome(), 'pi-task', 'subscriptions.json')
 }
 
 /** Diagnostic log file. Defaults to /tmp for easy tailing; override with
@@ -83,20 +98,59 @@ export function loadOrCreateVapidKeys(file = vapidStorePath()): VapidKeys {
 }
 
 // In-memory subscription store, keyed by endpoint. Persisted on globalThis so it
-// survives jiti re-evaluation on session switches (same pattern as broadcast.ts).
-// Subscriptions themselves are not written to disk: the browser re-subscribes on
-// every page load, so an in-memory set is sufficient and self-healing.
+// survives jiti re-evaluation on session switches (same pattern as broadcast.ts),
+// and mirrored to disk (subscriptionsStorePath) so it also survives a full
+// process restart. A re-subscribe on page load can't be relied on for that: the
+// devices that need server push are backgrounded/suspended and won't reload.
 const g = globalThis as unknown as {__piRemoteSubs?: Map<string, PushSubscriptionJSON>}
+const freshStore = !g.__piRemoteSubs
 if (!g.__piRemoteSubs) g.__piRemoteSubs = new Map<string, PushSubscriptionJSON>()
 const subs = g.__piRemoteSubs
+// Hydrate once per process: a restarted server reloads the devices it knew so it
+// can keep reaching them without waiting for each to re-register.
+if (freshStore) loadSubscriptions()
+
+function isSubscription(x: unknown): x is PushSubscriptionJSON {
+    return (
+        typeof x === 'object'
+        && x !== null
+        && typeof (x as {endpoint?: unknown}).endpoint === 'string'
+    )
+}
+
+/** Load persisted subscriptions into the in-memory store. Best-effort: a missing
+ *  or corrupt file just leaves the store as-is. Returns the resulting count. */
+export function loadSubscriptions(file = subscriptionsStorePath()): number {
+    try {
+        const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+        if (Array.isArray(parsed)) {
+            for (const s of parsed) if (isSubscription(s)) subs.set(s.endpoint as string, s)
+        }
+    } catch {
+        // missing or corrupt — keep whatever is already in memory
+    }
+    return subs.size
+}
+
+/** Mirror the current store to disk. Best-effort; never throws, so a failed write
+ *  can't break a subscribe request or a push. */
+function saveSubscriptions(file = subscriptionsStorePath()): void {
+    try {
+        mkdirSync(path.dirname(file), {recursive: true})
+        writeFileSync(file, JSON.stringify([...subs.values()]), 'utf8')
+    } catch {
+        // persistence is best-effort; the in-memory store remains authoritative
+    }
+}
 
 export function addSubscription(sub: PushSubscriptionJSON): void {
     if (!sub.endpoint) return
     subs.set(sub.endpoint, sub)
+    saveSubscriptions()
 }
 
 export function removeSubscription(endpoint: string): void {
-    subs.delete(endpoint)
+    if (subs.delete(endpoint)) saveSubscriptions()
 }
 
 export function getSubscriptions(): PushSubscriptionJSON[] {
@@ -105,6 +159,7 @@ export function getSubscriptions(): PushSubscriptionJSON[] {
 
 export function clearSubscriptions(): void {
     subs.clear()
+    saveSubscriptions()
 }
 
 /** True when the push service says the subscription is permanently gone and

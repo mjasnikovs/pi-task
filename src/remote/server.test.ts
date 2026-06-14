@@ -1,4 +1,7 @@
-import {describe, it, expect, afterEach, test} from 'bun:test'
+import {describe, it, expect, beforeEach, afterEach, test} from 'bun:test'
+import {mkdtempSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import path from 'node:path'
 import {startServer, getLocalIPs, formatAddresses} from './server.js'
 import type {ServerHandle} from './server.js'
 import WebSocket from 'ws'
@@ -8,12 +11,27 @@ import {clearSubscriptions, getSubscriptions} from './push.js'
 
 let handle: ServerHandle | null = null
 
+// The /push-key and /subscribe routes persist vapid.json and subscriptions.json
+// under data-home; redirect that at a temp dir so the suite never writes to the
+// real ~/.local/share.
+let xdgDir: string | null = null
+let prevXdg: string | undefined
+beforeEach(() => {
+    prevXdg = process.env.XDG_DATA_HOME
+    xdgDir = mkdtempSync(path.join(tmpdir(), 'server-xdg-'))
+    process.env.XDG_DATA_HOME = xdgDir
+})
+
 afterEach(() => {
     handle?.stop()
     handle = null
     const b = getBridge()
     b.pending.clear()
     reset()
+    if (prevXdg === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = prevXdg
+    if (xdgDir) rmSync(xdgDir, {recursive: true, force: true})
+    xdgDir = null
 })
 
 describe('getLocalIPs', () => {

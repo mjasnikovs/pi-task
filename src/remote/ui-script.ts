@@ -469,10 +469,6 @@ export function clientScript(wsUrl: string): string {
     }
 
     updateBell();
-    // Self-heal: if notifications were enabled before, re-register the
-    // subscription on load (the server keeps subscriptions in memory and may
-    // have restarted, and browsers can rotate the subscription).
-    if (notifyEnabled()) { subscribePush().catch(function () {}); }
 
     function answer(value) {
       if (activePromptId === null) return;
@@ -774,6 +770,12 @@ export function clientScript(wsUrl: string): string {
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
         setEnabled(true);
+        // Self-heal on every (re)connect, not just page load: if the server
+        // restarted it may have lost (or be rehydrating) our subscription, and
+        // browsers can rotate it. Re-registering here covers reconnects the
+        // disk-persisted server store can't see yet. The server dedupes by
+        // endpoint, so a redundant re-POST is harmless.
+        if (notifyEnabled()) { subscribePush().catch(function () {}); }
       });
       ws.addEventListener('message', (e) => {
         try { handleMsg(JSON.parse(e.data)); } catch {}
