@@ -391,6 +391,9 @@ test('runAutoLoop: resumes an in-progress inner task instead of starting fresh',
         const body =
             '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n- [ ] TASK_0006  A\n- [ ] B\n'
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), body)
+        // The inner task's file must exist on disk for it to be resumable; the
+        // loop only resumes a stamped id whose file is present.
+        await writeTaskFile(dir, autoFm('TASK_0006'), '## prompt\n\nA\n')
         const resumeIds: Array<string | undefined> = []
         let fresh = 7
         const d: AutoDeps = {
@@ -448,6 +451,9 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
             runTask: async (_c, _cwd, _title, opts) => {
                 seen1.push(opts?.resumeId)
                 await opts?.onStart?.('TASK_0006')
+                // The runner writes the inner task file before the session dies;
+                // run 2's resume relies on that file being present on disk.
+                await writeTaskFile(dir, autoFm('TASK_0006'), '## prompt\n\nA\n')
                 return {taskId: '', ok: false, sessionCancelled: true}
             },
             commit: () => Promise.resolve({committed: true})
@@ -477,6 +483,50 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
             {index: 0, title: 'A', done: true, producedId: 'TASK_0006'},
             {index: 1, title: 'B', done: true, producedId: 'TASK_0007'}
         ])
+    })
+})
+
+test('runAutoLoop: a stamped inner task with a missing file restarts fresh, never crashes', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // A was stamped TASK_0006 but its inner file is gone (never written, or
+        // deleted out-of-band). Resuming a missing file throws ENOENT in the
+        // runner and used to crash pi; the loop must fall back to a fresh start.
+        const body =
+            '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n- [ ] TASK_0006  A\n'
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), body)
+        const resumeIds: Array<string | undefined> = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, _title, opts) => {
+                resumeIds.push(opts?.resumeId)
+                return Promise.resolve({taskId: 'TASK_0009', ok: true, sessionCancelled: false})
+            },
+            commit: () => Promise.resolve({committed: true})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // No resume attempted (file missing) -> fresh start, re-stamped + checked.
+        expect(resumeIds).toEqual([undefined])
+        const {frontMatter, body: out} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(out)).toEqual([
+            {index: 0, title: 'A', done: true, producedId: 'TASK_0009'}
+        ])
+    })
+})
+
+test('runAutoLoop: an unexpected throw is caught, marks failed, and never propagates', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () => Promise.reject(new Error('boom')),
+            commit: () => Promise.resolve({committed: true})
+        }
+        // Must resolve, not reject — an escaping rejection used to take pi down.
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
     })
 })
 

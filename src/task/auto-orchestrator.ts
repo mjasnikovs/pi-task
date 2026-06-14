@@ -22,7 +22,7 @@ import {
     stampTaskInProgress,
     findResumableAuto
 } from './auto-io.js'
-import {writeTaskFile, readTaskFile, updateTaskFrontMatter} from './task-io.js'
+import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
@@ -287,13 +287,25 @@ export async function runAutoLoop(
             )
             // If this entry already has a stamped inner id, it was started in a
             // previous (interrupted) run — resume it from its saved phase rather
-            // than spawning a fresh task. Otherwise stamp the freshly-allocated id
-            // onto the entry the moment it exists, so an interruption here is
-            // resumable too. This mirrors /task-resume's continue-don't-restart.
+            // than spawning a fresh task. But the stamped inner file can be gone
+            // (deleted, or never written because allocation was interrupted), and
+            // resuming a missing file throws ENOENT deep in the runner — which used
+            // to take pi down. So verify the file exists and otherwise fall back to
+            // a fresh start. Either way an unstamped/restarted entry is (re)stamped
+            // the moment its inner id exists, keeping the next interruption
+            // resumable. This mirrors /task-resume's continue-don't-restart.
+            let resumeId = next.producedId
+            if (resumeId) {
+                try {
+                    await fsp.access(taskFilePath(cwd, resumeId))
+                } catch {
+                    resumeId = undefined
+                }
+            }
             const res = await deps.runTask(active, cwd, next.title, {
-                resumeId: next.producedId,
+                resumeId,
                 onStart:
-                    next.producedId ? undefined : (
+                    resumeId ? undefined : (
                         innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)
                     )
             })
@@ -331,6 +343,18 @@ export async function runAutoLoop(
                 )
             }
         }
+    } catch (err) {
+        // Safety net: no failure inside the loop may propagate out of runAutoLoop,
+        // because the resume handler doesn't wrap this call and an unhandled
+        // rejection crashes pi outright. Convert it into a failed run + notify,
+        // mirroring the in-loop per-task failure path.
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg === USER_CANCELLED) {
+            active.ui.notify(`${id} cancelled — resume with /task-auto-resume.`, 'warning')
+            return
+        }
+        await updateTaskFrontMatter(cwd, id, {state: 'failed'}).catch(() => {})
+        active.ui.notify(`${id} stopped: ${msg} — fix and run /task-auto-resume.`, 'error')
     } finally {
         cancelRequested = false
     }
