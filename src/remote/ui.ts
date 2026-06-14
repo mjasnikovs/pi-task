@@ -204,7 +204,7 @@ export function html(wsUrl: string): string {
     #prompt-card textarea { width: 100%; background: var(--surface0); color: var(--text);
       border: 1px solid var(--surface2); border-radius: 6px; padding: 10px; font-size: 15px;
       font-family: inherit; line-height: 1.5; resize: vertical; margin-bottom: 4px; }
-    #prompt-card .row { display: flex; gap: 8px; margin-top: 12px; align-items: center;
+    #prompt-card .row { display: flex; gap: 8px; margin-top: 12px; align-items: stretch;
       flex-wrap: wrap; }
     #prompt-card button { padding: 11px 16px; border-radius: 8px; border: none; cursor: pointer;
       font-family: inherit; font-size: 14px; font-weight: 600; transition: filter .15s ease; }
@@ -213,8 +213,8 @@ export function html(wsUrl: string): string {
       font-weight: 700; flex: 1; min-width: 160px; }
     #prompt-card button.secondary { background: var(--surface1); color: var(--text);
       flex: 1; min-width: 160px; }
-    #prompt-card button.cancel { margin-left: auto; background: transparent; color: var(--subtext0);
-      font-size: 12px; font-weight: 500; padding: 8px 10px; }
+    #prompt-card button.cancel { margin-left: auto; align-self: center; background: transparent;
+      color: var(--subtext0); font-size: 12px; font-weight: 500; padding: 8px 10px; }
     #prompt-card button.cancel:hover { color: var(--red); filter: none; }
     #prompt-card button.cancel.armed { background: var(--red); color: var(--crust); font-weight: 700; }
     .toast { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 12px);
