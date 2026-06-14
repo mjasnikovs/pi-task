@@ -42,7 +42,7 @@ import {
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
-import {parseVerifyBlock} from './parsers.js'
+import {parseVerifyBlock} from './spec-validation.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import type {SpawnFn} from '../shared/child-process.js'

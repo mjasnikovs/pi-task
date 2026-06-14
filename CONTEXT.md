@@ -28,6 +28,17 @@ concept get that concept recorded here.
   > *focused* worker variants, not the *raw* ones) — a tracked candidate to unify
   > once the focused-extractor seam exists.
 
+## Spec validation
+
+- **Spec gate** — the guards that decide whether a composed spec is acceptable
+  at handoff: `validateSpecShape` (well-formed GOAL/CONSTRAINTS/ACCEPTANCE/VERIFY
+  shape), its partner `stripSpecPreamble`, `parseVerifyBlock` (runnable VERIFY
+  commands), and `isCritiqueClean` (critique came back CLEAN). They live in
+  `task/spec-validation.ts` — separate from the informational parsers in
+  `parsers.ts` (grill questions, clarify list, auto-answer, tooling output,
+  title) because the gate answers a yes/no the orchestrator and critique phase
+  act on. Self-contained, so the gate doesn't drag in the phase pipeline.
+
 ## Worker tools
 
 - **Worker tool** — a tool the main agent calls to gather external context

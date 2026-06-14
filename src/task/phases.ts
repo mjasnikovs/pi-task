@@ -34,16 +34,18 @@ import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {type WidgetState} from './widget.js'
 import {
-    parseVerifyBlock,
     parseGrillQuestions,
     parseAutoAnswer,
     parseVerifyToolingOutput,
-    validateSpecShape,
-    stripSpecPreamble,
     deriveTitle,
-    isCritiqueClean,
     type AutoAnswer
 } from './parsers.js'
+import {
+    parseVerifyBlock,
+    validateSpecShape,
+    stripSpecPreamble,
+    isCritiqueClean
+} from './spec-validation.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
