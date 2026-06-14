@@ -18,6 +18,11 @@ concept get that concept recorded here.
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).
+- **JsonEventSink** — the parser for a child's `--mode json` event stream
+  (`shared/child-process.ts`). Holds the cross-chunk line buffer and text
+  assembly, turning events into assistant `text` + side effects (caller
+  callbacks, loop-kill via an `onLoopKill` signal). Lifted out of `runChild`'s
+  closure so event interpretation is unit-testable without spawning a child.
 - **External context** — the `EXTERNAL CONTEXT` block the research phase prepends
   to every worker prompt: live npm versions, package docs, fetched URLs, and
   service searches, gathered from targets parsed out of the refined spec.

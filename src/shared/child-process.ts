@@ -88,6 +88,140 @@ export interface RunChildJsonEventsOptions {
 
 export type RunChildOptions = RunChildTextOptions | RunChildJsonEventsOptions
 
+// ─── JSON event-stream sink ──────────────────────────────────────────────────
+
+/**
+ * Parses a child's `--mode json` event stream into assistant text plus side
+ * effects (caller callbacks, loop-kill). It holds the cross-chunk line buffer
+ * and the text-assembly state, so event interpretation is independent of the
+ * spawn/kill machinery in runChild — and therefore unit-testable without a real
+ * child: construct one, `feed()` raw lines, assert on `text` / the callbacks /
+ * the onLoopKill signal.
+ */
+export class JsonEventSink {
+    /** Final assistant text from the agent_end event, if one arrived. */
+    finalText = ''
+    private textDeltaAccum = ''
+    // json-events lines can split across data chunks; this holds the trailing
+    // partial line between feeds so events spanning a boundary still parse. We
+    // deliberately do NOT accumulate the full raw stream: a long-running child
+    // emits hundreds of MB of events and buffering it would overflow V8's max
+    // string length (≈512MB). We keep only the parsed text.
+    private buf = ''
+
+    constructor(
+        private readonly opts: RunChildJsonEventsOptions,
+        /** Invoked when onToolCall reports a loop hit — runChild kills the child. */
+        private readonly onLoopKill: () => void
+    ) {}
+
+    /** Feed a raw stdout chunk: parse every complete line, buffer the partial tail. */
+    feed(chunk: string): void {
+        this.buf += chunk
+        let nl: number
+        while ((nl = this.buf.indexOf('\n')) !== -1) {
+            const line = this.buf.slice(0, nl).trim()
+            this.buf = this.buf.slice(nl + 1)
+            if (line.length === 0) continue
+            try {
+                const evt = JSON.parse(line) as Record<string, unknown>
+                if (evt && typeof evt === 'object') this.handleEvent(evt)
+            } catch {
+                // Non-JSON line (startup banner, etc.) — ignore.
+            }
+        }
+    }
+
+    /** Flush a trailing event that wasn't newline-terminated (call on close). */
+    flush(): void {
+        if (this.buf.trim().length > 0) this.feed('\n')
+        this.buf = ''
+    }
+
+    /** Extracted assistant text: the agent_end text if present, else the deltas. */
+    get text(): string {
+        return (this.finalText || this.textDeltaAccum).trim()
+    }
+
+    private handleEvent(evt: Record<string, unknown>): void {
+        const opts = this.opts
+        const t = typeof evt.type === 'string' ? evt.type : ''
+
+        if (t === 'context_usage' && opts.onContextUsage) {
+            const tokens = Number(evt.tokens ?? 0)
+            const contextWindow = Number(evt.contextWindow ?? 0)
+            const percent = Number(evt.percent ?? 0)
+            if (tokens > 0 || contextWindow > 0) {
+                opts.onContextUsage({tokens, contextWindow, percent})
+            }
+            return
+        }
+
+        if (t === 'message_end' && opts.onContextUsage) {
+            const msg = evt.message as Record<string, unknown> | undefined
+            if (msg?.role === 'assistant') {
+                const usage = msg.usage as Record<string, unknown> | undefined
+                if (usage) {
+                    const tokens =
+                        Number(usage.input ?? 0)
+                        + Number(usage.cacheRead ?? 0)
+                        + Number(usage.cacheWrite ?? 0)
+                        + Number(usage.output ?? 0)
+                    if (tokens > 0) {
+                        opts.onContextUsage({tokens, contextWindow: 0, percent: 0})
+                    }
+                }
+            }
+            return
+        }
+
+        if (t === 'agent_end' && Array.isArray(evt.messages)) {
+            for (let i = evt.messages.length - 1; i >= 0; i--) {
+                const m = evt.messages[i] as Record<string, unknown> | undefined
+                if (m && m.role === 'assistant' && Array.isArray(m.content)) {
+                    const texts: string[] = []
+                    for (const c of m.content as Array<Record<string, unknown>>) {
+                        if (c?.type === 'text' && typeof c.text === 'string') {
+                            texts.push(c.text)
+                        }
+                    }
+                    if (texts.length > 0) {
+                        this.finalText = texts.join('')
+                        break
+                    }
+                }
+            }
+            return
+        }
+
+        if (t === 'message_update') {
+            const ame = evt.assistantMessageEvent as Record<string, unknown> | undefined
+            const ameType = ame && typeof ame.type === 'string' ? ame.type : ''
+            if (ameType === 'text_start') {
+                this.textDeltaAccum = ''
+                if (opts.onLine) opts.onLine('writing answer…')
+            } else if (ameType === 'text_delta' && typeof ame!.delta === 'string') {
+                this.textDeltaAccum += ame!.delta as string
+            } else if (ameType === 'thinking_start' && opts.onLine) {
+                opts.onLine('thinking…')
+            }
+            return
+        }
+
+        if (t === 'tool_execution_start') {
+            const tn = typeof evt.toolName === 'string' ? evt.toolName : 'tool'
+            if (opts.onLine) {
+                const detail = summarizeToolArgs(tn, evt.args)
+                opts.onLine(detail ? `${tn}: ${detail}` : tn)
+            }
+            if (opts.onToolCall) {
+                const hit = opts.onToolCall({name: tn, args: evt.args})
+                if (hit) this.onLoopKill()
+            }
+        }
+    }
+}
+
 // ─── Unified runChild ────────────────────────────────────────────────────────
 
 export function runChild(
@@ -101,12 +235,7 @@ export function runChild(
         let stdout = ''
         let stderr = ''
         let aborted = false
-        const isJsonEvents = opts?.mode === 'json-events'
         const discardStdout = opts?.mode === 'text' && opts.discardStdout === true
-
-        // State for json-events mode
-        let finalText = ''
-        let textDeltaAccum = ''
 
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
@@ -114,15 +243,19 @@ export function runChild(
             stdio: ['ignore', 'pipe', 'pipe']
         })
 
+        // One kill path, shared by user-abort and loop-kill: SIGTERM, then
+        // SIGKILL after a grace period if the child ignored the term.
+        const killProc = (): void => {
+            aborted = true
+            proc.kill('SIGTERM')
+            setTimeout(() => {
+                if (!proc.killed) proc.kill('SIGKILL')
+            }, KILL_GRACE_MS)
+        }
+
+        const sink = opts?.mode === 'json-events' ? new JsonEventSink(opts, killProc) : null
+
         let firstByteFired = false
-        // json-events lines can split across data chunks; this holds the trailing
-        // partial line between chunks so events spanning a boundary still parse.
-        // In json-events mode we deliberately do NOT accumulate the full raw
-        // stream: a long-running child emits hundreds of MB of events and
-        // `stdout += chunk` would overflow V8's max string length (≈512MB),
-        // crashing the process. We only need the parsed text, so we drop the raw
-        // bytes once drained.
-        let lineBuffer = ''
         proc.stdout?.on('data', (d: Buffer) => {
             if (!firstByteFired) {
                 firstByteFired = true
@@ -130,22 +263,15 @@ export function runChild(
             }
             if (discardStdout) return
             const chunk = d.toString()
-            if (isJsonEvents) {
-                lineBuffer = drainJsonEvents(lineBuffer + chunk, opts as RunChildJsonEventsOptions)
-            } else {
-                stdout += chunk
-            }
+            if (sink) sink.feed(chunk)
+            else stdout += chunk
         })
         proc.stderr?.on('data', (d: Buffer) => {
             stderr += d.toString()
         })
         proc.on('close', (code: number | null) => {
-            // Flush a final event that wasn't newline-terminated.
-            if (isJsonEvents && lineBuffer.trim().length > 0) {
-                drainJsonEvents(lineBuffer + '\n', opts as RunChildJsonEventsOptions)
-                lineBuffer = ''
-            }
-            const text = isJsonEvents ? (finalText || textDeltaAccum).trim() : undefined
+            if (sink) sink.flush()
+            const text = sink ? sink.text : undefined
             resolve({stdout, stderr, exitCode: code ?? 0, aborted, text})
         })
         proc.on('error', () => {
@@ -153,127 +279,8 @@ export function runChild(
         })
 
         if (signal) {
-            const kill = () => {
-                aborted = true
-                proc.kill('SIGTERM')
-                setTimeout(() => {
-                    if (!proc.killed) proc.kill('SIGKILL')
-                }, KILL_GRACE_MS)
-            }
-            if (signal.aborted) kill()
-            else signal.addEventListener('abort', kill, {once: true})
-        }
-
-        // ─── JSON event-stream processing ──────────────────────────────────
-
-        /**
-         * Parse every complete (newline-terminated) JSON line in `buf` and
-         * return the trailing partial line, which the caller carries into the
-         * next chunk. This avoids both losing events that span a chunk boundary
-         * and buffering the entire stream.
-         */
-        function drainJsonEvents(buf: string, jsonOpts: RunChildJsonEventsOptions): string {
-            let nl: number
-            while ((nl = buf.indexOf('\n')) !== -1) {
-                const line = buf.slice(0, nl).trim()
-                buf = buf.slice(nl + 1)
-                if (line.length === 0) continue
-                try {
-                    const evt = JSON.parse(line) as Record<string, unknown>
-                    if (evt && typeof evt === 'object') {
-                        handleEvent(evt, jsonOpts)
-                    }
-                } catch {
-                    // Non-JSON line (startup banner, etc.) — ignore.
-                }
-            }
-            return buf
-        }
-
-        function handleEvent(
-            evt: Record<string, unknown>,
-            jsonOpts: RunChildJsonEventsOptions
-        ): void {
-            const t = typeof evt.type === 'string' ? evt.type : ''
-
-            if (t === 'context_usage' && jsonOpts.onContextUsage) {
-                const tokens = Number(evt.tokens ?? 0)
-                const contextWindow = Number(evt.contextWindow ?? 0)
-                const percent = Number(evt.percent ?? 0)
-                if (tokens > 0 || contextWindow > 0) {
-                    jsonOpts.onContextUsage({tokens, contextWindow, percent})
-                }
-                return
-            }
-
-            if (t === 'message_end' && jsonOpts.onContextUsage) {
-                const msg = evt.message as Record<string, unknown> | undefined
-                if (msg?.role === 'assistant') {
-                    const usage = msg.usage as Record<string, unknown> | undefined
-                    if (usage) {
-                        const tokens =
-                            Number(usage.input ?? 0)
-                            + Number(usage.cacheRead ?? 0)
-                            + Number(usage.cacheWrite ?? 0)
-                            + Number(usage.output ?? 0)
-                        if (tokens > 0) {
-                            jsonOpts.onContextUsage({tokens, contextWindow: 0, percent: 0})
-                        }
-                    }
-                }
-                return
-            }
-
-            if (t === 'agent_end' && Array.isArray(evt.messages)) {
-                for (let i = evt.messages.length - 1; i >= 0; i--) {
-                    const m = evt.messages[i] as Record<string, unknown> | undefined
-                    if (m && m.role === 'assistant' && Array.isArray(m.content)) {
-                        const texts: string[] = []
-                        for (const c of m.content as Array<Record<string, unknown>>) {
-                            if (c?.type === 'text' && typeof c.text === 'string') {
-                                texts.push(c.text)
-                            }
-                        }
-                        if (texts.length > 0) {
-                            finalText = texts.join('')
-                            break
-                        }
-                    }
-                }
-                return
-            }
-
-            if (t === 'message_update') {
-                const ame = evt.assistantMessageEvent as Record<string, unknown> | undefined
-                const ameType = ame && typeof ame.type === 'string' ? ame.type : ''
-                if (ameType === 'text_start') {
-                    textDeltaAccum = ''
-                    if (jsonOpts.onLine) jsonOpts.onLine('writing answer…')
-                } else if (ameType === 'text_delta' && typeof ame!.delta === 'string') {
-                    textDeltaAccum += ame!.delta as string
-                } else if (ameType === 'thinking_start' && jsonOpts.onLine) {
-                    jsonOpts.onLine('thinking…')
-                }
-                return
-            }
-
-            if (t === 'tool_execution_start') {
-                const tn = typeof evt.toolName === 'string' ? evt.toolName : 'tool'
-                if (jsonOpts.onLine) {
-                    const detail = summarizeToolArgs(tn, evt.args)
-                    jsonOpts.onLine(detail ? `${tn}: ${detail}` : tn)
-                }
-                if (jsonOpts.onToolCall) {
-                    const hit = jsonOpts.onToolCall({name: tn, args: evt.args})
-                    if (hit) {
-                        aborted = true
-                        proc.kill('SIGTERM')
-                        setTimeout(() => {
-                            if (!proc.killed) proc.kill('SIGKILL')
-                        }, KILL_GRACE_MS)
-                    }
-                }
-            }
+            if (signal.aborted) killProc()
+            else signal.addEventListener('abort', killProc, {once: true})
         }
     })
 }
