@@ -16,7 +16,8 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
     {
         id: 'autoCommit',
         label: 'auto-commit',
-        description: 'git commit after each /task-auto sub-task'
+        description:
+            'git commit around each /task-auto sub-task (checkpoint before, snapshot after)'
     }
 ]
 

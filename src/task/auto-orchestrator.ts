@@ -315,6 +315,20 @@ export async function runAutoLoop(
                     resumeId = undefined
                 }
             }
+            // Before starting, fold any uncommitted work into its own checkpoint
+            // commit so a dirty tree at the start of the run — or edits left behind
+            // by an interrupted/failed task — land separately instead of being swept
+            // into this task's snapshot. Best-effort and a no-op on a clean tree
+            // (gitCommitAll commits nothing), so it only ever produces a commit when
+            // there is stray work; the matching post-task commit below is the "after"
+            // half. Only the success path is announced to keep the common no-op quiet.
+            const checkpoint = await deps.commit(cwd, `chore: checkpoint before "${next.title}"`)
+            if (checkpoint.committed) {
+                active.ui.notify(
+                    `${id}: checkpointed uncommitted work before "${next.title}".`,
+                    'info'
+                )
+            }
             const res = await deps.runTask(active, cwd, next.title, {
                 resumeId,
                 onStart:

@@ -239,8 +239,15 @@ test('runAutoLoop: runs each title in order, checks boxes, completes', async () 
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         expect(ran).toEqual(['A', 'B'])
-        // One commit per passing task, message is `task: <title> (<taskId>)`.
-        expect(commits).toEqual(['task: A (TASK_0006)', 'task: B (TASK_0007)'])
+        // Each task is bracketed by a pre-start checkpoint commit and a post-task
+        // commit (`task: <title> (<taskId>)`). On a clean tree the checkpoint is a
+        // real no-op, but the fake commit always reports success, so both calls show.
+        expect(commits).toEqual([
+            'chore: checkpoint before "A"',
+            'task: A (TASK_0006)',
+            'chore: checkpoint before "B"',
+            'task: B (TASK_0007)'
+        ])
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body).every(e => e.done)).toBe(true)
@@ -279,6 +286,37 @@ test('runAutoLoop: adopts each task\'s replacement ctx; never touches a stale on
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body).every(e => e.done)).toBe(true)
         expect(captured.notifies.some(nf => /complete/i.test(nf.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: pre-task checkpoint announces only when it actually commits', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        let n = 6
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false}),
+            // Dirty tree before A (checkpoint commits), clean before B (no-op); the
+            // post-task `task: ...` commits always land.
+            commit: (_cwd, message) =>
+                Promise.resolve(
+                    message === 'chore: checkpoint before "B"' ?
+                        {committed: false, reason: 'nothing to commit'}
+                    :   {committed: true}
+                )
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // Exactly one checkpoint announcement — the dirty one before A, not the
+        // clean no-op before B.
+        const checkpointed = captured.notifies.filter(nf => /checkpointed uncommitted/.test(nf.msg))
+        expect(checkpointed.length).toBe(1)
+        expect(checkpointed[0]?.msg).toContain('"A"')
     })
 })
 
