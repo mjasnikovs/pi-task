@@ -89,6 +89,15 @@ export function parseClarifyList(raw: string): ClarifyQuestion[] {
 
 // ─── Auto-answer parser ──────────────────────────────────────────────────────
 
+// Did the model use one of the required output tags (ANSWER/UNKNOWN/ALT,
+// tolerating the same ANSWER misspellings parseAutoAnswer accepts)? When no tag
+// is present the model ignored the format and wrote free-form prose, so the
+// caller reprompts instead of trusting parseAutoAnswer's lenient salvage.
+const AUTO_ANSWER_TAG_RE = /^\s*(AN[SW]{1,3}E?R|UNKNOWN|ALT)\s*:/im
+export function autoAnswerHasTag(raw: string): boolean {
+    return AUTO_ANSWER_TAG_RE.test(raw)
+}
+
 export function parseAutoAnswer(raw: string): AutoAnswer {
     const lines = raw
         .split('\n')
@@ -128,7 +137,14 @@ export function parseAutoAnswer(raw: string): AutoAnswer {
             raw
         }
     }
-    if (lines.length > 0) return {kind: 'unknown', suggested: lines[0], raw}
+    // Last-resort salvage: the model emitted no tag at all. Take the first line
+    // that reads like an answer, NOT a preamble — a trailing colon marks a
+    // heading ("Here's the analysis:") that introduces prose rather than
+    // recommending anything. Surfacing such a line as the recommendation is the
+    // "wrong format" the user sees; better to offer no default and let them
+    // answer than to pre-fill a meaningless preamble.
+    const salvaged = lines.find(l => !l.endsWith(':'))
+    if (salvaged) return {kind: 'unknown', suggested: salvaged, raw}
     return {kind: 'unknown', raw}
 }
 

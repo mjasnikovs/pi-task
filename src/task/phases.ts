@@ -22,6 +22,7 @@ import {
     RESEARCH_TOOLING_PROMPT,
     GRILL_GEN_PROMPT,
     GRILL_AUTO_ANSWER_PROMPT,
+    GRILL_AUTO_FORMAT_HINT,
     COMPOSE_PROMPT,
     CRITIQUE_PROMPT,
     CRITIQUE_TRIAGE_PROMPT,
@@ -36,6 +37,7 @@ import {type WidgetState} from './widget.js'
 import {
     parseGrillQuestions,
     parseAutoAnswer,
+    autoAnswerHasTag,
     parseVerifyToolingOutput,
     deriveTitle,
     type AutoAnswer
@@ -416,12 +418,21 @@ export async function phaseAutoAnswer(
                 `EXTERNAL CONTEXT\n${contextSections.join('\n\n')}\n\n`
             :   ''
 
-        const text = await runPhaseChild(
-            deps,
-            'grill-auto',
-            'read',
+        const basePrompt =
             externalContext + GRILL_AUTO_ANSWER_PROMPT(refined, research, question)
-        )
+        let text = await runPhaseChild(deps, 'grill-auto', 'read', basePrompt)
+        if (!autoAnswerHasTag(text)) {
+            // The model ignored the ANSWER/UNKNOWN/ALT format and wrote prose
+            // (typically an "analysis" preamble). Reprompt once, forcing the
+            // tagged form, before falling back to parseAutoAnswer's salvage —
+            // otherwise a preamble line leaks out as the recommended answer.
+            text = await runPhaseChild(
+                deps,
+                'grill-auto',
+                'read',
+                prependHint(GRILL_AUTO_FORMAT_HINT, basePrompt)
+            )
+        }
         return parseAutoAnswer(text)
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

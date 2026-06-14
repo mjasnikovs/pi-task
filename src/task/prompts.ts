@@ -247,6 +247,17 @@ ${research}
 
 Question: ${question}`
 
+// Reprompt prefix when grill-auto's first reply ignored the tagged output format
+// and wrote free-form prose (an "analysis" preamble). Forces the terse form so a
+// real recommendation reaches the user instead of a leaked preamble line.
+export const GRILL_AUTO_FORMAT_HINT =
+    '[SYSTEM NOTE: Your previous reply did NOT follow the required format — it had no '
+    + 'ANSWER:, UNKNOWN:, or ALT: line and read as free-form prose. Do not explain or '
+    + 'analyse. Output ONLY the tagged lines and nothing else. For a binary "A or B?" '
+    + 'question emit two lines:\nUNKNOWN: <primary option>\nALT: <alternative>\n'
+    + 'For a safe default the user would accept without thinking, emit one ANSWER: line. '
+    + 'No preamble, no markdown.]'
+
 function composeRetryEmphasis(problem: string): string {
     if (
         problem === 'spec does not start with GOAL'

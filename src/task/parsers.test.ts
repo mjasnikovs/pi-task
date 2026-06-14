@@ -1,5 +1,11 @@
 import {describe, expect, test} from 'bun:test'
-import {parseGrillQuestions, parseClarifyList, parseAutoAnswer, deriveTitle} from './parsers.js'
+import {
+    parseGrillQuestions,
+    parseClarifyList,
+    parseAutoAnswer,
+    autoAnswerHasTag,
+    deriveTitle
+} from './parsers.js'
 
 describe('parseGrillQuestions', () => {
     test('parses numbered lines with "."', () => {
@@ -148,6 +154,38 @@ describe('parseAutoAnswer', () => {
         const r = parseAutoAnswer('probably this\nor maybe that')
         expect(r.kind).toBe('unknown')
         if (r.kind === 'unknown') expect(r.suggested).toBe('probably this')
+    })
+
+    test('does not surface a preamble heading (trailing colon) as the suggestion', () => {
+        const r = parseAutoAnswer(
+            "This is a concrete implementation decision with trade-offs. Here's the analysis:"
+        )
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') expect(r.suggested).toBeUndefined()
+    })
+
+    test('skips a preamble heading and salvages the first real line', () => {
+        const r = parseAutoAnswer('Here is the analysis:\ndefer the phone column')
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') expect(r.suggested).toBe('defer the phone column')
+    })
+})
+
+describe('autoAnswerHasTag', () => {
+    test('true for ANSWER/UNKNOWN/ALT lines, including typos and leading space', () => {
+        expect(autoAnswerHasTag('ANSWER: npm')).toBe(true)
+        expect(autoAnswerHasTag('UNKNOWN: use npm\nALT: use pnpm')).toBe(true)
+        expect(autoAnswerHasTag('  UNKNOWN:')).toBe(true)
+        expect(autoAnswerHasTag('ANSER: do the thing')).toBe(true)
+    })
+
+    test('false when the model wrote free-form prose with no tag', () => {
+        expect(
+            autoAnswerHasTag(
+                "This is a concrete implementation decision. Here's the analysis:"
+            )
+        ).toBe(false)
+        expect(autoAnswerHasTag('')).toBe(false)
     })
 
     test('returns unknown with no suggestion on empty input', () => {

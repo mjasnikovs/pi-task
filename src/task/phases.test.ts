@@ -753,6 +753,49 @@ describe('phaseAutoAnswer enrichment', () => {
             expect(result.kind).toBe('unknown')
         })
     })
+
+    test('reprompts with the format hint when the first reply is untagged prose', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'grill',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const promptsSeen: string[] = []
+            let call = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                promptsSeen.push(args[args.length - 1] as string)
+                call += 1
+                // First reply ignores the format (free-form "analysis" preamble);
+                // the second, post-hint reply is properly tagged.
+                const text =
+                    call === 1 ?
+                        "This is a concrete implementation decision. Here's the analysis:"
+                    :   'UNKNOWN: create the phone column now\nALT: defer to email-only auth'
+                return agentEndResponse(text)
+            })
+            const result = await phaseAutoAnswer(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'refined',
+                'research',
+                'Create the phone column now, or defer it?'
+            )
+            expect(promptsSeen.length).toBe(2)
+            expect(promptsSeen[1]).toContain('did NOT follow the required format')
+            expect(result.kind).toBe('unknown')
+            if (result.kind === 'unknown') {
+                expect(result.suggested).toBe('create the phone column now')
+                expect(result.alt).toBe('defer to email-only auth')
+            }
+        })
+    })
 })
 
 // A bare-bones ExtensionCommandContext stub. Cast through unknown so the test
