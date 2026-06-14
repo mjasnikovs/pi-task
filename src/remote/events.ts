@@ -38,7 +38,8 @@ export function setupEvents(pi: ExtensionAPI): void {
             if (errorMessage || ae.reason === 'error') {
                 const message = errorMessage || 'Request failed'
                 addError(message)
-                if (!hasConnectedClients()) void pushNotify('Agent error', message, 'pi-error').catch(() => {})
+                if (!hasConnectedClients())
+                    void pushNotify('Agent error', message, 'pi-error').catch(() => {})
             }
         }
     })

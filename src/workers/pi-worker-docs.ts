@@ -141,7 +141,10 @@ export function registerPiWorkerDocs(
                 if (projectResult.kind === 'no_chunks') {
                     return textResult(
                         `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
-                        {hitCache: projectResult.hitCache, indexedFiles: projectResult.filesIngested}
+                        {
+                            hitCache: projectResult.hitCache,
+                            indexedFiles: projectResult.filesIngested
+                        }
                     )
                 }
 
@@ -174,11 +177,15 @@ export function registerPiWorkerDocs(
 
                 const parsed = parseChildOutput(child.stdout)
                 const verified =
-                    parsed.excerpt ?
-                        isExcerptInContent(parsed.excerpt, concatenated)
-                    :   undefined
+                    parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
                 const text = formatResultText(
-                    {name: projectName, version: 'local', root: ctx.cwd, entryDts: null, readme: null},
+                    {
+                        name: projectName,
+                        version: 'local',
+                        root: ctx.cwd,
+                        entryDts: null,
+                        readme: null
+                    },
                     parsed,
                     verified
                 )

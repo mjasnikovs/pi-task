@@ -226,7 +226,9 @@ export class TaskRunner {
         const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
         this._deps.logDebug = (msg: string) => {
             const line = `${new Date().toISOString()} ${msg}\n`
-            fsp.appendFile(debugLogPath, line).catch(() => {/* ignore */})
+            fsp.appendFile(debugLogPath, line).catch(() => {
+                /* ignore */
+            })
         }
         this._deps.logDebug(`run: start phase=${resumePhase}`)
 
