@@ -777,7 +777,7 @@ describe('phaseAutoAnswer enrichment', () => {
                 // the second, post-hint reply is properly tagged.
                 const text =
                     call === 1 ?
-                        "This is a concrete implementation decision. Here's the analysis:"
+                        'This is a concrete implementation decision. Here\'s the analysis:'
                     :   'UNKNOWN: create the phone column now\nALT: defer to email-only auth'
                 return agentEndResponse(text)
             })

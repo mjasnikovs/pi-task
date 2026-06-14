@@ -418,8 +418,7 @@ export async function phaseAutoAnswer(
                 `EXTERNAL CONTEXT\n${contextSections.join('\n\n')}\n\n`
             :   ''
 
-        const basePrompt =
-            externalContext + GRILL_AUTO_ANSWER_PROMPT(refined, research, question)
+        const basePrompt = externalContext + GRILL_AUTO_ANSWER_PROMPT(refined, research, question)
         let text = await runPhaseChild(deps, 'grill-auto', 'read', basePrompt)
         if (!autoAnswerHasTag(text)) {
             // The model ignored the ANSWER/UNKNOWN/ALT format and wrote prose
