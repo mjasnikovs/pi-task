@@ -28,7 +28,8 @@ import {
     MAX_GRILL_QUESTIONS,
     appendNoThink
 } from './prompts.js'
-import {setTaskSection, updateTaskFrontMatter, type PhaseName} from './task-file.js'
+import {setTaskSection, updateTaskFrontMatter} from './task-io.js'
+import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {type WidgetState} from './widget.js'
 import {

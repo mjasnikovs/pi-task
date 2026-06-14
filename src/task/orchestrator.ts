@@ -24,22 +24,22 @@ import {handleFailure} from './failure-classifier.js'
 import {
     PHASE_INDEX,
     PHASE_ORDER,
+    RESUMABLE_STATES,
+    type TaskFrontMatter,
+    type PhaseName
+} from './task-types.js'
+import {normaliseTaskId, parseFrontMatter, extractSection} from './task-parsers.js'
+import {
     allocateTaskId,
     ensureTasksDir,
-    normaliseTaskId,
-    parseFrontMatter,
     readSection,
     readTaskFile,
     setTaskSection,
     taskFilePath,
     tasksDir,
     updateTaskFrontMatter,
-    writeTaskFile,
-    extractSection,
-    type TaskFrontMatter,
-    type PhaseName,
-    RESUMABLE_STATES
-} from './task-file.js'
+    writeTaskFile
+} from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {parseVerifyBlock} from './parsers.js'

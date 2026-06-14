@@ -8,7 +8,7 @@ import {
     buildAutoBody,
     checkOffTask
 } from './auto-io.js'
-import {writeTaskFile, readTaskFile} from './task-file.js'
+import {writeTaskFile, readTaskFile} from './task-io.js'
 import type {TaskFrontMatter} from './task-types.js'
 
 function fm(id: string, state: string) {

@@ -4,7 +4,7 @@
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {updateTaskFrontMatter} from './task-file.js'
+import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
 import {LoopExhaustedError, LeakedToolCallError, USER_CANCELLED} from './child-runner.js'
 

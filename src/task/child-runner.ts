@@ -22,7 +22,7 @@ import {
     leakedToolCallHint,
     MAX_LEAK_RETRIES
 } from '../shared/leaked-tool-call.js'
-import {readSection, setTaskSection} from './task-file.js'
+import {readSection, setTaskSection} from './task-io.js'
 
 // ─── Loop detection constants ────────────────────────────────────────────────
 // Defined here (not in phases.ts) to avoid a circular dependency:

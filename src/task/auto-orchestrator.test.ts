@@ -8,7 +8,7 @@ import {
     expandFeatureMentions,
     type AutoDeps
 } from './auto-orchestrator.js'
-import {readTaskFile, writeTaskFile} from './task-file.js'
+import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'

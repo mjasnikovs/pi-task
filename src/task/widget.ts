@@ -6,7 +6,7 @@
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-file.js'
+import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-types.js'
 import {setTaskWidget} from '../remote/session-state.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
