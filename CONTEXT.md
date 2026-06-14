@@ -18,6 +18,15 @@ concept get that concept recorded here.
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).
+- **External context** — the `EXTERNAL CONTEXT` block the research phase prepends
+  to every worker prompt: live npm versions, package docs, fetched URLs, and
+  service searches, gathered from targets parsed out of the refined spec.
+  Assembled by `gatherExternalContext` (`task/external-context.ts`); target
+  parsing is the pure `enrichment.ts`. `phaseResearch` calls it, then runs the
+  four research workers (data-driven `workerSpecs`, assembled by `section`).
+  > `phaseAutoAnswer` still has its own near-duplicate enrichment block (uses the
+  > *focused* worker variants, not the *raw* ones) — a tracked candidate to unify
+  > once the focused-extractor seam exists.
 
 ## Worker tools
 

@@ -4,8 +4,8 @@
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {docsRaw, docsFocused} from '../workers/docs-core.js'
-import {fetchRaw, fetchFocused} from '../workers/fetch-core.js'
+import {docsFocused} from '../workers/docs-core.js'
+import {fetchFocused} from '../workers/fetch-core.js'
 import {formatNpmVersionSection} from '../workers/npm-version.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {search as defaultSearch} from '../workers/search-core.js'
@@ -13,6 +13,7 @@ import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {getFileInventory} from './file-inventory.js'
 import {formatServiceBlock, formatFreshnessSkippedBlock} from './service-blocks.js'
+import {gatherExternalContext, type ExternalContextDeps} from './external-context.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -155,11 +156,8 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
     return replaceToolingWithVerified(research, parsed.verified)
 }
 
-export interface PhaseResearchDeps {
-    docsRaw?: typeof docsRaw
-    fetchRaw?: typeof fetchRaw
+export interface PhaseResearchDeps extends ExternalContextDeps {
     getFileInventory?: (cwd: string, signal?: AbortSignal) => Promise<string>
-    searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
 }
 
 const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
@@ -169,97 +167,8 @@ export async function phaseResearch(
     refined: string,
     researchDeps: PhaseResearchDeps = {}
 ): Promise<string> {
-    const docsRawFn = researchDeps.docsRaw ?? docsRaw
-    const fetchRawFn = researchDeps.fetchRaw ?? fetchRaw
     const fileInventoryFn = researchDeps.getFileInventory ?? getFileInventory
-    const searchFn = researchDeps.searchFn ?? defaultSearch
-    const enrichTargets = extractEnrichTargets(refined)
-    const enrichSections: string[] = []
-
-    if (
-        enrichTargets.packages.length > 0
-        || enrichTargets.urls.length > 0
-        || enrichTargets.services.length > 0
-    ) {
-        const tEnrichStart = Date.now()
-        const [docsResults, fetchResults, serviceResults] = await Promise.all([
-            Promise.all(
-                enrichTargets.packages.map(pkg =>
-                    docsRawFn({
-                        pkg,
-                        query: refined.split('\n').find(l => l.trim()) ?? refined,
-                        cwd: deps.cwd,
-                        signal: deps.signal
-                    }).catch(() => null)
-                )
-            ),
-            Promise.all(
-                enrichTargets.urls.map(url =>
-                    fetchRawFn({url, signal: deps.signal}).catch(() => null)
-                )
-            ),
-            Promise.all(
-                enrichTargets.services.map(s =>
-                    searchFn({
-                        query: `${s.name} ${s.query}`,
-                        count: 3,
-                        signal: deps.signal
-                    }).catch(() => null)
-                )
-            )
-        ])
-
-        // npm version blocks come from docsRaw's bundled lookup and lead the
-        // section so the model anchors on live version data before reading
-        // the docs body.
-        for (let i = 0; i < enrichTargets.packages.length; i++) {
-            const v = docsResults[i]?.npmVersion
-            if (v) enrichSections.push(formatNpmVersionSection(v))
-        }
-
-        for (let i = 0; i < enrichTargets.packages.length; i++) {
-            const r = docsResults[i]
-            if (r?.kind === 'ok' && r.chunks.length > 0) {
-                const body = r.chunks
-                    .map(c => c.content)
-                    .join('\n\n')
-                    .slice(0, 4000)
-                enrichSections.push(`### docs: ${enrichTargets.packages[i]}\n${body}`)
-            }
-        }
-
-        for (let i = 0; i < enrichTargets.urls.length; i++) {
-            const r = fetchResults[i]
-            if (r) {
-                enrichSections.push(
-                    `### url: ${enrichTargets.urls[i]}\n${r.markdown.slice(0, 4000)}`
-                )
-            }
-        }
-
-        const skipped: string[] = []
-        for (let i = 0; i < enrichTargets.services.length; i++) {
-            const s = enrichTargets.services[i]
-            const r = serviceResults[i]
-            if (r === null) continue
-            if (r.kind === 'no_key') {
-                skipped.push(s.name)
-                continue
-            }
-            if (r.kind === 'error') continue
-            // kind === 'ok'
-            enrichSections.push(formatServiceBlock(s.name, `${s.name} ${s.query}`, r.results))
-        }
-
-        if (skipped.length > 0) {
-            enrichSections.push(formatFreshnessSkippedBlock(skipped))
-        }
-
-        deps.recordSubStep?.('enrichment', Date.now() - tEnrichStart)
-    }
-
-    const externalContext =
-        enrichSections.length > 0 ? `EXTERNAL CONTEXT\n${enrichSections.join('\n\n')}\n\n` : ''
+    const externalContext = await gatherExternalContext(refined, deps, researchDeps)
 
     // Pre-compute the project file inventory once and hand it to every worker.
     // Workers can then jump straight to targeted read/grep on known paths
@@ -274,7 +183,9 @@ export async function phaseResearch(
     let doneCount = 0
     const updateProgress = (): void => {
         doneCount++
-        if (deps.onChildOutput) deps.onChildOutput(`research (${doneCount}/4 workers done)`)
+        if (deps.onChildOutput) {
+            deps.onChildOutput(`research (${doneCount}/${workerSpecs.length} workers done)`)
+        }
     }
 
     // Per-worker timing split into wait (spawn → first byte) and work (first
@@ -312,22 +223,27 @@ export async function phaseResearch(
     // between them. See appendNoThink. Result order (files, apis, context,
     // tooling) is preserved for assembly.
     const workerSpecs: Array<{
+        /** Section heading this worker's output is assembled under. */
+        section: string
         label: string
         prompt: string
         tools?: string
         extensions?: string[]
     }> = [
         {
+            section: 'FILES',
             label: 'worker:files',
             prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
         },
         {
+            section: 'APIS',
             label: 'worker:apis',
             prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined)),
             tools: 'read,grep,find,ls,pi-worker-docs',
             extensions: [DOCS_EXTENSION_PATH]
         },
         {
+            section: 'CONTEXT',
             label: 'worker:context',
             prompt: appendNoThink(promptHeader + RESEARCH_CONTEXT_PROMPT(refined)),
             // Context owns architectural understanding, not path discovery —
@@ -337,6 +253,7 @@ export async function phaseResearch(
             tools: 'read,grep'
         },
         {
+            section: 'TOOLING',
             label: 'worker:tooling',
             prompt: appendNoThink(promptHeader + RESEARCH_TOOLING_PROMPT(refined))
         }
@@ -368,14 +285,11 @@ export async function phaseResearch(
         updateProgress()
         workerResults.push(r)
     }
-    const [files, apis, context, tooling] = workerResults
 
-    const sections = [
-        {name: 'FILES', result: files},
-        {name: 'APIS', result: apis},
-        {name: 'CONTEXT', result: context},
-        {name: 'TOOLING', result: tooling}
-    ]
+    // Validate + assemble by mapping spec.section over the results, so adding or
+    // reordering a worker is a single edit to workerSpecs (the result order
+    // mirrors workerSpecs order — the loop above pushes in sequence).
+    const sections = workerSpecs.map((spec, i) => ({name: spec.section, result: workerResults[i]}))
     for (const {name, result} of sections) {
         if (result.exitCode !== 0) {
             throw new Error(
@@ -393,7 +307,7 @@ export async function phaseResearch(
         }
     }
 
-    return `FILES\n${files.text}\n\nAPIS\n${apis.text}\n\nCONTEXT\n${context.text}\n\nTOOLING\n${tooling.text}`
+    return sections.map(({name, result}) => `${name}\n${result.text}`).join('\n\n')
 }
 
 export interface PhaseAutoAnswerDeps {
