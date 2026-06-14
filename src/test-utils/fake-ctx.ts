@@ -31,6 +31,7 @@ export interface FakeCtxHandle {
     captured: {
         notifies: CapturedNotify[]
         inputs: Array<{title: string; default?: string}>
+        selects: Array<{title: string; options: string[]}>
         widgets: CapturedWidget[]
         editorTexts: string[]
         editors: Array<{title: string; content: string}>
@@ -39,6 +40,7 @@ export interface FakeCtxHandle {
         calls: string[]
     }
     queueInput: (value: string | undefined) => void
+    queueSelect: (value: string | undefined) => void
     queueEditor: (value: string | undefined) => void
 }
 
@@ -48,10 +50,12 @@ const STALE_MSG =
 
 export function makeFakeCtx(cwd: string): FakeCtxHandle {
     const inputQueue: Array<string | undefined> = []
+    const selectQueue: Array<string | undefined> = []
     const editorQueue: Array<string | undefined> = []
     const captured: FakeCtxHandle['captured'] = {
         notifies: [],
         inputs: [],
+        selects: [],
         widgets: [],
         editorTexts: [],
         editors: [],
@@ -86,6 +90,11 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                     captured.inputs.push({title, default: defaultValue})
                     if (inputQueue.length === 0) return undefined
                     return inputQueue.shift()
+                }),
+                select: guard(async (title: string, options: string[]) => {
+                    captured.selects.push({title, options})
+                    if (selectQueue.length === 0) return undefined
+                    return selectQueue.shift()
                 }),
                 setWidget: guard((key: string, widgetState: unknown) => {
                     captured.widgets.push({key, state: widgetState})
@@ -131,6 +140,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         captured,
         queueInput: (value: string | undefined) => {
             inputQueue.push(value)
+        },
+        queueSelect: (value: string | undefined) => {
+            selectQueue.push(value)
         },
         queueEditor: (value: string | undefined) => {
             editorQueue.push(value)

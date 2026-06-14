@@ -121,32 +121,40 @@ export async function planAuto(
         const plainQ = stripInlineMarkdown(question)
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
         const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
-        // Compact A/B presentation, identical to /task's grill dialog: a binary
-        // fork shows both options labelled A/B; a single recommendation shows just
-        // the default; an open question shows the bare prompt. No verbose
-        // "Recommended:" / "press Enter to accept" scaffolding.
+        // Identical to /task's grill dialog: a binary fork becomes a select()
+        // picker locally — each option on its own line, labelled A/B; a single
+        // recommendation rides under the question as the input default; an open
+        // question shows the bare prompt. No verbose "Recommended:" /
+        // "press Enter to accept" scaffolding.
+        const twoOption = plainSuggested !== undefined && plainAlt !== undefined
         const title =
-            plainSuggested ?
-                plainAlt ?
-                    `${shownQ}\nA: ${renderInlineMarkdown(suggested!, theme)}\nB: ${renderInlineMarkdown(alt!, theme)}`
-                :   `${shownQ}\n${renderInlineMarkdown(suggested!, theme)}`
+            !twoOption && plainSuggested ?
+                `${shownQ}\n${renderInlineMarkdown(suggested!, theme)}`
             :   shownQ
         const a = await ui.ask({
             localTitle: title,
             question: plainQ,
             recommended: plainSuggested,
             ...(plainAlt !== undefined && {recommended2: plainAlt}),
-            allowSkip: plainSuggested === undefined && plainAlt === undefined
+            allowSkip: plainSuggested === undefined && plainAlt === undefined,
+            ...(twoOption && {
+                options: [
+                    {
+                        label: `A: ${renderInlineMarkdown(suggested!, theme)}`,
+                        value: plainSuggested!
+                    },
+                    {label: `B: ${renderInlineMarkdown(alt!, theme)}`, value: plainAlt!}
+                ]
+            })
         })
         if (a === undefined) {
             ctx.ui.notify('/task-auto cancelled.', 'warning')
             return null
         }
         const typed = a.trim()
-        // Two-option mode labels the choices "A:"/"B:", so a user (local TUI or
-        // remote "Manual answer") naturally types the bare letter to pick. Map it
-        // back to the option's full text. Mirrors phaseGrill's answer mapping.
-        const twoOption = plainSuggested !== undefined && plainAlt !== undefined
+        // The local picker resolves to the chosen option's full value, but a
+        // remote user (or the picker's free-text fallback) may still type a bare
+        // "A"/"B" — map those back to the option's full text. Mirrors phaseGrill.
         let answer: string
         if (typed.length === 0 && plainSuggested) {
             answer = `${plainSuggested} (accepted recommendation)`

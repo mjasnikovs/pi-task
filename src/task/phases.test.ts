@@ -934,17 +934,18 @@ describe('phaseGrill', () => {
         })
     })
 
-    test('two-option grill: typing the bare letter "A"/"B" selects that option, not the literal letter', async () => {
-        // The two-option prompt labels its choices "A:" / "B:", which trains the
-        // user to type the letter to pick. Records must store the chosen option's
-        // full text so the next grill-gen call can reason over it — storing the
-        // bare "A" leaves a dangling reference the model can't decode.
-        const pick = (letter: string) =>
+    test('two-option grill: picking A/B in the select picker stores that option, not the label', async () => {
+        // The binary fork renders as a select() picker labelled "A:" / "B:".
+        // Records must store the chosen option's full text so the next grill-gen
+        // call can reason over it — storing the bare "A" (or the "A: " label)
+        // would leave a dangling reference the model can't decode.
+        const pickIndex = (idx: number) =>
             ({
                 hasUI: true,
                 ui: {
-                    theme: {fg: (_: string, s: string) => s},
-                    input: async () => letter,
+                    theme: {fg: (_: string, s: string) => s, bold: (s: string) => s},
+                    select: async (_t: string, options: string[]) => options[idx],
+                    input: async () => undefined,
                     notify: () => undefined
                 }
             }) as unknown as ExtensionCommandContext
@@ -965,13 +966,13 @@ describe('phaseGrill', () => {
                     signal: new AbortController().signal,
                     spawn: twoOption()
                 },
-                pick('A'),
+                pickIndex(0), // the "A: …" entry
                 stubWidgetState,
                 'refined-task',
                 'research-notes'
             )
             expect(outA).toContain('A1: return false')
-            expect(outA).not.toMatch(/A1: A\b/)
+            expect(outA).not.toMatch(/A1: A:/)
 
             const outB = await phaseGrill(
                 {
@@ -980,13 +981,13 @@ describe('phaseGrill', () => {
                     signal: new AbortController().signal,
                     spawn: twoOption()
                 },
-                pick('B'),
+                pickIndex(1), // the "B: …" entry
                 stubWidgetState,
                 'refined-task',
                 'research-notes'
             )
             expect(outB).toContain('A1: return true and force a change')
-            expect(outB).not.toMatch(/A1: B\b/)
+            expect(outB).not.toMatch(/A1: B:/)
         })
     })
 

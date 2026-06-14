@@ -73,18 +73,23 @@ test('planAuto: offers the recommendation as placeholder and in the title', asyn
     })
 })
 
-test('planAuto: a binary fork offers two options (A/B) like the grill dialog', async () => {
+test('planAuto: a binary fork offers two options (A/B) as a select picker', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx, captured, queueInput} = makeFakeCtx(dir)
-        queueInput('B') // pick the alternative by its label
+        const {ctx, captured, queueSelect} = makeFakeCtx(dir)
+        queueSelect('B: pnpm') // pick the alternative from the picker
         const d = seqDeps(['1. npm or pnpm?\nSUGGESTED: npm\nALT: pnpm'], '- [ ] Task A')
         const id = await planAuto(ctx, dir, 'set up tooling', d)
-        // Both options surface in the title, labelled A/B; the primary is the
-        // editable default (the alt rides along as the remote's second button).
-        expect(captured.inputs[0].title).toContain('A: npm')
-        expect(captured.inputs[0].title).toContain('B: pnpm')
-        expect(captured.inputs[0].default).toBe('npm')
-        // Typing the bare letter "B" maps back to the alt option's full text.
+        // The fork renders as a select() picker: both options are listed, labelled
+        // A/B, with the free-text fallback appended. No bare text input is shown.
+        expect(captured.inputs).toHaveLength(0)
+        expect(captured.selects).toHaveLength(1)
+        expect(captured.selects[0].options).toContain('A: npm')
+        expect(captured.selects[0].options).toContain('B: pnpm')
+        expect(captured.selects[0].options).toContain('Type a different answer…')
+        // The question is the picker title; the A/B options are not crammed into it.
+        expect(captured.selects[0].title).toContain('npm or pnpm?')
+        expect(captured.selects[0].title).not.toContain('A: npm')
+        // Picking the B entry maps back to the alt option's full text.
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: pnpm')
     })

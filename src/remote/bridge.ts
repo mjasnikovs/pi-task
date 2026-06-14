@@ -59,7 +59,21 @@ export interface AskSpec {
     recommended2?: string
     /** Whether the browser card shows a Skip button (answers with empty string). */
     allowSkip: boolean
+    /**
+     * When set, the local TUI shows a select() picker of these entries instead of
+     * a bare text input — one option per line, arrow-key navigable. Each entry's
+     * `label` is what the picker displays; its `value` is what ask() resolves to
+     * when chosen. A built-in "type a different answer" entry is appended that
+     * falls back to a text input, preserving the free-text override. Used for the
+     * binary A/B grill/clarify fork. Remote browsers ignore this and keep
+     * rendering recommended/recommended2 as buttons.
+     */
+    options?: {label: string; value: string}[]
 }
+
+/** Trailing picker entry that drops to a free-text input — the local mirror of
+ *  the remote card's "✎ Manual answer" button. */
+const TYPE_OWN_LABEL = 'Type a different answer…'
 
 /** Wraps a live command ctx and fans interactions out to local TUI + browsers. */
 export class SessionUI {
@@ -104,9 +118,7 @@ export class SessionUI {
         // the rejection some implementations throw on abort so it never leaks.
         const local: Promise<string | undefined> =
             this.ctx.hasUI ?
-                this.ctx.ui
-                    .input(spec.localTitle, spec.recommended, {signal: ac.signal})
-                    .catch(() => undefined)
+                this.askLocal(spec, ac.signal).catch(() => undefined)
             :   new Promise<string | undefined>(() => {})
 
         try {
@@ -120,6 +132,31 @@ export class SessionUI {
             b.pending.delete(id)
             clearPrompt(id)
         }
+    }
+
+    /**
+     * The local-TUI half of ask(). With `spec.options` it renders a select()
+     * picker (each option on its own line) plus a trailing "type a different
+     * answer" entry that drops to a text input; the chosen entry's `value` is
+     * returned. Without options it falls back to a single text input. Cancelling
+     * either dialog (or an abort when the remote wins the race) resolves to
+     * undefined.
+     */
+    private async askLocal(spec: AskSpec, signal: AbortSignal): Promise<string | undefined> {
+        const opts = spec.options
+        if (opts && opts.length > 0) {
+            const labels = opts.map(o => o.label)
+            const choice = await this.ctx.ui.select(spec.localTitle, [...labels, TYPE_OWN_LABEL], {
+                signal
+            })
+            if (choice === undefined) return undefined // cancelled / aborted
+            if (choice === TYPE_OWN_LABEL) {
+                return this.ctx.ui.input(spec.localTitle, undefined, {signal})
+            }
+            const hit = opts.find(o => o.label === choice)
+            return hit ? hit.value : choice
+        }
+        return this.ctx.ui.input(spec.localTitle, spec.recommended, {signal})
     }
 }
 

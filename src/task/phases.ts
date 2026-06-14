@@ -486,11 +486,14 @@ export async function phaseGrill(
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
             const plainAlt = auto.alt === undefined ? undefined : stripInlineMarkdown(auto.alt)
+            // A binary fork (suggested + alt) becomes a select() picker locally —
+            // each option on its own line, labelled A/B. A single recommendation
+            // rides along under the question as the input default; an open
+            // question shows the bare prompt.
+            const twoOption = plainSuggested !== undefined && plainAlt !== undefined
             const localTitle =
-                plainSuggested ?
-                    plainAlt ?
-                        `${shownQ}\nA: ${renderInlineMarkdown(auto.suggested!, theme)}\nB: ${renderInlineMarkdown(auto.alt!, theme)}`
-                    :   `${shownQ}\n${renderInlineMarkdown(auto.suggested!, theme)}`
+                !twoOption && plainSuggested ?
+                    `${shownQ}\n${renderInlineMarkdown(auto.suggested!, theme)}`
                 :   shownQ
             widgetState.lastLine = `awaiting Q${n + 1}`
             const a = await ui.ask({
@@ -498,15 +501,24 @@ export async function phaseGrill(
                 question: plainQ,
                 recommended: plainSuggested,
                 recommended2: plainAlt,
-                allowSkip: plainSuggested === undefined && plainAlt === undefined
+                allowSkip: plainSuggested === undefined && plainAlt === undefined,
+                ...(twoOption && {
+                    options: [
+                        {
+                            label: `A: ${renderInlineMarkdown(auto.suggested!, theme)}`,
+                            value: plainSuggested!
+                        },
+                        {label: `B: ${renderInlineMarkdown(auto.alt!, theme)}`, value: plainAlt!}
+                    ]
+                })
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
             const typed = a.trim()
-            // Two-option mode labels the choices "A:"/"B:", so a user (local TUI
-            // or remote "Manual answer") naturally types the bare letter to pick.
-            // Map it back to the option's full text — storing the literal "A"
-            // leaves the next grill-gen call a dangling reference it can't decode.
-            const twoOption = plainSuggested !== undefined && plainAlt !== undefined
+            // The local picker resolves to the chosen option's full value, but a
+            // remote user (or the picker's free-text fallback) may still type a
+            // bare "A"/"B" — map those back to the option's full text, since
+            // storing the literal letter leaves the next grill-gen call a
+            // dangling reference it can't decode.
             if (typed.length === 0 && plainSuggested) {
                 answer = plainSuggested
             } else if (typed.length === 0) {

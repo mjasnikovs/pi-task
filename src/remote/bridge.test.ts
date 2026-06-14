@@ -105,6 +105,71 @@ test('remote off (no server, default broadcast): resolves from local, no crash',
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
 })
 
+test('select picker: choosing an option resolves to its value, not its label', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    let seenOptions: string[] = []
+    const ctx = {
+        hasUI: true,
+        ui: {
+            theme: {fg: (_c: string, s: string) => s},
+            select: async (_t: string, options: string[]) => {
+                seenOptions = options
+                return options[1] // the "B: …" entry
+            },
+            input: async () => undefined,
+            notify: () => {},
+            setWidget: () => {}
+        }
+    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    const ui = new SessionUI(ctx, b)
+    await expect(
+        ui.ask({
+            localTitle: 'npm or pnpm?',
+            question: 'npm or pnpm?',
+            recommended: 'npm',
+            recommended2: 'pnpm',
+            allowSkip: false,
+            options: [
+                {label: 'A: npm', value: 'npm'},
+                {label: 'B: pnpm', value: 'pnpm'}
+            ]
+        })
+    ).resolves.toBe('pnpm')
+    // The free-text fallback entry is appended after the real options.
+    expect(seenOptions).toEqual(['A: npm', 'B: pnpm', 'Type a different answer…'])
+})
+
+test('select picker: "type a different answer" falls through to a text input', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const ctx = {
+        hasUI: true,
+        ui: {
+            theme: {fg: (_c: string, s: string) => s},
+            // Pick the trailing free-text entry, then type a custom answer.
+            select: async (_t: string, options: string[]) => options[options.length - 1],
+            input: async () => 'yarn',
+            notify: () => {},
+            setWidget: () => {}
+        }
+    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    const ui = new SessionUI(ctx, b)
+    await expect(
+        ui.ask({
+            localTitle: 'npm or pnpm?',
+            question: 'npm or pnpm?',
+            recommended: 'npm',
+            recommended2: 'pnpm',
+            allowSkip: false,
+            options: [
+                {label: 'A: npm', value: 'npm'},
+                {label: 'B: pnpm', value: 'pnpm'}
+            ]
+        })
+    ).resolves.toBe('yarn')
+})
+
 test('publishNotify broadcasts a notify message', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
