@@ -425,6 +425,43 @@ test('runAutoLoop: sessionCancelled pauses without marking failed', async () => 
     })
 })
 
+test('runAutoLoop: a declined-steer interrupt pauses without checking off or advancing', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const ran: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, title) => {
+                ran.push(title)
+                // The inner task finished its pipeline (ok), but the user pressed
+                // ESC and declined to steer — runSingleTask reports interrupted.
+                return Promise.resolve({
+                    taskId: 'TASK_0006',
+                    ok: true,
+                    sessionCancelled: false,
+                    interrupted: true
+                })
+            },
+            commit: () => Promise.resolve({committed: true})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // Only the first task ran; the loop paused instead of advancing to B.
+        expect(ran).toEqual(['A'])
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // Still in progress (resumable), and the task is NOT checked off — so a
+        // /task-auto-resume re-delivers its spec to finish it.
+        expect(frontMatter.state).toBe('in_progress')
+        const entries = parseTaskList(body)
+        expect(entries[0].done).toBe(false)
+        expect(captured.notifies.some(n => /paused/i.test(n.msg))).toBe(true)
+    })
+})
+
 test('runAutoLoop: resume skips already-checked tasks', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

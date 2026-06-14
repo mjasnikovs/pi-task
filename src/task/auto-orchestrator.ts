@@ -352,6 +352,19 @@ export async function runAutoLoop(
                 )
                 return
             }
+            if (res.interrupted) {
+                // The user interrupted implementation (ESC) and then declined to
+                // steer (empty steer prompt) — they want to stop here. Pause
+                // without checking the task off, so /task-auto-resume re-delivers
+                // this task's spec to finish it. (A plain ESC that the user
+                // follows with steering text never reaches here — that loops on
+                // the same task inside runSingleTask until a turn completes.)
+                active.ui.notify(
+                    `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
+                    'warning'
+                )
+                return
+            }
             if (!res.ok) {
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                 active.ui.notify(

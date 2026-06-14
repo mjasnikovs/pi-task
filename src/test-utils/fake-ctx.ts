@@ -42,6 +42,13 @@ export interface FakeCtxHandle {
     queueInput: (value: string | undefined) => void
     queueSelect: (value: string | undefined) => void
     queueEditor: (value: string | undefined) => void
+    /**
+     * Set the stopReason of the most recent assistant turn the fake session
+     * reports via sessionManager.getEntries(). Use "aborted" to simulate the user
+     * pressing ESC during an implementation wait. Shared across session
+     * generations, like the captured arrays.
+     */
+    setStopReason: (reason: string | undefined) => void
 }
 
 // Matches the message the real extension runtime throws from a stale ctx.
@@ -52,6 +59,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     const inputQueue: Array<string | undefined> = []
     const selectQueue: Array<string | undefined> = []
     const editorQueue: Array<string | undefined> = []
+    // The stopReason runSingleTask reads after waitForIdle to detect a user ESC.
+    // Shared across generations so the value survives session replacement.
+    let lastStopReason: string | undefined
     const captured: FakeCtxHandle['captured'] = {
         notifies: [],
         inputs: [],
@@ -112,6 +122,13 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                 captured.calls.push('idle')
             }),
             isIdle: guard(() => true),
+            sessionManager: {
+                getEntries: guard(() =>
+                    lastStopReason === undefined ?
+                        []
+                    :   [{message: {role: 'assistant', stopReason: lastStopReason}}]
+                )
+            },
             newSession: guard(
                 async ({
                     withSession
@@ -146,6 +163,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         },
         queueEditor: (value: string | undefined) => {
             editorQueue.push(value)
+        },
+        setStopReason: (reason: string | undefined) => {
+            lastStopReason = reason
         }
     }
 }

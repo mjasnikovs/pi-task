@@ -417,6 +417,62 @@ describe('runSingleTask', () => {
         })
     })
 
+    test('runSingleTask: ESC then steering text continues the same task, not interrupted', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason, captured} = makeFakeCtx(cwd)
+            // The implementation turn ends aborted (user pressed ESC).
+            setStopReason('aborted')
+            let asks = 0
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts()),
+                // The user steers once; that turn then completes naturally.
+                promptSteer: () => {
+                    asks++
+                    setStopReason('stop')
+                    return Promise.resolve('use the other API')
+                }
+            })
+            // Steered exactly once, then the next turn finished uninterrupted.
+            expect(asks).toBe(1)
+            expect(res.interrupted).toBe(false)
+            // The steering text was delivered back as another turn.
+            expect(captured.sentMessages.some(m => m.spec === 'use the other API')).toBe(true)
+        })
+    })
+
+    test('runSingleTask: ESC then an empty steer prompt pauses (interrupted)', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason} = makeFakeCtx(cwd)
+            setStopReason('aborted')
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts()),
+                // The user declines to steer — pause the run.
+                promptSteer: () => Promise.resolve(undefined)
+            })
+            expect(res.interrupted).toBe(true)
+        })
+    })
+
+    test('runSingleTask: a natural completion never prompts to steer', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason} = makeFakeCtx(cwd)
+            setStopReason('stop')
+            let asks = 0
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts()),
+                promptSteer: () => {
+                    asks++
+                    return Promise.resolve(undefined)
+                }
+            })
+            expect(asks).toBe(0)
+            expect(res.interrupted).toBe(false)
+        })
+    })
+
     test('runSingleTask: returns the fresh replacement ctx; the original is stale', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)

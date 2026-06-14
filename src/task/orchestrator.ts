@@ -339,6 +339,27 @@ export interface RunSingleTaskOptions {
      *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
      *  interrupted run can be resumed instead of restarted. */
     onStart?: (taskId: string) => void | Promise<void>
+    /**
+     * Ask the user for a steering message after they interrupt (ESC) the
+     * implementation turn. Return text to continue the same task as another turn,
+     * or undefined/empty to pause the run. Only consulted with
+     * waitForImplementation. Defaults to a ctx.ui.input prompt; injectable so the
+     * steer loop is testable without a real dialog.
+     */
+    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
+}
+
+/** Dialog copy for the post-interrupt steering prompt. */
+const STEER_TITLE = 'Paused — steer the model'
+const STEER_PLACEHOLDER = 'Type guidance to continue this task, or leave empty to pause'
+
+/**
+ * The slice of the replacement-session context the steer loop needs.
+ * `sendUserMessage` lives on ReplacedSessionContext (not the base command ctx,
+ * and not re-exported from the package), so we narrow to just what we call.
+ */
+type SteerCtx = ExtensionCommandContext & {
+    sendUserMessage(content: string, options?: {deliverAs?: 'steer' | 'followUp'}): Promise<void>
 }
 
 export interface RunSingleTaskResult {
@@ -354,6 +375,61 @@ export interface RunSingleTaskResult {
      * only so test fakes that don't model session replacement can omit it.
      */
     ctx?: ExtensionCommandContext
+    /**
+     * Set when the user interrupted the implementation (ESC) and then declined to
+     * steer (submitted an empty steer prompt) — i.e. they want the run to pause
+     * rather than continue. Only meaningful with waitForImplementation. The
+     * /task-auto loop reads this to pause (resumable) instead of checking the task
+     * off and advancing. A plain ESC that the user follows with steering text does
+     * NOT set this — that case loops on the same task until a turn finishes
+     * uninterrupted.
+     */
+    interrupted?: boolean
+}
+
+/**
+ * True when the most recent assistant turn ended because the user interrupted it
+ * (pressed ESC). pi records a user abort as stopReason "aborted" on the assistant
+ * message, distinct from a natural "stop". Read after the implementation wait so
+ * the /task-auto loop can tell "user wants to steer" apart from "task finished".
+ */
+function wasInterrupted(ctx: ExtensionCommandContext): boolean {
+    const entries = ctx.sessionManager.getEntries()
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i]
+        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
+            return e.message.stopReason === 'aborted'
+        }
+    }
+    return false
+}
+
+/**
+ * After the implementation turn settles, honour a user ESC by letting them steer.
+ *
+ * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
+ * the turn → idle). When the last turn was aborted, the host's main input loop is
+ * blocked inside our command handler, so a message typed in the editor would only
+ * queue, never run (interactive-mode routes idle input through onInputCallback,
+ * which is unset while we hold the loop). We therefore solicit the steering text
+ * ourselves and feed it back as another turn via sendUserMessage — which runs to
+ * completion when the session is idle. Repeat until a turn finishes uninterrupted.
+ *
+ * Returns true when the user declined to steer (empty/cancelled) and the run
+ * should pause; false when the implementation completed (steered or not).
+ */
+async function steerUntilDone(
+    ctx: SteerCtx,
+    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
+): Promise<boolean> {
+    const ask = promptSteer ?? (c => c.ui.input(STEER_TITLE, STEER_PLACEHOLDER))
+    while (wasInterrupted(ctx)) {
+        const steer = await ask(ctx)
+        if (steer === undefined || steer.trim().length === 0) return true // pause
+        await ctx.sendUserMessage(steer)
+        await ctx.waitForIdle()
+    }
+    return false
 }
 
 /**
@@ -373,6 +449,7 @@ export async function runSingleTask(
     // UI after the original ctx is torn down. Defaults to the original for the
     // cancellation path (where no replacement occurs).
     let freshCtx: ExtensionCommandContext = ctx
+    let interrupted = false
     const result = await ctx.newSession({
         withSession: async newCtx => {
             freshCtx = newCtx
@@ -384,7 +461,10 @@ export async function runSingleTask(
                 opts.resumeId,
                 async spec => {
                     await newCtx.sendUserMessage(spec)
-                    if (opts.waitForImplementation) await newCtx.waitForIdle()
+                    if (opts.waitForImplementation) {
+                        await newCtx.waitForIdle()
+                        interrupted = await steerUntilDone(newCtx, opts.promptSteer)
+                    }
                 },
                 opts.spawnFn,
                 opts.onStart
@@ -406,7 +486,7 @@ export async function runSingleTask(
             ok = false
         }
     }
-    return {taskId, ok, sessionCancelled: false, ctx: freshCtx}
+    return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted}
 }
 
 // ─── Command handlers ────────────────────────────────────────────────────────
