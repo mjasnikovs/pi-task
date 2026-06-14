@@ -206,6 +206,10 @@ export function html(wsUrl: string): string {
       font-family: inherit; line-height: 1.5; resize: vertical; margin-bottom: 4px; }
     #prompt-card .row { display: flex; gap: 8px; margin-top: 12px; align-items: stretch;
       flex-wrap: wrap; }
+    /* Recommendation answers can be long sentences, so stack them as a readable list. */
+    #prompt-card .row.stacked { flex-direction: column; align-items: stretch; }
+    #prompt-card .row.stacked button { flex: none; text-align: left; }
+    #prompt-card .row.stacked button.cancel { align-self: center; text-align: center; }
     #prompt-card button { padding: 11px 16px; border-radius: 8px; border: none; cursor: pointer;
       font-family: inherit; font-size: 14px; font-weight: 600; transition: filter .15s ease; }
     #prompt-card button:hover { filter: brightness(1.08); }
@@ -776,7 +780,8 @@ export function html(wsUrl: string): string {
       return btn;
     }
 
-    function renderButtons(buttons) {
+    function renderButtons(buttons, stacked) {
+      promptButtons.className = stacked ? 'row stacked' : 'row';
       promptButtons.innerHTML = '';
       for (let i = 0; i < buttons.length; i++) promptButtons.appendChild(buttons[i]);
       promptButtons.appendChild(makeCancelBtn());
@@ -804,11 +809,14 @@ export function html(wsUrl: string): string {
         promptRec.style.display = 'none';
         buttons.push(makeBtn(activeRecommended, 'primary', function () { answer(activeRecommended); }));
         buttons.push(makeBtn(activeRecommended2, 'secondary', function () { answer(activeRecommended2); }));
-      } else {
-        // Single recommendation: show it in the green panel.
-        promptRec.style.display = 'block';
-        buttons.push(makeBtn('✓ Accept', 'primary', function () { answer(activeRecommended); }));
+        buttons.push(makeBtn('✎ Manual answer', 'secondary', function () { showManualEntry(); }));
+        // Answer buttons hold full sentences — stack them so long text stays readable.
+        renderButtons(buttons, true);
+        return;
       }
+      // Single recommendation: show it in the green panel.
+      promptRec.style.display = 'block';
+      buttons.push(makeBtn('✓ Accept', 'primary', function () { answer(activeRecommended); }));
       buttons.push(makeBtn('✎ Manual answer', 'secondary', function () { showManualEntry(); }));
       renderButtons(buttons);
     }
