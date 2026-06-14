@@ -17,25 +17,34 @@ const turndown = new TurndownService({
     bulletListMarker: '-'
 })
 
+// linkedom's parseHTML returns a DOM whose types don't resolve under this
+// tsconfig, so member access lands on an unresolved type. Narrow to the handful
+// of fields we touch; the raw document still goes to Readability untouched.
+interface ParsedDocument {
+    title: string
+    body: {innerHTML: string} | null
+}
+
 export function cleanHtml(html: string, baseUrl: string): CleanResult {
     const {document} = parseHTML(html)
+    const doc = document as unknown as ParsedDocument
     const reader = new Readability(document)
     const parsed = reader.parse()
 
     if (parsed && parsed.content) {
         return {
-            title: parsed.title || document.title || new URL(baseUrl).hostname,
+            title: parsed.title || doc.title || new URL(baseUrl).hostname,
             markdown: turndown.turndown(parsed.content).trim(),
             finalUrl: baseUrl
         }
     }
 
     // Fallback: turndown the body
-    const body = document.body
+    const body = doc.body
     const bodyHtml = body ? body.innerHTML : ''
     const markdown = turndown.turndown(bodyHtml).trim()
     return {
-        title: document.title || new URL(baseUrl).hostname,
+        title: doc.title || new URL(baseUrl).hostname,
         markdown,
         finalUrl: baseUrl
     }
@@ -189,7 +198,12 @@ export async function fetchAndClean(
         let bytesRead = 0
         try {
             while (true) {
-                const {value, done} = await reader.read()
+                // response.body's stream type doesn't resolve here, so the chunk
+                // surfaces as `any`; pin it to the Uint8Array the reader yields.
+                const {value, done} = (await reader.read()) as {
+                    value?: Uint8Array
+                    done: boolean
+                }
                 if (done) break
                 if (value) {
                     bytesRead += value.byteLength
