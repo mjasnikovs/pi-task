@@ -153,6 +153,22 @@ export async function startServer(
         // One authoritative snapshot — the client replaces its whole view with it.
         sendTo(ws, snapshot())
 
+        // Heartbeat: ping every 30 s; terminate if the client doesn't respond.
+        // This catches phones that close/sleep without sending a TCP FIN, so the
+        // server's client-set stays accurate and push notifications fire correctly.
+        let alive = true
+        const heartbeat = setInterval(() => {
+            if (!alive) {
+                ws.terminate()
+                return
+            }
+            alive = false
+            ws.ping()
+        }, 10_000)
+        ws.on('pong', () => {
+            alive = true
+        })
+
         ws.on('message', data => {
             let msg: unknown
             try {
@@ -172,6 +188,7 @@ export async function startServer(
         })
 
         ws.on('close', () => {
+            clearInterval(heartbeat)
             removeClient(ws)
         })
     })

@@ -2,6 +2,7 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
 import {pushNotify} from './push.js'
 import {publishNotify} from './bridge.js'
+import {hasConnectedClients} from './broadcast.js'
 import type {ContextUsage} from './protocol.js'
 import {
     agentStart,
@@ -37,7 +38,7 @@ export function setupEvents(pi: ExtensionAPI): void {
             if (errorMessage || ae.reason === 'error') {
                 const message = errorMessage || 'Request failed'
                 addError(message)
-                void pushNotify('Agent error', message, 'pi-error').catch(() => {})
+                if (!hasConnectedClients()) void pushNotify('Agent error', message, 'pi-error').catch(() => {})
             }
         }
     })
@@ -61,7 +62,7 @@ export function setupEvents(pi: ExtensionAPI): void {
     pi.on('agent_end', (_event, ctx) => {
         setAgentIdle(true)
         agentEnd(ctx.getContextUsage() as ContextUsage)
-        void pushNotify('Task finished', '', 'pi-end').catch(() => {})
+        if (!hasConnectedClients()) void pushNotify('Task finished', '', 'pi-end').catch(() => {})
     })
 
     pi.on('input', (event, _ctx) => {

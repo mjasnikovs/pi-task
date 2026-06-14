@@ -3,7 +3,7 @@ import type {
     ExtensionCommandContext,
     ExtensionContext
 } from '@earendil-works/pi-coding-agent'
-import {broadcast as wsBroadcast} from './broadcast.js'
+import {broadcast as wsBroadcast, hasConnectedClients} from './broadcast.js'
 import {pushNotify} from './push.js'
 import {setPrompt, clearPrompt} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
@@ -93,7 +93,7 @@ export class SessionUI {
         }
         setPrompt(prompt)
         // Reaches a backgrounded/suspended phone, which the in-page UI can't.
-        void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
+        if (!hasConnectedClients()) void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
         // Local: resolves to a value/undefined, or undefined on abort. Swallow
         // the rejection some implementations throw on abort so it never leaks.
