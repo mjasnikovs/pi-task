@@ -207,57 +207,37 @@ const GRILL_AUTO_ANSWER_PROMPT = (
     refined: string,
     research: string,
     question: string
-) => `You are pre-answering a clarifying question for an AI coding task. You have the refined task and the research notes. You can also use the read tool to open any file mentioned in the research (e.g. package.json) if it helps you answer.
+) => `You are pre-answering a clarifying question for an AI coding task. You have the refined task and the research notes. You may use the read tool on files mentioned in the research (e.g. package.json) if it helps.
 
-Your job is to produce a recommended default answer. If the default is one the user would almost certainly accept, you tag it ANSWER and we skip the user entirely. Otherwise you tag it UNKNOWN and we show the suggestion in the input box for the user to confirm or override.
+Your job is to produce a recommended default. If the default is one the user would almost certainly accept without thinking, tag it ANSWER and skip the user. Otherwise tag it UNKNOWN. YOU MUST PROPOSE A DEFAULT — never refuse, never leave it empty.
 
-YOU MUST PROPOSE A DEFAULT, no matter what. NEVER refuse. NEVER leave the answer empty.
+LIVE-DATA RULE:
+- "### npm: <pkg>" blocks in EXTERNAL CONTEXT are LIVE registry data; use those version numbers, do NOT invent them from memory.
+- "### service: <name>" blocks are LIVE web data; authoritative over training data for that service.
+- "### freshness-check skipped" → tag UNKNOWN and say current state needs verification.
+- No npm block + question is about latest/current version → tag UNKNOWN (training data goes stale).
 
-LIVE-DATA RULE — read carefully:
-- If EXTERNAL CONTEXT contains an "### npm: <pkg>" block, those version numbers are LIVE registry data and are MORE RECENT than anything you remember from training. Use them as the source of truth.
-- For any question about "latest", "current", "newest", or "which version" of an npm package, you MUST cite the version from the "### npm: <pkg>" block in EXTERNAL CONTEXT if one is present. Do NOT contradict it with a remembered version.
-- If EXTERNAL CONTEXT contains a "### service: <name>" block, those search results are LIVE web data and are authoritative over training data for that service's current API surface, deprecation status, and replacement systems. For any question about that service's API, status, or replacement, cite from the block; do not contradict it from memory.
-- If EXTERNAL CONTEXT contains a "### freshness-check skipped" block, you have no current data for the listed services. If the question is about one of them, tag UNKNOWN and say the current state needs user verification — do NOT answer from memory.
-- If no "### npm: <pkg>" block is present and the question is about latest/current versions, tag UNKNOWN — do not invent a version from training data, since that data goes stale within months.
+REVERSIBILITY TEST:
+  ANSWER: cheap to undo (output style, policy, report format, obvious scope, standard convention).
+  UNKNOWN: costly to reverse (file mutations, tool/dependency choice, approach/algorithm, format that shapes downstream artifacts).
 
-Use the REVERSIBILITY TEST to choose the tag:
+When the question is a binary "A or B?" choice, emit BOTH options:
+  UNKNOWN: <primary recommendation>
+  ALT: <alternative>
 
-  ANSWER: accepting your default is cheap to undo — output style, reporting
-          format, treat-as-error policy, summary vs full output, scope when
-          obviously implied, recommended convention for a typical project.
-          If the user would only "fix" your default by editing prose in the
-          task file, it's ANSWER.
-
-  UNKNOWN: accepting your default would do work that is costly to reverse —
-           file mutations, destructive operations, irreversible writes, tool
-           or dependency choices, format/structure decisions that change
-           downstream artifacts, anything that touches state outside the
-           task file. This INCLUDES choosing the implementation approach,
-           algorithm, or strategy — *how* the task is solved, not just
-           whether (e.g. "extract the value with a post-processing regex" vs
-           "rewrite the system prompt", "add a fallback step" vs "swap the
-           model", "parse manually" vs "use a library"). Approach decisions
-           shape the entire spec and are expensive to unwind once the agent
-           builds on them, so the user must vet the strategy: tag UNKNOWN and
-           surface your recommended approach as the default.
-
-Output format — ONE LINE only, no preamble, no markdown:
+Output — no preamble, no markdown:
   ANSWER: <one-line answer>
-  UNKNOWN: <one-line default>
+  UNKNOWN: <primary option>
+  ALT: <secondary option>     ← required when question is "A or B?"; omit otherwise
 
 Examples:
-  ANSWER: report a summary with counts and representative examples           ← reporting style is cheap to undo
-  ANSWER: treat all warnings and errors as genuine issues, do not ignore     ← policy is cheap to undo
-  ANSWER: run the read-only check variant (prettier --check, eslint, tsc)    ← read-only side, safer default; flip later if wanted
-  UNKNOWN: use npm                                                           ← package manager choice is costly to reverse mid-task
-  UNKNOWN: write output to ./report.md                                       ← creates a file; user may want a different path or no file
-  UNKNOWN: extract the value with a post-processing regex step               ← picks the implementation approach; user must vet the strategy
-
-Examples of FORBIDDEN outputs:
-  UNKNOWN:
-  UNKNOWN: it depends
-  (empty)
-  I think the user should decide.
+  ANSWER: report a summary with counts and representative examples
+  ANSWER: treat all warnings and errors as genuine issues
+  UNKNOWN: use npm
+  ALT: use pnpm
+  UNKNOWN: write output to ./report.md
+  UNKNOWN: extract with a post-processing regex step
+  ALT: rewrite the system prompt
 
 Refined task:
 ${refined}

@@ -62,8 +62,8 @@ function walkTsFiles(root: string): string[] {
             const full = path.join(dir, entry.name)
             if (entry.isDirectory()) stack.push(full)
             else if (
-                entry.isFile() &&
-                (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))
+                entry.isFile()
+                && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))
             ) {
                 out.push(full)
             }
@@ -203,7 +203,14 @@ export type ProjectDocsRawResult =
           chunksWritten: number
           indexingMs?: number
       }
-    | {kind: 'no_chunks'; projectName: string; cacheKey: string; version: string; hitCache: boolean; filesIngested: number}
+    | {
+          kind: 'no_chunks'
+          projectName: string
+          cacheKey: string
+          version: string
+          hitCache: boolean
+          filesIngested: number
+      }
     | {kind: 'error'; projectName: string; message: string}
 
 export function projectDocsRaw(
@@ -288,11 +295,7 @@ export function projectDocsRaw(
     }
 }
 
-export function buildProjectPrompt(
-    projectName: string,
-    query: string,
-    content: string
-): string {
+export function buildProjectPrompt(projectName: string, query: string, content: string): string {
     return (
         `You answer one question about a local project's source code, using only the provided content.\n`
         + `\n`

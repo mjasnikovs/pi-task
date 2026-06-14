@@ -53,8 +53,10 @@ export interface AskSpec {
     localTitle: string
     /** Plain question text for the browser card. */
     question: string
-    /** Plain recommended default (prefilled in both surfaces), if any. */
+    /** Primary recommended option, prefilled in the local TUI. */
     recommended?: string
+    /** Secondary recommended option shown as a second button on the remote. */
+    recommended2?: string
     /** Whether the browser card shows a Skip button (answers with empty string). */
     allowSkip: boolean
 }
@@ -89,11 +91,13 @@ export class SessionUI {
             id,
             question: spec.question,
             recommended: spec.recommended,
+            ...(spec.recommended2 !== undefined && {recommended2: spec.recommended2}),
             allowSkip: spec.allowSkip
         }
         setPrompt(prompt)
         // Reaches a backgrounded/suspended phone, which the in-page UI can't.
-        if (!hasConnectedClients()) void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
+        if (!hasConnectedClients())
+            void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
         // Local: resolves to a value/undefined, or undefined on abort. Swallow
         // the rejection some implementations throw on abort so it never leaks.

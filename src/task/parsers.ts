@@ -14,7 +14,7 @@ export interface VerifyCommand {
 
 export type AutoAnswer =
     | {kind: 'answered'; text: string; raw: string}
-    | {kind: 'unknown'; suggested?: string; raw: string}
+    | {kind: 'unknown'; suggested?: string; alt?: string; raw: string}
 
 /** One /task-auto clarify question with its model-recommended default answer. */
 export interface ClarifyQuestion {
@@ -119,17 +119,38 @@ export function parseAutoAnswer(raw: string): AutoAnswer {
         .split('\n')
         .map(l => l.trim())
         .filter(l => l.length > 0)
+    let suggested: string | undefined
+    let alt: string | undefined
+    let sawUnknown = false
     for (let i = 0; i < lines.length; i++) {
         const t = lines[i]
         const a = /^AN[SW]{1,3}E?R:\s*(.+)$/i.exec(t)
         if (a) return {kind: 'answered', text: a[1].trim(), raw}
-        const u = /^UNKNOWN:\s*(.*)$/i.exec(t)
-        if (u) {
-            const inline = u[1].trim()
-            if (inline.length > 0) return {kind: 'unknown', suggested: inline, raw}
-            const next = lines[i + 1]
-            if (next && next.length > 0) return {kind: 'unknown', suggested: next, raw}
-            return {kind: 'unknown', raw}
+        if (!sawUnknown) {
+            const u = /^UNKNOWN:\s*(.*)$/i.exec(t)
+            if (u) {
+                sawUnknown = true
+                const inline = u[1].trim()
+                if (inline.length > 0) {
+                    suggested = inline
+                } else {
+                    const next = lines[i + 1]
+                    if (next && !/^ALT:/i.test(next)) suggested = next
+                }
+                continue
+            }
+        }
+        if (alt === undefined) {
+            const altM = /^ALT:\s*(.+)$/i.exec(t)
+            if (altM) alt = altM[1].trim()
+        }
+    }
+    if (sawUnknown || suggested !== undefined || alt !== undefined) {
+        return {
+            kind: 'unknown',
+            ...(suggested !== undefined && {suggested}),
+            ...(alt !== undefined && {alt}),
+            raw
         }
     }
     if (lines.length > 0) return {kind: 'unknown', suggested: lines[0], raw}

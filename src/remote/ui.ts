@@ -301,6 +301,7 @@ export function html(wsUrl: string): string {
     document.getElementById('viewer-close').onclick = function () { viewer.style.display = 'none'; };
     let activePromptId = null;
     let activeRecommended = '';
+    let activeRecommended2 = '';
     let cancelArmTimer = null;
     const toolCallMap = {};
     let currentBubble = null;
@@ -741,6 +742,7 @@ export function html(wsUrl: string): string {
       promptInput.value = '';
       promptInput.style.display = 'none';
       promptRec.style.display = 'none';
+      activeRecommended2 = '';
       if (cancelArmTimer) { clearTimeout(cancelArmTimer); cancelArmTimer = null; }
       setEnabled(true);
     }
@@ -780,36 +782,44 @@ export function html(wsUrl: string): string {
       promptButtons.appendChild(makeCancelBtn());
     }
 
-    // Manual-entry view: editable textarea + Submit, reachable from the
-    // recommendation view via "Answer manually".
-    function showManualEntry(prefill) {
+    // Manual-entry view: empty textarea + Submit, reachable from the
+    // recommendation view via "Manual answer".
+    function showManualEntry() {
       promptRec.style.display = 'none';
       promptInput.style.display = 'block';
-      promptInput.value = prefill || '';
+      promptInput.value = '';
       renderButtons([
-        makeBtn('Submit answer', 'primary', function () { answer(promptInput.value); }),
+        makeBtn('Submit', 'primary', function () { answer(promptInput.value); }),
         makeBtn('← Back', 'secondary', function () { showRecommendation(); })
       ]);
       promptInput.focus();
     }
 
-    // Recommendation view (Mode A): show the suggested answer and let the user
-    // accept it in one tap or switch to manual entry.
+    // Recommendation view: 2-button mode when both options present, panel mode for one.
     function showRecommendation() {
       promptInput.style.display = 'none';
-      promptRec.style.display = 'block';
-      renderButtons([
-        makeBtn('✓ Accept recommended', 'primary', function () { answer(''); }),
-        makeBtn('✎ Answer manually', 'secondary', function () { showManualEntry(activeRecommended); })
-      ]);
+      const buttons = [];
+      if (activeRecommended2) {
+        // Two-option mode: each recommendation is a direct-accept button.
+        promptRec.style.display = 'none';
+        buttons.push(makeBtn(activeRecommended, 'primary', function () { answer(activeRecommended); }));
+        buttons.push(makeBtn(activeRecommended2, 'secondary', function () { answer(activeRecommended2); }));
+      } else {
+        // Single recommendation: show it in the green panel.
+        promptRec.style.display = 'block';
+        buttons.push(makeBtn('✓ Accept', 'primary', function () { answer(activeRecommended); }));
+      }
+      buttons.push(makeBtn('✎ Manual answer', 'secondary', function () { showManualEntry(); }));
+      renderButtons(buttons);
     }
 
     function showPrompt(msg) {
       activePromptId = msg.id;
       promptQ.textContent = msg.question;
       activeRecommended = msg.recommended || '';
+      activeRecommended2 = msg.recommended2 || '';
       if (msg.recommended) {
-        // Mode A: there's a recommendation — lead with "Accept recommended".
+        // Mode A: recommendation(s) present.
         promptRecText.textContent = msg.recommended;
         showRecommendation();
       } else {
@@ -817,9 +827,9 @@ export function html(wsUrl: string): string {
         promptRec.style.display = 'none';
         promptInput.style.display = 'block';
         promptInput.value = '';
-        const buttons = [makeBtn('Submit answer', 'primary', function () { answer(promptInput.value); })];
+        const buttons = [makeBtn('Submit', 'primary', function () { answer(promptInput.value); })];
         if (msg.allowSkip) {
-          buttons.push(makeBtn('Skip question', 'secondary', function () { answer(''); }));
+          buttons.push(makeBtn('Skip', 'secondary', function () { answer(''); }));
         }
         renderButtons(buttons);
         promptInput.focus();

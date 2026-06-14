@@ -6,6 +6,7 @@ export interface PromptMessage {
     id: string
     question: string
     recommended?: string
+    recommended2?: string
     allowSkip: boolean
 }
 

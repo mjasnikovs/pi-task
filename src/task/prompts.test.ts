@@ -62,15 +62,23 @@ describe('GRILL_AUTO_ANSWER_PROMPT LIVE-DATA RULE', () => {
 
     test('classifies implementation-approach choices as UNKNOWN, not ANSWER', () => {
         const p = GRILL_AUTO_ANSWER_PROMPT('refined', 'research', 'question')
-        // The UNKNOWN section must explicitly cover how-the-task-is-solved
-        // decisions so the orchestrator surfaces them to the user instead of
-        // silently committing to an approach.
-        expect(p.toLowerCase()).toContain('implementation approach')
-        const unknownIdx = p.indexOf('UNKNOWN: accepting your default')
-        const approachIdx = p.toLowerCase().indexOf('implementation approach')
+        // The REVERSIBILITY TEST must explicitly cover approach/algorithm decisions
+        // so the orchestrator surfaces them to the user instead of silently committing.
+        expect(p.toLowerCase()).toContain('approach')
+        const unknownIdx = p.indexOf('UNKNOWN: costly to reverse')
+        const approachIdx = p.toLowerCase().indexOf('approach')
         expect(unknownIdx).toBeGreaterThanOrEqual(0)
-        // The approach guidance lives inside the UNKNOWN bullet.
         expect(approachIdx).toBeGreaterThan(unknownIdx)
+    })
+
+    test('instructs model to emit ALT: for binary A-or-B questions', () => {
+        const p = GRILL_AUTO_ANSWER_PROMPT('refined', 'research', 'question')
+        expect(p).toContain('ALT:')
+        // ALT must come after UNKNOWN in the format description
+        const unknownIdx = p.indexOf('UNKNOWN: <primary')
+        const altIdx = p.indexOf('ALT: <')
+        expect(unknownIdx).toBeGreaterThanOrEqual(0)
+        expect(altIdx).toBeGreaterThan(unknownIdx)
     })
 })
 

@@ -227,6 +227,39 @@ describe('parseAutoAnswer', () => {
         expect(r.kind).toBe('unknown')
         if (r.kind === 'unknown') expect(r.suggested).toBeUndefined()
     })
+
+    test('parses ALT: line as second recommendation', () => {
+        const r = parseAutoAnswer('UNKNOWN: use npm\nALT: use pnpm')
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') {
+            expect(r.suggested).toBe('use npm')
+            expect(r.alt).toBe('use pnpm')
+        }
+    })
+
+    test('parses ALT: when UNKNOWN: has no inline text', () => {
+        const r = parseAutoAnswer('UNKNOWN:\nbest guess\nALT: other guess')
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') {
+            expect(r.suggested).toBe('best guess')
+            expect(r.alt).toBe('other guess')
+        }
+    })
+
+    test('no ALT: means alt is undefined', () => {
+        const r = parseAutoAnswer('UNKNOWN: use npm')
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') {
+            expect(r.suggested).toBe('use npm')
+            expect(r.alt).toBeUndefined()
+        }
+    })
+
+    test('returns unknown with no suggestion when UNKNOWN: has no content', () => {
+        const r = parseAutoAnswer('UNKNOWN:')
+        expect(r.kind).toBe('unknown')
+        if (r.kind === 'unknown') expect(r.suggested).toBeUndefined()
+    })
 })
 
 describe('stripSpecPreamble', () => {

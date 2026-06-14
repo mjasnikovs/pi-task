@@ -310,7 +310,12 @@ export async function phaseResearch(
     // The worker still calls as many tools as it wants; it just stops narrating
     // between them. See appendNoThink. Result order (files, apis, context,
     // tooling) is preserved for assembly.
-    const workerSpecs: Array<{label: string; prompt: string; tools?: string; extensions?: string[]}> = [
+    const workerSpecs: Array<{
+        label: string
+        prompt: string
+        tools?: string
+        extensions?: string[]
+    }> = [
         {
             label: 'worker:files',
             prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
@@ -545,10 +550,6 @@ export async function phaseGrill(
         const shownQ = renderInlineMarkdown(q, theme)
         const plainQ = stripInlineMarkdown(q)
         out.push(`Q${n + 1}: ${plainQ}`)
-        const rawTrim = auto.raw.trim()
-        out.push(
-            `  (auto-worker raw: ${rawTrim.length === 0 ? '(empty)' : rawTrim.replace(/\n/g, ' ⏎ ')})`
-        )
 
         let answer: string
         if (auto.kind === 'answered') {
@@ -557,21 +558,25 @@ export async function phaseGrill(
         } else {
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
+            const plainAlt = auto.alt === undefined ? undefined : stripInlineMarkdown(auto.alt)
             const localTitle =
-                auto.suggested ?
-                    `${shownQ}\n${theme.fg('muted', 'Recommended:')}\n\n${renderInlineMarkdown(auto.suggested, theme)}\n\n${theme.fg('muted', 'press Enter to accept')}`
-                :   `${shownQ}\n${theme.fg('muted', '(no recommendation — please answer)')}`
+                plainSuggested ?
+                    plainAlt ?
+                        `${shownQ}\nA: ${renderInlineMarkdown(auto.suggested!, theme)}\nB: ${renderInlineMarkdown(auto.alt!, theme)}`
+                    :   `${shownQ}\n${renderInlineMarkdown(auto.suggested!, theme)}`
+                :   shownQ
             widgetState.lastLine = `awaiting Q${n + 1}`
             const a = await ui.ask({
                 localTitle,
                 question: plainQ,
                 recommended: plainSuggested,
-                allowSkip: plainSuggested === undefined
+                recommended2: plainAlt,
+                allowSkip: plainSuggested === undefined && plainAlt === undefined
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
             const typed = a.trim()
             if (typed.length === 0 && plainSuggested) {
-                answer = `${plainSuggested} (accepted recommendation)`
+                answer = plainSuggested
             } else if (typed.length === 0) {
                 answer = '(skipped)'
             } else {
