@@ -39,6 +39,18 @@ concept get that concept recorded here.
   > *focused* worker variants, not the *raw* ones) — a tracked candidate to unify
   > once the focused-extractor seam exists.
 
+## Remote web view
+
+- **Remote client** — the single-page web UI streamed to a browser over
+  WebSocket (`remote/`). `ui.ts` composes the page from `ui-markup`-style head +
+  `ui-styles.ts` (`STYLES`, the CSS) + `ui-script.ts` (`clientScript(wsUrl)`,
+  the vanilla-JS client). The split is for navigability only — the three
+  concatenate to a byte-identical page.
+  > The client JS ships as a string (there is no bundler). A real
+  > transport/state/render split with a Node-unit-testable reducer would need a
+  > build step not justified for one screen; until then the client is covered by
+  > source string-match tests in `ui.test.ts`.
+
 ## Spec validation
 
 - **Spec gate** — the guards that decide whether a composed spec is acceptable
