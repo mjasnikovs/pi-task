@@ -174,9 +174,17 @@ export async function runPhaseChild(
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
         if (r.text.trim().length === 0) {
-            throw new Error(
-                `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
-            )
+            // An empty completion (exit 0, no assistant text, no stderr) is almost
+            // always transient — a model/API error swallowed inside --mode json,
+            // not a repeatable mistake — so re-spawn rather than fail the phase.
+            // There's nothing to correct, so we carry no hint. Reuses the leak
+            // retry budget: MAX_LEAK_RETRIES+1 attempts, then surface the error.
+            if (attempt === MAX_LEAK_RETRIES) {
+                throw new Error(
+                    `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+                )
+            }
+            continue
         }
         if (r.leakedToolCall) {
             if (attempt === MAX_LEAK_RETRIES) {
@@ -271,9 +279,17 @@ export async function runPhaseWithLoopGuard(
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
         if (r.text.trim().length === 0) {
-            throw new Error(
-                `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
-            )
+            // An empty completion (exit 0, no assistant text, no stderr) is almost
+            // always transient — a model/API error swallowed inside --mode json,
+            // not a repeatable mistake — so re-spawn rather than fail the phase.
+            // Nothing to correct, so leave nextHint as-is. Reuses the strike
+            // budget shared with loop/leak restarts: MAX_LOOP_RESTARTS+1 attempts.
+            if (strike === MAX_LOOP_RESTARTS) {
+                throw new Error(
+                    `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+                )
+            }
+            continue
         }
         if (r.leakedToolCall) {
             if (strike === MAX_LOOP_RESTARTS) {

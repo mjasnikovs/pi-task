@@ -166,6 +166,17 @@ describe('runPhaseChild', () => {
             runPhaseChild(depsWith(fakeSpawnSimple('', 1, 'kaboom')), 'refine', 'read', 'prompt')
         ).rejects.toThrow(/refine child failed.*kaboom/)
     })
+
+    test('retries an empty completion and returns the clean output from a later attempt', async () => {
+        // First spawn produces no assistant text (transient empty turn), the
+        // retry succeeds. Without the empty-output retry this would fail the phase.
+        const {spawn, prompts} = capturingQueue(['', 'recovered output'])
+        const out = await runPhaseChild(depsWith(spawn), 'refine', 'read', 'ORIGINAL PROMPT')
+        expect(out).toBe('recovered output')
+        expect(prompts.length).toBe(2)
+        // Empty output carries no correction hint — the re-spawn uses the bare prompt.
+        expect(prompts[1]).toBe('ORIGINAL PROMPT')
+    })
 })
 
 describe('prependHint', () => {
@@ -224,6 +235,69 @@ describe('runPhaseWithLoopGuard', () => {
             expect(builds[0]).toBeNull()
             expect(builds[1]).toContain('SYSTEM NOTE')
             expect(builds[1]).toContain('Read')
+        })
+    })
+
+    test('restarts on an empty completion and returns the clean output from a later strike', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // First strike yields no assistant text (transient empty turn); the
+            // re-spawn succeeds. This is the TASK_0005 refine failure mode.
+            const spawn = fakeSpawnQueue([
+                agentEndResponse(''),
+                agentEndResponse('refined content')
+            ])
+            const builds: Array<string | null> = []
+            const out = await runPhaseWithLoopGuard(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'refine',
+                'read',
+                hint => {
+                    builds.push(hint)
+                    return 'PROMPT'
+                }
+            )
+            expect(out).toBe('refined content')
+            expect(builds.length).toBe(2)
+            // Empty output carries no hint — the restart sees a null hint, not a SYSTEM NOTE.
+            expect(builds[1]).toBeNull()
+        })
+    })
+
+    test('throws "produced no output" when every strike yields an empty completion', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnQueue([agentEndResponse('')])
+            await expect(
+                runPhaseWithLoopGuard(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'refine',
+                    'read',
+                    () => 'PROMPT'
+                )
+            ).rejects.toThrow(/refine child produced no output/)
         })
     })
 
