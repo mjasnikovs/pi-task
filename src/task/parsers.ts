@@ -225,16 +225,18 @@ export function validateSpecShape(spec: string): string | null {
 // ─── Title derivation ────────────────────────────────────────────────────────
 
 export function deriveTitle(refined: string): string {
+    const stripBold = (s: string) => s.replace(/^\*+|\*+$/g, '').trim()
+    const truncate = (s: string) => (s.length > 119 ? s.slice(0, 119) + '…' : s)
     const lines = refined.split('\n')
     for (let i = 0; i < lines.length; i++) {
-        const stripped = lines[i].trim().replace(/^#+\s+/, '')
+        const stripped = stripBold(lines[i].trim().replace(/^#+\s+/, ''))
         if (/^GOAL\s*:?\s*$/i.test(stripped)) {
             for (let j = i + 1; j < lines.length; j++) {
                 const line = lines[j].trim()
                 if (line.length === 0) continue
-                const headerCheck = line.replace(/^#+\s+/, '')
+                const headerCheck = stripBold(line.replace(/^#+\s+/, ''))
                 if (/^(CONSTRAINTS|KNOWN-UNKNOWNS)\s*:?\s*$/i.test(headerCheck)) break
-                return line
+                return truncate(line)
             }
             break
         }
@@ -242,9 +244,9 @@ export function deriveTitle(refined: string): string {
     for (const raw of lines) {
         let line = raw.trim()
         if (line.length === 0) continue
-        line = line.replace(/^#+\s+/, '').replace(/^GOAL\s*:?\s*/i, '')
+        line = stripBold(line.replace(/^#+\s+/, '')).replace(/^GOAL\s*:?\s*/i, '')
         if (line.length === 0) continue
-        return line
+        return truncate(line)
     }
     return '(untitled)'
 }

@@ -321,6 +321,12 @@ describe('deriveTitle', () => {
         expect(deriveTitle('# GOAL\nShip it')).toBe('Ship it')
     })
 
+    test('handles bold markdown on GOAL (**GOAL**)', () => {
+        expect(deriveTitle('**GOAL**\nConfigure ESLint\n**CONSTRAINTS**\n- foo')).toBe(
+            'Configure ESLint'
+        )
+    })
+
     test('truncates with ellipsis when over 120 chars', () => {
         const long = 'x'.repeat(200)
         const title = deriveTitle(`GOAL\n${long}`)
