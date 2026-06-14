@@ -1,11 +1,10 @@
 import {Type} from '@sinclair/typebox'
 import type {EventEmitter} from 'node:events'
-import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-clean.js'
 import {fetchFocused, formatResultText} from './fetch-core.js'
-import {textResult} from './shared.js'
+import {formatChildFailure, makeWorkerTool} from './shared.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -46,7 +45,7 @@ export function registerPiWorkerFetch(
     pi: ExtensionAPI,
     internals: PiWorkerFetchInternals = {}
 ): void {
-    pi.registerTool({
+    makeWorkerTool<typeof Params, FetchDetails>(pi, {
         name: 'pi-worker-fetch',
         label: 'Pi Worker Fetch',
         description:
@@ -56,19 +55,12 @@ export function registerPiWorkerFetch(
             + 'focused answer. Use after `pi-worker-search` (or with a known URL) to '
             + 'avoid stuffing raw content into the main context.',
         parameters: Params,
-        executionMode: 'parallel',
 
-        async execute(
-            _toolCallId,
-            params,
-            signal,
-            _onUpdate,
-            ctx
-        ): Promise<AgentToolResult<FetchDetails>> {
+        async run(params, signal, ctx) {
             try {
                 new URL(params.url)
             } catch {
-                return textResult(`Invalid URL: ${params.url}`, {})
+                return {text: `Invalid URL: ${params.url}`, details: {}}
             }
 
             try {
@@ -81,14 +73,16 @@ export function registerPiWorkerFetch(
                     spawn: internals.spawn as Parameters<typeof fetchFocused>[0]['spawn']
                 })
 
-                if (result.aborted) {
-                    return textResult('Fetch aborted.', {childExitCode: result.childExitCode})
-                }
-                if (result.childExitCode !== 0) {
-                    const tail = result.stderr.trim().slice(-500) || '(no stderr)'
-                    return textResult(`Worker exited ${result.childExitCode}.\n${tail}`, {
-                        childExitCode: result.childExitCode
-                    })
+                const failure = formatChildFailure(
+                    {
+                        aborted: result.aborted,
+                        exitCode: result.childExitCode,
+                        stderr: result.stderr
+                    },
+                    'Fetch aborted.'
+                )
+                if (failure !== null) {
+                    return {text: failure, details: {childExitCode: result.childExitCode}}
                 }
 
                 const text =
@@ -96,20 +90,23 @@ export function registerPiWorkerFetch(
                         {answer: result.answer, excerpt: result.excerpt},
                         result.excerptVerified
                     ) || '(no output)'
-                return textResult(text, {
-                    childExitCode: 0,
-                    answer: result.answer,
-                    excerpt: result.excerpt,
-                    excerptVerified: result.excerptVerified
-                })
+                return {
+                    text,
+                    details: {
+                        childExitCode: 0,
+                        answer: result.answer,
+                        excerpt: result.excerpt,
+                        excerptVerified: result.excerptVerified
+                    }
+                }
             } catch (err) {
                 if (err instanceof FetchAndCleanError) {
-                    return textResult(err.message, {})
+                    return {text: err.message, details: {}}
                 }
-                return textResult(
-                    `Could not fetch ${params.url}: ${err instanceof Error ? err.message : String(err)}`,
-                    {}
-                )
+                return {
+                    text: `Could not fetch ${params.url}: ${err instanceof Error ? err.message : String(err)}`,
+                    details: {}
+                }
             }
         },
 

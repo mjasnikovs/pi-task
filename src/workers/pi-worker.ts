@@ -7,12 +7,11 @@
  * recurse into another worker.
  */
 
-import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
 import {runWorker} from './pi-worker-core.js'
-import {textResult} from './shared.js'
+import {formatChildFailure, makeWorkerTool} from './shared.js'
 
 const RENDER_PROMPT_MAX = 120
 
@@ -25,7 +24,7 @@ const WorkerParams = Type.Object({
 })
 
 export function registerPiWorker(pi: ExtensionAPI): void {
-    pi.registerTool({
+    makeWorkerTool<typeof WorkerParams, WorkerDetails>(pi, {
         name: 'pi-worker',
         label: 'Pi Worker',
         description:
@@ -48,29 +47,15 @@ export function registerPiWorker(pi: ExtensionAPI): void {
             + '- The task needs writes/edits (worker is read-only)\n'
             + '- The task needs the web — use `pi-worker-search` / `pi-worker-fetch`',
         parameters: WorkerParams,
-        executionMode: 'parallel',
 
-        async execute(
-            _toolCallId,
-            params,
-            signal,
-            _onUpdate,
-            ctx
-        ): Promise<AgentToolResult<WorkerDetails>> {
+        async run(params, signal, ctx) {
             const result = await runWorker({prompt: params.prompt, cwd: ctx.cwd, signal})
+            const details: WorkerDetails = {exitCode: result.exitCode}
 
-            if (result.aborted) {
-                return textResult('Worker aborted.', {exitCode: result.exitCode})
-            }
+            const failure = formatChildFailure(result, 'Worker aborted.')
+            if (failure !== null) return {text: failure, details}
 
-            if (result.exitCode !== 0) {
-                const tail = result.stderr.slice(-500) || '(no stderr)'
-                return textResult(`Worker exited ${result.exitCode}.\n${tail}`, {
-                    exitCode: result.exitCode
-                })
-            }
-
-            return textResult(result.text || '(no output)', {exitCode: result.exitCode})
+            return {text: result.text || '(no output)', details}
         },
 
         renderCall(args, theme) {

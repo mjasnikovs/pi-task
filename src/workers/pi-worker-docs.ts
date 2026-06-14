@@ -1,5 +1,4 @@
 import {Type} from '@sinclair/typebox'
-import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {openCache as defaultOpenCache} from './docs-cache.js'
@@ -14,7 +13,7 @@ import {
 import {type SpawnFn, runChild, CHILD_BASE_ARGS} from '../shared/child-process.js'
 import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {textResult} from './shared.js'
+import {formatChildFailure, makeWorkerTool} from './shared.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
 const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
@@ -62,7 +61,7 @@ export function registerPiWorkerDocs(
     pi: ExtensionAPI,
     internals: PiWorkerDocsInternals = {}
 ): void {
-    pi.registerTool({
+    makeWorkerTool<typeof Params, DocsDetails>(pi, {
         name: 'pi-worker-docs',
         label: 'Pi Worker Docs',
         description:
@@ -99,15 +98,8 @@ export function registerPiWorkerDocs(
             + 'Skip when:\n'
             + '- You need docs for a specific newer version than what is installed — use pi-worker-fetch on the upstream docs site',
         parameters: Params,
-        executionMode: 'parallel',
 
-        async execute(
-            _toolCallId,
-            params,
-            signal,
-            _onUpdate,
-            ctx
-        ): Promise<AgentToolResult<DocsDetails>> {
+        async run(params, signal, ctx) {
             const spawn =
                 internals.spawn
                 ?? (globalThis.Bun !== undefined ?
@@ -126,26 +118,26 @@ export function registerPiWorkerDocs(
                 }
 
                 if (!cache) {
-                    return textResult(
-                        `Project docs unavailable: cache open failed (${cacheError}).`,
-                        {}
-                    )
+                    return {
+                        text: `Project docs unavailable: cache open failed (${cacheError}).`,
+                        details: {}
+                    }
                 }
 
                 const retrieveChunks = internals.retrieveChunks ?? defaultRetrieveChunks
                 const projectResult = projectDocsRaw(cache, ctx.cwd, params.query, retrieveChunks)
 
                 if (projectResult.kind === 'error') {
-                    return textResult(`Project docs error: ${projectResult.message}`, {})
+                    return {text: `Project docs error: ${projectResult.message}`, details: {}}
                 }
                 if (projectResult.kind === 'no_chunks') {
-                    return textResult(
-                        `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
-                        {
+                    return {
+                        text: `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
+                        details: {
                             hitCache: projectResult.hitCache,
                             indexedFiles: projectResult.filesIngested
                         }
-                    )
+                    }
                 }
 
                 const {projectName, chunks, hitCache, filesIngested, indexingMs} = projectResult
@@ -160,19 +152,16 @@ export function registerPiWorkerDocs(
                 const invocation = getPiInvocation([...CHILD_ARGS, prompt])
                 const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
-                if (child.aborted) {
-                    return textResult('Project docs lookup aborted.', {
-                        ...baseDetails,
-                        aborted: true,
-                        childExitCode: child.exitCode
-                    })
-                }
-                if (child.exitCode !== 0) {
-                    const tail = child.stderr.trim().slice(-500) || '(no stderr)'
-                    return textResult(`Worker exited ${child.exitCode}.\n${tail}`, {
-                        ...baseDetails,
-                        childExitCode: child.exitCode
-                    })
+                const failure = formatChildFailure(child, 'Project docs lookup aborted.')
+                if (failure !== null) {
+                    return {
+                        text: failure,
+                        details: {
+                            ...baseDetails,
+                            ...(child.aborted ? {aborted: true} : {}),
+                            childExitCode: child.exitCode
+                        }
+                    }
                 }
 
                 const parsed = parseChildOutput(child.stdout)
@@ -189,11 +178,14 @@ export function registerPiWorkerDocs(
                     parsed,
                     verified
                 )
-                return textResult(text, {
-                    ...baseDetails,
-                    childExitCode: 0,
-                    excerptVerified: verified
-                })
+                return {
+                    text,
+                    details: {
+                        ...baseDetails,
+                        childExitCode: 0,
+                        excerptVerified: verified
+                    }
+                }
             }
 
             // ── npm package lookup (existing path) ──────────────────────────
@@ -230,22 +222,24 @@ export function registerPiWorkerDocs(
                     autoInstalled: rawResult.autoInstalled,
                     ...npmDetails
                 }
-                return textResult(npmHeader + rawResult.message, details)
+                return {text: npmHeader + rawResult.message, details}
             }
 
             if (rawResult.kind === 'not_installed') {
-                return textResult(
-                    npmHeader
+                return {
+                    text:
+                        npmHeader
                         + `Package "${rawResult.pkg}" is not installed and auto-install failed.`,
-                    {resolveError: 'not_installed' as const, ...npmDetails}
-                )
+                    details: {resolveError: 'not_installed' as const, ...npmDetails}
+                }
             }
 
             if (rawResult.kind === 'no_chunks') {
-                return textResult(
-                    npmHeader
+                return {
+                    text:
+                        npmHeader
                         + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
-                    {
+                    details: {
                         version: rawResult.pkg.version,
                         hitCache: rawResult.hitCache,
                         indexedFiles: rawResult.indexedFiles ?? 0,
@@ -253,7 +247,7 @@ export function registerPiWorkerDocs(
                         autoInstalled: rawResult.autoInstalled,
                         ...npmDetails
                     }
-                )
+                }
             }
 
             // kind === 'ok'
@@ -273,30 +267,30 @@ export function registerPiWorkerDocs(
             const invocation = getPiInvocation([...CHILD_ARGS, prompt])
             const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
-            if (child.aborted) {
-                return textResult(npmHeader + 'Docs lookup aborted.', {
-                    ...baseDetails,
-                    aborted: true,
-                    childExitCode: child.exitCode
-                })
-            }
-            if (child.exitCode !== 0) {
-                const tail = child.stderr.trim().slice(-500) || '(no stderr)'
-                return textResult(npmHeader + `Worker exited ${child.exitCode}.\n${tail}`, {
-                    ...baseDetails,
-                    childExitCode: child.exitCode
-                })
+            const failure = formatChildFailure(child, 'Docs lookup aborted.')
+            if (failure !== null) {
+                return {
+                    text: npmHeader + failure,
+                    details: {
+                        ...baseDetails,
+                        ...(child.aborted ? {aborted: true} : {}),
+                        childExitCode: child.exitCode
+                    }
+                }
             }
 
             const parsed = parseChildOutput(child.stdout)
             const verified =
                 parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
             const text = npmHeader + formatResultText(pkg, parsed, verified)
-            return textResult(text, {
-                ...baseDetails,
-                childExitCode: 0,
-                excerptVerified: verified
-            })
+            return {
+                text,
+                details: {
+                    ...baseDetails,
+                    childExitCode: 0,
+                    excerptVerified: verified
+                }
+            }
         },
 
         renderCall(args, theme) {

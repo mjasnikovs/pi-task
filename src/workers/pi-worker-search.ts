@@ -1,10 +1,9 @@
 import {Type} from '@sinclair/typebox'
-import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {braveSearch as defaultBraveSearch} from './brave-search.js'
 import {search} from './search-core.js'
-import {textResult} from './shared.js'
+import {makeWorkerTool} from './shared.js'
 
 const Params = Type.Object({
     query: Type.String({description: 'Search query.'}),
@@ -30,7 +29,7 @@ export function registerPiWorkerSearch(
     pi: ExtensionAPI,
     internals: PiWorkerSearchInternals = {}
 ): void {
-    pi.registerTool({
+    makeWorkerTool<typeof Params, SearchDetails>(pi, {
         name: 'pi-worker-search',
         label: 'Pi Worker Search',
         description:
@@ -44,35 +43,29 @@ export function registerPiWorkerSearch(
             + 'call `pi-worker-fetch` on the URL you want to read. '
             + 'Requires BRAVE_SEARCH_API_KEY env var.',
         parameters: Params,
-        executionMode: 'parallel',
 
-        async execute(_toolCallId, params, signal): Promise<AgentToolResult<SearchDetails>> {
+        async run(params, signal) {
             const result = await search({
-                query: (params as {query: string}).query,
-                count: (params as {count?: number}).count,
+                query: params.query,
+                count: params.count,
                 signal,
                 getEnv: internals.getEnv,
                 braveSearch: internals.braveSearch
             })
 
-            if (result.kind === 'no_key') {
-                return textResult(result.message, {resultCount: 0})
-            }
-            if (result.kind === 'error') {
-                return textResult(result.message, {resultCount: 0})
+            if (result.kind === 'no_key' || result.kind === 'error') {
+                return {text: result.message, details: {resultCount: 0}}
             }
 
             const {results} = result
             if (results.length === 0) {
-                return textResult(`No results for: ${(params as {query: string}).query}`, {
-                    resultCount: 0
-                })
+                return {text: `No results for: ${params.query}`, details: {resultCount: 0}}
             }
 
             const lines = results.map(
                 (r, i) => `${i + 1}. [${r.title}](${r.url}) — ${r.description}`
             )
-            return textResult(lines.join('\n'), {resultCount: results.length})
+            return {text: lines.join('\n'), details: {resultCount: results.length}}
         },
 
         renderCall(args, theme) {
