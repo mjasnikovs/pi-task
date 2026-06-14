@@ -62,10 +62,13 @@ export function getLocalIPs(nets = networkInterfaces()): LocalIPs {
 }
 
 /** Build the labeled URL lines shown under the QR code. Both Tailscale and LAN
- *  when present; a single unlabeled primary URL when neither resolves. */
-export function formatAddresses(ips: LocalIPs, port: number): AddressLine[] {
+ *  when present; a single unlabeled primary URL when neither resolves. The
+ *  Tailscale line uses the MagicDNS host when known (resolves to the same node,
+ *  but is what SSH and webpush certs need), falling back to the raw IP. */
+export function formatAddresses(ips: LocalIPs, port: number, tsHost?: string): AddressLine[] {
     const out: AddressLine[] = []
-    if (ips.tailscale) out.push({label: 'Tailscale', url: `http://${ips.tailscale}:${port}`})
+    if (tsHost) out.push({label: 'Tailscale', url: `http://${tsHost}:${port}`})
+    else if (ips.tailscale) out.push({label: 'Tailscale', url: `http://${ips.tailscale}:${port}`})
     if (ips.lan) out.push({label: 'LAN', url: `http://${ips.lan}:${port}`})
     if (out.length === 0) out.push({label: '', url: `http://${ips.primary}:${port}`})
     return out

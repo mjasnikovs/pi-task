@@ -91,6 +91,18 @@ describe('formatAddresses', () => {
         ])
     })
 
+    it('uses the MagicDNS host for the Tailscale line when provided', () => {
+        const addrs = formatAddresses(
+            {tailscale: '100.92.14.7', lan: '192.168.1.42', primary: '100.92.14.7'},
+            8800,
+            'omarchy-1.tailaa4e75.ts.net'
+        )
+        expect(addrs).toEqual([
+            {label: 'Tailscale', url: 'http://omarchy-1.tailaa4e75.ts.net:8800'},
+            {label: 'LAN', url: 'http://192.168.1.42:8800'}
+        ])
+    })
+
     it('emits only the LAN line when Tailscale is absent', () => {
         const addrs = formatAddresses({lan: '192.168.1.42', primary: '192.168.1.42'}, 8800)
         expect(addrs).toEqual([{label: 'LAN', url: 'http://192.168.1.42:8800'}])

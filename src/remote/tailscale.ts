@@ -6,10 +6,15 @@ export interface Run {
 }
 
 export type ServeResult =
-    | {state: 'served'; url: string}
+    | {state: 'served'; url: string; host: string}
     | {state: 'foreign-conflict'; host: string}
     | {state: 'certs-disabled'; host: string}
     | {state: 'unavailable'}
+
+/** The MagicDNS host of a serve result, or undefined when the daemon had no name. */
+export function hostFromResult(result: ServeResult): string | undefined {
+    return result.state === 'unavailable' ? undefined : result.host
+}
 
 export interface RemoteUrlPlan {
     /** URL to encode in the QR and announce; the https one when serve is live. */
@@ -77,7 +82,7 @@ export async function ensureTailscaleServe(
     const ours = `http://127.0.0.1:${port}`
     const serve = await run('tailscale', ['serve', 'status', '--json'])
     const target = serve443Target(serve.stdout)
-    if (target === ours) return {state: 'served', url: `https://${host}`}
+    if (target === ours) return {state: 'served', url: `https://${host}`, host}
     if (target !== undefined) return {state: 'foreign-conflict', host}
 
     // No :443 handler yet — check cert capability before trying to create one.
@@ -87,7 +92,7 @@ export async function ensureTailscaleServe(
     }
 
     const set = await run('tailscale', ['serve', '--bg', '--https=443', ours])
-    if (set.exitCode === 0) return {state: 'served', url: `https://${host}`}
+    if (set.exitCode === 0) return {state: 'served', url: `https://${host}`, host}
     return {state: 'certs-disabled', host}
 }
 
@@ -101,8 +106,15 @@ export async function teardownTailscaleServe(port: number, run: Run = defaultRun
     }
 }
 
-/** Pure: pick the primary URL and any hint lines from a serve result. */
-export function planRemoteUrls(httpPrimary: string, result: ServeResult): RemoteUrlPlan {
+/** Pure: pick the primary URL (what the QR encodes) and any hint lines from a
+ *  serve result. Prefers the MagicDNS host over the raw IP whenever it's known —
+ *  the https URL when serve is live, else http://<host>:<port> — so the QR and
+ *  the announced URL carry the tailnet name (needed for SSH and webpush certs). */
+export function planRemoteUrls(
+    httpPrimary: string,
+    result: ServeResult,
+    port: number
+): RemoteUrlPlan {
     switch (result.state) {
         case 'served':
             return {
@@ -112,7 +124,7 @@ export function planRemoteUrls(httpPrimary: string, result: ServeResult): Remote
             }
         case 'foreign-conflict':
             return {
-                primaryUrl: httpPrimary,
+                primaryUrl: `http://${result.host}:${port}`,
                 urlLines: [],
                 hintLines: [
                     'HTTPS: port 443 is already used by another tailscale serve config; not touching it.',
@@ -121,7 +133,7 @@ export function planRemoteUrls(httpPrimary: string, result: ServeResult): Remote
             }
         case 'certs-disabled':
             return {
-                primaryUrl: httpPrimary,
+                primaryUrl: `http://${result.host}:${port}`,
                 urlLines: [],
                 hintLines: [
                     'HTTPS (for phone notifications): enable HTTPS in the Tailscale admin console, then restart the remote.'

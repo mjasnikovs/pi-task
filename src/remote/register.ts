@@ -6,7 +6,12 @@ import {reset, addUserTurn} from './session-state.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
-import {ensureTailscaleServe, teardownTailscaleServe, planRemoteUrls} from './tailscale.js'
+import {
+    ensureTailscaleServe,
+    teardownTailscaleServe,
+    planRemoteUrls,
+    hostFromResult
+} from './tailscale.js'
 import type {ServeResult} from './tailscale.js'
 import {isAgentIdle} from './state.js'
 import type {ServerHandle} from './server.js'
@@ -130,11 +135,15 @@ export function registerRemote(pi: ExtensionAPI): void {
 
                 const httpPrimary = `http://${server.ip}:${server.port}`
                 const result: ServeResult = S.serveResult ?? {state: 'unavailable'}
-                const plan = planRemoteUrls(httpPrimary, result)
+                const plan = planRemoteUrls(httpPrimary, result, server.port)
                 const primaryUrl = plan.primaryUrl
                 const qr = await qrLines(primaryUrl)
 
-                const addrs = [...plan.urlLines, ...formatAddresses(server.ips, server.port)]
+                const tsHost = hostFromResult(result)
+                const addrs = [
+                    ...plan.urlLines,
+                    ...formatAddresses(server.ips, server.port, tsHost)
+                ]
                 const labelW = addrs.reduce((m, a) => Math.max(m, a.label.length), 0)
                 const addrLines = [
                     ...addrs.map(a => (a.label ? `${a.label.padEnd(labelW)}  ${a.url}` : a.url)),

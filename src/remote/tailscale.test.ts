@@ -3,7 +3,8 @@ import {
     ensureTailscaleServe,
     teardownTailscaleServe,
     planRemoteUrls,
-    serve443Target
+    serve443Target,
+    hostFromResult
 } from './tailscale.js'
 import type {Run} from './tailscale.js'
 
@@ -67,7 +68,8 @@ describe('ensureTailscaleServe()', () => {
         })
         expect(await ensureTailscaleServe(8800, run)).toEqual({
             state: 'served',
-            url: `https://${HOST}`
+            url: `https://${HOST}`,
+            host: HOST
         })
         expect(calls.some(c => c.args.includes('--bg'))).toBe(false)
     })
@@ -109,7 +111,8 @@ describe('ensureTailscaleServe()', () => {
         })
         expect(await ensureTailscaleServe(8800, run)).toEqual({
             state: 'served',
-            url: `https://${HOST}`
+            url: `https://${HOST}`,
+            host: HOST
         })
         const setCall = calls.find(c => c.args.includes('--bg'))
         expect(setCall?.args).toEqual(['serve', '--bg', '--https=443', 'http://127.0.0.1:8800'])
@@ -157,31 +160,46 @@ describe('teardownTailscaleServe()', () => {
 describe('planRemoteUrls()', () => {
     const http = 'http://100.83.115.70:8800'
     it('served → https url as primary + labeled HTTPS line, no hint', () => {
-        expect(planRemoteUrls(http, {state: 'served', url: 'https://h.ts.net'})).toEqual({
+        expect(
+            planRemoteUrls(http, {state: 'served', url: 'https://h.ts.net', host: 'h.ts.net'}, 8800)
+        ).toEqual({
             primaryUrl: 'https://h.ts.net',
             urlLines: [{label: 'HTTPS', url: 'https://h.ts.net'}],
             hintLines: []
         })
     })
-    it('foreign-conflict → http, no url line + conflict hint', () => {
-        const plan = planRemoteUrls(http, {state: 'foreign-conflict', host: 'h.ts.net'})
-        expect(plan.primaryUrl).toBe(http)
+    it('foreign-conflict → http host (not IP) as primary, no url line + conflict hint', () => {
+        const plan = planRemoteUrls(http, {state: 'foreign-conflict', host: 'h.ts.net'}, 8800)
+        expect(plan.primaryUrl).toBe('http://h.ts.net:8800')
         expect(plan.urlLines).toEqual([])
         expect(plan.hintLines.join('\n')).toContain(
             'already used by another tailscale serve config'
         )
     })
-    it('certs-disabled → http, no url line + admin hint', () => {
-        const plan = planRemoteUrls(http, {state: 'certs-disabled', host: 'h.ts.net'})
-        expect(plan.primaryUrl).toBe(http)
+    it('certs-disabled → http host (not IP) as primary, no url line + admin hint', () => {
+        const plan = planRemoteUrls(http, {state: 'certs-disabled', host: 'h.ts.net'}, 8800)
+        expect(plan.primaryUrl).toBe('http://h.ts.net:8800')
         expect(plan.urlLines).toEqual([])
         expect(plan.hintLines.join('\n')).toContain('admin console')
     })
-    it('unavailable → http, no url line, no hint', () => {
-        expect(planRemoteUrls(http, {state: 'unavailable'})).toEqual({
+    it('unavailable → http IP, no url line, no hint', () => {
+        expect(planRemoteUrls(http, {state: 'unavailable'}, 8800)).toEqual({
             primaryUrl: http,
             urlLines: [],
             hintLines: []
         })
+    })
+})
+
+describe('hostFromResult()', () => {
+    it('returns the host for served/foreign-conflict/certs-disabled', () => {
+        expect(hostFromResult({state: 'served', url: 'https://h.ts.net', host: 'h.ts.net'})).toBe(
+            'h.ts.net'
+        )
+        expect(hostFromResult({state: 'foreign-conflict', host: 'h.ts.net'})).toBe('h.ts.net')
+        expect(hostFromResult({state: 'certs-disabled', host: 'h.ts.net'})).toBe('h.ts.net')
+    })
+    it('returns undefined when unavailable', () => {
+        expect(hostFromResult({state: 'unavailable'})).toBeUndefined()
     })
 })
