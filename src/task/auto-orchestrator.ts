@@ -27,6 +27,7 @@ import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
+import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
@@ -148,7 +149,7 @@ export async function planAuto(
             })
         })
         if (a === undefined) {
-            ctx.ui.notify('/task-auto cancelled.', 'warning')
+            announceDone(ctx, '/task-auto cancelled.', 'warning')
             return null
         }
         const typed = a.trim()
@@ -182,7 +183,7 @@ export async function planAuto(
     )
     const titles = parseDecomposeList(listRaw)
     if (titles.length === 0) {
-        ctx.ui.notify('/task-auto: no tasks produced from the feature.', 'warning')
+        announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
         return null
     }
 
@@ -276,6 +277,22 @@ export function requestAutoCancel(): void {
     cancelRequested = true
 }
 
+/**
+ * Announce a terminal /task-auto-overall outcome both in the terminal and to
+ * subscribed devices. The push body reuses the exact terminal message, so a
+ * backgrounded phone learns the same thing the TUI shows. Used ONLY at the
+ * overall run's terminal points — never per internal task (those go through
+ * runSingleTask without notifyFinish, so they stay silent).
+ */
+function announceDone(
+    ctx: ExtensionCommandContext,
+    msg: string,
+    level: 'info' | 'warning' | 'error'
+): void {
+    ctx.ui.notify(msg, level)
+    void pushNotify('Task finished', msg, 'pi-end').catch(() => {})
+}
+
 export async function runAutoLoop(
     ctx: ExtensionCommandContext,
     cwd: string,
@@ -291,7 +308,7 @@ export async function runAutoLoop(
     try {
         for (;;) {
             if (cancelRequested) {
-                active.ui.notify(`${id} cancelled — resume with /task-auto-resume.`, 'warning')
+                announceDone(active, `${id} cancelled — resume with /task-auto-resume.`, 'warning')
                 return
             }
             const {body} = await readTaskFile(cwd, id)
@@ -299,7 +316,7 @@ export async function runAutoLoop(
             const next = entries.find(e => !e.done)
             if (!next) {
                 await updateTaskFrontMatter(cwd, id, {state: 'completed'})
-                active.ui.notify(`${id} complete — all ${entries.length} tasks done.`, 'info')
+                announceDone(active, `${id} complete — all ${entries.length} tasks done.`, 'info')
                 return
             }
             active.ui.notify(
@@ -346,7 +363,8 @@ export async function runAutoLoop(
             })
             active = res.ctx ?? active
             if (res.sessionCancelled) {
-                active.ui.notify(
+                announceDone(
+                    active,
                     `${id} paused — could not start a session. Run /task-auto-resume to retry.`,
                     'warning'
                 )
@@ -359,7 +377,8 @@ export async function runAutoLoop(
                 // this task's spec to finish it. (A plain ESC that the user
                 // follows with steering text never reaches here — that loops on
                 // the same task inside runSingleTask until a turn completes.)
-                active.ui.notify(
+                announceDone(
+                    active,
                     `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
                     'warning'
                 )
@@ -367,7 +386,8 @@ export async function runAutoLoop(
             }
             if (!res.ok) {
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                active.ui.notify(
+                announceDone(
+                    active,
                     `${id} stopped at "${next.title}" — fix and run /task-auto-resume.`,
                     'error'
                 )
@@ -398,11 +418,11 @@ export async function runAutoLoop(
         // mirroring the in-loop per-task failure path.
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === USER_CANCELLED) {
-            active.ui.notify(`${id} cancelled — resume with /task-auto-resume.`, 'warning')
+            announceDone(active, `${id} cancelled — resume with /task-auto-resume.`, 'warning')
             return
         }
         await updateTaskFrontMatter(cwd, id, {state: 'failed'}).catch(() => {})
-        active.ui.notify(`${id} stopped: ${msg} — fix and run /task-auto-resume.`, 'error')
+        announceDone(active, `${id} stopped: ${msg} — fix and run /task-auto-resume.`, 'error')
     } finally {
         cancelRequested = false
     }
@@ -429,10 +449,10 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         autoRunning = false
         const msg = err instanceof Error ? err.message : String(err)
         if (msg === USER_CANCELLED) {
-            ctx.ui.notify('/task-auto cancelled.', 'warning')
+            announceDone(ctx, '/task-auto cancelled.', 'warning')
             return
         }
-        ctx.ui.notify(`/task-auto planning failed: ${msg}`, 'error')
+        announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
         return
     }
     if (!id) {
@@ -444,7 +464,7 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
     if (cancelRequested) {
         cancelRequested = false
         autoRunning = false
-        ctx.ui.notify('/task-auto cancelled.', 'warning')
+        announceDone(ctx, '/task-auto cancelled.', 'warning')
         return
     }
     await runAutoLoop(ctx, cwd, id, deps)

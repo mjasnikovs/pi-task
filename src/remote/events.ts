@@ -1,6 +1,5 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {setAgentIdle} from './state.js'
-import {pushNotify} from './push.js'
 import {publishNotify} from './bridge.js'
 import type {ContextUsage} from './protocol.js'
 import {
@@ -37,10 +36,11 @@ export function setupEvents(pi: ExtensionAPI): void {
             if (errorMessage || ae.reason === 'error') {
                 const message = errorMessage || 'Request failed'
                 addError(message)
-                // Always push; the service worker suppresses the banner when a
-                // window is actually visible+focused (sw.ts), which is the only
-                // reliable foreground signal — an open WebSocket is not one.
-                void pushNotify('Agent error', message, 'pi-error').catch(() => {})
+                // No push here: pi-task only notifies for the two cases the user
+                // cares about — needing their input (the grill/clarify dialog, see
+                // bridge.ask) and a top-level /task or /task-auto run finishing
+                // (orchestrator/auto-orchestrator). A push on every host agent
+                // error — most of them outside any task — is just noise.
             }
         }
     })
@@ -64,7 +64,12 @@ export function setupEvents(pi: ExtensionAPI): void {
     pi.on('agent_end', (_event, ctx) => {
         setAgentIdle(true)
         agentEnd(ctx.getContextUsage() as ContextUsage)
-        void pushNotify('Task finished', '', 'pi-end').catch(() => {})
+        // Deliberately no push: agent_end fires on EVERY host turn — every chat
+        // reply, every internal phase turn inside /task, and every internal /task
+        // run inside /task-auto — so a "Task finished" push here floods the device.
+        // The real "a run finished" push is fired from the top-level command
+        // handlers instead (orchestrator handleTask/handleTaskResume, and
+        // auto-orchestrator's runAutoLoop), which never fire for internal runs.
     })
 
     pi.on('input', (event, _ctx) => {

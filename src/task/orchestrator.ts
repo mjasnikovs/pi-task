@@ -42,6 +42,7 @@ import {
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
+import {pushNotify} from '../remote/push.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
@@ -347,6 +348,13 @@ export interface RunSingleTaskOptions {
      * steer loop is testable without a real dialog.
      */
     promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
+    /**
+     * Push a "Task finished" notification to subscribed devices when this run
+     * reaches a terminal state (completed / failed / cancelled). Set only by the
+     * top-level /task and /task-resume command handlers — NOT by /task-auto's
+     * internal per-task runs, which must stay silent. Default false.
+     */
+    notifyFinish?: boolean
 }
 
 /** Dialog copy for the post-interrupt steering prompt. */
@@ -475,16 +483,35 @@ export async function runSingleTask(
     })
     if (result.cancelled) {
         // No replacement happened — the original ctx is still live.
+        if (opts.notifyFinish) {
+            void pushNotify(
+                'Task finished',
+                `${taskId || 'Task'} cancelled — could not start a session.`,
+                'pi-end'
+            ).catch(() => {})
+        }
         return {taskId, ok: false, sessionCancelled: true, ctx}
     }
     let ok = false
+    let state: string | undefined
     if (taskId) {
         try {
             const {frontMatter} = await readTaskFile(cwd, taskId)
-            ok = frontMatter.state === 'completed'
+            state = frontMatter.state
+            ok = state === 'completed'
         } catch {
             ok = false
         }
+    }
+    if (opts.notifyFinish) {
+        // One push per top-level /task or /task-resume, on any terminal end. The
+        // file state is the source of truth: 'completed' on success, 'failed' /
+        // 'cancelled' otherwise; an unreadable/absent file falls back to 'ended'.
+        void pushNotify(
+            'Task finished',
+            `${taskId || 'Task'} ${state ?? 'ended'}.`,
+            'pi-end'
+        ).catch(() => {})
     }
     return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted}
 }
@@ -500,7 +527,7 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
         ctx.ui.notify('Type your prompt after /task (use @ for file completion).', 'info')
         return
     }
-    const {sessionCancelled} = await runSingleTask(ctx, cwd, raw)
+    const {sessionCancelled} = await runSingleTask(ctx, cwd, raw, {notifyFinish: true})
     if (sessionCancelled) {
         ctx.ui.notify('Could not start a fresh session for /task.', 'warning')
     }
@@ -581,7 +608,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         }
         id = candidates[0].id
     }
-    const {sessionCancelled} = await runSingleTask(ctx, cwd, '', {resumeId: id})
+    const {sessionCancelled} = await runSingleTask(ctx, cwd, '', {resumeId: id, notifyFinish: true})
     if (sessionCancelled) {
         ctx.ui.notify('Could not start a fresh session for /task-resume.', 'warning')
     }
