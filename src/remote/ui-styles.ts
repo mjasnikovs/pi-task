@@ -37,10 +37,22 @@ export const STYLES = `    :root {
     }
     #bell:hover { color: var(--text); }
     #bell.on { color: var(--mauve); }
+    #chat-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
     #chat-log {
       flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px;
       display: flex; flex-direction: column; gap: 8px;
     }
+    /* Floating jump-to-latest button — only shown when scrolled away from the
+       bottom (toggled via .visible from the scroll handler). */
+    #scroll-bottom {
+      display: none; position: absolute; bottom: 16px; right: 16px; z-index: 40;
+      width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+      background: var(--surface1); color: var(--text); border: 1px solid var(--surface2);
+      font-family: inherit; font-size: 18px; line-height: 1; padding: 0;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    }
+    #scroll-bottom:hover { background: var(--surface2); color: var(--mauve); }
+    #scroll-bottom.visible { display: block; }
     #chat-log::-webkit-scrollbar { width: 6px; }
     #chat-log::-webkit-scrollbar-track { background: transparent; }
     #chat-log::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }

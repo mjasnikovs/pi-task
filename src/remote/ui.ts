@@ -43,7 +43,10 @@ ${STYLES}
       <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
     </div>
   </div>
-  <div id="chat-log"></div>
+  <div id="chat-wrap">
+    <div id="chat-log"></div>
+    <button id="scroll-bottom" aria-label="Scroll to latest" title="Scroll to latest">&#x2193;</button>
+  </div>
   <div id="status-panel"></div>
   <div id="input-bar">
     <div id="cmd-suggestions"></div>

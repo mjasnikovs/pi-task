@@ -216,12 +216,32 @@ export function clientScript(wsUrl: string): string {
       inputEl.focus();
     }
 
-    chatLog.addEventListener('scroll', () => {
+    const scrollBtn = document.getElementById('scroll-bottom');
+    function atBottom() {
       const { scrollTop, scrollHeight, clientHeight } = chatLog;
-      autoScroll = scrollTop + clientHeight >= scrollHeight - 24;
+      return scrollTop + clientHeight >= scrollHeight - 24;
+    }
+    // Show the jump-to-latest button only when the user has scrolled up away
+    // from the newest text; hide it once they're back at the bottom.
+    function updateScrollBtn() {
+      scrollBtn.classList.toggle('visible', !atBottom());
+    }
+    chatLog.addEventListener('scroll', () => {
+      autoScroll = atBottom();
+      updateScrollBtn();
+    });
+    scrollBtn.addEventListener('click', () => {
+      autoScroll = true;
+      chatLog.scrollTop = chatLog.scrollHeight;
+      updateScrollBtn();
     });
 
-    function scrollBottom() { if (autoScroll) chatLog.scrollTop = chatLog.scrollHeight; }
+    function scrollBottom() {
+      if (autoScroll) chatLog.scrollTop = chatLog.scrollHeight;
+      // New content can push the bottom away while the user is scrolled up;
+      // keep the button's visibility in sync on every append, not just on scroll.
+      updateScrollBtn();
+    }
 
     function addBubble(role, text) {
       const el = document.createElement('div');
