@@ -377,6 +377,35 @@ test('runAutoLoop: stops and marks failed on first failing task', async () => {
     })
 })
 
+test('runAutoLoop: surfaces a failed task reason in the stop message', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({
+                    taskId: 'TASK_0006',
+                    ok: false,
+                    sessionCancelled: false,
+                    reason: '400 request exceeds the available context size'
+                }),
+            commit: () => Promise.resolve({committed: true})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // The first entry is never checked off, so resume re-runs it.
+        const {body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(body).not.toContain('- [x]')
+        expect(captured.notifies.some(n => /exceeds the available context size/.test(n.msg))).toBe(
+            true
+        )
+    })
+})
+
 test('runAutoLoop: cancel after current task leaves state in_progress', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)

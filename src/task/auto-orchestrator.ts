@@ -386,9 +386,13 @@ export async function runAutoLoop(
             }
             if (!res.ok) {
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                // res.reason is set when the implementation turn itself died
+                // (e.g. a context-overflow 400) — surface it so the real cause
+                // isn't lost behind the generic "stopped" message.
+                const why = res.reason ? ` — ${res.reason.slice(0, 160)}` : ''
                 announceDone(
                     active,
-                    `${id} stopped at "${next.title}" — fix and run /task-auto-resume.`,
+                    `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
                     'error'
                 )
                 return

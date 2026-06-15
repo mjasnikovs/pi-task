@@ -393,6 +393,14 @@ export interface RunSingleTaskResult {
      * uninterrupted.
      */
     interrupted?: boolean
+    /**
+     * Why the run is not ok, when known. Set when a waitForImplementation turn
+     * ended with stopReason "error" (the model/provider died mid-implementation —
+     * e.g. a context-overflow 400 — after the task file was already marked
+     * `completed` at spec-handoff). The /task-auto loop surfaces this in its
+     * "stopped at …" message so the real cause isn't lost. Undefined otherwise.
+     */
+    reason?: string
 }
 
 /**
@@ -410,6 +418,30 @@ function wasInterrupted(ctx: ExtensionCommandContext): boolean {
         }
     }
     return false
+}
+
+/**
+ * The error cause when the most recent assistant turn ended with stopReason
+ * "error" — the model/provider failed mid-implementation (context overflow,
+ * disconnect, provider 5xx) after pi exhausted its own retries. Returns the
+ * provider's errorMessage, or undefined if the turn ended cleanly ("stop") or
+ * was user-aborted ("aborted", handled by wasInterrupted).
+ *
+ * The /task-auto loop reads this AFTER the implementation wait: a task's file is
+ * marked `completed` at spec-handoff (before implementation), so without this
+ * check an implementation turn that died — e.g. "400 ... exceeds the available
+ * context size" — would still read as ok and get checked off and committed.
+ */
+function implementationError(ctx: ExtensionCommandContext): string | undefined {
+    const entries = ctx.sessionManager.getEntries()
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i]
+        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
+            const m = e.message as {stopReason?: string; errorMessage?: string}
+            return m.stopReason === 'error' ? (m.errorMessage ?? 'model error') : undefined
+        }
+    }
+    return undefined
 }
 
 /**
@@ -458,6 +490,11 @@ export async function runSingleTask(
     // cancellation path (where no replacement occurs).
     let freshCtx: ExtensionCommandContext = ctx
     let interrupted = false
+    // The implementation turn's failure cause, when it ended with stopReason
+    // "error" (only meaningful in the waitForImplementation path). The task file
+    // was already marked `completed` at spec-handoff, so this is the only signal
+    // that the implementation itself died and the task must not be checked off.
+    let implError: string | undefined
     const result = await ctx.newSession({
         withSession: async newCtx => {
             freshCtx = newCtx
@@ -472,6 +509,9 @@ export async function runSingleTask(
                     if (opts.waitForImplementation) {
                         await newCtx.waitForIdle()
                         interrupted = await steerUntilDone(newCtx, opts.promptSteer)
+                        // A user-declined steer (interrupted) is its own paused
+                        // path; otherwise inspect how the turn actually ended.
+                        if (!interrupted) implError = implementationError(newCtx)
                     }
                 },
                 opts.spawnFn,
@@ -503,6 +543,10 @@ export async function runSingleTask(
             ok = false
         }
     }
+    // The file reads `completed` from spec-handoff even when the implementation
+    // turn then died. Demote to a failure so /task-auto stops here (leaving the
+    // entry unchecked and resumable) instead of committing and advancing.
+    if (ok && implError) ok = false
     if (opts.notifyFinish) {
         // One push per top-level /task or /task-resume, on any terminal end. The
         // file state is the source of truth: 'completed' on success, 'failed' /
@@ -513,7 +557,7 @@ export async function runSingleTask(
             'pi-end'
         ).catch(() => {})
     }
-    return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted}
+    return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted, reason: implError}
 }
 
 // ─── Command handlers ────────────────────────────────────────────────────────

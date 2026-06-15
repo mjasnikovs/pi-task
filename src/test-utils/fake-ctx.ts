@@ -45,10 +45,11 @@ export interface FakeCtxHandle {
     /**
      * Set the stopReason of the most recent assistant turn the fake session
      * reports via sessionManager.getEntries(). Use "aborted" to simulate the user
-     * pressing ESC during an implementation wait. Shared across session
-     * generations, like the captured arrays.
+     * pressing ESC during an implementation wait, or "error" with an errorMessage
+     * to simulate the model/provider dying mid-implementation (e.g. a context
+     * overflow). Shared across session generations, like the captured arrays.
      */
-    setStopReason: (reason: string | undefined) => void
+    setStopReason: (reason: string | undefined, errorMessage?: string) => void
 }
 
 // Matches the message the real extension runtime throws from a stale ctx.
@@ -62,6 +63,7 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     // The stopReason runSingleTask reads after waitForIdle to detect a user ESC.
     // Shared across generations so the value survives session replacement.
     let lastStopReason: string | undefined
+    let lastErrorMessage: string | undefined
     const captured: FakeCtxHandle['captured'] = {
         notifies: [],
         inputs: [],
@@ -126,7 +128,15 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                 getEntries: guard(() =>
                     lastStopReason === undefined ?
                         []
-                    :   [{message: {role: 'assistant', stopReason: lastStopReason}}]
+                    :   [
+                            {
+                                message: {
+                                    role: 'assistant',
+                                    stopReason: lastStopReason,
+                                    errorMessage: lastErrorMessage
+                                }
+                            }
+                        ]
                 )
             },
             newSession: guard(
@@ -164,8 +174,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         queueEditor: (value: string | undefined) => {
             editorQueue.push(value)
         },
-        setStopReason: (reason: string | undefined) => {
+        setStopReason: (reason: string | undefined, errorMessage?: string) => {
             lastStopReason = reason
+            lastErrorMessage = errorMessage
         }
     }
 }

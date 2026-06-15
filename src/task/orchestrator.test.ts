@@ -473,6 +473,37 @@ describe('runSingleTask', () => {
         })
     })
 
+    test('runSingleTask: implementation turn ending in stopReason "error" is not ok', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason} = makeFakeCtx(cwd)
+            // The spec composes fine (file → state "completed" at handoff), but the
+            // implementation turn then dies — e.g. a context-overflow 400.
+            setStopReason('error', '400 request (124789 tokens) exceeds the available context size')
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            // Must NOT read as ok despite the file saying "completed" — otherwise
+            // /task-auto would check the task off and commit a dead turn.
+            expect(res.ok).toBe(false)
+            expect(res.interrupted).toBe(false)
+            expect(res.reason).toContain('exceeds the available context size')
+        })
+    })
+
+    test('runSingleTask: a clean implementation turn ("stop") stays ok with no reason', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason} = makeFakeCtx(cwd)
+            setStopReason('stop')
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res.ok).toBe(true)
+            expect(res.reason).toBeUndefined()
+        })
+    })
+
     test('runSingleTask: returns the fresh replacement ctx; the original is stale', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
