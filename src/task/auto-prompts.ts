@@ -36,18 +36,33 @@ fork the breakdown). Account for the answers so far:
   real-time vs polling transport, search, deployment).
 - Skip anything /task will naturally resolve per-task during its own research.
 
-Also propose the most sensible default answer for this question, inferred from
-the repo, the referenced docs, and any stated philosophy or constraints —
-concrete and decisive, shown to the user as a recommendation they can accept or
-override. When the question is a genuine binary "A or B?" fork, also give the
-single best alternative as a second option; otherwise offer only the one default.
+YOU MUST propose a default answer for the question — every question you emit
+carries exactly one SUGGESTED line. Never omit it, never leave it blank, never
+refuse. Infer the most sensible, concrete, decisive default from the repo, the
+referenced docs, and any stated philosophy or constraints; it is shown to the
+user as a recommendation they accept or override. When the question is a genuine
+binary "A or B?" fork, also give the single best alternative as an ALT line;
+otherwise emit only the one SUGGESTED.
 
 OUTPUT FORMAT (exact):
 - One clarifying question as a single numbered line: "1. ...".
-- On the NEXT line (never inline), a line that begins with "SUGGESTED: <your recommended default>".
+- On the NEXT line (never inline), a line that begins with "SUGGESTED: <your recommended default>". This line is REQUIRED for every question.
 - ONLY for a binary "A or B?" fork, on the line after that, a line beginning with "ALT: <the alternative option>". Omit the ALT line entirely for open-ended questions.
 - Put the core question in **bold**, followed by a short one-line rationale in plain prose. Backticks around code/identifiers are fine. Avoid other markdown (headings, bullet lists, links).
-- Only when the spec already pins down every choice that would change the task breakdown — nothing decision-changing is left to ask — output exactly:
+- Only when the spec already pins down every choice that would change the task breakdown — nothing decision-changing is left to ask — output exactly the single token NONE on its own line (and no SUGGESTED line).
+
+EXAMPLES (format only — your wording will differ):
+
+Open-ended question:
+1. **Where should uploaded files be stored?** This forks whether an early storage-abstraction task is needed.
+SUGGESTED: store on local disk under ./uploads, served by the existing static handler
+
+Binary "A or B?" fork:
+1. **Should the Zod schemas live in a shared module imported by both server and client, or stay server-only with manual client types?** This decides whether a "shared schema" task must land before any route or API-client work.
+SUGGESTED: a shared schema module imported by both, so \`hc()\` gets typed RPC for free
+ALT: server-only schemas with hand-written client types
+
+No question remains:
 NONE`
 
 /**
