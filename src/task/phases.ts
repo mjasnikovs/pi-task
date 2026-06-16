@@ -7,7 +7,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {formatNpmVersionSection} from '../workers/npm-version.js'
-import {runWorker} from '../workers/pi-worker-core.js'
+import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
@@ -30,7 +30,7 @@ import {
     MAX_GRILL_QUESTIONS,
     appendNoThink
 } from './prompts.js'
-import {setTaskSection, updateTaskFrontMatter} from './task-io.js'
+import {readSection, removeTaskSection, setTaskSection, updateTaskFrontMatter} from './task-io.js'
 import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
@@ -168,6 +168,76 @@ export interface PhaseResearchDeps extends ExternalContextDeps {
 
 const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
 
+/**
+ * Task-file heading under which a research worker's validated output is cached.
+ * A resumed research phase reads these to skip workers that already succeeded,
+ * instead of re-running all four from scratch when one of them fails — the
+ * expensive case (e.g. 3 healthy workers thrown away because the 4th looped).
+ */
+function researchWorkerCacheHeading(section: string): string {
+    return `research worker ${section}`
+}
+
+/**
+ * The TOOLING worker only needs to know which verification commands the task
+ * cares about — never the per-file edit list. Big refined prompts embed a long
+ * bulleted "fix these files" checklist *inside* the GOAL block; handing that to
+ * a weak local model drags it into reading/grepping source it doesn't need and
+ * it loops (TASK_0017: read(sql-adapter.ts) ×5 → loop-kill → fails the phase).
+ * So scope TOOLING's view to the GOAL prose, truncated at the first bullet.
+ *
+ * Fallbacks, in order: no bare `GOAL` header (free-form refined) → the whole
+ * refined unchanged; a GOAL block with no bullets → the full GOAL block. The
+ * GOAL boundary is the next bare ALL-CAPS header (CONSTRAINTS, KNOWN-UNKNOWNS,
+ * …) or end of text. Verified against every recorded refined prompt: the
+ * bullet-heavy failure case drops 3319→329 chars with zero source-file
+ * mentions; the rest are unchanged or only lightly trimmed.
+ */
+export function scopedToolingGoal(refined: string): string {
+    const m = /^GOAL[ \t]*\n([\s\S]*?)(?=\n[A-Z][A-Z][A-Z -]*[ \t]*\n|$(?![\s\S]))/m.exec(refined)
+    if (!m) return refined
+    const goal = m[1].trim()
+    const firstBullet = goal.search(/\n[ \t]*[-*]\s/)
+    return firstBullet === -1 ? goal : goal.slice(0, firstBullet).trim()
+}
+
+/**
+ * Throw a descriptive error if a research worker's result is not trustworthy
+ * output, so only good output is ever cached and assembled. Precedence mirrors
+ * the original inline checks: loop/timeout exhaustion first (a loop-kill is a
+ * SIGTERM/exit 143 OR a clean exit 0 with partial text, so exitCode alone is
+ * ambiguous — the worker already burned its MAX_LOOP_RESTARTS restarts before
+ * setting these), then exit code, empty output, and finally a leaked
+ * (never-executed) tool call.
+ */
+function assertResearchWorkerOk(name: string, result: RunWorkerResult): void {
+    if (result.loopHit) {
+        const argsStr = JSON.stringify(result.loopHit.call.args)
+        throw new Error(
+            `Research ${name} worker stuck in a loop — called `
+                + `${result.loopHit.call.name}(${argsStr}) ×${result.loopHit.count} in the last `
+                + `${result.loopHit.windowSize} calls and still looped after restarts`
+        )
+    }
+    if (result.timedOut) {
+        throw new Error(`Research ${name} worker timed out after restarts`)
+    }
+    if (result.exitCode !== 0) {
+        throw new Error(
+            `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
+        )
+    }
+    if (result.text.trim().length === 0) {
+        throw new Error(`Research ${name} worker produced no output`)
+    }
+    if (result.leakedToolCall) {
+        throw new Error(
+            `Research ${name} worker wrote a tool call as text instead of invoking it `
+                + `(${result.leakedToolCall.trim()}) — it never ran`
+        )
+    }
+}
+
 export async function phaseResearch(
     deps: PhaseDeps,
     refined: string,
@@ -261,12 +331,31 @@ export async function phaseResearch(
         {
             section: 'TOOLING',
             label: 'worker:tooling',
-            prompt: appendNoThink(promptHeader + RESEARCH_TOOLING_PROMPT(refined))
+            // Scope to the goal prose only — not the per-file edit checklist that
+            // makes a weak model spelunk source and loop. See scopedToolingGoal.
+            prompt: appendNoThink(
+                promptHeader + RESEARCH_TOOLING_PROMPT(scopedToolingGoal(refined))
+            )
         }
     ]
 
-    const workerResults: Array<Awaited<ReturnType<typeof runWorker>>> = []
+    // Run workers one at a time, persisting each worker's validated output the
+    // moment it succeeds. On a resume, a worker whose cached output is already on
+    // disk is skipped — so when one worker fails and the phase is re-run, the
+    // others don't burn minutes regenerating work that was already good. Each
+    // worker is validated inline (not in a second pass) so a failure throws
+    // before later workers run, and only trustworthy text is ever cached.
+    const sections: Array<{name: string; text: string}> = []
     for (const spec of workerSpecs) {
+        const cacheHeading = researchWorkerCacheHeading(spec.section)
+        const cached = (await readSection(deps.cwd, deps.taskId, cacheHeading)) ?? ''
+        if (cached.trim().length > 0) {
+            deps.logDebug?.(`${spec.label}: cached — skipping re-run`)
+            updateProgress()
+            sections.push({name: spec.section, text: cached.trim()})
+            continue
+        }
+
         deps.logDebug?.(`${spec.label}: start`)
         const r = await recordWorker(
             spec.label,
@@ -289,47 +378,23 @@ export async function phaseResearch(
                 + (r.leakedToolCall ? ` leaked=${r.leakedToolCall.trim().slice(0, 80)}` : '')
         )
         updateProgress()
-        workerResults.push(r)
+
+        // Throws (failing the phase) on a loop/timeout/exit/empty/leak — so the
+        // workers that already succeeded above stay cached for the resume.
+        assertResearchWorkerOk(spec.section, r)
+        await setTaskSection(deps.cwd, deps.taskId, cacheHeading, r.text)
+        sections.push({name: spec.section, text: r.text.trim()})
     }
 
-    // Validate + assemble by mapping spec.section over the results, so adding or
-    // reordering a worker is a single edit to workerSpecs (the result order
-    // mirrors workerSpecs order — the loop above pushes in sequence).
-    const sections = workerSpecs.map((spec, i) => ({name: spec.section, result: workerResults[i]}))
-    for (const {name, result} of sections) {
-        // Loop/timeout exhaustion is checked before the generic exit-code branch:
-        // a loop-kill arrives as a SIGTERM (exit 143) AND sometimes as a clean
-        // exit 0 with partial text, so keying off exitCode alone would either give
-        // a useless "exit 143" message or silently accept truncated output. The
-        // worker already burned its MAX_LOOP_RESTARTS restarts before setting these.
-        if (result.loopHit) {
-            const argsStr = JSON.stringify(result.loopHit.call.args)
-            throw new Error(
-                `Research ${name} worker stuck in a loop — called `
-                    + `${result.loopHit.call.name}(${argsStr}) ×${result.loopHit.count} in the last `
-                    + `${result.loopHit.windowSize} calls and still looped after restarts`
-            )
-        }
-        if (result.timedOut) {
-            throw new Error(`Research ${name} worker timed out after restarts`)
-        }
-        if (result.exitCode !== 0) {
-            throw new Error(
-                `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
-            )
-        }
-        if (result.text.trim().length === 0) {
-            throw new Error(`Research ${name} worker produced no output`)
-        }
-        if (result.leakedToolCall) {
-            throw new Error(
-                `Research ${name} worker wrote a tool call as text instead of invoking it `
-                    + `(${result.leakedToolCall.trim()}) — it never ran`
-            )
-        }
+    // All workers succeeded — the assembled output below becomes the canonical
+    // 'research' section (written by the orchestrator). The per-worker caches
+    // exist only to survive a mid-phase failure, so drop them now to avoid
+    // carrying every section twice in the task file.
+    for (const spec of workerSpecs) {
+        await removeTaskSection(deps.cwd, deps.taskId, researchWorkerCacheHeading(spec.section))
     }
 
-    return sections.map(({name, result}) => `${name}\n${result.text}`).join('\n\n')
+    return sections.map(({name, text}) => `${name}\n${text}`).join('\n\n')
 }
 
 export interface PhaseAutoAnswerDeps {

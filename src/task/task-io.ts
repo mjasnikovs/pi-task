@@ -103,3 +103,12 @@ export async function setTaskSection(
     }
     await writeTaskFile(cwd, {...frontMatter, updated_at: new Date().toISOString()}, next)
 }
+
+/** Remove a section (heading + body) if present; a no-op when it's absent. */
+export async function removeTaskSection(cwd: string, id: string, heading: string): Promise<void> {
+    const {frontMatter, body} = await readTaskFile(cwd, id)
+    const re = sectionRegex(heading)
+    if (!re.test(body)) return
+    const next = body.replace(re, '')
+    await writeTaskFile(cwd, {...frontMatter, updated_at: new Date().toISOString()}, next)
+}

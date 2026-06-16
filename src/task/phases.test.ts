@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test'
 import {
     extractToolingCommands,
     replaceToolingWithVerified,
+    scopedToolingGoal,
     phaseResearch,
     phaseAutoAnswer,
     phaseGrill,
@@ -10,7 +11,7 @@ import {
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
-import {readTaskFile} from './task-io.js'
+import {readSection, readTaskFile} from './task-io.js'
 import {agentErrorResponse} from '../test-utils/fake-spawn.js'
 import {parseVerifyToolingOutput} from './parsers.js'
 import {
@@ -28,6 +29,41 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
 import {getBridge, answerPrompt} from '../remote/bridge.js'
 import {getState, _setSink, reset} from '../remote/session-state.js'
+
+describe('scopedToolingGoal', () => {
+    // Shape of the failing TASK_0017 refined prompt: a GOAL block whose tail is a
+    // long per-file edit checklist, then CONSTRAINTS. The checklist is what made
+    // the TOOLING worker spelunk source and loop.
+    const bulletHeavy = [
+        'GOAL',
+        'Fix every lint violation. The work is done when `bun run lint` passes and',
+        '`AGENT=1 bun test` tests pass. Specifically, fix violations in these files:',
+        '- src/server/lib/sql-adapter.ts — replace the casts',
+        '- src/server/routes/auth.ts — convert .parse() to .safeParse()',
+        '',
+        'CONSTRAINTS',
+        '- Never use `as unknown as`.'
+    ].join('\n')
+
+    test('strips the per-file bullet checklist, keeping only the goal prose', () => {
+        const out = scopedToolingGoal(bulletHeavy)
+        expect(out).toContain('bun run lint')
+        expect(out).toContain('AGENT=1 bun test')
+        expect(out).not.toContain('sql-adapter.ts')
+        expect(out).not.toContain('auth.ts')
+        expect(out).not.toContain('CONSTRAINTS')
+    })
+
+    test('a GOAL block with no bullets is returned whole (up to the next header)', () => {
+        const refined = 'GOAL\nRun `bun run lint` and fix all warnings.\n\nACCEPTANCE\n- lint clean'
+        expect(scopedToolingGoal(refined)).toBe('Run `bun run lint` and fix all warnings.')
+    })
+
+    test('falls back to the full refined when there is no bare GOAL header', () => {
+        const refined = '**GOAL** Fix invalid SQL queries to comply with Bun docs.'
+        expect(scopedToolingGoal(refined)).toBe(refined)
+    })
+})
 
 describe('extractToolingCommands', () => {
     test('parses single-column entry', () => {
@@ -175,6 +211,94 @@ describe('phaseResearch loop guard', () => {
                     {getFileInventory: async () => ''}
                 )
             ).rejects.toThrow(/CONTEXT worker stuck in a loop.*grep/i)
+        })
+    })
+})
+
+describe('phaseResearch per-worker persistence', () => {
+    // Marker strings each worker's prompt carries, used to route fake spawns and
+    // to keep this suite honest if a prompt is renamed.
+    const MARKERS = {
+        files: 'content of a FILES section',
+        apis: 'content of an APIS section',
+        context: 'content of a CONTEXT section',
+        tooling: 'content of a TOOLING section'
+    }
+
+    function classify(args: ReadonlyArray<string>): keyof typeof MARKERS | 'other' {
+        const prompt = args[args.length - 1] ?? ''
+        for (const k of Object.keys(MARKERS) as Array<keyof typeof MARKERS>) {
+            if (prompt.includes(MARKERS[k])) return k
+        }
+        return 'other'
+    }
+
+    test('a resumed phase reuses cached workers and only re-runs the failed one', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+
+            const spawns: Record<string, number> = {}
+            let toolingShouldFail = true
+            const spawn = fakeSpawnByPrompt(args => {
+                const which = classify(args)
+                spawns[which] = (spawns[which] ?? 0) + 1
+                // TOOLING (the last worker) loops through every restart on run 1,
+                // failing the phase after FILES/APIS/CONTEXT answered cleanly.
+                if (which === 'tooling' && toolingShouldFail) {
+                    return loopResponse('read', {path: '/x'}, 6)
+                }
+                return agentEndResponse(`- finding for ${which}`)
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+
+            // Run 1: TOOLING loops → the phase throws with a TOOLING-named error.
+            await expect(
+                phaseResearch(deps, 'a refined goal with no mentions', {
+                    getFileInventory: async () => ''
+                })
+            ).rejects.toThrow(/TOOLING worker stuck in a loop/i)
+
+            // The three good workers were cached; the failed one was not.
+            expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain('files')
+            expect(await readSection(cwd, 'TASK_0001', 'research worker APIS')).toContain('apis')
+            expect(await readSection(cwd, 'TASK_0001', 'research worker CONTEXT')).toContain(
+                'context'
+            )
+            expect(await readSection(cwd, 'TASK_0001', 'research worker TOOLING')).toBeNull()
+
+            const afterRun1 = {...spawns}
+
+            // Run 2 (resume at research): TOOLING now answers cleanly.
+            toolingShouldFail = false
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+
+            // The cached workers were NOT re-spawned; only TOOLING ran again (once).
+            expect(spawns.files).toBe(afterRun1.files)
+            expect(spawns.apis).toBe(afterRun1.apis)
+            expect(spawns.context).toBe(afterRun1.context)
+            expect(spawns.tooling).toBe((afterRun1.tooling ?? 0) + 1)
+
+            // Output is assembled from the cached sections plus the fresh TOOLING run.
+            expect(out).toContain('FILES\n- finding for files')
+            expect(out).toContain('TOOLING\n- finding for tooling')
+
+            // On success the per-worker caches are cleaned up (the assembled
+            // 'research' section, written by the orchestrator, is canonical).
+            expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toBeNull()
+            expect(await readSection(cwd, 'TASK_0001', 'research worker TOOLING')).toBeNull()
         })
     })
 })
