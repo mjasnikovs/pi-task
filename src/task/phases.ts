@@ -43,6 +43,7 @@ import {
     deriveTitle,
     type AutoAnswer
 } from './parsers.js'
+import {compressTitle} from './title-label.js'
 import {
     parseVerifyBlock,
     validateSpecShape,
@@ -723,11 +724,18 @@ export const PHASES: PhaseConfig[] = [
 
 export async function postCommitPhase(
     phase: PhaseConfig,
+    deps: PhaseDeps,
     pc: PhaseContext,
     out: string
 ): Promise<void> {
     if (phase.name !== 'refine') return
     const title = deriveTitle(out)
     pc.widgetState.title = title
+    // Compress the (often paragraph-long) title into a short display label. This
+    // is best-effort and self-falls-back to a truncation, so it never blocks the
+    // pipeline — but persist title first so a label failure can't lose the title.
     await updateTaskFrontMatter(pc.cwd, pc.id, {title})
+    const label = await compressTitle(deps, title)
+    pc.widgetState.label = label
+    await updateTaskFrontMatter(pc.cwd, pc.id, {label})
 }

@@ -4,7 +4,10 @@ import {
     parseClarifyList,
     parseAutoAnswer,
     autoAnswerHasTag,
-    deriveTitle
+    deriveTitle,
+    truncateLabel,
+    titleForDisplay,
+    LABEL_MAX
 } from './parsers.js'
 import {MAX_GRILL_QUESTIONS} from './prompts.js'
 
@@ -286,5 +289,58 @@ describe('deriveTitle', () => {
 
     test('stops at CONSTRAINTS if GOAL paragraph is empty', () => {
         expect(deriveTitle('GOAL\n\nCONSTRAINTS\n- y')).toBe('CONSTRAINTS')
+    })
+})
+
+describe('truncateLabel', () => {
+    test('returns short strings unchanged', () => {
+        expect(truncateLabel('Fix the bug')).toBe('Fix the bug')
+    })
+
+    test('collapses internal whitespace', () => {
+        expect(truncateLabel('Fix   the\n  bug')).toBe('Fix the bug')
+    })
+
+    test('truncates long strings with an ellipsis and clamps to max', () => {
+        const long = 'word '.repeat(40).trim()
+        const out = truncateLabel(long, 20)
+        expect(out.length).toBeLessThanOrEqual(20)
+        expect(out.endsWith('…')).toBe(true)
+    })
+
+    test('cuts on a word boundary when one falls late enough', () => {
+        const out = truncateLabel('alpha beta gamma delta', 18)
+        // boundary cut, not a mid-word chop
+        expect(out).toBe('alpha beta gamma…')
+    })
+
+    test('hard-cuts a single long word with no late boundary', () => {
+        const out = truncateLabel('supercalifragilisticexpialidocious', 10)
+        expect(out).toBe('supercali…')
+        expect(out.length).toBe(10)
+    })
+})
+
+describe('titleForDisplay', () => {
+    test('prefers a present label over the title', () => {
+        expect(
+            titleForDisplay({title: 'a very long title '.repeat(10), label: 'Short label'})
+        ).toBe('Short label')
+    })
+
+    test('falls back to a truncation of the title when label is absent', () => {
+        const long = 'GOAL paragraph that runs well past the display limit '.repeat(4)
+        const out = titleForDisplay({title: long})
+        expect(out.length).toBeLessThanOrEqual(LABEL_MAX)
+        expect(out.endsWith('…')).toBe(true)
+    })
+
+    test('ignores a blank/whitespace label', () => {
+        expect(titleForDisplay({title: 'Real title', label: '   '})).toBe('Real title')
+    })
+
+    test('clamps an over-long stored label defensively', () => {
+        const out = titleForDisplay({title: 't', label: 'x'.repeat(200)})
+        expect(out.length).toBeLessThanOrEqual(LABEL_MAX)
     })
 })

@@ -44,6 +44,7 @@ import {startWidget, type WidgetState} from './widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {parseVerifyBlock} from './spec-validation.js'
+import {titleForDisplay} from './parsers.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
@@ -183,11 +184,13 @@ export class TaskRunner {
         // Initialise or resume the TASK file.
         let id: string
         let title: string
+        let label: string | undefined
         let resumePhase: PhaseName = 'refine'
         if (this._resumeId) {
             id = this._resumeId
             const {frontMatter} = await readTaskFile(cwd, id)
             title = frontMatter.title
+            label = frontMatter.label
             resumePhase = frontMatter.phase
             await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
         } else {
@@ -227,6 +230,7 @@ export class TaskRunner {
         // Register as active.
         this._widgetState.taskId = id
         this._widgetState.title = title
+        this._widgetState.label = label
         this._widgetState.phase = resumePhase
         this._widgetState.startedAt = this._startedAt
         this._deps.taskId = id
@@ -272,7 +276,7 @@ export class TaskRunner {
                 }
                 await setTaskSection(cwd, id, phase.section, out)
                 this._pc[phase.field] = out
-                await postCommitPhase(phase, this._pc, out)
+                await postCommitPhase(phase, this._deps, this._pc, out)
             }
 
             // All phases done — hand off the spec.
@@ -601,7 +605,7 @@ async function handleTaskList(_args: string, ctx: ExtensionCommandContext): Prom
         const phasePart = `phase ${Math.min(idx + 1, PHASE_ORDER.length)}/${PHASE_ORDER.length} ${fm.phase}`
         const date = fm.updated_at.replace('T', ' ').slice(0, 16)
         lines.push(
-            `${fm.id}  ${fm.state.padEnd(12)}  ${phasePart.padEnd(24)}  ${date}  "${fm.title}"`
+            `${fm.id}  ${fm.state.padEnd(12)}  ${phasePart.padEnd(24)}  ${date}  "${titleForDisplay(fm)}"`
         )
     }
     if (lines.length === 0) lines.push('(no tasks in .pi-tasks/)')

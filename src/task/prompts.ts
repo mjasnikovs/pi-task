@@ -37,6 +37,24 @@ export function appendNoThink(prompt: string): string {
     return `${prompt}\n\n${NO_THINK}`
 }
 
+/**
+ * Compress a verbose task title into a short status-bar label. Pure judgment, no
+ * tools — the child reads only the title we hand it. The output is sanitised and
+ * length-clamped by the caller (title-label.ts), so the prompt optimises for the
+ * right *content* (identifying nouns) rather than trusting the model on length.
+ */
+export const COMPRESS_LABEL_PROMPT = (title: string, maxChars: number) =>
+    `Shorten the following task title into a brief label for a one-line status display.
+
+Rules:
+- Output ONLY the label text. No preamble, no quotes, no markdown, no trailing period.
+- One line, at most ${maxChars} characters.
+- Keep the most identifying nouns: the component, file, feature, or domain names.
+- Drop filler, constraints, verbatim file lists, and any "spec: @..." reference.
+
+TITLE:
+${title}`
+
 const REFINE_PROMPT = (
     raw: string
 ) => `You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.

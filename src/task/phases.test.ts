@@ -5,8 +5,13 @@ import {
     phaseResearch,
     phaseAutoAnswer,
     phaseGrill,
-    phaseCritique
+    phaseCritique,
+    postCommitPhase,
+    type PhaseConfig,
+    type PhaseContext
 } from './phases.js'
+import {readTaskFile} from './task-io.js'
+import {agentErrorResponse} from '../test-utils/fake-spawn.js'
 import {parseVerifyToolingOutput} from './parsers.js'
 import {
     agentEndResponse,
@@ -1724,6 +1729,122 @@ describe('phaseAutoAnswer service enrichment', () => {
             expect(queriesSeen.length).toBe(2)
             expect(queriesSeen[0].startsWith('A ')).toBe(true)
             expect(queriesSeen[1].startsWith('B ')).toBe(true)
+        })
+    })
+})
+
+describe('postCommitPhase label generation', () => {
+    const longParagraph =
+        'Create the database schema and bun:sql setup for ROADSTER — an invite-only used '
+        + 'parts marketplace for Mazda MX-5 enthusiasts in Latvia, defining five tables, '
+        + 'trigram indexes, and the searchVector generated column exactly as the spec dictates'
+    const refined = `GOAL\n${longParagraph}\nCONSTRAINTS\n- follow the spec`
+
+    const refinePhase = {name: 'refine', section: 'refined prompt', field: 'refined'} as PhaseConfig
+
+    function makeCtx(cwd: string, widgetState: WidgetState): PhaseContext {
+        return {
+            cwd,
+            id: 'TASK_0001',
+            // postCommitPhase never reads ctx; a stub keeps tsc happy.
+            ctx: {} as unknown as ExtensionCommandContext,
+            widgetState,
+            rawPrompt: '',
+            refined: '',
+            research: '',
+            qa: '',
+            spec: ''
+        }
+    }
+
+    async function seed(cwd: string): Promise<void> {
+        await writeTaskFile(
+            cwd,
+            {
+                id: 'TASK_0001',
+                state: 'in_progress',
+                phase: 'refine',
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-01T00:00:00Z',
+                title: '(refining…)'
+            },
+            '\n## raw prompt\n\nx\n'
+        )
+    }
+
+    test('stores the FULL title plus a compressed label, and updates widget state', async () => {
+        await withTmpTaskDir(async cwd => {
+            await seed(cwd)
+            const widgetState = {
+                taskId: 'TASK_0001',
+                title: '',
+                phase: 'refine',
+                startedAt: 0
+            } as WidgetState
+            const spawn = fakeSpawnByPrompt(() =>
+                agentEndResponse('ROADSTER DB schema + bun:sql setup')
+            )
+            await postCommitPhase(
+                refinePhase,
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                makeCtx(cwd, widgetState),
+                refined
+            )
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            // Full title preserved verbatim — only the label is compressed.
+            expect(frontMatter.title).toBe(longParagraph)
+            expect(frontMatter.label).toBe('ROADSTER DB schema + bun:sql setup')
+            expect(widgetState.title).toBe(longParagraph)
+            expect(widgetState.label).toBe('ROADSTER DB schema + bun:sql setup')
+        })
+    })
+
+    test('still stores the full title and a fallback label when compression fails', async () => {
+        await withTmpTaskDir(async cwd => {
+            await seed(cwd)
+            const widgetState = {
+                taskId: 'TASK_0001',
+                title: '',
+                phase: 'refine',
+                startedAt: 0
+            } as WidgetState
+            const spawn = fakeSpawnByPrompt(() => agentErrorResponse('model died'))
+            await postCommitPhase(
+                refinePhase,
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                makeCtx(cwd, widgetState),
+                refined
+            )
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.title).toBe(longParagraph)
+            // A label is always present (truncation fallback), never the full title.
+            expect(frontMatter.label).toBeDefined()
+            expect(frontMatter.label!.length).toBeLessThan(longParagraph.length)
+            expect(frontMatter.label!.endsWith('…')).toBe(true)
+        })
+    })
+
+    test('is a no-op for non-refine phases', async () => {
+        await withTmpTaskDir(async cwd => {
+            await seed(cwd)
+            const widgetState = {
+                taskId: 'TASK_0001',
+                title: 'unchanged',
+                phase: 'grill',
+                startedAt: 0
+            } as WidgetState
+            const grillPhase = {name: 'grill', section: 'grill Q&A', field: 'qa'} as PhaseConfig
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse('should not run'))
+            await postCommitPhase(
+                grillPhase,
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                makeCtx(cwd, widgetState),
+                refined
+            )
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.title).toBe('(refining…)')
+            expect(frontMatter.label).toBeUndefined()
+            expect(widgetState.title).toBe('unchanged')
         })
     })
 })

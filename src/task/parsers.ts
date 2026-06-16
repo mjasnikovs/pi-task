@@ -234,3 +234,41 @@ export function deriveTitle(refined: string): string {
     }
     return '(untitled)'
 }
+
+// ─── Display label ───────────────────────────────────────────────────────────
+//
+// `title` is stored in full (a refine GOAL paragraph can be 1000+ chars — see
+// the "no truncation at storage" contract in deriveTitle). These helpers shrink
+// it for status surfaces (widget head, /task list) WITHOUT touching what's
+// stored: the pipeline always reads the full title. A model-compressed `label`
+// is preferred when present (see title-label.ts); otherwise we fall back to a
+// deterministic, word-boundary truncation so a label-less task still reads
+// cleanly.
+
+/** Max characters shown for a task's display label. */
+export const LABEL_MAX = 72
+
+/**
+ * Collapse whitespace and clamp `s` to `max` chars, cutting on a word boundary
+ * (when one falls reasonably late) and appending an ellipsis. Returns the
+ * collapsed string unchanged when it already fits.
+ */
+export function truncateLabel(s: string, max = LABEL_MAX): string {
+    const flat = s.replace(/\s+/g, ' ').trim()
+    if (flat.length <= max) return flat
+    const slice = flat.slice(0, max - 1)
+    const lastSpace = slice.lastIndexOf(' ')
+    const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice
+    return cut.trimEnd() + '…'
+}
+
+/**
+ * The string to show for a task: the stored short `label` when present,
+ * otherwise a truncation of the full `title`. Both paths are clamped to
+ * LABEL_MAX so a hand-edited or legacy over-long label can't blow up a line.
+ */
+export function titleForDisplay(task: {title: string; label?: string}): string {
+    const label = task.label?.trim()
+    if (label) return truncateLabel(label)
+    return truncateLabel(task.title)
+}

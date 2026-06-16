@@ -14,6 +14,7 @@ const FRONT_MATTER_KEYS: (keyof TaskFrontMatter)[] = [
     'created_at',
     'updated_at',
     'title',
+    'label',
     'reason'
 ]
 
@@ -24,7 +25,9 @@ export function emitFrontMatter(fm: TaskFrontMatter): string {
     for (const k of FRONT_MATTER_KEYS) {
         const v = fm[k]
         if (v === undefined || v === '') {
-            if (k === 'reason') continue
+            // Optional fields are omitted entirely when empty rather than emitted
+            // as a blank `key:` line.
+            if (k === 'reason' || k === 'label') continue
         }
         lines.push(`${k}: ${typeof v === 'string' ? v : String(v)}`)
     }
@@ -51,6 +54,7 @@ export function parseFrontMatter(content: string): TaskFrontMatter | null {
         created_at: obj.created_at,
         updated_at: obj.updated_at ?? obj.created_at,
         title: obj.title ?? '',
+        label: obj.label || undefined,
         reason: obj.reason || undefined
     }
 }

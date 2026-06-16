@@ -7,6 +7,7 @@
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-types.js'
+import {titleForDisplay} from './parsers.js'
 import {setTaskWidget} from '../remote/session-state.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -14,6 +15,8 @@ import {setTaskWidget} from '../remote/session-state.js'
 export interface WidgetState {
     taskId: string
     title: string
+    /** Short display label compressed from `title`; falls back to a truncation when absent. */
+    label?: string
     phase: PhaseName
     startedAt: number
     lastLine?: string
@@ -95,7 +98,7 @@ function lastLineTrailer(lastLine: string | undefined, theme?: WidgetTheme): str
 
 export function buildWidgetLines(s: WidgetState, theme?: WidgetTheme): string[] {
     const elapsed = formatDuration(Date.now() - s.startedAt)
-    const head = `${s.taskId} · ${s.title}`
+    const head = `${s.taskId} · ${titleForDisplay(s)}`
     const idx = PHASE_INDEX[s.phase]
     const total = PHASE_ORDER.length
     const stepNum = Math.min(idx + 1, total)
