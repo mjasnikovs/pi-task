@@ -950,6 +950,68 @@ describe('phaseGrill', () => {
         })
     })
 
+    test('suppresses a re-asked question before paying for its auto-answer', async () => {
+        // Regression: a model that ignores "never re-ask" re-emits a settled fork
+        // reworded. The dup must be caught BEFORE phaseAutoAnswer runs (which fans
+        // out doc/fetch/search workers — the expensive part), reprompted, and not
+        // shown to the user. A genuinely-different question after it still lands.
+        await withTmpTaskDir(async cwd => {
+            let genCall = 0
+            let autoCalls = 0
+            const genPrompts: string[] = []
+            const spawn: SpawnFn = (_cmd: string, args: ReadonlyArray<string>) => {
+                const proc = makeProc()
+                const prompt = args[args.length - 1]
+                const isAuto = prompt.includes('pre-answering a clarifying question')
+                const isGen = prompt.includes('preparing clarifying questions')
+                if (isGen) genPrompts.push(prompt)
+                if (isAuto) autoCalls++
+                queueMicrotask(() => {
+                    let text: string
+                    if (isAuto) {
+                        text = 'ANSWER: yes'
+                    } else if (isGen) {
+                        const qs = [
+                            '1. Should uploaded images be resized server-side with sharp before storing in postgresql, or stored as raw blobs?',
+                            '1. Should the image upload pipeline resize images server-side using sharp, or keep raw uploaded blobs in postgresql?', // dup → reprompt
+                            '1. Should multer middleware parse the multipart form-data, or stream it natively?', // distinct
+                            'NONE'
+                        ]
+                        text = qs[genCall++] ?? 'NONE'
+                    } else {
+                        text = 'noop'
+                    }
+                    const evt = {
+                        type: 'agent_end',
+                        messages: [{role: 'assistant', content: [{type: 'text', text}]}]
+                    }
+                    proc.stdout!.emit('data', Buffer.from(JSON.stringify(evt) + '\n'))
+                    proc.emit('close', 0)
+                })
+                return proc
+            }
+
+            const out = await phaseGrill(
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                stubCtx,
+                stubWidgetState,
+                'refined-task',
+                'research-notes'
+            )
+
+            // Four gen calls (Q1, dup, distinct, NONE) but only two real questions
+            // were auto-answered — the dup never reached phaseAutoAnswer.
+            expect(genCall).toBe(4)
+            expect(autoCalls).toBe(2)
+            expect(out).toContain('Q1: Should uploaded images be resized')
+            expect(out).toContain('multer')
+            // The reworded duplicate ("pipeline") is never surfaced.
+            expect(out).not.toContain('pipeline')
+            // The reprompt after the dup carried the move-on hint.
+            expect(genPrompts[2]).toContain('re-asked')
+        })
+    })
+
     test('phaseGrill records per-iteration gen / auto-answer sub-step timings', async () => {
         await withTmpTaskDir(async cwd => {
             const subSteps: Array<{label: string; ms: number}> = []

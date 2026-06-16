@@ -33,6 +33,7 @@ import {
 import {setTaskSection, updateTaskFrontMatter} from './task-io.js'
 import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
+import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {type WidgetState} from './widget.js'
 import {
     parseGrillQuestions,
@@ -472,16 +473,40 @@ export async function phaseGrill(
     const ui = new SessionUI(ctx)
     const out: string[] = [] // human-facing Q&A transcript (with auto-worker debug lines)
     const qa: string[] = [] // compact Q&A fed back into the next question
+    const askedQuestions: string[] = [] // plain text of each question, for the dup backstop
+    // Deterministic backstop against a model that ignores "never re-ask": a
+    // near-duplicate question is reprompted (not auto-answered or shown), and after
+    // MAX_DUP_STRIKES consecutive dups the loop stops. Each question otherwise runs
+    // the research-backed auto-answer, which fans out doc/fetch/search workers — so
+    // a re-ask isn't just an extra prompt, it's an expensive recompute. Capped at
+    // MAX_GRILL_QUESTIONS so a model that never emits NONE can't run unbounded.
+    let dupStrikes = 0
+    let dupHint: string | null = null
     // Open-ended: keep asking until the model emits NONE or the user dismisses.
-    for (let n = 0; ; n++) {
+    for (let n = 0; n < MAX_GRILL_QUESTIONS; n++) {
         const tGenStart = Date.now()
+        const genHint = dupHint
         const raw = await runPhaseWithLoopGuard(deps, 'grill-gen', 'read', hint =>
-            prependHint(hint, GRILL_GEN_PROMPT(refined, research, qa.join('\n')))
+            prependHint(
+                hint,
+                prependHint(genHint, GRILL_GEN_PROMPT(refined, research, qa.join('\n')))
+            )
         )
         deps.recordSubStep?.('gen', Date.now() - tGenStart)
         const questions = parseGrillQuestions(raw)
         if (questions.length === 0) break // NONE / nothing left to ask
         const q = questions[0]
+        // Suppress a re-asked decision before paying for its auto-answer.
+        if (isDuplicateQuestion(askedQuestions, stripInlineMarkdown(q))) {
+            dupStrikes++
+            if (dupStrikes >= MAX_DUP_STRIKES) break
+            dupHint = DUP_REPROMPT_HINT
+            n--
+            continue
+        }
+        dupStrikes = 0
+        dupHint = null
+        askedQuestions.push(stripInlineMarkdown(q))
 
         widgetState.lastLine = `auto-answering Q${n + 1}…`
         const tAutoStart = Date.now()

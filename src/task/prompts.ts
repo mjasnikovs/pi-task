@@ -5,7 +5,10 @@
  * effects, trivially testable.
  */
 
-export const MAX_GRILL_QUESTIONS = 10
+// Caps both the per-response question count (parseGrillQuestions/parseClarifyList)
+// and the grill loop's total iterations, so a model that never emits NONE can't
+// run unbounded.
+export const MAX_GRILL_QUESTIONS = 20
 
 /**
  * Qwen3 "soft switch": placing `/no_think` in the prompt disables the model's

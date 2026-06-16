@@ -13,6 +13,7 @@ import type {RunSingleTaskResult} from './orchestrator.js'
 import {parseClarifyList, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
+import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {
     allocateAutoId,
     buildAutoBody,
@@ -25,12 +26,17 @@ import {
 import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {runPhaseChild, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
+
+// Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
+// when the model emits NONE), but a model that never says NONE would otherwise
+// barrage the user — the real mx5 run asked 10, several of them redundant.
+const MAX_CLARIFY_QUESTIONS = 8
 
 /**
  * Injectable seams so the planner and loop are testable without spawning pi.
@@ -166,20 +172,41 @@ export async function planAuto(
     // the real content, not a one-line "Implement @file" that reads as trivial.
     const featureForModel = await expandFeatureMentions(cwd, feature)
     const answers: string[] = []
-    // Open-ended: keep asking until the model emits NONE or the user dismisses.
-    for (;;) {
+    // Plain text of every question already shown, for the duplicate backstop.
+    const askedQuestions: string[] = []
+    // Deterministic guard against a model that ignores "never re-ask": consecutive
+    // near-duplicate questions are reprompted with an explicit hint, and once it
+    // strikes out (can't produce anything novel) we stop instead of barraging the
+    // user with the same decision worded N ways. Also caps the absolute count.
+    let dupStrikes = 0
+    let dupHint: string | null = null
+    // Open-ended: keep asking until the model emits NONE or the user dismisses —
+    // but never past MAX_CLARIFY_QUESTIONS distinct questions.
+    while (askedQuestions.length < MAX_CLARIFY_QUESTIONS) {
         const qRaw = await deps.runChild(
             'auto-clarify',
             'read',
-            AUTO_CLARIFY_PROMPT(featureForModel, answers.join('\n'))
+            prependHint(dupHint, AUTO_CLARIFY_PROMPT(featureForModel, answers.join('\n')))
         )
         const parsed = parseClarifyList(qRaw)
         if (parsed.length === 0) break // NONE / nothing left to ask
+        // Backstop: if the model re-asked a topic already settled, don't surface it.
+        // Reprompt it to move on or finish; give up after MAX_DUP_STRIKES so a model
+        // stuck on one fork can't loop forever.
+        if (isDuplicateQuestion(askedQuestions, stripInlineMarkdown(parsed[0].question))) {
+            dupStrikes++
+            if (dupStrikes >= MAX_DUP_STRIKES) break
+            dupHint = DUP_REPROMPT_HINT
+            continue
+        }
+        dupStrikes = 0
+        dupHint = null
         const {question, suggested, alt} = parsed[0]
         // Render markdown (bold/code) for the displayed prompt; keep plain text
         // for the editable default and the persisted file.
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = stripInlineMarkdown(question)
+        askedQuestions.push(plainQ)
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
         const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
         // Identical to /task's grill dialog: a binary fork becomes a select()

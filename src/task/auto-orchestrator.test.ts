@@ -120,6 +120,41 @@ test('planAuto: renders markdown in the prompt but stores/defaults plain text', 
     })
 })
 
+// Regression: on the real mx5 run the local model ignored "never re-ask" and
+// barraged the user with the same "how to build/serve the SPA (Bun bundler vs
+// Vite)" decision worded four ways (Q2/Q3/Q8/Q9 in TASK_AUTO_0001.md). The
+// duplicate backstop must suppress the re-asks and stop the loop, so the user is
+// only prompted for genuinely distinct decisions. Without the guard, all six
+// generated questions would be surfaced (captured.inputs.length === 6).
+test('planAuto: suppresses re-asked questions and stops after repeated dups', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured, queueInput} = makeFakeCtx(dir)
+        queueInput('pg_trgm') // A1 (distinct: search)
+        queueInput('single server, no vite') // A2 (distinct: SPA serve)
+        queueInput('sharp resize') // A3 (distinct: image pipeline)
+        // Verbatim-shaped questions from the failing run, in the order it asked.
+        const d = seqDeps([
+            "1. Should the search index use the PostgreSQL pg_trgm extension's similarity() function, or a simpler LIKE '%term%' approach to avoid the extension dependency?",
+            "2. Should the Hono app's entry point (src/server/index.ts) serve the React SPA's index.html as a static catch-all, or should a separate frontend build step produce static assets served by an external tool like Vite dev server in development and nginx/Express in production?",
+            "3. Should the React SPA's build and dev workflow use Bun's built-in bundler (esbuild), or should a separate Vite configuration be added?", // dup of Q2 → strike
+            '4. Should the image upload pipeline process/resize images server-side before storing them in PostgreSQL, or store them as raw uploaded blobs?', // distinct → resets strikes
+            '5. How should the React SPA be built and served by Bun without Vite — a single bun index.ts entry that compiles .tsx client files at runtime, or a separate build step (bun build src/client/main.tsx --outdir dist/client) serving static assets?', // dup → strike
+            "6. Should the Hono entry point (src/server/index.ts) load .tsx pages at runtime via Bun's bundler in development with HMR, or should ALL .tsx page components be pre-compiled by bun build into dist/client even during development?" // dup → 2nd strike → break
+        ])
+        const id = await planAuto(ctx, dir, 'Implement marketplace', d)
+        expect(id).toBe('TASK_AUTO_0001')
+        // Only the three distinct questions reach the user; the three SPA-build
+        // re-asks are suppressed.
+        expect(captured.inputs.length).toBe(3)
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toContain('A1: pg_trgm')
+        expect(body).toContain('A2: single server, no vite')
+        expect(body).toContain('A3: sharp resize')
+        // The loop terminated cleanly and produced a task list.
+        expect(parseTaskList(body).length).toBeGreaterThan(0)
+    })
+})
+
 test('planAuto: typed answer overrides the recommended default', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueInput} = makeFakeCtx(dir)
@@ -758,7 +793,9 @@ test('attachSpecRefs: a task without decisions is unaffected by the decisions lo
         ['spec.md']
     )
     expect(withDec).toContain('argon2id only')
-    expect(plain).toBe('Build listings | spec: @spec.md — otherwise authoritative; read it and follow it over this title wherever they differ')
+    expect(plain).toBe(
+        'Build listings | spec: @spec.md — otherwise authoritative; read it and follow it over this title wherever they differ'
+    )
 })
 
 test('attachSpecRefs: idempotent when a decisions clause was already threaded', () => {

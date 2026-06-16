@@ -6,6 +6,7 @@ import {
     autoAnswerHasTag,
     deriveTitle
 } from './parsers.js'
+import {MAX_GRILL_QUESTIONS} from './prompts.js'
 
 describe('parseGrillQuestions', () => {
     test('parses numbered lines with "."', () => {
@@ -23,10 +24,13 @@ describe('parseGrillQuestions', () => {
         expect(out).toEqual(['real question'])
     })
 
-    test('caps at MAX_GRILL_QUESTIONS (10)', () => {
-        const text = Array.from({length: 20}, (_, i) => `${i + 1}. q${i + 1}`).join('\n')
+    test('caps at MAX_GRILL_QUESTIONS', () => {
+        const text = Array.from(
+            {length: MAX_GRILL_QUESTIONS + 5},
+            (_, i) => `${i + 1}. q${i + 1}`
+        ).join('\n')
         const out = parseGrillQuestions(text)
-        expect(out.length).toBe(10)
+        expect(out.length).toBe(MAX_GRILL_QUESTIONS)
     })
 
     test('returns empty array on empty input', () => {
@@ -76,14 +80,15 @@ describe('parseClarifyList', () => {
         expect(parseClarifyList('preamble\nNONE\nnoise')).toEqual([])
     })
 
-    test('caps at MAX_GRILL_QUESTIONS (10) keeping each suggestion', () => {
+    test('caps at MAX_GRILL_QUESTIONS keeping each suggestion', () => {
         const text = Array.from(
-            {length: 20},
+            {length: MAX_GRILL_QUESTIONS + 5},
             (_, i) => `${i + 1}. q${i + 1}\nSUGGESTED: s${i + 1}`
         ).join('\n')
         const out = parseClarifyList(text)
-        expect(out.length).toBe(10)
-        expect(out[9]).toEqual({question: 'q10', suggested: 's10'})
+        expect(out.length).toBe(MAX_GRILL_QUESTIONS)
+        const last = MAX_GRILL_QUESTIONS
+        expect(out[last - 1]).toEqual({question: `q${last}`, suggested: `s${last}`})
     })
 
     test('splits a SUGGESTED that the model wrote inline on the question line', () => {
