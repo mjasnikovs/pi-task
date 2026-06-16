@@ -1,6 +1,6 @@
 {
     "name": "@mjasnikovs/pi-task",
-    "version": "0.13.22",
+    "version": "0.13.23",
     "description": "Deterministic spec-orchestration for local models, with a bundled real-time remote web view and web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
