@@ -6,6 +6,8 @@ import {
     runAutoLoop,
     requestAutoCancel,
     expandFeatureMentions,
+    readableMentions,
+    attachSpecRefs,
     type AutoDeps
 } from './auto-orchestrator.js'
 import {readTaskFile, writeTaskFile} from './task-io.js'
@@ -688,4 +690,39 @@ test('expandFeatureMentions: dedupes repeated mentions, skips empty files', asyn
         expect(out.match(/contents of a\.md/g)).toHaveLength(1)
         expect(out).not.toContain('contents of empty.md')
     })
+})
+
+test('readableMentions: returns only @refs that resolve to a real file, deduped', async () => {
+    await withTmpTaskDir(async dir => {
+        await fsp.writeFile(path.join(dir, 'spec.md'), '# Spec')
+        expect(await readableMentions(dir, 'Implement @spec.md and @spec.md')).toEqual(['spec.md'])
+        expect(await readableMentions(dir, 'see @missing.md')).toEqual([])
+        expect(await readableMentions(dir, 'no mentions here')).toEqual([])
+    })
+})
+
+test('attachSpecRefs: appends an authoritative spec suffix to every title', () => {
+    const out = attachSpecRefs(['Scaffold project', 'Build auth routes'], ['DESIGN/spec.md'])
+    expect(out).toHaveLength(2)
+    for (const t of out) {
+        expect(t).toContain('| spec: @DESIGN/spec.md')
+        expect(t).toContain('authoritative')
+    }
+    expect(out[0].startsWith('Scaffold project')).toBe(true)
+})
+
+test('attachSpecRefs: no refs leaves titles unchanged (doc-less /task-auto)', () => {
+    const titles = ['Task A', 'Task B']
+    expect(attachSpecRefs(titles, [])).toEqual(titles)
+})
+
+test('attachSpecRefs: idempotent — does not double-append if a title already has the suffix', () => {
+    const once = attachSpecRefs(['Task A'], ['spec.md'])
+    expect(attachSpecRefs(once, ['spec.md'])).toEqual(once)
+})
+
+test('attachSpecRefs: multiple refs all appear in the suffix', () => {
+    const [t] = attachSpecRefs(['Task A'], ['a.md', 'b.md'])
+    expect(t).toContain('@a.md')
+    expect(t).toContain('@b.md')
 })

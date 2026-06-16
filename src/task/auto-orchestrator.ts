@@ -84,6 +84,46 @@ export async function expandFeatureMentions(cwd: string, feature: string): Promi
     return blocks.length === 0 ? feature : `${feature.trim()}\n\n${blocks.join('\n\n')}`
 }
 
+/**
+ * The @file references in the feature that point at a readable file on disk —
+ * the bare path tokens, deduped, in first-seen order. Unreadable mentions
+ * (typos, non-file @tokens) are dropped so we never advertise a missing file as
+ * an authoritative spec.
+ */
+export async function readableMentions(cwd: string, feature: string): Promise<string[]> {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const m of feature.matchAll(MENTION_RE)) {
+        const rel = m[1]
+        if (seen.has(rel)) continue
+        seen.add(rel)
+        try {
+            await fsp.access(path.resolve(cwd, rel))
+            out.push(rel)
+        } catch {
+            // not a readable file — don't thread it into task titles
+        }
+    }
+    return out
+}
+
+/**
+ * Thread the feature's spec references into every decomposed task title.
+ * Decompose emits titles only, and a title is ALL a per-task pipeline ever sees
+ * — so without this the design doc the feature pointed at is invisible
+ * downstream and each task drifts to a generic reading of its one-line title
+ * (this is how an "Implement @design.md" run built a generic `posts` table the
+ * spec never mentioned). Appending the @refs makes the per-task refine/research
+ * read the real spec and treat it as authoritative over the title. No readable
+ * refs → titles unchanged, so a doc-less /task-auto behaves exactly as before.
+ */
+export function attachSpecRefs(titles: string[], refs: string[]): string[] {
+    if (refs.length === 0) return titles
+    const list = refs.map(r => '@' + r).join(' ')
+    const suffix = ` | spec: ${list} — authoritative; read it and follow it over this title wherever they differ`
+    return titles.map(t => (t.includes('| spec:') ? t : t + suffix))
+}
+
 /** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */
 export async function planAuto(
     ctx: ExtensionCommandContext,
@@ -181,7 +221,11 @@ export async function planAuto(
         'read',
         AUTO_DECOMPOSE_PROMPT(featureForModel, clarifications)
     )
-    const titles = parseDecomposeList(listRaw)
+    // Thread the feature's spec doc(s) into every title so each per-task
+    // pipeline — which only ever sees its title — reads the real spec instead of
+    // a lossy one-line paraphrase of it.
+    const refs = await readableMentions(cwd, feature)
+    const titles = attachSpecRefs(parseDecomposeList(listRaw), refs)
     if (titles.length === 0) {
         announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
         return null

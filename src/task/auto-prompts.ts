@@ -35,6 +35,7 @@ fork the breakdown). Account for the answers so far:
   time (file/blob storage, client/rendering strategy, auth and session model,
   real-time vs polling transport, search, deployment).
 - Skip anything /task will naturally resolve per-task during its own research.
+- Stay grounded in the referenced spec. If a design/spec doc is included above, do NOT propose a new subsystem, dependency, or requirement it does not call for, and do NOT re-ask a choice the spec already settles. Ask only about genuine forks the spec leaves open.
 
 YOU MUST propose a default answer for the question — every question you emit
 carries exactly one SUGGESTED line. Never omit it, never leave it blank, never

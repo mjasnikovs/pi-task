@@ -60,6 +60,7 @@ Rules:
 - Fix spelling and grammar; output in English regardless of input language.
 - Preserve every concrete identifier verbatim (paths, function names, ports, env vars, file:line refs).
 - Do not invent requirements not implied by the input.
+- If the task references a design/spec document (an @-path or a named spec file), READ it and treat it as authoritative. Carry its concrete schema verbatim into GOAL/CONSTRAINTS — table and column names, types, endpoint methods and paths, enum values. The task title is only a pointer into that spec: where the title and the spec disagree, follow the spec, and never introduce a table, column, endpoint, or dependency the spec does not define.
 - Do not output any preamble, commentary, or markdown headings beyond the four sections above.
 
 Task: ${raw}`
@@ -84,6 +85,8 @@ const RESEARCH_FILES_PROMPT = (
 ) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools to locate every path on disk the agent will read, edit, or reference for the following task. This includes source code AND configuration, schemas, fixtures — any file the agent needs to know exists.
 
 FILES owns paths. APIS owns symbols. Do not omit a path because it "feels like config" — if the agent will touch or read it, list it here.
+
+If the task references a design/spec document (an @-path or a named spec file), OPEN it first and list it — it is the contract for this task, and the schema, names, and endpoints it defines are authoritative over any paraphrase in the task title.
 
 When a task operates across a whole directory tree (e.g. lint, typecheck, build, format, test-all), list the root directory entry (\`src/  one-line purpose\`) instead of enumerating every file under it. Enumerate individual files only when they need to be singled out — modified specifically, called out by name in the task, or distinct from their siblings in some material way.
 
