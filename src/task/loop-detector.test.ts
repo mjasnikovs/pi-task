@@ -119,3 +119,88 @@ describe('LoopDetector', () => {
         expect(hit?.windowSize).toBe(3)
     })
 })
+
+describe('LoopDetector path-aware detection', () => {
+    test('re-reading one file with varied offset/limit trips even though args differ', () => {
+        // The exact-match key never matches (offset/limit change every call), so
+        // only path detection catches this — the TASK_0017 failure signature.
+        const d = new LoopDetector(20, 5)
+        const reads = [
+            {offset: 0, limit: 50},
+            {offset: 0, limit: 80},
+            {offset: 0, limit: 40},
+            {offset: 0, limit: 200},
+            {offset: 0, limit: 30},
+            {offset: 0, limit: 60}
+        ]
+        let hit = null
+        for (const args of reads) {
+            hit = d.record({name: 'read', args: {file_path: '/auth.ts', ...args}})
+        }
+        expect(hit).not.toBeNull()
+    })
+
+    test('mixed read+grep on the same path accumulates and trips', () => {
+        // grep carries the path but no offset → counts as a non-advancing revisit.
+        const d = new LoopDetector(20, 5)
+        const calls = [
+            {name: 'read', args: {file_path: '/auth.ts'}},
+            {name: 'grep', args: {path: '/auth.ts', pattern: 'token'}},
+            {name: 'read', args: {file_path: '/auth.ts', offset: 0, limit: 40}},
+            {name: 'grep', args: {path: '/auth.ts', pattern: 'session'}},
+            {name: 'read', args: {file_path: '/auth.ts'}},
+            {name: 'grep', args: {path: '/auth.ts', pattern: 'cookie'}}
+        ]
+        let hit = null
+        for (const c of calls) hit = d.record(c)
+        expect(hit).not.toBeNull()
+    })
+
+    test('forward paging through a large file never trips', () => {
+        // Strictly-advancing offsets are progress, not revisits.
+        const d = new LoopDetector(20, 5)
+        for (let i = 0; i < 12; i++) {
+            const hit = d.record({
+                name: 'read',
+                args: {file_path: '/big.ts', offset: i * 100, limit: 100}
+            })
+            expect(hit).toBeNull()
+        }
+    })
+
+    test('reads across different files do not trip path detection', () => {
+        const d = new LoopDetector(20, 5)
+        for (let i = 0; i < 12; i++) {
+            const hit = d.record({
+                name: 'read',
+                args: {file_path: `/file${i % 4}.ts`, offset: i * 10}
+            })
+            expect(hit).toBeNull()
+        }
+    })
+
+    test('a few revisits below threshold do not trip', () => {
+        // Re-reading the top of a file twice while mostly paging forward is legit.
+        const d = new LoopDetector(20, 5)
+        const calls = [
+            {file_path: '/a.ts', offset: 0, limit: 100},
+            {file_path: '/a.ts', offset: 100, limit: 100},
+            {file_path: '/a.ts', offset: 0, limit: 100}, // revisit 1
+            {file_path: '/a.ts', offset: 200, limit: 100},
+            {file_path: '/a.ts', offset: 0, limit: 100} // revisit 2
+        ]
+        let hit = null
+        for (const args of calls) hit = d.record({name: 'read', args})
+        expect(hit).toBeNull()
+    })
+
+    test('pathThreshold is configurable independently of the exact threshold', () => {
+        const d = new LoopDetector(20, 5, 3)
+        d.record({name: 'read', args: {file_path: '/x.ts'}}) // progress
+        d.record({name: 'read', args: {file_path: '/x.ts'}}) // revisit 1
+        d.record({name: 'read', args: {file_path: '/x.ts'}}) // revisit 2
+        const hit = d.record({name: 'read', args: {file_path: '/x.ts'}}) // revisit 3 → trip
+        expect(hit).not.toBeNull()
+        expect(hit?.count).toBe(3)
+    })
+})
