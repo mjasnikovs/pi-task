@@ -169,6 +169,16 @@ export interface PhaseResearchDeps extends ExternalContextDeps {
 const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
 
 /**
+ * In-process guard loaded into the TOOLING worker only: blocks a second read of
+ * any file it already read, feeding the model "you already read this, answer
+ * now" instead of letting it re-read. TOOLING reads each file exactly once in
+ * every healthy recorded run; re-reading is purely the thrash signature, so a
+ * read-once rule has no legitimate false positive here. See single-read-guard.ts.
+ */
+const SINGLE_READ_EXTENSION_PATH = new URL('../workers/single-read-extension.js', import.meta.url)
+    .pathname
+
+/**
  * Task-file heading under which a research worker's validated output is cached.
  * A resumed research phase reads these to skip workers that already succeeded,
  * instead of re-running all four from scratch when one of them fails — the
@@ -335,7 +345,10 @@ export async function phaseResearch(
             // makes a weak model spelunk source and loop. See scopedToolingGoal.
             prompt: appendNoThink(
                 promptHeader + RESEARCH_TOOLING_PROMPT(scopedToolingGoal(refined))
-            )
+            ),
+            // Block re-reads in-process so a weak model that wants to re-read the
+            // same file is told to answer from what it has instead of looping.
+            extensions: [SINGLE_READ_EXTENSION_PATH]
         }
     ]
 
