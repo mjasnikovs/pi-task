@@ -12,8 +12,10 @@ import {
     agentEndResponse,
     fakeSpawnByPrompt,
     fakeSpawnQueue,
+    loopResponse,
     makeProc
 } from '../test-utils/fake-spawn.js'
+import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile} from './task-io.js'
@@ -123,6 +125,51 @@ describe('phaseResearch leaked tool-call guard', () => {
                     {getFileInventory: async () => ''}
                 )
             ).rejects.toThrow(/tool call|leaked/i)
+        })
+    })
+})
+
+describe('phaseResearch loop guard', () => {
+    // Sanity-check the routing marker stays in sync with the real prompt.
+    const CONTEXT_MARKER = 'content of a CONTEXT section'
+    test('the CONTEXT prompt carries the routing marker this suite keys on', () => {
+        expect(RESEARCH_CONTEXT_PROMPT('x')).toContain(CONTEXT_MARKER)
+    })
+
+    test('a worker that loops through every restart fails the phase with a named loop error', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // Only the CONTEXT worker thrashes (same grep 6× every spawn, through
+            // its initial attempt + both restarts); FILES/APIS/TOOLING answer
+            // cleanly. The runaway must be reined in (loop-killed + restarted) and,
+            // having still looped, fail the phase with a precise CONTEXT-named loop
+            // error — never a bare "exit 143", and never silently passing partial
+            // text through.
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes(CONTEXT_MARKER)) {
+                    return loopResponse('grep', {pattern: 'glorptube'}, 6)
+                }
+                return agentEndResponse('- a real finding')
+            })
+            await expect(
+                phaseResearch(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'a refined goal with no mentions',
+                    {getFileInventory: async () => ''}
+                )
+            ).rejects.toThrow(/CONTEXT worker stuck in a loop.*grep/i)
         })
     })
 })

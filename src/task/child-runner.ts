@@ -207,7 +207,7 @@ export async function runPhaseChild(
     throw new LeakedToolCallError(name, '(unknown)')
 }
 
-function formatLoopHint(hit: LoopHit): string {
+export function formatLoopHint(hit: LoopHit): string {
     const argsStr = JSON.stringify(hit.call.args)
     return (
         `[SYSTEM NOTE: Your prior attempt called ${hit.call.name}(${argsStr}) `

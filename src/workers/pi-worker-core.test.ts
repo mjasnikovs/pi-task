@@ -1,6 +1,11 @@
 import {describe, expect, test} from 'bun:test'
 import {runWorker} from './pi-worker-core.js'
-import {agentEndResponse, fakeSpawnByPrompt, fakeSpawnQueue} from '../test-utils/fake-spawn.js'
+import {
+    agentEndResponse,
+    fakeSpawnByPrompt,
+    fakeSpawnQueue,
+    loopResponse
+} from '../test-utils/fake-spawn.js'
 
 // A tool call the model wrote as text instead of invoking — never executed.
 const LEAKED =
@@ -78,6 +83,55 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
         expect(r.leakedToolCall).toBeTruthy()
+    })
+
+    test('restarts a loop-killed worker with a hint and returns the clean retry', async () => {
+        // First spawn thrashes the same grep 6× → trips LoopDetector(20,5) → the
+        // unified runner SIGTERMs it. The worker must re-spawn (with a loop hint)
+        // rather than surface the kill as a failure, like every other phase does.
+        const spawn = fakeSpawnQueue([
+            loopResponse('grep', {pattern: 'glorptube'}, 6),
+            agentEndResponse('clean output')
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.text).toBe('clean output')
+        expect(r.loopHit).toBeUndefined()
+    })
+
+    test('surfaces loopHit when the worker loops through every restart', async () => {
+        // 3 attempts (initial + MAX_LOOP_RESTARTS) all loop → give up, but report
+        // the loop so the caller emits a precise error instead of a bare exit code.
+        const spawn = fakeSpawnQueue([
+            loopResponse('grep', {pattern: 'glorptube'}, 6),
+            loopResponse('grep', {pattern: 'glorptube'}, 6),
+            loopResponse('grep', {pattern: 'glorptube'}, 6)
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.loopHit).toBeTruthy()
+        expect(r.loopHit?.call.name).toBe('grep')
+        expect(r.loopHit?.count).toBeGreaterThanOrEqual(5)
+    })
+
+    test('restarts on a per-worker wall-clock timeout and returns the retry', async () => {
+        // First spawn keeps running past the timeout (delayed close, no answer);
+        // the deliberate per-worker timeout must abort it and re-spawn.
+        const spawn = fakeSpawnQueue([
+            {events: [], closeDelayMs: 80},
+            agentEndResponse('clean output')
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+        expect(r.text).toBe('clean output')
+        expect(r.timedOut).toBeUndefined()
+    })
+
+    test('surfaces timedOut when the worker times out through every restart', async () => {
+        const spawn = fakeSpawnQueue([
+            {events: [], closeDelayMs: 60},
+            {events: [], closeDelayMs: 60},
+            {events: [], closeDelayMs: 60}
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+        expect(r.timedOut).toBe(true)
     })
 
     test('input.tools overrides the default tool set', async () => {

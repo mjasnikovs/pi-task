@@ -17,6 +17,12 @@ export interface SpawnResponseText {
     stdout: string
     exitCode?: number
     stderr?: string
+    /**
+     * Delay (ms) between emitting output and the `close` event. Lets a test
+     * simulate a child that keeps running — so a per-worker wall-clock timeout
+     * fires before the child exits on its own. Default: close immediately.
+     */
+    closeDelayMs?: number
 }
 
 export interface SpawnResponseJsonEvents {
@@ -27,6 +33,8 @@ export interface SpawnResponseJsonEvents {
     events: ReadonlyArray<Record<string, unknown>>
     exitCode?: number
     stderr?: string
+    /** See SpawnResponseText.closeDelayMs. */
+    closeDelayMs?: number
 }
 
 export type SpawnResponse = SpawnResponseText | SpawnResponseJsonEvents
@@ -53,7 +61,13 @@ function emitResponse(
             if (r.stdout) emitter.stdout.emit('data', Buffer.from(r.stdout))
         }
         if (stderr) emitter.stderr.emit('data', Buffer.from(stderr))
-        emitter.emit('close', exitCode)
+        // A delayed close lets the child appear to keep running past a caller's
+        // timeout; the close still arrives so the run promise resolves.
+        if (r.closeDelayMs && r.closeDelayMs > 0) {
+            setTimeout(() => emitter.emit('close', exitCode), r.closeDelayMs)
+        } else {
+            emitter.emit('close', exitCode)
+        }
     })
 }
 
@@ -98,6 +112,36 @@ export function fakeSpawnByPrompt(match: (args: ReadonlyArray<string>) => SpawnR
         emitResponse(p as EventEmitter & {stdout: EventEmitter; stderr: EventEmitter}, match(args))
         return p
     }) as unknown as SpawnFn
+}
+
+/**
+ * Convenience: a response whose event stream repeats the SAME tool_execution_start
+ * `count` times — enough identical calls to trip a LoopDetector(window, threshold).
+ * No agent_end, so the only assistant text is whatever `trailingText` supplies
+ * (default none), mimicking a worker killed mid-thrash. Optionally hold the close
+ * open with `closeDelayMs` to also model a worker that never exits on its own.
+ */
+export function loopResponse(
+    toolName: string,
+    args: Record<string, unknown>,
+    count: number,
+    opts: {exitCode?: number; closeDelayMs?: number; trailingText?: string} = {}
+): SpawnResponseJsonEvents {
+    const events: Array<Record<string, unknown>> = []
+    for (let i = 0; i < count; i++) {
+        events.push({type: 'tool_execution_start', toolName, args})
+    }
+    if (opts.trailingText !== undefined) {
+        events.push({
+            type: 'agent_end',
+            messages: [{role: 'assistant', content: [{type: 'text', text: opts.trailingText}]}]
+        })
+    }
+    return {
+        events,
+        exitCode: opts.exitCode ?? 0,
+        ...(opts.closeDelayMs ? {closeDelayMs: opts.closeDelayMs} : {})
+    }
 }
 
 /** Convenience: build a json-events response that delivers final assistant text via agent_end. */

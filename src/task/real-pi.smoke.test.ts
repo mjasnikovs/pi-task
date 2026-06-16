@@ -20,6 +20,7 @@
 import {describe, expect, test, beforeAll, afterAll} from 'bun:test'
 import {spawnSync} from 'node:child_process'
 import {phaseRefine} from './phases.js'
+import {runWorker} from '../workers/pi-worker-core.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 
 function findPi(): string | null {
@@ -61,6 +62,29 @@ describe('real pi smoke', () => {
                 // (model output varies), but the headings should appear.
                 expect(refined).toMatch(/GOAL/)
                 expect(refined).toMatch(/CONSTRAINTS/)
+            })
+        },
+        120_000
+    )
+
+    itPi(
+        'runWorker drives real pi through the timeout-wrapped spawn path',
+        async () => {
+            await withTmpTaskDir(async cwd => {
+                // The research workers spawn pi through runWorker, which now wraps
+                // every run in a combined external-abort + wall-clock-timeout
+                // signal. A real spawn confirms that wrapper does not break the
+                // child wiring (right flags, json events parsed) and that a healthy
+                // worker finishes well under the timeout — no false loopHit/timedOut.
+                const r = await runWorker({
+                    prompt: 'Reply with the single word READY and nothing else.',
+                    cwd,
+                    timeoutMs: 90_000
+                })
+                expect(r.exitCode).toBe(0)
+                expect(r.text.trim().length).toBeGreaterThan(0)
+                expect(r.loopHit).toBeUndefined()
+                expect(r.timedOut).toBeUndefined()
             })
         },
         120_000

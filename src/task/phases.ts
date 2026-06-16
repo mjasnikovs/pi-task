@@ -295,6 +295,22 @@ export async function phaseResearch(
     // mirrors workerSpecs order — the loop above pushes in sequence).
     const sections = workerSpecs.map((spec, i) => ({name: spec.section, result: workerResults[i]}))
     for (const {name, result} of sections) {
+        // Loop/timeout exhaustion is checked before the generic exit-code branch:
+        // a loop-kill arrives as a SIGTERM (exit 143) AND sometimes as a clean
+        // exit 0 with partial text, so keying off exitCode alone would either give
+        // a useless "exit 143" message or silently accept truncated output. The
+        // worker already burned its MAX_LOOP_RESTARTS restarts before setting these.
+        if (result.loopHit) {
+            const argsStr = JSON.stringify(result.loopHit.call.args)
+            throw new Error(
+                `Research ${name} worker stuck in a loop — called `
+                    + `${result.loopHit.call.name}(${argsStr}) ×${result.loopHit.count} in the last `
+                    + `${result.loopHit.windowSize} calls and still looped after restarts`
+            )
+        }
+        if (result.timedOut) {
+            throw new Error(`Research ${name} worker timed out after restarts`)
+        }
         if (result.exitCode !== 0) {
             throw new Error(
                 `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
