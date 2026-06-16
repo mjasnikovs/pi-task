@@ -107,21 +107,41 @@ export async function readableMentions(cwd: string, feature: string): Promise<st
     return out
 }
 
+/** A trailing "[decisions: …]" clause decompose may attach to a task line. */
+const DECISIONS_RE = /\s*\[decisions:\s*(.+?)\]\s*$/i
+
 /**
- * Thread the feature's spec references into every decomposed task title.
- * Decompose emits titles only, and a title is ALL a per-task pipeline ever sees
- * — so without this the design doc the feature pointed at is invisible
- * downstream and each task drifts to a generic reading of its one-line title
- * (this is how an "Implement @design.md" run built a generic `posts` table the
- * spec never mentioned). Appending the @refs makes the per-task refine/research
- * read the real spec and treat it as authoritative over the title. No readable
- * refs → titles unchanged, so a doc-less /task-auto behaves exactly as before.
+ * Thread the feature's spec references AND any per-task decisions into every
+ * decomposed task title. A title is ALL a per-task pipeline ever sees, so both
+ * the design doc the feature pointed at and the user's clarification choices have
+ * to ride along or they're invisible downstream — this is how an "Implement
+ * @design.md" run built a generic `posts` table the spec never mentioned, and how
+ * a "do not use vite" clarification got silently overridden by the doc's own
+ * vite.config.ts.
+ *
+ * Precedence is the crux: a clarification is a CORRECTION to a (possibly stale)
+ * spec doc, so the decisions clause is marked as overriding the doc, while the doc
+ * stays authoritative for everything the decisions don't touch. Decompose scopes
+ * each decision to the task(s) it governs, so most titles carry none. No readable
+ * refs and no decisions → title unchanged, so a doc-less /task-auto behaves
+ * exactly as before.
  */
 export function attachSpecRefs(titles: string[], refs: string[]): string[] {
-    if (refs.length === 0) return titles
     const list = refs.map(r => '@' + r).join(' ')
-    const suffix = ` | spec: ${list} — authoritative; read it and follow it over this title wherever they differ`
-    return titles.map(t => (t.includes('| spec:') ? t : t + suffix))
+    return titles.map(t => {
+        if (t.includes('| spec:') || t.includes('| decisions')) return t // already threaded
+        const dm = DECISIONS_RE.exec(t)
+        const base = dm ? t.slice(0, dm.index).trimEnd() : t
+        const decisions = dm ? dm[1].trim() : ''
+        let out = base
+        if (decisions) {
+            out += ` | decisions (explicit user choices — these OVERRIDE the spec doc wherever they conflict; follow them exactly): ${decisions}`
+        }
+        if (refs.length > 0) {
+            out += ` | spec: ${list} — otherwise authoritative; read it and follow it over this title wherever they differ`
+        }
+        return out
+    })
 }
 
 /** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */

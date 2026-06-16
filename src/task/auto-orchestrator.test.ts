@@ -726,3 +726,42 @@ test('attachSpecRefs: multiple refs all appear in the suffix', () => {
     expect(t).toContain('@a.md')
     expect(t).toContain('@b.md')
 })
+
+test('attachSpecRefs: a [decisions:] clause is lifted out and marked as overriding the doc', () => {
+    const [t] = attachSpecRefs(
+        ['Scaffold project [decisions: use Bun bundler, do not add vite]'],
+        ['DESIGN/spec.md']
+    )
+    // base title preserved, decisions clause stripped from it
+    expect(t.startsWith('Scaffold project |')).toBe(true)
+    expect(t).not.toContain('[decisions:')
+    // decisions are framed as overriding the doc, and the doc stays authoritative otherwise
+    expect(t).toContain('decisions')
+    expect(t).toContain('OVERRIDE the spec doc')
+    expect(t).toContain('use Bun bundler, do not add vite')
+    expect(t).toContain('| spec: @DESIGN/spec.md')
+    // decisions precede the spec clause so the override reads before the doc ref
+    expect(t.indexOf('decisions')).toBeLessThan(t.indexOf('| spec:'))
+})
+
+test('attachSpecRefs: decisions are honoured even with no spec doc (doc-less /task-auto)', () => {
+    const [t] = attachSpecRefs(['Scaffold project [decisions: no vite]'], [])
+    expect(t).toContain('decisions')
+    expect(t).toContain('no vite')
+    expect(t).not.toContain('| spec:')
+    expect(t).not.toContain('[decisions:')
+})
+
+test('attachSpecRefs: a task without decisions is unaffected by the decisions logic', () => {
+    const [withDec, plain] = attachSpecRefs(
+        ['Build auth [decisions: argon2id only]', 'Build listings'],
+        ['spec.md']
+    )
+    expect(withDec).toContain('argon2id only')
+    expect(plain).toBe('Build listings | spec: @spec.md — otherwise authoritative; read it and follow it over this title wherever they differ')
+})
+
+test('attachSpecRefs: idempotent when a decisions clause was already threaded', () => {
+    const once = attachSpecRefs(['Scaffold [decisions: no vite]'], [])
+    expect(attachSpecRefs(once, [])).toEqual(once)
+})

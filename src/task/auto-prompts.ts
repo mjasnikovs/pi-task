@@ -86,4 +86,10 @@ RULES:
 - Order tasks so earlier ones unblock later ones (foundations first).
 - Each task should be independently implementable as a single /task run.
 - Prefer a handful of substantial tasks over many trivial ones.
+- When a CLARIFICATION decision governs a task, append it to that task's line as
+  "[decisions: <directive>]" — include ONLY the decisions that bear on that task,
+  and attach a cross-cutting decision to EACH task it governs. Most tasks carry
+  none. These are explicit user choices that may contradict the referenced spec
+  doc; phrase them as imperative directives (e.g. "use Bun's built-in bundler, do
+  not add vite"). Do NOT invent decisions — only restate ones from CLARIFICATIONS.
 - Output the checkbox list and NOTHING else (no preamble, no numbering).`
