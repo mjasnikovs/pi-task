@@ -1,5 +1,10 @@
 import {describe, expect, test} from 'bun:test'
-import {SingleReadGuard, singleReadReason} from './single-read-guard.js'
+import {
+    RepeatedCallGuard,
+    SingleReadGuard,
+    repeatedCallReason,
+    singleReadReason
+} from './single-read-guard.js'
 
 describe('SingleReadGuard', () => {
     test('first read of a path is allowed', () => {
@@ -39,6 +44,53 @@ describe('SingleReadGuard', () => {
     test('reason names the blocked path and tells the model to answer', () => {
         const msg = singleReadReason('/workspace/package.json')
         expect(msg).toContain('/workspace/package.json')
+        expect(msg.toLowerCase()).toContain('write your final answer')
+    })
+})
+
+describe('RepeatedCallGuard', () => {
+    test('first call with given args is allowed', () => {
+        const g = new RepeatedCallGuard()
+        expect(g.check('grep', {pattern: 'foo', path: '/a.ts'})).toBeNull()
+    })
+
+    test('identical repeat is blocked with a reason naming the tool', () => {
+        const g = new RepeatedCallGuard()
+        g.check('grep', {pattern: 'foo', path: '/a.ts'})
+        const r = g.check('grep', {pattern: 'foo', path: '/a.ts'})
+        expect(r?.block).toBe(true)
+        expect(r?.reason).toContain('grep')
+    })
+
+    test('TASK_0017 regression: same brace-count grep ×5 trips after the first', () => {
+        const g = new RepeatedCallGuard()
+        const args = {pattern: '^\\s*}', path: '/workspace/src/types/index.ts', context: 0}
+        let blocked = 0
+        for (let i = 0; i < 5; i++) if (g.check('grep', args)) blocked++
+        expect(blocked).toBe(4) // first allowed, the next four denied in-run
+    })
+
+    test('argument key-order does not cause a miss', () => {
+        const g = new RepeatedCallGuard()
+        expect(g.check('grep', {pattern: 'foo', path: '/a.ts'})).toBeNull()
+        expect(g.check('grep', {path: '/a.ts', pattern: 'foo'})).not.toBeNull()
+    })
+
+    test('a different pattern on the same file is allowed', () => {
+        const g = new RepeatedCallGuard()
+        expect(g.check('grep', {pattern: 'foo', path: '/a.ts'})).toBeNull()
+        expect(g.check('grep', {pattern: 'bar', path: '/a.ts'})).toBeNull()
+    })
+
+    test('same args under a different tool name are tracked separately', () => {
+        const g = new RepeatedCallGuard()
+        expect(g.check('grep', {path: '/a.ts'})).toBeNull()
+        expect(g.check('find', {path: '/a.ts'})).toBeNull()
+    })
+
+    test('reason names the tool and points the model forward', () => {
+        const msg = repeatedCallReason('grep')
+        expect(msg).toContain('grep')
         expect(msg.toLowerCase()).toContain('write your final answer')
     })
 })

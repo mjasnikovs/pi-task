@@ -169,11 +169,12 @@ export interface PhaseResearchDeps extends ExternalContextDeps {
 const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
 
 /**
- * In-process guard loaded into the TOOLING worker only: blocks a second read of
- * any file it already read, feeding the model "you already read this, answer
- * now" instead of letting it re-read. TOOLING reads each file exactly once in
- * every healthy recorded run; re-reading is purely the thrash signature, so a
- * read-once rule has no legitimate false positive here. See single-read-guard.ts.
+ * In-process guards loaded into the TOOLING worker only: block a re-read of any
+ * file already read, and block any byte-identical grep/find/ls repeat, feeding
+ * the model "you already have this, answer now" instead of letting it re-run.
+ * TOOLING reads each file once and never needs an identical search twice in any
+ * healthy recorded run, so neither rule has a legitimate false positive here.
+ * See single-read-guard.ts.
  */
 const SINGLE_READ_EXTENSION_PATH = new URL('../workers/single-read-extension.js', import.meta.url)
     .pathname

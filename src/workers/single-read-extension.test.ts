@@ -30,11 +30,42 @@ describe('single-read-extension', () => {
         expect(blocked.reason).toContain('/tmp/x.ts')
     })
 
-    test('does not interfere with non-read tools', () => {
+    test('allows the first grep, blocks an identical repeat', () => {
         const {handler} = fakePi()
         const grep = {toolName: 'grep', input: {path: '/tmp/x.ts', pattern: 'foo'}}
         expect(handler!(grep)).toBeUndefined()
-        expect(handler!(grep)).toBeUndefined()
+        const blocked = handler!(grep) as {block?: boolean; reason?: string}
+        expect(blocked.block).toBe(true)
+        expect(blocked.reason).toContain('grep')
+    })
+
+    test('allows a different grep pattern on the same file', () => {
+        const {handler} = fakePi()
+        expect(
+            handler!({toolName: 'grep', input: {path: '/tmp/x.ts', pattern: 'foo'}})
+        ).toBeUndefined()
+        expect(
+            handler!({toolName: 'grep', input: {path: '/tmp/x.ts', pattern: 'bar'}})
+        ).toBeUndefined()
+    })
+
+    test('blocks identical find and ls repeats too', () => {
+        const {handler} = fakePi()
+        expect(handler!({toolName: 'find', input: {path: '/tmp'}})).toBeUndefined()
+        expect(
+            (handler!({toolName: 'find', input: {path: '/tmp'}}) as {block?: boolean}).block
+        ).toBe(true)
+        expect(handler!({toolName: 'ls', input: {path: '/tmp'}})).toBeUndefined()
+        expect((handler!({toolName: 'ls', input: {path: '/tmp'}}) as {block?: boolean}).block).toBe(
+            true
+        )
+    })
+
+    test('leaves other tools (e.g. bash) untouched', () => {
+        const {handler} = fakePi()
+        const bash = {toolName: 'bash', input: {command: 'echo hi'}}
+        expect(handler!(bash)).toBeUndefined()
+        expect(handler!(bash)).toBeUndefined()
     })
 
     test('ignores a read whose path is not a string', () => {
