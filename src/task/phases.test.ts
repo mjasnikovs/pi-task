@@ -177,7 +177,7 @@ describe('phaseResearch loop guard', () => {
         expect(RESEARCH_CONTEXT_PROMPT('x')).toContain(CONTEXT_MARKER)
     })
 
-    test('a worker that loops through every restart fails the phase with a named loop error', async () => {
+    test('a worker that loops through every restart degrades its section instead of failing the phase', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -194,23 +194,33 @@ describe('phaseResearch loop guard', () => {
             // Only the CONTEXT worker thrashes (same grep 6× every spawn, through
             // its initial attempt + both restarts); FILES/APIS/TOOLING answer
             // cleanly. The runaway must be reined in (loop-killed + restarted) and,
-            // having still looped, fail the phase with a precise CONTEXT-named loop
-            // error — never a bare "exit 143", and never silently passing partial
-            // text through.
+            // having still looped, DEGRADE to its partial output — one weak worker
+            // must not abort the whole phase (and the whole auto-run). The bad
+            // section is marked so it's never mistaken for a clean finding, and the
+            // three good workers come through intact.
             const spawn = fakeSpawnByPrompt(args => {
                 const prompt = args[args.length - 1] ?? ''
                 if (prompt.includes(CONTEXT_MARKER)) {
-                    return loopResponse('grep', {pattern: 'glorptube'}, 6)
+                    return loopResponse('grep', {pattern: 'glorptube'}, 6, {
+                        trailingText: '- a partial context note'
+                    })
                 }
                 return agentEndResponse('- a real finding')
             })
-            await expect(
-                phaseResearch(
-                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                    'a refined goal with no mentions',
-                    {getFileInventory: async () => ''}
-                )
-            ).rejects.toThrow(/CONTEXT worker stuck in a loop.*grep/i)
+            const out = await phaseResearch(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'a refined goal with no mentions',
+                {getFileInventory: async () => ''}
+            )
+            // CONTEXT section is present but flagged degraded and carries the loop
+            // detail plus whatever partial text the worker streamed.
+            expect(out).toMatch(
+                /CONTEXT\n\(degraded: research CONTEXT worker stuck in a loop.*grep/i
+            )
+            expect(out).toContain('- a partial context note')
+            // The healthy workers are assembled normally.
+            expect(out).toContain('FILES\n- a real finding')
+            expect(out).toContain('TOOLING\n- a real finding')
         })
     })
 })
@@ -253,21 +263,25 @@ describe('phaseResearch per-worker persistence', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 const which = classify(args)
                 spawns[which] = (spawns[which] ?? 0) + 1
-                // TOOLING (the last worker) loops through every restart on run 1,
-                // failing the phase after FILES/APIS/CONTEXT answered cleanly.
+                // TOOLING (the last worker) hits a FATAL failure on run 1 — empty
+                // output, the untrustworthy mode that still throws (unlike a runaway,
+                // which would degrade-and-cache). It fails the phase after
+                // FILES/APIS/CONTEXT answered cleanly, and is NOT cached, so the
+                // resume re-runs only it.
                 if (which === 'tooling' && toolingShouldFail) {
-                    return loopResponse('read', {path: '/x'}, 6)
+                    return agentEndResponse('')
                 }
                 return agentEndResponse(`- finding for ${which}`)
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
 
-            // Run 1: TOOLING loops → the phase throws with a TOOLING-named error.
+            // Run 1: TOOLING produces no output → the phase throws with a
+            // TOOLING-named error.
             await expect(
                 phaseResearch(deps, 'a refined goal with no mentions', {
                     getFileInventory: async () => ''
                 })
-            ).rejects.toThrow(/TOOLING worker stuck in a loop/i)
+            ).rejects.toThrow(/TOOLING worker produced no output/i)
 
             // The three good workers were cached; the failed one was not.
             expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain('files')
@@ -299,6 +313,65 @@ describe('phaseResearch per-worker persistence', () => {
             // 'research' section, written by the orchestrator, is canonical).
             expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toBeNull()
             expect(await readSection(cwd, 'TASK_0001', 'research worker TOOLING')).toBeNull()
+        })
+    })
+
+    test('a degraded runaway section is cached across a resume triggered by a later fatal worker, so the deterministic loop is not re-run', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+
+            const spawns: Record<string, number> = {}
+            let toolingShouldFail = true
+            const spawn = fakeSpawnByPrompt(args => {
+                const which = classify(args)
+                spawns[which] = (spawns[which] ?? 0) + 1
+                // FILES (first worker) loops through every restart on EVERY spawn —
+                // a deterministic runaway. TOOLING (last) fatally fails on run 1.
+                if (which === 'files') {
+                    return loopResponse('read', {path: '/x'}, 6)
+                }
+                if (which === 'tooling' && toolingShouldFail) {
+                    return agentEndResponse('')
+                }
+                return agentEndResponse(`- finding for ${which}`)
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+
+            // Run 1: FILES degrades (cached), then TOOLING fatally fails → throw.
+            await expect(
+                phaseResearch(deps, 'a refined goal with no mentions', {
+                    getFileInventory: async () => ''
+                })
+            ).rejects.toThrow(/TOOLING worker produced no output/i)
+
+            // FILES looped through its full restart budget once, and its degraded
+            // section was cached (unlike a fatal failure, which is not).
+            const filesSpawnsAfterRun1 = spawns.files ?? 0
+            expect(filesSpawnsAfterRun1).toBeGreaterThan(1)
+            expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toMatch(
+                /degraded: research FILES worker stuck in a loop/i
+            )
+
+            // Run 2 (resume): TOOLING now answers cleanly; FILES is reused from the
+            // cache and is NOT re-spawned — the deterministic loop never runs again.
+            toolingShouldFail = false
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+            expect(spawns.files ?? 0).toBe(filesSpawnsAfterRun1)
+            expect(out).toMatch(/FILES\n\(degraded: research FILES worker stuck in a loop/i)
+            expect(out).toContain('TOOLING\n- finding for tooling')
         })
     })
 })

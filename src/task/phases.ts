@@ -213,40 +213,76 @@ export function scopedToolingGoal(refined: string): string {
 }
 
 /**
- * Throw a descriptive error if a research worker's result is not trustworthy
- * output, so only good output is ever cached and assembled. Precedence mirrors
- * the original inline checks: loop/timeout exhaustion first (a loop-kill is a
- * SIGTERM/exit 143 OR a clean exit 0 with partial text, so exitCode alone is
- * ambiguous — the worker already burned its MAX_LOOP_RESTARTS restarts before
- * setting these), then exit code, empty output, and finally a leaked
- * (never-executed) tool call.
+ * Classify a research worker's result so the phase can react per-worker instead
+ * of treating every failure the same. Two distinct failure shapes:
+ *
+ *   - 'runaway' (loop-kill OR per-worker wall-clock timeout): the worker explored
+ *     too long and was killed *after* burning its MAX_LOOP_RESTARTS restarts. It
+ *     did real work and left partial text; the other three workers are unaffected.
+ *     Failing the whole task here would throw away every already-good worker AND
+ *     abort the entire auto-run over the weakest section — and because the loop is
+ *     deterministic, a resume just re-loops and re-fails. So this DEGRADES: keep
+ *     the partial answer (marked), cache it, move on. A loop-kill is a SIGTERM
+ *     (exit 143) OR a clean exit 0 with truncated text, so loopHit/timedOut — not
+ *     exitCode — are the reliable signal and are checked first.
+ *
+ *   - 'fatal' (non-zero exit that isn't a loop-kill, empty output, or a leaked
+ *     never-executed tool call): the output is untrustworthy in a way partial text
+ *     can't paper over (broken env, model disconnect, wrong tool-call dialect).
+ *     These still throw — degrading them would launder a real breakage into a
+ *     plausible-looking section. Returns null when the result is trustworthy.
  */
-function assertResearchWorkerOk(name: string, result: RunWorkerResult): void {
+function classifyResearchWorker(
+    name: string,
+    result: RunWorkerResult
+): {kind: 'runaway'; reason: string} | {kind: 'fatal'; error: Error} | null {
     if (result.loopHit) {
         const argsStr = JSON.stringify(result.loopHit.call.args)
-        throw new Error(
-            `Research ${name} worker stuck in a loop — called `
-                + `${result.loopHit.call.name}(${argsStr}) ×${result.loopHit.count} in the last `
-                + `${result.loopHit.windowSize} calls and still looped after restarts`
-        )
+        return {
+            kind: 'runaway',
+            reason:
+                `stuck in a loop — called ${result.loopHit.call.name}(${argsStr}) `
+                + `×${result.loopHit.count} in the last ${result.loopHit.windowSize} calls `
+                + `and still looped after restarts`
+        }
     }
     if (result.timedOut) {
-        throw new Error(`Research ${name} worker timed out after restarts`)
+        return {kind: 'runaway', reason: 'timed out after restarts'}
     }
     if (result.exitCode !== 0) {
-        throw new Error(
-            `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
-        )
+        return {
+            kind: 'fatal',
+            error: new Error(
+                `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
+            )
+        }
     }
     if (result.text.trim().length === 0) {
-        throw new Error(`Research ${name} worker produced no output`)
+        return {kind: 'fatal', error: new Error(`Research ${name} worker produced no output`)}
     }
     if (result.leakedToolCall) {
-        throw new Error(
-            `Research ${name} worker wrote a tool call as text instead of invoking it `
-                + `(${result.leakedToolCall.trim()}) — it never ran`
-        )
+        return {
+            kind: 'fatal',
+            error: new Error(
+                `Research ${name} worker wrote a tool call as text instead of invoking it `
+                    + `(${result.leakedToolCall.trim()}) — it never ran`
+            )
+        }
     }
+    return null
+}
+
+/**
+ * Build a degraded section body for a runaway worker: a one-line marker naming
+ * the failure (so downstream phases and a human reading the task file know this
+ * section is incomplete) followed by whatever partial answer the worker streamed
+ * before it was killed. The marker is always present even when there is no
+ * partial text, so an empty degrade is never mistaken for a real finding.
+ */
+export function degradedSectionBody(name: string, reason: string, partial: string): string {
+    const marker = `(degraded: research ${name} worker ${reason}; this section may be incomplete)`
+    const body = partial.trim()
+    return body.length > 0 ? `${marker}\n\n${body}` : marker
 }
 
 export async function phaseResearch(
@@ -393,11 +429,21 @@ export async function phaseResearch(
         )
         updateProgress()
 
-        // Throws (failing the phase) on a loop/timeout/exit/empty/leak — so the
-        // workers that already succeeded above stay cached for the resume.
-        assertResearchWorkerOk(spec.section, r)
-        await setTaskSection(deps.cwd, deps.taskId, cacheHeading, r.text)
-        sections.push({name: spec.section, text: r.text.trim()})
+        // A fatal failure (crash/empty/leak) still throws — the already-cached
+        // workers survive for the resume. A runaway (loop/timeout) degrades to its
+        // partial output instead, so one weak worker can't abort a whole auto-run;
+        // the degraded section is cached too, so a resume doesn't re-loop it.
+        const failure = classifyResearchWorker(spec.section, r)
+        if (failure?.kind === 'fatal') throw failure.error
+        const sectionText =
+            failure?.kind === 'runaway' ?
+                degradedSectionBody(spec.section, failure.reason, r.text)
+            :   r.text.trim()
+        if (failure?.kind === 'runaway') {
+            deps.logDebug?.(`${spec.label}: degraded — ${failure.reason}`)
+        }
+        await setTaskSection(deps.cwd, deps.taskId, cacheHeading, sectionText)
+        sections.push({name: spec.section, text: sectionText})
     }
 
     // All workers succeeded — the assembled output below becomes the canonical
