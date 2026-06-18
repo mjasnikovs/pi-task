@@ -53,6 +53,16 @@ describe('buildAutoLoaderLines', () => {
         expect(lines[1]).not.toContain('planning')
     })
 
+    test('kind "enforce" shows the context bar like the planning loader', () => {
+        const lines = buildAutoLoaderLines({
+            ...base,
+            kind: 'enforce',
+            contextUsage: {tokens: 12_000, contextWindow: 200_000, percent: 6}
+        })
+        expect(lines[1]).toContain('enforcing guidelines · ')
+        expect(lines[1]).toContain('12k/200k')
+    })
+
     test('kind "enforce" still appends the latest child output trailer', () => {
         const lines = buildAutoLoaderLines({
             ...base,

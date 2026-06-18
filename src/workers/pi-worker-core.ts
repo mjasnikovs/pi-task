@@ -1,5 +1,10 @@
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {CHILD_BASE_ARGS, runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {
+    CHILD_BASE_ARGS,
+    runChildDefault,
+    type ContextSnapshot,
+    type SpawnFn
+} from '../shared/child-process.js'
 import {LoopDetector, type LoopHit} from '../task/loop-detector.js'
 import {
     LOOP_WINDOW,
@@ -50,6 +55,13 @@ export interface RunWorkerInput {
     extensions?: string[]
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
+    /**
+     * Called for each context_usage snapshot the child emits (same `--mode json`
+     * stream the phase children parse). Lets a caller's status widget show the
+     * tokens/window progress bar for the worker exactly like the phase widget,
+     * instead of omitting it.
+     */
+    onContextUsage?: (snapshot: ContextSnapshot) => void
     /**
      * Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS.
      * Pass 0 to disable the timeout entirely (run until the child exits on its
@@ -193,7 +205,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         if (hit && !loopHit) loopHit = hit
                         return hit
                     },
-                    onLine: input.onLine
+                    onLine: input.onLine,
+                    onContextUsage: input.onContextUsage
                 },
                 input.spawn
             )

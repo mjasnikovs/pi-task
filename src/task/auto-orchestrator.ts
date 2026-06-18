@@ -401,9 +401,11 @@ function defaultDeps(
                 runChild: async (tools, prompt, sig) => {
                     // The enforcement child is a slow local-model pass with edit
                     // tools; show the same /task-auto status block as planning so
-                    // it isn't silent — head · enforcing guidelines/elapsed · ↳
-                    // last line. (runWorker surfaces no context usage, so that
-                    // line is just omitted.)
+                    // it isn't silent — head · enforcing guidelines/elapsed ·
+                    // tokens/window [bar] · ↳ last line. The worker runs the same
+                    // `--mode json` stream as the phase children, so it emits
+                    // context_usage; forward it (onContextUsage below) so the bar
+                    // renders here exactly like every other phase widget.
                     lastLine = undefined
                     contextUsage = undefined
                     const startedAt = Date.now()
@@ -441,6 +443,13 @@ function defaultDeps(
                             onLine: line => {
                                 lastLine = line
                                 logEnforce(line)
+                            },
+                            onContextUsage: snapshot => {
+                                contextUsage = resolveContextUsage(
+                                    snapshot,
+                                    contextUsage,
+                                    parentContextWindow
+                                )
                             }
                         })
                         const failure = classifyEnforceChildFailure(r)
