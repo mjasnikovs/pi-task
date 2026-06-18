@@ -20,8 +20,33 @@ export function taskFilePath(cwd: string, id: string): string {
     return path.join(tasksDir(cwd), `${id}.md`)
 }
 
+/**
+ * `.ignore` body written into .pi-tasks/ so pi's discovery tools skip it. fd and
+ * ripgrep (the find/grep tools the host model AND the research workers use) honor
+ * `.ignore`, but git does NOT — so task files stay committable while no worker or
+ * the local model ever surfaces them via search. `*` hides the whole directory's
+ * contents; the leading comment explains the file to anyone who opens it. This
+ * only affects discovery: pi-task reads task files by direct path (see
+ * readTaskFile), which no ignore mechanism intercepts.
+ */
+const TASKS_IGNORE_BODY =
+    '# Keep committed task files out of pi find/grep discovery (host model + '
+    + 'research\n# workers) while git still tracks them. .ignore is read by '
+    + 'fd/ripgrep, not by\n# git, so tasks stay committable. Managed by pi-task.\n*\n'
+
+/**
+ * Create .pi-tasks/ and, if absent, its `.ignore`. The ignore file is written
+ * only when missing so a hand-edited one is never clobbered.
+ */
 export async function ensureTasksDir(cwd: string): Promise<void> {
-    await fsp.mkdir(tasksDir(cwd), {recursive: true})
+    const dir = tasksDir(cwd)
+    await fsp.mkdir(dir, {recursive: true})
+    const ignorePath = path.join(dir, '.ignore')
+    try {
+        await fsp.access(ignorePath)
+    } catch {
+        await fsp.writeFile(ignorePath, TASKS_IGNORE_BODY, 'utf8')
+    }
 }
 
 export async function allocateTaskId(cwd: string): Promise<string> {

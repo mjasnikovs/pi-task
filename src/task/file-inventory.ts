@@ -6,8 +6,26 @@
  */
 
 import {spawn} from 'node:child_process'
+import {TASKS_DIR_NAME} from './task-types.js'
 
 const DEFAULT_MAX_LINES = 2000
+
+/**
+ * Drop the committed task directory from the inventory. `git ls-files` lists
+ * tracked files regardless of `.ignore`, so once tasks are committed they would
+ * otherwise be handed to every research worker (and feed orientation). The user
+ * wants tasks committable but invisible to workers and the local model, so we
+ * strip `.pi-tasks/` here — the inventory's single chokepoint. (`git ls-files`
+ * always emits posix-style paths, so the forward-slash prefix is correct on all
+ * platforms.)
+ */
+export function stripTasksDir(raw: string): string {
+    const prefix = `${TASKS_DIR_NAME}/`
+    return raw
+        .split('\n')
+        .filter(l => !l.startsWith(prefix))
+        .join('\n')
+}
 
 function runGitLsFiles(cwd: string, signal?: AbortSignal): Promise<string> {
     return new Promise(resolve => {
@@ -45,5 +63,5 @@ export async function getFileInventory(
 ): Promise<string> {
     const raw = await runGitLsFiles(cwd, signal)
     if (!raw) return ''
-    return capInventory(raw, maxLines)
+    return capInventory(stripTasksDir(raw), maxLines)
 }

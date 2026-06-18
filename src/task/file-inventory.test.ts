@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {capInventory, getFileInventory} from './file-inventory.js'
+import {capInventory, getFileInventory, stripTasksDir} from './file-inventory.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
@@ -28,6 +28,20 @@ describe('capInventory', () => {
     })
 })
 
+describe('stripTasksDir', () => {
+    test('drops .pi-tasks/ paths but keeps everything else', () => {
+        const raw = ['.pi-tasks/.ignore', '.pi-tasks/TASK_0001.md', 'src/app.ts', 'README.md'].join(
+            '\n'
+        )
+        expect(stripTasksDir(raw)).toBe('src/app.ts\nREADME.md')
+    })
+
+    test('does not drop lookalike paths that merely contain the dir name', () => {
+        const raw = ['src/.pi-tasks/x.ts', 'my.pi-tasks/y.ts'].join('\n')
+        expect(stripTasksDir(raw)).toBe(raw)
+    })
+})
+
 describe('getFileInventory', () => {
     test('returns empty string for a non-git directory', async () => {
         await withTmpTaskDir(async cwd => {
@@ -51,6 +65,27 @@ describe('getFileInventory', () => {
             const out = await getFileInventory(cwd)
             const paths = out.split('\n').sort()
             expect(paths).toEqual(['a.ts', 'b.ts'])
+        })
+    })
+
+    test('excludes committed .pi-tasks files from the inventory', async () => {
+        if (spawnSync('which', ['git']).status !== 0) return
+        await withTmpTaskDir(async cwd => {
+            spawnSync('git', ['init', '-q'], {cwd})
+            spawnSync('git', ['config', 'user.email', 't@t'], {cwd})
+            spawnSync('git', ['config', 'user.name', 't'], {cwd})
+            fs.mkdirSync(path.join(cwd, '.pi-tasks'))
+            fs.writeFileSync(path.join(cwd, '.pi-tasks', 'TASK_0001.md'), 'task')
+            fs.writeFileSync(path.join(cwd, '.pi-tasks', '.ignore'), '*\n')
+            fs.writeFileSync(path.join(cwd, 'a.ts'), '')
+            spawnSync('git', ['add', '-A'], {cwd})
+            spawnSync('git', ['commit', '-q', '-m', 'init'], {cwd})
+            // Sanity: the task files ARE committed (so they remain committable).
+            const tracked = spawnSync('git', ['ls-files'], {cwd, encoding: 'utf8'}).stdout
+            expect(tracked).toContain('.pi-tasks/TASK_0001.md')
+            // But the inventory handed to workers must not mention them.
+            const out = await getFileInventory(cwd)
+            expect(out.split('\n').sort()).toEqual(['a.ts'])
         })
     })
 })

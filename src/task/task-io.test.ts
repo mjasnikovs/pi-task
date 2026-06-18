@@ -8,6 +8,7 @@ import {
     updateTaskFrontMatter,
     setTaskSection,
     readSection,
+    ensureTasksDir,
     tasksDir
 } from './task-io.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
@@ -23,6 +24,28 @@ function makeFm(id: string): TaskFrontMatter {
         title: 'test'
     }
 }
+
+describe('ensureTasksDir', () => {
+    test('writes a .ignore whose only effective rule is *', async () => {
+        await withTmpTaskDir(async cwd => {
+            await ensureTasksDir(cwd)
+            const ignore = await fsp.readFile(path.join(tasksDir(cwd), '.ignore'), 'utf8')
+            // fd/ripgrep skip the whole dir; comments are allowed around the rule.
+            const rules = ignore.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'))
+            expect(rules).toEqual(['*'])
+        })
+    })
+
+    test('does not clobber a hand-edited .ignore on re-run', async () => {
+        await withTmpTaskDir(async cwd => {
+            await ensureTasksDir(cwd)
+            const ignorePath = path.join(tasksDir(cwd), '.ignore')
+            await fsp.writeFile(ignorePath, '# custom\n*.tmp\n')
+            await ensureTasksDir(cwd)
+            expect(await fsp.readFile(ignorePath, 'utf8')).toBe('# custom\n*.tmp\n')
+        })
+    })
+})
 
 describe('allocateTaskId', () => {
     test('returns TASK_0001 in an empty project', async () => {
