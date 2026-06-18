@@ -159,12 +159,19 @@ export interface AutoLoaderState {
     startedAt: number
     lastLine?: string
     contextUsage?: ContextSnapshot
+    /** Which /task-auto stage this loader is for. Defaults to 'planning' (the
+     *  numbered clarify/decompose steps); 'enforce' is the per-task guideline
+     *  pass, which has no step numbering. */
+    kind?: 'planning' | 'enforce'
 }
 
 export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): string[] {
     const elapsed = formatDuration(Date.now() - s.startedAt)
     const head = `/task-auto · ${s.title}`
-    let detail = `planning ${s.stepNum}/${s.stepTotal} ${s.step} · ${elapsed}`
+    let detail =
+        s.kind === 'enforce' ?
+            `enforcing guidelines · ${elapsed}`
+        :   `planning ${s.stepNum}/${s.stepTotal} ${s.step} · ${elapsed}`
     if (s.contextUsage) {
         const ctxDetail = formatContextDetail(s.contextUsage, theme)
         if (ctxDetail) detail += ` · ${ctxDetail}`

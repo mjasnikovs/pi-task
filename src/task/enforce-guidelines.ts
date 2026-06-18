@@ -19,6 +19,7 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {USER_CANCELLED} from './child-runner.js'
 
 /** Filenames discovered in the working directory (cwd only — no tree walk). */
 export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
@@ -119,6 +120,35 @@ export function parseEnforceVerdict(text: string): {clean: boolean; detail: stri
     if (!last) return {clean: false, detail: 'no verdict emitted'}
     const clean = last[1].toUpperCase() === 'CLEAN'
     return {clean, detail: clean ? '' : last[2].trim() || 'unspecified violation'}
+}
+
+/** The subset of a runWorker result the enforcement-child mapping reads. */
+export interface EnforceChildResult {
+    text: string
+    exitCode: number
+    aborted: boolean
+    timedOut?: boolean
+    loopHit?: unknown
+    leakedToolCall?: unknown
+}
+
+/**
+ * Map the enforcement child's runWorker result to a fatal error message, or null
+ * when it finished cleanly enough to parse a verdict from its text.
+ *
+ * The order is load-bearing. A loop-kill AND a wall-clock timeout BOTH also set
+ * `aborted` — killProc flips it on every kill path — so the specific causes
+ * (timeout, loop, leaked tool call) must be named BEFORE the generic
+ * `aborted → user-cancel` mapping. Checking `aborted` first (as the original
+ * inline code did) mislabels a loop-killed enforcement child as a user cancel.
+ */
+export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
+    if (r.timedOut) return 'enforcement child timed out'
+    if (r.loopHit) return 'enforcement child looped'
+    if (r.leakedToolCall) return 'enforcement child leaked a tool call'
+    if (r.aborted) return USER_CANCELLED
+    if (r.exitCode !== 0) return `enforcement child exited ${r.exitCode}`
+    return null
 }
 
 /**

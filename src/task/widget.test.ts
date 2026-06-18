@@ -45,6 +45,22 @@ describe('buildAutoLoaderLines', () => {
         })
         expect(lines[1]).toContain('12k/200k')
     })
+
+    test('kind "enforce" renders the guideline pass, not a numbered planning step', () => {
+        const lines = buildAutoLoaderLines({...base, kind: 'enforce'})
+        expect(lines[0]).toBe('/task-auto · Add dark mode')
+        expect(lines[1]).toContain('enforcing guidelines · ')
+        expect(lines[1]).not.toContain('planning')
+    })
+
+    test('kind "enforce" still appends the latest child output trailer', () => {
+        const lines = buildAutoLoaderLines({
+            ...base,
+            kind: 'enforce',
+            lastLine: 'editing eslint.config.mjs'
+        })
+        expect(lines[2]).toBe('↳ editing eslint.config.mjs')
+    })
 })
 
 describe('formatContextDetail', () => {

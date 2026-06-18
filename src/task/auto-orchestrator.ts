@@ -27,6 +27,7 @@ import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from '
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import {
     runGuidelineEnforcement,
+    classifyEnforceChildFailure,
     ENFORCE_TIMEOUT_MS,
     type EnforceOutcome
 } from './enforce-guidelines.js'
@@ -369,7 +370,7 @@ function defaultDeps(
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)
             :   Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
-        enforce: (cwd2, _taskTitle) => {
+        enforce: (cwd2, taskTitle) => {
             if (!getConfig().enforceGuidelines) {
                 return Promise.resolve({ok: true, reason: 'disabled'})
             }
@@ -378,26 +379,47 @@ function defaultDeps(
                 signal,
                 // Reuse the timeout- and loop-guarded worker child. It runs the
                 // same local model with edit tools so it can fix violations in
-                // place. Any non-clean exit (loop kill, timeout, leaked tool call,
-                // non-zero) throws so the pass becomes a blocking outcome rather
-                // than trusting a partial transcript.
+                // place. classifyEnforceChildFailure turns any non-clean exit
+                // (loop kill, timeout, leaked tool call, non-zero) into a thrown
+                // error so the pass becomes a blocking outcome rather than
+                // trusting a partial transcript.
                 runChild: async (tools, prompt, sig) => {
-                    const r = await runWorker({
-                        prompt,
-                        cwd: cwd2,
-                        signal: sig,
-                        tools,
-                        timeoutMs: ENFORCE_TIMEOUT_MS,
-                        onLine: line => phaseDeps.logDebug?.(`enforce: ${line}`)
-                    })
-                    if (r.aborted && !r.timedOut) throw new Error(USER_CANCELLED)
-                    if (r.timedOut) throw new Error('enforcement child timed out')
-                    if (r.loopHit) throw new Error('enforcement child looped')
-                    if (r.leakedToolCall) throw new Error('enforcement child leaked a tool call')
-                    if (r.exitCode !== 0) {
-                        throw new Error(`enforcement child exited ${r.exitCode}`)
+                    // The enforcement child is a slow local-model pass with edit
+                    // tools; show the same /task-auto status block as planning so
+                    // it isn't silent — head · enforcing guidelines/elapsed · ↳
+                    // last line. (runWorker surfaces no context usage, so that
+                    // line is just omitted.)
+                    lastLine = undefined
+                    contextUsage = undefined
+                    const startedAt = Date.now()
+                    const stopLoader = startAutoLoader(ctx, () => ({
+                        title: taskTitle,
+                        kind: 'enforce',
+                        step: 'guidelines',
+                        stepNum: 1,
+                        stepTotal: 1,
+                        startedAt,
+                        lastLine,
+                        contextUsage
+                    }))
+                    try {
+                        const r = await runWorker({
+                            prompt,
+                            cwd: cwd2,
+                            signal: sig,
+                            tools,
+                            timeoutMs: ENFORCE_TIMEOUT_MS,
+                            onLine: line => {
+                                lastLine = line
+                                phaseDeps.logDebug?.(`enforce: ${line}`)
+                            }
+                        })
+                        const failure = classifyEnforceChildFailure(r)
+                        if (failure) throw new Error(failure)
+                        return r.text
+                    } finally {
+                        stopLoader()
                     }
-                    return r.text
                 }
             })
         }

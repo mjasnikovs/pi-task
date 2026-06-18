@@ -4,9 +4,12 @@ import {
     buildEnforcePrompt,
     parseEnforceVerdict,
     runGuidelineEnforcement,
+    classifyEnforceChildFailure,
     GUIDELINE_FILENAMES,
+    type EnforceChildResult,
     type GuidelineDoc
 } from './enforce-guidelines.js'
+import {USER_CANCELLED} from './child-runner.js'
 
 // ─── discoverGuidelines ──────────────────────────────────────────────────────
 
@@ -172,4 +175,45 @@ test('runGuidelineEnforcement: child failure → blocks (unverifiable)', async (
     })
     expect(r.ok).toBe(false)
     expect(r.reason).toBe('enforcement pass could not run: enforcement child timed out')
+})
+
+// ─── classifyEnforceChildFailure ─────────────────────────────────────────────
+
+function childResult(over: Partial<EnforceChildResult>): EnforceChildResult {
+    return {text: 'ENFORCE: CLEAN', exitCode: 0, aborted: false, ...over}
+}
+
+test('classifyEnforceChildFailure: clean run → null (verdict is parsable)', () => {
+    expect(classifyEnforceChildFailure(childResult({}))).toBeNull()
+})
+
+test('classifyEnforceChildFailure: loop-kill is named "looped", NOT user-cancelled', () => {
+    // A loop-kill ALSO sets aborted (killProc flips it on every kill path). The
+    // specific cause must win over the generic aborted→user-cancel mapping —
+    // checking aborted first mislabels the kill as a user cancellation.
+    const failure = classifyEnforceChildFailure(childResult({aborted: true, loopHit: 'read x3'}))
+    expect(failure).toBe('enforcement child looped')
+    expect(failure).not.toBe(USER_CANCELLED)
+})
+
+test('classifyEnforceChildFailure: timeout (also aborted) is named "timed out"', () => {
+    const failure = classifyEnforceChildFailure(childResult({aborted: true, timedOut: true}))
+    expect(failure).toBe('enforcement child timed out')
+})
+
+test('classifyEnforceChildFailure: leaked tool call (also aborted) is named "leaked"', () => {
+    const failure = classifyEnforceChildFailure(
+        childResult({aborted: true, leakedToolCall: 'edit{...}'})
+    )
+    expect(failure).toBe('enforcement child leaked a tool call')
+})
+
+test('classifyEnforceChildFailure: aborted with no specific cause → user-cancelled', () => {
+    expect(classifyEnforceChildFailure(childResult({aborted: true}))).toBe(USER_CANCELLED)
+})
+
+test('classifyEnforceChildFailure: non-zero exit (not aborted) → exited <code>', () => {
+    expect(classifyEnforceChildFailure(childResult({exitCode: 2}))).toBe(
+        'enforcement child exited 2'
+    )
 })
