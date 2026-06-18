@@ -414,6 +414,65 @@ test('runAutoLoop: stops and marks failed on first failing task', async () => {
     })
 })
 
+test('runAutoLoop: a guideline violation blocks the commit and fails the task', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const commits: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            enforce: () => Promise.resolve({ok: false, reason: 'guideline violation: used print()'})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // Run halts on A: file is failed, A is NOT checked off, and only the
+        // pre-start checkpoint commit ran — never the post-task snapshot.
+        expect(frontMatter.state).toBe('failed')
+        expect(parseTaskList(body).some(e => e.done)).toBe(false)
+        expect(commits).toEqual(['chore: checkpoint before "A"'])
+        expect(captured.notifies.some(n => /used print\(\)/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: a clean guideline verdict lets the run complete normally', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const enforced: string[] = []
+        let n = 6
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            enforce: (_cwd, title) => {
+                enforced.push(title)
+                return Promise.resolve({ok: true})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // Enforcement ran once per task, and the run completed with both boxes checked.
+        expect(enforced).toEqual(['A', 'B'])
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+    })
+})
+
 test('runAutoLoop: surfaces a failed task reason in the stop message', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)

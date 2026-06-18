@@ -24,6 +24,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'orientation',
         description:
             'Pre-supply the project core (manifest, types, schema…) to the read-heavy research workers'
+    },
+    {
+        id: 'enforceGuidelines',
+        label: 'enforce guidelines',
+        description:
+            'Before each /task-auto commit, re-check the work against AGENTS.md/CLAUDE.md and fix drift'
     }
 ]
 
@@ -77,7 +83,7 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
 export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
         description:
-            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation).',
+            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation, enforce guidelines).',
         handler: handleTaskConfig
     })
 }

@@ -25,6 +25,12 @@ import {
 } from './auto-io.js'
 import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
+import {
+    runGuidelineEnforcement,
+    ENFORCE_TIMEOUT_MS,
+    type EnforceOutcome
+} from './enforce-guidelines.js'
+import {runWorker} from '../workers/pi-worker-core.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
@@ -57,6 +63,13 @@ export interface AutoDeps {
     ) => Promise<RunSingleTaskResult>
     /** Snapshot the working tree into one commit after a task passes. */
     commit: (cwd: string, message: string) => Promise<CommitResult>
+    /**
+     * Verify the just-finished task's work against the project's AGENTS.md /
+     * CLAUDE.md guidelines (and auto-fix violations) BEFORE it is committed.
+     * Optional: when absent (tests, or the feature disabled), the loop treats it
+     * as a pass. ok === false blocks the commit and fails the task.
+     */
+    enforce?: (cwd: string, taskTitle: string) => Promise<EnforceOutcome>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -355,7 +368,39 @@ function defaultDeps(
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)
-            :   Promise.resolve({committed: false, reason: 'auto-commit disabled'})
+            :   Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
+        enforce: (cwd2, _taskTitle) => {
+            if (!getConfig().enforceGuidelines) {
+                return Promise.resolve({ok: true, reason: 'disabled'})
+            }
+            return runGuidelineEnforcement({
+                cwd: cwd2,
+                signal,
+                // Reuse the timeout- and loop-guarded worker child. It runs the
+                // same local model with edit tools so it can fix violations in
+                // place. Any non-clean exit (loop kill, timeout, leaked tool call,
+                // non-zero) throws so the pass becomes a blocking outcome rather
+                // than trusting a partial transcript.
+                runChild: async (tools, prompt, sig) => {
+                    const r = await runWorker({
+                        prompt,
+                        cwd: cwd2,
+                        signal: sig,
+                        tools,
+                        timeoutMs: ENFORCE_TIMEOUT_MS,
+                        onLine: line => phaseDeps.logDebug?.(`enforce: ${line}`)
+                    })
+                    if (r.aborted && !r.timedOut) throw new Error(USER_CANCELLED)
+                    if (r.timedOut) throw new Error('enforcement child timed out')
+                    if (r.loopHit) throw new Error('enforcement child looped')
+                    if (r.leakedToolCall) throw new Error('enforcement child leaked a tool call')
+                    if (r.exitCode !== 0) {
+                        throw new Error(`enforcement child exited ${r.exitCode}`)
+                    }
+                    return r.text
+                }
+            })
+        }
     }
 }
 
@@ -487,6 +532,28 @@ export async function runAutoLoop(
                     'error'
                 )
                 return
+            }
+            // Before checking the task off or committing, hold the work to the
+            // project's AGENTS.md / CLAUDE.md rules. Local models drift and skip
+            // those guidelines, so the enforcement pass re-reads the diff with the
+            // same local model (edit tools enabled) and fixes violations in place.
+            // A non-clean verdict — or a pass that could not run — blocks the
+            // commit and fails the task: non-compliant work is never snapshotted,
+            // and the run pauses for /task-auto-resume. (No-op when the feature is
+            // off, when there are no guideline files, or in tests with no enforce
+            // dep.) Fixes it makes are folded into this task's snapshot below.
+            if (deps.enforce) {
+                active.ui.notify(`${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`, 'info')
+                const verdict = await deps.enforce(cwd, next.title)
+                if (!verdict.ok) {
+                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                    announceDone(
+                        active,
+                        `${id} stopped at "${next.title}" — ${verdict.reason ?? 'guideline check failed'} — fix and run /task-auto-resume.`,
+                        'error'
+                    )
+                    return
+                }
             }
             // res.ok === true means runner.run() completed, so res.taskId is the
             // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an

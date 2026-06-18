@@ -49,7 +49,7 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, and orientation. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, orientation, and enforce guidelines. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -140,7 +140,7 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 
 ## Settings — `/task-config`
 
-Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json` and all default to **on**:
+Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`. All default to **on** except **enforce guidelines**:
 
 | Setting | What it does |
 | --- | --- |
@@ -148,6 +148,7 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | **compress reasoning** | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
 | **auto-commit** | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
 | **orientation** | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
+| **enforce guidelines** _(off by default)_ | Before each `/task-auto` commit, re-checks the sub-task's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). Local models drift and skip those rules, so a fresh pass of the same local model — with edit tools — reads the diff, fixes any violations in place, and returns a verdict. A violation it can't clear (or a pass that can't run) **blocks the commit and stops the run** so non-compliant work is never snapshotted; fix and `/task-auto-resume`. Adds one extra local-model pass per task, so it's opt-in. |
 
 ## Configuration
 
