@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
-import type {ResolvedPackage} from './docs-resolve.js'
+import {isDtsFile, type ResolvedPackage} from './docs-resolve.js'
 
 const MAX_CHUNK_BYTES = 8 * 1024
 const ZERO_SEP = Buffer.from([0])
@@ -72,11 +72,11 @@ function walkDts(root: string): string[] {
                 if (relReal.startsWith('..')) continue
                 const stat = fs.statSync(realPath)
                 if (stat.isDirectory()) stack.push(realPath)
-                else if (stat.isFile() && realPath.endsWith('.d.ts')) out.push(realPath)
+                else if (stat.isFile() && isDtsFile(realPath)) out.push(realPath)
                 continue
             }
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && entry.name.endsWith('.d.ts')) out.push(full)
+            else if (entry.isFile() && isDtsFile(entry.name)) out.push(full)
         }
     }
     return out.sort()

@@ -7,6 +7,10 @@ import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-in
 import {
     resolvePackage as defaultResolvePackage,
     ResolveError,
+    detectTypesRedirect,
+    typesPackageName,
+    hasTypeFiles,
+    isDtsFile,
     type ResolvedPackage
 } from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './docs-retrieve.js'
@@ -139,6 +143,59 @@ export async function runAutoInstall(
     return {success: result.exitCode === 0 && !result.aborted, installDir, stderr: result.stderr}
 }
 
+/** Resolve `name` from cwd; on `not_installed`, auto-install it and resolve from
+ *  the install dir. Returns null on any failure (caller keeps its fallback). */
+async function tryResolveOrInstall(
+    name: string,
+    cwd: string,
+    spawn: SpawnFn,
+    resolvePackage: typeof defaultResolvePackage,
+    signal: AbortSignal | undefined
+): Promise<ResolvedPackage | null> {
+    try {
+        return resolvePackage(name, cwd)
+    } catch (err) {
+        if (!(err instanceof ResolveError) || err.kind !== 'not_installed') return null
+        const install = await runAutoInstall(spawn, extractParentPackage(name), signal)
+        if (!install.success) return null
+        try {
+            return resolvePackage(name, install.installDir)
+        } catch {
+            return null
+        }
+    }
+}
+
+/** Follow the @types/<name> + triple-slash `<reference types>` redirect chain
+ *  from a package that ships no usable types of its own to the one that actually
+ *  holds the declarations (e.g. bun -> @types/bun -> bun-types). Bounded to a few
+ *  hops; returns the original package if no better source is found. */
+async function resolveTypeSource(
+    pkg: ResolvedPackage,
+    requested: string,
+    cwd: string,
+    spawn: SpawnFn,
+    resolvePackage: typeof defaultResolvePackage,
+    signal: AbortSignal | undefined
+): Promise<ResolvedPackage> {
+    const visited = new Set<string>([pkg.name, extractParentPackage(requested)])
+    let cur = pkg
+    for (let depth = 0; depth < 3; depth++) {
+        let next = detectTypesRedirect(cur)
+        if (next && visited.has(next)) next = null
+        if (!next && !hasTypeFiles(cur.root)) {
+            const types = typesPackageName(cur.name)
+            if (types && !visited.has(types)) next = types
+        }
+        if (!next) break
+        visited.add(next)
+        const resolved = await tryResolveOrInstall(next, cwd, spawn, resolvePackage, signal)
+        if (!resolved) break
+        cur = resolved
+    }
+    return cur
+}
+
 export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     const resolvePackage = input.resolvePackage ?? defaultResolvePackage
     const ensureIndexed = input.ensureIndexed ?? defaultEnsureIndexed
@@ -207,6 +264,14 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             }
         }
     }
+
+    // Step 1b: if the resolved package ships no usable type declarations (e.g.
+    // the `bun` runtime launcher, which is just a binary + install README), or is
+    // a pure `@types/<name>` redirect stub, follow the conventional
+    // @types/<name> + triple-slash `<reference types>` chain to the package that
+    // actually holds the declarations (e.g. bun -> @types/bun -> bun-types).
+    // Best-effort: any failure leaves the original resolution untouched.
+    pkg = await resolveTypeSource(pkg, input.pkg, input.cwd, spawn, resolvePackage, input.signal)
 
     // Step 2: open cache
     let cache: CacheHandle | null = null
@@ -367,7 +432,7 @@ function walkDtsAlpha(root: string): string[] {
             if (entry.name === 'node_modules') continue
             const full = path.join(dir, entry.name)
             if (entry.isDirectory()) stack.push(full)
-            else if (entry.isFile() && entry.name.endsWith('.d.ts')) out.push(full)
+            else if (entry.isFile() && isDtsFile(entry.name)) out.push(full)
         }
     }
     return out.sort()

@@ -1,6 +1,13 @@
 import {test, expect} from 'bun:test'
 import * as path from 'node:path'
-import {resolvePackage, ResolveError} from './docs-resolve.js'
+import {
+    resolvePackage,
+    ResolveError,
+    isDtsFile,
+    typesPackageName,
+    hasTypeFiles,
+    detectTypesRedirect
+} from './docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
@@ -61,6 +68,42 @@ test('resolvePackage throws ResolveError(not_installed) for missing package', ()
         expect(err).toBeInstanceOf(ResolveError)
         expect((err as ResolveError).kind).toBe('not_installed')
     }
+})
+
+test('isDtsFile matches .d.ts, .d.mts, .d.cts only', () => {
+    expect(isDtsFile('foo.d.ts')).toBe(true)
+    expect(isDtsFile('foo.d.mts')).toBe(true)
+    expect(isDtsFile('foo.d.cts')).toBe(true)
+    expect(isDtsFile('foo.ts')).toBe(false)
+    expect(isDtsFile('foo.mts')).toBe(false)
+    expect(isDtsFile('foo.d.ts.map')).toBe(false)
+})
+
+test('typesPackageName maps to DefinitelyTyped convention', () => {
+    expect(typesPackageName('bun')).toBe('@types/bun')
+    expect(typesPackageName('react/jsx-runtime')).toBe('@types/react')
+    expect(typesPackageName('@radix-ui/react-dialog')).toBe('@types/radix-ui__react-dialog')
+    expect(typesPackageName('@types/bun')).toBeNull()
+})
+
+test('resolvePackage picks a .d.mts types entry (tailwindcss shape)', () => {
+    const r = resolvePackage('mts-pkg', FIXTURES)
+    expect(r.entryDts?.endsWith('node_modules/mts-pkg/dist/lib.d.mts')).toBe(true)
+})
+
+test('hasTypeFiles is false for a launcher package with no declarations', () => {
+    expect(hasTypeFiles(resolvePackage('launcher-pkg', FIXTURES).root)).toBe(false)
+    expect(hasTypeFiles(resolvePackage('mts-pkg', FIXTURES).root)).toBe(true)
+})
+
+test('detectTypesRedirect follows a pure @types redirect stub', () => {
+    // stub-pkg is `/// <reference types="target-types" />` only
+    expect(detectTypesRedirect(resolvePackage('stub-pkg', FIXTURES))).toBe('target-types')
+})
+
+test('detectTypesRedirect returns null for an aggregator package', () => {
+    // target-types references node + local paths and ships its own .d.ts files
+    expect(detectTypesRedirect(resolvePackage('target-types', FIXTURES))).toBeNull()
 })
 
 test.each(['../etc/passwd', '/abs/path', 'pkg with spaces', '', '@scope/', '@/name'])(
