@@ -38,7 +38,13 @@ import {
 } from './enforce-guidelines.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {
+    runPhaseChild,
+    prependHint,
+    formatLoopHint,
+    USER_CANCELLED,
+    type PhaseDeps
+} from './child-runner.js'
 import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
@@ -439,7 +445,15 @@ function defaultDeps(
                             signal: sig,
                             tools,
                             timeoutMs: 0, // no wall-clock timeout — run to completion
-                            loop: false, // no loop guard — revisiting one file IS the job
+                            // Exact-match loop guard only: pathThreshold Infinity
+                            // disables the path-revisit heuristic, so revisiting one
+                            // file (which IS this pass's job) never trips — only a
+                            // literally-identical call repeated past threshold does
+                            // (e.g. the same grep fired 900× in enforce-debug.log).
+                            // A hit nudges via the normal restart-with-hint; a loop
+                            // that survives the nudges is WARNED, not blocked (see
+                            // r.loopHit handling below and classifyEnforceChildFailure).
+                            loop: {pathThreshold: Number.POSITIVE_INFINITY},
                             onLine: line => {
                                 lastLine = line
                                 logEnforce(line)
@@ -452,6 +466,18 @@ function defaultDeps(
                                 )
                             }
                         })
+                        // A loop that survived the restart-with-hint nudges is a
+                        // warning, not a failure: log it and tell the user, but let
+                        // the verdict gate (below) be the only thing that can block.
+                        if (r.loopHit) {
+                            logEnforce(
+                                `=== enforce LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`
+                            )
+                            enforceCtx.ui.notify(
+                                `${taskTitle}: enforce worker looped past the nudges — continuing (not blocked).`,
+                                'warning'
+                            )
+                        }
                         const failure = classifyEnforceChildFailure(r)
                         logEnforce(
                             failure ?

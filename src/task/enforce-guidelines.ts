@@ -132,14 +132,21 @@ export interface EnforceChildResult {
  * when it finished cleanly enough to parse a verdict from its text.
  *
  * The order is load-bearing. A loop-kill AND a wall-clock timeout BOTH also set
- * `aborted` — killProc flips it on every kill path — so the specific causes
- * (timeout, loop, leaked tool call) must be named BEFORE the generic
- * `aborted → user-cancel` mapping. Checking `aborted` first (as the original
- * inline code did) mislabels a loop-killed enforcement child as a user cancel.
+ * `aborted` (and a non-zero exit) — killProc flips it on every kill path — so the
+ * specific causes (timeout, loop, leaked tool call) must be handled BEFORE the
+ * generic `aborted → user-cancel` and `exitCode` mappings. Checking `aborted`
+ * first (as the original inline code did) mislabels a loop-killed enforcement
+ * child as a user cancel.
+ *
+ * A loop is NOT fatal: enforce attaches the detector in nudge-then-warn mode, so a
+ * loop that survived its restart-with-hint nudges returns null here (the caller
+ * logs/notifies it as a warning) and the verdict gate alone decides the outcome.
+ * It still has to be matched before `aborted`/`exitCode` so the kill's side
+ * effects don't get re-classified as a user cancel or a crash.
  */
 export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
     if (r.timedOut) return 'enforcement child timed out'
-    if (r.loopHit) return 'enforcement child looped'
+    if (r.loopHit) return null // looped past the nudges → warning, handled by caller
     if (r.leakedToolCall) return 'enforcement child leaked a tool call'
     if (r.aborted) return USER_CANCELLED
     if (r.exitCode !== 0) return `enforcement child exited ${r.exitCode}`

@@ -201,12 +201,13 @@ test('classifyEnforceChildFailure: clean run → null (verdict is parsable)', ()
     expect(classifyEnforceChildFailure(childResult({}))).toBeNull()
 })
 
-test('classifyEnforceChildFailure: loop-kill is named "looped", NOT user-cancelled', () => {
-    // A loop-kill ALSO sets aborted (killProc flips it on every kill path). The
-    // specific cause must win over the generic aborted→user-cancel mapping —
-    // checking aborted first mislabels the kill as a user cancellation.
+test('classifyEnforceChildFailure: loop is non-fatal (warning), NOT user-cancelled', () => {
+    // A loop-kill ALSO sets aborted (killProc flips it on every kill path). Enforce
+    // attaches the detector in nudge-then-warn mode, so a surviving loop is null
+    // here (the caller warns) — but it must still be matched BEFORE the generic
+    // aborted→user-cancel mapping so the kill isn't mislabeled as a user cancel.
     const failure = classifyEnforceChildFailure(childResult({aborted: true, loopHit: 'read x3'}))
-    expect(failure).toBe('enforcement child looped')
+    expect(failure).toBeNull()
     expect(failure).not.toBe(USER_CANCELLED)
 })
 
