@@ -177,6 +177,20 @@ test('runGuidelineEnforcement: child failure → blocks (unverifiable)', async (
     expect(r.reason).toBe('enforcement pass could not run: enforcement child timed out')
 })
 
+test('runGuidelineEnforcement: a user cancel re-throws (not wrapped as a failure)', async () => {
+    // USER_CANCELLED must propagate so the /task-auto loop reports a clean
+    // "cancelled — resume", not "enforcement pass could not run".
+    const run = runGuidelineEnforcement({
+        cwd: '/repo',
+        discover: async () => docOf('rules'),
+        getDiff: async () => 'd',
+        runChild: async () => {
+            throw new Error(USER_CANCELLED)
+        }
+    })
+    await expect(run).rejects.toThrow(USER_CANCELLED)
+})
+
 // ─── classifyEnforceChildFailure ─────────────────────────────────────────────
 
 function childResult(over: Partial<EnforceChildResult>): EnforceChildResult {

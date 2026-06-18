@@ -204,6 +204,10 @@ export async function runGuidelineEnforcement(deps: EnforcementDeps): Promise<En
     try {
         text = await deps.runChild(ENFORCE_TOOLS, buildEnforcePrompt(doc.text, diff), deps.signal)
     } catch (err) {
+        // A user cancellation is not an enforcement failure — re-throw it so the
+        // /task-auto loop's USER_CANCELLED handler reports a clean "cancelled —
+        // resume" instead of wrapping it as "enforcement pass could not run".
+        if (err instanceof Error && err.message === USER_CANCELLED) throw err
         const msg = err instanceof Error ? err.message : String(err)
         return {ok: false, reason: `enforcement pass could not run: ${msg}`}
     }

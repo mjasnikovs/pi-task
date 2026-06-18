@@ -459,7 +459,7 @@ test('runAutoLoop: a clean guideline verdict lets the run complete normally', as
             runTask: () =>
                 Promise.resolve({taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false}),
             commit: () => Promise.resolve({committed: true}),
-            enforce: (_cwd, title) => {
+            enforce: (_ctx, _cwd, title) => {
                 enforced.push(title)
                 return Promise.resolve({ok: true})
             }
@@ -470,6 +470,36 @@ test('runAutoLoop: a clean guideline verdict lets the run complete normally', as
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body).every(e => e.done)).toBe(true)
+    })
+})
+
+test('runAutoLoop: enforce gets the fresh post-task ctx, not the stale captured one', async () => {
+    await withTmpTaskDir(async dir => {
+        // Each task runs in a fresh session; runTask hands back the replacement
+        // ctx. enforce must be invoked with THAT ctx — driving its loader widget
+        // off the captured ctx throws "stale ctx" once a session was replaced.
+        const {ctx} = makeFakeCtx(dir)
+        const {ctx: freshCtx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let seen: unknown
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({
+                    taskId: 'TASK_0006',
+                    ok: true,
+                    sessionCancelled: false,
+                    ctx: freshCtx
+                }),
+            commit: () => Promise.resolve({committed: true}),
+            enforce: enforceCtx => {
+                seen = enforceCtx
+                return Promise.resolve({ok: true})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(seen).toBe(freshCtx)
+        expect(seen).not.toBe(ctx)
     })
 })
 

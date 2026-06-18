@@ -69,8 +69,16 @@ export interface AutoDeps {
      * CLAUDE.md guidelines (and auto-fix violations) BEFORE it is committed.
      * Optional: when absent (tests, or the feature disabled), the loop treats it
      * as a pass. ok === false blocks the commit and fails the task.
+     *
+     * Takes the loop's CURRENT ctx (not the one captured at defaultDeps time):
+     * each task runs in a fresh session, so the captured ctx is stale by the time
+     * enforcement runs and using it for the loader widget throws "stale ctx".
      */
-    enforce?: (cwd: string, taskTitle: string) => Promise<EnforceOutcome>
+    enforce?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        taskTitle: string
+    ) => Promise<EnforceOutcome>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -370,7 +378,7 @@ function defaultDeps(
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)
             :   Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
-        enforce: (cwd2, taskTitle) => {
+        enforce: (enforceCtx, cwd2, taskTitle) => {
             if (!getConfig().enforceGuidelines) {
                 return Promise.resolve({ok: true, reason: 'disabled'})
             }
@@ -392,7 +400,7 @@ function defaultDeps(
                     lastLine = undefined
                     contextUsage = undefined
                     const startedAt = Date.now()
-                    const stopLoader = startAutoLoader(ctx, () => ({
+                    const stopLoader = startAutoLoader(enforceCtx, () => ({
                         title: taskTitle,
                         kind: 'enforce',
                         step: 'guidelines',
@@ -566,7 +574,7 @@ export async function runAutoLoop(
             // dep.) Fixes it makes are folded into this task's snapshot below.
             if (deps.enforce) {
                 active.ui.notify(`${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`, 'info')
-                const verdict = await deps.enforce(cwd, next.title)
+                const verdict = await deps.enforce(active, cwd, next.title)
                 if (!verdict.ok) {
                     await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                     announceDone(
