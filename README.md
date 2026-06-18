@@ -49,7 +49,7 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, and auto-commit. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, and orientation. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -147,6 +147,7 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | **remote** | The remote UI server (QR code, phone access). Turn off to never start it. |
 | **compress reasoning** | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
 | **auto-commit** | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
+| **orientation** | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
 
 ## Configuration
 

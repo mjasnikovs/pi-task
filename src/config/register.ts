@@ -18,6 +18,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'auto-commit',
         description:
             'git commit around each /task-auto sub-task (checkpoint before, snapshot after)'
+    },
+    {
+        id: 'orientation',
+        label: 'orientation',
+        description:
+            'Pre-supply the project core (manifest, types, schema…) to the read-heavy research workers'
     }
 ]
 
@@ -70,7 +76,8 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
 
 export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
-        description: 'Configure pi-task settings (remote, compress reasoning, auto-commit).',
+        description:
+            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation).',
         handler: handleTaskConfig
     })
 }

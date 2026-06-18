@@ -12,6 +12,10 @@ import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {getFileInventory} from './file-inventory.js'
+import {buildOrientation} from './orientation.js'
+import {getConfig} from '../config/config.js'
+import {readFile} from 'node:fs/promises'
+import {resolve} from 'node:path'
 import {formatServiceBlock, formatFreshnessSkippedBlock} from './service-blocks.js'
 import {gatherExternalContext, type ExternalContextDeps} from './external-context.js'
 import {
@@ -301,6 +305,39 @@ export async function phaseResearch(
     const inventoryRaw = await fileInventoryFn(deps.cwd, deps.signal).catch(() => '')
     const inventoryHeader =
         inventoryRaw.length > 0 ? `PROJECT FILE INVENTORY\n${inventoryRaw}\n\n` : ''
+
+    // Pre-read the project's orientation core (manifest, config, domain types,
+    // schema, entrypoints, API surface) ONCE and hand the full contents to the
+    // READ-HEAVY workers in their header. The workers run as separate child
+    // processes, so without this each one that explores re-reads the same hot
+    // files cold. Bounded by a hard byte budget so it can't overflow on a large
+    // repo; purely additive (nothing is blocked) so it can only remove a
+    // redundant read, never hide a file.
+    //
+    // Applied to FILES and APIS only — NOT CONTEXT/TOOLING. Verified with a live
+    // A/B on the local model (real pi, real repo): FILES and APIS are bimodal —
+    // they sometimes answer from the inventory but sometimes spiral into heavy
+    // reads (APIS hit 37 reads / 221s, a near-runaway), and pre-supplying the core
+    // collapses that to 0 reads / ~3.5s with the model honoring "do not re-read"
+    // (0 core re-reads in every ON run). CONTEXT works from inventory+grep and
+    // reads ~0 files regardless, so the block was pure prefill and made it slower
+    // in 5/5 reps; TOOLING is already scoped + single-read-guarded and saw no
+    // benefit. So orientation only goes where reads actually happen.
+    const orientationPaths =
+        getConfig().orientation && inventoryRaw.length > 0 ?
+            inventoryRaw.split('\n').filter(l => l.trim().length > 0)
+        :   []
+    const orientation = await buildOrientation(orientationPaths, async path => {
+        try {
+            return await readFile(resolve(deps.cwd, path), 'utf8')
+        } catch {
+            return null
+        }
+    }).catch(() => ({block: '', supplied: new Set<string>()}))
+    if (orientation.supplied.size > 0) {
+        deps.logDebug?.(`orientation: pre-supplied ${orientation.supplied.size} core files`)
+    }
+
     const promptHeader = externalContext + inventoryHeader
 
     let doneCount = 0
@@ -356,12 +393,14 @@ export async function phaseResearch(
         {
             section: 'FILES',
             label: 'worker:files',
-            prompt: appendNoThink(promptHeader + RESEARCH_FILES_PROMPT(refined))
+            // Read-heavy: gets the orientation core (see note above).
+            prompt: appendNoThink(orientation.block + promptHeader + RESEARCH_FILES_PROMPT(refined))
         },
         {
             section: 'APIS',
             label: 'worker:apis',
-            prompt: appendNoThink(promptHeader + RESEARCH_APIS_PROMPT(refined)),
+            // Read-heavy: gets the orientation core (see note above).
+            prompt: appendNoThink(orientation.block + promptHeader + RESEARCH_APIS_PROMPT(refined)),
             tools: 'read,grep,find,ls,pi-worker-docs',
             extensions: [DOCS_EXTENSION_PATH]
         },
