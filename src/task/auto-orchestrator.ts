@@ -34,8 +34,6 @@ import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import {
     runGuidelineEnforcement,
     classifyEnforceChildFailure,
-    ENFORCE_TIMEOUT_MS,
-    ENFORCE_LOOP,
     type EnforceOutcome
 } from './enforce-guidelines.js'
 import {runWorker} from '../workers/pi-worker-core.js'
@@ -392,12 +390,14 @@ function defaultDeps(
             return runGuidelineEnforcement({
                 cwd: cwd2,
                 signal,
-                // Reuse the timeout- and loop-guarded worker child. It runs the
-                // same local model with edit tools so it can fix violations in
-                // place. classifyEnforceChildFailure turns any non-clean exit
-                // (loop kill, timeout, leaked tool call, non-zero) into a thrown
-                // error so the pass becomes a blocking outcome rather than
-                // trusting a partial transcript.
+                // Run the worker child UNGUARDED: no loop detector, no wall-clock
+                // timeout. This pass's job is to rework files in place until every
+                // violation is fixed, and it legitimately reads/edits/re-greps the
+                // same file many times — the research-worker guards mislabel that
+                // as a runaway and kill good work (proven on mx5 TASK_0002). Let it
+                // run until the model finishes; classifyEnforceChildFailure still
+                // blocks the commit on a real failure (non-zero exit, leaked tool
+                // call) or a user cancel.
                 runChild: async (tools, prompt, sig) => {
                     // The enforcement child is a slow local-model pass with edit
                     // tools; show the same /task-auto status block as planning so
@@ -408,12 +408,11 @@ function defaultDeps(
                     contextUsage = undefined
                     const startedAt = Date.now()
                     // Per-pass debug log. The enforce child is otherwise
-                    // unobservable (it has no per-task file like the impl runner),
-                    // so a loop/timeout in the verifier was undiagnosable. One
-                    // rolling file under .pi-tasks/; each pass brackets its
+                    // unobservable (it has no per-task file like the impl runner).
+                    // One rolling file under .pi-tasks/; each pass brackets its
                     // tool/text lines with start/end markers naming the task and
-                    // the terminal outcome, so a kill shows the exact repeated
-                    // calls that tripped the loop detector. Fire-and-forget.
+                    // the terminal outcome, so a stop (a real failure or a found
+                    // violation) is diagnosable. Fire-and-forget.
                     const enforceLogPath = path.join(tasksDir(cwd2), 'enforce-debug.log')
                     const logEnforce = (msg: string): void => {
                         void fsp
@@ -437,8 +436,8 @@ function defaultDeps(
                             cwd: cwd2,
                             signal: sig,
                             tools,
-                            timeoutMs: ENFORCE_TIMEOUT_MS,
-                            loop: ENFORCE_LOOP,
+                            timeoutMs: 0, // no wall-clock timeout — run to completion
+                            loop: false, // no loop guard — revisiting one file IS the job
                             onLine: line => {
                                 lastLine = line
                                 logEnforce(line)

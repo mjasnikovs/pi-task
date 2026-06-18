@@ -112,6 +112,30 @@ describe('runWorker', () => {
         expect(r.loopHit?.count).toBeGreaterThanOrEqual(5)
     })
 
+    test('loop: false disables the detector — a thrashing worker runs to completion', async () => {
+        // 8 identical greps would trip LoopDetector(20,5) and get SIGTERMed; with
+        // the guard off the worker is left alone and returns its own result. This
+        // is what the /task-auto enforcement fix pass relies on.
+        const spawn = fakeSpawnByPrompt(() =>
+            loopResponse('grep', {pattern: 'glorptube'}, 8, {trailingText: 'all fixed'})
+        )
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, loop: false})
+        expect(r.text).toBe('all fixed')
+        expect(r.loopHit).toBeUndefined()
+    })
+
+    test('timeoutMs: 0 disables the wall-clock timeout — a slow worker still completes', async () => {
+        // A 50ms-delayed close with the timeout OFF must be waited out, not aborted
+        // (contrast the timeoutMs:15 test below, which aborts an 80ms close).
+        const spawn = fakeSpawnByPrompt(() => ({
+            ...agentEndResponse('slow but done'),
+            closeDelayMs: 50
+        }))
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 0})
+        expect(r.text).toBe('slow but done')
+        expect(r.timedOut).toBeUndefined()
+    })
+
     test('restarts on a per-worker wall-clock timeout and returns the retry', async () => {
         // First spawn keeps running past the timeout (delayed close, no answer);
         // the deliberate per-worker timeout must abort it and re-spawn.

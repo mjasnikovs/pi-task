@@ -50,15 +50,20 @@ export interface RunWorkerInput {
     extensions?: string[]
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
-    /** Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS. */
+    /**
+     * Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS.
+     * Pass 0 to disable the timeout entirely (run until the child exits on its
+     * own) — for a pass that must be allowed to finish however long it takes.
+     */
     timeoutMs?: number
     /**
      * Per-worker loop-detector tuning. Defaults to the read-only research/impl
      * guard (LOOP_WINDOW / LOOP_THRESHOLD, path threshold = exact threshold). An
      * edit/fix pass legitimately revisits one file, so it can raise (or disable
-     * via Infinity) `pathThreshold` to keep only the exact-match guard.
+     * via Infinity) `pathThreshold`. Pass `false` to turn the detector OFF
+     * entirely — no tool-call pattern will ever kill the worker.
      */
-    loop?: {window?: number; threshold?: number; pathThreshold?: number}
+    loop?: {window?: number; threshold?: number; pathThreshold?: number} | false
 }
 
 /**
@@ -73,10 +78,15 @@ function workerTimeout(
 ): {signal: AbortSignal; timedOut: () => boolean; cleanup: () => void} {
     const ctrl = new AbortController()
     let timedOut = false
-    const timer = setTimeout(() => {
-        timedOut = true
-        ctrl.abort()
-    }, ms)
+    // ms <= 0 (or non-finite) disables the wall-clock timeout: no timer is armed,
+    // so only the external signal can abort and timedOut() stays false forever.
+    const timer =
+        ms > 0 && Number.isFinite(ms) ?
+            setTimeout(() => {
+                timedOut = true
+                ctrl.abort()
+            }, ms)
+        :   undefined
     const onExternal = (): void => ctrl.abort()
     if (external) {
         if (external.aborted) ctrl.abort()
@@ -147,13 +157,21 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const invocation = getPiInvocation([...baseArgs, prompt])
         const tStart = Date.now()
         let tFirstByte: number | null = null
-        const loopWindow = input.loop?.window ?? LOOP_WINDOW
-        const loopThreshold = input.loop?.threshold ?? LOOP_THRESHOLD
-        const loopDetector = new LoopDetector(
-            loopWindow,
-            loopThreshold,
-            input.loop?.pathThreshold ?? loopThreshold
-        )
+        // loop === false turns the guard off entirely (detector is null and no
+        // tool call is ever flagged); otherwise build a detector from the override
+        // or the default research/impl thresholds.
+        const loopDetector =
+            input.loop === false ?
+                null
+            :   (() => {
+                    const window = input.loop?.window ?? LOOP_WINDOW
+                    const threshold = input.loop?.threshold ?? LOOP_THRESHOLD
+                    return new LoopDetector(
+                        window,
+                        threshold,
+                        input.loop?.pathThreshold ?? threshold
+                    )
+                })()
         // Capture the hit the detector reports (it also returns it to the unified
         // runner, which kills the child on a hit). Without capturing it here the
         // SIGTERM that kill produces would surface as a bare non-zero exit the
@@ -170,6 +188,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                     mode: 'json-events',
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
+                        if (!loopDetector) return null
                         const hit = loopDetector.record(call)
                         if (hit && !loopHit) loopHit = hit
                         return hit

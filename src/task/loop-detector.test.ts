@@ -1,6 +1,5 @@
 import {describe, expect, test} from 'bun:test'
 import {LoopDetector, stableStringify, type ToolCall} from './loop-detector.js'
-import {ENFORCE_LOOP} from './enforce-guidelines.js'
 
 describe('stableStringify', () => {
     test('produces identical output for objects with reordered keys', () => {
@@ -205,58 +204,27 @@ describe('LoopDetector path-aware detection', () => {
         expect(hit?.count).toBe(3)
     })
 
-    // Real loop-kill captured on mx5 TASK_0002 (enforce-debug.log): the
-    // enforcement fix pass read/edited/grepped queries.ts ~23× — its actual job —
-    // and the default path-revisit detector killed it at 5. ENFORCE_LOOP must NOT
-    // trip on this (path-revisit disabled, exact guard raised), while the default
-    // research/impl guard still does.
-    const QUERIES = '/workspace/src/server/db/queries.ts'
-    const enforceFixSequence: ToolCall[] = [
-        'read',
-        'edit',
-        'edit',
-        'read',
-        'read',
-        'edit',
-        'grep',
-        'grep',
-        'read',
-        'edit',
-        'edit',
-        'read',
-        'read',
-        'read',
-        'read',
-        'read',
-        'edit',
-        'read',
-        // trailing burst of identical greps — worst case for the exact guard too
-        'grep',
-        'grep',
-        'grep',
-        'grep',
-        'grep'
-    ].map(name => ({name, args: {file_path: QUERIES}}))
-
-    const firstHit = (d: LoopDetector): boolean =>
-        enforceFixSequence.some(call => d.record(call) !== null)
-
-    test('default guard kills the legit single-file enforce fix pass (the bug)', () => {
-        expect(firstHit(new LoopDetector(20, 5))).toBe(true)
-    })
-
-    test('ENFORCE_LOOP tolerates the single-file fix pass (no false loop-kill)', () => {
-        const {window, threshold, pathThreshold} = ENFORCE_LOOP
-        expect(firstHit(new LoopDetector(window, threshold, pathThreshold))).toBe(false)
-    })
-
-    test('ENFORCE_LOOP still catches a genuine byte-identical runaway', () => {
-        const {window, threshold, pathThreshold} = ENFORCE_LOOP
-        const d = new LoopDetector(window, threshold, pathThreshold)
-        const spin = {name: 'grep', args: {pattern: 'TODO', file_path: QUERIES}}
-        let hit = null
-        for (let i = 0; i < threshold; i++) hit = d.record(spin)
-        expect(hit).not.toBeNull()
-        expect(hit?.count).toBe(threshold)
+    // Why the /task-auto enforcement child runs UNGUARDED (loop: false). Real
+    // loop-kill captured on mx5 TASK_0002 (enforce-debug.log): the fix pass
+    // read/edited/grepped queries.ts ~23× — its actual job — and the default
+    // path-revisit detector killed it at 5. This documents that the default guard
+    // is wrong for a single-file fix pass; the enforce path disables it entirely
+    // (covered in pi-worker-core.test.ts: "loop: false disables the detector").
+    test('default guard kills a legit single-file fix pass (why enforce runs unguarded)', () => {
+        const QUERIES = '/workspace/src/server/db/queries.ts'
+        const enforceFixSequence: ToolCall[] = [
+            'read',
+            'edit',
+            'edit',
+            'read',
+            'read',
+            'edit',
+            'grep',
+            'grep',
+            'read',
+            'edit'
+        ].map(name => ({name, args: {file_path: QUERIES}}))
+        const d = new LoopDetector(20, 5)
+        expect(enforceFixSequence.some(call => d.record(call) !== null)).toBe(true)
     })
 })
