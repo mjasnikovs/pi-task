@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-559%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-731%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -49,7 +49,8 @@ pi install npm:@mjasnikovs/pi-task
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/remote` | Show the QR code & URLs for the always-on web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, and auto-commit. |
+| `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
 
@@ -77,10 +78,11 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 - **Clarify first.** It asks the few clarifying questions whose answers change how the feature splits, then decomposes the answers into an ordered list of task titles written to `.pi-tasks/TASK_AUTO_NNNN.md`.
 - **Sequential, blocking.** Each title runs through `/task` to a spec, the spec is implemented, and the loop waits for that to finish before starting the next title. No overlap.
 - **Crash- and cancel-safe.** Progress is the markdown checkboxes in the AUTO file. `/task-auto-resume` (no id) automatically picks up the active run at the first unchecked title. If a title's `/task` run fails, the loop stops and leaves the run resumable.
+- **One commit per task.** When **auto-commit** is on (the default) and you're in a git repo, the working tree is snapshotted into a single commit after each title passes, so the run produces a clean per-task history. It's best-effort: outside a repo, with nothing to commit, or on any git error, the loop reports the reason and keeps going. Toggle it in `/task-config`.
 
 ## Remote — drive a task from your phone
 
-The remote server is **always on** — it starts automatically with each session, with nothing taking up screen space. Run `/remote` any time to pop a QR code and the connection URLs: a **Tailscale** line and a **LAN** line when both are available (the QR encodes the Tailscale-preferred one). Open the URL on any device that can reach the host and you get a live view of the session: streaming output, tool calls, and the `/task` status block (phase, elapsed, context). It's bidirectional — the browser can:
+The remote server is **on by default** — it starts automatically with each session, with nothing taking up screen space (disable it in `/task-config`). Run `/remote` any time to pop a QR code and the connection URLs: a **Tailscale** line and a **LAN** line when both are available (the QR encodes the Tailscale-preferred one). Open the URL on any device that can reach the host and you get a live view of the session: streaming output, tool calls, and the `/task` status block (phase, elapsed, context). It's bidirectional — the browser can:
 
 - **Answer grill / `/task-auto` clarify questions.** Each question appears as a card with the recommended default pre-filled (Accept), a free-text box (Submit), Skip, or Cancel task.
 - **Start and control tasks.** Type `/task …`, `/task-auto …`, `/task-cancel`, `/task-resume`, etc. — they run on the host.
@@ -136,6 +138,16 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 - The first call for a `(package, version)` pair pays a one-time ingestion cost; later calls are FTS-only.
 - Cache lives at `${XDG_CACHE_HOME:-~/.cache}/pi-worker/docs.sqlite` — delete it to reset.
 
+## Settings — `/task-config`
+
+Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json` and all default to **on**:
+
+| Setting | What it does |
+| --- | --- |
+| **remote** | The remote UI server (QR code, phone access). Turn off to never start it. |
+| **compress reasoning** | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
+| **auto-commit** | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
+
 ## Configuration
 
 | Variable | Used by | Notes |
@@ -153,7 +165,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 559 tests across 46 files
+bun test src/      # 731 tests across 57 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
