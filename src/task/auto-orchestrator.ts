@@ -23,7 +23,13 @@ import {
     stampTaskInProgress,
     findResumableAuto
 } from './auto-io.js'
-import {writeTaskFile, readTaskFile, updateTaskFrontMatter, taskFilePath} from './task-io.js'
+import {
+    writeTaskFile,
+    readTaskFile,
+    updateTaskFrontMatter,
+    taskFilePath,
+    tasksDir
+} from './task-io.js'
 import {gitCommitAll, type CommitResult} from './auto-commit.js'
 import {
     runGuidelineEnforcement,
@@ -400,6 +406,20 @@ function defaultDeps(
                     lastLine = undefined
                     contextUsage = undefined
                     const startedAt = Date.now()
+                    // Per-pass debug log. The enforce child is otherwise
+                    // unobservable (it has no per-task file like the impl runner),
+                    // so a loop/timeout in the verifier was undiagnosable. One
+                    // rolling file under .pi-tasks/; each pass brackets its
+                    // tool/text lines with start/end markers naming the task and
+                    // the terminal outcome, so a kill shows the exact repeated
+                    // calls that tripped the loop detector. Fire-and-forget.
+                    const enforceLogPath = path.join(tasksDir(cwd2), 'enforce-debug.log')
+                    const logEnforce = (msg: string): void => {
+                        void fsp
+                            .appendFile(enforceLogPath, `${new Date().toISOString()} ${msg}\n`)
+                            .catch(() => {})
+                    }
+                    logEnforce(`=== enforce start: ${taskTitle} ===`)
                     const stopLoader = startAutoLoader(enforceCtx, () => ({
                         title: taskTitle,
                         kind: 'enforce',
@@ -419,10 +439,15 @@ function defaultDeps(
                             timeoutMs: ENFORCE_TIMEOUT_MS,
                             onLine: line => {
                                 lastLine = line
-                                phaseDeps.logDebug?.(`enforce: ${line}`)
+                                logEnforce(line)
                             }
                         })
                         const failure = classifyEnforceChildFailure(r)
+                        logEnforce(
+                            failure ?
+                                `=== enforce end: FAIL — ${failure} ===`
+                            :   '=== enforce end: verdict captured ==='
+                        )
                         if (failure) throw new Error(failure)
                         return r.text
                     } finally {
