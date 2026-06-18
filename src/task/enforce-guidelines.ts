@@ -32,6 +32,22 @@ const ENFORCE_TOOLS = 'read,grep,find,ls,edit,write'
  *  let a wedged child hang the whole run. */
 const ENFORCE_TIMEOUT_MS = 600_000
 
+/**
+ * Loop-guard tuning for the enforcement child. Unlike a read-only research
+ * worker, this pass's JOB is to rework files in place, so it legitimately reads,
+ * edits, and re-greps the SAME file many times — the default path-revisit
+ * heuristic (5 ops on one path) mislabels that as a runaway. It is disabled here
+ * (pathThreshold = Infinity); only the exact-match guard remains (a byte-for-byte
+ * identical call repeated, raised to 12 over a 40-call window), with the 10-min
+ * wall-clock timeout as the real runaway backstop. Validated against a real
+ * loop-kill on mx5 TASK_0002, where a single-file fix pass on queries.ts tripped
+ * the default detector at 5 revisits. */
+export const ENFORCE_LOOP = {
+    window: 40,
+    threshold: 12,
+    pathThreshold: Number.POSITIVE_INFINITY
+} as const
+
 export interface GuidelineDoc {
     /** Filenames found, in discovery order (e.g. ['AGENTS.md', 'CLAUDE.md']). */
     files: string[]

@@ -52,6 +52,13 @@ export interface RunWorkerInput {
     onLine?: (line: string) => void
     /** Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS. */
     timeoutMs?: number
+    /**
+     * Per-worker loop-detector tuning. Defaults to the read-only research/impl
+     * guard (LOOP_WINDOW / LOOP_THRESHOLD, path threshold = exact threshold). An
+     * edit/fix pass legitimately revisits one file, so it can raise (or disable
+     * via Infinity) `pathThreshold` to keep only the exact-match guard.
+     */
+    loop?: {window?: number; threshold?: number; pathThreshold?: number}
 }
 
 /**
@@ -140,7 +147,13 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const invocation = getPiInvocation([...baseArgs, prompt])
         const tStart = Date.now()
         let tFirstByte: number | null = null
-        const loopDetector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
+        const loopWindow = input.loop?.window ?? LOOP_WINDOW
+        const loopThreshold = input.loop?.threshold ?? LOOP_THRESHOLD
+        const loopDetector = new LoopDetector(
+            loopWindow,
+            loopThreshold,
+            input.loop?.pathThreshold ?? loopThreshold
+        )
         // Capture the hit the detector reports (it also returns it to the unified
         // runner, which kills the child on a hit). Without capturing it here the
         // SIGTERM that kill produces would surface as a bare non-zero exit the

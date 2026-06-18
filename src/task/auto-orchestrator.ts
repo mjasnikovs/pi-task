@@ -35,6 +35,7 @@ import {
     runGuidelineEnforcement,
     classifyEnforceChildFailure,
     ENFORCE_TIMEOUT_MS,
+    ENFORCE_LOOP,
     type EnforceOutcome
 } from './enforce-guidelines.js'
 import {runWorker} from '../workers/pi-worker-core.js'
@@ -437,6 +438,7 @@ function defaultDeps(
                             signal: sig,
                             tools,
                             timeoutMs: ENFORCE_TIMEOUT_MS,
+                            loop: ENFORCE_LOOP,
                             onLine: line => {
                                 lastLine = line
                                 logEnforce(line)
