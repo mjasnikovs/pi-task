@@ -20,6 +20,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
 import {USER_CANCELLED} from './child-runner.js'
+import {TASKS_DIR_NAME} from './task-types.js'
 
 /** Filenames discovered in the working directory (cwd only — no tree walk). */
 export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
@@ -158,16 +159,33 @@ export function classifyEnforceChildFailure(r: EnforceChildResult): string | nul
  * names of any new (untracked) files. Non-destructive — it does not touch the
  * index, so the later `git add -A` in gitCommitAll still stages everything
  * (including fixes the enforcement child makes).
+ *
+ * The `.pi-tasks/` directory is excluded from both git commands. Those task
+ * files are committable (tracked) by design, so they show up in `git diff HEAD`
+ * and `git ls-files --others` — git does not honor the fd/ripgrep `.ignore` that
+ * keeps them out of the worker's find/grep discovery. Without this pathspec the
+ * enforce child is handed its own TASK_*.md / TASK_AUTO_*.md bookkeeping as
+ * "changes to verify" and edits them, corrupting the front matter mid-run.
  */
 export async function captureDiff(
     cwd: string,
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<string> {
+    // `:(exclude)<dir>` is a git pathspec that drops everything under the tasks
+    // directory from the result, leaving only real source changes to verify.
+    const excludeTasks = `:(exclude)${TASKS_DIR_NAME}`
     const run = (args: string[]) =>
         runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
-    const tracked = await run(['diff', 'HEAD'])
-    const untracked = await run(['ls-files', '--others', '--exclude-standard'])
+    const tracked = await run(['diff', 'HEAD', '--', '.', excludeTasks])
+    const untracked = await run([
+        'ls-files',
+        '--others',
+        '--exclude-standard',
+        '--',
+        '.',
+        excludeTasks
+    ])
     const parts: string[] = []
     if (tracked.exitCode === 0 && tracked.stdout.trim().length > 0)
         parts.push(tracked.stdout.trim())

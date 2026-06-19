@@ -1,5 +1,7 @@
 import {expect, test} from 'bun:test'
+import {EventEmitter} from 'node:events'
 import {
+    captureDiff,
     discoverGuidelines,
     buildEnforcePrompt,
     parseEnforceVerdict,
@@ -9,6 +11,7 @@ import {
     type EnforceChildResult,
     type GuidelineDoc
 } from './enforce-guidelines.js'
+import type {ProcLike, SpawnFn} from '../shared/child-process.js'
 import {USER_CANCELLED} from './child-runner.js'
 
 // ─── discoverGuidelines ──────────────────────────────────────────────────────
@@ -231,4 +234,61 @@ test('classifyEnforceChildFailure: non-zero exit (not aborted) → exited <code>
     expect(classifyEnforceChildFailure(childResult({exitCode: 2}))).toBe(
         'enforcement child exited 2'
     )
+})
+
+// ─── captureDiff ─────────────────────────────────────────────────────────────
+
+/**
+ * A fake SpawnFn that records every git invocation's args and replays a queued
+ * stdout for each, exiting 0. Lets us assert what pathspec captureDiff hands git
+ * without a real repo.
+ */
+function recordingSpawn(stdouts: string[]): {spawn: SpawnFn; calls: string[][]} {
+    const calls: string[][] = []
+    let i = 0
+    const spawn: SpawnFn = (_command, args) => {
+        calls.push([...args])
+        const out = stdouts[i++] ?? ''
+        const proc = new EventEmitter() as unknown as ProcLike & EventEmitter
+        const stdout = new EventEmitter()
+        const stderr = new EventEmitter()
+        ;(proc as unknown as {stdout: EventEmitter}).stdout = stdout
+        ;(proc as unknown as {stderr: EventEmitter}).stderr = stderr
+        ;(proc as unknown as {kill: () => void}).kill = () => {}
+        ;(proc as unknown as {killed: boolean}).killed = false
+        queueMicrotask(() => {
+            if (out.length > 0) stdout.emit('data', Buffer.from(out))
+            proc.emit('close', 0)
+        })
+        return proc
+    }
+    return {spawn, calls}
+}
+
+test('captureDiff: excludes .pi-tasks from BOTH git commands (its own bookkeeping is not work-to-verify)', async () => {
+    // Regression: committable TASK_*/TASK_AUTO_*.md files ride into `git diff HEAD`
+    // and `git ls-files --others` (git ignores the fd/ripgrep .ignore), so without
+    // a pathspec the enforce child is handed its own task files and edits them,
+    // corrupting their front matter mid-run.
+    const {spawn, calls} = recordingSpawn(['src/app.ts diff body', ''])
+    await captureDiff('/repo', undefined, spawn)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual(['diff', 'HEAD', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[1]).toEqual([
+        'ls-files',
+        '--others',
+        '--exclude-standard',
+        '--',
+        '.',
+        ':(exclude).pi-tasks'
+    ])
+})
+
+test('captureDiff: combines tracked diff and untracked file list', async () => {
+    const {spawn} = recordingSpawn(['diff text', 'newfile.ts\nother.ts'])
+    const out = await captureDiff('/repo', undefined, spawn)
+    expect(out).toContain('diff text')
+    expect(out).toContain('New (untracked) files — read them in full:')
+    expect(out).toContain('newfile.ts')
 })
