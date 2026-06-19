@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-731%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-788%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -106,7 +106,7 @@ Delivery is **server → push service → device** over the [Web Push](https://d
 2. **Share → Add to Home Screen**, then open the app from that icon. iOS only permits notifications for installed PWAs.
 3. Launch the app, **tap the bell**, and **Allow** when prompted.
 
-The subscription is kept in memory, so after restarting `pi` just reload the app (it re-subscribes automatically) or tap the bell again. Notifications are suppressed while the app is focused in the foreground — the in-page UI already shows the prompt there.
+Subscriptions are mirrored to `${XDG_DATA_HOME:-~/.local/share}/pi-task/subscriptions.json` and reloaded on startup, so they survive a full `pi` restart — the server keeps reaching a backgrounded device without waiting for it to re-register. Notifications are suppressed while the app is focused in the foreground — the in-page UI already shows the prompt there.
 
 VAPID keys are generated once and persisted to `${XDG_DATA_HOME:-~/.local/share}/pi-task/vapid.json` (deleting them invalidates existing subscriptions). The JWT contact (`sub`) defaults to the project URL; override it with `PI_REMOTE_PUSH_SUBJECT` (e.g. your own `mailto:you@domain.com`). To debug delivery, set `PI_REMOTE_PUSH_DEBUG=1` and tail `/tmp/pi-task-push.log` — it records each push and the **push-service HTTP status** (`201` delivered, `403`/`400` token/key problem, `410` stale subscription).
 
@@ -167,7 +167,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 731 tests across 57 files
+bun test src/      # 788 tests across 60 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
