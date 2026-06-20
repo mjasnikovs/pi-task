@@ -105,6 +105,30 @@ describe('html()', () => {
         expect(out).toContain('retrying in')
     })
 
+    it('reconnects immediately when the tab is refocused instead of waiting out the backoff', () => {
+        const out = html('ws://localhost:7600/ws')
+        // A backgrounded phone throttles the retry timer and drops the radio, so
+        // reconnectDelay pins at 30s. Without a foreground trigger the user stares
+        // at the spinner (over an already-updated question) while the server is
+        // reachable now. Returning/regaining network must retry at once.
+        expect(out).toContain("addEventListener('visibilitychange'")
+        expect(out).toContain("addEventListener('online'")
+        expect(out).toContain("addEventListener('focus'")
+        expect(out).toContain('function connectNow')
+        // The immediate retry must drop the stale backoff, and must no-op while a
+        // socket is already open/connecting so the triple-fire can't stack sockets.
+        const m = out.match(/function connectNow\(\) \{[\s\S]*?\n {4}\}/)
+        expect(m).not.toBeNull()
+        expect(m![0]).toContain('reconnectDelay = 1000')
+        expect(m![0]).toContain('WebSocket.CONNECTING')
+        expect(m![0]).toContain('WebSocket.OPEN')
+        // The scheduled reconnect is now cancellable (tracked timer), so an early
+        // retry doesn't leave a second connect firing later.
+        expect(out).toContain('reconnectTimer = setTimeout')
+        // A superseded socket's late events must not touch the overlay/reconnect.
+        expect(out).toContain('if (ws !== sock) return;')
+    })
+
     it('clears the remote view on a reset message (new session)', () => {
         const out = html('ws://localhost:7600/ws')
         expect(out).toContain("case 'reset'")

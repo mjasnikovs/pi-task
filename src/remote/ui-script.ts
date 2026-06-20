@@ -53,6 +53,7 @@ export function clientScript(wsUrl: string): string {
     let autoScroll = true;
     let reconnectDelay = 1000;
     let reconnectAnim = null;
+    let reconnectTimer = null;
     let ws = null;
 
     const BT = String.fromCharCode(96);
@@ -784,8 +785,15 @@ export function clientScript(wsUrl: string): string {
     });
 
     function connect() {
-      ws = new WebSocket(WS_URL);
-      ws.addEventListener('open', () => {
+      // Capture the socket locally so a superseded socket's late events (a
+      // delayed 'close' after we already opened a replacement) can't touch the
+      // overlay or schedule a second reconnect — every handler bails unless it's
+      // still the current socket.
+      const sock = new WebSocket(WS_URL);
+      ws = sock;
+      sock.addEventListener('open', () => {
+        if (ws !== sock) return;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         if (reconnectAnim) { clearInterval(reconnectAnim); reconnectAnim = null; }
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
@@ -797,10 +805,12 @@ export function clientScript(wsUrl: string): string {
         // endpoint, so a redundant re-POST is harmless.
         if (notifyEnabled()) { subscribePush().catch(function () {}); }
       });
-      ws.addEventListener('message', (e) => {
+      sock.addEventListener('message', (e) => {
+        if (ws !== sock) return;
         try { handleMsg(JSON.parse(e.data)); } catch {}
       });
-      ws.addEventListener('close', () => {
+      sock.addEventListener('close', () => {
+        if (ws !== sock) return;
         setEnabled(false);
         reconnectOverlay.classList.add('visible');
         // Animate the same braille spinner used elsewhere, with a live countdown.
@@ -816,9 +826,31 @@ export function clientScript(wsUrl: string): string {
         if (reconnectAnim) clearInterval(reconnectAnim);
         paint();
         reconnectAnim = setInterval(paint, 90);
-        setTimeout(() => { reconnectDelay = Math.min(reconnectDelay * 2, 30000); connect(); }, reconnectDelay);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+          connect();
+        }, reconnectDelay);
       });
     }
+
+    // Reconnect immediately instead of waiting out the exponential backoff. A
+    // phone that backgrounds the PWA throttles our retry timer and the radio
+    // drops, so by the time it foregrounds reconnectDelay can be pinned at 30s —
+    // leaving the user staring at a spinner (over an already-updated question)
+    // while the server is reachable RIGHT NOW. Returning to the tab, regaining
+    // network, or refocusing the window should all retry at once. No-op if a
+    // socket is already open or a connect is in flight.
+    function connectNow() {
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      reconnectDelay = 1000; // a deliberate return shouldn't inherit a stale 30s backoff
+      connect();
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) connectNow(); });
+    window.addEventListener('online', connectNow);
+    window.addEventListener('focus', connectNow);
 
     connect();`
 }
