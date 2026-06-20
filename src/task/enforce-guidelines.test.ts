@@ -7,6 +7,7 @@ import {
     parseEnforceVerdict,
     runGuidelineEnforcement,
     classifyEnforceChildFailure,
+    ENFORCE_TOOLS,
     GUIDELINE_FILENAMES,
     type EnforceChildResult,
     type GuidelineDoc
@@ -73,6 +74,27 @@ test('buildEnforcePrompt: embeds rules, diff, and the verdict contract', () => {
 test('buildEnforcePrompt: notes an empty diff instead of leaving a blank', () => {
     const p = buildEnforcePrompt('rules', '')
     expect(p).toContain('no textual diff captured')
+})
+
+test('buildEnforcePrompt: states the read+edit / no-run / no-create / edit-only-changed contract', () => {
+    // The local model spirals into scratch "runner" files when it thinks it can run
+    // checks; the prompt must tell it plainly that it cannot, matching ENFORCE_TOOLS.
+    const p = buildEnforcePrompt('rules', 'diff')
+    expect(p).toContain('`read`')
+    expect(p).toContain('`edit`')
+    expect(p).toMatch(/cannot|CANNOT/)
+    expect(p).toContain('create')
+    // It must scope EDITS to the changed files even though read is broader.
+    expect(p).toMatch(/EDIT ONLY|only the changed files|do not modify anything outside/i)
+})
+
+test('ENFORCE_TOOLS is read,edit — no write (no new files), no grep/find/ls (no roaming)', () => {
+    // Validated against the local model: with no write the pass cannot create files
+    // (edit ENOENTs), and read is kept because the model needs to re-read its edits
+    // and read neighbours for correct imports/types (else it fabricates them).
+    expect(ENFORCE_TOOLS).toBe('read,edit')
+    expect(ENFORCE_TOOLS).not.toContain('write')
+    expect(ENFORCE_TOOLS).not.toContain('grep')
 })
 
 // ─── parseEnforceVerdict ─────────────────────────────────────────────────────
@@ -265,17 +287,18 @@ function recordingSpawn(stdouts: string[]): {spawn: SpawnFn; calls: string[][]} 
     return {spawn, calls}
 }
 
-test('captureDiff: excludes .pi-tasks from BOTH git commands (its own bookkeeping is not work-to-verify)', async () => {
+test('captureDiff: excludes .pi-tasks from ALL git commands (its own bookkeeping is not work-to-verify)', async () => {
     // Regression: committable TASK_*/TASK_AUTO_*.md files ride into `git diff HEAD`
     // and `git ls-files --others` (git ignores the fd/ripgrep .ignore), so without
     // a pathspec the enforce child is handed its own task files and edits them,
     // corrupting their front matter mid-run.
-    const {spawn, calls} = recordingSpawn(['src/app.ts diff body', ''])
+    const {spawn, calls} = recordingSpawn(['diff body', '', ''])
     await captureDiff('/repo', undefined, spawn)
 
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3)
     expect(calls[0]).toEqual(['diff', 'HEAD', '--', '.', ':(exclude).pi-tasks'])
-    expect(calls[1]).toEqual([
+    expect(calls[1]).toEqual(['diff', 'HEAD', '--name-only', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[2]).toEqual([
         'ls-files',
         '--others',
         '--exclude-standard',
@@ -285,10 +308,35 @@ test('captureDiff: excludes .pi-tasks from BOTH git commands (its own bookkeepin
     ])
 })
 
-test('captureDiff: combines tracked diff and untracked file list', async () => {
-    const {spawn} = recordingSpawn(['diff text', 'newfile.ts\nother.ts'])
+test('captureDiff: lists MODIFIED and NEW files separately so new files keep their salience', async () => {
+    // git calls in order: full diff, tracked --name-only, untracked ls-files.
+    // svc.ts is tracked-modified AND shows up in ls-files; it must be a MODIFIED
+    // file, listed once, NOT duplicated into the NEW section.
+    const {spawn} = recordingSpawn(['the diff text', 'src/app.ts\nsvc.ts', 'newfile.ts\nsvc.ts'])
     const out = await captureDiff('/repo', undefined, spawn)
-    expect(out).toContain('diff text')
-    expect(out).toContain('New (untracked) files — read them in full:')
-    expect(out).toContain('newfile.ts')
+    expect(out).toContain('the diff text')
+    expect(out).toContain('MODIFIED FILES')
+    expect(out).toContain('- src/app.ts')
+    // New (untracked) files get their own emphatic section, not buried in one list.
+    expect(out).toContain('NEW FILES')
+    expect(out).toContain('- newfile.ts')
+    // svc.ts is a modified file, listed exactly once across the whole capture.
+    expect(out.match(/- svc\.ts/g)).toHaveLength(1)
+    const newSection = out.slice(out.indexOf('NEW FILES'))
+    expect(newSection).not.toContain('svc.ts')
+    // Contents are NOT inlined — the child has a read tool and reads them itself.
+    expect(out).not.toContain('FULL CURRENT CONTENT')
+})
+
+test('captureDiff: only-new-files run omits the empty MODIFIED section', async () => {
+    const {spawn} = recordingSpawn(['', '', 'brand-new.ts'])
+    const out = await captureDiff('/repo', undefined, spawn)
+    expect(out).toContain('NEW FILES')
+    expect(out).toContain('- brand-new.ts')
+    expect(out).not.toContain('MODIFIED FILES')
+})
+
+test('captureDiff: no changes → empty string (nothing to verify)', async () => {
+    const {spawn} = recordingSpawn(['', '', ''])
+    expect(await captureDiff('/repo', undefined, spawn)).toBe('')
 })

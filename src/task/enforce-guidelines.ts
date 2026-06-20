@@ -5,8 +5,11 @@
  * when those files sit right next to the code. After a /task-auto sub-task's
  * implementation turn settles — but BEFORE its per-task commit — this runs a
  * fresh child pi (the same local model that did the work) that is handed the
- * project's guideline files plus the task's diff, fixes any violations in place
- * with its edit tools, and reports a CLEAN / VIOLATION verdict.
+ * project's guideline files, the task's diff, and the list of changed files. With
+ * read + edit tools (and nothing else) it reads those files, fixes any violations
+ * in place, and reports a CLEAN / VIOLATION verdict. It cannot create files or run
+ * anything: no `write` (so it can't scaffold junk) and no `grep`/`find`/`ls` (so it
+ * can't roam the tree) — see ENFORCE_TOOLS.
  *
  * A VIOLATION (or an enforcement pass that cannot confirm CLEAN) blocks the
  * commit and fails the task, so non-compliant work is never snapshotted — the
@@ -25,8 +28,26 @@ import {TASKS_DIR_NAME} from './task-types.js'
 /** Filenames discovered in the working directory (cwd only — no tree walk). */
 export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
 
-/** Tools the fix pass is allowed: read/search to inspect, edit/write to fix. */
-const ENFORCE_TOOLS = 'read,grep,find,ls,edit,write'
+/**
+ * The fix pass gets exactly two tools: `read` and `edit`. Deliberately no
+ * `write`, `grep`, `find`, or `ls`.
+ *
+ *  - No `write` (and `edit` ENOENTs on a missing path) → the pass cannot create
+ *    new files. Without this the local model, unable to run lint/tsc/tests, wrote
+ *    hundreds of scratch "runner" scripts hoping to execute them — 864 junk files
+ *    in one real run (see enforce-debug.log analysis). This is the load-bearing
+ *    removal: dropping `write` is what stops the runaway file creation.
+ *  - No `grep`/`find`/`ls` → the pass cannot enumerate or roam the tree; it is
+ *    handed the explicit, closed list of changed files (see captureDiff) and is
+ *    told to edit only those.
+ *  - `read` IS allowed: the model genuinely needs it — to re-read a file after
+ *    editing to confirm the fix landed, and to read a neighbouring file for the
+ *    correct import/type when bringing the change into compliance (without it the
+ *    model fabricates imports — validated against the local model). `read` has no
+ *    per-path sandbox in pi, so "only the changed files" is enforced for EDITS
+ *    (the prompt scopes them) but is a soft instruction for READS.
+ */
+const ENFORCE_TOOLS = 'read,edit'
 
 export interface GuidelineDoc {
     /** Filenames found, in discovery order (e.g. ['AGENTS.md', 'CLAUDE.md']). */
@@ -80,18 +101,25 @@ export function buildEnforcePrompt(rulesText: string, diff: string): string {
     return [
         'You are a strict guideline-enforcement pass running after an AI coding agent',
         'finished a task but before its work is committed. The agent is known to skip',
-        'project rules, so do not trust that it followed them — verify against the diff.',
+        'project rules, so do not trust that it followed them — verify against the changes.',
+        '',
+        'You have a `read` tool and an `edit` tool — nothing else. You CANNOT run',
+        'commands, run lint/tsc/tests, or create files. Read the changed files listed',
+        'below to inspect them; you may also read a neighbouring file when you need the',
+        'correct import or type. But EDIT ONLY the changed files listed below — do not',
+        'create new files and do not modify anything outside that set.',
         '',
         'PROJECT GUIDELINES (from this repository):',
         rulesText,
         '',
-        'CHANGES JUST MADE (verify these specifically; read any file you need in full):',
-        diff.trim().length > 0 ? diff : '(no textual diff captured — inspect the working tree)',
+        'CHANGES JUST MADE (verify these specifically against the rules):',
+        diff.trim().length > 0 ? diff : '(no textual diff captured — nothing to verify)',
         '',
         'Your job:',
-        '1. Check the changed files against EVERY rule above.',
-        '2. For each violation you find, FIX it directly using your edit/write tools.',
-        '   Make the minimal change that satisfies the rule; do not rewrite unrelated code.',
+        '1. Read each changed file and check it against EVERY rule above.',
+        '2. For each violation you find, FIX it directly with your `edit` tool, then',
+        '   re-read the file to confirm the fix landed. Make the minimal change that',
+        '   satisfies the rule; do not rewrite unrelated code.',
         '3. Do not introduce new behavior or features — only bring the work into compliance.',
         '',
         'When you are done, output EXACTLY ONE of these as the final line:',
@@ -155,17 +183,26 @@ export function classifyEnforceChildFailure(r: EnforceChildResult): string | nul
 }
 
 /**
- * Capture the work to verify as text: the tracked diff against HEAD plus the
- * names of any new (untracked) files. Non-destructive — it does not touch the
- * index, so the later `git add -A` in gitCommitAll still stages everything
- * (including fixes the enforcement child makes).
+ * Capture the work to verify as text: the tracked diff against HEAD followed by
+ * the COMPLETE list of changed files — tracked-modified ∪ new (untracked) — that
+ * the child should read and is allowed to edit.
  *
- * The `.pi-tasks/` directory is excluded from both git commands. Those task
- * files are committable (tracked) by design, so they show up in `git diff HEAD`
- * and `git ls-files --others` — git does not honor the fd/ripgrep `.ignore` that
- * keeps them out of the worker's find/grep discovery. Without this pathspec the
- * enforce child is handed its own TASK_*.md / TASK_AUTO_*.md bookkeeping as
- * "changes to verify" and edits them, corrupting the front matter mid-run.
+ * The child has a `read` tool, so file contents are NOT inlined here: it reads
+ * each listed file itself (and re-reads after editing to confirm). The list is the
+ * scoping signal — it tells the model the closed set of files to touch so it edits
+ * only the change set rather than roaming. Validated against the local model:
+ * inlining full bodies bought nothing (it read the files by name regardless).
+ *
+ * Non-destructive — it does not touch the index, so the later `git add -A` in
+ * gitCommitAll still stages everything (including fixes the enforcement child
+ * makes).
+ *
+ * The `.pi-tasks/` directory is excluded from every git command. Those task files
+ * are committable (tracked) by design, so they show up in `git diff HEAD` and
+ * `git ls-files --others` — git does not honor the fd/ripgrep `.ignore` that keeps
+ * them out of the worker's find/grep discovery. Without this pathspec the enforce
+ * child is handed its own TASK_*.md / TASK_AUTO_*.md bookkeeping as "changes to
+ * verify" and edits them, corrupting the front matter mid-run.
  */
 export async function captureDiff(
     cwd: string,
@@ -178,6 +215,7 @@ export async function captureDiff(
     const run = (args: string[]) =>
         runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
     const tracked = await run(['diff', 'HEAD', '--', '.', excludeTasks])
+    const trackedNames = await run(['diff', 'HEAD', '--name-only', '--', '.', excludeTasks])
     const untracked = await run([
         'ls-files',
         '--others',
@@ -186,11 +224,38 @@ export async function captureDiff(
         '.',
         excludeTasks
     ])
+
     const parts: string[] = []
     if (tracked.exitCode === 0 && tracked.stdout.trim().length > 0)
-        parts.push(tracked.stdout.trim())
-    const newFiles = untracked.exitCode === 0 ? untracked.stdout.trim() : ''
-    if (newFiles.length > 0) parts.push(`New (untracked) files — read them in full:\n${newFiles}`)
+        parts.push(`UNIFIED DIFF (modified files):\n${tracked.stdout.trim()}`)
+
+    const lines = (out: {exitCode: number; stdout: string}): string[] =>
+        out.exitCode === 0 ?
+            out.stdout
+                .split('\n')
+                .map(s => s.trim())
+                .filter(Boolean)
+        :   []
+    const modified = lines(trackedNames).sort()
+    // Untracked-NEW files do NOT appear in the diff above, so they are listed in
+    // their own emphatic section: in a flat list the model overlooks them and then
+    // emits a false CLEAN while a new file still violates the rules (observed on the
+    // local model). A diff-only file (already in `modified`) is not repeated here.
+    const newFiles = lines(untracked)
+        .filter(n => !modified.includes(n))
+        .sort()
+
+    if (modified.length > 0)
+        parts.push(
+            'MODIFIED FILES — read each in full and check it against the rules:\n'
+                + modified.map(n => `- ${n}`).join('\n')
+        )
+    if (newFiles.length > 0)
+        parts.push(
+            'NEW FILES — created by this task and NOT shown in the diff above. You MUST'
+                + ' read and check each one against EVERY rule too:\n'
+                + newFiles.map(n => `- ${n}`).join('\n')
+        )
     return parts.join('\n\n')
 }
 

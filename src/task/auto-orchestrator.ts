@@ -398,9 +398,9 @@ function defaultDeps(
                 signal,
                 // Run the worker child UNGUARDED: no loop detector, no wall-clock
                 // timeout. This pass's job is to rework files in place until every
-                // violation is fixed, and it legitimately reads/edits/re-greps the
-                // same file many times — the research-worker guards mislabel that
-                // as a runaway and kill good work (proven on mx5 TASK_0002). Let it
+                // violation is fixed, and it legitimately reads and edits the same
+                // file many times — the research-worker guards mislabel that as a
+                // runaway and kill good work (proven on mx5 TASK_0002). Let it
                 // run until the model finishes; classifyEnforceChildFailure still
                 // blocks the commit on a real failure (non-zero exit, leaked tool
                 // call) or a user cancel.
@@ -449,7 +449,7 @@ function defaultDeps(
                             // disables the path-revisit heuristic, so revisiting one
                             // file (which IS this pass's job) never trips — only a
                             // literally-identical call repeated past threshold does
-                            // (e.g. the same grep fired 900× in enforce-debug.log).
+                            // (e.g. the same read or edit repeated hundreds of times).
                             // A hit nudges via the normal restart-with-hint; a loop
                             // that survives the nudges is WARNED, not blocked (see
                             // r.loopHit handling below and classifyEnforceChildFailure).
