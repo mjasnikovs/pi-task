@@ -313,13 +313,33 @@ export function clientScript(wsUrl: string): string {
       sendBtn.disabled = !allow;
     }
 
+    // Pull the human-readable text out of a tool result. Many tools (Read, Bash,
+    // MCP tools) return Anthropic content-block shapes — { content: [{type:'text',
+    // text:'...'}] } or a bare array of such blocks — which JSON.stringify would
+    // render as escaped, unreadable JSON. Extract the text blocks and join them;
+    // return null when there's nothing text-shaped so the caller falls back to JSON.
+    function contentBlocksText(result) {
+      const blocks = Array.isArray(result) ? result
+        : (result && Array.isArray(result.content)) ? result.content
+        : null;
+      if (!blocks) return null;
+      const parts = [];
+      for (const b of blocks) {
+        if (typeof b === 'string') parts.push(b);
+        else if (b && b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+      }
+      return parts.length ? parts.join('\\n') : null;
+    }
+
     // Stringify a tool result safely. A null/undefined result (e.g. a tool that
     // hasn't produced output) must NOT become the JS value undefined, whose
     // .slice() throws — a throw here aborts the whole snapshot rebuild after the
     // log was already cleared, blanking the transcript on reconnect.
     function toolResultText(result) {
       if (result == null) return '';
-      const r = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      if (typeof result === 'string') return result.slice(0, 8000);
+      const text = contentBlocksText(result);
+      const r = text != null ? text : JSON.stringify(result, null, 2);
       return (r == null ? '' : r).slice(0, 8000);
     }
 

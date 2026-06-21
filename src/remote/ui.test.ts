@@ -204,6 +204,19 @@ describe('html()', () => {
         expect(m![0]).toContain('try { renderTurn(t)')
     })
 
+    it('renders content-block tool results as text, not escaped JSON', () => {
+        const out = html('ws://localhost:7600/ws')
+        // Tools (Read, Bash, MCP) return { content: [{type:'text', text:'...'}] };
+        // dumping that through JSON.stringify shows the user escaped \n garbage.
+        // toolResultText must unwrap the text blocks instead.
+        expect(out).toContain('function contentBlocksText')
+        expect(out).toContain("b.type === 'text'")
+        // It must accept both the { content: [...] } and bare-array block shapes.
+        expect(out).toContain('Array.isArray(result.content)')
+        // And only fall back to JSON.stringify when there is no text to extract.
+        expect(out).toContain('text != null ? text : JSON.stringify(result')
+    })
+
     it('keeps long toast messages readable on narrow phone screens', () => {
         const out = html('ws://localhost:7600/ws')
         const m = out.match(/\.toast \{([^}]*)\}/)
