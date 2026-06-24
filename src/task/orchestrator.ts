@@ -78,6 +78,7 @@ export class TaskRunner {
     private readonly _resumeId: string | undefined
     private readonly _sendSpec: ((spec: string) => Promise<void>) | undefined
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
+    private readonly _planContext: string | undefined
 
     private readonly _abort = new AbortController()
     private readonly _startedAt: number
@@ -102,7 +103,8 @@ export class TaskRunner {
         resumeId?: string,
         sendSpec?: (spec: string) => Promise<void>,
         spawnFn?: SpawnFn,
-        onStart?: (taskId: string) => void | Promise<void>
+        onStart?: (taskId: string) => void | Promise<void>,
+        planContext?: string
     ) {
         this._ctx = ctx
         this._cwd = cwd
@@ -110,6 +112,7 @@ export class TaskRunner {
         this._resumeId = resumeId
         this._sendSpec = sendSpec
         this._onStart = onStart
+        this._planContext = planContext
         this._startedAt = Date.now()
 
         // We'll populate id/title/phase lazily in run().
@@ -154,7 +157,8 @@ export class TaskRunner {
             refined: '',
             research: '',
             qa: '',
-            spec: ''
+            spec: '',
+            planContext: this._planContext
         }
     }
 
@@ -359,6 +363,13 @@ export interface RunSingleTaskOptions {
      * internal per-task runs, which must stay silent. Default false.
      */
     notifyFinish?: boolean
+    /**
+     * Scope fence naming the sibling steps of a /task-auto plan. Forwarded into
+     * the refine phase so a single decomposed step bounds its slice instead of
+     * re-expanding the whole referenced spec doc. Set only by /task-auto's loop;
+     * a bare /task leaves it undefined and the refine prompt is unchanged.
+     */
+    planContext?: string
 }
 
 /** Dialog copy for the post-interrupt steering prompt. */
@@ -519,7 +530,8 @@ export async function runSingleTask(
                     }
                 },
                 opts.spawnFn,
-                opts.onStart
+                opts.onStart,
+                opts.planContext
             )
             await runner.run()
             taskId = runner.taskId

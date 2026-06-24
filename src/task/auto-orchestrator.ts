@@ -71,6 +71,8 @@ export interface AutoDeps {
             resumeId?: string
             /** Called with the inner task id once its file exists, before phases. */
             onStart?: (taskId: string) => void | Promise<void>
+            /** Scope fence naming the sibling steps, forwarded into refine. */
+            planContext?: string
         }
     ) => Promise<RunSingleTaskResult>
     /** Snapshot the working tree into one commit after a task passes. */
@@ -181,6 +183,43 @@ export function attachSpecRefs(titles: string[], refs: string[]): string[] {
         }
         return out
     })
+}
+
+/**
+ * Build the refine scope fence for step `currentIndex` of an N-step /task-auto
+ * plan. Every per-step pipeline only ever sees its own title, so without this the
+ * refine phase — told "the task title is only a pointer into that spec; follow the
+ * spec" — re-expands the whole referenced design into one task (a real run
+ * implemented all 24 steps under step 1). The fence lists the sibling steps by
+ * number and forbids touching anything they own, so refine bounds this step's
+ * slice. Validated on the local model: with the fence, refine's CONSTRAINTS gained
+ * an explicit per-step deferral list and tool calls dropped 27→11.
+ *
+ * The plan listing strips the threaded "| decisions … | spec …" tail from each
+ * title (keeps the human-readable head) so the model reads clean step names. The
+ * authoritative spec ref still rides on THIS step's own title via attachSpecRefs.
+ */
+export function buildScopeFence(titles: string[], currentIndex: number): string {
+    const n = titles.length
+    const listing = titles
+        .map((t, i) => {
+            const head = t.split(' | ')[0].trim()
+            const tag = i === currentIndex ? ' (THIS STEP)' : ''
+            return `[${i + 1}]${tag} ${head}`
+        })
+        .join('\n')
+    return (
+        `PLAN CONTEXT — this task is STEP ${currentIndex + 1} of ${n} in an already-decomposed plan. `
+        + `Each step below is implemented by its OWN separate run; the others are NOT your job and `
+        + `are done in later runs. Implement ONLY the slice named in "Task" below.\n\n`
+        + `The design/spec document the task references describes the WHOLE system across all ${n} `
+        + `steps. Read it to get exact names, types, and signatures for YOUR step and to understand `
+        + `how your step fits — but DO NOT design, scaffold, schema, route, page, query, component, or `
+        + `test anything that belongs to another step listed below. Your GOAL / CONSTRAINTS / `
+        + `KNOWN-UNKNOWNS must cover only THIS step's slice. Do not pull in tables, endpoints, pages, `
+        + `components, or flows owned by a later step.\n\n`
+        + `The full plan (these run separately — do NOT implement them here):\n${listing}`
+    )
 }
 
 /** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */
@@ -383,7 +422,8 @@ function defaultDeps(
             runSingleTask(c, cwd2, t, {
                 waitForImplementation: true,
                 resumeId: opts?.resumeId,
-                onStart: opts?.onStart
+                onStart: opts?.onStart,
+                planContext: opts?.planContext
             }),
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
@@ -583,6 +623,15 @@ export async function runAutoLoop(
             }
             const res = await deps.runTask(active, cwd, next.title, {
                 resumeId,
+                // Fence this step against re-expanding the whole referenced spec:
+                // name the sibling steps so refine bounds this step's slice. Only
+                // matters when refine runs fresh (a resumed task past refine ignores
+                // it), but always supplied so a resume that restarts at refine is
+                // fenced too.
+                planContext: buildScopeFence(
+                    entries.map(e => e.title),
+                    next.index
+                ),
                 onStart:
                     resumeId ? undefined : (
                         innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)

@@ -55,9 +55,22 @@ Rules:
 TITLE:
 ${title}`
 
+/**
+ * Optional scope fence for a task that is ONE step of a /task-auto plan. Prepended
+ * verbatim ahead of the refine body so the model reads the step boundary as
+ * authoritative context before it expands the (whole-system) spec doc. Empty for a
+ * bare /task run, which keeps that prompt byte-for-byte unchanged. The caller
+ * (auto-orchestrator) builds the listing; this prompt only positions it.
+ *
+ * Without it, refine is told "the task title is only a pointer into that spec —
+ * follow the spec" with no signal that the other steps exist, so a one-step
+ * "Scaffold …" title re-expands the entire design into one task (validated: a real
+ * /task-auto run implemented all 24 steps under step 1).
+ */
 const REFINE_PROMPT = (
-    raw: string
-) => `You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.
+    raw: string,
+    planContext?: string
+) => `${planContext ? planContext + '\n\n---\n\n' : ''}You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.
 
 Output structure (four sections, exact headings, in this order):
 
@@ -132,6 +145,8 @@ const RESEARCH_APIS_PROMPT = (
 NPM PACKAGES — use pi-worker-docs, NOT file reads: for any third-party npm package (e.g. "zod", "hono", "drizzle-orm"), call \`pi-worker-docs(module, query)\` to get its type signatures and API surface. Do NOT open node_modules source files directly — those reads are expensive and produce far more noise than the tool. The tool returns a compact, focused excerpt in a fraction of the token cost.
 
 PROJECT SOURCE — use pi-worker-docs with module ".", NOT file reads: for any function, class, type, or interface defined in THIS project's own .ts/.tsx source (e.g. "what does requireAuth check?", "what does CreateListingSchema look like?", "what does the listings query module export?"), call \`pi-worker-docs(".", query)\` instead of reading the file. The tool indexes all git-tracked source files and returns only the relevant chunks — far cheaper than reading whole files.
+
+RUNTIME BUILTINS — verify, do NOT echo: a task (or the spec doc it references) may name a runtime/builtin import like \`bun:sql\`, \`bun:sqlite\`, \`node:fs\`, or \`Bun.password\`. A runtime exposes only a small FIXED set of \`<runtime>:<submodule>\` modules, and a spec doc can confidently name one that does not exist. Before you list ANY \`<pkg>:<sub>\` specifier, confirm it with \`pi-worker-docs\` (e.g. \`pi-worker-docs("bun:sql", "sql tagged template and SQL class — the import")\` — the tool resolves the runtime's real types) and emit the CANONICAL import the types actually prove, NOT the string copied from the task. Concretely: Bun's SQL client is \`import { sql } from "bun"\` (or \`Bun.sql\` / \`new SQL()\`) — there is NO \`bun:sql\` module. Never pass an unverified colon-specifier through to the APIS list; a phantom import laundered here becomes fabricated \`declare module\` shims in the implementation.
 
 APIS owns symbols and commands BY NAME ONLY. Do NOT include any file path or path fragment — no \`package.json\`, no \`./src/foo.ts\`, no \`package.json#scripts.lint\`. If the symbol is a script defined in package.json, write the invocation (\`npm run lint\`), not its location. If the symbol is a config file, it does not belong in APIS at all — it belongs in FILES.
 

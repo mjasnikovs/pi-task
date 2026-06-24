@@ -8,6 +8,7 @@ import {
     expandFeatureMentions,
     readableMentions,
     attachSpecRefs,
+    buildScopeFence,
     type AutoDeps
 } from './auto-orchestrator.js'
 import {readTaskFile, writeTaskFile} from './task-io.js'
@@ -856,6 +857,33 @@ test('readableMentions: returns only @refs that resolve to a real file, deduped'
         expect(await readableMentions(dir, 'see @missing.md')).toEqual([])
         expect(await readableMentions(dir, 'no mentions here')).toEqual([])
     })
+})
+
+test('buildScopeFence: marks the current step and lists every sibling by number', () => {
+    const titles = ['Scaffold project', 'Build database schema', 'Build auth routes']
+    const fence = buildScopeFence(titles, 0)
+    expect(fence).toContain('STEP 1 of 3')
+    expect(fence).toContain('[1] (THIS STEP) Scaffold project')
+    expect(fence).toContain('[2] Build database schema')
+    expect(fence).toContain('[3] Build auth routes')
+    // Only the current step is tagged.
+    expect(fence.match(/\(THIS STEP\)/g)).toHaveLength(1)
+    expect(fence).toContain('do NOT implement them here')
+})
+
+test('buildScopeFence: tags a middle step and keeps the count right', () => {
+    const fence = buildScopeFence(['a', 'b', 'c', 'd'], 2)
+    expect(fence).toContain('STEP 3 of 4')
+    expect(fence).toContain('[3] (THIS STEP) c')
+})
+
+test('buildScopeFence: strips the threaded "| decisions | spec" tail from the plan listing', () => {
+    const threaded = attachSpecRefs(['Scaffold project'], ['DESIGN/spec.md'])
+    const fence = buildScopeFence([...threaded, 'Build auth routes'], 0)
+    // The listing shows the clean head, not the authoritative-spec suffix.
+    expect(fence).toContain('[1] (THIS STEP) Scaffold project')
+    expect(fence).not.toContain('| spec:')
+    expect(fence).not.toContain('authoritative')
 })
 
 test('attachSpecRefs: appends an authoritative spec suffix to every title', () => {

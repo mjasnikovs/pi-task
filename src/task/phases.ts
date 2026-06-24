@@ -80,6 +80,13 @@ export interface PhaseContext {
     research: string
     qa: string
     spec: string
+    /**
+     * Scope fence for a task that is one step of a /task-auto plan: names the
+     * sibling steps so refine bounds this task's slice instead of re-expanding the
+     * whole spec doc. Undefined for a bare /task run (prompt unchanged). Threaded
+     * only into refine — its scoped output carries the boundary downstream.
+     */
+    planContext?: string
 }
 
 export type OutputField = 'refined' | 'research' | 'qa' | 'spec'
@@ -131,9 +138,9 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 
 // ─── Phase functions ─────────────────────────────────────────────────────────
 
-export const phaseRefine = (deps: PhaseDeps, raw: string) =>
+export const phaseRefine = (deps: PhaseDeps, raw: string, planContext?: string) =>
     runPhaseWithLoopGuard(deps, 'refine', 'read', hint =>
-        prependHint(hint, appendNoThink(REFINE_PROMPT(raw)))
+        prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext)))
     )
 
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {
@@ -855,7 +862,7 @@ export const PHASES: PhaseConfig[] = [
         name: 'refine',
         section: 'refined prompt',
         field: 'refined',
-        run: (d, p) => phaseRefine(d, p.rawPrompt)
+        run: (d, p) => phaseRefine(d, p.rawPrompt, p.planContext)
     },
     {
         name: 'research',

@@ -33,6 +33,20 @@ describe('REFINE_PROMPT', () => {
         const p = REFINE_PROMPT('raw task')
         expect(p.toLowerCase()).toContain('npm')
     })
+
+    test('omits the scope fence and starts with the refine body when no planContext', () => {
+        const p = REFINE_PROMPT('raw task')
+        expect(p.startsWith('You receive a')).toBe(true)
+        expect(p).not.toContain('PLAN CONTEXT')
+    })
+
+    test('prepends planContext ahead of the refine body when supplied', () => {
+        const fence = 'PLAN CONTEXT — this task is STEP 1 of 3 …'
+        const p = REFINE_PROMPT('raw task', fence)
+        expect(p.startsWith(fence)).toBe(true)
+        expect(p.indexOf(fence)).toBeLessThan(p.indexOf('You receive a'))
+        expect(p).toContain('Task: raw task')
+    })
 })
 
 describe('RESEARCH_CONTEXT_PROMPT LIVE-DATA RULE', () => {
@@ -93,6 +107,16 @@ describe('research prompts enforce relevance / size discipline', () => {
         const p = RESEARCH_APIS_PROMPT('task')
         expect(p).toContain('RELEVANCE')
         expect(p.toLowerCase()).toContain('entire public surface')
+    })
+
+    test('APIS prompt tells the worker to verify runtime builtin imports, not echo them', () => {
+        const p = RESEARCH_APIS_PROMPT('task')
+        expect(p).toContain('RUNTIME BUILTINS')
+        // Names the concrete phantom and its real replacement so the worker emits
+        // the canonical import instead of the spec doc's invented colon-specifier.
+        expect(p).toContain('bun:sql')
+        expect(p).toContain('import { sql } from "bun"')
+        expect(p.toLowerCase()).toContain('do not echo')
     })
 
     test('CONTEXT prompt caps bullets and demands actionable facts', () => {
