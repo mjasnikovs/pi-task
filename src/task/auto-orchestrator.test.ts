@@ -850,12 +850,33 @@ test('expandFeatureMentions: dedupes repeated mentions, skips empty files', asyn
     })
 })
 
+test('expandFeatureMentions: strips trailing prose punctuation off the @-mention', async () => {
+    // A user typing the feature inline naturally writes "@spec.md, reuse…" or
+    // "@spec.md." — the greedy [^\s]+ swallows the comma/period into the path, the
+    // file fails to resolve, and the spec is silently NOT inlined (the model then
+    // fabricates generic questions). Validated against a real 32KB design doc.
+    await withTmpTaskDir(async dir => {
+        await fsp.writeFile(path.join(dir, 'spec.md'), '# Spec\n\nBuild the thing.\n')
+        for (const f of [
+            'Implement @spec.md, reuse current directory',
+            'see @spec.md.',
+            'follow @spec.md; then build'
+        ]) {
+            const out = await expandFeatureMentions(dir, f)
+            expect(out).toContain('--- contents of spec.md ---')
+            expect(out).toContain('Build the thing.')
+        }
+    })
+})
+
 test('readableMentions: returns only @refs that resolve to a real file, deduped', async () => {
     await withTmpTaskDir(async dir => {
         await fsp.writeFile(path.join(dir, 'spec.md'), '# Spec')
         expect(await readableMentions(dir, 'Implement @spec.md and @spec.md')).toEqual(['spec.md'])
         expect(await readableMentions(dir, 'see @missing.md')).toEqual([])
         expect(await readableMentions(dir, 'no mentions here')).toEqual([])
+        // trailing prose punctuation must not defeat resolution (mirrors expand)
+        expect(await readableMentions(dir, 'Implement @spec.md, reuse it')).toEqual(['spec.md'])
     })
 })
 

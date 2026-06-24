@@ -97,6 +97,21 @@ export interface AutoDeps {
 // Matches pi's @-file completion token (a path after @, until whitespace).
 const MENTION_RE = /(?:^|\s)@([^\s]+)/g
 
+// Trailing punctuation a user naturally types AFTER an @-mention when it sits in
+// prose — "Implement @design.md, reuse…" or "see @spec.md." — which the greedy
+// [^\s]+ above would otherwise swallow into the path. Left unstripped, the
+// resulting "design.md," resolves to no file, expansion is silently skipped, and
+// the planner reasons over a one-line "Implement @design.md" with NO spec inline
+// → it fabricates generic questions/tasks the spec never called for (validated:
+// a stray comma turned a 32KB design into a contentless prompt). None of these
+// chars are legitimate trailing characters of a referenced doc path.
+const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
+
+/** The cleaned path token of an @-mention: greedy match minus trailing prose punctuation. */
+function mentionPath(token: string): string {
+    return token.replace(MENTION_TRAILING_PUNCT, '')
+}
+
 /**
  * Expand any @file references in the feature text by appending each referenced
  * file's contents, so the planning children (clarify, decompose) always see the
@@ -110,8 +125,8 @@ export async function expandFeatureMentions(cwd: string, feature: string): Promi
     const seen = new Set<string>()
     const blocks: string[] = []
     for (const m of feature.matchAll(MENTION_RE)) {
-        const rel = m[1]
-        if (seen.has(rel)) continue
+        const rel = mentionPath(m[1])
+        if (rel === '' || seen.has(rel)) continue
         seen.add(rel)
         try {
             const body = await fsp.readFile(path.resolve(cwd, rel), 'utf8')
@@ -135,8 +150,8 @@ export async function readableMentions(cwd: string, feature: string): Promise<st
     const out: string[] = []
     const seen = new Set<string>()
     for (const m of feature.matchAll(MENTION_RE)) {
-        const rel = m[1]
-        if (seen.has(rel)) continue
+        const rel = mentionPath(m[1])
+        if (rel === '' || seen.has(rel)) continue
         seen.add(rel)
         try {
             await fsp.access(path.resolve(cwd, rel))
