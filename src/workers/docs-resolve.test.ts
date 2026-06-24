@@ -6,7 +6,8 @@ import {
     isDtsFile,
     typesPackageName,
     hasTypeFiles,
-    detectTypesRedirect
+    detectTypesRedirect,
+    splitRuntimeNamespace
 } from './docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
@@ -77,6 +78,21 @@ test('isDtsFile matches .d.ts, .d.mts, .d.cts only', () => {
     expect(isDtsFile('foo.ts')).toBe(false)
     expect(isDtsFile('foo.mts')).toBe(false)
     expect(isDtsFile('foo.d.ts.map')).toBe(false)
+})
+
+test('splitRuntimeNamespace splits bun:/node: builtin specifiers to their runtime', () => {
+    expect(splitRuntimeNamespace('bun:sql')).toEqual({runtime: 'bun', sub: 'sql'})
+    expect(splitRuntimeNamespace('bun:sqlite')).toEqual({runtime: 'bun', sub: 'sqlite'})
+    expect(splitRuntimeNamespace('node:fs/promises')).toEqual({runtime: 'node', sub: 'fs/promises'})
+})
+
+test('splitRuntimeNamespace returns null for ordinary and scoped package names', () => {
+    expect(splitRuntimeNamespace('bun')).toBeNull()
+    expect(splitRuntimeNamespace('zod')).toBeNull()
+    expect(splitRuntimeNamespace('@hono/zod-validator')).toBeNull()
+    expect(splitRuntimeNamespace('react/jsx-runtime')).toBeNull()
+    // A colon-prefix from an unknown runtime is not treated as a builtin namespace.
+    expect(splitRuntimeNamespace('http:foo')).toBeNull()
 })
 
 test('typesPackageName maps to DefinitelyTyped convention', () => {

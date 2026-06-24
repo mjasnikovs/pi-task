@@ -11,6 +11,7 @@ import {
     typesPackageName,
     hasTypeFiles,
     isDtsFile,
+    splitRuntimeNamespace,
     type ResolvedPackage
 } from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './docs-retrieve.js'
@@ -204,9 +205,16 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     const spawn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const npmVersionLookup = input.npmVersionLookup ?? defaultNpmVersionLookup
 
+    // A runtime builtin specifier (`bun:sql`, `node:fs`) is typed by the runtime's
+    // own types package, not a literal package of that colon-name — so resolve the
+    // runtime instead. This is what turns a `bun:sql` lookup into Bun's real SQL
+    // surface (`declare module "bun"` → `const sql: SQL`) rather than an
+    // `invalid_name` error, and it lets the docs tool disprove a phantom submodule.
+    const requested = splitRuntimeNamespace(input.pkg)?.runtime ?? input.pkg
+
     // Fire the npm registry lookup in parallel with resolve/index/retrieve.
     // It returns null on any failure, so it never blocks the local pipeline.
-    const npmVersionPromise = npmVersionLookup(extractParentPackage(input.pkg), {
+    const npmVersionPromise = npmVersionLookup(extractParentPackage(requested), {
         signal: input.signal
     }).catch<NpmVersionInfo | null>(() => null)
 
@@ -214,11 +222,11 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     let pkg: ResolvedPackage
     let autoInstalled = false
     try {
-        pkg = resolvePackage(input.pkg, input.cwd)
+        pkg = resolvePackage(requested, input.cwd)
     } catch (firstErr) {
         if (firstErr instanceof ResolveError && firstErr.kind === 'not_installed') {
             // auto-install
-            const parentPkg = extractParentPackage(input.pkg)
+            const parentPkg = extractParentPackage(requested)
             const installResult = await runAutoInstall(spawn, parentPkg, undefined)
             if (!installResult.success) {
                 return {
@@ -231,7 +239,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             }
             autoInstalled = true
             try {
-                pkg = resolvePackage(input.pkg, installResult.installDir)
+                pkg = resolvePackage(requested, installResult.installDir)
             } catch (retryErr) {
                 if (retryErr instanceof ResolveError) {
                     return {
@@ -271,7 +279,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     // @types/<name> + triple-slash `<reference types>` chain to the package that
     // actually holds the declarations (e.g. bun -> @types/bun -> bun-types).
     // Best-effort: any failure leaves the original resolution untouched.
-    pkg = await resolveTypeSource(pkg, input.pkg, input.cwd, spawn, resolvePackage, input.signal)
+    pkg = await resolveTypeSource(pkg, requested, input.cwd, spawn, resolvePackage, input.signal)
 
     // Step 2: open cache
     let cache: CacheHandle | null = null

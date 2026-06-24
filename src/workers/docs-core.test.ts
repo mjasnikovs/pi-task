@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import * as path from 'node:path'
 import {docsRaw, docsFocused} from './docs-core.js'
+import {resolvePackage as realResolvePackage} from './docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {openCache} from './docs-cache.js'
 
@@ -31,6 +32,28 @@ describe('docsRaw', () => {
         })
         expect(r.kind).toBe('error')
         if (r.kind === 'error') expect(r.resolveError).toBe('invalid_name')
+        cache.close()
+    })
+
+    test('normalizes a bun: runtime namespace to resolve the runtime, not the colon-name', async () => {
+        const cache = openCache(':memory:')
+        const seen: string[] = []
+        const r = await docsRaw({
+            pkg: 'bun:sql',
+            query: 'sql',
+            cwd: FIXTURES,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            // tiny-pkg ships its own types, so resolveTypeSource follows no redirect
+            // and the only resolve target recorded is the normalized runtime name.
+            resolvePackage: (name, cwd) => {
+                seen.push(name)
+                return realResolvePackage('tiny-pkg', cwd)
+            }
+        })
+        expect(r.kind).toBe('ok')
+        expect(seen).toContain('bun')
+        expect(seen).not.toContain('bun:sql')
         cache.close()
     })
 

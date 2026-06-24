@@ -34,6 +34,30 @@ function isValidModuleName(name: string): boolean {
     return MODULE_NAME_RE.test(name)
 }
 
+// Runtimes whose builtin `<runtime>:<sub>` imports are typed by the runtime's own
+// types package, not by a literal package named "<runtime>:<sub>". `node:fs` and
+// `bun:sqlite` are real imports, but their declarations live in @types/node and
+// bun-types — and a phantom like `bun:sql` (no such submodule) is only disprovable
+// by resolving the runtime and finding the symbol absent. Either way the docs
+// lookup target is the runtime, never the colon-name.
+const RUNTIME_NAMESPACES = new Set(['bun', 'node', 'deno'])
+
+/**
+ * Split a runtime builtin specifier (`bun:sql`, `node:fs/promises`) into its
+ * runtime and submodule. Returns null for ordinary specifiers (including scoped
+ * names, which legitimately contain no colon). The resolver maps the runtime to
+ * its types package via the existing @types redirect chain (bun -> bun-types,
+ * node -> @types/node), so a `bun:sql` query lands on Bun's real SQL surface
+ * (`declare module "bun"` → `const sql: SQL`) instead of erroring `invalid_name`.
+ */
+export function splitRuntimeNamespace(spec: string): {runtime: string; sub: string} | null {
+    const m = /^([a-z]+):([a-z0-9./_-]+)$/i.exec(spec)
+    if (!m) return null
+    const runtime = m[1].toLowerCase()
+    if (!RUNTIME_NAMESPACES.has(runtime)) return null
+    return {runtime, sub: m[2]}
+}
+
 function parentPackageName(moduleName: string): string {
     if (moduleName.startsWith('@')) {
         const parts = moduleName.split('/')
