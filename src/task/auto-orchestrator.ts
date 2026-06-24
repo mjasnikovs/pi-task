@@ -624,35 +624,14 @@ export async function runAutoLoop(
                 )
                 return
             }
-            // Before checking the task off or committing, hold the work to the
-            // project's AGENTS.md / CLAUDE.md rules. Local models drift and skip
-            // those guidelines, so the enforcement pass re-reads the diff with the
-            // same local model (edit tools enabled) and fixes violations in place.
-            // A non-clean verdict — or a pass that could not run — blocks the
-            // commit and fails the task: non-compliant work is never snapshotted,
-            // and the run pauses for /task-auto-resume. (No-op when the feature is
-            // off, when there are no guideline files, or in tests with no enforce
-            // dep.) Fixes it makes are folded into this task's snapshot below.
-            if (deps.enforce) {
-                active.ui.notify(`${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`, 'info')
-                const verdict = await deps.enforce(active, cwd, next.title)
-                if (!verdict.ok) {
-                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                    announceDone(
-                        active,
-                        `${id} stopped at "${next.title}" — ${verdict.reason ?? 'guideline check failed'} — fix and run /task-auto-resume.`,
-                        'error'
-                    )
-                    return
-                }
-            }
             // res.ok === true means runner.run() completed, so res.taskId is the
             // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an
             // empty id by writing a plain checked line, but that path is unreachable.
             await checkOffTask(cwd, id, next.index, res.taskId, next.title)
             // Commit the task's work (and the just-written check-off) as one
-            // snapshot. Best-effort: a failed/empty commit only warns — the task
-            // already passed, so the run continues.
+            // snapshot FIRST — before guideline enforcement — so a passing task is
+            // durably recorded no matter what enforcement later finds. Best-effort:
+            // a failed/empty commit only warns; the task already passed.
             const message = `task: ${next.title} (${res.taskId})`
             const commit = await deps.commit(cwd, message)
             if (commit.committed) {
@@ -662,6 +641,40 @@ export async function runAutoLoop(
                     `${id}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
                     'warning'
                 )
+            }
+            // With the task committed, hold its work to the project's AGENTS.md /
+            // CLAUDE.md rules. Local models drift and skip those guidelines, so the
+            // enforcement pass re-reads THE LAST COMMIT's diff with the same local
+            // model (edit tools enabled) and fixes violations in place; those fixes
+            // are then committed SEPARATELY under an "ENFORCE GUIDELINES" commit so
+            // they form an independent, auditable diff on top of the task commit.
+            // A non-clean verdict only warns — the task commit already landed, so
+            // the run continues. Skipped when nothing was committed this round
+            // (autoCommit off or an empty commit): there is no "last commit" of this
+            // task's work to verify. (Also a no-op when the feature is off, when
+            // there are no guideline files, or in tests with no enforce dep.)
+            if (deps.enforce && commit.committed) {
+                active.ui.notify(`${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`, 'info')
+                const verdict = await deps.enforce(active, cwd, next.title)
+                if (!verdict.ok) {
+                    active.ui.notify(
+                        `${id}: guideline enforcement on "${next.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
+                        'warning'
+                    )
+                }
+                // Commit whatever the pass fixed as its own snapshot. A no-op when
+                // the pass made no edits (gitCommitAll reports nothing to commit),
+                // so a clean task adds no empty commit — only announce a real one.
+                const enforceCommit = await deps.commit(
+                    cwd,
+                    `ENFORCE GUIDELINES: ${next.title} (${res.taskId})`
+                )
+                if (enforceCommit.committed) {
+                    active.ui.notify(
+                        `${id}: committed guideline fixes for "${next.title}".`,
+                        'info'
+                    )
+                }
             }
         }
     } catch (err) {

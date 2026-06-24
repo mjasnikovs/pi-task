@@ -414,7 +414,7 @@ test('runAutoLoop: stops and marks failed on first failing task', async () => {
     })
 })
 
-test('runAutoLoop: a guideline violation blocks the commit and fails the task', async () => {
+test('runAutoLoop: a guideline violation only warns — task stays committed, run continues', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(
@@ -435,12 +435,45 @@ test('runAutoLoop: a guideline violation blocks the commit and fails the task', 
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
-        // Run halts on A: file is failed, A is NOT checked off, and only the
-        // pre-start checkpoint commit ran — never the post-task snapshot.
-        expect(frontMatter.state).toBe('failed')
-        expect(parseTaskList(body).some(e => e.done)).toBe(false)
-        expect(commits).toEqual(['chore: checkpoint before "A"'])
+        // The task commit lands BEFORE enforcement, so an unfixable violation no
+        // longer halts the run: both boxes check off and the file completes.
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+        // The violation is surfaced as a warning, not a stop.
         expect(captured.notifies.some(n => /used print\(\)/.test(n.msg))).toBe(true)
+        // Each task: checkpoint → `task: …` commit → separate `ENFORCE GUIDELINES`
+        // commit (the enforce pass runs only because the task commit landed).
+        expect(commits).toEqual([
+            'chore: checkpoint before "A"',
+            'task: A (TASK_0006)',
+            'ENFORCE GUIDELINES: A (TASK_0006)',
+            'chore: checkpoint before "B"',
+            'task: B (TASK_0006)',
+            'ENFORCE GUIDELINES: B (TASK_0006)'
+        ])
+    })
+})
+
+test('runAutoLoop: enforce is skipped when the task commit did not land', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let enforced = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            // No commit ever lands (e.g. autoCommit off / nothing to commit), so the
+            // last commit isn't this task's work — there is nothing to enforce.
+            commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
+            enforce: () => {
+                enforced++
+                return Promise.resolve({ok: true})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(enforced).toBe(0)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
     })
 })
 

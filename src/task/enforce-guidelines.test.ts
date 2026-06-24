@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test'
 import {EventEmitter} from 'node:events'
 import {
-    captureDiff,
+    captureCommitDiff,
     discoverGuidelines,
     buildEnforcePrompt,
     parseEnforceVerdict,
@@ -258,19 +258,25 @@ test('classifyEnforceChildFailure: non-zero exit (not aborted) → exited <code>
     )
 })
 
-// ─── captureDiff ─────────────────────────────────────────────────────────────
+// ─── captureCommitDiff ───────────────────────────────────────────────────────
 
 /**
  * A fake SpawnFn that records every git invocation's args and replays a queued
- * stdout for each, exiting 0. Lets us assert what pathspec captureDiff hands git
- * without a real repo.
+ * stdout (and optional exit code) for each. Lets us assert what range/pathspec
+ * captureCommitDiff hands git without a real repo. Exit code defaults to 0; pass
+ * `exits` to make a specific call (e.g. the HEAD~1 rev-parse) fail.
  */
-function recordingSpawn(stdouts: string[]): {spawn: SpawnFn; calls: string[][]} {
+function recordingSpawn(
+    stdouts: string[],
+    exits: number[] = []
+): {spawn: SpawnFn; calls: string[][]} {
     const calls: string[][] = []
     let i = 0
     const spawn: SpawnFn = (_command, args) => {
+        const idx = i++
         calls.push([...args])
-        const out = stdouts[i++] ?? ''
+        const out = stdouts[idx] ?? ''
+        const code = exits[idx] ?? 0
         const proc = new EventEmitter() as unknown as ProcLike & EventEmitter
         const stdout = new EventEmitter()
         const stderr = new EventEmitter()
@@ -280,63 +286,69 @@ function recordingSpawn(stdouts: string[]): {spawn: SpawnFn; calls: string[][]} 
         ;(proc as unknown as {killed: boolean}).killed = false
         queueMicrotask(() => {
             if (out.length > 0) stdout.emit('data', Buffer.from(out))
-            proc.emit('close', 0)
+            proc.emit('close', code)
         })
         return proc
     }
     return {spawn, calls}
 }
 
-test('captureDiff: excludes .pi-tasks from ALL git commands (its own bookkeeping is not work-to-verify)', async () => {
-    // Regression: committable TASK_*/TASK_AUTO_*.md files ride into `git diff HEAD`
-    // and `git ls-files --others` (git ignores the fd/ripgrep .ignore), so without
-    // a pathspec the enforce child is handed its own task files and edits them,
-    // corrupting their front matter mid-run.
-    const {spawn, calls} = recordingSpawn(['diff body', '', ''])
-    await captureDiff('/repo', undefined, spawn)
+test('captureCommitDiff: diffs HEAD~1..HEAD and excludes .pi-tasks from every git command', async () => {
+    // The pass runs AFTER the task commit, so it verifies the last commit's diff
+    // (HEAD against its parent). Committable TASK_*/TASK_AUTO_*.md files ride into
+    // that diff (git ignores the fd/ripgrep .ignore), so without the pathspec the
+    // enforce child is handed its own task bookkeeping and edits it.
+    // Calls: [0] rev-parse HEAD~1 (parent exists), [1] diff, [2] name-only.
+    const {spawn, calls} = recordingSpawn(['<sha>', 'diff body', 'src/a.ts'])
+    await captureCommitDiff('/repo', undefined, spawn)
 
     expect(calls).toHaveLength(3)
-    expect(calls[0]).toEqual(['diff', 'HEAD', '--', '.', ':(exclude).pi-tasks'])
-    expect(calls[1]).toEqual(['diff', 'HEAD', '--name-only', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[0]).toEqual(['rev-parse', '--verify', '--quiet', 'HEAD~1'])
+    expect(calls[1]).toEqual(['diff', 'HEAD~1', 'HEAD', '--', '.', ':(exclude).pi-tasks'])
     expect(calls[2]).toEqual([
-        'ls-files',
-        '--others',
-        '--exclude-standard',
+        'diff',
+        'HEAD~1',
+        'HEAD',
+        '--name-only',
         '--',
         '.',
         ':(exclude).pi-tasks'
     ])
 })
 
-test('captureDiff: lists MODIFIED and NEW files separately so new files keep their salience', async () => {
-    // git calls in order: full diff, tracked --name-only, untracked ls-files.
-    // svc.ts is tracked-modified AND shows up in ls-files; it must be a MODIFIED
-    // file, listed once, NOT duplicated into the NEW section.
-    const {spawn} = recordingSpawn(['the diff text', 'src/app.ts\nsvc.ts', 'newfile.ts\nsvc.ts'])
-    const out = await captureDiff('/repo', undefined, spawn)
+test('captureCommitDiff: a root commit (no HEAD~1) diffs against the empty tree', async () => {
+    // rev-parse exits non-zero when there is no parent; the base becomes the git
+    // empty-tree object so the first commit still renders fully as additions.
+    const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+    const {spawn, calls} = recordingSpawn(['', 'diff body', 'src/a.ts'], [1, 0, 0])
+    await captureCommitDiff('/repo', undefined, spawn)
+    expect(calls[1]).toEqual(['diff', EMPTY_TREE, 'HEAD', '--', '.', ':(exclude).pi-tasks'])
+    expect(calls[2]).toEqual([
+        'diff',
+        EMPTY_TREE,
+        'HEAD',
+        '--name-only',
+        '--',
+        '.',
+        ':(exclude).pi-tasks'
+    ])
+})
+
+test('captureCommitDiff: emits the unified diff and one sorted list of changed files', async () => {
+    // New files created by the task are additions in the commit diff, so there is
+    // no separate untracked section — one closed list scopes the child's edits.
+    const {spawn} = recordingSpawn(['<sha>', 'the diff text', 'src/svc.ts\nsrc/app.ts'])
+    const out = await captureCommitDiff('/repo', undefined, spawn)
+    expect(out).toContain('UNIFIED DIFF (last commit)')
     expect(out).toContain('the diff text')
-    expect(out).toContain('MODIFIED FILES')
-    expect(out).toContain('- src/app.ts')
-    // New (untracked) files get their own emphatic section, not buried in one list.
-    expect(out).toContain('NEW FILES')
-    expect(out).toContain('- newfile.ts')
-    // svc.ts is a modified file, listed exactly once across the whole capture.
-    expect(out.match(/- svc\.ts/g)).toHaveLength(1)
-    const newSection = out.slice(out.indexOf('NEW FILES'))
-    expect(newSection).not.toContain('svc.ts')
+    expect(out).toContain('FILES CHANGED IN THE LAST COMMIT')
+    // Sorted, one bullet each.
+    expect(out.indexOf('- src/app.ts')).toBeLessThan(out.indexOf('- src/svc.ts'))
     // Contents are NOT inlined — the child has a read tool and reads them itself.
     expect(out).not.toContain('FULL CURRENT CONTENT')
 })
 
-test('captureDiff: only-new-files run omits the empty MODIFIED section', async () => {
-    const {spawn} = recordingSpawn(['', '', 'brand-new.ts'])
-    const out = await captureDiff('/repo', undefined, spawn)
-    expect(out).toContain('NEW FILES')
-    expect(out).toContain('- brand-new.ts')
-    expect(out).not.toContain('MODIFIED FILES')
-})
-
-test('captureDiff: no changes → empty string (nothing to verify)', async () => {
-    const {spawn} = recordingSpawn(['', '', ''])
-    expect(await captureDiff('/repo', undefined, spawn)).toBe('')
+test('captureCommitDiff: an empty commit → empty string (nothing to verify)', async () => {
+    const {spawn} = recordingSpawn(['<sha>', '', ''])
+    expect(await captureCommitDiff('/repo', undefined, spawn)).toBe('')
 })

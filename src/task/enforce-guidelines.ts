@@ -2,19 +2,21 @@
  * Guideline enforcement for /task-auto.
  *
  * Local models drift: they skip the rules written in AGENTS.md / CLAUDE.md even
- * when those files sit right next to the code. After a /task-auto sub-task's
- * implementation turn settles — but BEFORE its per-task commit — this runs a
+ * when those files sit right next to the code. A /task-auto sub-task's work is
+ * auto-committed AS SOON AS the implementation turn passes; THEN this runs a
  * fresh child pi (the same local model that did the work) that is handed the
- * project's guideline files, the task's diff, and the list of changed files. With
- * read + edit tools (and nothing else) it reads those files, fixes any violations
- * in place, and reports a CLEAN / VIOLATION verdict. It cannot create files or run
+ * project's guideline files and the diff of THAT LAST COMMIT. With read + edit
+ * tools (and nothing else) it reads the committed files, fixes any violations in
+ * place, and reports a CLEAN / VIOLATION verdict. It cannot create files or run
  * anything: no `write` (so it can't scaffold junk) and no `grep`/`find`/`ls` (so it
  * can't roam the tree) — see ENFORCE_TOOLS.
  *
- * A VIOLATION (or an enforcement pass that cannot confirm CLEAN) blocks the
- * commit and fails the task, so non-compliant work is never snapshotted — the
- * run pauses for /task-auto-resume. This is deliberately strict: the whole
- * point is that "the model probably followed the rules" is not good enough.
+ * The fixes it makes are committed SEPARATELY by the orchestrator under an
+ * "ENFORCE GUIDELINES" commit, so guideline corrections are an independent,
+ * auditable diff that sits on top of the task commit. A VIOLATION it could not
+ * fix (or a pass that cannot confirm CLEAN) is surfaced as a warning — the task
+ * commit already landed, so the run continues rather than pausing. The outcome's
+ * `ok` flag therefore drives a warn-or-not decision, not a hard gate.
  *
  * Gated by the `enforceGuidelines` config flag. With the flag off, or with no
  * guideline files in the working directory, enforcement is a pass (ok: true).
@@ -38,7 +40,7 @@ export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
  *    in one real run (see enforce-debug.log analysis). This is the load-bearing
  *    removal: dropping `write` is what stops the runaway file creation.
  *  - No `grep`/`find`/`ls` → the pass cannot enumerate or roam the tree; it is
- *    handed the explicit, closed list of changed files (see captureDiff) and is
+ *    handed the explicit, closed list of changed files (see captureCommitDiff) and is
  *    told to edit only those.
  *  - `read` IS allowed: the model genuinely needs it — to re-read a file after
  *    editing to confirm the fix landed, and to read a neighbouring file for the
@@ -99,20 +101,21 @@ export async function discoverGuidelines(
  */
 export function buildEnforcePrompt(rulesText: string, diff: string): string {
     return [
-        'You are a strict guideline-enforcement pass running after an AI coding agent',
-        'finished a task but before its work is committed. The agent is known to skip',
-        'project rules, so do not trust that it followed them — verify against the changes.',
+        'You are a strict guideline-enforcement pass running right after an AI coding',
+        'agent finished a task and committed it. The agent is known to skip project',
+        'rules, so do not trust that it followed them — verify against the changes.',
         '',
         'You have a `read` tool and an `edit` tool — nothing else. You CANNOT run',
         'commands, run lint/tsc/tests, or create files. Read the changed files listed',
         'below to inspect them; you may also read a neighbouring file when you need the',
         'correct import or type. But EDIT ONLY the changed files listed below — do not',
-        'create new files and do not modify anything outside that set.',
+        'create new files and do not modify anything outside that set. Your fixes will',
+        'be committed separately, so make them count.',
         '',
         'PROJECT GUIDELINES (from this repository):',
         rulesText,
         '',
-        'CHANGES JUST MADE (verify these specifically against the rules):',
+        'CHANGES IN THE LAST COMMIT (verify these specifically against the rules):',
         diff.trim().length > 0 ? diff : '(no textual diff captured — nothing to verify)',
         '',
         'Your job:',
@@ -183,28 +186,37 @@ export function classifyEnforceChildFailure(r: EnforceChildResult): string | nul
 }
 
 /**
- * Capture the work to verify as text: the tracked diff against HEAD followed by
- * the COMPLETE list of changed files — tracked-modified ∪ new (untracked) — that
+ * The git "empty tree" object — the canonical base for diffing a ROOT commit
+ * (one with no parent). Diffing `HEAD` against it renders the whole first commit
+ * as additions, so a root commit still produces a verifiable diff.
+ */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/**
+ * Capture the LAST COMMIT's work to verify as text: the unified diff of HEAD
+ * against its parent followed by the list of files that commit changed — the set
  * the child should read and is allowed to edit.
+ *
+ * This runs AFTER the task's auto-commit, so the change set is whatever HEAD
+ * introduced (`HEAD~1..HEAD`). New files created by the task appear in that diff
+ * as additions, so — unlike the pre-commit working-tree capture this replaced —
+ * there is no separate untracked/new-files section to chase. On a root commit
+ * (no `HEAD~1`) the diff is taken against the empty tree so the first commit is
+ * still fully verifiable.
  *
  * The child has a `read` tool, so file contents are NOT inlined here: it reads
  * each listed file itself (and re-reads after editing to confirm). The list is the
  * scoping signal — it tells the model the closed set of files to touch so it edits
- * only the change set rather than roaming. Validated against the local model:
- * inlining full bodies bought nothing (it read the files by name regardless).
- *
- * Non-destructive — it does not touch the index, so the later `git add -A` in
- * gitCommitAll still stages everything (including fixes the enforcement child
- * makes).
+ * only the change set rather than roaming.
  *
  * The `.pi-tasks/` directory is excluded from every git command. Those task files
- * are committable (tracked) by design, so they show up in `git diff HEAD` and
- * `git ls-files --others` — git does not honor the fd/ripgrep `.ignore` that keeps
- * them out of the worker's find/grep discovery. Without this pathspec the enforce
- * child is handed its own TASK_*.md / TASK_AUTO_*.md bookkeeping as "changes to
- * verify" and edits them, corrupting the front matter mid-run.
+ * are committable (tracked) by design, so they ride into the commit's diff — git
+ * does not honor the fd/ripgrep `.ignore` that keeps them out of the worker's
+ * find/grep discovery. Without this pathspec the enforce child is handed its own
+ * TASK_*.md / TASK_AUTO_*.md bookkeeping as "changes to verify" and edits them,
+ * corrupting the front matter mid-run.
  */
-export async function captureDiff(
+export async function captureCommitDiff(
     cwd: string,
     signal?: AbortSignal,
     spawnFn?: SpawnFn
@@ -214,47 +226,32 @@ export async function captureDiff(
     const excludeTasks = `:(exclude)${TASKS_DIR_NAME}`
     const run = (args: string[]) =>
         runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
-    const tracked = await run(['diff', 'HEAD', '--', '.', excludeTasks])
-    const trackedNames = await run(['diff', 'HEAD', '--name-only', '--', '.', excludeTasks])
-    const untracked = await run([
-        'ls-files',
-        '--others',
-        '--exclude-standard',
-        '--',
-        '.',
-        excludeTasks
-    ])
+
+    // Diff the last commit against its parent. On a root commit there is no
+    // HEAD~1 (rev-parse exits non-zero), so fall back to the empty tree.
+    const parent = await run(['rev-parse', '--verify', '--quiet', 'HEAD~1'])
+    const base = parent.exitCode === 0 ? 'HEAD~1' : EMPTY_TREE
+
+    const diff = await run(['diff', base, 'HEAD', '--', '.', excludeTasks])
+    const names = await run(['diff', base, 'HEAD', '--name-only', '--', '.', excludeTasks])
 
     const parts: string[] = []
-    if (tracked.exitCode === 0 && tracked.stdout.trim().length > 0)
-        parts.push(`UNIFIED DIFF (modified files):\n${tracked.stdout.trim()}`)
+    if (diff.exitCode === 0 && diff.stdout.trim().length > 0)
+        parts.push(`UNIFIED DIFF (last commit):\n${diff.stdout.trim()}`)
 
-    const lines = (out: {exitCode: number; stdout: string}): string[] =>
-        out.exitCode === 0 ?
-            out.stdout
+    const changed =
+        names.exitCode === 0 ?
+            names.stdout
                 .split('\n')
                 .map(s => s.trim())
                 .filter(Boolean)
+                .sort()
         :   []
-    const modified = lines(trackedNames).sort()
-    // Untracked-NEW files do NOT appear in the diff above, so they are listed in
-    // their own emphatic section: in a flat list the model overlooks them and then
-    // emits a false CLEAN while a new file still violates the rules (observed on the
-    // local model). A diff-only file (already in `modified`) is not repeated here.
-    const newFiles = lines(untracked)
-        .filter(n => !modified.includes(n))
-        .sort()
-
-    if (modified.length > 0)
+    if (changed.length > 0)
         parts.push(
-            'MODIFIED FILES — read each in full and check it against the rules:\n'
-                + modified.map(n => `- ${n}`).join('\n')
-        )
-    if (newFiles.length > 0)
-        parts.push(
-            'NEW FILES — created by this task and NOT shown in the diff above. You MUST'
-                + ' read and check each one against EVERY rule too:\n'
-                + newFiles.map(n => `- ${n}`).join('\n')
+            'FILES CHANGED IN THE LAST COMMIT — read each in full and check it against'
+                + ' EVERY rule:\n'
+                + changed.map(n => `- ${n}`).join('\n')
         )
     return parts.join('\n\n')
 }
@@ -279,7 +276,7 @@ export interface EnforcementDeps {
  */
 export async function runGuidelineEnforcement(deps: EnforcementDeps): Promise<EnforceOutcome> {
     const discover = deps.discover ?? (cwd => discoverGuidelines(cwd))
-    const getDiff = deps.getDiff ?? ((cwd, signal) => captureDiff(cwd, signal))
+    const getDiff = deps.getDiff ?? ((cwd, signal) => captureCommitDiff(cwd, signal))
 
     const doc = await discover(deps.cwd)
     if (!doc) return {ok: true, reason: 'no guideline files'}
