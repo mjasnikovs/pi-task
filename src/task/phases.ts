@@ -8,6 +8,7 @@ import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {formatNpmVersionSection} from '../workers/npm-version.js'
 import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
+import {findPhantomImports, formatApiCorrections} from '../workers/phantom-imports.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
@@ -875,6 +876,17 @@ export const PHASES: PhaseConfig[] = [
             const tVerify = Date.now()
             const out = await phaseVerifyTooling(d, rawResearch)
             d.recordSubStep?.('verify-tooling', Date.now() - tVerify)
+            // Deterministically verify every runtime builtin specifier the refined
+            // task names (`bun:sql`, `node:…`) against the installed types. A doc can
+            // confidently name a module that does not exist; left unchecked it rides
+            // through every phase and the implementer fabricates a `declare module`
+            // shim to compile it. Append the corrections so compose folds them into
+            // CONSTRAINTS. No LLM cost and silent when nothing is wrong.
+            const corrections = formatApiCorrections(findPhantomImports(p.refined, d.cwd))
+            if (corrections) {
+                d.logDebug?.(`phantom imports flagged:\n${corrections}`)
+                return `${out}\n\n${corrections}`
+            }
             return out
         }
     },

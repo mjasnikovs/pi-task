@@ -354,6 +354,8 @@ VERIFY must exercise the surface area the task actually touches. Draw VERIFY com
 
 If TOOLING is empty for a category the change clearly touches, still include the best-effort standard command for that ecosystem (e.g. \`npx tsc --noEmit\` for a TS repo with no script) and note that the receiving agent may need to install it.
 
+If the research contains an "API CORRECTIONS" section, it is AUTHORITATIVE — each line was verified against the installed types. For every correction: use the import it prescribes, never the specifier it marks non-existent, and add a CONSTRAINT recording it verbatim (e.g. Use \`import { sql } from "bun"\`; \`bun:sql\` is not a module — do not import it or declare a module for it). This overrides any conflicting identifier carried up from the refined task or the spec doc.
+
 Refined task:
 ${refined}
 

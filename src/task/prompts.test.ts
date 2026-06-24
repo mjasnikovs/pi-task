@@ -6,9 +6,19 @@ import {
     RESEARCH_APIS_PROMPT,
     RESEARCH_TOOLING_PROMPT,
     GRILL_AUTO_ANSWER_PROMPT,
+    COMPOSE_PROMPT,
     CRITIQUE_PROMPT,
     CRITIQUE_TRIAGE_PROMPT
 } from './prompts.js'
+
+describe('COMPOSE_PROMPT API CORRECTIONS', () => {
+    test('treats an API CORRECTIONS research section as authoritative', () => {
+        const p = COMPOSE_PROMPT('refined', 'research', 'qa', null)
+        expect(p).toContain('API CORRECTIONS')
+        expect(p).toContain('AUTHORITATIVE')
+        expect(p.toLowerCase()).toContain('add a constraint')
+    })
+})
 
 describe('REFINE_PROMPT', () => {
     test('declares four sections', () => {
