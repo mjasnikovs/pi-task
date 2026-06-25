@@ -30,6 +30,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'enforce guidelines',
         description:
             'Before each /task-auto commit, re-check the work against AGENTS.md/CLAUDE.md and fix drift'
+    },
+    {
+        id: 'verifyWork',
+        label: 'verify work',
+        description:
+            "After each /task-auto task, RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict"
     }
 ]
 

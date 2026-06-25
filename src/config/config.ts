@@ -9,6 +9,7 @@ export interface PiTaskConfig {
     autoCommit: boolean
     orientation: boolean
     enforceGuidelines: boolean
+    verifyWork: boolean
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -16,7 +17,8 @@ const DEFAULTS: PiTaskConfig = {
     compressReasoning: true,
     autoCommit: true,
     orientation: true,
-    enforceGuidelines: false
+    enforceGuidelines: false,
+    verifyWork: false
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')

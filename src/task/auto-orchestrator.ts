@@ -36,6 +36,7 @@ import {
     classifyEnforceChildFailure,
     type EnforceOutcome
 } from './enforce-guidelines.js'
+import {runWorkVerification, extractSpecForVerification, type VerifyOutcome} from './verify-work.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -93,6 +94,21 @@ export interface AutoDeps {
         cwd: string,
         taskTitle: string
     ) => Promise<EnforceOutcome>
+    /**
+     * Verify the just-finished task's work by RUNNING its composed spec's VERIFY
+     * block in the real workspace (a fresh child of the same local model, with a
+     * `bash` tool), then reporting a PASS/FAIL verdict. Optional: absent in tests
+     * or when the `verifyWork` flag is off, in which case the loop treats it as a
+     * pass. Runs BEFORE the task is checked off/committed and is a hard GATE: ok
+     * === false stops the run and fails the task (left unchecked so resume re-runs
+     * it). Needs the inner taskId to read that task's spec.
+     */
+    verify?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        taskTitle: string,
+        taskId: string
+    ) => Promise<VerifyOutcome>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -584,6 +600,92 @@ function defaultDeps(
                     }
                 }
             })
+        },
+        verify: async (verifyCtx, cwd2, taskTitle, taskId) => {
+            if (!getConfig().verifyWork) {
+                return {ok: true, reason: 'disabled'}
+            }
+            // The spec to verify against is the composed spec committed in the
+            // task file. A task that never reached compose has no spec section —
+            // runWorkVerification treats a null spec as a no-op pass.
+            let spec: string | null
+            try {
+                const {body} = await readTaskFile(cwd2, taskId)
+                spec = extractSpecForVerification(body)
+            } catch {
+                spec = null
+            }
+            return runWorkVerification({
+                cwd: cwd2,
+                signal,
+                spec,
+                // Same unguarded child as enforce: no wall-clock timeout (a build
+                // or test suite legitimately takes minutes) and exact-match loop
+                // guard only. Re-running the same VERIFY command is the job, so the
+                // path-revisit heuristic is disabled; only a literally-identical
+                // call repeated past threshold trips, and that warns rather than
+                // blocks.
+                runChild: async (tools, prompt, sig) => {
+                    lastLine = undefined
+                    contextUsage = undefined
+                    const startedAt = Date.now()
+                    const verifyLogPath = path.join(tasksDir(cwd2), 'verify-debug.log')
+                    const logVerify = (msg: string): void => {
+                        void fsp
+                            .appendFile(verifyLogPath, `${new Date().toISOString()} ${msg}\n`)
+                            .catch(() => {})
+                    }
+                    logVerify(`=== verify start: ${taskTitle} ===`)
+                    const stopLoader = startAutoLoader(verifyCtx, () => ({
+                        title: taskTitle,
+                        kind: 'verify',
+                        step: 'verify',
+                        stepNum: 1,
+                        stepTotal: 1,
+                        startedAt,
+                        lastLine,
+                        contextUsage
+                    }))
+                    try {
+                        const r = await runWorker({
+                            prompt,
+                            cwd: cwd2,
+                            signal: sig,
+                            tools,
+                            timeoutMs: 0,
+                            loop: {pathThreshold: Number.POSITIVE_INFINITY},
+                            onLine: line => {
+                                lastLine = line
+                                logVerify(line)
+                            },
+                            onContextUsage: snapshot => {
+                                contextUsage = resolveContextUsage(
+                                    snapshot,
+                                    contextUsage,
+                                    parentContextWindow
+                                )
+                            }
+                        })
+                        if (r.loopHit) {
+                            logVerify(`=== verify LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
+                            verifyCtx.ui.notify(
+                                `${taskTitle}: verify worker looped past the nudges — continuing (not blocked).`,
+                                'warning'
+                            )
+                        }
+                        const failure = classifyEnforceChildFailure(r)
+                        logVerify(
+                            failure ?
+                                `=== verify end: FAIL — ${failure} ===`
+                            :   '=== verify end: verdict captured ==='
+                        )
+                        if (failure) throw new Error(failure)
+                        return r.text
+                    } finally {
+                        stopLoader()
+                    }
+                }
+            })
         }
     }
 }
@@ -725,6 +827,28 @@ export async function runAutoLoop(
                     'error'
                 )
                 return
+            }
+            // GATE: actually RUN the task's verification against the just-finished
+            // work BEFORE it is checked off or committed. The composed spec ships a
+            // VERIFY block, but nothing in the pipeline ever executed it — a task
+            // that did not work was checked off identically to one that did. Run it
+            // now in the real workspace; a FAIL stops the whole run exactly like an
+            // implementation failure — the task is left UNCHECKED and UNCOMMITTED so
+            // /task-auto-resume re-runs it (rather than blessing broken work). Off
+            // by default (deps.verify returns a disabled no-op) and a no-op when the
+            // task has no composed spec to verify against.
+            if (deps.verify) {
+                active.ui.notify(`${id}: verifying "${next.title}"…`, 'info')
+                const verified = await deps.verify(active, cwd, next.title, res.taskId)
+                if (!verified.ok) {
+                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                    announceDone(
+                        active,
+                        `${id} stopped at "${next.title}" — ${verified.reason ?? 'did not verify'} — fix and run /task-auto-resume.`,
+                        'error'
+                    )
+                    return
+                }
             }
             // res.ok === true means runner.run() completed, so res.taskId is the
             // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an

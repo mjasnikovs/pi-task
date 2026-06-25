@@ -509,6 +509,88 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
     })
 })
 
+test('runAutoLoop: a failing verification STOPS the run and leaves the task unchecked', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(
+            dir,
+            autoFm('TASK_AUTO_0001'),
+            buildAutoBody('feat', '(none)', ['A', 'B'])
+        )
+        const commits: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'work did not verify: bun run build exited 1'})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // The gate runs BEFORE check-off/commit: the run halts at A, the file is
+        // marked failed, and NEITHER box is checked (so resume re-runs A).
+        expect(frontMatter.state).toBe('failed')
+        expect(parseTaskList(body).some(e => e.done)).toBe(false)
+        // Only the pre-task checkpoint ran — the task was never blessed with a
+        // `task:` commit because verification failed first.
+        expect(commits).toEqual(['chore: checkpoint before "A"'])
+        // Second task is never reached.
+        expect(
+            captured.notifies.some(n => /verify exited 1|did not verify|build exited 1/.test(n.msg))
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: a passing verification lets the run check off and complete', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let verified = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            verify: () => {
+                verified++
+                return Promise.resolve({ok: true})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(verified).toBe(1)
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+    })
+})
+
+test('runAutoLoop: verification runs even when no commit lands (it gates the work, not the commit)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let verified = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            // Unlike enforce (which needs the last commit's diff), verification runs
+            // against the working tree, so a no-commit round still verifies.
+            commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
+            verify: () => {
+                verified++
+                return Promise.resolve({ok: true})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(verified).toBe(1)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})
+
 test('runAutoLoop: enforce is skipped when the task commit did not land', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
