@@ -3,7 +3,8 @@ import {
     extractRuntimeSpecifiers,
     classifyRuntimeImport,
     findPhantomImports,
-    formatApiCorrections
+    formatApiCorrections,
+    rewritePhantomSpecifiers
 } from './phantom-imports.js'
 
 const TYPES = `
@@ -65,8 +66,34 @@ test('findPhantomImports skips a runtime whose types cannot be loaded (never fla
 test('formatApiCorrections renders a section, or empty string when clean', () => {
     expect(formatApiCorrections([])).toBe('')
     const block = formatApiCorrections([
-        {spec: 'bun:sql', realModules: [], suggestion: 'X is not a module'}
+        {spec: 'bun:sql', realModules: [], suggestion: 'X is not a module', baseSymbol: 'sql'}
     ])
     expect(block.startsWith('API CORRECTIONS\n')).toBe(true)
     expect(block).toContain('  - X is not a module')
+})
+
+test('rewritePhantomSpecifiers strikes all four syntactic forms', () => {
+    const phantoms = findPhantomImports('bun:sql', '/x', () => TYPES)
+    const text = [
+        'import { x } from "bun:sql"',
+        'const c = require("bun:sql")',
+        'declare module "bun:sql" {}',
+        'the `bun:sql` driver',
+        '| PostgreSQL driver | bun:sql | pg |'
+    ].join('\n')
+    const out = rewritePhantomSpecifiers(text, phantoms)
+    expect(out).not.toContain('"bun:sql"') // import/require/declare quotes rewritten
+    expect(out).not.toContain('`bun:sql`') // backticked mention rewritten
+    expect(out).toContain('from "bun"')
+    expect(out).toContain('require("bun")')
+    expect(out).toContain('/* not a module — use') // declare-module → comment
+    expect(out).toContain('`import { sql } from "bun"`') // backtick → canonical
+    expect(out).toContain('| import { sql } from "bun" | pg |') // bare word in table cell
+})
+
+test('rewritePhantomSpecifiers is idempotent and a no-op when nothing is flagged', () => {
+    const phantoms = findPhantomImports('use bun:sql', '/x', () => TYPES)
+    const once = rewritePhantomSpecifiers('use bun:sql now', phantoms)
+    expect(rewritePhantomSpecifiers(once, phantoms)).toBe(once)
+    expect(rewritePhantomSpecifiers('use zod and react', [])).toBe('use zod and react')
 })

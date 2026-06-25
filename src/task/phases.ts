@@ -8,7 +8,11 @@ import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {formatNpmVersionSection} from '../workers/npm-version.js'
 import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
-import {findPhantomImports, formatApiCorrections} from '../workers/phantom-imports.js'
+import {
+    findPhantomImports,
+    formatApiCorrections,
+    rewritePhantomSpecifiers
+} from '../workers/phantom-imports.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
@@ -863,7 +867,22 @@ export const PHASES: PhaseConfig[] = [
         name: 'refine',
         section: 'refined prompt',
         field: 'refined',
-        run: (d, p) => phaseRefine(d, p.rawPrompt, p.planContext)
+        run: async (d, p) => {
+            const refined = await phaseRefine(d, p.rawPrompt, p.planContext)
+            // Subtractively strike any phantom runtime specifier (`bun:sql`) the
+            // refine carried up verbatim from the spec doc, BEFORE it flows to
+            // research/grill/compose. An appended correction alone loses: the
+            // affirmative survives into the composed GOAL and on to the implementer
+            // (proven: compose re-leaks it 4/4). Rewriting the source so compose has
+            // nothing to contradict is the fix. Silent + no-op when nothing is wrong
+            // or the runtime's types aren't installed.
+            const phantoms = findPhantomImports(refined, d.cwd)
+            if (phantoms.length === 0) return refined
+            d.logDebug?.(
+                `phantom specifiers rewritten in refined: ${phantoms.map(x => x.spec).join(', ')}`
+            )
+            return rewritePhantomSpecifiers(refined, phantoms)
+        }
     },
     {
         name: 'research',

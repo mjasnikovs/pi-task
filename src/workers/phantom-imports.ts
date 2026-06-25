@@ -31,6 +31,9 @@ export interface PhantomImport {
     realModules: string[]
     /** Corrective guidance to inject into the spec. */
     suggestion: string
+    /** Base-module symbol the submodule leaf maps to (`bun:sql` → `SQL`), or null
+     *  when the types declare no matching symbol. Drives the canonical-import rewrite. */
+    baseSymbol: string | null
 }
 
 // Runtime builtin specifiers as they appear in prose/code: `bun:sql`,
@@ -211,7 +214,8 @@ export function findPhantomImports(
         out.push({
             spec,
             realModules: verdict.realModules,
-            suggestion: suggestionFor(verdict, ns.runtime)
+            suggestion: suggestionFor(verdict, ns.runtime),
+            baseSymbol: verdict.baseSymbol
         })
     }
     return out
@@ -222,4 +226,51 @@ export function formatApiCorrections(phantoms: PhantomImport[]): string {
     if (phantoms.length === 0) return ''
     const lines = phantoms.map(p => `  - ${p.suggestion}`)
     return `API CORRECTIONS\n${lines.join('\n')}`
+}
+
+/**
+ * Subtractively rewrite every flagged phantom specifier in `text` to the canonical
+ * import the installed types prove, so NO affirmative occurrence of the non-existent
+ * specifier survives downstream. This is the half an appended correction can't do:
+ * REFINE preserves identifiers verbatim, so `bun:sql` otherwise rides into the
+ * composed GOAL (proven: compose re-leaks it 4/4) and on to the implementer. Strike
+ * it at the source and compose has nothing to contradict.
+ *
+ * Deterministic, no LLM. Idempotent on healthy input: once a specifier is replaced
+ * the literal is gone, so a second pass is a no-op (the only residue is a `declare
+ * module` comment that quotes the spec inside a slash-star, which the bare-word rule
+ * skips via its lookbehind). Handles the four forms a phantom takes: an import/require
+ * `from "<spec>"`, a fabricated `declare module "<spec>"`, a backticked prose mention
+ * `` `<spec>` ``, and a bare word `<spec>`.
+ */
+export function rewritePhantomSpecifiers(text: string, phantoms: PhantomImport[]): string {
+    let out = text
+    for (const p of phantoms) {
+        const ns = splitRuntimeNamespace(p.spec)
+        if (!ns) continue
+        const runtime = ns.runtime
+        const canonical =
+            p.baseSymbol ?
+                `import { ${p.baseSymbol} } from "${runtime}"`
+            :   `the "${runtime}" module`
+        const spec = escapeRe(p.spec)
+        out = out
+            // `from "bun:sql"` / `require("bun:sql")` → point at the base runtime module
+            .replace(
+                new RegExp(`((?:from\\s+|require\\(\\s*)["'])${spec}(["'])`, 'g'),
+                `$1${runtime}$2`
+            )
+            // a fabricated `declare module "bun:sql"` → a comment naming the real import.
+            // Deliberately does NOT echo the spec literal, so the bare-word pass below
+            // can't re-corrupt this comment (keeps the rewrite idempotent).
+            .replace(
+                new RegExp(`declare\\s+module\\s+["']${spec}["']`, 'g'),
+                `/* not a module — use ${canonical} */`
+            )
+            // backticked prose mention → the canonical import
+            .replace(new RegExp('`' + spec + '`', 'g'), '`' + canonical + '`')
+            // bare word, not already inside quotes/backticks/a path or our own comment
+            .replace(new RegExp(`(?<![\`"'/])\\b${spec}\\b(?![\`"'])`, 'g'), canonical)
+    }
+    return out
 }
