@@ -704,31 +704,31 @@ export async function phaseGrill(
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
             const plainAlt = auto.alt === undefined ? undefined : stripInlineMarkdown(auto.alt)
-            // A binary fork (suggested + alt) becomes a select() picker locally —
-            // each option on its own line, labelled A/B. A single recommendation
-            // rides along under the question as the input default; an open
-            // question shows the bare prompt.
+            // A recommendation (or suggested+alt fork) becomes the boxed picker
+            // locally — each answer in its own bounding box, the recommended one
+            // tinted green; an open question shows the bare text prompt.
             const twoOption = plainSuggested !== undefined && plainAlt !== undefined
-            const localTitle =
-                !twoOption && plainSuggested ?
-                    `${shownQ}\n${renderInlineMarkdown(auto.suggested!, theme)}`
-                :   shownQ
-            widgetState.lastLine = `awaiting Q${n + 1}`
-            const a = await ui.ask({
-                localTitle,
-                question: plainQ,
-                recommended: plainSuggested,
-                recommended2: plainAlt,
-                allowSkip: plainSuggested === undefined && plainAlt === undefined,
-                ...(twoOption && {
-                    options: [
+            const options =
+                twoOption ?
+                    [
                         {
                             label: `A: ${renderInlineMarkdown(auto.suggested!, theme)}`,
                             value: plainSuggested!
                         },
                         {label: `B: ${renderInlineMarkdown(auto.alt!, theme)}`, value: plainAlt!}
                     ]
-                })
+                : plainSuggested !== undefined ?
+                    [{label: renderInlineMarkdown(auto.suggested!, theme), value: plainSuggested}]
+                :   undefined
+            widgetState.lastLine = `awaiting Q${n + 1}`
+            const a = await ui.ask({
+                localTitle: shownQ,
+                displayQuestion: shownQ,
+                question: plainQ,
+                recommended: plainSuggested,
+                recommended2: plainAlt,
+                allowSkip: plainSuggested === undefined && plainAlt === undefined,
+                ...(options && {options})
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
             const typed = a.trim()

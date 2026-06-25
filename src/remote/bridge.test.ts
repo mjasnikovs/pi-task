@@ -34,7 +34,7 @@ function fakeCtx(opts: {
     return {
         hasUI: opts.hasUI ?? true,
         ui: {
-            theme: {fg: (_c: string, s: string) => s},
+            theme: {fg: (_c: string, s: string) => s, bold: (s: string) => s},
             input: (_title: string, _ph?: string, o?: {signal?: AbortSignal}) =>
                 new Promise<string | undefined>(resolve => {
                     o?.signal?.addEventListener('abort', () => resolve(undefined))
@@ -105,23 +105,41 @@ test('remote off (no server, default broadcast): resolves from local, no crash',
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
 })
 
-test('select picker: choosing an option resolves to its value, not its label', async () => {
-    const b = getBridge()
-    _setSink(msg => b.sent.push(msg as never))
-    let seenOptions: string[] = []
+// Mock ctx.ui.custom for the boxed picker: builds the real component, drives it
+// `down` rows then confirms with Enter — exercising the actual navigation +
+// onChoose wiring. `rendered` captures the component's lines for assertions.
+function boxedCtx(opts: {down: number; input?: () => Promise<string | undefined>}) {
+    const rendered: string[] = []
     const ctx = {
         hasUI: true,
         ui: {
-            theme: {fg: (_c: string, s: string) => s},
-            select: async (_t: string, options: string[]) => {
-                seenOptions = options
-                return options[1] // the "B: …" entry
-            },
-            input: async () => undefined,
+            theme: {fg: (_c: string, s: string) => s, bold: (s: string) => s},
+            custom: <T>(
+                factory: (
+                    tui: unknown,
+                    theme: unknown,
+                    kb: unknown,
+                    done: (r: T) => void
+                ) => {render: (w: number) => string[]; handleInput: (d: string) => void}
+            ) =>
+                new Promise<T>(resolve => {
+                    const comp = factory({}, {}, {}, resolve)
+                    rendered.push(...comp.render(80))
+                    for (let i = 0; i < opts.down; i++) comp.handleInput('\x1b[B')
+                    comp.handleInput('\r')
+                }),
+            input: opts.input ?? (async () => undefined),
             notify: () => {},
             setWidget: () => {}
         }
     } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    return {ctx, rendered}
+}
+
+test('boxed picker: choosing an option resolves to its value, not its label', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const {ctx, rendered} = boxedCtx({down: 1}) // move to the "B: …" card, then Enter
     const ui = new SessionUI(ctx, b)
     await expect(
         ui.ask({
@@ -136,24 +154,18 @@ test('select picker: choosing an option resolves to its value, not its label', a
             ]
         })
     ).resolves.toBe('pnpm')
-    // The free-text fallback entry is appended after the real options.
-    expect(seenOptions).toEqual(['A: npm', 'B: pnpm', 'Type a different answer…'])
+    // Both options plus the free-text fallback render as boxed cards.
+    const all = rendered.join('\n')
+    expect(all).toContain('A: npm')
+    expect(all).toContain('B: pnpm')
+    expect(all).toContain('Type a different answer…')
 })
 
-test('select picker: "type a different answer" falls through to a text input', async () => {
+test('boxed picker: "type a different answer" falls through to a text input', async () => {
     const b = getBridge()
     _setSink(msg => b.sent.push(msg as never))
-    const ctx = {
-        hasUI: true,
-        ui: {
-            theme: {fg: (_c: string, s: string) => s},
-            // Pick the trailing free-text entry, then type a custom answer.
-            select: async (_t: string, options: string[]) => options[options.length - 1],
-            input: async () => 'yarn',
-            notify: () => {},
-            setWidget: () => {}
-        }
-    } as unknown as import('@earendil-works/pi-coding-agent').ExtensionCommandContext
+    // Two cards + the manual fallback → index 2 is the trailing free-text entry.
+    const {ctx} = boxedCtx({down: 2, input: async () => 'yarn'})
     const ui = new SessionUI(ctx, b)
     await expect(
         ui.ask({

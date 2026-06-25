@@ -1245,17 +1245,30 @@ describe('phaseGrill', () => {
         })
     })
 
-    test('two-option grill: picking A/B in the select picker stores that option, not the label', async () => {
-        // The binary fork renders as a select() picker labelled "A:" / "B:".
-        // Records must store the chosen option's full text so the next grill-gen
-        // call can reason over it — storing the bare "A" (or the "A: " label)
-        // would leave a dangling reference the model can't decode.
+    test('two-option grill: picking A/B in the boxed picker stores that option, not the label', async () => {
+        // The binary fork renders as a boxed picker labelled "A:" / "B:". Records
+        // must store the chosen option's full text so the next grill-gen call can
+        // reason over it — storing the bare "A" (or the "A: " label) would leave a
+        // dangling reference the model can't decode.
         const pickIndex = (idx: number) =>
             ({
                 hasUI: true,
                 ui: {
                     theme: {fg: (_: string, s: string) => s, bold: (s: string) => s},
-                    select: async (_t: string, options: string[]) => options[idx],
+                    // Drive the real boxed component to card `idx`, then confirm.
+                    custom: <T>(
+                        factory: (
+                            tui: unknown,
+                            theme: unknown,
+                            kb: unknown,
+                            done: (r: T) => void
+                        ) => {handleInput: (d: string) => void}
+                    ) =>
+                        new Promise<T>(resolve => {
+                            const comp = factory({}, {}, {}, resolve)
+                            for (let i = 0; i < idx; i++) comp.handleInput('\x1b[B')
+                            comp.handleInput('\r')
+                        }),
                     input: async () => undefined,
                     notify: () => undefined
                 }

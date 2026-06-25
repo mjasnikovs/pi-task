@@ -108,6 +108,44 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                     if (selectQueue.length === 0) return undefined
                     return selectQueue.shift()
                 }),
+                // The boxed clarify/grill picker (askQuestionBox) goes through
+                // ui.custom. Build the real component, capture its header + card
+                // labels into `selects`, and drive it to the queued choice: the
+                // queued value is the LABEL of the card to pick (the manual
+                // "type a different answer" card then falls through to ui.input),
+                // or undefined to cancel.
+                custom: guard(
+                    async <T>(
+                        factory: (
+                            tui: unknown,
+                            theme: unknown,
+                            kb: unknown,
+                            done: (r: T) => void
+                        ) => {
+                            cardLabels: string[]
+                            headerText: string
+                            handleInput: (d: string) => void
+                        }
+                    ): Promise<T> => {
+                        let resolved: T = undefined as T
+                        const comp = factory({}, {}, {}, r => {
+                            resolved = r
+                        })
+                        captured.selects.push({
+                            title: comp.headerText,
+                            options: comp.cardLabels
+                        })
+                        const want = selectQueue.length === 0 ? undefined : selectQueue.shift()
+                        const idx = want === undefined ? -1 : comp.cardLabels.indexOf(want)
+                        if (idx < 0) {
+                            comp.handleInput('\x1b') // cancel
+                            return resolved
+                        }
+                        for (let i = 0; i < idx; i++) comp.handleInput('\x1b[B')
+                        comp.handleInput('\r')
+                        return resolved
+                    }
+                ),
                 setWidget: guard((key: string, widgetState: unknown) => {
                     captured.widgets.push({key, state: widgetState})
                 }),

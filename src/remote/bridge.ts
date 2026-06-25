@@ -7,6 +7,7 @@ import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
 import {setPrompt, clearPrompt} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
+import {askQuestionBox} from '../task/question-box.js'
 
 export interface BridgeState {
     /** promptId → resolver that settles the remote side of an ask() race. */
@@ -51,6 +52,9 @@ export function answerPrompt(id: string, value: string | undefined): void {
 export interface AskSpec {
     /** Themed, possibly multi-line title for the local TUI input. */
     localTitle: string
+    /** Themed (markdown-rendered) question shown as the boxed picker header.
+     *  Falls back to `question` when absent. */
+    displayQuestion?: string
     /** Plain question text for the browser card. */
     question: string
     /** Primary recommended option, prefilled in the local TUI. */
@@ -70,10 +74,6 @@ export interface AskSpec {
      */
     options?: {label: string; value: string}[]
 }
-
-/** Trailing picker entry that drops to a free-text input — the local mirror of
- *  the remote card's "✎ Manual answer" button. */
-const TYPE_OWN_LABEL = 'Type a different answer…'
 
 /** Wraps a live command ctx and fans interactions out to local TUI + browsers. */
 export class SessionUI {
@@ -135,26 +135,26 @@ export class SessionUI {
     }
 
     /**
-     * The local-TUI half of ask(). With `spec.options` it renders a select()
-     * picker (each option on its own line) plus a trailing "type a different
-     * answer" entry that drops to a text input; the chosen entry's `value` is
-     * returned. Without options it falls back to a single text input. Cancelling
-     * either dialog (or an abort when the remote wins the race) resolves to
-     * undefined.
+     * The local-TUI half of ask(). With `spec.options` it renders the boxed
+     * picker (each answer in its own bounding box, the first/recommended one
+     * tinted green) plus a trailing "type a different answer" entry that drops to
+     * a text input; the chosen entry's `value` is returned. Without options it
+     * falls back to a single text input. Cancelling either dialog (or an abort
+     * when the remote wins the race) resolves to undefined.
      */
     private async askLocal(spec: AskSpec, signal: AbortSignal): Promise<string | undefined> {
         const opts = spec.options
         if (opts && opts.length > 0) {
-            const labels = opts.map(o => o.label)
-            const choice = await this.ctx.ui.select(spec.localTitle, [...labels, TYPE_OWN_LABEL], {
+            return askQuestionBox(this.ctx, {
+                question: spec.displayQuestion ?? spec.question,
+                inputTitle: spec.localTitle,
+                options: opts.map((o, i) => ({
+                    label: o.label,
+                    value: o.value,
+                    recommended: i === 0
+                })),
                 signal
             })
-            if (choice === undefined) return undefined // cancelled / aborted
-            if (choice === TYPE_OWN_LABEL) {
-                return this.ctx.ui.input(spec.localTitle, undefined, {signal})
-            }
-            const hit = opts.find(o => o.label === choice)
-            return hit ? hit.value : choice
         }
         return this.ctx.ui.input(spec.localTitle, spec.recommended, {signal})
     }

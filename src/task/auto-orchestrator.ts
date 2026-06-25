@@ -330,31 +330,31 @@ export async function planAuto(
         askedQuestions.push(plainQ)
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
         const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
-        // Identical to /task's grill dialog: a binary fork becomes a select()
-        // picker locally — each option on its own line, labelled A/B; a single
-        // recommendation rides under the question as the input default; an open
-        // question shows the bare prompt. No verbose "Recommended:" /
-        // "press Enter to accept" scaffolding.
+        // Identical to /task's grill dialog: a recommendation (or A/B fork)
+        // becomes the boxed picker locally — each answer in its own bounding box,
+        // the recommended one tinted green; an open question shows the bare text
+        // prompt. No verbose "Recommended:" / "press Enter to accept" scaffolding.
         const twoOption = plainSuggested !== undefined && plainAlt !== undefined
-        const title =
-            !twoOption && plainSuggested ?
-                `${shownQ}\n${renderInlineMarkdown(suggested!, theme)}`
-            :   shownQ
-        const a = await ui.ask({
-            localTitle: title,
-            question: plainQ,
-            recommended: plainSuggested,
-            ...(plainAlt !== undefined && {recommended2: plainAlt}),
-            allowSkip: plainSuggested === undefined && plainAlt === undefined,
-            ...(twoOption && {
-                options: [
+        const options =
+            twoOption ?
+                [
                     {
                         label: `A: ${renderInlineMarkdown(suggested!, theme)}`,
                         value: plainSuggested!
                     },
                     {label: `B: ${renderInlineMarkdown(alt!, theme)}`, value: plainAlt!}
                 ]
-            })
+            : plainSuggested !== undefined ?
+                [{label: renderInlineMarkdown(suggested!, theme), value: plainSuggested}]
+            :   undefined
+        const a = await ui.ask({
+            localTitle: shownQ,
+            displayQuestion: shownQ,
+            question: plainQ,
+            recommended: plainSuggested,
+            ...(plainAlt !== undefined && {recommended2: plainAlt}),
+            allowSkip: plainSuggested === undefined && plainAlt === undefined,
+            ...(options && {options})
         })
         if (a === undefined) {
             announceDone(ctx, '/task-auto cancelled.', 'warning')
@@ -373,6 +373,10 @@ export async function planAuto(
             answer = plainSuggested!
         } else if (twoOption && /^b[.)]?$/i.test(typed)) {
             answer = plainAlt!
+        } else if (!twoOption && plainSuggested !== undefined && typed === plainSuggested) {
+            // Single recommendation accepted by picking its (green) card in the
+            // boxed picker — same provenance as an empty-submit accept.
+            answer = `${plainSuggested} (accepted recommendation)`
         } else {
             answer = typed
         }

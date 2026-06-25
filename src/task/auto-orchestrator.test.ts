@@ -104,42 +104,43 @@ test('planAuto: strips phantom bun:sql out of the spec before clarify sees it', 
     })
 })
 
-test('planAuto: offers the recommendation as placeholder and in the title', async () => {
+test('planAuto: offers the recommendation as a green card in the boxed picker', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx, captured, queueInput} = makeFakeCtx(dir)
-        queueInput('') // empty -> accept the recommendation
+        const {ctx, captured, queueSelect} = makeFakeCtx(dir)
+        queueSelect('local disk via Bun file APIs') // pick the recommended card
         const d = seqDeps(
             ['1. Where do photos live?\nSUGGESTED: local disk via Bun file APIs'],
             '- [ ] Task A'
         )
         const id = await planAuto(ctx, dir, 'add photo uploads', d)
-        // The suggestion is offered as the input default and surfaced in the title.
-        expect(captured.inputs).toHaveLength(1)
-        expect(captured.inputs[0].default).toBe('local disk via Bun file APIs')
-        // Compact form: the recommendation is shown on its own line, with no
-        // verbose "Recommended:" / "press Enter to accept" scaffolding.
-        expect(captured.inputs[0].title).toContain('local disk via Bun file APIs')
-        expect(captured.inputs[0].title).not.toContain('Recommended:')
-        // Empty input records the recommendation as accepted.
+        // The recommendation renders as its own card alongside the free-text
+        // fallback — no bare text input is shown.
+        expect(captured.inputs).toHaveLength(0)
+        expect(captured.selects).toHaveLength(1)
+        expect(captured.selects[0].options).toContain('local disk via Bun file APIs')
+        expect(captured.selects[0].options).toContain('✎ Type a different answer…')
+        // The question is the picker header; the recommendation is not crammed in.
+        expect(captured.selects[0].title).toContain('Where do photos live?')
+        // Picking the recommended card records it as accepted.
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: local disk via Bun file APIs (accepted recommendation)')
     })
 })
 
-test('planAuto: a binary fork offers two options (A/B) as a select picker', async () => {
+test('planAuto: a binary fork offers two options (A/B) as a boxed picker', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueSelect} = makeFakeCtx(dir)
         queueSelect('B: pnpm') // pick the alternative from the picker
         const d = seqDeps(['1. npm or pnpm?\nSUGGESTED: npm\nALT: pnpm'], '- [ ] Task A')
         const id = await planAuto(ctx, dir, 'set up tooling', d)
-        // The fork renders as a select() picker: both options are listed, labelled
+        // The fork renders as a boxed picker: both options are listed, labelled
         // A/B, with the free-text fallback appended. No bare text input is shown.
         expect(captured.inputs).toHaveLength(0)
         expect(captured.selects).toHaveLength(1)
         expect(captured.selects[0].options).toContain('A: npm')
         expect(captured.selects[0].options).toContain('B: pnpm')
-        expect(captured.selects[0].options).toContain('Type a different answer…')
-        // The question is the picker title; the A/B options are not crammed into it.
+        expect(captured.selects[0].options).toContain('✎ Type a different answer…')
+        // The question is the picker header; the A/B options are not crammed into it.
         expect(captured.selects[0].title).toContain('npm or pnpm?')
         expect(captured.selects[0].title).not.toContain('A: npm')
         // Picking the B entry maps back to the alt option's full text.
@@ -148,10 +149,10 @@ test('planAuto: a binary fork offers two options (A/B) as a select picker', asyn
     })
 })
 
-test('planAuto: renders markdown in the prompt but stores/defaults plain text', async () => {
+test('planAuto: renders markdown in the prompt but stores plain text', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx, captured, queueInput} = makeFakeCtx(dir)
-        queueInput('') // accept the recommendation
+        const {ctx, captured, queueSelect} = makeFakeCtx(dir)
+        queueSelect('Native WebSockets via Bun.serve') // pick the recommended card
         const d = seqDeps(
             [
                 '1. **What transport?** WebSockets or polling?\nSUGGESTED: **Native WebSockets** via `Bun.serve`'
@@ -159,12 +160,12 @@ test('planAuto: renders markdown in the prompt but stores/defaults plain text', 
             '- [ ] Task A'
         )
         const id = await planAuto(ctx, dir, 'messaging', d)
-        // Title shows the question text (bold rendered; fake theme is identity, so
+        // Header shows the question text (bold rendered; fake theme is identity, so
         // no literal ** markers leak through).
-        expect(captured.inputs[0].title).toContain('What transport?')
-        expect(captured.inputs[0].title).not.toContain('**')
-        // The editable default and the persisted answer are plain text.
-        expect(captured.inputs[0].default).toBe('Native WebSockets via Bun.serve')
+        expect(captured.selects[0].title).toContain('What transport?')
+        expect(captured.selects[0].title).not.toContain('**')
+        // The recommended card and the persisted answer are plain text.
+        expect(captured.selects[0].options).toContain('Native WebSockets via Bun.serve')
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: Native WebSockets via Bun.serve (accepted recommendation)')
         expect(body).not.toContain('**')
@@ -206,13 +207,16 @@ test('planAuto: suppresses re-asked questions and stops after repeated dups', as
     })
 })
 
-test('planAuto: typed answer overrides the recommended default', async () => {
+test('planAuto: typed answer overrides the recommended card', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx, captured, queueInput} = makeFakeCtx(dir)
+        const {ctx, captured, queueSelect, queueInput} = makeFakeCtx(dir)
+        queueSelect('✎ Type a different answer…') // choose the free-text fallback card
         queueInput('object storage (S3)')
         const d = seqDeps(['1. Where do photos live?\nSUGGESTED: local disk'], '- [ ] Task A')
         const id = await planAuto(ctx, dir, 'add photo uploads', d)
-        expect(captured.inputs[0].default).toBe('local disk')
+        // The recommendation is offered as a card; choosing "type a different
+        // answer" drops to the free-text input and stores the typed override.
+        expect(captured.selects[0].options).toContain('local disk')
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('A1: object storage (S3)')
         expect(body).not.toContain('accepted recommendation')
@@ -221,9 +225,9 @@ test('planAuto: typed answer overrides the recommended default', async () => {
 
 test('planAuto: feeds each answer into the next clarify call (adaptive)', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx, queueInput} = makeFakeCtx(dir)
-        queueInput('React') // answer to Q1
-        queueInput('') // accept Q2's recommendation
+        const {ctx, queueInput, queueSelect} = makeFakeCtx(dir)
+        queueInput('React') // answer to Q1 (open question → text input)
+        queueSelect('Bun bundler, no Vite') // accept Q2's recommended card
         const clarifyPrompts: string[] = []
         let clarifyCall = 0
         const d: AutoDeps = {
