@@ -51,14 +51,15 @@ describe('renderQuestionBox', () => {
         expect(out.match(/RECOMMENDED/g)?.length).toBe(1)
     })
 
-    test('the selected card is marked with the cursor arrow', () => {
+    test('the selected card is marked with a full-height cursor bar', () => {
         const sel0 = renderQuestionBox(80, 'Q?', CARDS, 0, PLAIN)
         const sel1 = renderQuestionBox(80, 'Q?', CARDS, 1, PLAIN)
-        expect(sel0.some(l => l.startsWith('▸'))).toBe(true)
-        // Exactly one arrow regardless of which card is selected.
-        expect(sel0.filter(l => l.startsWith('▸')).length).toBe(1)
-        expect(sel1.filter(l => l.startsWith('▸')).length).toBe(1)
-        // Moving the cursor moves the arrow.
+        // The bar spans every line of the selected card (top, body, bottom) — not
+        // a single glyph — so it is clearly visible.
+        expect(sel0.filter(l => l.startsWith('▌')).length).toBeGreaterThan(1)
+        // Only the selected card carries the bar: card 0 (one body line) marks 3 rows.
+        expect(sel0.filter(l => l.startsWith('▌')).length).toBe(3)
+        // Moving the cursor moves the bar.
         expect(sel0).not.toEqual(sel1)
     })
 
@@ -91,7 +92,7 @@ describe('renderQuestionBox', () => {
         const long =
             'This is a deliberately long answer option that must wrap across multiple body lines inside its bounding box'
         const lines = renderQuestionBox(40, 'Q?', [{label: long, recommended: true}], 0, PLAIN)
-        const bodyLines = lines.filter(l => l.trimStart().startsWith('│'))
+        const bodyLines = lines.filter(l => l.includes('│') && !l.includes('┌') && !l.includes('└'))
         expect(bodyLines.length).toBeGreaterThan(1)
     })
 })
@@ -120,17 +121,17 @@ describe('QuestionBoxComponent', () => {
         const {comp} = make()
         // Start at 0; up clamps.
         comp.handleInput('\x1b[A') // up
-        expect(comp.render(80).filter(l => l.startsWith('▸')).length).toBe(1)
+        expect(comp.render(80).some(l => l.startsWith('▌'))).toBe(true)
         // Down to the last card then clamp.
         comp.handleInput('\x1b[B')
         comp.handleInput('\x1b[B')
         comp.handleInput('\x1b[B')
         const lines = comp.render(80)
-        const arrowRow = lines.findIndex(l => l.startsWith('▸'))
-        // Arrow should sit on the last (manual) card's top border.
+        const barRow = lines.findIndex(l => l.startsWith('▌'))
+        // The bar should reach the last (manual) card's top border.
         const manualRow = lines.findIndex(l => l.includes(MANUAL_CARD_LABEL))
-        expect(arrowRow).toBeLessThan(manualRow)
-        expect(arrowRow).toBeGreaterThan(-1)
+        expect(barRow).toBeLessThanOrEqual(manualRow)
+        expect(barRow).toBeGreaterThan(-1)
     })
 
     test('enter chooses the highlighted card', () => {

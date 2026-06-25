@@ -46,8 +46,12 @@ type ThemeLike = ExtensionCommandContext['ui']['theme']
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-/** Left gutter: two columns reserved for the "▸ " cursor so boxes stay aligned. */
+/** Left gutter: two columns reserved for the cursor bar so boxes stay aligned. */
 const GUTTER = 2
+/** Cap the dialog at a readable column count. Without this the boxes stretch the
+ *  full terminal width on wide/ultrawide screens — long question lines become
+ *  hard to scan and short answers leave a huge empty right margin inside the box. */
+const MAX_CONTENT_WIDTH = 96
 const RECOMMENDED_TAG = 'RECOMMENDED'
 /** Smallest box that still fits "┌─ RECOMMENDED ─┐". Below this we drop the tag. */
 const TAG_MIN_BOX_WIDTH = visibleWidth(`┌─ ${RECOMMENDED_TAG} ─┐`)
@@ -86,9 +90,10 @@ function renderCard(card: BoxCard, selected: boolean, boxWidth: number, c: BoxCo
     )
     const bottom = borderFn(`└${dash(boxWidth - 2)}┘`)
 
-    const arrow = selected ? c.arrow('▸') + ' ' : '  '
-    const pad = '  '
-    return [arrow + top, ...body.map(b => pad + b), pad + bottom]
+    // A full-height accent bar in the gutter marks the selected card — far more
+    // visible than a single "▸" glyph on the top border alone.
+    const cursor = selected ? c.arrow('▌') + ' ' : '  '
+    return [cursor + top, ...body.map(b => cursor + b), cursor + bottom]
 }
 
 /**
@@ -104,7 +109,7 @@ export function renderQuestionBox(
     c: BoxColors,
     hintText: string = HINT_TEXT
 ): string[] {
-    const W = Math.max(width, 12)
+    const W = Math.min(Math.max(width, 12), MAX_CONTENT_WIDTH)
     const boxWidth = Math.max(6, W - GUTTER)
     const out: string[] = ['']
 
