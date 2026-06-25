@@ -229,6 +229,58 @@ export function formatApiCorrections(phantoms: PhantomImport[]): string {
 }
 
 /**
+ * A top-of-handoff override banner (Layer B). The deterministic check has proven —
+ * against the installed type definitions — that the spec, or a design doc it
+ * references, names an API that does NOT exist. The implementer is told the spec/doc
+ * is authoritative, so a residual affirmative that survived into the composed spec, or
+ * one re-injected when pi expands an `@design.md` the spec references, can still push it
+ * to write `bun:sql` / a `declare module` shim. This banner sits ABOVE the spec and is
+ * declared to outrank it for these specifiers only. Empty when nothing is flagged.
+ */
+export function formatApiOverrideBanner(phantoms: PhantomImport[]): string {
+    if (phantoms.length === 0) return ''
+    const lines = phantoms.map(p => `  - ${p.suggestion}`)
+    return (
+        'VERIFIED API OVERRIDES — checked against the installed type definitions. These '
+        + 'SUPERSEDE the spec below and any design/spec document it references: the doc is '
+        + 'WRONG about these specifiers, so do NOT follow it here.\n'
+        + lines.join('\n')
+        + '\nUse the corrected import shown for each. Never write the phantom specifier, '
+        + 'and never add a `declare module` shim to make it resolve.'
+    )
+}
+
+// An @-file mention in a spec ("@DESIGN/foo.md", path until whitespace) minus the
+// trailing prose punctuation a sentence adds. Mirrors auto-orchestrator's mention
+// rules so we read the same docs pi re-expands when delivering the spec.
+const MENTION_RE = /(?:^|\s)@([^\s]+)/g
+const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
+
+/**
+ * The phantoms the IMPLEMENTER would actually encounter: those named in the delivered
+ * spec text itself, PLUS those in any @-file the spec references (pi expands that
+ * mention at send time, re-injecting the doc's affirmative). Concatenates the spec with
+ * each readable referenced doc and runs the standard deterministic check over the whole.
+ * Unreadable mentions are skipped; silent when types are absent or nothing is flagged.
+ * Drives the impl-handoff override banner (Layer B).
+ */
+export function findDeliveryPhantoms(spec: string, cwd: string): PhantomImport[] {
+    let text = spec
+    const seen = new Set<string>()
+    for (const m of spec.matchAll(MENTION_RE)) {
+        const rel = m[1].replace(MENTION_TRAILING_PUNCT, '')
+        if (rel === '' || seen.has(rel)) continue
+        seen.add(rel)
+        try {
+            text += '\n' + fs.readFileSync(path.resolve(cwd, rel), 'utf8')
+        } catch {
+            // not a readable file — leave the @token, skip it
+        }
+    }
+    return findPhantomImports(text, cwd)
+}
+
+/**
  * Subtractively rewrite every flagged phantom specifier in `text` to the canonical
  * import the installed types prove, so NO affirmative occurrence of the non-existent
  * specifier survives downstream. This is the half an appended correction can't do:

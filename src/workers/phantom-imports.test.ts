@@ -4,8 +4,13 @@ import {
     classifyRuntimeImport,
     findPhantomImports,
     formatApiCorrections,
+    formatApiOverrideBanner,
+    findDeliveryPhantoms,
     rewritePhantomSpecifiers
 } from './phantom-imports.js'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as nodePath from 'node:path'
 
 const TYPES = `
 declare module "bun" {
@@ -70,6 +75,67 @@ test('formatApiCorrections renders a section, or empty string when clean', () =>
     ])
     expect(block.startsWith('API CORRECTIONS\n')).toBe(true)
     expect(block).toContain('  - X is not a module')
+})
+
+test('formatApiOverrideBanner: top banner that supersedes the doc, or empty when clean', () => {
+    expect(formatApiOverrideBanner([])).toBe('')
+    const banner = formatApiOverrideBanner([
+        {
+            spec: 'bun:sql',
+            realModules: [],
+            suggestion: '`bun:sql` is NOT a module — use `import { SQL } from "bun"`',
+            baseSymbol: 'SQL'
+        }
+    ])
+    expect(banner.startsWith('VERIFIED API OVERRIDES')).toBe(true)
+    expect(banner).toContain('SUPERSEDE the spec')
+    expect(banner).toContain('import { SQL } from "bun"')
+    expect(banner).toContain('declare module') // the explicit "never add a shim" clause
+})
+
+// Lay down a resolvable `bun` types stub so the REAL loader flags bun:sql as phantom.
+function withStubbedBun(fn: (dir: string) => void): void {
+    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'phantom-deliv-'))
+    const pkg = nodePath.join(dir, 'node_modules', 'bun')
+    fs.mkdirSync(pkg, {recursive: true})
+    fs.writeFileSync(
+        nodePath.join(pkg, 'package.json'),
+        JSON.stringify({name: 'bun', version: '1.0.0', types: 'index.d.ts'})
+    )
+    fs.writeFileSync(
+        nodePath.join(pkg, 'index.d.ts'),
+        'export class SQL {}\nexport const sql: SQL\ndeclare module "bun:test" {}\n'
+    )
+    try {
+        fn(dir)
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+}
+
+test('findDeliveryPhantoms: flags an affirmative bun:sql in the spec text itself', () => {
+    withStubbedBun(dir => {
+        const phantoms = findDeliveryPhantoms('Connect using the `bun:sql` driver.', dir)
+        expect(phantoms.map(p => p.spec)).toEqual(['bun:sql'])
+    })
+})
+
+test('findDeliveryPhantoms: flags bun:sql reached only via an @-referenced design doc', () => {
+    withStubbedBun(dir => {
+        fs.writeFileSync(
+            nodePath.join(dir, 'DESIGN.md'),
+            '# Design\nDB access via `bun:sql` built-in driver.'
+        )
+        // The spec itself is clean — the phantom lives only in the doc pi re-expands.
+        const phantoms = findDeliveryPhantoms('Implement the DB layer per @DESIGN.md', dir)
+        expect(phantoms.map(p => p.spec)).toEqual(['bun:sql'])
+    })
+})
+
+test('findDeliveryPhantoms: clean spec + no phantom doc -> empty', () => {
+    withStubbedBun(dir => {
+        expect(findDeliveryPhantoms('Use `import { SQL } from "bun"` for the DB.', dir)).toEqual([])
+    })
 })
 
 test('rewritePhantomSpecifiers strikes all four syntactic forms', () => {

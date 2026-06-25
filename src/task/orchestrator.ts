@@ -44,6 +44,7 @@ import {startWidget, type WidgetState} from './widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {parseVerifyBlock} from './spec-validation.js'
+import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
 import {titleForDisplay} from './parsers.js'
 import {type PhaseDeps} from './child-runner.js'
 import {formatTimings, type TimingEntry} from './timings.js'
@@ -319,18 +320,38 @@ export class TaskRunner {
     }
 
     private async _deliverSpec(ctx: ExtensionCommandContext): Promise<void> {
+        const spec = this._specForDelivery()
         if (this._sendSpec) {
-            await this._sendSpec(this._pc.spec)
+            await this._sendSpec(spec)
             return
         }
         if (!piApi) {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
         if (ctx.isIdle()) {
-            piApi.sendUserMessage(this._pc.spec)
+            piApi.sendUserMessage(spec)
         } else {
-            piApi.sendUserMessage(this._pc.spec, {deliverAs: 'followUp'})
+            piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
         }
+    }
+
+    /**
+     * The spec as the implementer should receive it (Layer B). Layer A strips phantom
+     * specifiers from the upstream pipeline text, but a residual affirmative can survive
+     * into the composed spec, or arrive when pi expands an `@design.md` the spec
+     * references — and the implementer is told that doc is authoritative. Prepend a
+     * VERIFIED API OVERRIDES banner that outranks the spec for any specifier the
+     * deterministic check proves does not exist. No-op (returns the spec unchanged) when
+     * nothing is flagged or the runtime's types aren't installed.
+     */
+    private _specForDelivery(): string {
+        const phantoms = findDeliveryPhantoms(this._pc.spec, this._cwd)
+        const banner = formatApiOverrideBanner(phantoms)
+        if (!banner) return this._pc.spec
+        this._deps.logDebug?.(
+            `impl-handoff API override banner prepended for: ${phantoms.map(p => p.spec).join(', ')}`
+        )
+        return `${banner}\n\n${this._pc.spec}`
     }
 }
 
