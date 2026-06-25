@@ -37,6 +37,7 @@ import {
     type EnforceOutcome
 } from './enforce-guidelines.js'
 import {runWorker} from '../workers/pi-worker-core.js'
+import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {
     runPhaseChild,
@@ -110,6 +111,20 @@ const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
 /** The cleaned path token of an @-mention: greedy match minus trailing prose punctuation. */
 function mentionPath(token: string): string {
     return token.replace(MENTION_TRAILING_PUNCT, '')
+}
+
+/**
+ * Fire-and-forget debug line for the PLAN phase (clarify/decompose), which runs
+ * before any task file — hence any per-task `TASK_XXXX-debug.log` — exists. Writes
+ * to `.pi-tasks/plan-debug.log`; the `*-debug.log` suffix keeps it grep-compatible
+ * with the per-task logs. Never throws (mkdir + append are best-effort).
+ */
+function logPlanDebug(cwd: string, msg: string): void {
+    const line = `${new Date().toISOString()} ${msg}\n`
+    const dir = tasksDir(cwd)
+    fsp.mkdir(dir, {recursive: true})
+        .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
+        .catch(() => {})
 }
 
 /**
@@ -257,7 +272,26 @@ export async function planAuto(
     const ui = new SessionUI(ctx)
     // Inline any @file spec the user referenced so clarify/decompose reason over
     // the real content, not a one-line "Implement @file" that reads as trivial.
-    const featureForModel = await expandFeatureMentions(cwd, feature)
+    const rawFeatureForModel = await expandFeatureMentions(cwd, feature)
+    // Strike phantom runtime specifiers (`bun:sql`) out of the inlined spec BEFORE
+    // clarify/decompose ever see it. Layer A only rewrites the per-task `refined`
+    // text — which is DOWNSTREAM of here: clarify is the first phase and runs on
+    // this raw inline, so the doc's affirmative `bun:sql` is parroted straight into
+    // the very first clarifying question ("instantly bun:sql is back"). Apply the
+    // same deterministic, no-LLM strike at the single point that feeds both planning
+    // children. Silent + no-op when nothing is flagged or the runtime's types aren't
+    // installed.
+    const planPhantoms = findPhantomImports(rawFeatureForModel, cwd)
+    const featureForModel =
+        planPhantoms.length === 0 ?
+            rawFeatureForModel
+        :   rewritePhantomSpecifiers(rawFeatureForModel, planPhantoms)
+    if (planPhantoms.length > 0) {
+        logPlanDebug(
+            cwd,
+            `phantom specifiers rewritten in plan spec: ${planPhantoms.map(x => x.spec).join(', ')}`
+        )
+    }
     const answers: string[] = []
     // Plain text of every question already shown, for the duplicate backstop.
     const askedQuestions: string[] = []

@@ -54,6 +54,56 @@ test('planAuto: asks clarify questions, records answers, writes AUTO file with t
     })
 })
 
+// Lay down a minimal resolvable `bun` types package so findPhantomImports can
+// prove `bun:sql` is phantom (the base `bun` module declares `class SQL`, but
+// there is no `declare module "bun:sql"`). Mirrors the real bun-types shape just
+// enough for resolveRuntimeTypesRoot → classifyRuntimeImport.
+async function stubBunTypes(dir: string): Promise<void> {
+    const pkg = path.join(dir, 'node_modules', 'bun')
+    await fsp.mkdir(pkg, {recursive: true})
+    await fsp.writeFile(
+        path.join(pkg, 'package.json'),
+        JSON.stringify({name: 'bun', version: '1.0.0', types: 'index.d.ts'})
+    )
+    await fsp.writeFile(
+        path.join(pkg, 'index.d.ts'),
+        'export class SQL {}\nexport const sql: SQL\ndeclare module "bun:test" {}\n'
+    )
+}
+
+test('planAuto: strips phantom bun:sql out of the spec before clarify sees it', async () => {
+    await withTmpTaskDir(async dir => {
+        await stubBunTypes(dir)
+        await fsp.writeFile(
+            path.join(dir, 'design.md'),
+            'DB access via `bun:sql` built-in driver.\nConnect with bun:sql at startup.'
+        )
+        const {ctx} = makeFakeCtx(dir)
+        let clarifyPrompt = ''
+        const d: AutoDeps = {
+            runChild: (name, _tools, prompt) => {
+                if (name === 'auto-clarify') {
+                    clarifyPrompt = prompt
+                    return Promise.resolve('NONE')
+                }
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        await planAuto(ctx, dir, 'Implement @design.md', d)
+        // The doc WAS inlined (clarify reasons over real content)…
+        expect(clarifyPrompt).toContain('built-in driver')
+        // …but every affirmative `bun:sql` is gone, rewritten to the real import.
+        expect(clarifyPrompt).not.toContain('bun:sql')
+        expect(clarifyPrompt).toContain('from "bun"')
+        // And it left a grep-able plan-phase debug line.
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('phantom specifiers rewritten in plan spec: bun:sql')
+    })
+})
+
 test('planAuto: offers the recommendation as placeholder and in the title', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueInput} = makeFakeCtx(dir)
