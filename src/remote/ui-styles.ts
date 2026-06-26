@@ -8,7 +8,13 @@ export const STYLES = `    :root {
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--base); color: var(--text);
-      font-family: ui-monospace, monospace; height: 100dvh;
+      font-family: ui-monospace, monospace;
+      /* --app-h is set from window.innerHeight (see setAppHeight) so the column
+         height is a stable pixel value across an orientation change. 100dvh is a
+         fallback for first paint / no-JS: iOS Safari interpolates dvh during the
+         rotation animation, which makes the whole flex column resize repeatedly
+         ("spazzing out") — a fixed px height does not. */
+      height: var(--app-h, 100dvh);
       display: flex; flex-direction: column; overflow: hidden;
       padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
                0px env(safe-area-inset-left, 0px);

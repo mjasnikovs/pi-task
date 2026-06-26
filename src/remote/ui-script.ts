@@ -872,5 +872,32 @@ export function clientScript(wsUrl: string): string {
     window.addEventListener('online', connectNow);
     window.addEventListener('focus', connectNow);
 
+    // Pin the column to window.innerHeight (a stable px value) instead of letting
+    // it ride 100dvh, which iOS Safari interpolates DURING the rotation animation
+    // and makes the whole layout resize repeatedly ("spazzing out"). A rotation
+    // also fires several resize events and changes scrollHeight, so coalesce the
+    // updates in one rAF and re-pin to the bottom when the user was already there.
+    let appHeightRaf = null;
+    let appHeightPin = false;
+    function setAppHeight() {
+      const h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+      document.documentElement.style.setProperty('--app-h', h + 'px');
+      // Snapshot autoScroll synchronously, before the post-rotation reflow can fire
+      // a scroll event that flips it. When several resize events coalesce into one
+      // frame, the LATEST snapshot must win — otherwise a stale "was at bottom"
+      // capture (e.g. the load-time call, when the empty log counts as at-bottom)
+      // would yank a since-scrolled-up reader to the bottom on the next rotate.
+      appHeightPin = autoScroll;
+      if (appHeightRaf) return;
+      appHeightRaf = requestAnimationFrame(function () {
+        appHeightRaf = null;
+        if (appHeightPin) chatLog.scrollTop = chatLog.scrollHeight;
+        updateScrollBtn();
+      });
+    }
+    setAppHeight();
+    window.addEventListener('resize', setAppHeight);
+    window.addEventListener('orientationchange', setAppHeight);
+
     connect();`
 }
