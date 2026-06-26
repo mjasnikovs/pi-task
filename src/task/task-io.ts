@@ -118,7 +118,15 @@ export async function setTaskSection(
     const re = sectionRegex(heading)
     let next: string
     if (re.test(body)) {
-        next = body.replace(re, `$1\n${content.trim()}\n\n`)
+        // Use a replacer FUNCTION, not a replacement string: `content` is
+        // untrusted model output and may contain `$`-sequences (`$\``, `$'`,
+        // `$&`, `$1`, `$$`). In a replacement string those are special patterns
+        // String.prototype.replace would expand — e.g. a spec line with the
+        // regex `^\+[1-9]\d{1,14}$` ends in the literal `` $` `` (dollar +
+        // closing backtick), which expands to "everything before the match" and
+        // silently mangles/truncates the stored section (dropping ACCEPTANCE /
+        // VERIFY), making the spec unrunnable. A function return is literal.
+        next = body.replace(re, (_m, p1: string) => `${p1}\n${content.trim()}\n\n`)
     } else {
         const sep =
             body.endsWith('\n\n') ? ''

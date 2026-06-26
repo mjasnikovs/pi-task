@@ -152,6 +152,33 @@ describe('setTaskSection / readSection', () => {
         })
     })
 
+    test('stores content with $-sequences verbatim when replacing', async () => {
+        // Regression: `content` is untrusted model output. A replacement *string*
+        // expands `$`-patterns; a spec line like `^\+[1-9]\d{1,14}$` ends in the
+        // literal `` $` `` which silently mangled/truncated the stored section
+        // (dropping ACCEPTANCE/VERIFY → no_verify_block on every resume).
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## a\n\nA\n\n## spec\n\nold\n')
+            const content = [
+                'GOAL',
+                'do it',
+                'CONSTRAINTS',
+                '- phone must match `^\\+[1-9]\\d{1,14}$` exactly',
+                'ACCEPTANCE',
+                '- works',
+                'VERIFY:',
+                '```bash',
+                'bun run build',
+                '```'
+            ].join('\n')
+            await setTaskSection(cwd, 'TASK_0001', 'spec', content)
+            const stored = await readSection(cwd, 'TASK_0001', 'spec')
+            expect(stored).toBe(content)
+            // The preceding section is untouched (no $`-injection of the prefix).
+            expect(await readSection(cwd, 'TASK_0001', 'a')).toBe('A')
+        })
+    })
+
     test('readSection returns null when section is missing', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## other\n\nx\n')
