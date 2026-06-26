@@ -162,8 +162,9 @@ export interface AutoLoaderState {
     /** Which /task-auto stage this loader is for. Defaults to 'planning' (the
      *  numbered clarify/decompose steps); 'enforce' is the per-task guideline
      *  pass and 'verify' is the per-task work-verification pass, neither of which
-     *  has step numbering. */
-    kind?: 'planning' | 'enforce' | 'verify'
+     *  has step numbering. 'recommend' is the read-only research that picks the
+     *  recommended action after a verify FAIL. */
+    kind?: 'planning' | 'enforce' | 'verify' | 'recommend'
 }
 
 export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): string[] {
@@ -172,6 +173,7 @@ export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): s
     let detail =
         s.kind === 'enforce' ? `enforcing guidelines · ${elapsed}`
         : s.kind === 'verify' ? `verifying work · ${elapsed}`
+        : s.kind === 'recommend' ? `assessing the failure · ${elapsed}`
         : `planning ${s.stepNum}/${s.stepTotal} ${s.step} · ${elapsed}`
     if (s.contextUsage) {
         const ctxDetail = formatContextDetail(s.contextUsage, theme)

@@ -405,6 +405,23 @@ describe('runSingleTask', () => {
         })
     })
 
+    test('runSingleTask: fixInstruction prepends a RE-ATTEMPT banner to the delivered spec', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured} = makeFakeCtx(cwd)
+            const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
+                spawnFn: scriptedSpawn(happyScripts()),
+                fixInstruction: 'work did not verify: bun run build exited 1'
+            })
+            expect(ok).toBe(true)
+            const delivered = captured.sentMessages.at(-1)?.spec ?? ''
+            // The implementer is told this is a re-attempt and given the failure,
+            // ahead of the composed spec it still receives in full.
+            expect(delivered).toContain('RE-ATTEMPT')
+            expect(delivered).toContain('bun run build exited 1')
+            expect(delivered).toContain(COMPOSE_SPEC.trim())
+        })
+    })
+
     test('runSingleTask: waitForImplementation awaits idle after delivering the spec', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)

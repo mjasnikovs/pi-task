@@ -80,6 +80,7 @@ export class TaskRunner {
     private readonly _sendSpec: ((spec: string) => Promise<void>) | undefined
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
     private readonly _planContext: string | undefined
+    private readonly _fixInstruction: string | undefined
 
     private readonly _abort = new AbortController()
     private readonly _startedAt: number
@@ -105,7 +106,8 @@ export class TaskRunner {
         sendSpec?: (spec: string) => Promise<void>,
         spawnFn?: SpawnFn,
         onStart?: (taskId: string) => void | Promise<void>,
-        planContext?: string
+        planContext?: string,
+        fixInstruction?: string
     ) {
         this._ctx = ctx
         this._cwd = cwd
@@ -114,6 +116,7 @@ export class TaskRunner {
         this._sendSpec = sendSpec
         this._onStart = onStart
         this._planContext = planContext
+        this._fixInstruction = fixInstruction
         this._startedAt = Date.now()
 
         // We'll populate id/title/phase lazily in run().
@@ -346,12 +349,27 @@ export class TaskRunner {
      */
     private _specForDelivery(): string {
         const phantoms = findDeliveryPhantoms(this._pc.spec, this._cwd)
-        const banner = formatApiOverrideBanner(phantoms)
-        if (!banner) return this._pc.spec
-        this._deps.logDebug?.(
-            `impl-handoff API override banner prepended for: ${phantoms.map(p => p.spec).join(', ')}`
-        )
-        return `${banner}\n\n${this._pc.spec}`
+        const apiBanner = formatApiOverrideBanner(phantoms)
+        if (apiBanner) {
+            this._deps.logDebug?.(
+                `impl-handoff API override banner prepended for: ${phantoms.map(p => p.spec).join(', ')}`
+            )
+        }
+        // A verify-FAIL re-attempt: the work was already implemented once and the
+        // verification gate rejected it. Lead with WHY so the model fixes that
+        // specific failure and re-satisfies the VERIFY block, rather than redoing
+        // the task from scratch (or repeating the same mistake).
+        let fixBanner = ''
+        if (this._fixInstruction && this._fixInstruction.trim().length > 0) {
+            this._deps.logDebug?.('impl-handoff RE-ATTEMPT banner prepended (verify FAIL fix)')
+            fixBanner =
+                'RE-ATTEMPT — your previous implementation of this task FAILED verification.\n'
+                + "Fix the cause below, then make the spec's VERIFY block pass. Do NOT start over;\n"
+                + 'change only what is needed to resolve the failure.\n\n'
+                + `VERIFICATION FAILURE:\n${this._fixInstruction.trim()}`
+        }
+        const banners = [fixBanner, apiBanner].filter(b => b && b.length > 0).join('\n\n')
+        return banners ? `${banners}\n\n${this._pc.spec}` : this._pc.spec
     }
 }
 
@@ -391,6 +409,15 @@ export interface RunSingleTaskOptions {
      * a bare /task leaves it undefined and the refine prompt is unchanged.
      */
     planContext?: string
+    /**
+     * Marks this run as a verify-FAIL re-attempt. When set (only by /task-auto's
+     * autofix path, with `resumeId` pointing at the already-composed task), the
+     * text — the verify gate's failure reason plus any guidance the user typed —
+     * is prepended to the delivered spec as a RE-ATTEMPT banner, so the
+     * implementer fixes the specific failure and re-satisfies the VERIFY block
+     * rather than blindly redoing the task. Empty/undefined on a first attempt.
+     */
+    fixInstruction?: string
 }
 
 /** Dialog copy for the post-interrupt steering prompt. */
@@ -552,7 +579,8 @@ export async function runSingleTask(
                 },
                 opts.spawnFn,
                 opts.onStart,
-                opts.planContext
+                opts.planContext,
+                opts.fixInstruction
             )
             await runner.run()
             taskId = runner.taskId

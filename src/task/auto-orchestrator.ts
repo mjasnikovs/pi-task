@@ -37,6 +37,13 @@ import {
     type EnforceOutcome
 } from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification, type VerifyOutcome} from './verify-work.js'
+import {
+    researchResolution,
+    resolutionOptions,
+    classifyResolutionAnswer,
+    type ResolutionOutcome,
+    type ResolutionChoice
+} from './verify-resolution.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -75,6 +82,9 @@ export interface AutoDeps {
             onStart?: (taskId: string) => void | Promise<void>
             /** Scope fence naming the sibling steps, forwarded into refine. */
             planContext?: string
+            /** Verify-FAIL autofix re-attempt: prepended to the delivered spec as
+             *  a RE-ATTEMPT banner so the re-run fixes that specific failure. */
+            fixInstruction?: string
         }
     ) => Promise<RunSingleTaskResult>
     /** Snapshot the working tree into one commit after a task passes. */
@@ -109,6 +119,21 @@ export interface AutoDeps {
         taskTitle: string,
         taskId: string
     ) => Promise<VerifyOutcome>
+    /**
+     * After a verify FAIL, research whether to recommend AUTOFIX (re-do the work)
+     * or ACCEPT (the gate misjudged a good artifact) — read-only, same local
+     * model. Only sets which card the picker tints RECOMMENDED; the user always
+     * makes the final call. Optional: absent in tests or when verify is off, in
+     * which case the loop defaults the recommendation to AUTOFIX. Needs the inner
+     * taskId (to read the spec) and the gate's failure reason.
+     */
+    recommend?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        taskTitle: string,
+        taskId: string,
+        failReason: string
+    ) => Promise<ResolutionOutcome>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -452,6 +477,76 @@ function defaultDeps(
     let lastLine: string | undefined
     let contextUsage: ContextSnapshot | undefined
     const parentContextWindow = getParentContextWindow(ctx)
+
+    // Shared runner for the per-task GATE children (verify + post-FAIL recommend).
+    // Both are read-only passes of the same local model that must run to
+    // completion: unguarded (no wall-clock timeout, exact-match loop guard only,
+    // path-revisit disabled because re-running the same check is the job), with a
+    // status widget and a per-gate debug log. Returns the closure
+    // runWorkVerification / researchResolution expect as `runChild`.
+    const makeGateChild =
+        (
+            gateCtx: ExtensionCommandContext,
+            cwd2: string,
+            taskTitle: string,
+            kind: 'verify' | 'recommend',
+            logFile: string
+        ) =>
+        async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
+            lastLine = undefined
+            contextUsage = undefined
+            const startedAt = Date.now()
+            const logPath = path.join(tasksDir(cwd2), logFile)
+            const log = (msg: string): void => {
+                void fsp.appendFile(logPath, `${new Date().toISOString()} ${msg}\n`).catch(() => {})
+            }
+            log(`=== ${kind} start: ${taskTitle} ===`)
+            const stopLoader = startAutoLoader(gateCtx, () => ({
+                title: taskTitle,
+                kind,
+                step: kind,
+                stepNum: 1,
+                stepTotal: 1,
+                startedAt,
+                lastLine,
+                contextUsage
+            }))
+            try {
+                const r = await runWorker({
+                    prompt,
+                    cwd: cwd2,
+                    signal: sig,
+                    tools,
+                    timeoutMs: 0,
+                    loop: {pathThreshold: Number.POSITIVE_INFINITY},
+                    onLine: line => {
+                        lastLine = line
+                        log(line)
+                    },
+                    onContextUsage: snapshot => {
+                        contextUsage = resolveContextUsage(
+                            snapshot,
+                            contextUsage,
+                            parentContextWindow
+                        )
+                    }
+                })
+                if (r.loopHit) {
+                    log(`=== ${kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
+                    gateCtx.ui.notify(
+                        `${taskTitle}: ${kind} worker looped past the nudges — continuing (not blocked).`,
+                        'warning'
+                    )
+                }
+                const failure = classifyEnforceChildFailure(r)
+                log(failure ? `=== ${kind} end: FAIL — ${failure} ===` : `=== ${kind} end: ok ===`)
+                if (failure) throw new Error(failure)
+                return r.text
+            } finally {
+                stopLoader()
+            }
+        }
+
     const phaseDeps: PhaseDeps = {
         cwd,
         taskId: '',
@@ -492,7 +587,8 @@ function defaultDeps(
                 waitForImplementation: true,
                 resumeId: opts?.resumeId,
                 onStart: opts?.onStart,
-                planContext: opts?.planContext
+                planContext: opts?.planContext,
+                fixInstruction: opts?.fixInstruction
             }),
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
@@ -619,78 +715,61 @@ function defaultDeps(
                 cwd: cwd2,
                 signal,
                 spec,
-                // Same unguarded child as enforce: no wall-clock timeout (a build
-                // or test suite legitimately takes minutes) and exact-match loop
-                // guard only. Re-running the same VERIFY command is the job, so the
-                // path-revisit heuristic is disabled; only a literally-identical
-                // call repeated past threshold trips, and that warns rather than
-                // blocks.
-                runChild: async (tools, prompt, sig) => {
-                    lastLine = undefined
-                    contextUsage = undefined
-                    const startedAt = Date.now()
-                    const verifyLogPath = path.join(tasksDir(cwd2), 'verify-debug.log')
-                    const logVerify = (msg: string): void => {
-                        void fsp
-                            .appendFile(verifyLogPath, `${new Date().toISOString()} ${msg}\n`)
-                            .catch(() => {})
-                    }
-                    logVerify(`=== verify start: ${taskTitle} ===`)
-                    const stopLoader = startAutoLoader(verifyCtx, () => ({
-                        title: taskTitle,
-                        kind: 'verify',
-                        step: 'verify',
-                        stepNum: 1,
-                        stepTotal: 1,
-                        startedAt,
-                        lastLine,
-                        contextUsage
-                    }))
-                    try {
-                        const r = await runWorker({
-                            prompt,
-                            cwd: cwd2,
-                            signal: sig,
-                            tools,
-                            timeoutMs: 0,
-                            loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                            onLine: line => {
-                                lastLine = line
-                                logVerify(line)
-                            },
-                            onContextUsage: snapshot => {
-                                contextUsage = resolveContextUsage(
-                                    snapshot,
-                                    contextUsage,
-                                    parentContextWindow
-                                )
-                            }
-                        })
-                        if (r.loopHit) {
-                            logVerify(`=== verify LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
-                            verifyCtx.ui.notify(
-                                `${taskTitle}: verify worker looped past the nudges — continuing (not blocked).`,
-                                'warning'
-                            )
-                        }
-                        const failure = classifyEnforceChildFailure(r)
-                        logVerify(
-                            failure ?
-                                `=== verify end: FAIL — ${failure} ===`
-                            :   '=== verify end: verdict captured ==='
-                        )
-                        if (failure) throw new Error(failure)
-                        return r.text
-                    } finally {
-                        stopLoader()
-                    }
-                }
+                runChild: makeGateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log')
+            })
+        },
+        recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
+            // Read the same composed spec the verify gate judged against, so the
+            // recommendation reasons over the real contract (a missing spec is
+            // unusual here — verify already ran — but degrade to the bare title).
+            let spec: string
+            try {
+                const {body} = await readTaskFile(cwd2, taskId)
+                spec = extractSpecForVerification(body) ?? taskTitle
+            } catch {
+                spec = taskTitle
+            }
+            return researchResolution({
+                cwd: cwd2,
+                signal,
+                spec,
+                failReason,
+                runChild: makeGateChild(recCtx, cwd2, taskTitle, 'recommend', 'verify-debug.log')
             })
         }
     }
 }
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
+
+/**
+ * Show the boxed two-choice picker after a verify FAIL and return what the user
+ * decided. The model-recommended card is placed first so the renderer tints it
+ * green; the user ALWAYS makes the final call (there is no auto-pick). Mirrors the
+ * clarify/grill dialog: the same SessionUI.ask races the local boxed picker
+ * against a remote answer, with the two actions also surfaced as remote buttons.
+ */
+async function askVerifyResolution(
+    ctx: ExtensionCommandContext,
+    title: string,
+    failReason: string,
+    rec: ResolutionOutcome
+): Promise<ResolutionChoice> {
+    const options = resolutionOptions(rec.recommend)
+    const question =
+        `Verification FAILED for "${title}".\n\n${failReason}\n\n`
+        + `Recommended: ${rec.recommend.toUpperCase()} — ${rec.rationale}`
+    const answer = await new SessionUI(ctx).ask({
+        localTitle: 'Verification failed — how should pi proceed?',
+        displayQuestion: question,
+        question,
+        recommended: options[0].label,
+        recommended2: options[1].label,
+        allowSkip: false,
+        options
+    })
+    return classifyResolutionAnswer(answer)
+}
 
 let cancelRequested = false
 let autoRunning = false
@@ -839,16 +918,88 @@ export async function runAutoLoop(
             // task has no composed spec to verify against.
             if (deps.verify) {
                 active.ui.notify(`${id}: verifying "${next.title}"…`, 'info')
-                const verified = await deps.verify(active, cwd, next.title, res.taskId)
-                if (!verified.ok) {
-                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                    announceDone(
-                        active,
-                        `${id} stopped at "${next.title}" — ${verified.reason ?? 'did not verify'} — fix and run /task-auto-resume.`,
-                        'error'
-                    )
-                    return
+                let verified = await deps.verify(active, cwd, next.title, res.taskId)
+                // A FAIL no longer dead-stops the run. The user is offered a boxed
+                // two-choice picker — AUTOFIX (re-run the implementation turn against
+                // the failure, then re-verify) or ACCEPT (the gate misjudged a good
+                // artifact; override and proceed). A read-only research pass picks
+                // which card is recommended, but the USER always decides — there is
+                // no attempt cap: AUTOFIX loops straight back to the gate as many
+                // times as the user keeps choosing it. The run only leaves the loop
+                // when the work verifies, the user ACCEPTs, or the user dismisses
+                // the picker (which pauses the run, resumable).
+                while (!verified.ok) {
+                    const failReason = verified.reason ?? 'did not verify'
+                    const rec: ResolutionOutcome =
+                        deps.recommend ?
+                            await deps.recommend(active, cwd, next.title, res.taskId, failReason)
+                        :   {recommend: 'autofix', rationale: failReason}
+                    const choice = await askVerifyResolution(active, next.title, failReason, rec)
+                    if (choice.action === 'cancel') {
+                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                        announceDone(
+                            active,
+                            `${id} paused at "${next.title}" — verification failed and you dismissed the choice; resume with /task-auto-resume.`,
+                            'warning'
+                        )
+                        return
+                    }
+                    if (choice.action === 'accept') {
+                        active.ui.notify(
+                            `${id}: accepted "${next.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,
+                            'warning'
+                        )
+                        break
+                    }
+                    // AUTOFIX: re-run the implementation turn with the failure (and
+                    // any typed guidance) prepended as a RE-ATTEMPT banner, then
+                    // re-verify — looping back to the gate. No cap: the user decides
+                    // when to stop (by accepting or dismissing the next picker).
+                    active.ui.notify(`${id}: autofixing "${next.title}"…`, 'info')
+                    const fixInstruction =
+                        choice.guidance ?
+                            `${failReason}\n\nUser guidance: ${choice.guidance}`
+                        :   failReason
+                    const fixRes = await deps.runTask(active, cwd, next.title, {
+                        resumeId: res.taskId,
+                        planContext: buildScopeFence(
+                            entries.map(e => e.title),
+                            next.index
+                        ),
+                        fixInstruction
+                    })
+                    active = fixRes.ctx ?? active
+                    if (fixRes.sessionCancelled) {
+                        announceDone(
+                            active,
+                            `${id} paused — could not start a session for autofix. Run /task-auto-resume to retry.`,
+                            'warning'
+                        )
+                        return
+                    }
+                    if (fixRes.interrupted) {
+                        announceDone(
+                            active,
+                            `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
+                            'warning'
+                        )
+                        return
+                    }
+                    if (!fixRes.ok) {
+                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                        const why = fixRes.reason ? ` — ${fixRes.reason.slice(0, 160)}` : ''
+                        announceDone(
+                            active,
+                            `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
+                            'error'
+                        )
+                        return
+                    }
+                    // Resume reuses the same inner task id, so res.taskId is stable.
+                    verified = await deps.verify(active, cwd, next.title, res.taskId)
                 }
+                // Loop exited because the work verified OR the user accepted the
+                // artifact — either way fall through to check-off/commit/enforce.
             }
             // res.ok === true means runner.run() completed, so res.taskId is the
             // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an

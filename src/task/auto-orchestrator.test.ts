@@ -13,6 +13,7 @@ import {
 } from './auto-orchestrator.js'
 import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
+import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 
@@ -509,7 +510,7 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
     })
 })
 
-test('runAutoLoop: a failing verification STOPS the run and leaves the task unchecked', async () => {
+test('runAutoLoop: verify FAIL + user dismisses the picker → run pauses, task unchecked', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(
@@ -527,21 +528,102 @@ test('runAutoLoop: a failing verification STOPS the run and leaves the task unch
                 return Promise.resolve({committed: true})
             },
             verify: () =>
-                Promise.resolve({ok: false, reason: 'work did not verify: bun run build exited 1'})
+                Promise.resolve({ok: false, reason: 'work did not verify: bun run build exited 1'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'build is broken'})
         }
+        // No queueSelect → the picker is dismissed (cancel).
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
-        // The gate runs BEFORE check-off/commit: the run halts at A, the file is
-        // marked failed, and NEITHER box is checked (so resume re-runs A).
+        // Dismissing the choice pauses the run at A: file marked failed, NEITHER
+        // box checked (resume re-runs A).
         expect(frontMatter.state).toBe('failed')
         expect(parseTaskList(body).some(e => e.done)).toBe(false)
-        // Only the pre-task checkpoint ran — the task was never blessed with a
-        // `task:` commit because verification failed first.
+        // Only the pre-task checkpoint ran — no `task:` commit (work not blessed).
         expect(commits).toEqual(['chore: checkpoint before "A"'])
-        // Second task is never reached.
-        expect(
-            captured.notifies.some(n => /verify exited 1|did not verify|build exited 1/.test(n.msg))
-        ).toBe(true)
+        expect(captured.notifies.some(n => /dismissed the choice/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: verify FAIL + user ACCEPTS → run proceeds, checks off and commits', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'work did not verify: over-strict check'}),
+            recommend: () =>
+                Promise.resolve({recommend: 'accept', rationale: 'gate misjudged a valid file'})
+        }
+        handle.queueSelect(ACCEPT_LABEL)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // Accept overrides the FAIL: the task checks off, commits, and completes.
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+        expect(commits).toEqual(['chore: checkpoint before "A"', 'task: A (TASK_0006)'])
+        expect(captured.notifies.some(n => /accepted .* despite verify FAIL/.test(n.msg))).toBe(
+            true
+        )
+    })
+})
+
+test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifies', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const fixInstructions: Array<string | undefined> = []
+        let verifyCalls = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: (_c, _cwd, _t, opts) => {
+                fixInstructions.push(opts?.fixInstruction)
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => {
+                verifyCalls++
+                // FAIL the first THREE times — past any 2-attempt cap — then PASS,
+                // proving the autofix loop is uncapped (the user keeps picking it).
+                return Promise.resolve(
+                    verifyCalls <= 3 ?
+                        {ok: false, reason: 'work did not verify: bun run build exited 1'}
+                    :   {ok: true}
+                )
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real build defect'})
+        }
+        // The user picks AUTOFIX on every FAIL (more than a 2-attempt cap would allow).
+        handle.queueSelect(AUTOFIX_LABEL)
+        handle.queueSelect(AUTOFIX_LABEL)
+        handle.queueSelect(AUTOFIX_LABEL)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // Initial impl (no fixInstruction) + three autofix re-runs, each carrying
+        // the verify failure as its fixInstruction.
+        expect(fixInstructions).toHaveLength(4)
+        expect(fixInstructions[0]).toBeUndefined()
+        expect(fixInstructions.slice(1).every(f => f?.includes('bun run build exited 1'))).toBe(
+            true
+        )
+        // Verify ran four times (initial + three re-runs); the 4th PASS checks off.
+        expect(verifyCalls).toBe(4)
+        expect(frontMatter.state).toBe('completed')
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+        expect(commits).toEqual(['chore: checkpoint before "A"', 'task: A (TASK_0006)'])
     })
 })
 
