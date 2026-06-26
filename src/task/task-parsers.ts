@@ -66,7 +66,17 @@ function escapeRegex(s: string): string {
 }
 
 export function sectionRegex(heading: string): RegExp {
-    return new RegExp(`(^## ${escapeRegex(heading)}\\s*\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm')
+    // Group 1 captures ONLY the heading line — `[ \t]*\n`, not `\s*\n`. A greedy
+    // `\s*` swallows every blank line after the heading into the capture, and
+    // setTaskSection re-emits that capture verbatim plus one more `\n`, so each
+    // rewrite grew the gap by a blank line (the "big empty gap" under `## tasks`
+    // after a long /task-auto run). Keeping blanks in group 2 lets the `.trim()`
+    // every reader already applies collapse them, which also self-heals files
+    // that already accumulated the gap.
+    return new RegExp(
+        `(^## ${escapeRegex(heading)}[ \\t]*\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`,
+        'm'
+    )
 }
 
 export function extractSection(body: string, heading: string): string | null {

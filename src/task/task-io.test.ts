@@ -185,4 +185,34 @@ describe('setTaskSection / readSection', () => {
             expect(await readSection(cwd, 'TASK_0001', 'missing')).toBeNull()
         })
     })
+
+    test('repeated rewrites do not grow a blank gap under the heading', async () => {
+        // Regression: sectionRegex group 1 used `\s*\n`, which greedily swallowed
+        // every blank line after the heading into the capture; setTaskSection then
+        // re-emitted that capture plus one more `\n`, so each rewrite added a blank
+        // line. A long /task-auto run (~2 rewrites/task) ballooned the `## tasks`
+        // section into a ~48-line empty gap. The body must stay stable.
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## tasks\n\n- [ ] a\n- [ ] b\n')
+            for (let i = 0; i < 20; i++) {
+                const sec = (await readSection(cwd, 'TASK_0001', 'tasks')) ?? ''
+                await setTaskSection(cwd, 'TASK_0001', 'tasks', sec)
+            }
+            const {body} = await readTaskFile(cwd, 'TASK_0001')
+            expect(body).not.toMatch(/## tasks\n\n\n/)
+            expect(body).toContain('## tasks\n\n- [ ] a\n- [ ] b')
+        })
+    })
+
+    test('self-heals an existing blank-line gap on the next rewrite', async () => {
+        await withTmpTaskDir(async cwd => {
+            const gap = '\n'.repeat(48)
+            await writeTaskFile(cwd, makeFm('TASK_0001'), `\n## tasks\n${gap}- [ ] a\n`)
+            const sec = (await readSection(cwd, 'TASK_0001', 'tasks')) ?? ''
+            await setTaskSection(cwd, 'TASK_0001', 'tasks', sec)
+            const {body} = await readTaskFile(cwd, 'TASK_0001')
+            expect(body).toContain('## tasks\n\n- [ ] a')
+            expect(body).not.toMatch(/## tasks\n\n\n/)
+        })
+    })
 })
