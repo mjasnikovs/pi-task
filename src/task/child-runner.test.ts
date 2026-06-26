@@ -7,7 +7,9 @@ import {
     LoopExhaustedError,
     LeakedToolCallError,
     ModelError,
-    childArgs
+    childArgs,
+    isConnectionError,
+    connectionRetryBackoffMs
 } from './child-runner.js'
 import {
     fakeSpawnSimple,
@@ -25,7 +27,9 @@ function depsWith(spawn: SpawnFn) {
         cwd: '/tmp',
         taskId: 'TASK_TEST',
         signal: new AbortController().signal,
-        spawn
+        spawn,
+        // No-op backoff so connection-error retries don't actually sleep in tests.
+        sleepFor: async () => {}
     }
 }
 
@@ -173,18 +177,43 @@ describe('runPhaseChild', () => {
         ).rejects.toThrow(/refine child failed.*kaboom/)
     })
 
-    test('throws ModelError (fail-fast, no retry) when the child reports a model error', async () => {
-        // A model/provider failure arrives as a stopReason "error" agent_end with
-        // empty text — previously masked as "produced no output". The second queued
-        // response would only be reached on a retry; getting ModelError proves we
-        // fail fast and surface the real cause instead.
+    test('throws ModelError (fail-fast, no retry) on a NON-connection model error', async () => {
+        // A non-transient model/provider failure (bad request, context overflow,
+        // auth) arrives as a stopReason "error" agent_end with empty text. The
+        // second queued response would only be reached on a retry; getting
+        // ModelError proves we fail fast — re-spawning won't fix a real fault.
         const spawn = fakeSpawnQueue([
-            agentErrorResponse('connection lost'),
+            agentErrorResponse('400 context length exceeded'),
             agentEndResponse('should not be reached')
         ])
         const p = runPhaseChild(depsWith(spawn), 'refine', 'read', 'prompt')
         await expect(p).rejects.toBeInstanceOf(ModelError)
-        await expect(p).rejects.toThrow(/model error — connection lost/)
+        await expect(p).rejects.toThrow(/model error — 400 context length exceeded/)
+    })
+
+    test('retries a connection-class model error and returns the later clean output', async () => {
+        // The TASK_0012 grill-gen failure: one dropped fetch to a live single-slot
+        // local server reported as "Connection error.". It's transient — the
+        // re-spawn succeeds. Fail-fast here would have killed the whole task.
+        const {spawn, prompts} = capturingQueue([{error: 'Connection error.'}, 'recovered output'])
+        const out = await runPhaseChild(depsWith(spawn), 'grill-gen', 'read', 'ORIGINAL PROMPT')
+        expect(out).toBe('recovered output')
+        expect(prompts.length).toBe(2)
+        // A connection retry carries no correction hint — bare prompt is re-sent.
+        expect(prompts[1]).toBe('ORIGINAL PROMPT')
+    })
+
+    test('throws ModelError when every attempt hits a connection error', async () => {
+        // The endpoint stays unreachable for the whole budget — after exhausting
+        // the retries we surface the real cause so the user knows to restart it.
+        const spawn = fakeSpawnQueue([
+            agentErrorResponse('Connection error.'),
+            agentErrorResponse('socket hang up'),
+            agentErrorResponse('ECONNREFUSED')
+        ])
+        const p = runPhaseChild(depsWith(spawn), 'grill-gen', 'read', 'prompt')
+        await expect(p).rejects.toBeInstanceOf(ModelError)
+        await expect(p).rejects.toThrow(/model error — ECONNREFUSED/)
     })
 
     test('retries an empty completion and returns the clean output from a later attempt', async () => {
@@ -196,6 +225,52 @@ describe('runPhaseChild', () => {
         expect(prompts.length).toBe(2)
         // Empty output carries no correction hint — the re-spawn uses the bare prompt.
         expect(prompts[1]).toBe('ORIGINAL PROMPT')
+    })
+})
+
+describe('isConnectionError', () => {
+    test('matches the exact provider string the user hit', () => {
+        // This is the literal errorMessage pi surfaced on TASK_0012 grill-gen.
+        expect(isConnectionError('Connection error.')).toBe(true)
+    })
+
+    test('matches the transient connection family (case-insensitive)', () => {
+        for (const cause of [
+            'socket hang up',
+            'fetch failed',
+            'ECONNRESET',
+            'ECONNREFUSED',
+            'read ECONNRESET',
+            'connection reset by peer',
+            'connection refused',
+            'ETIMEDOUT',
+            'network timeout at: http://127.0.0.1:8080/v1',
+            'Premature close',
+            'terminated'
+        ]) {
+            expect(isConnectionError(cause)).toBe(true)
+        }
+    })
+
+    test('does NOT match real, non-transient faults (still fail-fast)', () => {
+        for (const cause of [
+            '400 context length exceeded',
+            'invalid request: messages too long',
+            'model not found',
+            '401 unauthorized',
+            'rate limit exceeded',
+            'internal server error'
+        ]) {
+            expect(isConnectionError(cause)).toBe(false)
+        }
+    })
+})
+
+describe('connectionRetryBackoffMs', () => {
+    test('grows exponentially from 500ms', () => {
+        expect(connectionRetryBackoffMs(0)).toBe(500)
+        expect(connectionRetryBackoffMs(1)).toBe(1000)
+        expect(connectionRetryBackoffMs(2)).toBe(2000)
     })
 })
 
@@ -295,7 +370,7 @@ describe('runPhaseWithLoopGuard', () => {
         })
     })
 
-    test('throws ModelError (fail-fast) when the child reports a model error', async () => {
+    test('throws ModelError (fail-fast) on a NON-connection model error', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -309,11 +384,11 @@ describe('runPhaseWithLoopGuard', () => {
                 },
                 '\n'
             )
-            // The local model disconnected mid-run (the TASK_0005 root cause). The
-            // second response would only be reached on a restart — ModelError proves
-            // we fail fast on the real cause rather than restarting into a dead model.
+            // A real fault (bad request / context overflow). The second response
+            // would only be reached on a restart — ModelError proves we fail fast
+            // rather than burning the strike budget on something re-spawn can't fix.
             const spawn = fakeSpawnQueue([
-                agentErrorResponse('socket hang up'),
+                agentErrorResponse('invalid request: messages too long'),
                 agentEndResponse('should not be reached')
             ])
             const p = runPhaseWithLoopGuard(
@@ -323,7 +398,87 @@ describe('runPhaseWithLoopGuard', () => {
                 () => 'PROMPT'
             )
             await expect(p).rejects.toBeInstanceOf(ModelError)
-            await expect(p).rejects.toThrow(/model error — socket hang up/)
+            await expect(p).rejects.toThrow(/model error — invalid request/)
+        })
+    })
+
+    test('restarts a connection-class model error and returns the later clean output', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'grill',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // The TASK_0012 grill-gen failure: a single "Connection error." against
+            // a live single-slot local server. Transient — the restart succeeds.
+            const spawn = fakeSpawnQueue([
+                agentErrorResponse('Connection error.'),
+                agentEndResponse('grilled questions')
+            ])
+            const builds: Array<string | null> = []
+            const out = await runPhaseWithLoopGuard(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    sleepFor: async () => {}
+                },
+                'grill-gen',
+                'read',
+                hint => {
+                    builds.push(hint)
+                    return 'PROMPT'
+                }
+            )
+            expect(out).toBe('grilled questions')
+            expect(builds.length).toBe(2)
+            // A connection restart carries no correction hint — same bare prompt.
+            expect(builds[1]).toBeNull()
+        })
+    })
+
+    test('throws ModelError when every strike hits a connection error', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'grill',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // Endpoint unreachable for the whole strike budget — surface the cause.
+            const spawn = fakeSpawnQueue([
+                agentErrorResponse('Connection error.'),
+                agentErrorResponse('Connection error.'),
+                agentErrorResponse('Connection error.')
+            ])
+            const p = runPhaseWithLoopGuard(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    sleepFor: async () => {}
+                },
+                'grill-gen',
+                'read',
+                () => 'PROMPT'
+            )
+            await expect(p).rejects.toBeInstanceOf(ModelError)
+            await expect(p).rejects.toThrow(/model error — Connection error/)
         })
     })
 
@@ -396,13 +551,29 @@ const LEAKED = [
 ].join('\n')
 
 /** Queue agent_end texts in order while capturing each call's final prompt arg. */
-function capturingQueue(texts: ReadonlyArray<string>): {spawn: SpawnFn; prompts: string[]} {
+/** A queued response is either clean assistant text or a `{error}` — a
+ *  stopReason "error" agent_end carrying that cause (an empty/connection turn). */
+type QueuedResponse = string | {error: string}
+
+function capturingQueue(responses: ReadonlyArray<QueuedResponse>): {
+    spawn: SpawnFn
+    prompts: string[]
+} {
     const prompts: string[] = []
     let i = 0
     const spawn = ((_cmd: string, args: ReadonlyArray<string>) => {
         prompts.push(String(args[args.length - 1]))
-        const text = texts[Math.min(i, texts.length - 1)]
+        const r = responses[Math.min(i, responses.length - 1)]
         i++
+        const assistant =
+            typeof r === 'string' ?
+                {role: 'assistant', content: [{type: 'text', text: r}]}
+            :   {
+                    role: 'assistant',
+                    content: [{type: 'text', text: ''}],
+                    stopReason: 'error',
+                    errorMessage: r.error
+                }
         const p = new EventEmitter() as EventEmitter & ProcLike
         p.stdout = new EventEmitter()
         p.stderr = new EventEmitter()
@@ -414,12 +585,7 @@ function capturingQueue(texts: ReadonlyArray<string>): {spawn: SpawnFn; prompts:
         queueMicrotask(() => {
             p.stdout?.emit(
                 'data',
-                Buffer.from(
-                    JSON.stringify({
-                        type: 'agent_end',
-                        messages: [{role: 'assistant', content: [{type: 'text', text}]}]
-                    }) + '\n'
-                )
+                Buffer.from(JSON.stringify({type: 'agent_end', messages: [assistant]}) + '\n')
             )
             p.emit('close', 0)
         })

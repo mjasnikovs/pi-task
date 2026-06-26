@@ -33,6 +33,38 @@ export const LOOP_THRESHOLD = 5
 export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 restarts)
 // MAX_LEAK_RETRIES lives in shared/leaked-tool-call.ts (imported above).
 
+// ─── Connection-error retry ──────────────────────────────────────────────────
+
+/**
+ * A connection-class model error is transient: a single dropped fetch to a live
+ * endpoint, not a repeatable mistake. On a local single-slot server (e.g.
+ * llama-server with `--parallel 1`) pi-task's own concurrent fan-out can briefly
+ * saturate the slot, and one request fails to connect even though the model is
+ * up and the next request succeeds. pi already retries internally, but those
+ * retries don't always absorb it on a saturated local server — and pi-task's
+ * fail-fast then kills the whole task (and, under /task-auto, the whole run) for
+ * a single blip. We retry these within the existing strike/leak budget.
+ *
+ * A NON-connection model error (bad request, context-length overflow, auth,
+ * provider 5xx that names a real fault) still fails fast: re-spawning against
+ * the same request won't fix it, so burning the budget only delays the report.
+ */
+const CONNECTION_ERROR_RE =
+    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|fetch failed|network (?:error|timeout)|premature close|request timed out|terminated)\b/i
+
+export function isConnectionError(cause: string): boolean {
+    return CONNECTION_ERROR_RE.test(cause)
+}
+
+/** Exponential backoff before a connection-error retry: 500ms, 1s, 2s, …, so a
+ *  brief saturation window can drain before we re-issue the request. */
+export function connectionRetryBackoffMs(attempt: number): number {
+    return 500 * 2 ** attempt
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+    new Promise<void>(resolve => setTimeout(resolve, ms))
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface PhaseRunResult {
@@ -144,6 +176,9 @@ interface PhaseDeps {
     spawn?: SpawnFn
     /** Write a timestamped line to the per-task debug log. Fire-and-forget. */
     logDebug?: (msg: string) => void
+    /** Injectable delay for connection-error backoff; defaults to a real timer.
+     *  Tests override it with a no-op so retries don't actually sleep. */
+    sleepFor?: (ms: number) => Promise<void>
 }
 
 export type {PhaseDeps}
@@ -177,8 +212,18 @@ export async function runPhaseChild(
             throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
         }
         if (r.modelError) {
-            // The model/provider failed (pi exited 0 with an stopReason "error"
-            // turn). Surface the real cause and fail fast — pi already retried.
+            // The model/provider failed (pi exited 0 with a stopReason "error"
+            // turn). A connection-class cause is transient — retry within the
+            // leak budget after a backoff; anything else fails fast (pi already
+            // retried, and re-spawning won't fix a real fault).
+            if (isConnectionError(r.modelError) && attempt < MAX_LEAK_RETRIES) {
+                deps.logDebug?.(
+                    `${name}: connection error "${r.modelError}" — retry `
+                        + `${attempt + 1}/${MAX_LEAK_RETRIES}`
+                )
+                await (deps.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(attempt))
+                continue
+            }
             throw new ModelError(name, r.modelError)
         }
         if (r.text.trim().length === 0) {
@@ -288,7 +333,17 @@ export async function runPhaseWithLoopGuard(
         }
         if (r.modelError) {
             // The model/provider failed (pi exited 0 with a stopReason "error"
-            // turn). Surface the real cause and fail fast — pi already retried.
+            // turn). A connection-class cause is transient — restart within the
+            // strike budget after a backoff; anything else fails fast (pi already
+            // retried, and re-spawning won't fix a real fault).
+            if (isConnectionError(r.modelError) && strike < MAX_LOOP_RESTARTS) {
+                deps.logDebug?.(
+                    `${name}: connection error "${r.modelError}" — restart `
+                        + `${strike + 1}/${MAX_LOOP_RESTARTS}`
+                )
+                await (deps.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(strike))
+                continue
+            }
             throw new ModelError(name, r.modelError)
         }
         if (r.text.trim().length === 0) {
