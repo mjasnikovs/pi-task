@@ -1,8 +1,17 @@
 import {describe, expect, test} from 'bun:test'
-import {TaskRunner, runSingleTask} from './orchestrator.js'
+import {
+    TaskRunner,
+    runSingleTask,
+    endedAtCompactionBoundary,
+    resumeAcrossCompactions,
+    CONTINUE_AFTER_COMPACTION,
+    MAX_COMPACTION_RESUMES,
+    type SteerCtx
+} from './orchestrator.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
 import {agentEndResponse, fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
-import {makeFakeCtx} from '../test-utils/fake-ctx.js'
+import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
+import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import type {SpawnFn} from '../shared/child-process.js'
 
@@ -534,6 +543,130 @@ describe('runSingleTask', () => {
             expect(() => ctx.ui.notify('x', 'info')).toThrow(/stale/)
             // The replacement ctx is live.
             expect(() => res.ctx!.ui.notify('ok', 'info')).not.toThrow()
+        })
+    })
+})
+
+describe('compaction-aware implementation wait', () => {
+    // Count the compaction-resume nudges sent during a run.
+    const continueCount = (sent: Array<{spec: string}>): number =>
+        sent.filter(m => m.spec === CONTINUE_AFTER_COMPACTION).length
+
+    // Minimal ctx exposing only getEntries, for the pure detector.
+    const ctxWithEntries = (entries: unknown[]): ExtensionCommandContext =>
+        ({sessionManager: {getEntries: () => entries}}) as unknown as ExtensionCommandContext
+
+    test('endedAtCompactionBoundary: a compaction after the last assistant message is a boundary', () => {
+        expect(
+            endedAtCompactionBoundary(ctxWithEntries([assistantEntry('stop'), compactionEntry()]))
+        ).toBe(true)
+    })
+
+    test('endedAtCompactionBoundary: a turn ending on an assistant message is NOT a boundary', () => {
+        // genuine completion (no trailing compaction)
+        expect(endedAtCompactionBoundary(ctxWithEntries([assistantEntry('stop')]))).toBe(false)
+        // a compaction followed by a fresh assistant turn = already continued
+        expect(
+            endedAtCompactionBoundary(ctxWithEntries([compactionEntry(), assistantEntry('stop')]))
+        ).toBe(false)
+        // no entries at all
+        expect(endedAtCompactionBoundary(ctxWithEntries([]))).toBe(false)
+    })
+
+    test('resumeAcrossCompactions: drives continues until the turn ends on an assistant message', async () => {
+        const {ctx, captured, setIdleEntries} = makeFakeCtx('/tmp/x')
+        setIdleEntries([
+            [compactionEntry()], // parked at a compaction boundary
+            [compactionEntry()], // resumed → crossed threshold again
+            [assistantEntry('stop')] // resumed → genuinely finished
+        ])
+        // Mirror runSingleTask: the first idle has already happened.
+        await ctx.waitForIdle()
+        const resumes = await resumeAcrossCompactions(ctx as SteerCtx)
+        expect(resumes).toBe(2)
+        expect(continueCount(captured.sentMessages)).toBe(2)
+    })
+
+    // ── A/B: same harness, the ONLY difference is whether the turn parks at a
+    // compaction boundary. Pre-fix, both jumped straight past the wait; the control
+    // proves no regression, the compaction case proves the resume now fires.
+
+    test('A (control): a clean turn does NOT send any continue and waits once', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setIdleEntries} = makeFakeCtx(cwd)
+            setIdleEntries([[assistantEntry('stop')]])
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res.ok).toBe(true)
+            expect(res.interrupted).toBe(false)
+            expect(continueCount(captured.sentMessages)).toBe(0)
+            // exactly one implementation-wait idle, no resume waits
+            expect(captured.calls.filter(c => c === 'idle')).toHaveLength(1)
+        })
+    })
+
+    test('B (fix): a turn parked at a compaction resumes instead of jumping to verify', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setIdleEntries} = makeFakeCtx(cwd)
+            // First idle: compaction boundary (the runtime parked here without
+            // auto-continuing). After one continue: a real assistant "stop".
+            setIdleEntries([[compactionEntry()], [assistantEntry('stop')]])
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res.ok).toBe(true)
+            expect(res.interrupted).toBe(false)
+            // exactly one resume continue, and a second wait for it to settle
+            expect(continueCount(captured.sentMessages)).toBe(1)
+            expect(captured.calls.filter(c => c === 'idle')).toHaveLength(2)
+        })
+    })
+
+    test('B (fix): resumes across SUCCESSIVE compactions until the work is done', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setIdleEntries} = makeFakeCtx(cwd)
+            setIdleEntries([[compactionEntry()], [compactionEntry()], [assistantEntry('stop')]])
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res.ok).toBe(true)
+            expect(continueCount(captured.sentMessages)).toBe(2)
+            expect(captured.calls.filter(c => c === 'idle')).toHaveLength(3)
+        })
+    })
+
+    test('ESC takes priority: an aborted turn at a compaction tail steers, never resumes', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setIdleEntries, queueInput} = makeFakeCtx(cwd)
+            // Artificial tail: the last assistant message is aborted (user ESC) and a
+            // compaction entry follows. wasInterrupted must win over the boundary.
+            setIdleEntries([[assistantEntry('aborted'), compactionEntry()]])
+            queueInput(undefined) // decline to steer → pause
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res.interrupted).toBe(true)
+            expect(continueCount(captured.sentMessages)).toBe(0)
+        })
+    })
+
+    test('safety cap bounds a pathological compaction loop at MAX_COMPACTION_RESUMES', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setIdleEntries} = makeFakeCtx(cwd)
+            // Every idle reports a compaction boundary (snapshot clamps to the last);
+            // without a cap this would resume forever.
+            setIdleEntries([[compactionEntry()]])
+            const res = await runSingleTask(ctx, cwd, 'run lint', {
+                waitForImplementation: true,
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(res).toBeDefined()
+            expect(continueCount(captured.sentMessages)).toBe(MAX_COMPACTION_RESUMES)
         })
     })
 })

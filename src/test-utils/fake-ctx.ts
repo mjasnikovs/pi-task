@@ -50,6 +50,28 @@ export interface FakeCtxHandle {
      * overflow). Shared across session generations, like the captured arrays.
      */
     setStopReason: (reason: string | undefined, errorMessage?: string) => void
+    /**
+     * Script the session entries reported by sessionManager.getEntries() as a
+     * sequence of snapshots, one per turn. Each waitForIdle() advances to the next
+     * snapshot (clamped at the last), modelling a session whose branch evolves as
+     * the implementation turn and its resumes complete: snapshot[0] is the state
+     * after the first idle, snapshot[1] after the next, and so on. Use this to
+     * exercise compaction-boundary handling (a snapshot ending in a `compaction`
+     * entry → the turn parked at a compaction; one ending in an assistant `stop` →
+     * genuine completion). Takes precedence over setStopReason while set.
+     */
+    setIdleEntries: (snapshots: unknown[][]) => void
+}
+
+/** Build a fake assistant message entry with the given stopReason. */
+export function assistantEntry(stopReason: string, errorMessage?: string): unknown {
+    return {type: 'message', message: {role: 'assistant', stopReason, errorMessage}}
+}
+
+/** Build a fake compaction-boundary entry (the runtime appends one at the branch
+ *  tail after a context compaction). */
+export function compactionEntry(): unknown {
+    return {type: 'compaction', summary: 'compacted'}
 }
 
 // Matches the message the real extension runtime throws from a stale ctx.
@@ -64,6 +86,11 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     // Shared across generations so the value survives session replacement.
     let lastStopReason: string | undefined
     let lastErrorMessage: string | undefined
+    // Scripted entries-per-turn (see setIdleEntries). Shared across generations,
+    // like lastStopReason. idleCount advances on each waitForIdle so getEntries
+    // returns the snapshot for the most recently settled turn.
+    let idleEntries: unknown[][] | null = null
+    let idleCount = 0
     const captured: FakeCtxHandle['captured'] = {
         notifies: [],
         inputs: [],
@@ -160,22 +187,28 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
             },
             waitForIdle: guard(async () => {
                 captured.calls.push('idle')
+                idleCount++
             }),
             isIdle: guard(() => true),
             sessionManager: {
-                getEntries: guard(() =>
-                    lastStopReason === undefined ?
-                        []
-                    :   [
-                            {
-                                message: {
-                                    role: 'assistant',
-                                    stopReason: lastStopReason,
-                                    errorMessage: lastErrorMessage
+                getEntries: guard(() => {
+                    if (idleEntries) {
+                        const i = Math.min(Math.max(idleCount - 1, 0), idleEntries.length - 1)
+                        return idleEntries[i]
+                    }
+                    return lastStopReason === undefined ?
+                            []
+                        :   [
+                                {
+                                    type: 'message',
+                                    message: {
+                                        role: 'assistant',
+                                        stopReason: lastStopReason,
+                                        errorMessage: lastErrorMessage
+                                    }
                                 }
-                            }
-                        ]
-                )
+                            ]
+                })
             },
             newSession: guard(
                 async ({
@@ -215,6 +248,10 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         setStopReason: (reason: string | undefined, errorMessage?: string) => {
             lastStopReason = reason
             lastErrorMessage = errorMessage
+        },
+        setIdleEntries: (snapshots: unknown[][]) => {
+            idleEntries = snapshots
+            idleCount = 0
         }
     }
 }

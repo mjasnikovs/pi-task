@@ -429,7 +429,7 @@ const STEER_PLACEHOLDER = 'Type guidance to continue this task, or leave empty t
  * `sendUserMessage` lives on ReplacedSessionContext (not the base command ctx,
  * and not re-exported from the package), so we narrow to just what we call.
  */
-type SteerCtx = ExtensionCommandContext & {
+export type SteerCtx = ExtensionCommandContext & {
     sendUserMessage(content: string, options?: {deliverAs?: 'steer' | 'followUp'}): Promise<void>
 }
 
@@ -508,6 +508,88 @@ function implementationError(ctx: ExtensionCommandContext): string | undefined {
 }
 
 /**
+ * True when the implementation turn went idle right after a context compaction —
+ * the most recent entry in the branch is a `compaction` boundary sitting after the
+ * last assistant message.
+ *
+ * A *threshold* auto-compaction (the runtime's "context is getting large" path)
+ * compacts and then deliberately does NOT auto-continue: it returns to idle and
+ * expects a manual continue (`_runAutoCompaction("threshold", false)` →
+ * `hasQueuedMessages()` is false → the agent loop stops). Our implementation wait
+ * resolves at exactly that idle. Without this check it reads as "the model
+ * finished" (the last assistant message is a normal `stop`, not `aborted`/`error`),
+ * so the run jumps straight to the verify gate and abandons a half-done task at the
+ * compaction boundary — the failure this detector closes.
+ *
+ * Position-based, not timestamp-based: the runtime APPENDS the compaction entry to
+ * the tail of the branch after the assistant message that triggered it
+ * (`appendCompaction` → `_appendEntry` push), so a `compaction` after the last
+ * assistant message means we are parked on a compaction with no continuation. A
+ * genuinely finished turn ends on an assistant message with no trailing compaction;
+ * an *overflow* compaction self-retries, so it never leaves us idle here.
+ */
+export function endedAtCompactionBoundary(ctx: ExtensionCommandContext): boolean {
+    const entries = ctx.sessionManager.getEntries()
+    let lastAssistant = -1
+    let lastCompaction = -1
+    for (let i = 0; i < entries.length; i++) {
+        const e = entries[i]
+        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
+            lastAssistant = i
+        } else if (e.type === 'compaction') {
+            lastCompaction = i
+        }
+    }
+    return lastCompaction > lastAssistant
+}
+
+/**
+ * Nudge that resumes an implementation turn the runtime parked at a compaction
+ * boundary. It must let a turn that was genuinely finished (then tipped over the
+ * threshold by its own final message) confirm completion without inventing busywork
+ * — we cannot tell "paused mid-task by compaction" from "finished, then compacted"
+ * from the boundary alone, so the wording lets a done turn end in one line.
+ */
+export const CONTINUE_AFTER_COMPACTION =
+    'Your context was automatically compacted. Continue implementing this task from '
+    + 'exactly where you left off, and keep going until it is fully done. If the '
+    + 'implementation is already complete, say so in one line and stop — do not invent '
+    + 'extra work or restart the task.'
+
+/**
+ * Safety cap on compaction-driven resumes for a single implementation turn. Each
+ * resume follows a real compaction (which only fires after the model produced a
+ * turn large enough to cross the threshold), so a legitimately large task may
+ * resume a handful of times; the cap exists only to stop a pathological loop from
+ * auto-sending forever with no user in the loop. Hitting it stops resuming and lets
+ * the verify gate / `/task-auto-resume` catch any leftover incompleteness.
+ */
+export const MAX_COMPACTION_RESUMES = 20
+
+/**
+ * Resume an implementation turn that went idle at a threshold-compaction boundary.
+ * The runtime compacts and parks at idle without auto-continuing; we send a
+ * continue and wait again, repeating across successive compactions until the turn
+ * ends on a real assistant message (genuine completion). A user ESC takes priority
+ * (it is not a compaction boundary, and `wasInterrupted` guards the loop so the
+ * steer loop handles it), and the safety cap bounds a runaway. Returns the number
+ * of resumes performed (0 when the turn did not end on a compaction).
+ */
+export async function resumeAcrossCompactions(ctx: SteerCtx): Promise<number> {
+    let resumes = 0
+    while (
+        resumes < MAX_COMPACTION_RESUMES
+        && !wasInterrupted(ctx)
+        && endedAtCompactionBoundary(ctx)
+    ) {
+        await ctx.sendUserMessage(CONTINUE_AFTER_COMPACTION)
+        await ctx.waitForIdle()
+        resumes++
+    }
+    return resumes
+}
+
+/**
  * After the implementation turn settles, honour a user ESC by letting them steer.
  *
  * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
@@ -571,6 +653,14 @@ export async function runSingleTask(
                     await newCtx.sendUserMessage(spec)
                     if (opts.waitForImplementation) {
                         await newCtx.waitForIdle()
+                        // A threshold auto-compaction parks the turn at idle WITHOUT
+                        // auto-continuing (the runtime expects a manual continue). Our
+                        // single waitForIdle resolves there, so without this the run
+                        // would treat a compaction mid-task as completion and jump
+                        // straight to the verify gate. Resume across any compaction
+                        // boundaries first, so steering/error inspection below see the
+                        // turn's REAL end, not a compaction pause.
+                        await resumeAcrossCompactions(newCtx)
                         interrupted = await steerUntilDone(newCtx, opts.promptSteer)
                         // A user-declined steer (interrupted) is its own paused
                         // path; otherwise inspect how the turn actually ended.
