@@ -5,7 +5,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {pushNotify} from './push.js'
-import {setPrompt, clearPrompt} from './session-state.js'
+import {setPrompt, clearPrompt, addError} from './session-state.js'
 import type {PromptMessage, ServerMessage} from './protocol.js'
 import {askQuestionBox} from '../task/question-box.js'
 
@@ -162,6 +162,22 @@ export class SessionUI {
 
 export function publishNotify(message: string, level: 'info' | 'warning' | 'error'): void {
     getBridge().broadcast({type: 'notify', message, level})
+}
+
+/**
+ * Mirror a task lifecycle notice (the kind pi-task shows on the terminal via
+ * ctx.ui.notify) to connected remote viewers. Task failures and other
+ * ctx.ui.notify calls bypass the host agent's event stream — the only thing
+ * events.ts mirrors — so without this the remote view shows nothing when a task
+ * fails completely even though the terminal flashes red.
+ *
+ * An 'error' becomes a PERSISTENT red bubble in the transcript (addError) so it
+ * survives a reconnect, matching the terminal's red text; 'warning'/'info' are a
+ * transient toast since they don't need to linger.
+ */
+export function publishLifecycleNotice(message: string, level: 'info' | 'warning' | 'error'): void {
+    if (level === 'error') addError(message)
+    else publishNotify(message, level)
 }
 
 export function publishViewer(title: string, text: string): void {

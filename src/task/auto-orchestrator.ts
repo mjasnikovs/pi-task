@@ -54,7 +54,7 @@ import {
     USER_CANCELLED,
     type PhaseDeps
 } from './child-runner.js'
-import {SessionUI, registerBridgeCommand} from '../remote/bridge.js'
+import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
@@ -791,6 +791,10 @@ function announceDone(
     level: 'info' | 'warning' | 'error'
 ): void {
     ctx.ui.notify(msg, level)
+    // ctx.ui.notify is terminal-only and pushNotify is a backgrounded-device web
+    // push — neither shows up in a remote viewer that's watching live. Mirror it
+    // into the session view too (errors become a persistent red bubble).
+    publishLifecycleNotice(msg, level)
     void pushNotify('Task finished', msg, 'pi-end').catch(() => {})
 }
 

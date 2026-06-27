@@ -4,6 +4,7 @@ import {
     answerPrompt,
     SessionUI,
     publishNotify,
+    publishLifecycleNotice,
     publishViewer,
     registerBridgeCommand,
     dispatchRemoteLine,
@@ -189,6 +190,37 @@ test('publishNotify broadcasts a notify message', () => {
     expect(b.sent).toContainEqual({
         type: 'notify',
         message: 'Cancelling TASK_0001…',
+        level: 'warning'
+    })
+})
+
+test('publishLifecycleNotice: an error becomes a persistent red bubble in the transcript', () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    publishLifecycleNotice('TASK_0001 failed: clarify model error.', 'error')
+    // addError → persistent agent_error (survives reconnect via the snapshot),
+    // matching the terminal's red text — not a transient toast.
+    // agent_error is a live SessionState delta — intentionally not in the typed
+    // ServerMessage union (see protocol.ts), so cast the literal like the rest of
+    // this file does for sink captures.
+    expect(b.sent).toContainEqual({
+        type: 'agent_error',
+        message: 'TASK_0001 failed: clarify model error.'
+    } as never)
+    expect(
+        getState()
+            .history.getEntries()
+            .some(t => t.error)
+    ).toBe(true)
+})
+
+test('publishLifecycleNotice: a non-error is a transient toast', () => {
+    const b = getBridge()
+    b.broadcast = msg => b.sent.push(msg)
+    publishLifecycleNotice('TASK_0001 cancelled.', 'warning')
+    expect(b.sent).toContainEqual({
+        type: 'notify',
+        message: 'TASK_0001 cancelled.',
         level: 'warning'
     })
 })

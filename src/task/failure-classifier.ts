@@ -6,6 +6,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
+import {publishLifecycleNotice} from '../remote/bridge.js'
 import {
     LoopExhaustedError,
     LeakedToolCallError,
@@ -106,4 +107,7 @@ export async function handleFailure(
     await updateTaskFrontMatter(cwd, id, {state: c.state, reason: c.reason})
     flashTerminalWidget(ctx, c.state, id, c.flash)
     ctx.ui.notify(`${id} ${c.notify}`, c.level)
+    // Mirror to remote viewers — ctx.ui.notify is terminal-only, so without this
+    // the remote view shows nothing when a task fails.
+    publishLifecycleNotice(`${id} ${c.notify}`, c.level)
 }
