@@ -1,9 +1,11 @@
 import {describe, expect, test} from 'bun:test'
 import {
     buildAutoLoaderLines,
+    buildImplLines,
     formatContextDetail,
     WIDGET_LAST_LINE_MAX,
     type AutoLoaderState,
+    type ImplState,
     type WidgetState,
     startWidget
 } from './widget.js'
@@ -70,6 +72,37 @@ describe('buildAutoLoaderLines', () => {
             lastLine: 'editing eslint.config.mjs'
         })
         expect(lines[2]).toBe('↳ editing eslint.config.mjs')
+    })
+})
+
+describe('buildImplLines', () => {
+    const base: ImplState = {
+        taskId: 'TASK_0007',
+        title: 'Add dark mode',
+        startedAt: Date.now()
+    }
+
+    test('renders the /task-style head + an "implementing" detail line', () => {
+        const lines = buildImplLines(base)
+        expect(lines).toHaveLength(2)
+        expect(lines[0]).toBe('TASK_0007 · Add dark mode')
+        expect(lines[1]).toContain('implementing · ')
+        expect(lines[1]).not.toContain('phase')
+    })
+
+    test('shows the host context bar like the phase widget', () => {
+        const lines = buildImplLines({
+            ...base,
+            contextUsage: {tokens: 48_000, contextWindow: 200_000, percent: 24}
+        })
+        expect(lines[1]).toContain('implementing · ')
+        expect(lines[1]).toContain('48k/200k')
+    })
+
+    test('appends the latest tool line as a muted ↳ trailer', () => {
+        const lines = buildImplLines({...base, lastLine: 'read src/index.ts'})
+        expect(lines).toHaveLength(3)
+        expect(lines[2]).toBe('↳ read src/index.ts')
     })
 })
 

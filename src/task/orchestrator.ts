@@ -41,6 +41,7 @@ import {
     writeTaskFile
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
+import {armImplWidget, disarmImplWidget, setupImplWidget} from './impl-widget.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {parseVerifyBlock} from './spec-validation.js'
@@ -81,6 +82,11 @@ export class TaskRunner {
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
     private readonly _planContext: string | undefined
     private readonly _fixInstruction: string | undefined
+    /** True when the caller awaits the implementation turn (waitForImplementation):
+     *  the impl widget stays armed across the whole impl phase (incl. compaction /
+     *  steer turns) and is disarmed here. False for fire-and-forget /task, where the
+     *  widget is armed one-shot and its own agent_end disarms it. */
+    private readonly _implAwaited: boolean
 
     private readonly _abort = new AbortController()
     private readonly _startedAt: number
@@ -107,7 +113,8 @@ export class TaskRunner {
         spawnFn?: SpawnFn,
         onStart?: (taskId: string) => void | Promise<void>,
         planContext?: string,
-        fixInstruction?: string
+        fixInstruction?: string,
+        implAwaited?: boolean
     ) {
         this._ctx = ctx
         this._cwd = cwd
@@ -117,6 +124,7 @@ export class TaskRunner {
         this._onStart = onStart
         this._planContext = planContext
         this._fixInstruction = fixInstruction
+        this._implAwaited = implAwaited ?? false
         this._startedAt = Date.now()
 
         // We'll populate id/title/phase lazily in run().
@@ -324,13 +332,28 @@ export class TaskRunner {
 
     private async _deliverSpec(ctx: ExtensionCommandContext): Promise<void> {
         const spec = this._specForDelivery()
+        // Keep the rich status block alive across the implementation turn (the phase
+        // widget was disposed at handoff). Awaited (/task-auto) stays armed across all
+        // sub-turns and is disarmed here; fire-and-forget (/task) arms one-shot and its
+        // own agent_end disarms it after the single turn.
+        const meta = {
+            taskId: this._widgetState.taskId,
+            title: this._widgetState.title,
+            label: this._widgetState.label
+        }
         if (this._sendSpec) {
-            await this._sendSpec(spec)
+            armImplWidget(meta, {oneShot: !this._implAwaited})
+            try {
+                await this._sendSpec(spec)
+            } finally {
+                if (this._implAwaited) disarmImplWidget()
+            }
             return
         }
         if (!piApi) {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
+        armImplWidget(meta, {oneShot: true})
         if (ctx.isIdle()) {
             piApi.sendUserMessage(spec)
         } else {
@@ -670,7 +693,8 @@ export async function runSingleTask(
                 opts.spawnFn,
                 opts.onStart,
                 opts.planContext,
-                opts.fixInstruction
+                opts.fixInstruction,
+                opts.waitForImplementation
             )
             await runner.run()
             taskId = runner.taskId
@@ -829,6 +853,7 @@ async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Pr
 
 export function registerTask(pi: ExtensionAPI): void {
     piApi = pi
+    setupImplWidget(pi)
     registerBridgeCommand(pi, 'task', {
         description: 'Start a new task. Usage: /task <prompt>',
         handler: handleTask

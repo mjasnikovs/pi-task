@@ -220,6 +220,37 @@ export function startAutoLoader(
     }
 }
 
+// ─── Implementation-turn loader ──────────────────────────────────────────────
+// The phase widget is disposed at spec-handoff, so the implementation turn — the
+// host agent actually building the spec, the longest-running and most visible
+// part — would otherwise show only pi's bare "⠸ Working…" indicator. This renders
+// the SAME status block (head · implementing/elapsed/context · ↳ last line) during
+// that turn, driven by the host's own live context usage. Lives in impl-widget.ts.
+
+export interface ImplState {
+    taskId: string
+    title: string
+    /** Short display label compressed from `title`; falls back to a truncation when absent. */
+    label?: string
+    startedAt: number
+    lastLine?: string
+    contextUsage?: ContextSnapshot
+}
+
+export function buildImplLines(s: ImplState, theme?: WidgetTheme): string[] {
+    const elapsed = formatDuration(Date.now() - s.startedAt)
+    const head = `${s.taskId} · ${titleForDisplay(s)}`
+    let detail = `implementing · ${elapsed}`
+    if (s.contextUsage) {
+        const ctxDetail = formatContextDetail(s.contextUsage, theme)
+        if (ctxDetail) detail += ` · ${ctxDetail}`
+    }
+    const lines = [head, detail]
+    const trailer = lastLineTrailer(s.lastLine, theme)
+    if (trailer) lines.push(trailer)
+    return lines
+}
+
 export function flashTerminalWidget(
     ctx: ExtensionCommandContext,
     state: Exclude<TaskState, 'pending' | 'in_progress' | 'completed'>,
