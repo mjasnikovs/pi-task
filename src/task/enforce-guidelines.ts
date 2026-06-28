@@ -51,6 +51,21 @@ export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
  */
 const ENFORCE_TOOLS = 'read,edit'
 
+/**
+ * Flag-only enforcement gets exactly ONE tool: `read`. It can inspect the changed
+ * files and report violations but CANNOT edit, create, or run anything.
+ *
+ * This is the "no signal ⇒ no license to rewrite logic" half of the gate. When a
+ * task ships no behavioral verification to guard a destructive edit (no runnable
+ * VERIFY, or the verify gate did not produce a genuine clean pass), letting the
+ * weak model rewrite working code is exactly what trashes the build — A/B-proven:
+ * with `read,edit` and no guard the model degraded a clean tree in 4/5 runs while
+ * declaring CLEAN. Demoted to `read`, it cannot trash anything (5/5 clean) and
+ * still names the real violation (5/5). So with no signal to revert against, the
+ * pass reports the violation as a warning instead of editing.
+ */
+const ENFORCE_FLAG_TOOLS = 'read'
+
 export interface GuidelineDoc {
     /** Filenames found, in discovery order (e.g. ['AGENTS.md', 'CLAUDE.md']). */
     files: string[]
@@ -128,6 +143,38 @@ export function buildEnforcePrompt(rulesText: string, diff: string): string {
         'When you are done, output EXACTLY ONE of these as the final line:',
         '  ENFORCE: CLEAN              (the changes comply with every rule, after your fixes)',
         '  ENFORCE: VIOLATION <text>  (a rule is still violated and you could not fix it; say which)',
+        'Output the verdict line verbatim — it is parsed mechanically.'
+    ].join('\n')
+}
+
+/**
+ * Build the FLAG-ONLY enforcement prompt: same rules + diff, but the child has a
+ * `read` tool only and is told to REPORT violations, not fix them. Kept pure so
+ * the wording is unit-tested without spawning pi. Used when there is no
+ * verification signal to guard a destructive edit (see ENFORCE_FLAG_TOOLS).
+ */
+export function buildEnforceFlagPrompt(rulesText: string, diff: string): string {
+    return [
+        'You are a strict guideline-enforcement REVIEW pass running right after an AI',
+        'coding agent finished a task and committed it. The agent is known to skip',
+        'project rules, so do not trust that it followed them — verify against the',
+        'changes.',
+        '',
+        'You have a `read` tool — and NOTHING else. You CANNOT edit, create, or run',
+        'anything. Your job is to REVIEW and REPORT, not to fix.',
+        '',
+        'PROJECT GUIDELINES (from this repository):',
+        rulesText,
+        '',
+        'CHANGES IN THE LAST COMMIT (review these specifically against the rules):',
+        diff.trim().length > 0 ? diff : '(no textual diff captured — nothing to verify)',
+        '',
+        'Read each changed file and check it against EVERY rule above. Do NOT attempt',
+        'to fix anything — only report what you find.',
+        '',
+        'When you are done, output EXACTLY ONE of these as the final line:',
+        '  ENFORCE: CLEAN              (the changes comply with every rule)',
+        '  ENFORCE: VIOLATION <text>  (a rule is violated; say which — do not fix it)',
         'Output the verdict line verbatim — it is parsed mechanically.'
     ].join('\n')
 }
@@ -259,6 +306,16 @@ export async function captureCommitDiff(
 export interface EnforcementDeps {
     cwd: string
     signal?: AbortSignal
+    /**
+     * Which capability the pass runs with.
+     *  - `'edit'` (default): `read,edit` — the model fixes violations in place. The
+     *    caller is responsible for guarding those edits with a differential
+     *    verification check (revert on regression), because a bare edit pass
+     *    trashes working code (A/B: 4/5).
+     *  - `'flag'`: `read` only — the model reports violations but cannot touch the
+     *    tree. Used when there is no verification signal to guard an edit against.
+     */
+    mode?: 'edit' | 'flag'
     /** Defaults to the real cwd-only file discovery. */
     discover?: (cwd: string) => Promise<GuidelineDoc | null>
     /** Defaults to the real git diff capture. */
@@ -282,9 +339,13 @@ export async function runGuidelineEnforcement(deps: EnforcementDeps): Promise<En
     if (!doc) return {ok: true, reason: 'no guideline files'}
 
     const diff = await getDiff(deps.cwd, deps.signal)
+    const flagOnly = deps.mode === 'flag'
+    const tools = flagOnly ? ENFORCE_FLAG_TOOLS : ENFORCE_TOOLS
+    const prompt =
+        flagOnly ? buildEnforceFlagPrompt(doc.text, diff) : buildEnforcePrompt(doc.text, diff)
     let text: string
     try {
-        text = await deps.runChild(ENFORCE_TOOLS, buildEnforcePrompt(doc.text, diff), deps.signal)
+        text = await deps.runChild(tools, prompt, deps.signal)
     } catch (err) {
         // A user cancellation is not an enforcement failure — re-throw it so the
         // /task-auto loop's USER_CANCELLED handler reports a clean "cancelled —
@@ -299,4 +360,4 @@ export async function runGuidelineEnforcement(deps: EnforcementDeps): Promise<En
     return {ok: false, reason: `guideline violation: ${verdict.detail}`}
 }
 
-export {ENFORCE_TOOLS}
+export {ENFORCE_TOOLS, ENFORCE_FLAG_TOOLS}

@@ -71,3 +71,29 @@ export async function gitCommitAll(
     }
     return {committed: true}
 }
+
+/**
+ * Drop the last commit, restoring the tree to its parent — the differential
+ * guard's "revert" when an `'edit'` enforcement pass regressed the verified task
+ * commit. The enforcement fixes are committed first (as `ENFORCE GUIDELINES`);
+ * when re-running verification against that commit reports a regression, this
+ * `git reset --hard HEAD~1` throws the enforce commit away and brings back the
+ * verified task commit underneath it.
+ *
+ * `reset --hard` is safe here precisely because it runs right after the enforce
+ * commit: the working tree is clean (everything was just committed), so there is
+ * no unrelated uncommitted work for it to destroy. HEAD~1 is the verified task
+ * commit. The enforcement child runs `read,edit` with no `write`, so the dropped
+ * commit contains only its in-place source edits — nothing else to preserve.
+ *
+ * Best-effort and never throws: a git failure is swallowed (the caller has
+ * already decided to keep the verified work; a failed reset only leaves the
+ * enforce commit in place, which is surfaced as a warning).
+ */
+export async function gitDropLastCommit(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<void> {
+    await git(cwd, ['reset', '--hard', 'HEAD~1'], signal, spawnFn)
+}

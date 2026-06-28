@@ -30,7 +30,7 @@ import {
     taskFilePath,
     tasksDir
 } from './task-io.js'
-import {gitCommitAll, type CommitResult} from './auto-commit.js'
+import {gitCommitAll, gitDropLastCommit, type CommitResult} from './auto-commit.js'
 import {
     runGuidelineEnforcement,
     classifyEnforceChildFailure,
@@ -102,7 +102,14 @@ export interface AutoDeps {
     enforce?: (
         ctx: ExtensionCommandContext,
         cwd: string,
-        taskTitle: string
+        taskTitle: string,
+        /**
+         * `'edit'` (read,edit — fix in place) only when there is a clean
+         * verification signal to guard the edits against; otherwise `'flag'`
+         * (read-only, report don't fix). The loop picks the mode from whether the
+         * verify gate produced a genuine clean pass.
+         */
+        mode: 'edit' | 'flag'
     ) => Promise<EnforceOutcome>
     /**
      * Verify the just-finished task's work by RUNNING its composed spec's VERIFY
@@ -134,6 +141,15 @@ export interface AutoDeps {
         taskId: string,
         failReason: string
     ) => Promise<ResolutionOutcome>
+    /**
+     * Discard the working-tree edits an `'edit'` enforcement pass made, restoring
+     * the verified task commit. The differential guard calls this when re-running
+     * verification AFTER enforcement reports a regression: the guideline fixes are
+     * thrown away and the verified implementation is kept. Optional: absent in
+     * tests; the loop then skips the revert (and warns). Scoped to exclude the
+     * .pi-tasks bookkeeping so task front matter is not rolled back.
+     */
+    revert?: (cwd: string) => Promise<void>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -594,13 +610,15 @@ function defaultDeps(
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)
             :   Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
-        enforce: (enforceCtx, cwd2, taskTitle) => {
+        revert: cwd2 => gitDropLastCommit(cwd2, signal),
+        enforce: (enforceCtx, cwd2, taskTitle, mode) => {
             if (!getConfig().enforceGuidelines) {
                 return Promise.resolve({ok: true, reason: 'disabled'})
             }
             return runGuidelineEnforcement({
                 cwd: cwd2,
                 signal,
+                mode,
                 // Run the worker child UNGUARDED: no loop detector, no wall-clock
                 // timeout. This pass's job is to rework files in place until every
                 // violation is fixed, and it legitimately reads and edits the same
@@ -920,6 +938,14 @@ export async function runAutoLoop(
             // /task-auto-resume re-runs it (rather than blessing broken work). Off
             // by default (deps.verify returns a disabled no-op) and a no-op when the
             // task has no composed spec to verify against.
+            //
+            // Whether this gate produced a GENUINE clean pass (a real signal ran
+            // and the work met it) also decides how the enforce pass below is
+            // allowed to behave: only a genuine pass gives a signal to revert
+            // against, so only then may enforce edit in place (see the enforce
+            // block). A no-op pass (no spec), a disabled gate, or a user
+            // accept-override leaves this false → enforce runs flag-only.
+            let verifyCleanPass = false
             if (deps.verify) {
                 active.ui.notify(`${id}: verifying "${next.title}"…`, 'info')
                 let verified = await deps.verify(active, cwd, next.title, res.taskId)
@@ -1004,6 +1030,10 @@ export async function runAutoLoop(
                 }
                 // Loop exited because the work verified OR the user accepted the
                 // artifact — either way fall through to check-off/commit/enforce.
+                // A genuine clean pass is ok===true with NO reason; a no-op pass
+                // ('no spec to verify') or an accept-override (verified.ok still
+                // false at break) does NOT count as a guardable signal.
+                verifyCleanPass = verified.ok && !verified.reason
             }
             // res.ok === true means runner.run() completed, so res.taskId is the
             // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an
@@ -1024,38 +1054,77 @@ export async function runAutoLoop(
                 )
             }
             // With the task committed, hold its work to the project's AGENTS.md /
-            // CLAUDE.md rules. Local models drift and skip those guidelines, so the
-            // enforcement pass re-reads THE LAST COMMIT's diff with the same local
-            // model (edit tools enabled) and fixes violations in place; those fixes
-            // are then committed SEPARATELY under an "ENFORCE GUIDELINES" commit so
-            // they form an independent, auditable diff on top of the task commit.
-            // A non-clean verdict only warns — the task commit already landed, so
-            // the run continues. Skipped when nothing was committed this round
-            // (autoCommit off or an empty commit): there is no "last commit" of this
-            // task's work to verify. (Also a no-op when the feature is off, when
-            // there are no guideline files, or in tests with no enforce dep.)
+            // CLAUDE.md rules — but as a step INSIDE the validation gate, never the
+            // blind post-commit write pass it used to be. A bare read,edit enforce
+            // pass trashes working code: A/B-proven, it degraded a clean build in
+            // 4/5 runs while declaring CLEAN. So enforcement is now gated by the
+            // verify signal:
+            //
+            //   - 'edit' mode (read,edit — fix in place) runs ONLY when the verify
+            //     gate just produced a genuine clean pass. That pass is the
+            //     differential SIGNAL: enforce commits its fixes, then the SAME
+            //     signal is re-run against the enforced tree. A regression means the
+            //     pass made the artifact worse than it found it — its commit is
+            //     dropped and the verified implementation is kept (A/B: 5/5 clean).
+            //   - 'flag' mode (read-only — report don't fix) runs when there is no
+            //     such signal (verify off, no spec, or an accept-override): with
+            //     nothing to revert against, the pass may not rewrite logic, only
+            //     surface violations as a warning ("no signal ⇒ no license"; A/B:
+            //     5/5 clean, 5/5 caught the real violation).
+            //
+            // Skipped when nothing was committed this round (autoCommit off or an
+            // empty commit), when the feature is off, when there are no guideline
+            // files, or in tests with no enforce dep.
             if (deps.enforce && commit.committed) {
-                active.ui.notify(`${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`, 'info')
-                const verdict = await deps.enforce(active, cwd, next.title)
+                const mode: 'edit' | 'flag' = verifyCleanPass ? 'edit' : 'flag'
+                active.ui.notify(
+                    mode === 'edit' ?
+                        `${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`
+                    :   `${id}: reviewing "${next.title}" against AGENTS.md/CLAUDE.md (no verify signal — report only)…`,
+                    'info'
+                )
+                const verdict = await deps.enforce(active, cwd, next.title, mode)
                 if (!verdict.ok) {
                     active.ui.notify(
-                        `${id}: guideline enforcement on "${next.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
+                        `${id}: guideline ${mode === 'edit' ? 'enforcement' : 'review'} on "${next.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
                         'warning'
                     )
                 }
-                // Commit whatever the pass fixed as its own snapshot. A no-op when
-                // the pass made no edits (gitCommitAll reports nothing to commit),
-                // so a clean task adds no empty commit — only announce a real one.
-                const enforceCommit = await deps.commit(
-                    cwd,
-                    `ENFORCE GUIDELINES: ${next.title} (${res.taskId})`
-                )
-                if (enforceCommit.committed) {
-                    active.ui.notify(
-                        `${id}: committed guideline fixes for "${next.title}".`,
-                        'info'
+                if (mode === 'edit') {
+                    // Commit whatever the pass fixed as its own snapshot. A no-op
+                    // when it made no edits (nothing to commit) — and then there is
+                    // nothing to re-verify or revert, so a clean task skips the
+                    // second verify entirely.
+                    const enforceCommit = await deps.commit(
+                        cwd,
+                        `ENFORCE GUIDELINES: ${next.title} (${res.taskId})`
                     )
+                    if (enforceCommit.committed) {
+                        // Differential guard: re-run the verify signal against the
+                        // enforced tree. verifyCleanPass implies deps.verify exists,
+                        // so this is a real check. A regression ⇒ drop the enforce
+                        // commit, keep the verified task commit underneath it.
+                        const after =
+                            deps.verify ?
+                                await deps.verify(active, cwd, next.title, res.taskId)
+                            :   ({ok: true} as VerifyOutcome)
+                        if (!after.ok) {
+                            // Regression: drop the enforce commit if we can, and
+                            // never report it as a kept fix.
+                            if (deps.revert) await deps.revert(cwd)
+                            active.ui.notify(
+                                `${id}: guideline fixes regressed verification on "${next.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,
+                                'warning'
+                            )
+                        } else {
+                            active.ui.notify(
+                                `${id}: committed guideline fixes for "${next.title}".`,
+                                'info'
+                            )
+                        }
+                    }
                 }
+                // 'flag' mode makes no edits — nothing to commit or revert.
             }
         }
     } catch (err) {

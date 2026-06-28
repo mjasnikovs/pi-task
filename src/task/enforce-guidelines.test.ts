@@ -4,10 +4,12 @@ import {
     captureCommitDiff,
     discoverGuidelines,
     buildEnforcePrompt,
+    buildEnforceFlagPrompt,
     parseEnforceVerdict,
     runGuidelineEnforcement,
     classifyEnforceChildFailure,
     ENFORCE_TOOLS,
+    ENFORCE_FLAG_TOOLS,
     GUIDELINE_FILENAMES,
     type EnforceChildResult,
     type GuidelineDoc
@@ -95,6 +97,59 @@ test('ENFORCE_TOOLS is read,edit — no write (no new files), no grep/find/ls (n
     expect(ENFORCE_TOOLS).toBe('read,edit')
     expect(ENFORCE_TOOLS).not.toContain('write')
     expect(ENFORCE_TOOLS).not.toContain('grep')
+})
+
+// ─── flag-only mode (no signal ⇒ no license to rewrite) ──────────────────────
+
+test('ENFORCE_FLAG_TOOLS is read only — flag-only cannot edit/write/run', () => {
+    // A/B-proven: with no verification signal to guard against, demoting the pass to
+    // read-only is what stops it trashing working code (4/5 → 0/5).
+    expect(ENFORCE_FLAG_TOOLS).toBe('read')
+    expect(ENFORCE_FLAG_TOOLS).not.toContain('edit')
+    expect(ENFORCE_FLAG_TOOLS).not.toContain('write')
+})
+
+test("buildEnforceFlagPrompt: read-only, report-don't-fix, same verdict contract", () => {
+    const p = buildEnforceFlagPrompt('## AGENTS.md\n\nno print()', 'diff --git a/x b/x')
+    expect(p).toContain('no print()')
+    expect(p).toContain('diff --git a/x b/x')
+    expect(p).toContain('`read`')
+    expect(p).not.toContain('`edit`')
+    expect(p).toMatch(/CANNOT edit|cannot edit|REVIEW and REPORT|do not.*fix|not to fix/i)
+    expect(p).toContain('ENFORCE: CLEAN')
+    expect(p).toContain('ENFORCE: VIOLATION')
+})
+
+test('runGuidelineEnforcement: mode "flag" runs the read-only child with the flag prompt', async () => {
+    let usedTools = ''
+    const r = await runGuidelineEnforcement({
+        cwd: '/repo',
+        mode: 'flag',
+        discover: async () => docOf('rules'),
+        getDiff: async () => 'the diff',
+        runChild: async (tools, prompt) => {
+            usedTools = tools
+            // The flag prompt forbids fixing — it must NOT offer the edit tool.
+            expect(prompt).not.toContain('`edit`')
+            return 'ENFORCE: VIOLATION duplicated JSX'
+        }
+    })
+    expect(usedTools).toBe(ENFORCE_FLAG_TOOLS)
+    expect(r).toEqual({ok: false, reason: 'guideline violation: duplicated JSX'})
+})
+
+test('runGuidelineEnforcement: default mode is edit (read,edit child)', async () => {
+    let usedTools = ''
+    await runGuidelineEnforcement({
+        cwd: '/repo',
+        discover: async () => docOf('rules'),
+        getDiff: async () => 'd',
+        runChild: async tools => {
+            usedTools = tools
+            return 'ENFORCE: CLEAN'
+        }
+    })
+    expect(usedTools).toBe(ENFORCE_TOOLS)
 })
 
 // ─── parseEnforceVerdict ─────────────────────────────────────────────────────

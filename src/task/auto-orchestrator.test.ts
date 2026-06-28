@@ -479,6 +479,7 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
             buildAutoBody('feat', '(none)', ['A', 'B'])
         )
         const commits: string[] = []
+        const enforceModes: Array<'edit' | 'flag'> = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
             runTask: () =>
@@ -487,7 +488,10 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
                 commits.push(message)
                 return Promise.resolve({committed: true})
             },
-            enforce: () => Promise.resolve({ok: false, reason: 'guideline violation: used print()'})
+            enforce: (_c, _cwd, _title, mode) => {
+                enforceModes.push(mode)
+                return Promise.resolve({ok: false, reason: 'guideline violation: used print()'})
+            }
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
@@ -497,16 +501,95 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
         expect(parseTaskList(body).every(e => e.done)).toBe(true)
         // The violation is surfaced as a warning, not a stop.
         expect(captured.notifies.some(n => /used print\(\)/.test(n.msg))).toBe(true)
-        // Each task: checkpoint → `task: …` commit → separate `ENFORCE GUIDELINES`
-        // commit (the enforce pass runs only because the task commit landed).
+        // No verify dep ⇒ no signal to guard a destructive edit ⇒ enforcement runs
+        // in FLAG mode (read-only, report don't fix). It makes no edits, so there is
+        // NO separate `ENFORCE GUIDELINES` commit — only the per-task commits.
+        expect(enforceModes).toEqual(['flag', 'flag'])
         expect(commits).toEqual([
             'chore: checkpoint before "A"',
             'task: A (TASK_0006)',
-            'ENFORCE GUIDELINES: A (TASK_0006)',
             'chore: checkpoint before "B"',
-            'task: B (TASK_0006)',
-            'ENFORCE GUIDELINES: B (TASK_0006)'
+            'task: B (TASK_0006)'
         ])
+    })
+})
+
+test('runAutoLoop: clean verify ⇒ enforce runs in EDIT mode; fixes that re-verify clean are committed', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const enforceModes: Array<'edit' | 'flag'> = []
+        let reverted = false
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            // Genuine clean pass (ok, no reason) BOTH times: the gate before
+            // enforcement and the differential guard after it.
+            verify: () => Promise.resolve({ok: true}),
+            enforce: (_c, _cwd, _t, mode) => {
+                enforceModes.push(mode)
+                return Promise.resolve({ok: true})
+            },
+            revert: () => {
+                reverted = true
+                return Promise.resolve()
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // A clean verify signal exists ⇒ enforce is licensed to edit.
+        expect(enforceModes).toEqual(['edit'])
+        // Re-verify stayed clean ⇒ the guideline fixes are kept and committed; the
+        // verified work was never reverted.
+        expect(reverted).toBe(false)
+        expect(commits).toContain('ENFORCE GUIDELINES: A (TASK_0006)')
+    })
+})
+
+test('runAutoLoop: enforce edits that REGRESS the verify signal are reverted, not kept', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        let reverted = false
+        let verifyCalls = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            // 1st call = the gate: clean pass (licenses edit mode). 2nd call = the
+            // differential guard AFTER enforcement: now FAILS ⇒ enforce regressed it.
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, reason: 'work did not verify: tsc 3 errors'}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            revert: () => {
+                reverted = true
+                return Promise.resolve()
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // The guard fired: the enforce commit was dropped and the verified work kept.
+        expect(verifyCalls).toBe(2)
+        expect(reverted).toBe(true)
+        // The regression is surfaced as a warning, and the run still completes (the
+        // verified task commit stands; only the bad guideline edits were dropped).
+        expect(captured.notifies.some(n => /regressed verification/.test(n.msg))).toBe(true)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
     })
 })
 
