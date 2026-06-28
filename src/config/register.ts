@@ -26,16 +26,16 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
             'Pre-supply the project core (manifest, types, schema…) to the read-heavy research workers'
     },
     {
-        id: 'enforceGuidelines',
-        label: 'enforce guidelines',
-        description:
-            'Before each /task-auto commit, re-check the work against AGENTS.md/CLAUDE.md and fix drift'
-    },
-    {
         id: 'verifyWork',
         label: 'verify work',
         description:
-            "After each /task-auto task, RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict"
+            "After each /task-auto task, RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict (also the signal that lets 'enforce guidelines' fix safely)"
+    },
+    {
+        id: 'enforceGuidelines',
+        label: 'enforce guidelines',
+        description:
+            "Check each /task-auto commit against AGENTS.md/CLAUDE.md. Needs 'verify work' to FIX drift (fixes are reverted if they regress verification); without it, only reports violations"
     }
 ]
 
