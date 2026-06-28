@@ -15,11 +15,13 @@ import {
     fakeSpawnSimple,
     agentEndResponse,
     agentErrorResponse,
-    fakeSpawnQueue
+    fakeSpawnQueue,
+    fakeSpawnByPrompt,
+    type SpawnResponse
 } from '../test-utils/fake-spawn.js'
 import type {ProcLike, SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
-import {writeTaskFile} from './task-io.js'
+import {writeTaskFile, readSection} from './task-io.js'
 import {EventEmitter} from 'node:events'
 
 function depsWith(spawn: SpawnFn) {
@@ -284,6 +286,24 @@ describe('prependHint', () => {
     })
 })
 
+/** Serve a queue of SpawnResponses in order while capturing each call's full
+ *  argv — so a test can assert which `--tools` / `--no-tools` flag each spawn ran
+ *  with (the degrade attempt must be `--no-tools`). */
+function capturingResponseQueue(responses: ReadonlyArray<SpawnResponse>): {
+    spawn: SpawnFn
+    calls: Array<ReadonlyArray<string>>
+} {
+    const calls: Array<ReadonlyArray<string>> = []
+    let i = 0
+    const spawn = fakeSpawnByPrompt(args => {
+        calls.push(args)
+        const r = responses[Math.min(i, responses.length - 1)]
+        i++
+        return r
+    })
+    return {spawn, calls}
+}
+
 function loopEvents(
     toolName: string,
     args: unknown,
@@ -535,6 +555,160 @@ describe('runPhaseWithLoopGuard', () => {
                     () => 'PROMPT'
                 )
             ).rejects.toBeInstanceOf(LoopExhaustedError)
+        })
+    })
+
+    // ─── degradeOnExhaustion (TASK_0016 fix) ────────────────────────────────
+    // refine on a "write tests" task against a large existing codebase made the
+    // weak local model over-explore — re-reading source hunting for the impl
+    // until the loop budget was spent — and a hard-fail there killed the whole
+    // /task-auto run on every resume. The deliverable (a 4-section text rewrite)
+    // never needed a successful read, so the budget-exhausted phase now does ONE
+    // no-tools final attempt instead of throwing.
+    describe('degradeOnExhaustion', () => {
+        test('runs a no-tools final attempt after the budget is spent and returns its text', async () => {
+            await withTmpTaskDir(async cwd => {
+                await writeTaskFile(
+                    cwd,
+                    {
+                        id: 'TASK_0001',
+                        state: 'in_progress',
+                        phase: 'refine',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        title: 't'
+                    },
+                    '\n'
+                )
+                // 3 strikes all loop, then the degrade attempt produces the spec.
+                const {spawn, calls} = capturingResponseQueue([
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    agentEndResponse('GOAL\n  a degraded but complete spec')
+                ])
+                const builds: Array<string | null> = []
+                const out = await runPhaseWithLoopGuard(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'refine',
+                    'read',
+                    hint => {
+                        builds.push(hint)
+                        return 'PROMPT'
+                    },
+                    {degradeOnExhaustion: true}
+                )
+                expect(out).toBe('GOAL\n  a degraded but complete spec')
+                // 4 spawns: 3 strikes + 1 degrade attempt.
+                expect(calls.length).toBe(4)
+                // The first three carry `--tools read`; the degrade carries `--no-tools`.
+                for (const c of calls.slice(0, 3)) expect(c).toContain('--tools')
+                expect(calls[3]).toContain('--no-tools')
+                expect(calls[3]).not.toContain('--tools')
+                // The degrade prompt was built with the terminal "NO tools" hint.
+                expect(builds.length).toBe(4)
+                expect(builds[3]).toContain('SYSTEM NOTE')
+                expect(builds[3]).toContain('NO tools')
+            })
+        })
+
+        test('records the degrade outcome (not "phase failed") in the loop events section', async () => {
+            await withTmpTaskDir(async cwd => {
+                await writeTaskFile(
+                    cwd,
+                    {
+                        id: 'TASK_0001',
+                        state: 'in_progress',
+                        phase: 'refine',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        title: 't'
+                    },
+                    '\n'
+                )
+                const spawn = fakeSpawnQueue([
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    agentEndResponse('GOAL\n  spec\n')
+                ])
+                await runPhaseWithLoopGuard(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'refine',
+                    'read',
+                    () => 'PROMPT',
+                    {degradeOnExhaustion: true}
+                )
+                const events = (await readSection(cwd, 'TASK_0001', 'loop events')) ?? ''
+                expect(events).toContain('degraded — no-tools final attempt')
+                expect(events).not.toContain('phase failed')
+            })
+        })
+
+        test('still throws LoopExhaustedError when even the no-tools attempt yields no output', async () => {
+            await withTmpTaskDir(async cwd => {
+                await writeTaskFile(
+                    cwd,
+                    {
+                        id: 'TASK_0001',
+                        state: 'in_progress',
+                        phase: 'refine',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        title: 't'
+                    },
+                    '\n'
+                )
+                const spawn = fakeSpawnQueue([
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    agentEndResponse('') // degrade attempt is also empty → honest fail
+                ])
+                await expect(
+                    runPhaseWithLoopGuard(
+                        {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                        'refine',
+                        'read',
+                        () => 'PROMPT',
+                        {degradeOnExhaustion: true}
+                    )
+                ).rejects.toBeInstanceOf(LoopExhaustedError)
+            })
+        })
+
+        test('without degradeOnExhaustion the budget-exhausted phase still hard-fails (default)', async () => {
+            await withTmpTaskDir(async cwd => {
+                await writeTaskFile(
+                    cwd,
+                    {
+                        id: 'TASK_0001',
+                        state: 'in_progress',
+                        phase: 'refine',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        title: 't'
+                    },
+                    '\n'
+                )
+                // A clean 4th response is queued but must NEVER be reached: the
+                // default path throws on the 3rd strike without a degrade attempt.
+                const {spawn, calls} = capturingResponseQueue([
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    {events: loopEvents('Read', {path: '/foo'}, 5)},
+                    agentEndResponse('should not be reached')
+                ])
+                await expect(
+                    runPhaseWithLoopGuard(
+                        {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                        'refine',
+                        'read',
+                        () => 'PROMPT'
+                    )
+                ).rejects.toBeInstanceOf(LoopExhaustedError)
+                expect(calls.length).toBe(3) // no 4th (degrade) spawn
+            })
         })
     })
 })

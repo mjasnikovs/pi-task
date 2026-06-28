@@ -262,6 +262,25 @@ export function formatLoopHint(hit: LoopHit): string {
     )
 }
 
+/**
+ * Terminal hint for the degrade attempt: the model has thrashed through the whole
+ * strike budget re-reading files without converging, so we strip its tools and
+ * order it to emit the deliverable NOW from what it already has. Used only by
+ * read-only analysis phases (refine) whose output is a text rewrite that never
+ * strictly required a successful read — far better to ship a best-effort spec
+ * than to hard-fail the whole /task-auto run. See countRevisits / LoopExhausted.
+ */
+export function formatDegradeHint(hit: LoopHit): string {
+    return (
+        `[SYSTEM NOTE: You called ${hit.call.name}(${JSON.stringify(hit.call.args)}) `
+        + `repeatedly and made no forward progress — you are stuck re-reading the same files. `
+        + `You now have NO tools: you cannot read, grep, list, or open anything further. `
+        + `STOP exploring. Produce the COMPLETE required output IMMEDIATELY, using only the task `
+        + `description and what you have already seen. Emit the full structured result now — do not `
+        + `ask to read more, do not explain, just output the final answer.]`
+    )
+}
+
 export function prependHint(hint: string | null, prompt: string): string {
     return hint === null ? prompt : `${hint}\n\n${prompt}`
 }
@@ -272,7 +291,7 @@ async function appendLoopEvent(
     phase: string,
     hit: LoopHit,
     strike: number,
-    outcome: 'restarted with hint' | 'phase failed'
+    outcome: 'restarted with hint' | 'phase failed' | 'degraded — no-tools final attempt'
 ): Promise<void> {
     const ts = new Date().toISOString()
     const argsStr = JSON.stringify(hit.call.args)
@@ -289,11 +308,25 @@ async function appendLoopEvent(
  * with a hint that names the offending call. Cap at MAX_LOOP_RESTARTS restarts;
  * the (MAX_LOOP_RESTARTS+1)th loop throws LoopExhaustedError.
  */
+export interface LoopGuardOptions {
+    /**
+     * When the strike budget is exhausted by loops, do NOT fail the phase. Run
+     * ONE final attempt with NO tools and a terminal hint ordering the model to
+     * emit its output from what it already has. Only safe for phases whose
+     * deliverable is a pure text rewrite that never strictly required a read
+     * (refine) — a hard-fail there kills the whole /task-auto run for a model
+     * that simply over-explored. Research/location phases must NOT enable this:
+     * their output depends on real reads, so a no-tools fallback would fabricate.
+     */
+    degradeOnExhaustion?: boolean
+}
+
 export async function runPhaseWithLoopGuard(
     deps: PhaseDeps,
     name: string,
     tools: string,
-    buildPrompt: (loopHint: string | null) => string
+    buildPrompt: (loopHint: string | null) => string,
+    opts: LoopGuardOptions = {}
 ): Promise<string> {
     const loopHistory: LoopHit[] = []
     // Carries the correction hint (loop OR leaked-tool-call) into the next strike.
@@ -316,15 +349,28 @@ export async function runPhaseWithLoopGuard(
         if (r.loopHit) {
             const isLastStrike = strike === MAX_LOOP_RESTARTS
             loopHistory.push(r.loopHit)
+            const lastOutcome =
+                opts.degradeOnExhaustion ? 'degraded — no-tools final attempt' : 'phase failed'
             await appendLoopEvent(
                 deps.cwd,
                 deps.taskId,
                 name,
                 r.loopHit,
                 strike + 1,
-                isLastStrike ? 'phase failed' : 'restarted with hint'
+                isLastStrike ? lastOutcome : 'restarted with hint'
             )
-            if (isLastStrike) throw new LoopExhaustedError(name, loopHistory)
+            if (isLastStrike) {
+                if (opts.degradeOnExhaustion) {
+                    return await runDegradedFinalAttempt(
+                        deps,
+                        name,
+                        buildPrompt,
+                        r.loopHit,
+                        loopHistory
+                    )
+                }
+                throw new LoopExhaustedError(name, loopHistory)
+            }
             nextHint = formatLoopHint(r.loopHit)
             continue
         }
@@ -369,6 +415,39 @@ export async function runPhaseWithLoopGuard(
         return r.text
     }
     throw new LoopExhaustedError(name, loopHistory)
+}
+
+/**
+ * Final degrade attempt after the loop budget is spent: re-spawn the child with
+ * NO tools and a terminal hint, so a model that thrashed re-reading files is
+ * forced to emit its deliverable from what it already has. With no tools there
+ * are no tool calls, so no loop can recur — the only failure modes left are a
+ * dead turn (non-zero exit, model error) or empty output, any of which fall back
+ * to the original LoopExhaustedError so the phase still fails honestly when even
+ * the degrade produces nothing.
+ */
+async function runDegradedFinalAttempt(
+    deps: PhaseDeps,
+    name: string,
+    buildPrompt: (loopHint: string | null) => string,
+    hit: LoopHit,
+    loopHistory: LoopHit[]
+): Promise<string> {
+    deps.logDebug?.(`${name}: loop budget exhausted — degrading to a no-tools final attempt`)
+    const r = await runChild(
+        deps.cwd,
+        '', // --no-tools: the model cannot read/grep/list, only answer
+        buildPrompt(formatDegradeHint(hit)),
+        deps.signal,
+        deps.onChildOutput,
+        deps.onContextUsage,
+        undefined,
+        deps.spawn
+    )
+    if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
+        throw new LoopExhaustedError(name, loopHistory)
+    }
+    return r.text
 }
 
 /**

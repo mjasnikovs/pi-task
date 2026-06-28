@@ -144,8 +144,19 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 // ─── Phase functions ─────────────────────────────────────────────────────────
 
 export const phaseRefine = (deps: PhaseDeps, raw: string, planContext?: string) =>
-    runPhaseWithLoopGuard(deps, 'refine', 'read', hint =>
-        prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext)))
+    runPhaseWithLoopGuard(
+        deps,
+        'refine',
+        'read',
+        hint => prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext))),
+        // refine's deliverable is a 4-section text rewrite that never strictly
+        // needs a successful read — on a test-writing task against a large
+        // existing codebase the model over-explores (re-reads source hunting for
+        // the impl) and burns the loop budget. Degrade to a no-tools final
+        // attempt instead of hard-failing the whole run. See TASK_0016 (mx5):
+        // refine looped 3×/resume forever; the deliverable was always producible
+        // from the title + design doc alone.
+        {degradeOnExhaustion: true}
     )
 
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {
