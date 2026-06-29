@@ -886,6 +886,107 @@ describe('phaseResearch enrichment DI', () => {
     })
 })
 
+describe('phaseAutoAnswer integration-unknown routing', () => {
+    const meta = {
+        id: 'TASK_0001',
+        state: 'in_progress' as const,
+        phase: 'grill' as const,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        title: 't'
+    }
+    const answerSpawn = (text: string): SpawnFn =>
+        fakeSpawnByPrompt(() => ({
+            events: [
+                {
+                    type: 'agent_end',
+                    messages: [{role: 'assistant', content: [{type: 'text', text}]}]
+                }
+            ]
+        }))
+
+    test('downgrades an auto-ANSWERED integration unknown to a user-surfaced UNKNOWN when fetch resolved nothing', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, meta, '\n')
+            // Pure wiring question, no backtick package → enrichment fetches
+            // nothing → docResolved=false. grill-auto guesses ANSWER.
+            const result = await phaseAutoAnswer(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn: answerSpawn('ANSWER: add the stylesheet import to the HTML entry')
+                },
+                'refined',
+                'research',
+                'The build plugin is referenced but the spec does not say how to wire it; should the stylesheet import structure in the HTML entry be modified?'
+            )
+            // The guess is NOT silently applied — it is surfaced to the user with
+            // the model's answer pre-filled as the recommendation.
+            expect(result.kind).toBe('unknown')
+            if (result.kind === 'unknown') {
+                expect(result.suggested).toBe('add the stylesheet import to the HTML entry')
+            }
+        })
+    })
+
+    test('leaves a benign auto-ANSWERED unknown untouched (no over-hoisting)', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, meta, '\n')
+            const result = await phaseAutoAnswer(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn: answerSpawn('ANSWER: emit logs as JSON')
+                },
+                'refined',
+                'research',
+                'Should logs be emitted as JSON or plain text?'
+            )
+            expect(result.kind).toBe('answered')
+        })
+    })
+
+    test('keeps the auto-answer when fetch DID ground an integration unknown', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, meta, '\n')
+            const result = await phaseAutoAnswer(
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn: answerSpawn('ANSWER: register it in the build config')
+                },
+                'refined',
+                'research',
+                'How should the `some-plugin` plugin be wired into the build pipeline?',
+                {
+                    // A docs worker returns a non-empty answer → the integration
+                    // unknown is grounded, so the auto-answer is allowed to stand.
+                    docsFocused: async ({pkg}) => ({
+                        answer: 'register the plugin in the build config and import it from the entry',
+                        excerpt: undefined,
+                        pkg: {
+                            name: pkg,
+                            version: '1.0.0',
+                            root: '/tmp',
+                            entryDts: null,
+                            readme: null
+                        },
+                        version: '1.0.0',
+                        exitCode: 0,
+                        aborted: false,
+                        stderr: '',
+                        npmVersion: null
+                    })
+                }
+            )
+            expect(result.kind).toBe('answered')
+        })
+    })
+})
+
 describe('phaseAutoAnswer enrichment', () => {
     test('injects npm version data ahead of the auto-answer prompt', async () => {
         await withTmpTaskDir(async cwd => {

@@ -16,6 +16,7 @@ import {
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
+import {isIntegrationUnknown} from './unknown-routing.js'
 import {getFileInventory} from './file-inventory.js'
 import {buildOrientation} from './orientation.js'
 import {getConfig} from '../config/config.js'
@@ -637,7 +638,24 @@ export async function phaseAutoAnswer(
                 prependHint(GRILL_AUTO_FORMAT_HINT, basePrompt)
             )
         }
-        return parseAutoAnswer(text)
+        const parsed = parseAutoAnswer(text)
+
+        // Surviving-unknown routing: an integration / build-wiring unknown whose
+        // wrong guess is a structural landmine must NOT be silently auto-answered.
+        // We first try to ground it from fetched docs (the enrichment fan-out
+        // above); only when NO doc/fetch worker produced a grounding section do we
+        // refuse the guess and surface it to the user — carrying the model's
+        // best-effort answer as the pre-filled recommendation so the user accepts
+        // it with one keystroke or overrides it. Benign unknowns are untouched.
+        const docResolved = docSections.filter(Boolean).length > 0
+        if (parsed.kind === 'answered' && !docResolved && isIntegrationUnknown(question)) {
+            deps.logDebug?.(
+                `grill-auto: integration unknown unresolved by fetch — surfacing to user `
+                    + `instead of auto-answering: ${question.replace(/\s+/g, ' ').slice(0, 120)}`
+            )
+            return {kind: 'unknown', suggested: parsed.text, raw: parsed.raw}
+        }
+        return parsed
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         return {kind: 'unknown', raw: `(threw: ${msg})`}
