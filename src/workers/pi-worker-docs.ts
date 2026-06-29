@@ -5,7 +5,13 @@ import {openCache as defaultOpenCache} from './docs-cache.js'
 import {ensureIndexed as defaultEnsureIndexed} from './docs-index.js'
 import {resolvePackage as defaultResolvePackage} from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
-import {docsRaw, formatResultText, buildPrompt} from './docs-core.js'
+import {
+    docsRaw,
+    formatResultText,
+    buildPrompt,
+    buildVersionBanner,
+    type AutoInstallPin
+} from './docs-core.js'
 import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
@@ -46,6 +52,12 @@ interface DocsDetails {
     installError?: string
     npmLatest?: string
     npmPublishedAt?: string
+    versionSource?: 'declared-range' | 'npm-latest'
+    declaredRange?: string
+}
+
+function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | 'declaredRange'> {
+    return pin ? {versionSource: pin.source, declaredRange: pin.range} : {}
 }
 
 export interface PiWorkerDocsInternals {
@@ -235,9 +247,15 @@ export function registerPiWorkerDocs(
             }
 
             if (rawResult.kind === 'no_chunks') {
+                const banner = buildVersionBanner(
+                    rawResult.autoInstallPin,
+                    rawResult.pkg.name,
+                    rawResult.pkg.version
+                )
                 return {
                     text:
-                        npmHeader
+                        banner
+                        + npmHeader
                         + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
                     details: {
                         version: rawResult.pkg.version,
@@ -245,6 +263,7 @@ export function registerPiWorkerDocs(
                         indexedFiles: rawResult.indexedFiles ?? 0,
                         cacheError: rawResult.cacheError,
                         autoInstalled: rawResult.autoInstalled,
+                        ...pinDetails(rawResult.autoInstallPin),
                         ...npmDetails
                     }
                 }
@@ -252,6 +271,11 @@ export function registerPiWorkerDocs(
 
             // kind === 'ok'
             const {pkg, chunks, hitCache, indexingMs, cacheError, autoInstalled} = rawResult
+            const versionBanner = buildVersionBanner(
+                rawResult.autoInstallPin,
+                pkg.name,
+                pkg.version
+            )
             const baseDetails: DocsDetails = {
                 version: pkg.version,
                 hitCache,
@@ -259,6 +283,7 @@ export function registerPiWorkerDocs(
                 indexingMs,
                 cacheError,
                 autoInstalled,
+                ...pinDetails(rawResult.autoInstallPin),
                 ...npmDetails
             }
 
@@ -270,7 +295,7 @@ export function registerPiWorkerDocs(
             const failure = formatChildFailure(child, 'Docs lookup aborted.')
             if (failure !== null) {
                 return {
-                    text: npmHeader + failure,
+                    text: versionBanner + npmHeader + failure,
                     details: {
                         ...baseDetails,
                         ...(child.aborted ? {aborted: true} : {}),
@@ -282,7 +307,7 @@ export function registerPiWorkerDocs(
             const parsed = parseChildOutput(child.stdout)
             const verified =
                 parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
-            const text = npmHeader + formatResultText(pkg, parsed, verified)
+            const text = versionBanner + npmHeader + formatResultText(pkg, parsed, verified)
             return {
                 text,
                 details: {

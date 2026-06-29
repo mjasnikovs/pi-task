@@ -34,6 +34,20 @@ const NO_CACHE_MARKER = '\n\n[...content continues, truncated...]\n\n'
 
 const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
 
+/**
+ * Provenance of an auto-installed package's version, so the answer can state
+ * what the version is grounded in instead of leaving it buried in tool details.
+ * - 'declared-range': install was pinned to the project's own package.json range
+ *   (the resolved version therefore matches project intent).
+ * - 'npm-latest': nothing in the project declared the dep, so the install fell
+ *   back to whatever npm tags `latest` — which may be a newer MAJOR than the
+ *   project targets (this is what a scaffolding task hits, and needs a banner).
+ */
+export interface AutoInstallPin {
+    source: 'declared-range' | 'npm-latest'
+    range?: string
+}
+
 export type DocsRawResult =
     | {
           kind: 'ok'
@@ -44,6 +58,7 @@ export type DocsRawResult =
           indexedFiles?: number
           cacheError?: string
           autoInstalled?: boolean
+          autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
       }
     | {kind: 'not_installed'; pkg: string; npmVersion?: NpmVersionInfo | null}
@@ -54,6 +69,7 @@ export type DocsRawResult =
           indexedFiles?: number
           cacheError?: string
           autoInstalled?: boolean
+          autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
       }
     | {
@@ -65,6 +81,7 @@ export type DocsRawResult =
           hitCache?: boolean
           cacheError?: string
           autoInstalled?: boolean
+          autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
       }
 
@@ -111,6 +128,79 @@ export function extractParentPackage(moduleName: string): string {
     return moduleName.split('/')[0]
 }
 
+const DEP_FIELDS = [
+    'dependencies',
+    'devDependencies',
+    'peerDependencies',
+    'optionalDependencies'
+] as const
+
+/** A declared value that is a real, installable npm semver range — not a
+ *  wildcard (which pins nothing) and not a non-registry protocol (which is not
+ *  an `install <pkg>@<range>` target). */
+function isUsableRange(range: string): boolean {
+    const r = range.trim()
+    if (r.length === 0 || r === '*' || r === 'x' || r === 'latest') return false
+    if (/^(?:workspace|link|file|git|github|http|https|portal|patch|npm):/i.test(r)) return false
+    return true
+}
+
+/**
+ * The version range a project DECLARES for `parentPkg` in its package.json under
+ * `cwd`. Lets a not-yet-installed scaffolding dependency be documented against
+ * the major the project intends, instead of whatever npm currently tags
+ * `latest`. Scans the four standard dependency maps in priority order. Returns
+ * null — caller falls back to latest — when the dep is undeclared, the
+ * package.json is missing/unreadable, or the declared value is not a usable
+ * range. Best-effort; never throws.
+ */
+export function findDeclaredRange(parentPkg: string, cwd: string): string | null {
+    let json: Record<string, unknown>
+    try {
+        json = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as Record<
+            string,
+            unknown
+        >
+    } catch {
+        return null
+    }
+    for (const field of DEP_FIELDS) {
+        const map = json[field]
+        if (!map || typeof map !== 'object') continue
+        const range = (map as Record<string, unknown>)[parentPkg]
+        if (typeof range === 'string' && isUsableRange(range)) return range.trim()
+    }
+    return null
+}
+
+/**
+ * One-line version-provenance banner that LEADS a docs answer for a package the
+ * worker had to auto-install (not yet present in node_modules — every
+ * scaffolding task). Surfaces the version the answer is grounded in directly in
+ * the prose the impl model reads, rather than burying it in tool `details`.
+ * Empty string when there was no auto-install (already-installed packages need
+ * no banner — their version is the project's own).
+ */
+export function buildVersionBanner(
+    pin: AutoInstallPin | undefined,
+    pkgName: string,
+    version: string
+): string {
+    if (!pin) return ''
+    if (pin.source === 'declared-range') {
+        return (
+            `[VERSION] "${pkgName}" resolved to this project's declared range `
+            + `${pin.range} (installed v${version}); the answer below is pinned to that version.\n\n`
+        )
+    }
+    return (
+        `[VERSION — verify] "${pkgName}" is not declared in this project's package.json, `
+        + `so this answer is based on npm latest (v${version}). Your project may target a `
+        + `different MAJOR — confirm the version you intend to install and treat any API that `
+        + `differs across majors as unverified until you check it against that version.\n\n`
+    )
+}
+
 export function getDocsModulesDir(): string {
     const base = process.env.XDG_CACHE_HOME?.trim() || path.join(os.homedir(), '.cache')
     return path.join(base, 'pi-worker', 'docs-modules')
@@ -127,15 +217,19 @@ export function ensureDocsModulesDir(dir: string): void {
 export async function runAutoInstall(
     spawn: SpawnFn,
     packageName: string,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    versionRange?: string
 ): Promise<{success: boolean; installDir: string; stderr: string}> {
     const installDir = getDocsModulesDir()
     ensureDocsModulesDir(installDir)
+    // `shell: false` in runChild, so a `^`/`~`/space in the range stays a single
+    // literal arg — no glob/expansion risk from `<pkg>@<range>`.
+    const target = versionRange ? `${packageName}@${versionRange}` : packageName
     const result = await runChild(
         spawn,
         {
             command: 'npm',
-            args: ['install', '--no-audit', '--no-fund', '--loglevel=error', packageName]
+            args: ['install', '--no-audit', '--no-fund', '--loglevel=error', target]
         },
         installDir,
         signal,
@@ -221,19 +315,34 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     // Step 1: resolve package
     let pkg: ResolvedPackage
     let autoInstalled = false
+    let autoInstallPin: AutoInstallPin | undefined
     try {
         pkg = resolvePackage(requested, input.cwd)
     } catch (firstErr) {
         if (firstErr instanceof ResolveError && firstErr.kind === 'not_installed') {
-            // auto-install
+            // auto-install — but FIRST honour the version the project intends.
+            // If the dep is declared in the project's package.json, install that
+            // range so a scaffolding answer is grounded in the project's major,
+            // not whatever npm currently tags `latest`.
             const parentPkg = extractParentPackage(requested)
-            const installResult = await runAutoInstall(spawn, parentPkg, undefined)
+            const declaredRange = findDeclaredRange(parentPkg, input.cwd)
+            autoInstallPin =
+                declaredRange ?
+                    {source: 'declared-range', range: declaredRange}
+                :   {source: 'npm-latest'}
+            const installResult = await runAutoInstall(
+                spawn,
+                parentPkg,
+                undefined,
+                declaredRange ?? undefined
+            )
             if (!installResult.success) {
                 return {
                     kind: 'error',
                     message: `Package "${parentPkg}" is not installed and auto-install failed.\n${installResult.stderr}`,
                     resolveError: 'not_installed',
                     installError: installResult.stderr,
+                    autoInstallPin,
                     npmVersion: await npmVersionPromise
                 }
             }
@@ -247,6 +356,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                         message: retryErr.message,
                         resolveError: retryErr.kind,
                         autoInstalled,
+                        autoInstallPin,
                         npmVersion: await npmVersionPromise
                     }
                 }
@@ -254,6 +364,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
                     kind: 'error',
                     message: `Could not resolve "${input.pkg}" after install: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
                     autoInstalled,
+                    autoInstallPin,
                     npmVersion: await npmVersionPromise
                 }
             }
@@ -295,6 +406,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             docsRawCached(cache, pkg, input.query, ensureIndexed, retrieveChunks, autoInstalled)
         :   docsRawUncached(pkg, cacheError ?? 'unknown cache error', autoInstalled)
     result.npmVersion = await npmVersionPromise
+    if (autoInstallPin && result.kind !== 'not_installed') result.autoInstallPin = autoInstallPin
     return result
 }
 

@@ -1,11 +1,20 @@
 import {describe, expect, test} from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
-import {docsRaw, docsFocused} from './docs-core.js'
-import {resolvePackage as realResolvePackage} from './docs-resolve.js'
+import {docsRaw, docsFocused, findDeclaredRange, buildVersionBanner} from './docs-core.js'
+import {resolvePackage as realResolvePackage, ResolveError} from './docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {openCache} from './docs-cache.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
+
+/** Make a throwaway project dir whose package.json has the given dep maps. */
+function makeProjectDir(pkgJson: Record<string, unknown>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-pin-'))
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkgJson), 'utf8')
+    return dir
+}
 
 describe('docsRaw', () => {
     test('returns kind: ok with chunks on a known-good package', async () => {
@@ -68,6 +77,135 @@ describe('docsRaw', () => {
         })
         expect(r.kind).toBe('no_chunks')
         cache.close()
+    })
+})
+
+describe('findDeclaredRange', () => {
+    test('returns the range declared in dependencies', () => {
+        const dir = makeProjectDir({dependencies: {'left-pad': '^1.0.0'}})
+        expect(findDeclaredRange('left-pad', dir)).toBe('^1.0.0')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('finds devDependencies / peerDependencies / optionalDependencies', () => {
+        const dev = makeProjectDir({devDependencies: {'a-pkg': '~2.3.0'}})
+        const peer = makeProjectDir({peerDependencies: {'a-pkg': '3.x'}})
+        const opt = makeProjectDir({optionalDependencies: {'a-pkg': '>=4 <5'}})
+        expect(findDeclaredRange('a-pkg', dev)).toBe('~2.3.0')
+        expect(findDeclaredRange('a-pkg', peer)).toBe('3.x')
+        expect(findDeclaredRange('a-pkg', opt)).toBe('>=4 <5')
+        for (const d of [dev, peer, opt]) fs.rmSync(d, {recursive: true, force: true})
+    })
+
+    test('returns null for undeclared dep, wildcard, and non-registry protocol', () => {
+        const none = makeProjectDir({dependencies: {other: '^1'}})
+        const star = makeProjectDir({dependencies: {'a-pkg': '*'}})
+        const workspace = makeProjectDir({dependencies: {'a-pkg': 'workspace:*'}})
+        const file = makeProjectDir({dependencies: {'a-pkg': 'file:../a-pkg'}})
+        expect(findDeclaredRange('a-pkg', none)).toBeNull()
+        expect(findDeclaredRange('a-pkg', star)).toBeNull()
+        expect(findDeclaredRange('a-pkg', workspace)).toBeNull()
+        expect(findDeclaredRange('a-pkg', file)).toBeNull()
+        for (const d of [none, star, workspace, file]) fs.rmSync(d, {recursive: true, force: true})
+    })
+
+    test('returns null when package.json is missing or unreadable', () => {
+        expect(findDeclaredRange('a-pkg', path.join(os.tmpdir(), 'does-not-exist-xyz'))).toBeNull()
+    })
+})
+
+describe('buildVersionBanner', () => {
+    test('returns empty string when there was no auto-install', () => {
+        expect(buildVersionBanner(undefined, 'left-pad', '1.3.0')).toBe('')
+    })
+
+    test('declared-range banner names the range + version, no verify warning', () => {
+        const b = buildVersionBanner({source: 'declared-range', range: '^3.4.0'}, 'thing', '3.4.19')
+        expect(b).toContain('^3.4.0')
+        expect(b).toContain('3.4.19')
+        expect(b).not.toMatch(/different MAJOR/i)
+    })
+
+    test('npm-latest banner warns about a possibly-different major + names version', () => {
+        const b = buildVersionBanner({source: 'npm-latest'}, 'thing', '4.1.0')
+        expect(b).toContain('4.1.0')
+        expect(b).toMatch(/different MAJOR/i)
+        expect(b).toMatch(/verify/i)
+    })
+})
+
+describe('docsRaw auto-install version pinning', () => {
+    // resolvePackage: first call (from the project cwd) is not_installed, so the
+    // worker auto-installs; the post-install resolve returns a real fixture pkg so
+    // the rest of the pipeline reaches `ok`. The fake spawn records the npm args.
+    function pinHarness() {
+        const installArgs: string[][] = []
+        let calls = 0
+        return {
+            installArgs,
+            resolvePackage: ((name: string, cwd: string) => {
+                calls++
+                if (calls === 1) {
+                    throw new ResolveError('not_installed', `"${name}" not installed in ${cwd}`)
+                }
+                return realResolvePackage('tiny-pkg', FIXTURES)
+            }) as typeof realResolvePackage,
+            spawn: fakeSpawnByPrompt(args => {
+                installArgs.push([...args])
+                return {stdout: '', exitCode: 0}
+            })
+        }
+    }
+
+    test('installs the project-declared range, not latest, and pins the result', async () => {
+        const dir = makeProjectDir({dependencies: {'left-pad': '^1.0.0'}})
+        const cache = openCache(':memory:')
+        const h = pinHarness()
+        const r = await docsRaw({
+            pkg: 'left-pad',
+            query: 'x',
+            cwd: dir,
+            openCache: () => cache,
+            npmVersionLookup: async () => ({pkg: 'left-pad', latest: '4.0.0', recent: []}),
+            resolvePackage: h.resolvePackage,
+            spawn: h.spawn
+        })
+        // npm install received `left-pad@^1.0.0`, never a bare `left-pad`.
+        const npmInstall = h.installArgs.find(a => a.includes('install'))
+        expect(npmInstall).toBeDefined()
+        expect(npmInstall).toContain('left-pad@^1.0.0')
+        expect(npmInstall).not.toContain('left-pad')
+        expect(r.kind).toBe('ok')
+        if (r.kind === 'ok') {
+            expect(r.autoInstallPin).toEqual({source: 'declared-range', range: '^1.0.0'})
+        }
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('falls back to bare latest install + npm-latest pin when undeclared', async () => {
+        const dir = makeProjectDir({dependencies: {something_else: '^1'}})
+        const cache = openCache(':memory:')
+        const h = pinHarness()
+        const r = await docsRaw({
+            pkg: 'left-pad',
+            query: 'x',
+            cwd: dir,
+            openCache: () => cache,
+            npmVersionLookup: async () => ({pkg: 'left-pad', latest: '4.0.0', recent: []}),
+            resolvePackage: h.resolvePackage,
+            spawn: h.spawn
+        })
+        const npmInstall = h.installArgs.find(a => a.includes('install'))
+        expect(npmInstall).toBeDefined()
+        expect(npmInstall).toContain('left-pad')
+        expect(npmInstall!.some(a => a.startsWith('left-pad@'))).toBe(false)
+        expect(r.kind).toBe('ok')
+        if (r.kind === 'ok') {
+            expect(r.autoInstallPin).toEqual({source: 'npm-latest'})
+        }
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 })
 
