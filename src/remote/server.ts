@@ -138,14 +138,37 @@ export async function startServer(
 
     const wss = new WebSocketServer({server: httpServer, path: '/ws'})
 
+    // Track every accepted TCP socket so stop() can forcibly destroy lingering
+    // keep-alive / WebSocket connections. Without this, httpServer.close() only
+    // stops accepting new connections and waits for existing ones to drain — an
+    // open browser tab never drains, so the listening server and its sockets
+    // stay as active event-loop handles forever. In headless print mode the host
+    // exits by natural event-loop drain (it sets process.exitCode and returns,
+    // with no process.exit()), so these lingering handles keep the pi process
+    // alive indefinitely — which blocks `docker stop` / OS shutdown until the
+    // SIGKILL grace timeout fires. A/B-proven: terminating clients + destroying
+    // sockets here makes the loop drain in ~2ms instead of never.
+    const sockets = new Set<import('node:net').Socket>()
+    httpServer.on('connection', s => {
+        sockets.add(s)
+        s.on('close', () => sockets.delete(s))
+    })
+
     const handle: ServerHandle = {
         port,
         ip,
         ips,
         onFirstConnect: null,
         stop() {
+            // Terminate WebSocket clients (immediate close, no drain), then
+            // destroy any remaining raw sockets, then close the servers so the
+            // event loop has no lingering handles holding the process open.
+            for (const ws of wss.clients) ws.terminate()
             wss.close()
+            for (const s of sockets) s.destroy()
+            sockets.clear()
             httpServer.close()
+            httpServer.closeAllConnections?.()
         }
     }
 

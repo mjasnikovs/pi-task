@@ -190,6 +190,31 @@ describe('startServer', () => {
         await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow()
     })
 
+    // Regression: stop() must forcibly TERMINATE live WebSocket connections, not
+    // just stop accepting new ones. An undrained client socket stays an active
+    // event-loop handle, and headless print mode exits by natural loop drain (no
+    // process.exit()), so a lingering socket keeps the pi process alive forever —
+    // blocking `docker stop` / OS shutdown until SIGKILL. A/B-proven: old stop()
+    // never fired the client's close; the fix closes it in ~ms.
+    it('stop() terminates an open WebSocket client (so the event loop can drain)', async () => {
+        handle = await startServer(
+            () => {},
+            () => '<html></html>'
+        )
+        const ws = new WebSocket(`ws://127.0.0.1:${handle.port}/ws`)
+        await new Promise<void>((resolve, reject) => {
+            ws.on('open', () => resolve())
+            ws.on('error', reject)
+        })
+        const closed = new Promise<boolean>(resolve => {
+            ws.on('close', () => resolve(true))
+            setTimeout(() => resolve(false), 1000)
+        })
+        handle.stop()
+        handle = null
+        expect(await closed).toBe(true)
+    })
+
     it('GET /sw.js serves the service worker as JavaScript', async () => {
         handle = await startServer(
             () => {},
