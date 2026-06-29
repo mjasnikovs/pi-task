@@ -17,6 +17,18 @@
  * PASS / FAIL verdict. If the spec's VERIFY is legitimately a no-op (config-only
  * change, re-read of a file), the model says so and that is a PASS.
  *
+ * It must verify the REAL deliverable, not a stand-in. The spec's VERIFY block is
+ * authored by the same weak model that did the work, so it frequently grades a
+ * SIMULATION it controls: it reconstructs the build in a scratch dir, compiles with
+ * options the project does not ship, or only greps the SOURCE for a string — all of
+ * which pass while the project's own build ships broken output. The prompt therefore
+ * anchors the child to the project's OWN build/run command and the artifact it SHIPS,
+ * treats source-text presence as insufficient (a build artifact that still contains an
+ * un-processed source directive means the build never ran), and treats "I had to add a
+ * dependency/flag/config the project lacks to make it pass" as the defect itself.
+ * A/B-proven on the live local model: the old prompt false-passed 3/3 on a
+ * broken-pipeline fixture; the anchored prompt caught it 3/3, naming the real defect.
+ *
  * It runs as a GATE right after the implementation turn, BEFORE the task is
  * checked off or committed. A FAIL stops the /task-auto run exactly like an
  * implementation failure: the task is left unchecked and uncommitted so
@@ -106,24 +118,37 @@ export function buildVerifyPrompt(spec: string): string {
         'THE TASK SPEC (its ACCEPTANCE criteria and VERIFY block are the contract):',
         spec.trim(),
         '',
-        'How to verify:',
-        "1. Run the commands in the spec's VERIFY block, in order, with your `bash`",
-        '   tool, from the repository root. Observe the REAL exit codes and output —',
-        '   do not assume success.',
-        '2. Treat the ACCEPTANCE criteria as the bar. If a VERIFY command fails, or',
-        '   its output contradicts an ACCEPTANCE criterion, the work has NOT verified.',
-        '3. If a VERIFY command depends on something this environment genuinely lacks',
-        '   (a service, a network resource) and that is clearly an environment gap',
-        '   rather than a defect in the code, note it and judge the rest. Do not fail',
-        '   the task for a missing external service it cannot control.',
-        '4. If the spec legitimately has no runnable verification (a config-only or',
-        '   docs-only change whose VERIFY just re-reads or validates a file), running',
-        '   that re-read/validation cleanly is a PASS.',
-        '5. Do NOT edit anything to make a check pass. Report what you actually saw.',
+        'How to verify — verify the REAL deliverable, not a stand-in:',
+        "1. Run the project's OWN build/run/serve command — the one it actually ships",
+        '   (the scripts in package.json, the command the spec names). Run it exactly as',
+        '   the project defines it, then inspect the artifact it PRODUCES. Also run the',
+        "   spec's VERIFY block — but the project's real build/output is the bar.",
+        '2. NEVER substitute your own build, compile step, plugin, flag, scratch transform,',
+        '   or config to make a check pass. If the VERIFY block reconstructs the output in',
+        '   a temp/scratch dir, builds with options the project does not use, or only greps',
+        '   the SOURCE for a string, that is INSUFFICIENT — it proves the code *could* work,',
+        "   not that the shipping pipeline *does*. You must still run the project's real",
+        '   build and judge its real output.',
+        '3. If, to make any check pass, you find you must add an import, plugin, flag, or',
+        '   config the project itself does not have, STOP: that missing piece IS the defect.',
+        '   Report FAIL and name exactly what the project is missing.',
+        '4. Presence of a token/directive/string in a SOURCE file is NOT verification. Judge',
+        '   the produced/shipped artifact and the actual runtime behavior. (A build directive',
+        '   belongs in the source; if that same raw directive SURVIVES into the built output,',
+        '   the build did not run — that is a FAIL, not a PASS.)',
+        '5. Treat the ACCEPTANCE criteria as the bar. If a VERIFY command fails, or its',
+        '   output (or the real build output) contradicts an ACCEPTANCE criterion, the work',
+        '   has NOT verified.',
+        '6. If a check depends on something this environment genuinely lacks (a service, a',
+        '   network resource) and that is clearly an environment gap rather than a defect in',
+        '   the code, note it and judge the rest. Do not fail for a missing external service.',
+        '7. If the spec legitimately has no runnable verification (a pure docs/config change',
+        '   with nothing to build or run), validating it cleanly is a PASS.',
+        '8. Do NOT edit anything to make a check pass. Report what you actually saw.',
         '',
         'When you are done, output EXACTLY ONE of these as the final line:',
-        '  WORK-VERIFIED: PASS              (every check ran and the work meets its spec)',
-        '  WORK-VERIFIED: FAIL <text>      (a check failed or the work does not meet its spec; say what failed)',
+        '  WORK-VERIFIED: PASS              (the real build/run produced an artifact that meets the spec)',
+        '  WORK-VERIFIED: FAIL <text>      (the real build/output failed or does not meet the spec; say what failed)',
         'Output the verdict line verbatim — it is parsed mechanically.'
     ].join('\n')
 }

@@ -63,6 +63,23 @@ describe('buildVerifyPrompt', () => {
         expect(p).toContain('WORK-VERIFIED: PASS')
         expect(p).toContain('WORK-VERIFIED: FAIL')
     })
+
+    test("anchors verification to the project's own build and shipped artifact", () => {
+        // Regression guard for the validated false-pass class: the spec's VERIFY
+        // block is authored by the weak model and often grades a stand-in (scratch
+        // rebuild / source grep). The prompt must push the child past that.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        // run the project's OWN build, not a reconstruction
+        expect(p).toContain("project's own")
+        expect(p).toMatch(/never substitute your own build|do not.*substitute/)
+        // a scratch/temp reconstruction or source-only grep is not enough
+        expect(p).toMatch(/temp\/scratch dir|scratch dir|reconstructs the output/)
+        // source-text presence is not verification
+        expect(p).toContain('source')
+        expect(p).toContain('is not verification')
+        // self-added missing config IS the defect
+        expect(p).toMatch(/that missing piece is the defect|is the defect/)
+    })
 })
 
 describe('parseVerifyVerdict', () => {
