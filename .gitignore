@@ -1,7 +1,7 @@
 node_modules/
 dist/
 plans/
-docs/superpowers/specs/
+docs/
 
 # Docs-worker test fixtures live under a node_modules/ (and a dist/) dir on
 # purpose — the resolver walks real node_modules layouts. Keep them tracked.
