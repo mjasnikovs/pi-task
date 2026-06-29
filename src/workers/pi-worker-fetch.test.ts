@@ -214,3 +214,18 @@ test('pi-worker-fetch returns Worker exited message on child non-zero exit', asy
     expect(text).toMatch(/Worker exited 1/)
     expect(text).toMatch(/something broke/)
 })
+
+test('pi-worker-fetch description is trigger-framed toward integration/wiring intent', () => {
+    // Regression guard for the reachability fix: the local model selects tools by
+    // surface framing, so the description must lead the model to reach for fetch
+    // when it needs to know how something is configured/wired and installed docs
+    // don't cover it — not just "use after search / with a known URL".
+    const registered: Array<{description?: string}> = []
+    registerPiWorkerFetch({
+        registerTool: (t: {description?: string}) => registered.push(t)
+    } as unknown as Parameters<typeof registerPiWorkerFetch>[0])
+    const desc = registered[0].description ?? ''
+    expect(desc).toMatch(/configured|wired|integrated/i)
+    expect(desc).toMatch(/do not cover it|installed-package docs/i)
+    expect(desc).toMatch(/do NOT guess/i)
+})

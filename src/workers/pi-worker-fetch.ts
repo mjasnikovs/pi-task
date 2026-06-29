@@ -52,8 +52,15 @@ export function registerPiWorkerFetch(
             'Fetch a web page or text resource (HTML, markdown, plain text, JSON, '
             + 'XML/feeds), clean HTML to markdown, and hand it to an isolated child '
             + 'Pi session that extracts ONLY content answering `query`. Returns the '
-            + 'focused answer. Use after `pi-worker-search` (or with a known URL) to '
-            + 'avoid stuffing raw content into the main context.',
+            + 'focused answer.\n'
+            + 'REACH FOR THIS when you need to know how an external library, tool, '
+            + 'plugin, framework, or service is CONFIGURED, WIRED, or INTEGRATED and '
+            + 'the installed-package docs (pi-worker-docs) do not cover it: fetch its '
+            + 'README or official documentation page and extract the setup/wiring you '
+            + 'need, instead of guessing. Do NOT guess integration or configuration '
+            + 'details from memory — fetch the authoritative page. Also use it to read '
+            + 'any known URL, or after `pi-worker-search` to read a result, without '
+            + 'stuffing raw content into the main context.',
         parameters: Params,
 
         async run(params, signal, ctx) {
