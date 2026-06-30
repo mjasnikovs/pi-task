@@ -13,6 +13,7 @@ import type {RunSingleTaskResult} from './orchestrator.js'
 import {parseClarifyList, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
+import {getProjectSnapshot} from './file-inventory.js'
 import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {
     allocateAutoId,
@@ -349,6 +350,13 @@ export async function planAuto(
             `phantom specifiers rewritten in plan spec: ${planPhantoms.map(x => x.spec).join(', ')}`
         )
     }
+    // Factual snapshot of the target directory (root files + top-level dirs).
+    // Clarify only "may" read the repo; a model that skips the read assumes a
+    // greenfield project and recommends bootstrapping config/manifest files that
+    // already exist (or invents a path like /workspace). Handing it the facts
+    // up front removes the guess. '' for a non-git/empty tree ⇒ prompt omits the
+    // block and the model correctly treats the target as greenfield.
+    const projectState = await getProjectSnapshot(cwd)
     const answers: string[] = []
     // Plain text of every question already shown, for the duplicate backstop.
     const askedQuestions: string[] = []
@@ -364,7 +372,10 @@ export async function planAuto(
         const qRaw = await deps.runChild(
             'auto-clarify',
             'read',
-            prependHint(dupHint, AUTO_CLARIFY_PROMPT(featureForModel, answers.join('\n')))
+            prependHint(
+                dupHint,
+                AUTO_CLARIFY_PROMPT(featureForModel, answers.join('\n'), projectState)
+            )
         )
         const parsed = parseClarifyList(qRaw)
         if (parsed.length === 0) break // NONE / nothing left to ask

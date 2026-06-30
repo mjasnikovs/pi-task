@@ -65,3 +65,42 @@ export async function getFileInventory(
     if (!raw) return ''
     return capInventory(stripTasksDir(raw), maxLines)
 }
+
+/**
+ * Derive a compact PROJECT STATE block (root-level files + top-level directories)
+ * from a raw `git ls-files` listing. Pure/testable; `getProjectSnapshot` wires it
+ * to the live repo. Returns '' when there is nothing tracked so the caller omits
+ * the block entirely (and the model is then correctly free to treat the target as
+ * an empty/greenfield project).
+ */
+export function formatProjectSnapshot(raw: string): string {
+    const lines = stripTasksDir(raw)
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+    const rootFiles = [...new Set(lines.filter(l => !l.includes('/')))].sort()
+    const dirs = [...new Set(lines.filter(l => l.includes('/')).map(l => l.split('/')[0]))].sort()
+    if (rootFiles.length === 0 && dirs.length === 0) return ''
+    return (
+        'EXISTING PROJECT STATE (a factual snapshot of the target directory — trust it over '
+        + 'assumptions: do NOT assume an empty or greenfield project, do NOT invent directory '
+        + 'paths, and do NOT propose creating files that already exist. Treat the config/manifest '
+        + "files listed here as the project's established setup unless the request explicitly says "
+        + 'to replace them):\n'
+        + `Root files: ${rootFiles.join(', ') || '(none)'}\n`
+        + `Top-level directories: ${dirs.join(', ') || '(none)'}`
+    )
+}
+
+/**
+ * Live PROJECT STATE snapshot for the planning phase. Clarify otherwise only
+ * "may" read the repo; a weak model that skips the read then assumes a greenfield
+ * project and recommends creating package.json/tsconfig from scratch — or invents
+ * a path like /workspace — even when those configs already exist on disk. Handing
+ * it the facts up front removes the guess. Empty (non-git / nothing tracked) ⇒ ''.
+ */
+export async function getProjectSnapshot(cwd: string, signal?: AbortSignal): Promise<string> {
+    const raw = await runGitLsFiles(cwd, signal)
+    if (!raw) return ''
+    return formatProjectSnapshot(raw)
+}
