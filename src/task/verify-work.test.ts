@@ -64,21 +64,27 @@ describe('buildVerifyPrompt', () => {
         expect(p).toContain('WORK-VERIFIED: FAIL')
     })
 
-    test("anchors verification to the project's own build and shipped artifact", () => {
-        // Regression guard for the validated false-pass class: the spec's VERIFY
-        // block is authored by the weak model and often grades a stand-in (scratch
-        // rebuild / source grep). The prompt must push the child past that.
+    test('anchors verification to the project as-shipped, run unaided', () => {
+        // Regression guard for the validated work-around-to-pass class: the child has
+        // `bash` and can make almost anything go green by preparing the run (export an
+        // env var, source a file, run a different command, rebuild in a scratch dir).
+        // The prompt must forbid that and treat any such intervention as the defect.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
-        // run the project's OWN build, not a reconstruction
+        // run the project's OWN command, unaided / as shipped
         expect(p).toContain("project's own")
-        expect(p).toMatch(/never substitute your own build|do not.*substitute/)
-        // a scratch/temp reconstruction or source-only grep is not enough
-        expect(p).toMatch(/temp\/scratch dir|scratch dir|reconstructs the output/)
+        expect(p).toMatch(/as shipped|unaided|fresh\s*\n?\s*checkout/)
+        // must NOT prepare/repair/reconfigure the run — name the concrete workarounds
+        expect(p).toMatch(/do not prepare, repair, reconfigure/)
+        expect(p).toContain('export an')
+        expect(p).toContain('environment variable')
+        expect(p).toMatch(/scratch dir/)
+        // the intervention IS the defect
+        expect(p).toMatch(/is the\s*\n?\s*defect/)
         // source-text presence is not verification
-        expect(p).toContain('source')
         expect(p).toContain('is not verification')
-        // self-added missing config IS the defect
-        expect(p).toMatch(/that missing piece is the defect|is the defect/)
+        // still distinguishes a genuine external-service gap from a code defect
+        expect(p).toContain('environment gap')
+        expect(p).toContain('external')
     })
 })
 
