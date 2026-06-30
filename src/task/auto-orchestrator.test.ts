@@ -16,6 +16,7 @@ import {parseTaskList, buildAutoBody} from './auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
+import {spawnSync} from 'node:child_process'
 
 // Sequential clarify is adaptive: planAuto re-calls 'auto-clarify' after every
 // answer until it returns NONE. This helper feeds the given clarify responses in
@@ -242,6 +243,55 @@ test('planAuto: clarify-triage auto-resolves a spec-settled question (never show
         const {body} = await readTaskFile(dir, id!)
         expect(body).toContain('auto-resolved')
         expect(body).toContain("Hono's Bun adapter")
+    })
+})
+
+test('planAuto: feeds the existing-files block into clarify-triage when a manifest is on disk', async () => {
+    if (spawnSync('which', ['git']).status !== 0) return
+    await withTmpTaskDir(async dir => {
+        // A real git repo with a tracked package.json → refineExistingFilesBlock
+        // emits the REFINE_PRESERVE_DIRECTIVE + manifest content, which must reach
+        // the triage so a "scaffold from scratch" question resolves to preserve.
+        await fsp.writeFile(
+            path.join(dir, 'package.json'),
+            JSON.stringify({name: 'x', devDependencies: {eslint: '9.0.0'}}, null, 2)
+        )
+        for (const args of [
+            ['init', '-q'],
+            ['config', 'user.email', 't@t'],
+            ['config', 'user.name', 't'],
+            ['add', '.'],
+            ['commit', '-q', '-m', 'init']
+        ]) {
+            spawnSync('git', args, {cwd: dir})
+        }
+        const {ctx} = makeFakeCtx(dir)
+        let triagePrompt = ''
+        let clarifyCall = 0
+        const d: AutoDeps = {
+            runChild: (name, _tools, prompt) => {
+                if (name === 'auto-clarify') {
+                    const responses = [
+                        '1. Should the setup task scaffold package.json from scratch?'
+                    ]
+                    return Promise.resolve(responses[clarifyCall++] ?? 'NONE')
+                }
+                if (name === 'clarify-triage') {
+                    triagePrompt = prompt
+                    return Promise.resolve(
+                        'ANSWER: build on the existing package.json, preserving its deps'
+                    )
+                }
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        await planAuto(ctx, dir, 'set up the project', d)
+        // The preserve directive AND the real manifest content reached the triage.
+        expect(triagePrompt).toContain('EXISTING FILES ON DISK')
+        expect(triagePrompt).toContain('eslint')
     })
 })
 

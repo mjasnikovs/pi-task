@@ -33,6 +33,7 @@ import {
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {refineExistingFilesBlock} from './phases.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
@@ -116,11 +117,23 @@ async function triageClarifyQuestion(
     deps: AutoDeps,
     cwd: string,
     featureForModel: string,
+    existingFilesBlock: string,
     question: string
 ): Promise<string | null> {
     try {
+        // Prepend the existing-files block (refine's REFINE_PRESERVE_DIRECTIVE +
+        // manifest/config content) so a "scaffold/create/from scratch" question is
+        // auto-resolved as an in-place UPDATE that PRESERVES what is on disk —
+        // instead of "greenfield, from scratch", which the spec-only triage emitted
+        // 13/15 of the time and would mint a destructive decompose decision that can
+        // outrank refine's preserve directive (A/B live: 2/15 → 14/15 preserve).
+        // Empty (greenfield repo / orientation off) → byte-identical to before.
+        const source =
+            existingFilesBlock.length > 0 ?
+                `${existingFilesBlock}\n\n${featureForModel}`
+            :   featureForModel
         const basePrompt = GRILL_AUTO_ANSWER_PROMPT(
-            featureForModel,
+            source,
             '(none — clarify runs before decomposition; each task researches itself later)',
             question
         )
@@ -320,6 +333,15 @@ export async function planAuto(
             `phantom specifiers rewritten in plan spec: ${planPhantoms.map(x => x.spec).join(', ')}`
         )
     }
+    // Existing manifest/config on disk (REFINE_PRESERVE_DIRECTIVE + tier 0–1
+    // content), computed ONCE and fed to every triage call so a "scaffold X"
+    // question resolves to an in-place update instead of "greenfield". '' for a
+    // greenfield/non-git repo or orientation off → triage stays spec-only.
+    const existingFilesBlock = await refineExistingFilesBlock({
+        cwd,
+        taskId: '',
+        signal: new AbortController().signal
+    }).catch(() => '')
     const answers: string[] = []
     // Plain text of every question already shown, for the duplicate backstop.
     const askedQuestions: string[] = []
@@ -360,7 +382,13 @@ export async function planAuto(
         // this question, auto-resolve it and never show it. The resolved value is
         // recorded so decompose sees the decision and the next gen call's priorQA
         // won't re-ask it.
-        const autoResolved = await triageClarifyQuestion(deps, cwd, featureForModel, plainQ)
+        const autoResolved = await triageClarifyQuestion(
+            deps,
+            cwd,
+            featureForModel,
+            existingFilesBlock,
+            plainQ
+        )
         if (autoResolved !== null) {
             answers.push(
                 `Q${answers.length + 1}: ${plainQ}\n`
