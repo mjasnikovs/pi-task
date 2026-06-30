@@ -9,9 +9,10 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {gateRunTask} from './orchestrator.js'
-import {parseClarifyList, deriveTitle} from './parsers.js'
+import {parseClarifyList, parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
+import {GRILL_AUTO_ANSWER_PROMPT, GRILL_AUTO_FORMAT_HINT} from './prompts.js'
 import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {
     allocateAutoId,
@@ -84,6 +85,72 @@ function logPlanDebug(cwd: string, msg: string): void {
     fsp.mkdir(dir, {recursive: true})
         .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
         .catch(() => {})
+}
+
+/**
+ * Clarify's answer-side TRIAGE — the second stage /task-auto's clarify gate was
+ * missing that /task's grill already had. /task-auto's clarify was single-stage:
+ * it generated a question and went straight to the user, with the gen prompt's
+ * own "do not re-ask what the spec settles" prose as the only guard — and a weak
+ * local model ignores that prose, surfacing questions the inlined spec already
+ * answers (the "use Hono's Bun adapter or node adapter?" question when the spec
+ * pins the Bun adapter outright).
+ *
+ * grill is gen → AUTO-ANSWER triage → user; clarify was gen → user. This runs
+ * grill's exact triage (ALREADY-DECIDED → FUNCTIONAL-REQUIREMENT → reversibility,
+ * see GRILL_AUTO_ANSWER_PROMPT) against the inlined spec BEFORE a question reaches
+ * the user. If the spec already settles the answer (or it's a cheap-to-undo
+ * default the user would accept without thinking), the question is auto-resolved
+ * and never shown — the resolved value still flows into the clarify transcript so
+ * decompose sees the decision and the next gen call won't re-ask it. Only a
+ * genuine UNKNOWN — a fork the spec leaves open — survives to the user.
+ *
+ * Returns the auto-resolved answer string when the question is settled, or null
+ * to surface it. The source fed to the triage is the feature spec itself; there
+ * is no per-feature research blob at this pre-decomposition stage (each task does
+ * its own research downstream), so the "Research" slot is a stub. Best-effort: a
+ * throw or an untagged reply falls back to surfacing the question (the prior
+ * behavior), never dropping it silently.
+ */
+async function triageClarifyQuestion(
+    deps: AutoDeps,
+    cwd: string,
+    featureForModel: string,
+    question: string
+): Promise<string | null> {
+    try {
+        const basePrompt = GRILL_AUTO_ANSWER_PROMPT(
+            featureForModel,
+            '(none — clarify runs before decomposition; each task researches itself later)',
+            question
+        )
+        let text = await deps.runChild('clarify-triage', 'read', basePrompt)
+        if (!autoAnswerHasTag(text)) {
+            // No ANSWER/UNKNOWN/ALT tag — the model wrote prose. Reprompt once for
+            // the tagged form before trusting parseAutoAnswer's lenient salvage,
+            // exactly as phaseAutoAnswer does, so a preamble line can't masquerade
+            // as a decision.
+            text = await deps.runChild(
+                'clarify-triage',
+                'read',
+                prependHint(GRILL_AUTO_FORMAT_HINT, basePrompt)
+            )
+        }
+        const parsed = parseAutoAnswer(text)
+        if (parsed.kind === 'answered') {
+            logPlanDebug(
+                cwd,
+                `clarify-triage auto-resolved (spec-settled): ${question.replace(/\s+/g, ' ').slice(0, 100)}`
+                    + ` → ${parsed.text.replace(/\s+/g, ' ').slice(0, 100)}`
+            )
+            return parsed.text
+        }
+        return null
+    } catch {
+        // Triage is a best-effort filter, not a gate: on any failure, surface the
+        // question rather than silently dropping it.
+        return null
+    }
 }
 
 /**
@@ -225,8 +292,10 @@ export async function planAuto(
     // otherwise the model's recommendation is shown as the input placeholder and
     // in the title. Nothing is pre-filled into the editor — submitting an empty
     // field is what accepts the recommendation (see the typed.length === 0 branch
-    // below); typing overrides it. We never auto-answer; the model emits NONE when
-    // nothing remains.
+    // below); typing overrides it. Each generated question first runs the
+    // answer-side TRIAGE (triageClarifyQuestion): a question the inlined spec
+    // already settles is auto-resolved and never shown — only genuine open forks
+    // reach the user. The model emits NONE when nothing remains.
     const theme = ctx.ui.theme
     const ui = new SessionUI(ctx)
     // Inline any @file spec the user referenced so clarify/decompose reason over
@@ -287,6 +356,18 @@ export async function planAuto(
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = stripInlineMarkdown(question)
         askedQuestions.push(plainQ)
+        // Answer-side triage (grill parity): if the inlined spec already settles
+        // this question, auto-resolve it and never show it. The resolved value is
+        // recorded so decompose sees the decision and the next gen call's priorQA
+        // won't re-ask it.
+        const autoResolved = await triageClarifyQuestion(deps, cwd, featureForModel, plainQ)
+        if (autoResolved !== null) {
+            answers.push(
+                `Q${answers.length + 1}: ${plainQ}\n`
+                    + `A${answers.length + 1}: ${autoResolved} (auto-resolved — already settled by the spec)`
+            )
+            continue
+        }
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
         const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
         // Identical to /task's grill dialog: a recommendation (or A/B fork)

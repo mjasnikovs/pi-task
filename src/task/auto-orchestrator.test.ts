@@ -208,6 +208,101 @@ test('planAuto: suppresses re-asked questions and stops after repeated dups', as
     })
 })
 
+test('planAuto: clarify-triage auto-resolves a spec-settled question (never shown)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        // The exact failure class: the gen model asks a question the spec already
+        // settles (HTTP server adapter). The triage child answers it from the spec,
+        // so it must be suppressed — the user is never prompted.
+        let clarifyCall = 0
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                if (name === 'auto-clarify') {
+                    const responses = [
+                        "1. Should the server use Hono's Bun adapter or the Node adapter?\nSUGGESTED: Hono Bun adapter"
+                    ]
+                    return Promise.resolve(responses[clarifyCall++] ?? 'NONE')
+                }
+                if (name === 'clarify-triage') {
+                    return Promise.resolve(
+                        "ANSWER: use Hono's Bun adapter — the spec pins Bun.serve via it"
+                    )
+                }
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'Implement server', d)
+        // The user was NEVER asked — the settled question was auto-resolved.
+        expect(captured.inputs.length).toBe(0)
+        expect(captured.selects.length).toBe(0)
+        // …but the resolved decision is recorded so decompose sees it.
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toContain('auto-resolved')
+        expect(body).toContain("Hono's Bun adapter")
+    })
+})
+
+test('planAuto: clarify-triage surfaces a genuine open fork (UNKNOWN)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured, queueSelect} = makeFakeCtx(dir)
+        queueSelect('local disk') // accept the surfaced recommendation
+        let clarifyCall = 0
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                if (name === 'auto-clarify') {
+                    const responses = ['1. Where do photos live?\nSUGGESTED: local disk']
+                    return Promise.resolve(responses[clarifyCall++] ?? 'NONE')
+                }
+                if (name === 'clarify-triage') {
+                    // The spec leaves this open → triage tags it UNKNOWN → surfaced.
+                    return Promise.resolve('UNKNOWN: local disk')
+                }
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'add photo uploads', d)
+        // A genuine fork reaches the user exactly as before.
+        expect(captured.selects.length).toBe(1)
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toContain('A1: local disk')
+        expect(body).not.toContain('auto-resolved')
+    })
+})
+
+test('planAuto: clarify-triage failure falls back to surfacing the question', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured, queueInput} = makeFakeCtx(dir)
+        queueInput('Redis')
+        let clarifyCall = 0
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                if (name === 'auto-clarify') {
+                    const responses = ['1. Which store?']
+                    return Promise.resolve(responses[clarifyCall++] ?? 'NONE')
+                }
+                if (name === 'clarify-triage') {
+                    return Promise.reject(new Error('triage child crashed'))
+                }
+                return Promise.resolve('- [ ] Task A')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'add billing', d)
+        // Triage threw → the question is still shown, never silently dropped.
+        expect(captured.inputs.length).toBe(1)
+        const {body} = await readTaskFile(dir, id!)
+        expect(body).toContain('A1: Redis')
+    })
+})
+
 test('planAuto: typed answer overrides the recommended card', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueSelect, queueInput} = makeFakeCtx(dir)
