@@ -42,8 +42,17 @@ import {
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {armImplWidget, disarmImplWidget, setupImplWidget} from './impl-widget.js'
-import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
+import {
+    publishViewer,
+    publishNotify,
+    publishLifecycleNotice,
+    registerBridgeCommand,
+    getBridge
+} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
+import {getConfig} from '../config/config.js'
+import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
+import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
 import {titleForDisplay} from './parsers.js'
@@ -739,6 +748,138 @@ export async function runSingleTask(
     return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted, reason: implError}
 }
 
+// ─── Gated single-task flow ────────────────────────────────────────────────────
+
+/**
+ * The AUTOFIX re-runner injected into the gate deps: re-run a task's
+ * implementation turn, blocking until it finishes (steering across interrupts and
+ * resuming across compactions). Shared by /task and /task-auto so both gate the
+ * same way; lives here because it wraps runSingleTask (gate-deps must not import the
+ * orchestrators, to keep the dependency graph acyclic).
+ */
+export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
+    runSingleTask(c, cwd, t, {
+        waitForImplementation: true,
+        resumeId: opts?.resumeId,
+        onStart: opts?.onStart,
+        planContext: opts?.planContext,
+        fixInstruction: opts?.fixInstruction
+    })
+
+/**
+ * Demote a task file to a resumable state after a gate (or its implementation)
+ * stopped short. The file is marked `completed` at spec-handoff — before the work
+ * is even verified — so a gate FAIL would otherwise leave it un-resumable
+ * (`completed` is not in RESUMABLE_STATES). Best-effort; a missing/empty id is a
+ * no-op. Mirrors how /task-auto marks the parent run `failed` so resume re-runs it.
+ */
+async function markResumable(cwd: string, taskId: string): Promise<void> {
+    if (!taskId) return
+    try {
+        await updateTaskFrontMatter(cwd, taskId, {state: 'failed'})
+    } catch {
+        /* best-effort */
+    }
+}
+
+/**
+ * Run a single /task through implementation AND the shared verify + enforce gates,
+ * blocking until both finish. Used instead of the fire-and-forget handoff whenever
+ * `verify work` or `enforce guidelines` is enabled — so /task gates exactly like a
+ * /task-auto sub-task does. A terminal stop (the implementation died, or a gate
+ * paused/failed) leaves the task resumable and tells the user to /task-resume.
+ */
+export async function runGatedTask(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    raw: string,
+    opts: {resumeId?: string; deps?: GateDeps} = {}
+): Promise<void> {
+    const abort = new AbortController()
+    const deps =
+        opts.deps
+        ?? buildGateDeps({
+            signal: abort.signal,
+            parentContextWindow: getParentContextWindow(ctx),
+            runTask: gateRunTask
+        })
+    let active = ctx
+    // One push + remote bubble on the terminal outcome (parity with the
+    // notifyFinish push the fire-and-forget path emits via runSingleTask).
+    const announce = (msg: string, level: 'info' | 'warning' | 'error'): void => {
+        active.ui.notify(msg, level)
+        publishLifecycleNotice(msg, level)
+        void pushNotify('Task finished', msg, 'pi-end').catch(() => {})
+    }
+
+    // First implementation run (blocking).
+    const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId})
+    active = res.ctx ?? active
+    const tag = res.taskId || 'Task'
+    if (res.sessionCancelled) {
+        announce(`${tag} — could not start a fresh session for /task.`, 'warning')
+        return
+    }
+    if (res.interrupted) {
+        await markResumable(cwd, res.taskId)
+        announce(`${tag} paused — resume with /task-resume.`, 'warning')
+        return
+    }
+    if (!res.ok) {
+        await markResumable(cwd, res.taskId)
+        const why = res.reason ? ` — ${res.reason.slice(0, 160)}` : ''
+        announce(`${tag} stopped${why} — fix and run /task-resume.`, 'error')
+        return
+    }
+
+    // The composed task's own front-matter title — used in commit messages and
+    // notifies (the gate sequence has no plan title to borrow). Degrade to the id.
+    let title = tag
+    try {
+        const {frontMatter} = await readTaskFile(cwd, res.taskId)
+        title = frontMatter.title || tag
+    } catch {
+        /* keep the id as the title */
+    }
+
+    const gate = await runGatesForTask(active, deps, {
+        cwd,
+        taskId: res.taskId,
+        title,
+        tag
+        // No sibling plan → no scope fence; no parent list → no check-off.
+    })
+    active = gate.ctx
+    switch (gate.kind) {
+        case 'paused':
+            await markResumable(cwd, res.taskId)
+            announce(
+                `${tag} paused — verification failed and you dismissed the choice; resume with /task-resume.`,
+                'warning'
+            )
+            return
+        case 'session-cancelled':
+            announce(
+                `${tag} paused — could not start a session for autofix. Run /task-resume to retry.`,
+                'warning'
+            )
+            return
+        case 'interrupted':
+            await markResumable(cwd, res.taskId)
+            announce(`${tag} paused — resume with /task-resume.`, 'warning')
+            return
+        case 'failed': {
+            await markResumable(cwd, res.taskId)
+            const why = gate.reason ? ` — ${gate.reason.slice(0, 160)}` : ''
+            announce(`${tag} stopped${why} — fix and run /task-resume.`, 'error')
+            return
+        }
+        case 'done':
+            announce(`${tag} complete — verified.`, 'info')
+            return
+    }
+}
+
 // ─── Command handlers ────────────────────────────────────────────────────────
 
 async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -748,6 +889,15 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
     if (raw.length === 0) {
         ctx.ui.setEditorText('/task ')
         ctx.ui.notify('Type your prompt after /task (use @ for file completion).', 'info')
+        return
+    }
+    // When a gate is enabled, /task awaits the implementation and runs the same
+    // verify + enforce gates a /task-auto sub-task does. With both gates off
+    // (the default), /task stays fire-and-forget: hand the spec to the main
+    // conversation and return immediately, exactly as before.
+    const cfg = getConfig()
+    if (cfg.verifyWork || cfg.enforceGuidelines) {
+        await runGatedTask(ctx, cwd, raw)
         return
     }
     const {sessionCancelled} = await runSingleTask(ctx, cwd, raw, {notifyFinish: true})
@@ -830,6 +980,12 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
             return
         }
         id = candidates[0].id
+    }
+    // Match /task: resume through the gates when one is enabled, else fire-and-forget.
+    const cfg = getConfig()
+    if (cfg.verifyWork || cfg.enforceGuidelines) {
+        await runGatedTask(ctx, cwd, '', {resumeId: id})
+        return
     }
     const {sessionCancelled} = await runSingleTask(ctx, cwd, '', {resumeId: id, notifyFinish: true})
     if (sessionCancelled) {

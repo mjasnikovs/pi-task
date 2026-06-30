@@ -29,13 +29,13 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         id: 'verifyWork',
         label: 'verify work',
         description:
-            "After each /task-auto task, RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict (also the signal that lets 'enforce guidelines' fix safely)"
+            "After each /task (and /task-auto task), RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict (also the signal that lets 'enforce guidelines' fix safely). Enabling it makes /task wait for the implementation"
     },
     {
         id: 'enforceGuidelines',
         label: 'enforce guidelines',
         description:
-            "Check each /task-auto commit against AGENTS.md/CLAUDE.md. Needs 'verify work' to FIX drift (fixes are reverted if they regress verification); without it, only reports violations"
+            "Check each /task and /task-auto commit against AGENTS.md/CLAUDE.md. Needs 'verify work' to FIX drift (fixes are reverted if they regress verification); without it, only reports violations. Enabling it makes /task wait for the implementation"
     }
 ]
 

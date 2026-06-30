@@ -8,8 +8,7 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {runSingleTask} from './orchestrator.js'
-import type {RunSingleTaskResult} from './orchestrator.js'
+import {gateRunTask} from './orchestrator.js'
 import {parseClarifyList, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
@@ -30,35 +29,15 @@ import {
     taskFilePath,
     tasksDir
 } from './task-io.js'
-import {gitCommitAll, gitDropLastCommit, type CommitResult} from './auto-commit.js'
-import {
-    runGuidelineEnforcement,
-    classifyEnforceChildFailure,
-    type EnforceOutcome
-} from './enforce-guidelines.js'
-import {runWorkVerification, extractSpecForVerification, type VerifyOutcome} from './verify-work.js'
-import {
-    researchResolution,
-    resolutionOptions,
-    classifyResolutionAnswer,
-    type ResolutionOutcome,
-    type ResolutionChoice
-} from './verify-resolution.js'
-import {runWorker} from '../workers/pi-worker-core.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {
-    runPhaseChild,
-    prependHint,
-    formatLoopHint,
-    USER_CANCELLED,
-    type PhaseDeps
-} from './child-runner.js'
+import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
-import {getConfig} from '../config/config.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
+import {buildGateDeps} from './gate-deps.js'
+import {runGatesForTask, type GateDeps} from './task-gates.js'
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
 // when the model emits NONE), but a model that never says NONE would otherwise
@@ -67,89 +46,12 @@ const MAX_CLARIFY_QUESTIONS = 8
 
 /**
  * Injectable seams so the planner and loop are testable without spawning pi.
- * `runChild` is used by planAuto; `runTask` is used by runAutoLoop.
+ * `runChild` is the planning-only seam used by planAuto; everything else (runTask,
+ * commit, verify, enforce, recommend, revert) is the shared post-implementation
+ * gate surface defined by {@link GateDeps} and built by {@link buildGateDeps}.
  */
-export interface AutoDeps {
+export interface AutoDeps extends GateDeps {
     runChild: (name: string, tools: string, prompt: string) => Promise<string>
-    runTask: (
-        ctx: ExtensionCommandContext,
-        cwd: string,
-        title: string,
-        opts?: {
-            /** Resume this inner task id instead of allocating a fresh one. */
-            resumeId?: string
-            /** Called with the inner task id once its file exists, before phases. */
-            onStart?: (taskId: string) => void | Promise<void>
-            /** Scope fence naming the sibling steps, forwarded into refine. */
-            planContext?: string
-            /** Verify-FAIL autofix re-attempt: prepended to the delivered spec as
-             *  a RE-ATTEMPT banner so the re-run fixes that specific failure. */
-            fixInstruction?: string
-        }
-    ) => Promise<RunSingleTaskResult>
-    /** Snapshot the working tree into one commit after a task passes. */
-    commit: (cwd: string, message: string) => Promise<CommitResult>
-    /**
-     * Verify the just-finished task's work against the project's AGENTS.md /
-     * CLAUDE.md guidelines (and auto-fix violations) BEFORE it is committed.
-     * Optional: when absent (tests, or the feature disabled), the loop treats it
-     * as a pass. ok === false blocks the commit and fails the task.
-     *
-     * Takes the loop's CURRENT ctx (not the one captured at defaultDeps time):
-     * each task runs in a fresh session, so the captured ctx is stale by the time
-     * enforcement runs and using it for the loader widget throws "stale ctx".
-     */
-    enforce?: (
-        ctx: ExtensionCommandContext,
-        cwd: string,
-        taskTitle: string,
-        /**
-         * `'edit'` (read,edit — fix in place) only when there is a clean
-         * verification signal to guard the edits against; otherwise `'flag'`
-         * (read-only, report don't fix). The loop picks the mode from whether the
-         * verify gate produced a genuine clean pass.
-         */
-        mode: 'edit' | 'flag'
-    ) => Promise<EnforceOutcome>
-    /**
-     * Verify the just-finished task's work by RUNNING its composed spec's VERIFY
-     * block in the real workspace (a fresh child of the same local model, with a
-     * `bash` tool), then reporting a PASS/FAIL verdict. Optional: absent in tests
-     * or when the `verifyWork` flag is off, in which case the loop treats it as a
-     * pass. Runs BEFORE the task is checked off/committed and is a hard GATE: ok
-     * === false stops the run and fails the task (left unchecked so resume re-runs
-     * it). Needs the inner taskId to read that task's spec.
-     */
-    verify?: (
-        ctx: ExtensionCommandContext,
-        cwd: string,
-        taskTitle: string,
-        taskId: string
-    ) => Promise<VerifyOutcome>
-    /**
-     * After a verify FAIL, research whether to recommend AUTOFIX (re-do the work)
-     * or ACCEPT (the gate misjudged a good artifact) — read-only, same local
-     * model. Only sets which card the picker tints RECOMMENDED; the user always
-     * makes the final call. Optional: absent in tests or when verify is off, in
-     * which case the loop defaults the recommendation to AUTOFIX. Needs the inner
-     * taskId (to read the spec) and the gate's failure reason.
-     */
-    recommend?: (
-        ctx: ExtensionCommandContext,
-        cwd: string,
-        taskTitle: string,
-        taskId: string,
-        failReason: string
-    ) => Promise<ResolutionOutcome>
-    /**
-     * Discard the working-tree edits an `'edit'` enforcement pass made, restoring
-     * the verified task commit. The differential guard calls this when re-running
-     * verification AFTER enforcement reports a regression: the guideline fixes are
-     * thrown away and the verified implementation is kept. Optional: absent in
-     * tests; the loop then skips the revert (and warns). Scoped to exclude the
-     * .pi-tasks bookkeeping so task front matter is not rolled back.
-     */
-    revert?: (cwd: string) => Promise<void>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -488,80 +390,12 @@ function defaultDeps(
     signal: AbortSignal,
     title: string
 ): AutoDeps {
-    // Captured by the loader's getState so the widget mirrors the child's latest
-    // output line and context usage, exactly like the single-task phase widget.
+    // Captured by the planning loader's getState so the widget mirrors the child's
+    // latest output line and context usage, exactly like the single-task phase
+    // widget. (The gate children manage their own loaders inside buildGateDeps.)
     let lastLine: string | undefined
     let contextUsage: ContextSnapshot | undefined
     const parentContextWindow = getParentContextWindow(ctx)
-
-    // Shared runner for the per-task GATE children (verify + post-FAIL recommend).
-    // Both are read-only passes of the same local model that must run to
-    // completion: unguarded (no wall-clock timeout, exact-match loop guard only,
-    // path-revisit disabled because re-running the same check is the job), with a
-    // status widget and a per-gate debug log. Returns the closure
-    // runWorkVerification / researchResolution expect as `runChild`.
-    const makeGateChild =
-        (
-            gateCtx: ExtensionCommandContext,
-            cwd2: string,
-            taskTitle: string,
-            kind: 'verify' | 'recommend',
-            logFile: string
-        ) =>
-        async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
-            lastLine = undefined
-            contextUsage = undefined
-            const startedAt = Date.now()
-            const logPath = path.join(tasksDir(cwd2), logFile)
-            const log = (msg: string): void => {
-                void fsp.appendFile(logPath, `${new Date().toISOString()} ${msg}\n`).catch(() => {})
-            }
-            log(`=== ${kind} start: ${taskTitle} ===`)
-            const stopLoader = startAutoLoader(gateCtx, () => ({
-                title: taskTitle,
-                kind,
-                step: kind,
-                stepNum: 1,
-                stepTotal: 1,
-                startedAt,
-                lastLine,
-                contextUsage
-            }))
-            try {
-                const r = await runWorker({
-                    prompt,
-                    cwd: cwd2,
-                    signal: sig,
-                    tools,
-                    timeoutMs: 0,
-                    loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                    onLine: line => {
-                        lastLine = line
-                        log(line)
-                    },
-                    onContextUsage: snapshot => {
-                        contextUsage = resolveContextUsage(
-                            snapshot,
-                            contextUsage,
-                            parentContextWindow
-                        )
-                    }
-                })
-                if (r.loopHit) {
-                    log(`=== ${kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
-                    gateCtx.ui.notify(
-                        `${taskTitle}: ${kind} worker looped past the nudges — continuing (not blocked).`,
-                        'warning'
-                    )
-                }
-                const failure = classifyEnforceChildFailure(r)
-                log(failure ? `=== ${kind} end: FAIL — ${failure} ===` : `=== ${kind} end: ok ===`)
-                if (failure) throw new Error(failure)
-                return r.text
-            } finally {
-                stopLoader()
-            }
-        }
 
     const phaseDeps: PhaseDeps = {
         cwd,
@@ -575,6 +409,9 @@ function defaultDeps(
         }
     }
     return {
+        // Planning-only seam. The shared gate surface (runTask/commit/verify/
+        // enforce/recommend/revert) comes from buildGateDeps below — identical to
+        // what /task builds, so both commands gate the same way.
         runChild: async (name, tools, prompt) => {
             // Planning children are slow LLM calls with no UI of their own; show
             // the same status block as /task so this never goes silent until the
@@ -598,196 +435,11 @@ function defaultDeps(
                 stopLoader()
             }
         },
-        runTask: (c, cwd2, t, opts) =>
-            runSingleTask(c, cwd2, t, {
-                waitForImplementation: true,
-                resumeId: opts?.resumeId,
-                onStart: opts?.onStart,
-                planContext: opts?.planContext,
-                fixInstruction: opts?.fixInstruction
-            }),
-        commit: (cwd2, message) =>
-            getConfig().autoCommit ?
-                gitCommitAll(cwd2, message, signal)
-            :   Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
-        revert: cwd2 => gitDropLastCommit(cwd2, signal),
-        enforce: (enforceCtx, cwd2, taskTitle, mode) => {
-            if (!getConfig().enforceGuidelines) {
-                return Promise.resolve({ok: true, reason: 'disabled'})
-            }
-            return runGuidelineEnforcement({
-                cwd: cwd2,
-                signal,
-                mode,
-                // Run the worker child UNGUARDED: no loop detector, no wall-clock
-                // timeout. This pass's job is to rework files in place until every
-                // violation is fixed, and it legitimately reads and edits the same
-                // file many times — the research-worker guards mislabel that as a
-                // runaway and kill good work (proven on mx5 TASK_0002). Let it
-                // run until the model finishes; classifyEnforceChildFailure still
-                // blocks the commit on a real failure (non-zero exit, leaked tool
-                // call) or a user cancel.
-                runChild: async (tools, prompt, sig) => {
-                    // The enforcement child is a slow local-model pass with edit
-                    // tools; show the same /task-auto status block as planning so
-                    // it isn't silent — head · enforcing guidelines/elapsed ·
-                    // tokens/window [bar] · ↳ last line. The worker runs the same
-                    // `--mode json` stream as the phase children, so it emits
-                    // context_usage; forward it (onContextUsage below) so the bar
-                    // renders here exactly like every other phase widget.
-                    lastLine = undefined
-                    contextUsage = undefined
-                    const startedAt = Date.now()
-                    // Per-pass debug log. The enforce child is otherwise
-                    // unobservable (it has no per-task file like the impl runner).
-                    // One rolling file under .pi-tasks/; each pass brackets its
-                    // tool/text lines with start/end markers naming the task and
-                    // the terminal outcome, so a stop (a real failure or a found
-                    // violation) is diagnosable. Fire-and-forget.
-                    const enforceLogPath = path.join(tasksDir(cwd2), 'enforce-debug.log')
-                    const logEnforce = (msg: string): void => {
-                        void fsp
-                            .appendFile(enforceLogPath, `${new Date().toISOString()} ${msg}\n`)
-                            .catch(() => {})
-                    }
-                    logEnforce(`=== enforce start: ${taskTitle} ===`)
-                    const stopLoader = startAutoLoader(enforceCtx, () => ({
-                        title: taskTitle,
-                        kind: 'enforce',
-                        step: 'guidelines',
-                        stepNum: 1,
-                        stepTotal: 1,
-                        startedAt,
-                        lastLine,
-                        contextUsage
-                    }))
-                    try {
-                        const r = await runWorker({
-                            prompt,
-                            cwd: cwd2,
-                            signal: sig,
-                            tools,
-                            timeoutMs: 0, // no wall-clock timeout — run to completion
-                            // Exact-match loop guard only: pathThreshold Infinity
-                            // disables the path-revisit heuristic, so revisiting one
-                            // file (which IS this pass's job) never trips — only a
-                            // literally-identical call repeated past threshold does
-                            // (e.g. the same read or edit repeated hundreds of times).
-                            // A hit nudges via the normal restart-with-hint; a loop
-                            // that survives the nudges is WARNED, not blocked (see
-                            // r.loopHit handling below and classifyEnforceChildFailure).
-                            loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                            onLine: line => {
-                                lastLine = line
-                                logEnforce(line)
-                            },
-                            onContextUsage: snapshot => {
-                                contextUsage = resolveContextUsage(
-                                    snapshot,
-                                    contextUsage,
-                                    parentContextWindow
-                                )
-                            }
-                        })
-                        // A loop that survived the restart-with-hint nudges is a
-                        // warning, not a failure: log it and tell the user, but let
-                        // the verdict gate (below) be the only thing that can block.
-                        if (r.loopHit) {
-                            logEnforce(
-                                `=== enforce LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`
-                            )
-                            enforceCtx.ui.notify(
-                                `${taskTitle}: enforce worker looped past the nudges — continuing (not blocked).`,
-                                'warning'
-                            )
-                        }
-                        const failure = classifyEnforceChildFailure(r)
-                        logEnforce(
-                            failure ?
-                                `=== enforce end: FAIL — ${failure} ===`
-                            :   '=== enforce end: verdict captured ==='
-                        )
-                        if (failure) throw new Error(failure)
-                        return r.text
-                    } finally {
-                        stopLoader()
-                    }
-                }
-            })
-        },
-        verify: async (verifyCtx, cwd2, taskTitle, taskId) => {
-            if (!getConfig().verifyWork) {
-                return {ok: true, reason: 'disabled'}
-            }
-            // The spec to verify against is the composed spec committed in the
-            // task file. A task that never reached compose has no spec section —
-            // runWorkVerification treats a null spec as a no-op pass.
-            let spec: string | null
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                spec = extractSpecForVerification(body)
-            } catch {
-                spec = null
-            }
-            return runWorkVerification({
-                cwd: cwd2,
-                signal,
-                spec,
-                runChild: makeGateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log')
-            })
-        },
-        recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
-            // Read the same composed spec the verify gate judged against, so the
-            // recommendation reasons over the real contract (a missing spec is
-            // unusual here — verify already ran — but degrade to the bare title).
-            let spec: string
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                spec = extractSpecForVerification(body) ?? taskTitle
-            } catch {
-                spec = taskTitle
-            }
-            return researchResolution({
-                cwd: cwd2,
-                signal,
-                spec,
-                failReason,
-                runChild: makeGateChild(recCtx, cwd2, taskTitle, 'recommend', 'verify-debug.log')
-            })
-        }
+        ...buildGateDeps({signal, parentContextWindow, runTask: gateRunTask})
     }
 }
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
-
-/**
- * Show the boxed two-choice picker after a verify FAIL and return what the user
- * decided. The model-recommended card is placed first so the renderer tints it
- * green; the user ALWAYS makes the final call (there is no auto-pick). Mirrors the
- * clarify/grill dialog: the same SessionUI.ask races the local boxed picker
- * against a remote answer, with the two actions also surfaced as remote buttons.
- */
-async function askVerifyResolution(
-    ctx: ExtensionCommandContext,
-    title: string,
-    failReason: string,
-    rec: ResolutionOutcome
-): Promise<ResolutionChoice> {
-    const options = resolutionOptions(rec.recommend)
-    const question =
-        `Verification FAILED for "${title}".\n\n${failReason}\n\n`
-        + `Recommended: ${rec.recommend.toUpperCase()} — ${rec.rationale}`
-    const answer = await new SessionUI(ctx).ask({
-        localTitle: 'Verification failed — how should pi proceed?',
-        displayQuestion: question,
-        question,
-        recommended: options[0].label,
-        recommended2: options[1].label,
-        allowSkip: false,
-        options
-    })
-    return classifyResolutionAnswer(answer)
-}
 
 let cancelRequested = false
 let autoRunning = false
@@ -930,202 +582,65 @@ export async function runAutoLoop(
                 return
             }
             // GATE: actually RUN the task's verification against the just-finished
-            // work BEFORE it is checked off or committed. The composed spec ships a
-            // VERIFY block, but nothing in the pipeline ever executed it — a task
-            // that did not work was checked off identically to one that did. Run it
-            // now in the real workspace; a FAIL stops the whole run exactly like an
-            // implementation failure — the task is left UNCHECKED and UNCOMMITTED so
-            // /task-auto-resume re-runs it (rather than blessing broken work). Off
-            // by default (deps.verify returns a disabled no-op) and a no-op when the
-            // task has no composed spec to verify against.
-            //
-            // Whether this gate produced a GENUINE clean pass (a real signal ran
-            // and the work met it) also decides how the enforce pass below is
-            // allowed to behave: only a genuine pass gives a signal to revert
-            // against, so only then may enforce edit in place (see the enforce
-            // block). A no-op pass (no spec), a disabled gate, or a user
-            // accept-override leaves this false → enforce runs flag-only.
-            let verifyCleanPass = false
-            if (deps.verify) {
-                active.ui.notify(`${id}: verifying "${next.title}"…`, 'info')
-                let verified = await deps.verify(active, cwd, next.title, res.taskId)
-                // A FAIL no longer dead-stops the run. The user is offered a boxed
-                // two-choice picker — AUTOFIX (re-run the implementation turn against
-                // the failure, then re-verify) or ACCEPT (the gate misjudged a good
-                // artifact; override and proceed). A read-only research pass picks
-                // which card is recommended, but the USER always decides — there is
-                // no attempt cap: AUTOFIX loops straight back to the gate as many
-                // times as the user keeps choosing it. The run only leaves the loop
-                // when the work verifies, the user ACCEPTs, or the user dismisses
-                // the picker (which pauses the run, resumable).
-                while (!verified.ok) {
-                    const failReason = verified.reason ?? 'did not verify'
-                    const rec: ResolutionOutcome =
-                        deps.recommend ?
-                            await deps.recommend(active, cwd, next.title, res.taskId, failReason)
-                        :   {recommend: 'autofix', rationale: failReason}
-                    const choice = await askVerifyResolution(active, next.title, failReason, rec)
-                    if (choice.action === 'cancel') {
-                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                        announceDone(
-                            active,
-                            `${id} paused at "${next.title}" — verification failed and you dismissed the choice; resume with /task-auto-resume.`,
-                            'warning'
-                        )
-                        return
-                    }
-                    if (choice.action === 'accept') {
-                        active.ui.notify(
-                            `${id}: accepted "${next.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,
-                            'warning'
-                        )
-                        break
-                    }
-                    // AUTOFIX: re-run the implementation turn with the failure (and
-                    // any typed guidance) prepended as a RE-ATTEMPT banner, then
-                    // re-verify — looping back to the gate. No cap: the user decides
-                    // when to stop (by accepting or dismissing the next picker).
-                    active.ui.notify(`${id}: autofixing "${next.title}"…`, 'info')
-                    const fixInstruction =
-                        choice.guidance ?
-                            `${failReason}\n\nUser guidance: ${choice.guidance}`
-                        :   failReason
-                    const fixRes = await deps.runTask(active, cwd, next.title, {
-                        resumeId: res.taskId,
-                        planContext: buildScopeFence(
-                            entries.map(e => e.title),
-                            next.index
-                        ),
-                        fixInstruction
-                    })
-                    active = fixRes.ctx ?? active
-                    if (fixRes.sessionCancelled) {
-                        announceDone(
-                            active,
-                            `${id} paused — could not start a session for autofix. Run /task-auto-resume to retry.`,
-                            'warning'
-                        )
-                        return
-                    }
-                    if (fixRes.interrupted) {
-                        announceDone(
-                            active,
-                            `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
-                            'warning'
-                        )
-                        return
-                    }
-                    if (!fixRes.ok) {
-                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                        const why = fixRes.reason ? ` — ${fixRes.reason.slice(0, 160)}` : ''
-                        announceDone(
-                            active,
-                            `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
-                            'error'
-                        )
-                        return
-                    }
-                    // Resume reuses the same inner task id, so res.taskId is stable.
-                    verified = await deps.verify(active, cwd, next.title, res.taskId)
-                }
-                // Loop exited because the work verified OR the user accepted the
-                // artifact — either way fall through to check-off/commit/enforce.
-                // A genuine clean pass is ok===true with NO reason; a no-op pass
-                // ('no spec to verify') or an accept-override (verified.ok still
-                // false at break) does NOT count as a guardable signal.
-                verifyCleanPass = verified.ok && !verified.reason
-            }
-            // res.ok === true means runner.run() completed, so res.taskId is the
-            // allocated TASK_NNNN id (never empty here). checkOffTask tolerates an
-            // empty id by writing a plain checked line, but that path is unreachable.
-            await checkOffTask(cwd, id, next.index, res.taskId, next.title)
-            // Commit the task's work (and the just-written check-off) as one
-            // snapshot FIRST — before guideline enforcement — so a passing task is
-            // durably recorded no matter what enforcement later finds. Best-effort:
-            // a failed/empty commit only warns; the task already passed.
-            const message = `task: ${next.title} (${res.taskId})`
-            const commit = await deps.commit(cwd, message)
-            if (commit.committed) {
-                active.ui.notify(`${id}: committed "${next.title}".`, 'info')
-            } else {
-                active.ui.notify(
-                    `${id}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
+            // work, then hold the committed result to AGENTS.md / CLAUDE.md. Shared
+            // verbatim with /task so both commands gate identically — see
+            // runGatesForTask. `done` means the work verified (or was accepted),
+            // was checked off + committed, and enforcement ran; every other kind is
+            // a terminal stop this loop announces with its own /task-auto-resume
+            // wording (the shared gate is command-agnostic).
+            const gate = await runGatesForTask(active, deps, {
+                cwd,
+                taskId: res.taskId,
+                title: next.title,
+                tag: id,
+                // Fence an AUTOFIX re-run against re-expanding the whole spec.
+                planContext: buildScopeFence(
+                    entries.map(e => e.title),
+                    next.index
+                ),
+                // res.ok === true means runner.run() completed, so res.taskId is the
+                // allocated TASK_NNNN id (never empty here). The parent task-list
+                // check-off runs after verify passes/accepts and before the commit,
+                // so the commit captures the checked box too.
+                onVerified: () => checkOffTask(cwd, id, next.index, res.taskId, next.title)
+            })
+            active = gate.ctx
+            if (gate.kind === 'paused') {
+                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                announceDone(
+                    active,
+                    `${id} paused at "${next.title}" — verification failed and you dismissed the choice; resume with /task-auto-resume.`,
                     'warning'
                 )
+                return
             }
-            // With the task committed, hold its work to the project's AGENTS.md /
-            // CLAUDE.md rules — but as a step INSIDE the validation gate, never the
-            // blind post-commit write pass it used to be. A bare read,edit enforce
-            // pass trashes working code: A/B-proven, it degraded a clean build in
-            // 4/5 runs while declaring CLEAN. So enforcement is now gated by the
-            // verify signal:
-            //
-            //   - 'edit' mode (read,edit — fix in place) runs ONLY when the verify
-            //     gate just produced a genuine clean pass. That pass is the
-            //     differential SIGNAL: enforce commits its fixes, then the SAME
-            //     signal is re-run against the enforced tree. A regression means the
-            //     pass made the artifact worse than it found it — its commit is
-            //     dropped and the verified implementation is kept (A/B: 5/5 clean).
-            //   - 'flag' mode (read-only — report don't fix) runs when there is no
-            //     such signal (verify off, no spec, or an accept-override): with
-            //     nothing to revert against, the pass may not rewrite logic, only
-            //     surface violations as a warning ("no signal ⇒ no license"; A/B:
-            //     5/5 clean, 5/5 caught the real violation).
-            //
-            // Skipped when nothing was committed this round (autoCommit off or an
-            // empty commit), when the feature is off, when there are no guideline
-            // files, or in tests with no enforce dep.
-            if (deps.enforce && commit.committed) {
-                const mode: 'edit' | 'flag' = verifyCleanPass ? 'edit' : 'flag'
-                active.ui.notify(
-                    mode === 'edit' ?
-                        `${id}: enforcing AGENTS.md/CLAUDE.md on "${next.title}"…`
-                    :   `${id}: reviewing "${next.title}" against AGENTS.md/CLAUDE.md (no verify signal — report only)…`,
-                    'info'
+            if (gate.kind === 'session-cancelled') {
+                announceDone(
+                    active,
+                    `${id} paused — could not start a session for autofix. Run /task-auto-resume to retry.`,
+                    'warning'
                 )
-                const verdict = await deps.enforce(active, cwd, next.title, mode)
-                if (!verdict.ok) {
-                    active.ui.notify(
-                        `${id}: guideline ${mode === 'edit' ? 'enforcement' : 'review'} on "${next.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
-                        'warning'
-                    )
-                }
-                if (mode === 'edit') {
-                    // Commit whatever the pass fixed as its own snapshot. A no-op
-                    // when it made no edits (nothing to commit) — and then there is
-                    // nothing to re-verify or revert, so a clean task skips the
-                    // second verify entirely.
-                    const enforceCommit = await deps.commit(
-                        cwd,
-                        `ENFORCE GUIDELINES: ${next.title} (${res.taskId})`
-                    )
-                    if (enforceCommit.committed) {
-                        // Differential guard: re-run the verify signal against the
-                        // enforced tree. verifyCleanPass implies deps.verify exists,
-                        // so this is a real check. A regression ⇒ drop the enforce
-                        // commit, keep the verified task commit underneath it.
-                        const after =
-                            deps.verify ?
-                                await deps.verify(active, cwd, next.title, res.taskId)
-                            :   ({ok: true} as VerifyOutcome)
-                        if (!after.ok) {
-                            // Regression: drop the enforce commit if we can, and
-                            // never report it as a kept fix.
-                            if (deps.revert) await deps.revert(cwd)
-                            active.ui.notify(
-                                `${id}: guideline fixes regressed verification on "${next.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,
-                                'warning'
-                            )
-                        } else {
-                            active.ui.notify(
-                                `${id}: committed guideline fixes for "${next.title}".`,
-                                'info'
-                            )
-                        }
-                    }
-                }
-                // 'flag' mode makes no edits — nothing to commit or revert.
+                return
             }
+            if (gate.kind === 'interrupted') {
+                announceDone(
+                    active,
+                    `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
+                    'warning'
+                )
+                return
+            }
+            if (gate.kind === 'failed') {
+                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                const why = gate.reason ? ` — ${gate.reason.slice(0, 160)}` : ''
+                announceDone(
+                    active,
+                    `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
+                    'error'
+                )
+                return
+            }
+            // gate.kind === 'done' → fall through to the next task.
         }
     } catch (err) {
         // Safety net: no failure inside the loop may propagate out of runAutoLoop,
