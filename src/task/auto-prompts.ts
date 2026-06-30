@@ -10,11 +10,7 @@
  * when no clarification remains. priorQA carries the questions already answered so
  * each next question adapts to them.
  */
-export const AUTO_CLARIFY_PROMPT = (
-    feature: string,
-    priorQA: string,
-    projectState: string = ''
-): string =>
+export const AUTO_CLARIFY_PROMPT = (feature: string, priorQA: string): string =>
     `You are planning how to split a feature into separate implementation tasks, one clarifying question at a time.
 
 FEATURE REQUEST:
@@ -22,12 +18,9 @@ ${feature.trim()}
 
 ANSWERS SO FAR:
 ${priorQA.trim() || '(none yet)'}
-${projectState.trim() ? `\n${projectState.trim()}\n` : ''}
+
 You may use the read tool to inspect the repo and any referenced docs so your
-question and recommendation are grounded in what already exists. When a PROJECT
-STATE snapshot is given above, trust it: never assume an empty or greenfield
-project, never invent directory paths, and never recommend creating files it
-already lists — at most propose updating them.
+question and recommendation are grounded in what already exists.
 
 Output the SINGLE most important clarifying question that REMAINS — the one whose
 answer would most change HOW this feature is split into tasks (scope boundaries,

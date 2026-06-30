@@ -8,9 +8,13 @@ import {
     phaseGrill,
     phaseCritique,
     postCommitPhase,
+    refineExistingFilesBlock,
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
+import {spawnSync} from 'node:child_process'
+import * as nodeFs from 'node:fs'
+import * as nodePath from 'node:path'
 import {readSection, readTaskFile} from './task-io.js'
 import {agentErrorResponse} from '../test-utils/fake-spawn.js'
 import {parseVerifyToolingOutput} from './parsers.js'
@@ -29,6 +33,52 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
 import {getBridge, answerPrompt} from '../remote/bridge.js'
 import {getState, _setSink, reset} from '../remote/session-state.js'
+
+describe('refineExistingFilesBlock', () => {
+    const deps = (cwd: string) => ({cwd, taskId: 'TASK_0001', signal: new AbortController().signal})
+
+    test('returns the preserve directive + manifest/config content for an existing scaffold', async () => {
+        if (spawnSync('which', ['git']).status !== 0) return
+        await withTmpTaskDir(async cwd => {
+            spawnSync('git', ['init', '-q'], {cwd})
+            spawnSync('git', ['config', 'user.email', 't@t'], {cwd})
+            spawnSync('git', ['config', 'user.name', 't'], {cwd})
+            nodeFs.writeFileSync(
+                nodePath.join(cwd, 'package.json'),
+                JSON.stringify({
+                    name: 'x',
+                    dependencies: {hono: '^4'},
+                    devDependencies: {eslint: '^9'}
+                })
+            )
+            nodeFs.writeFileSync(
+                nodePath.join(cwd, 'tsconfig.json'),
+                '{"compilerOptions":{"jsx":"react-jsx"}}'
+            )
+            nodeFs.writeFileSync(nodePath.join(cwd, 'src.ts'), 'export const x = 1') // not config — excluded
+            spawnSync('git', ['add', '.'], {cwd})
+            spawnSync('git', ['commit', '-q', '-m', 'init'], {cwd})
+
+            const block = await refineExistingFilesBlock(deps(cwd))
+            // The authoritative reframe travels with the content.
+            expect(block).toContain('EXISTING FILES ON DISK — AUTHORITATIVE')
+            expect(block).toMatch(/in-place UPDATE/)
+            // Manifest + config (tiers 0–1) content is supplied, with the existing deps.
+            expect(block).toContain('package.json')
+            expect(block).toContain('hono')
+            expect(block).toContain('eslint')
+            expect(block).toContain('tsconfig.json')
+            // A non-config source file is NOT pulled into the refine grounding.
+            expect(block).not.toContain('src.ts')
+        })
+    })
+
+    test('returns empty string for a non-git / empty project so refine is unchanged', async () => {
+        await withTmpTaskDir(async cwd => {
+            expect(await refineExistingFilesBlock(deps(cwd))).toBe('')
+        })
+    })
+})
 
 describe('scopedToolingGoal', () => {
     // Shape of the failing TASK_0017 refined prompt: a GOAL block whose tail is a

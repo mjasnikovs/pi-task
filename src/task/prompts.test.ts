@@ -57,6 +57,20 @@ describe('REFINE_PROMPT', () => {
         expect(p.indexOf(fence)).toBeLessThan(p.indexOf('You receive a'))
         expect(p).toContain('Task: raw task')
     })
+
+    test('inserts an existingFiles block (between the rules and the task) when supplied', () => {
+        const block = 'EXISTING FILES ON DISK — AUTHORITATIVE\n=== package.json ===\n{…}'
+        const p = REFINE_PROMPT('raw task', undefined, block)
+        expect(p).toContain(block)
+        // It must sit AFTER the rules and BEFORE the task, so the model reads it as
+        // authoritative grounding rather than part of the verbatim task text.
+        expect(p.indexOf(block)).toBeGreaterThan(p.indexOf('EXTERNAL-DEPENDENCIES'))
+        expect(p.indexOf(block)).toBeLessThan(p.indexOf('Task: raw task'))
+    })
+
+    test('omits the existingFiles region entirely when not supplied (byte-identical to bare)', () => {
+        expect(REFINE_PROMPT('raw task', undefined, '')).toBe(REFINE_PROMPT('raw task'))
+    })
 })
 
 describe('RESEARCH_CONTEXT_PROMPT LIVE-DATA RULE', () => {

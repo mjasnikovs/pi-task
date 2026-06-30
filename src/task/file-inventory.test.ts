@@ -1,10 +1,5 @@
 import {describe, expect, test} from 'bun:test'
-import {
-    capInventory,
-    formatProjectSnapshot,
-    getFileInventory,
-    stripTasksDir
-} from './file-inventory.js'
+import {capInventory, getFileInventory, stripTasksDir} from './file-inventory.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
@@ -30,41 +25,6 @@ describe('capInventory', () => {
     test('drops blank lines so the limit is applied to real paths only', () => {
         const raw = 'a\n\nb\n\nc'
         expect(capInventory(raw, 10)).toBe('a\nb\nc')
-    })
-})
-
-describe('formatProjectSnapshot', () => {
-    test('lists root files and top-level directories, deduped and sorted', () => {
-        // Mirrors the mx5 failure case: configs ARE present, so the snapshot must
-        // surface them so clarify cannot recommend creating them from scratch.
-        const raw = [
-            'tsconfig.json',
-            'package.json',
-            'eslint.config.mjs',
-            'prettier.config.mjs',
-            'DESIGN/spec.md',
-            'DESIGN/app.html',
-            '.pi/skills/zod/SKILL.md'
-        ].join('\n')
-        const out = formatProjectSnapshot(raw)
-        expect(out).toContain(
-            'Root files: eslint.config.mjs, package.json, prettier.config.mjs, tsconfig.json'
-        )
-        expect(out).toContain('Top-level directories: .pi, DESIGN')
-        // The anti-greenfield directive must travel with the facts.
-        expect(out).toMatch(/do NOT assume an empty or greenfield project/)
-    })
-
-    test('returns empty string for an empty/non-git tree so the block is omitted', () => {
-        expect(formatProjectSnapshot('')).toBe('')
-        expect(formatProjectSnapshot('\n  \n')).toBe('')
-    })
-
-    test('excludes the committed task directory', () => {
-        const raw = 'package.json\n.pi-tasks/TASK_0001.md'
-        const out = formatProjectSnapshot(raw)
-        expect(out).toContain('Root files: package.json')
-        expect(out).not.toContain('.pi-tasks')
     })
 })
 

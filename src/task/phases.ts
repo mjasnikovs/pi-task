@@ -18,7 +18,7 @@ import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {isIntegrationUnknown} from './unknown-routing.js'
 import {getFileInventory} from './file-inventory.js'
-import {buildOrientation} from './orientation.js'
+import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
 import {readFile} from 'node:fs/promises'
 import {resolve} from 'node:path'
@@ -144,12 +144,61 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 
 // ─── Phase functions ─────────────────────────────────────────────────────────
 
-export const phaseRefine = (deps: PhaseDeps, raw: string, planContext?: string) =>
-    runPhaseWithLoopGuard(
+// Authoritative directive that travels with the refine orientation block. Refine
+// runs BEFORE research, so on a "Scaffold project with package.json…" title it has
+// no signal the file already exists and authors greenfield strip-constraints
+// ("bun-plugin-tailwind the only dependency", "exactly N scripts") that compose
+// then obeys over the research facts — the implementer executes a wholesale
+// rewrite that drops every existing dependency and script (mx5 TASK_0001 emptied
+// package.json; the REAL pipeline reproduced it 3/3 even with research surfacing
+// the deps). Handing refine the manifest/config CONTENT up front, with this
+// reframe, fixes it at the origin (A/B: 1/5 → 5/5 preserve, 5/5 end-to-end).
+const REFINE_PRESERVE_DIRECTIVE =
+    'EXISTING FILES ON DISK — AUTHORITATIVE (overrides any "scaffold / create / set '
+    + 'up / initialize / from scratch / only / exactly / minimal" wording in the task '
+    + 'below): the files shown in the PROJECT ORIENTATION block ALREADY EXIST. When '
+    + 'the task says to scaffold, create, set up, initialize, or configure a file that '
+    + 'already exists, your GOAL and CONSTRAINTS MUST frame it as an in-place UPDATE '
+    + 'that PRESERVES every existing dependency, devDependency, script, field, and '
+    + "compiler option — adding or changing only the task's explicit delta. Do NOT "
+    + 'author any constraint that empties, reduces to a fixed/minimal set, renames, '
+    + 'recreates, or drops existing entries (no "X is the only dependency", no '
+    + '"exactly N scripts", no "produce exactly N files from scratch"). An existing '
+    + 'entry is NEVER scope drift and is never removed because it "belongs to a later step".'
+
+/**
+ * Manifest + config content (orientation tiers 0–1) for refine, with the preserve
+ * directive. Reuses the SAME orientation machinery research feeds its workers — not
+ * a parallel reader — scoped to the "accumulative" files a from-scratch rewrite
+ * silently destroys. '' (non-git/empty/orientation-off) leaves refine unchanged, so
+ * a genuinely greenfield task is still free to create.
+ */
+export async function refineExistingFilesBlock(deps: PhaseDeps): Promise<string> {
+    if (!getConfig().orientation) return ''
+    const inventoryRaw = await getFileInventory(deps.cwd, deps.signal).catch(() => '')
+    if (inventoryRaw.length === 0) return ''
+    const paths = inventoryRaw
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0 && (orientationTier(l) === 0 || orientationTier(l) === 1))
+    if (paths.length === 0) return ''
+    const {block} = await buildOrientation(paths, async p => {
+        try {
+            return await readFile(resolve(deps.cwd, p), 'utf8')
+        } catch {
+            return null
+        }
+    })
+    return block.trim().length === 0 ? '' : `${REFINE_PRESERVE_DIRECTIVE}\n\n${block.trim()}`
+}
+
+export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
+    const existingFiles = await refineExistingFilesBlock(deps).catch(() => '')
+    return runPhaseWithLoopGuard(
         deps,
         'refine',
         'read',
-        hint => prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext))),
+        hint => prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles))),
         // refine's deliverable is a 4-section text rewrite that never strictly
         // needs a successful read — on a test-writing task against a large
         // existing codebase the model over-explores (re-reads source hunting for
@@ -159,6 +208,7 @@ export const phaseRefine = (deps: PhaseDeps, raw: string, planContext?: string) 
         // from the title + design doc alone.
         {degradeOnExhaustion: true}
     )
+}
 
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {
     const commands = extractToolingCommands(research)
