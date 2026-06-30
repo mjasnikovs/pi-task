@@ -11,7 +11,7 @@
 
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
-import {formatNpmVersionSection} from '../workers/npm-version.js'
+import {formatNpmVersionSection, npmVersionLookup} from '../workers/npm-version.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
@@ -23,6 +23,7 @@ export interface ExternalContextDeps {
     docsRaw?: typeof docsRaw
     fetchRaw?: typeof fetchRaw
     searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
+    npmVersionLookup?: typeof npmVersionLookup
 }
 
 type GatherDeps = Pick<PhaseDeps, 'cwd' | 'signal' | 'recordSubStep'>
@@ -39,7 +40,16 @@ export async function gatherExternalContext(
     const docsRawFn = researchDeps.docsRaw ?? docsRaw
     const fetchRawFn = researchDeps.fetchRaw ?? fetchRaw
     const searchFn = researchDeps.searchFn ?? defaultSearch
+    const npmVersionFn = researchDeps.npmVersionLookup ?? npmVersionLookup
     const enrichTargets = extractEnrichTargets(refined)
+
+    // Every named dep past the heavy-docs cap still gets a cheap live version
+    // lookup, so a version block exists for ALL of them (the docs-fetched ones
+    // emit their version below from the bundled lookup). Without this, deps 4..N
+    // had no live version and a "which version?" question fell back to the model's
+    // stale training data — how tailwindcss got pinned to an old major.
+    const docsPkgs = new Set(enrichTargets.packages)
+    const extraVersionPkgs = enrichTargets.versionPackages.filter(p => !docsPkgs.has(p))
 
     if (
         enrichTargets.packages.length === 0
@@ -51,7 +61,7 @@ export async function gatherExternalContext(
 
     const enrichSections: string[] = []
     const tEnrichStart = Date.now()
-    const [docsResults, fetchResults, serviceResults] = await Promise.all([
+    const [docsResults, fetchResults, serviceResults, extraVersionResults] = await Promise.all([
         Promise.all(
             enrichTargets.packages.map(pkg =>
                 docsRawFn({
@@ -73,14 +83,21 @@ export async function gatherExternalContext(
                     signal: deps.signal
                 }).catch(() => null)
             )
+        ),
+        Promise.all(
+            extraVersionPkgs.map(pkg => npmVersionFn(pkg, {signal: deps.signal}).catch(() => null))
         )
     ])
 
-    // npm version blocks come from docsRaw's bundled lookup and lead the
-    // section so the model anchors on live version data before reading
-    // the docs body.
+    // npm version blocks lead the section so the model anchors on live version
+    // data before reading any docs body. The docs-fetched packages carry their
+    // version in docsRaw's bundled lookup; the remaining named deps get theirs
+    // from the cheap standalone lookup above. Together they cover EVERY named dep.
     for (let i = 0; i < enrichTargets.packages.length; i++) {
         const v = docsResults[i]?.npmVersion
+        if (v) enrichSections.push(formatNpmVersionSection(v))
+    }
+    for (const v of extraVersionResults) {
         if (v) enrichSections.push(formatNpmVersionSection(v))
     }
 

@@ -109,6 +109,12 @@ describe('GRILL_AUTO_ANSWER_PROMPT LIVE-DATA RULE', () => {
         expect(approachIdx).toBeGreaterThan(unknownIdx)
     })
 
+    test('treats version-pin questions as UNKNOWN and forbids stale-memory downgrades', () => {
+        const p = GRILL_AUTO_ANSWER_PROMPT('refined', 'research', 'question')
+        expect(p).toContain('VERSION-PIN')
+        expect(p.toLowerCase()).toContain('older major')
+    })
+
     test('instructs model to emit ALT: for binary A-or-B questions', () => {
         const p = GRILL_AUTO_ANSWER_PROMPT('refined', 'research', 'question')
         expect(p).toContain('ALT:')

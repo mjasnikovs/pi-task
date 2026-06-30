@@ -41,6 +41,49 @@ describe('gatherExternalContext', () => {
         expect(recorded).toContain('enrichment')
     })
 
+    test('gives EVERY named dep a live npm version block, not just the docs-capped 3', async () => {
+        // Six named runtime deps — the real mx5 TASK_0001 shape. The heavy docs
+        // fetch still caps at 3, but a version block must exist for all six so a
+        // later "which version?" question is grounded for tailwindcss too (the bug:
+        // deps past the cap fell back to the model's stale training-data version).
+        const docsCalls: string[] = []
+        const versionCalls: string[] = []
+        const out = await gatherExternalContext(
+            'add `hono`, `zod`, `react`, `react-dom`, `wouter`, and `tailwindcss`',
+            deps,
+            {
+                docsRaw: async ({pkg}) => {
+                    docsCalls.push(pkg)
+                    return {
+                        kind: 'ok',
+                        pkg: {
+                            name: pkg,
+                            version: '1.0.0',
+                            root: '/tmp',
+                            entryDts: null,
+                            readme: null
+                        },
+                        chunks: [{filePath: 'x', kind: 'dts', content: `${pkg} docs`, rank: 0}],
+                        hitCache: true,
+                        npmVersion: {pkg, latest: `9.9.9-${pkg}`, recent: []}
+                    }
+                },
+                npmVersionLookup: async pkg => {
+                    versionCalls.push(pkg)
+                    return {pkg, latest: `4.1.0-${pkg}`, recent: []}
+                }
+            }
+        )
+        // Heavy docs fetch only for the first 3; the rest get a cheap version lookup.
+        expect(docsCalls.length).toBe(3)
+        expect(versionCalls).toEqual(['react-dom', 'wouter', 'tailwindcss'])
+        // A live npm block exists for ALL six — including tailwindcss.
+        for (const pkg of ['hono', 'zod', 'react', 'react-dom', 'wouter', 'tailwindcss']) {
+            expect(out).toContain(`### npm: ${pkg}`)
+        }
+        expect(out).toContain('latest: 4.1.0-tailwindcss')
+    })
+
     test('assembles a url block from fetchRaw', async () => {
         const out = await gatherExternalContext('see https://example.com/guide for details', deps, {
             fetchRaw: async ({url}) => ({

@@ -24,6 +24,21 @@ describe('extractEnrichTargets', () => {
         expect(out.packages.length).toBeLessThanOrEqual(3)
         expect(out.urls.length).toBeLessThanOrEqual(3)
     })
+
+    test('versionPackages is a deduped superset past the docs cap (for cheap version lookups)', () => {
+        const out = extractEnrichTargets('`a` `b` `c` `d` `e` `f` `a`')
+        // docs stay capped at 3…
+        expect(out.packages).toEqual(['a', 'b', 'c'])
+        // …but every named dep (deduped, order-preserving) is available for a
+        // version lookup, so deps 4..N aren't silently dropped.
+        expect(out.versionPackages).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+    })
+
+    test('versionPackages caps at ENRICH_VERSION_CAP (12)', () => {
+        const text = Array.from({length: 15}, (_, i) => `\`p${i}\``).join(' ')
+        const out = extractEnrichTargets(text)
+        expect(out.versionPackages.length).toBe(12)
+    })
 })
 
 describe('extractEnrichTargets — services', () => {

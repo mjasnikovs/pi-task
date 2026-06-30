@@ -256,6 +256,7 @@ LIVE-DATA RULE:
 - "### service: <name>" blocks are LIVE web data; authoritative over training data for that service.
 - "### freshness-check skipped" → tag UNKNOWN and say current state needs verification.
 - No npm block + question is about latest/current version → tag UNKNOWN (training data goes stale).
+- VERSION-PIN questions ("pin to X.y vs latest", "which major version") are costly-to-reverse build-shaping choices: unless the spec or an "### npm:" block already settles it (then ANSWER that value), tag UNKNOWN and surface it. NEVER auto-answer a downgrade to an OLDER major "to avoid breaking changes" from memory — that reasoning is exactly the stale-training-data trap. If an "### npm:" block shows a newer major than your instinct, that block is the live latest; do not silently pin an older major the live data and spec never asked for.
 
 TRIAGE — run these checks IN ORDER first. The REVERSIBILITY TEST below applies ONLY to a question that survives all checks as a genuine preference.
 

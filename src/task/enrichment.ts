@@ -22,6 +22,13 @@ const ENRICH_DENYLIST = new Set([
     'rm'
 ])
 const ENRICH_CAP = 3
+// Heavy docs/url fetches stay capped at ENRICH_CAP (each is a worker spawn +
+// page fetch). A live npm VERSION lookup is just one cheap registry GET, so it
+// can cover far more packages — every dependency a task explicitly names should
+// get a grounded latest-version block, not just the first ENRICH_CAP of them. A
+// task that named 6 runtime deps used to leave the 4th–6th (e.g. tailwindcss)
+// with NO live version, so a version question fell back to stale training data.
+const ENRICH_VERSION_CAP = 12
 const ENRICH_SERVICE_HEADER = 'EXTERNAL-DEPENDENCIES'
 const ENRICH_HEADER_LINE_RE = /^[A-Z][A-Z0-9 -]+$/
 const ENRICH_SERVICE_BULLET_RE = /^\s*-\s+(.+?)\s{2,}(.+?)\s*$/
@@ -57,16 +64,25 @@ function parseServices(text: string): Array<{name: string; query: string}> {
 }
 
 export function extractEnrichTargets(text: string): {
+    /** Packages that get a (heavy) docs fetch — capped at ENRICH_CAP. */
     packages: string[]
+    /**
+     * Every named package, up to ENRICH_VERSION_CAP, for a cheap live npm version
+     * lookup. A superset of `packages`; the extras get a version block only (no
+     * docs body). Order-preserving and deduped, same as `packages`.
+     */
+    versionPackages: string[]
     urls: string[]
     services: Array<{name: string; query: string}>
 } {
-    const pkgs = new Set<string>()
+    const pkgs: string[] = []
+    const seen = new Set<string>()
     for (const m of text.matchAll(ENRICH_PKG_RE)) {
         const t = m[1]
-        if (ENRICH_DENYLIST.has(t)) continue
-        pkgs.add(t)
-        if (pkgs.size >= ENRICH_CAP) break
+        if (ENRICH_DENYLIST.has(t) || seen.has(t)) continue
+        seen.add(t)
+        pkgs.push(t)
+        if (pkgs.length >= ENRICH_VERSION_CAP) break
     }
     const urls = new Set<string>()
     for (const m of text.matchAll(ENRICH_URL_RE)) {
@@ -75,5 +91,5 @@ export function extractEnrichTargets(text: string): {
         if (urls.size >= ENRICH_CAP) break
     }
     const services = parseServices(text)
-    return {packages: [...pkgs], urls: [...urls], services}
+    return {packages: pkgs.slice(0, ENRICH_CAP), versionPackages: pkgs, urls: [...urls], services}
 }
