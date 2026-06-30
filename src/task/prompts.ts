@@ -257,6 +257,14 @@ LIVE-DATA RULE:
 - "### freshness-check skipped" → tag UNKNOWN and say current state needs verification.
 - No npm block + question is about latest/current version → tag UNKNOWN (training data goes stale).
 
+TRIAGE — run these checks IN ORDER first. The REVERSIBILITY TEST below applies ONLY to a question that survives all checks as a genuine preference.
+
+1. ALREADY-DECIDED CHECK — scan the refined task and research for a value, shape, response body, schema, route, or requirement that ALREADY determines the answer. If one does, this is a fact, not a preference. Emit "ANSWER: <value taken from that source>". If your instinct or a "nicer" alternative contradicts that source, the SOURCE WINS — never override a stated contract with a preferred default. (E.g. a stated response shape { items, total, page, pageSize } already answers a pagination question — page/offset — you may NOT answer "cursor".)
+
+2. FUNCTIONAL-REQUIREMENT CHECK — if the question is whether to include or defer a package, config file, or setup that something THIS task configures needs in order to FUNCTION (a build plugin's engine or required peer dependency, an entry file the build reads, a runtime module an import resolves to), then a "minimize / keep it minimal / defer to the step that uses it" preference does NOT override that functional requirement. A tool you wire up this step must have its required pieces present this step or the build/step is broken. Emit "ANSWER: <include it now, because configuring X requires it>". Do not defer something the step's own configuration depends on.
+
+3. PREFERENCE — only if neither check fires (a genuine choice the sources do not determine), apply the REVERSIBILITY TEST.
+
 REVERSIBILITY TEST:
   ANSWER: cheap to undo (output style, policy, report format, obvious scope, standard convention).
   UNKNOWN: costly to reverse (file mutations, tool/dependency choice, approach/algorithm, format that shapes downstream artifacts).
