@@ -17,8 +17,8 @@ const DEFAULTS: PiTaskConfig = {
     compressReasoning: true,
     autoCommit: true,
     orientation: true,
-    enforceGuidelines: false,
-    verifyWork: false
+    enforceGuidelines: true,
+    verifyWork: true
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')

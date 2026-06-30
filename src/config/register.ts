@@ -1,10 +1,60 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {SettingsList} from '@earendil-works/pi-tui'
-import type {SettingsListTheme} from '@earendil-works/pi-tui'
+import {SettingsList, visibleWidth} from '@earendil-works/pi-tui'
+import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
 import {registerBridgeCommand} from '../remote/bridge.js'
 import {getConfig, saveConfig, type PiTaskConfig} from './config.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
+
+const CONFIG_TITLE = 'pi-task settings'
+
+/**
+ * Frames a child component (the settings list) in a rounded border with a title
+ * woven into the top edge. Without this the overlay's content sits flush against
+ * the chat scrollback and reads as just more console text; the border gives it a
+ * distinct panel. Layout mirrors {@link renderQuestionBox}'s box chrome: render
+ * the child at the inner width, pad each line so the right edge lines up, then
+ * frame. Input and invalidation are forwarded straight through to the child.
+ */
+class BorderedBox implements Component {
+    constructor(
+        private readonly child: Component & {handleInput(data: string): void},
+        private readonly title: string,
+        private readonly border: (s: string) => string,
+        private readonly titleColor: (s: string) => string
+    ) {}
+
+    render(width: number): string[] {
+        const innerWidth = Math.max(1, width - 4) // "│ " + content + " │"
+        const dash = (n: number) => '─'.repeat(Math.max(0, n))
+
+        // Top border with the title woven in: "╭─ pi-task settings ─…─╮".
+        const tag = ` ${this.title} `
+        const lead = 1 // one dash before the title
+        const rest = width - 2 - lead - visibleWidth(tag)
+        const top =
+            rest >= 0 ?
+                this.border(`╭${dash(lead)}`) + this.titleColor(tag) + this.border(`${dash(rest)}╮`)
+            :   this.border(`╭${dash(width - 2)}╮`)
+
+        const body = this.child.render(innerWidth).map(line => {
+            const pad = innerWidth - visibleWidth(line)
+            const padded = pad > 0 ? line + ' '.repeat(pad) : line
+            return this.border('│ ') + padded + this.border(' │')
+        })
+
+        const bottom = this.border(`╰${dash(width - 2)}╯`)
+        return [top, ...body, bottom]
+    }
+
+    invalidate(): void {
+        this.child.invalidate()
+    }
+
+    handleInput(data: string): void {
+        this.child.handleInput(data)
+    }
+}
 
 const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
     {id: 'remote', label: 'remote', description: 'Remote UI server (QR code, phone access)'},
@@ -80,9 +130,14 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                 () => done(undefined)
             )
 
-            return list
+            return new BorderedBox(
+                list,
+                CONFIG_TITLE,
+                s => theme.fg('borderMuted', s),
+                s => theme.fg('accent', theme.bold(s))
+            )
         },
-        {overlay: true, overlayOptions: {width: 54}}
+        {overlay: true, overlayOptions: {width: 58}}
     )
 }
 
