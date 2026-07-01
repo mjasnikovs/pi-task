@@ -161,7 +161,7 @@ export function registerPiWorkerDocs(
                 }
                 const concatenated = chunks.map(c => c.content).join('\n\n')
                 const prompt = buildProjectPrompt(projectName, params.query, concatenated)
-                const invocation = getPiInvocation([...CHILD_ARGS, prompt])
+                const invocation = getPiInvocation([...CHILD_ARGS], prompt)
                 const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
                 const failure = formatChildFailure(child, 'Project docs lookup aborted.')
@@ -289,7 +289,7 @@ export function registerPiWorkerDocs(
 
             const concatenated = chunks.map(c => c.content).join('\n\n')
             const prompt = buildPrompt(pkg, params.query, concatenated)
-            const invocation = getPiInvocation([...CHILD_ARGS, prompt])
+            const invocation = getPiInvocation([...CHILD_ARGS], prompt)
             const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
             const failure = formatChildFailure(child, 'Docs lookup aborted.')

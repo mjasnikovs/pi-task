@@ -80,7 +80,7 @@ export interface PhaseRunResult {
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
 
-export function childArgs(tools: string, prompt: string): string[] {
+export function childArgs(tools: string): string[] {
     // `--mode json` puts the child into the structured event stream the
     // unified runner parses in `mode: 'json-events'`. Without it the child
     // emits plain text, every line fails JSON.parse, finalText stays empty,
@@ -91,8 +91,12 @@ export function childArgs(tools: string, prompt: string): string[] {
     // instead of `--tools ''` (which pi would reject). Used by pure-judgment
     // phases like critique-triage that should reason only over the text we
     // hand them, never spend time reading the repo.
+    //
+    // The prompt is NOT an argv element: it goes to the child over stdin (see
+    // runChild below / getPiInvocation), so a large inlined-design prompt can't
+    // overflow the OS command-line limit (Windows `spawn ENAMETOOLONG`).
     const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
-    return [...CHILD_BASE_ARGS, '--mode', 'json', ...toolFlags, prompt]
+    return [...CHILD_BASE_ARGS, '--mode', 'json', ...toolFlags]
 }
 
 // Sentinel error thrown when the user dismisses a grill-me dialog.
@@ -116,7 +120,7 @@ export async function runChild(
     onToolCall?: (call: ToolCall) => LoopHit | null,
     spawnFn?: SpawnFn
 ): Promise<PhaseRunResult> {
-    const invocation = getPiInvocation(childArgs(tools, prompt))
+    const invocation = getPiInvocation(childArgs(tools), prompt)
     let loopHit: LoopHit | undefined
 
     const result = await runChildUnified(

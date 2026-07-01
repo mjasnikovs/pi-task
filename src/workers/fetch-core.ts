@@ -66,7 +66,7 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         content: truncated
     })
 
-    const invocation = getPiInvocation([...CHILD_ARGS, prompt])
+    const invocation = getPiInvocation([...CHILD_ARGS], prompt)
     const childResult = await runChild(spawnFn, invocation, input.cwd, input.signal)
 
     if (childResult.aborted) {

@@ -9,6 +9,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {tasksDir, ensureTasksDir, readTaskFile, setTaskSection} from './task-io.js'
 import {extractSection, parseFrontMatter} from './task-parsers.js'
+import {readTextFile} from '../shared/fs-text.js'
 import {RESUMABLE_STATES} from './task-types.js'
 
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
@@ -160,7 +161,7 @@ export async function findResumableAuto(cwd: string): Promise<string | null> {
         const m = AUTO_FILE_RE.exec(f)
         if (!m) continue
         try {
-            const raw = await fsp.readFile(path.join(tasksDir(cwd), f), 'utf8')
+            const raw = await readTextFile(path.join(tasksDir(cwd), f))
             const fm = parseFrontMatter(raw)
             if (!fm) continue
             if (!RESUMABLE_STATES.includes(fm.state)) continue

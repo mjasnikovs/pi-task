@@ -9,6 +9,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {TASKS_DIR_NAME, type TaskFrontMatter} from './task-types.js'
 import {emitFrontMatter, parseFrontMatter, sectionRegex} from './task-parsers.js'
+import {readTextFile} from '../shared/fs-text.js'
 
 // ─── Directory & path helpers ────────────────────────────────────────────────
 
@@ -69,7 +70,10 @@ export async function readTaskFile(
     cwd: string,
     id: string
 ): Promise<{frontMatter: TaskFrontMatter; body: string}> {
-    const raw = await fsp.readFile(taskFilePath(cwd, id), 'utf8')
+    // Normalize CRLF/CR → LF at the read boundary: every parser below (front
+    // matter, body strip, sectionRegex) assumes '\n'. A Windows/autocrlf file
+    // would otherwise fail as "malformed front matter". See shared/fs-text.ts.
+    const raw = await readTextFile(taskFilePath(cwd, id))
     const fm = parseFrontMatter(raw)
     if (!fm) throw new Error(`malformed front matter in ${id}.md`)
     const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, '')

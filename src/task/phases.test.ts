@@ -731,12 +731,13 @@ describe('phaseResearch enrichment DI', () => {
             const spawn: SpawnFn = (_cmd, args) => {
                 const argsArr = args as ReadonlyArray<string>
                 const toolsIdx = argsArr.indexOf('--tools')
-                observed.push({
-                    tools: argsArr[toolsIdx + 1],
-                    prompt: argsArr[argsArr.length - 1]
-                })
                 const proc = makeProc()
                 queueMicrotask(() => {
+                    // Prompt is on stdin (written after spawn returns), tools in argv.
+                    observed.push({
+                        tools: argsArr[toolsIdx + 1],
+                        prompt: proc.stdinData
+                    })
                     proc.stdout!.emit(
                         'data',
                         Buffer.from(
@@ -1258,14 +1259,15 @@ describe('phaseGrill', () => {
             let genCall = 0
             const genPrompts: string[] = []
 
-            const spawn: SpawnFn = (_cmd: string, args: ReadonlyArray<string>) => {
+            const spawn: SpawnFn = (_cmd: string, _args: ReadonlyArray<string>) => {
                 const proc = makeProc()
-                const prompt = args[args.length - 1]
-                const isAuto = prompt.includes('pre-answering a clarifying question')
-                const isGen = prompt.includes('preparing clarifying questions')
-                if (isGen) genPrompts.push(prompt)
-
+                // The prompt arrives on stdin (written by runChild after spawn
+                // returns), so branch on it inside the deferred microtask.
                 queueMicrotask(() => {
+                    const prompt = proc.stdinData
+                    const isAuto = prompt.includes('pre-answering a clarifying question')
+                    const isGen = prompt.includes('preparing clarifying questions')
+                    if (isGen) genPrompts.push(prompt)
                     let text: string
                     if (isAuto) {
                         text = 'ANSWER: yes'
@@ -1312,14 +1314,15 @@ describe('phaseGrill', () => {
             let genCall = 0
             let autoCalls = 0
             const genPrompts: string[] = []
-            const spawn: SpawnFn = (_cmd: string, args: ReadonlyArray<string>) => {
+            const spawn: SpawnFn = (_cmd: string, _args: ReadonlyArray<string>) => {
                 const proc = makeProc()
-                const prompt = args[args.length - 1]
-                const isAuto = prompt.includes('pre-answering a clarifying question')
-                const isGen = prompt.includes('preparing clarifying questions')
-                if (isGen) genPrompts.push(prompt)
-                if (isAuto) autoCalls++
+                // The prompt arrives on stdin; branch on it in the microtask.
                 queueMicrotask(() => {
+                    const prompt = proc.stdinData
+                    const isAuto = prompt.includes('pre-answering a clarifying question')
+                    const isGen = prompt.includes('preparing clarifying questions')
+                    if (isGen) genPrompts.push(prompt)
+                    if (isAuto) autoCalls++
                     let text: string
                     if (isAuto) {
                         text = 'ANSWER: yes'
@@ -1538,10 +1541,11 @@ describe('phaseCritique conditional rewrite', () => {
             const observed: Array<{argv: ReadonlyArray<string>; prompt: string}> = []
             const spawn: SpawnFn = (_cmd, args) => {
                 const argv = args as ReadonlyArray<string>
-                const prompt = argv[argv.length - 1]
-                observed.push({argv, prompt})
                 const proc = makeProc()
                 queueMicrotask(() => {
+                    // Prompt on stdin, argv still carries the tool flags.
+                    const prompt = proc.stdinData
+                    observed.push({argv, prompt})
                     const text =
                         prompt.includes('triaging an implementation spec') ? 'ACCEPTANCE: vague' : (
                             validSpec

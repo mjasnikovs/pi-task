@@ -582,7 +582,7 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     const {pkg, chunks, hitCache, indexingMs} = rawResult
     const concatenated = chunks.map(c => c.content).join('\n\n')
     const prompt = buildPrompt(pkg, input.query, concatenated)
-    const invocation = getPiInvocation([...CHILD_ARGS, prompt])
+    const invocation = getPiInvocation([...CHILD_ARGS], prompt)
     const child = await runChild(spawn, invocation, input.cwd, input.signal)
 
     const parsed = parseChildOutput(child.stdout)

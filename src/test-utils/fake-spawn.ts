@@ -71,10 +71,20 @@ function emitResponse(
     })
 }
 
-export function makeProc(): EventEmitter & ProcLike {
-    const emitter = new EventEmitter() as EventEmitter & ProcLike
+export function makeProc(): EventEmitter & ProcLike & {stdinData: string} {
+    const emitter = new EventEmitter() as EventEmitter & ProcLike & {stdinData: string}
     emitter.stdout = new EventEmitter()
     emitter.stderr = new EventEmitter()
+    // Capture whatever runChild writes to stdin (the prompt, since it no longer
+    // rides on argv). Tests that need the prompt read `stdinData` after the run.
+    emitter.stdinData = ''
+    emitter.stdin = {
+        write: (chunk: string) => {
+            emitter.stdinData += chunk
+            return true
+        },
+        end: () => {}
+    }
     emitter.killed = false
     emitter.kill = () => {
         emitter.killed = true
@@ -109,7 +119,18 @@ export function fakeSpawnQueue(responses: ReadonlyArray<SpawnResponse>): SpawnFn
 export function fakeSpawnByPrompt(match: (args: ReadonlyArray<string>) => SpawnResponse): SpawnFn {
     return ((_cmd: string, args: ReadonlyArray<string>) => {
         const p = makeProc()
-        emitResponse(p as EventEmitter & {stdout: EventEmitter; stderr: EventEmitter}, match(args))
+        // The prompt now arrives on stdin, which runChild writes synchronously
+        // right after this returns — so defer response selection to a microtask
+        // and append the captured prompt as the final args element. Matchers that
+        // read args[args.length - 1] keep working whether the prompt came via
+        // argv (old) or stdin (new); arg-only spawns (git) get nothing appended.
+        queueMicrotask(() => {
+            const argsForMatch = p.stdinData.length > 0 ? [...args, p.stdinData] : args
+            emitResponse(
+                p as EventEmitter & {stdout: EventEmitter; stderr: EventEmitter},
+                match(argsForMatch)
+            )
+        })
         return p
     }) as unknown as SpawnFn
 }

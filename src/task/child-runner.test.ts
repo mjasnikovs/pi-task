@@ -43,29 +43,30 @@ describe('childArgs', () => {
     // it's the only thing pinning the contract between the spawn flags and the
     // runChild parser mode.
     test('includes --mode json so the child emits the event stream the parser expects', () => {
-        const args = childArgs('read', 'hello')
+        const args = childArgs('read')
         const i = args.indexOf('--mode')
         expect(i).toBeGreaterThanOrEqual(0)
         expect(args[i + 1]).toBe('json')
     })
 
-    test('includes --print, --tools <tools>, and the prompt as the last arg', () => {
-        const args = childArgs('read,bash', 'do the thing')
+    test('includes --print and --tools <tools>, and never carries the prompt (stdin-delivered)', () => {
+        const args = childArgs('read,bash')
         expect(args).toContain('--print')
         const t = args.indexOf('--tools')
         expect(t).toBeGreaterThanOrEqual(0)
         expect(args[t + 1]).toBe('read,bash')
-        expect(args[args.length - 1]).toBe('do the thing')
+        // The prompt must NOT be an argv element — it goes over stdin so a large
+        // prompt can't overflow the OS command line (issue #1: spawn ENAMETOOLONG).
+        expect(args).not.toContain('do the thing')
     })
 
     test('an empty tools string emits --no-tools instead of --tools', () => {
-        const args = childArgs('', 'judge this text')
+        const args = childArgs('')
         expect(args).toContain('--no-tools')
         expect(args).not.toContain('--tools')
-        // Still json mode, still prompt last.
+        // Still json mode.
         const i = args.indexOf('--mode')
         expect(args[i + 1]).toBe('json')
-        expect(args[args.length - 1]).toBe('judge this text')
     })
 })
 
@@ -735,8 +736,7 @@ function capturingQueue(responses: ReadonlyArray<QueuedResponse>): {
 } {
     const prompts: string[] = []
     let i = 0
-    const spawn = ((_cmd: string, args: ReadonlyArray<string>) => {
-        prompts.push(String(args[args.length - 1]))
+    const spawn = ((_cmd: string, _args: ReadonlyArray<string>) => {
         const r = responses[Math.min(i, responses.length - 1)]
         i++
         const assistant =
@@ -751,6 +751,17 @@ function capturingQueue(responses: ReadonlyArray<QueuedResponse>): {
         const p = new EventEmitter() as EventEmitter & ProcLike
         p.stdout = new EventEmitter()
         p.stderr = new EventEmitter()
+        // The prompt is delivered on stdin now; capture it on end() to assert on it.
+        let stdinData = ''
+        p.stdin = {
+            write: (chunk: string) => {
+                stdinData += chunk
+                return true
+            },
+            end: () => {
+                prompts.push(stdinData)
+            }
+        }
         p.killed = false
         p.kill = () => {
             p.killed = true

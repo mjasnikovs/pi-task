@@ -30,6 +30,7 @@ import {
     taskFilePath,
     tasksDir
 } from './task-io.js'
+import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
@@ -183,7 +184,9 @@ export async function expandFeatureMentions(cwd: string, feature: string): Promi
         if (rel === '' || seen.has(rel)) continue
         seen.add(rel)
         try {
-            const body = await fsp.readFile(path.resolve(cwd, rel), 'utf8')
+            // Normalize CRLF/CR so an @-mentioned design doc saved on Windows
+            // inlines with LF endings the downstream phase parsers expect.
+            const body = await readTextFile(path.resolve(cwd, rel))
             if (body.trim().length > 0) {
                 blocks.push(`--- contents of ${rel} ---\n${body.trim()}`)
             }

@@ -16,7 +16,15 @@ export const CHILD_BASE_ARGS = [
 
 // ─── Spawn interface ─────────────────────────────────────────────────────────
 
+/** The subset of a child's stdin we use: write the prompt, then close it. */
+export interface WritableLike {
+    write(chunk: string): boolean
+    end(): void
+}
+
 export interface ProcLike extends EventEmitter {
+    /** Present only when the child was spawned with stdin 'pipe' (prompt delivery). */
+    stdin: WritableLike | null
     stdout: EventEmitter | null
     stderr: EventEmitter | null
     killed: boolean
@@ -26,7 +34,7 @@ export interface ProcLike extends EventEmitter {
 export type SpawnFn = (
     command: string,
     args: ReadonlyArray<string>,
-    options: {cwd: string; shell: boolean; stdio: ['ignore', 'pipe', 'pipe']}
+    options: {cwd: string; shell: boolean; stdio: ['ignore' | 'pipe', 'pipe', 'pipe']}
 ) => ProcLike
 
 // ─── Result types ────────────────────────────────────────────────────────────
@@ -255,7 +263,7 @@ export class JsonEventSink {
 
 export function runChild(
     spawn: SpawnFn,
-    invocation: {command: string; args: ReadonlyArray<string>},
+    invocation: {command: string; args: ReadonlyArray<string>; stdin?: string},
     cwd: string,
     signal: AbortSignal | undefined,
     opts?: RunChildOptions
@@ -266,11 +274,23 @@ export function runChild(
         let aborted = false
         const discardStdout = opts?.mode === 'text' && opts.discardStdout === true
 
+        // Deliver the prompt on stdin, not argv: a large prompt (e.g. an inlined
+        // design doc) blows past the OS command-line limit — Windows CreateProcessW
+        // caps it at 32767 chars and Node throws `spawn ENAMETOOLONG`. When a
+        // prompt is present we open stdin as a pipe; otherwise keep it 'ignore'
+        // (git and other arg-only spawns are unaffected). See GitHub issue #1.
+        const usesStdin = invocation.stdin !== undefined
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
             shell: false,
-            stdio: ['ignore', 'pipe', 'pipe']
+            stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
         })
+
+        if (usesStdin) {
+            // pi reads the prompt from stdin and waits for EOF, so write then end.
+            proc.stdin?.write(invocation.stdin as string)
+            proc.stdin?.end()
+        }
 
         // One kill path, shared by user-abort and loop-kill: SIGTERM, then
         // SIGKILL after a grace period if the child ignored the term.

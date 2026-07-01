@@ -166,7 +166,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     let leakRetries = 0
     for (;;) {
         const prompt = hint === null ? input.prompt : `${hint}\n\n${input.prompt}`
-        const invocation = getPiInvocation([...baseArgs, prompt])
+        const invocation = getPiInvocation([...baseArgs], prompt)
         const tStart = Date.now()
         let tFirstByte: number | null = null
         // loop === false turns the guard off entirely (detector is null and no

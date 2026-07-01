@@ -29,6 +29,7 @@ import {
     type PhaseName
 } from './task-types.js'
 import {normaliseTaskId, parseFrontMatter, extractSection} from './task-parsers.js'
+import {readTextFile} from '../shared/fs-text.js'
 import {
     allocateTaskId,
     ensureTasksDir,
@@ -914,7 +915,7 @@ async function handleTaskList(_args: string, ctx: ExtensionCommandContext): Prom
     const rows: Array<{fm: TaskFrontMatter; mtime: number}> = []
     for (const f of taskFiles) {
         try {
-            const raw = await fsp.readFile(path.join(tasksDir(cwd), f), 'utf8')
+            const raw = await readTextFile(path.join(tasksDir(cwd), f))
             const fm = parseFrontMatter(raw)
             if (!fm) continue
             const st = await fsp.stat(path.join(tasksDir(cwd), f))
