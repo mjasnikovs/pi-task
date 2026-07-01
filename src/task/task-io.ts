@@ -76,7 +76,7 @@ export async function readTaskFile(
     const raw = await readTextFile(taskFilePath(cwd, id))
     const fm = parseFrontMatter(raw)
     if (!fm) throw new Error(`malformed front matter in ${id}.md`)
-    const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, '')
+    const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
     return {frontMatter: fm, body}
 }
 

@@ -23,6 +23,7 @@ import {describe, expect, test} from 'bun:test'
 import * as fsp from 'node:fs/promises'
 import {runPhaseChild} from './child-runner.js'
 import {readTaskFile, readSection, writeTaskFile, taskFilePath} from './task-io.js'
+import {parseFrontMatter, extractSection} from './task-parsers.js'
 import {parseTaskList} from './auto-io.js'
 import {findResumableAuto} from './auto-io.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -154,5 +155,34 @@ describe('issue #1 follow-up: CRLF task files must read/parse the same as LF', (
             const found = await findResumableAuto(cwd)
             expect(found).toBe('TASK_AUTO_0001')
         })
+    })
+})
+
+/**
+ * Safety net: the parsers themselves must tolerate CRLF, not only content that
+ * happened to pass through readTextFile. A read site that forgets to normalize
+ * (as the no-arg /task-resume scan did in 0.17.8) then still works. These pin
+ * the pure functions directly on raw CRLF input.
+ */
+describe('issue #1 follow-up: parsers are intrinsically CRLF-tolerant', () => {
+    const rawLF =
+        '---\nid: TASK_0001\nstate: in_progress\nphase: refine\n'
+        + 'created_at: 2026-01-01T00:00:00Z\nupdated_at: 2026-01-01T00:00:01Z\n'
+        + 'title: A title\n---\n## notes\n\nhello\n'
+
+    test('parseFrontMatter parses raw CRLF content (the missed no-arg /task-resume scan path)', () => {
+        const fm = parseFrontMatter(rawLF.replace(/\n/g, '\r\n'))
+        expect(fm).not.toBeNull()
+        expect(fm!.id).toBe('TASK_0001')
+        expect(fm!.phase).toBe('refine')
+        // No stray CR contaminating a value (would break PHASE_INDEX / state checks).
+        expect(fm!.title).toBe('A title')
+        expect(fm!.state).toBe('in_progress')
+    })
+
+    test('extractSection matches a section heading with CRLF endings', () => {
+        const body = '## tasks\n\nfoo\n\n## notes\n\nbar\n'.replace(/\n/g, '\r\n')
+        expect(extractSection(body, 'tasks')).toBe('foo')
+        expect(extractSection(body, 'notes')).toBe('bar')
     })
 })

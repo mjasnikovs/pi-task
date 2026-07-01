@@ -36,10 +36,14 @@ export function emitFrontMatter(fm: TaskFrontMatter): string {
 }
 
 export function parseFrontMatter(content: string): TaskFrontMatter | null {
-    const m = /^---\n([\s\S]*?)\n---\n?/.exec(content)
+    // `\r?\n` throughout so a CRLF/Windows task file parses too. Reads normally
+    // pass through readTextFile (which normalizes to LF), but tolerating CRLF at
+    // the parser itself is the safety net for any read site that forgets to —
+    // exactly the class of miss that shipped in 0.17.8. See shared/fs-text.ts.
+    const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content)
     if (!m) return null
     const obj: Record<string, string> = {}
-    for (const line of m[1].split('\n')) {
+    for (const line of m[1].split(/\r?\n/)) {
         const kv = /^([a-z_]+):\s*(.*)$/.exec(line)
         if (kv) obj[kv[1]] = kv[2]
     }
@@ -73,8 +77,10 @@ export function sectionRegex(heading: string): RegExp {
     // after a long /task-auto run). Keeping blanks in group 2 lets the `.trim()`
     // every reader already applies collapse them, which also self-heals files
     // that already accumulated the gap.
+    // `[ \t]*\r?\n` on the heading line so a CRLF file still matches the section
+    // (belt-and-suspenders alongside read-boundary normalization; see fs-text.ts).
     return new RegExp(
-        `(^## ${escapeRegex(heading)}[ \\t]*\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`,
+        `(^## ${escapeRegex(heading)}[ \\t]*\\r?\\n)([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`,
         'm'
     )
 }

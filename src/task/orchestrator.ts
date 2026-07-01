@@ -964,7 +964,7 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
             const m = /^(TASK_\d+)\.md$/.exec(f)
             if (!m) continue
             try {
-                const raw = await fsp.readFile(path.join(tasksDir(cwd), f), 'utf8')
+                const raw = await readTextFile(path.join(tasksDir(cwd), f))
                 const fm = parseFrontMatter(raw)
                 if (!fm) continue
                 if (!RESUMABLE_STATES.includes(fm.state)) continue
