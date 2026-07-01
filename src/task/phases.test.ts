@@ -6,7 +6,9 @@ import {
     phaseResearch,
     phaseAutoAnswer,
     phaseGrill,
+    phaseCompose,
     phaseCritique,
+    critiqueWithFallback,
     postCommitPhase,
     refineExistingFilesBlock,
     type PhaseConfig,
@@ -1683,6 +1685,120 @@ describe('phaseCritique conditional rewrite', () => {
             const labels = subSteps.map(s => s.label)
             expect(labels).toContain('triage')
             expect(labels).toContain('rewrite')
+        })
+    })
+})
+
+describe('phaseCompose VERIFY block gate', () => {
+    // The exact shape that failed TASK_0022: GOAL/CONSTRAINTS/ACCEPTANCE all
+    // present, but the `VERIFY:` header has no fenced command block after it.
+    // validateSpecShape accepts this (header exists); parseVerifyBlock rejects
+    // it (no runnable commands). Compose must apply the stricter bar so it never
+    // hands a header-only draft to the downstream gates that reject it.
+    const draftHeaderOnly =
+        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n'
+    const draftRunnable =
+        'GOAL\n  build it\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n```sh\nnpm test\n```\n'
+
+    test('a bare `VERIFY:` header with no fenced block is rejected and retried, then throws compose_invalid', async () => {
+        await withTmpTaskDir(async cwd => {
+            const promptsSeen: string[] = []
+            const spawn = fakeSpawnByPrompt(args => {
+                promptsSeen.push(args[args.length - 1] as string)
+                return agentEndResponse(draftHeaderOnly)
+            })
+            await expect(
+                phaseCompose(
+                    {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                    'refined',
+                    'research',
+                    'qa'
+                )
+            ).rejects.toThrow('compose_invalid')
+            // Emphasis retry burned before giving up — two attempts, not one.
+            expect(promptsSeen.length).toBe(2)
+            // The retry was told what was wrong so it can fix the VERIFY block.
+            expect(promptsSeen[1]).toContain('VERIFY block')
+        })
+    })
+
+    test('a header-only draft recovers when the retry supplies a runnable VERIFY block', async () => {
+        await withTmpTaskDir(async cwd => {
+            let call = 0
+            const spawn = fakeSpawnByPrompt(() => {
+                call++
+                return agentEndResponse(call === 1 ? draftHeaderOnly : draftRunnable)
+            })
+            const out = await phaseCompose(
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                'refined',
+                'research',
+                'qa'
+            )
+            expect(out).toBe(draftRunnable.trim())
+            expect(call).toBe(2)
+        })
+    })
+
+    test('a first-try draft with a runnable VERIFY block passes without a retry', async () => {
+        await withTmpTaskDir(async cwd => {
+            let call = 0
+            const spawn = fakeSpawnByPrompt(() => {
+                call++
+                return agentEndResponse(draftRunnable)
+            })
+            const out = await phaseCompose(
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                'refined',
+                'research',
+                'qa'
+            )
+            expect(out).toBe(draftRunnable.trim())
+            expect(call).toBe(1)
+        })
+    })
+})
+
+describe('critiqueWithFallback VERIFY-less draft guard', () => {
+    const noVerifyDraft = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n'
+    const runnableDraft =
+        'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n\nVERIFY:\n```sh\nnpm test\n```\n'
+
+    const makeP = (spec: string): PhaseContext => ({
+        cwd: '',
+        id: 'TASK_TEST',
+        ctx: stubCtx,
+        widgetState: stubWidgetState,
+        rawPrompt: '',
+        refined: 'refined',
+        research: '',
+        qa: 'qa',
+        spec
+    })
+
+    test('re-throws no_verify_block instead of shipping a compose draft that also lacks a VERIFY block', async () => {
+        await withTmpTaskDir(async cwd => {
+            // Every child (triage is skipped for a VERIFY-less draft; the rewrite
+            // then runs) returns a draft with no fenced VERIFY, so phaseCritique
+            // throws no_verify_block. The compose draft (p.spec) also lacks one,
+            // so falling back to it would persist a spec the handoff gate rejects
+            // and resume can't heal — the guard must re-throw.
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(noVerifyDraft))
+            const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
+            await expect(critiqueWithFallback(deps, makeP(noVerifyDraft))).rejects.toThrow(
+                'no_verify_block'
+            )
+        })
+    })
+
+    test('falls back to the compose draft when that draft carries a runnable VERIFY block', async () => {
+        await withTmpTaskDir(async cwd => {
+            // The rewrite keeps failing to emit a VERIFY block, but the compose
+            // draft has one — so the fallback is safe and returns it verbatim.
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(noVerifyDraft))
+            const deps = {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn}
+            const out = await critiqueWithFallback(deps, makeP(runnableDraft))
+            expect(out).toBe(runnableDraft)
         })
     })
 })

@@ -852,7 +852,18 @@ export async function phaseCompose(
             // value starts at GOAL.
             const stripped = stripSpecPreamble(text)
             const problem = validateSpecShape(stripped)
-            return problem ? {ok: false, problem} : {ok: true, value: stripped}
+            if (problem) return {ok: false, problem}
+            // validateSpecShape only checks the VERIFY *header* exists. The
+            // critique gate and the handoff gate both require a *runnable*
+            // fenced block (parseVerifyBlock). Enforce the same bar here so a
+            // draft ending in a bare `VERIFY:` retries with emphasis now,
+            // instead of passing compose and being rejected downstream — which
+            // otherwise leaves a persisted VERIFY-less spec that resume can't
+            // heal.
+            if (parseVerifyBlock(stripped) === null) {
+                return {ok: false, problem: 'VERIFY block has no runnable ```bash fenced commands'}
+            }
+            return {ok: true, value: stripped}
         },
         problem => new Error(`compose_invalid: ${problem}`)
     )
@@ -931,6 +942,14 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg !== 'no_verify_block') throw err
+        // Fall back to the compose draft — but only if it actually carries a
+        // runnable VERIFY block. Critique reaches its rewrite path precisely
+        // when the compose draft lacked one (triage is skipped in that case),
+        // so returning that same draft would persist a VERIFY-less spec the
+        // handoff gate rejects and resume can't heal. Compose now enforces a
+        // parseable VERIFY, so this should hold; keep the guard so a regression
+        // fails the run cleanly instead of shipping a broken spec.
+        if (parseVerifyBlock(p.spec) === null) throw err
         p.ctx.ui.notify(
             "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",
             'warning'
