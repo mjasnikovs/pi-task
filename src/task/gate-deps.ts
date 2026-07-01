@@ -21,6 +21,7 @@ import {tasksDir, readTaskFile} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
+import {runRepoHealthCheck} from './repo-health-check.js'
 import {researchResolution} from './verify-resolution.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {formatLoopHint} from './child-runner.js'
@@ -230,7 +231,11 @@ export function buildGateDeps(params: {
                 cwd: cwd2,
                 signal,
                 spec,
-                runChild: makeGateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log')
+                runChild: makeGateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log'),
+                // Deterministic whole-repo static-analysis gate — runs the project's
+                // own lint/typecheck and fails on a real non-zero exit, independent of
+                // the model-authored VERIFY block (which may not lint at all).
+                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2))
             })
         },
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {

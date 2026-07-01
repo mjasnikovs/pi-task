@@ -201,6 +201,15 @@ export interface VerificationDeps {
     /** Runs the verification child and returns its assistant text. Injected so
      *  the orchestrator wires the real child runner and tests use a fake. */
     runChild: (tools: string, prompt: string, signal?: AbortSignal) => Promise<string>
+    /**
+     * DETERMINISTIC whole-repo static-analysis gate (see repo-health-check.ts). Runs
+     * the project's OWN lint/typecheck command and lets its real exit code decide —
+     * independent of the model-authored VERIFY block, so a repo-wide lint failure can
+     * never be narrowed away to "not my files". A non-zero result short-circuits to a
+     * FAIL (the existing verify-FAIL outcome → the AUTOFIX/ACCEPT/dismiss picker).
+     * Injected so tests fake it; ABSENT → skipped (a pass), keeping the pass path a
+     * pure no-op for callers/tests that do not wire it. */
+    repoHealth?: () => Promise<{ok: boolean; reason: string}>
 }
 
 /**
@@ -210,6 +219,16 @@ export interface VerificationDeps {
  * USER_CANCELLED handler reports a clean "cancelled — resume").
  */
 export async function runWorkVerification(deps: VerificationDeps): Promise<VerifyOutcome> {
+    // DETERMINISTIC gate FIRST: run the project's own whole-repo static analysis and
+    // let its exit code decide, before spending a model turn. This catches the class
+    // the model gate misses — a task whose composed VERIFY block never lints (proven
+    // 5/5 false-PASS live) — because it does not depend on that block. A fail is the
+    // ordinary verify-FAIL outcome, so it flows into the existing resolution picker.
+    // Absent dep, or a no-op result (no tooling to run), falls through to the model.
+    if (deps.repoHealth) {
+        const h = await deps.repoHealth()
+        if (!h.ok) return {ok: false, reason: `repo health: ${h.reason}`}
+    }
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify'}
     }

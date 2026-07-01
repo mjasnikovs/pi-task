@@ -177,6 +177,45 @@ describe('runWorkVerification', () => {
         expect(out.reason).toContain('could not run')
     })
 
+    test('repoHealth FAIL short-circuits to blocked — model child never runs', async () => {
+        let childRan = false
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            repoHealth: async () => ({ok: false, reason: '`bun run lint` exited 1'}),
+            runChild: async () => {
+                childRan = true
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('repo health')
+        expect(out.reason).toContain('bun run lint')
+        // The deterministic fail is authoritative; do not spend a model turn.
+        expect(childRan).toBe(false)
+    })
+
+    test('repoHealth PASS falls through to the model verdict', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            repoHealth: async () => ({ok: true, reason: 'static checks passed'}),
+            runChild: async () => 'WORK-VERIFIED: FAIL behavior wrong'
+        })
+        expect(out).toEqual({ok: false, reason: 'work did not verify: behavior wrong'})
+    })
+
+    test('repoHealth FAIL blocks even a spec-less task (no VERIFY block to lean on)', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: null,
+            repoHealth: async () => ({ok: false, reason: '`bun run lint` exited 1'}),
+            runChild: async () => 'WORK-VERIFIED: PASS'
+        })
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('repo health')
+    })
+
     test('user cancel propagates (not swallowed as a fail)', async () => {
         await expect(
             runWorkVerification({
