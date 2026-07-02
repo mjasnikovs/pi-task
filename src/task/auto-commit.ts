@@ -19,11 +19,11 @@ function firstLine(s: string): string {
     return (line ?? s).trim()
 }
 
-async function git(
+export async function git(
     cwd: string,
     args: string[],
     signal: AbortSignal | undefined,
-    spawnFn: SpawnFn | undefined
+    spawnFn?: SpawnFn
 ): Promise<{stdout: string; stderr: string; exitCode: number; aborted: boolean}> {
     const r = await runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
     return {stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, aborted: r.aborted}

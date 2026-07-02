@@ -163,8 +163,9 @@ export interface AutoLoaderState {
      *  numbered clarify/decompose steps); 'enforce' is the per-task guideline
      *  pass and 'verify' is the per-task work-verification pass, neither of which
      *  has step numbering. 'recommend' is the read-only research that picks the
-     *  recommended action after a verify FAIL. */
-    kind?: 'planning' | 'enforce' | 'verify' | 'recommend'
+     *  recommended action after a verify FAIL. 'lint-fix' is the bounded fix pass
+     *  for a repo-health verify FAIL. */
+    kind?: 'planning' | 'enforce' | 'verify' | 'recommend' | 'lint-fix'
 }
 
 export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): string[] {
@@ -174,6 +175,7 @@ export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): s
         s.kind === 'enforce' ? `enforcing guidelines · ${elapsed}`
         : s.kind === 'verify' ? `verifying work · ${elapsed}`
         : s.kind === 'recommend' ? `assessing the failure · ${elapsed}`
+        : s.kind === 'lint-fix' ? `fixing static findings · ${elapsed}`
         : `planning ${s.stepNum}/${s.stepTotal} ${s.step} · ${elapsed}`
     if (s.contextUsage) {
         const ctxDetail = formatContextDetail(s.contextUsage, theme)

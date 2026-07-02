@@ -127,8 +127,29 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * Build the verification child's prompt. Kept pure so the wording is unit-tested
  * without spawning pi. The contract: run the spec's own verification in the real
  * workspace, judge against ACCEPTANCE, and end on exactly one verdict line.
+ *
+ * `probeFindings` are the deterministic self-verification probe results (see
+ * substitution-probe.ts): the TEST-THE-COPY class is caught 5/5 only when the
+ * prompt carries both the rule (3b) AND a concrete finding naming the suspect
+ * file — the rule alone got 2/5 attention on the live model. The findings are
+ * pure git shape (test files the task itself changed), so the mandate is
+ * language- and framework-agnostic.
  */
-export function buildVerifyPrompt(spec: string): string {
+export function buildVerifyPrompt(spec: string, probeFindings?: string[]): string {
+    const probeBlock =
+        probeFindings && probeFindings.length > 0 ?
+            [
+                'SELF-VERIFICATION NOTICE (deterministic, computed by the orchestrator from the diff):',
+                'this task wrote or changed the very tests whose green result would bless it:',
+                ...probeFindings.map(f => `- ${f}`),
+                'A green run of self-authored tests is NOT sufficient verification. Before any PASS',
+                'you MUST confirm these tests exercise the REAL shipped artifact: drive 1-2 tested',
+                'behaviors directly against the real app / module / entry point and judge what IT',
+                'returns. Tests that intercept, re-implement, or stub the artifact prove only the',
+                'copy (rule 3b below).',
+                ''
+            ]
+        :   []
     return [
         'You are a strict verification pass running right after an AI coding agent',
         'finished a task and committed it. The agent is known to mark work "done"',
@@ -142,6 +163,7 @@ export function buildVerifyPrompt(spec: string): string {
         'THE TASK SPEC (its ACCEPTANCE criteria and VERIFY block are the contract):',
         spec.trim(),
         '',
+        ...probeBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
@@ -171,6 +193,14 @@ export function buildVerifyPrompt(spec: string): string {
         '   never executed is NOT a PASS — a static match cannot prove an artifact works, only',
         '   running it can.',
         '',
+        '3b. SUBSTITUTION: a test suite (or any check) shipped by the work counts as verification',
+        "   ONLY if it exercises the real shipped code paths. If the work's own tests re-implement",
+        '   logic inline, intercept or stub the artifact behind their own server or handlers, or',
+        '   import the real module and then never call it, a green suite proves only the copy —',
+        '   NOT the deliverable. Spot-check this: pick 1-2 tested behaviors and drive the REAL',
+        '   shipped artifact directly (the real app / module / entry point). If the real artifact',
+        '   fails where the tests pass, report FAIL and name the bypass.',
+        '',
         '4. Treat the ACCEPTANCE criteria as the bar. If a command fails, or its real output',
         '   contradicts an ACCEPTANCE criterion, the work has NOT verified.',
         '',
@@ -190,10 +220,23 @@ export function buildVerifyPrompt(spec: string): string {
         '   not load, a wrong default, a command that cannot run unaided) is a defect, not an',
         '   environment gap.',
         '',
+        '5b. EXTERNAL SERVICE STATE IS PART OF "AS SHIPPED": you may probe and read an external',
+        '   service, but you must NOT create, alter, or repair its schema or data to make the',
+        '   artifact work — no ALTER TABLE, CREATE TABLE, manual INSERT/UPDATE fixes, or ad-hoc',
+        "   DDL. You may apply only the project's OWN migration/schema files, exactly as shipped.",
+        "   If the shipped code needs schema or data that the project's own files do not create,",
+        '   that is a FAIL naming the gap. Any schema surgery you performed to reach green IS the',
+        '   defect.',
+        '',
         '6. If the spec legitimately has no runnable verification (a pure docs / config change',
         '   with nothing to build or run), validating it cleanly is a PASS.',
         '',
         '7. Do NOT edit anything to make a check pass. Report what you actually saw.',
+        '',
+        'VERDICT DISCIPLINE: the verdict must follow mechanically from your findings. If ANY',
+        'acceptance criterion is unmet — a required function absent, required data not persisted,',
+        'a required behavior missing — the verdict is FAIL, even if typecheck and lint are green',
+        'and even if the gap seems minor. Never downgrade an unmet criterion to a warning note.',
         '',
         'When you are done, output EXACTLY ONE of these as the final line:',
         "  WORK-VERIFIED: PASS              (the project's own command, run unaided, met the spec)",
@@ -237,6 +280,12 @@ export interface VerificationDeps {
      * Injected so tests fake it; ABSENT → skipped (a pass), keeping the pass path a
      * pure no-op for callers/tests that do not wire it. */
     repoHealth?: () => Promise<{ok: boolean; reason: string}>
+    /**
+     * DETERMINISTIC substitution probe (see substitution-probe.ts): scans the task's
+     * changed test files for test-the-copy shapes and returns finding lines to inject
+     * into the child's prompt. A/B-proven load-bearing: the prompt rule alone caught
+     * the class 2/5, rule + probe finding 5/5. ABSENT or empty → no probe block. */
+    probe?: () => Promise<string[]>
 }
 
 /**
@@ -259,9 +308,23 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify'}
     }
+    // Substitution probe findings feed the prompt; a probe failure must never block
+    // verification (it is an optional sharpener, the gate still runs without it).
+    let findings: string[] = []
+    if (deps.probe) {
+        try {
+            findings = await deps.probe()
+        } catch {
+            findings = []
+        }
+    }
     let text: string
     try {
-        text = await deps.runChild(VERIFY_TOOLS, buildVerifyPrompt(deps.spec), deps.signal)
+        text = await deps.runChild(
+            VERIFY_TOOLS,
+            buildVerifyPrompt(deps.spec, findings),
+            deps.signal
+        )
     } catch (err) {
         if (err instanceof Error && err.message === USER_CANCELLED) throw err
         const msg = err instanceof Error ? err.message : String(err)

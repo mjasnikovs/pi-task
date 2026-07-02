@@ -104,6 +104,51 @@ describe('buildVerifyPrompt', () => {
         expect(p).toMatch(/is reachable, the exception\s*\n?\s*does not apply/)
         expect(p).toMatch(/genuinely absent/)
     })
+
+    test('forbids test-the-copy: substitution rule always present (A/B: rule + probe = 5/5)', () => {
+        // Regression guard for the mx5 test-the-copy class: "integration tests"
+        // re-implemented every protected route inline (own Bun.serve / fake Hono),
+        // ran 26/26 green, and the old prompt false-PASSed 5/5 on the real tree.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        expect(p).toContain('substitution')
+        expect(p).toMatch(/proves only the copy/)
+        expect(p).toMatch(/import the real module and then never call it/)
+        expect(p).toMatch(/drive the real\s*\n?\s*shipped artifact/)
+        expect(p).toMatch(/name the bypass/)
+    })
+
+    test('injects deterministic probe findings as a self-verification mandate', () => {
+        const findings = [
+            'src/test/auth.test.ts (+712 lines) — a test file this task authored or changed itself…',
+            'src/test/request.ts (+941 lines) — a test file this task authored or changed itself…'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', findings)
+        expect(p).toContain('SELF-VERIFICATION NOTICE')
+        expect(p).toContain('- src/test/auth.test.ts (+712 lines)')
+        expect(p).toContain('- src/test/request.ts (+941 lines)')
+        expect(p).toContain('you MUST confirm these tests exercise the REAL shipped artifact')
+        // No findings → no probe block at all (empty array and undefined alike).
+        expect(buildVerifyPrompt('GOAL\nx', [])).not.toContain('SELF-VERIFICATION NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SELF-VERIFICATION NOTICE')
+    })
+
+    test('external service STATE is as-shipped: schema surgery is forbidden', () => {
+        // Regression guard for the observed DB-repair loophole: children (and the
+        // live impl turn) ALTER TABLEd the shared test DB to make broken work pass.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        expect(p).toContain('alter table')
+        expect(p).toMatch(/schema surgery[\s\S]*?is the\s*\n?\s*defect/)
+        expect(p).toMatch(/own migration\/schema files/)
+    })
+
+    test('verdict discipline: an unmet acceptance criterion is a FAIL, not a warning', () => {
+        // Regression guard for verdict leniency: a live child enumerated two real
+        // acceptance violations as warnings and PASSed anyway.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        expect(p).toContain('verdict discipline')
+        expect(p).toMatch(/follow mechanically from your findings/)
+        expect(p).toMatch(/never downgrade an unmet criterion/)
+    })
 })
 
 describe('parseVerifyVerdict', () => {
@@ -159,6 +204,39 @@ describe('runWorkVerification', () => {
             runChild: async () => 'WORK-VERIFIED: PASS'
         })
         expect(out.ok).toBe(true)
+    })
+
+    test('probe findings reach the child prompt; a probe failure never blocks', async () => {
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            probe: () =>
+                Promise.resolve([
+                    'src/test/a.test.ts constructs its OWN server/app (Bun.serve(...))'
+                ]),
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(prompt).toContain('SELF-VERIFICATION NOTICE')
+        expect(prompt).toContain('src/test/a.test.ts')
+
+        // Probe throwing must degrade to "no probe block", not a failed gate.
+        let prompt2 = ''
+        const out2 = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            probe: () => Promise.reject(new Error('git broke')),
+            runChild: async (_t, p) => {
+                prompt2 = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out2.ok).toBe(true)
+        expect(prompt2).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
     test('FAIL verdict → blocked with reason', async () => {

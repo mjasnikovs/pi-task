@@ -18,11 +18,13 @@ import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
 import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
-import {gitCommitAll, gitDropLastCommit} from './auto-commit.js'
+import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {researchResolution} from './verify-resolution.js'
+import {findSubstitutionSuspects, type ChangedFile} from './substitution-probe.js'
+import {runBoundedLintFix} from './lint-fix.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {formatLoopHint} from './child-runner.js'
 import {getConfig} from '../config/config.js'
@@ -32,6 +34,67 @@ import {resolveContextUsage} from './context-usage.js'
 /** A function that re-runs a task's implementation turn (AUTOFIX). Injected by the
  *  command so this module stays free of the orchestrators (avoids an import cycle). */
 export type RunTaskFn = GateDeps['runTask']
+
+/** Keep the gate machinery's own artifacts out of every git pathspec below. */
+const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
+
+const splitLines = (s: string): string[] =>
+    s
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+
+/** Parse `git diff --numstat` output into {path, addedLines} (binary files → 0). */
+const parseNumstat = (stdout: string): ChangedFile[] =>
+    splitLines(stdout).flatMap(line => {
+        const [added, , ...rest] = line.split('\t')
+        const p = rest.join('\t')
+        if (!p) return []
+        const n = Number.parseInt(added, 10)
+        return [{path: p, addedLines: Number.isNaN(n) ? 0 : n}]
+    })
+
+/**
+ * Collect the task's changed files as pure GIT SHAPE — path + added-line count,
+ * no content, no language parsing — for the self-verification probe. Before the
+ * task commit the work is the tree-vs-HEAD diff (+ untracked files, counted from
+ * disk); on the post-enforce re-verify the tree is clean, so fall back to the last
+ * commit. Failures degrade to an empty list — the probe is a sharpener, never a
+ * blocker.
+ */
+export async function collectChangedFiles(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<ChangedFile[]> {
+    const tracked = await git(
+        cwd,
+        ['diff', '--numstat', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    const files = tracked.exitCode === 0 ? parseNumstat(tracked.stdout) : []
+    const untracked = await git(
+        cwd,
+        ['ls-files', '--others', '--exclude-standard', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    for (const name of splitLines(untracked.exitCode === 0 ? untracked.stdout : '')) {
+        try {
+            const content = await fsp.readFile(path.join(cwd, name), 'utf8')
+            files.push({path: name, addedLines: content.split('\n').length})
+        } catch {
+            // unreadable/binary — nothing to report
+        }
+    }
+    if (files.length === 0) {
+        const last = await git(
+            cwd,
+            ['diff', '--numstat', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+            signal
+        )
+        return last.exitCode === 0 ? parseNumstat(last.stdout) : []
+    }
+    return files
+}
 
 /**
  * Build the gate deps for one command run. `runTask` is the orchestrator's
@@ -62,7 +125,7 @@ export function buildGateDeps(params: {
             gateCtx: ExtensionCommandContext,
             cwd2: string,
             taskTitle: string,
-            kind: 'verify' | 'recommend',
+            kind: 'verify' | 'recommend' | 'lint-fix',
             logFile: string
         ) =>
         async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
@@ -238,8 +301,40 @@ export function buildGateDeps(params: {
                 // Deterministic whole-repo static-analysis gate — runs the project's
                 // own lint/typecheck and fails on a real non-zero exit, independent of
                 // the model-authored VERIFY block (which may not lint at all).
-                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2))
+                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2)),
+                // Deterministic self-verification probe: test files the task itself
+                // authored/changed become prompt-level findings mandating the child
+                // to drive the real artifact before trusting their green result.
+                probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects)
             })
+        },
+        lintFix: (fixCtx, cwd2, taskTitle, failReason) =>
+            runBoundedLintFix({
+                cwd: cwd2,
+                signal,
+                failReason,
+                runChild: makeGateChild(fixCtx, cwd2, taskTitle, 'lint-fix', 'verify-debug.log'),
+                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2)),
+                git: async args => {
+                    const r = await git(cwd2, args, signal)
+                    return {exitCode: r.exitCode, stdout: r.stdout}
+                }
+            }),
+        // Deterministic static check + tree helpers for the enforce pre-commit gate.
+        repoHealth: cwd2 => Promise.resolve(runRepoHealthCheck(cwd2)),
+        dirty: async cwd2 => {
+            const r = await git(
+                cwd2,
+                ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR],
+                signal
+            )
+            return r.exitCode === 0 && r.stdout.trim().length > 0
+        },
+        discardEdits: async cwd2 => {
+            // Restore tracked files to HEAD and drop files the pass created; the
+            // .pi-tasks trail/log writes made during the pass survive both.
+            await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
+            await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
         },
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the

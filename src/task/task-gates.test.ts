@@ -382,3 +382,173 @@ test('record: enforce skip (nothing committed) is recorded', async () => {
         ])
     })
 })
+
+// ─── Bounded lint-fix (graduated resolution for repo-health FAILs) ───────────
+
+test('lint-fix: repo-health FAIL → one bounded fix, re-verify PASS, no picker', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let fixCalls = 0
+        let verifyCalls = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => {
+                verifyCalls++
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: false, reason: 'repo health: `bun run lint` exited 1'}
+                    :   {ok: true}
+                )
+            },
+            lintFix: () => {
+                fixCalls++
+                return Promise.resolve({ok: true})
+            },
+            // The picker must never open: recommend would be its first step.
+            recommend: () => Promise.reject(new Error('picker path must not run'))
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(fixCalls).toBe(1)
+        expect(verifyCalls).toBe(2)
+        expect(trail).toContain('lint-fix: applied — re-verifying')
+    })
+})
+
+test('lint-fix: not applied → falls through to the picker; attempted only once', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let fixCalls = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
+            lintFix: () => {
+                fixCalls++
+                return Promise.resolve({ok: false, reason: 'revert-guard: fix pass discarded work'})
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'static findings'})
+        })
+        // No queueSelect → picker dismissed → paused. lintFix must not retry.
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        expect(fixCalls).toBe(1)
+        expect(trail).toContain('lint-fix: not applied (revert-guard: fix pass discarded work)')
+    })
+})
+
+test('lint-fix: NOT attempted for a non-health verify FAIL', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let fixCalls = 0
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: false, reason: 'work did not verify: route 500s'}),
+            lintFix: () => {
+                fixCalls++
+                return Promise.resolve({ok: true})
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        expect(fixCalls).toBe(0)
+    })
+})
+
+// ─── Enforce pre-commit repo-health gate ─────────────────────────────────────
+
+test('enforce edits failing repo health are discarded BEFORE commit (no cycle)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const commits: string[] = []
+        let discarded = 0
+        let reverted = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => Promise.resolve({ok: true}), // clean pass → EDIT mode
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(true),
+            repoHealth: () => Promise.resolve({ok: false, reason: '`bun run lint` exited 1'}),
+            discardEdits: () => {
+                discarded++
+                return Promise.resolve()
+            },
+            revert: () => {
+                reverted++
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(discarded).toBe(1)
+        expect(reverted).toBe(0) // the commit+differential+revert cycle never ran
+        // Only the task snapshot committed — never an ENFORCE GUIDELINES commit.
+        expect(commits).toEqual(['task: A (TASK_0006)'])
+        expect(trail).toContain(
+            'enforce: edits discarded pre-commit (repo health: `bun run lint` exited 1)'
+        )
+        // P1b: verdict line no longer claims a bare "clean" when edits exist.
+        expect(trail).toContain('enforce(edit): clean — edits in tree')
+    })
+})
+
+test('enforce edits passing repo health commit + differential-guard as before', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const commits: string[] = []
+        const deps = makeDeps({
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(true),
+            repoHealth: () => Promise.resolve({ok: true, reason: 'static checks passed'})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(commits).toEqual(['task: A (TASK_0006)', 'ENFORCE GUIDELINES: A (TASK_0006)'])
+    })
+})
+
+test('enforce with a clean tree (no edits) skips the pre-commit health check', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let healthCalls = 0
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(false),
+            repoHealth: () => {
+                healthCalls++
+                return Promise.resolve({ok: true, reason: ''})
+            },
+            commit: (_c, m) =>
+                Promise.resolve(
+                    m.startsWith('ENFORCE') ?
+                        {committed: false, reason: 'nothing to commit'}
+                    :   {committed: true}
+                )
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(healthCalls).toBe(0)
+    })
+})

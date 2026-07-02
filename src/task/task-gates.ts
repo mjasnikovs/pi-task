@@ -106,6 +106,34 @@ export interface GateDeps {
      */
     revert?: (cwd: string) => Promise<void>
     /**
+     * BOUNDED fix for a repo-health verify FAIL: a small read,edit,bash child fixes
+     * exactly the static findings (revert-guarded — see lint-fix.ts), instead of the
+     * full implementation re-run AUTOFIX reaches for. Validated live: 64s/106s to
+     * lint-clean where the impl re-run burned 36–56 min and did not converge. Runs
+     * at most once per gate sequence; not-applied falls through to the picker.
+     * Absent → the loop goes straight to recommend/picker as before.
+     */
+    lintFix?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        taskTitle: string,
+        failReason: string
+    ) => Promise<{ok: boolean; reason?: string}>
+    /**
+     * Deterministic whole-repo static check (repo-health), used as the PRE-COMMIT
+     * gate on an edit-mode enforce pass: live data shows enforce edits broke the
+     * repo's own lint in 11 of 16 tasks, each costing a commit + model re-verify +
+     * revert cycle. Checking before committing skips that cycle. Absent → the old
+     * commit-then-differential path runs unchanged.
+     */
+    repoHealth?: (cwd: string) => Promise<{ok: boolean; reason: string}>
+    /** Does the working tree hold changes (excluding .pi-tasks)? Lets the pre-commit
+     *  health check run only when the enforce pass actually edited something. */
+    dirty?: (cwd: string) => Promise<boolean>
+    /** Restore the working tree to HEAD (excluding .pi-tasks) — discards enforce
+     *  edits that failed the pre-commit health check, before they are committed. */
+    discardEdits?: (cwd: string) => Promise<void>
+    /**
      * Append one line to the task's durable gate trail (`## gates` in the task
      * file). Every gate outcome — each verify verdict, the user's FAIL resolution,
      * the commit result, enforce mode + verdict, the differential guard's decision —
@@ -226,8 +254,29 @@ export async function runGatesForTask(
         // A FAIL no longer dead-stops: offer the boxed AUTOFIX / ACCEPT / dismiss
         // picker. The USER always decides; AUTOFIX loops straight back to the gate
         // as many times as they keep choosing it (no attempt cap).
+        let lintFixAttempted = false
         while (!verified.ok) {
             const failReason = verified.reason ?? 'did not verify'
+            // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
+            // bounded fix attempt before the picker — smallest tool first. Applied →
+            // re-verify and re-enter the loop on the fresh verdict; not applied (guard
+            // trip, no convergence) → fall through to the ordinary picker unchanged.
+            if (!lintFixAttempted && deps.lintFix && failReason.startsWith('repo health:')) {
+                lintFixAttempted = true
+                active.ui.notify(
+                    `${p.tag}: static findings on "${p.title}" — attempting bounded lint fix…`,
+                    'info'
+                )
+                const fix = await deps.lintFix(active, p.cwd, p.title, failReason)
+                await rec(
+                    `lint-fix: ${fix.ok ? 'applied — re-verifying' : `not applied (${fix.reason ?? 'failed'})`}`
+                )
+                if (fix.ok) {
+                    verified = await deps.verify(active, p.cwd, p.title, p.taskId)
+                    await rec(verdictLine(verified))
+                    continue
+                }
+            }
             const recOutcome: ResolutionOutcome =
                 deps.recommend ?
                     await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
@@ -299,8 +348,12 @@ export async function runGatesForTask(
             'info'
         )
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
+        // The child's verdict and its edits are independent facts: the pass has been
+        // observed declaring "clean" while having edited files (which then get
+        // committed as fixes) — record both so the trail cannot contradict itself.
+        const editsMade = mode === 'edit' && deps.dirty ? await deps.dirty(p.cwd) : undefined
         await rec(
-            `enforce(${mode}): ${verdict.ok ? `clean${verdict.reason ? ` (${verdict.reason})` : ''}` : (verdict.reason ?? 'not clean')}`
+            `enforce(${mode}): ${verdict.ok ? `clean${verdict.reason ? ` (${verdict.reason})` : ''}` : (verdict.reason ?? 'not clean')}${editsMade ? ' — edits in tree' : ''}`
         )
         if (!verdict.ok) {
             active.ui.notify(
@@ -308,7 +361,32 @@ export async function runGatesForTask(
                 'warning'
             )
         }
-        if (mode === 'edit') {
+        // PRE-COMMIT health gate on enforce edits: live data shows the edit pass broke
+        // the repo's own lint in 11/16 tasks, each burning a commit + model re-verify +
+        // revert cycle. A deterministic static check BEFORE committing skips the cycle
+        // and discards the bad edits outright. Only runs when the tree is actually
+        // dirty (or dirtiness is unknowable); the differential guard below still
+        // catches behavioral regressions the static check cannot see.
+        let enforceEditsBlocked = false
+        if (mode === 'edit' && deps.repoHealth && editsMade !== false) {
+            const h = await deps.repoHealth(p.cwd)
+            if (!h.ok) {
+                enforceEditsBlocked = true
+                if (deps.discardEdits) {
+                    await deps.discardEdits(p.cwd)
+                    await rec(`enforce: edits discarded pre-commit (repo health: ${h.reason})`)
+                } else {
+                    await rec(
+                        `enforce: edits FAILED repo health pre-commit (${h.reason}) — no discard available, left uncommitted`
+                    )
+                }
+                active.ui.notify(
+                    `${p.tag}: guideline edits on "${p.title}" failed repo health (${h.reason.slice(0, 120)}) — discarded before commit.`,
+                    'warning'
+                )
+            }
+        }
+        if (mode === 'edit' && !enforceEditsBlocked) {
             // Commit whatever the pass fixed as its own snapshot. A no-op when it made
             // no edits (nothing to commit) — then there is nothing to re-verify/revert.
             const enforceCommit = await deps.commit(
