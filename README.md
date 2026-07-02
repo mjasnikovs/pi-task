@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-916%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-993%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -140,7 +140,7 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 
 ## Settings — `/task-config`
 
-Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`. All default to **on** except **enforce guidelines**:
+Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`. All default to **on**:
 
 | Setting | What it does |
 | --- | --- |
@@ -148,8 +148,8 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | **compress reasoning** | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
 | **auto-commit** | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
 | **orientation** | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
-| **verify work** _(off by default)_ | After a `/task-auto` task implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). Adds one extra local-model pass per task, so it's opt-in. |
-| **enforce guidelines** _(off by default)_ | After each `/task-auto` task is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
+| **verify work** | After each `/task` (and `/task-auto` task) implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). |
+| **enforce guidelines** | After each `/task` (and `/task-auto` task) is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
 
 ## Configuration
 
@@ -168,7 +168,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 916 tests across 65 files
+bun test src/      # 993 tests across 70 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
