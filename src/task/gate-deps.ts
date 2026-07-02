@@ -17,7 +17,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
-import {tasksDir, readTaskFile} from './task-io.js'
+import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
@@ -122,6 +122,9 @@ export function buildGateDeps(params: {
 
     return {
         runTask,
+        // Durable per-task gate trail: every verdict/decision lands in the task
+        // file's `## gates` section so gate behavior is auditable from artifacts.
+        record: (cwd2, taskId, line) => appendGateRecord(cwd2, taskId, line),
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)

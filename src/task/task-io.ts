@@ -141,6 +141,25 @@ export async function setTaskSection(
     await writeTaskFile(cwd, {...frontMatter, updated_at: new Date().toISOString()}, next)
 }
 
+/**
+ * Append one timestamped line to the task's `## gates` section — the durable
+ * per-task trail of gate outcomes (verify verdicts, enforce mode/verdict, commit
+ * results). Motivated by the mx5 audit: verdict text lived only in memory and
+ * terminal notifies, so "did enforce run for this task, and in which mode?" was
+ * unanswerable from artifacts. Best-effort by design: a failure to record must
+ * never break the gate sequence, so all errors are swallowed.
+ */
+export async function appendGateRecord(cwd: string, id: string, line: string): Promise<void> {
+    try {
+        const stamp = new Date().toISOString()
+        const entry = `- ${stamp} ${line.replace(/\s*\n\s*/g, ' ').trim()}`
+        const existing = await readSection(cwd, id, 'gates')
+        await setTaskSection(cwd, id, 'gates', existing ? `${existing}\n${entry}` : entry)
+    } catch {
+        // Recording is observability, not control flow — never propagate.
+    }
+}
+
 /** Remove a section (heading + body) if present; a no-op when it's absent. */
 export async function removeTaskSection(cwd: string, id: string, heading: string): Promise<void> {
     const {frontMatter, body} = await readTaskFile(cwd, id)

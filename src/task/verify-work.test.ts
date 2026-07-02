@@ -86,6 +86,24 @@ describe('buildVerifyPrompt', () => {
         expect(p).toContain('environment gap')
         expect(p).toContain('external')
     })
+
+    test('forbids grep-theater: static-only checks are not a PASS when execution was possible', () => {
+        // Regression guard for the mx5 grep-theater class: a schema.sql with INVALID
+        // SQL was "verified" by grepping for its own (broken) text while a live
+        // Postgres sat reachable in the same container. The prompt must (a) say a
+        // grep-only VERIFY block does not cap the obligation to execute/apply the
+        // artifact, and (b) require PROBING a declared external service before
+        // invoking the absent-service exception — reachable ⇒ must run against it.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        // the VERIFY block does not cap the obligation
+        expect(p).toMatch(/verify block does not cap/)
+        expect(p).toMatch(/executed or applied/)
+        expect(p).toMatch(/grep-only checks passing[\s\S]*?not a pass/)
+        // probe before relying on the external-service exception
+        expect(p).toContain('probe')
+        expect(p).toMatch(/is reachable, the exception\s*\n?\s*does not apply/)
+        expect(p).toMatch(/genuinely absent/)
+    })
 })
 
 describe('parseVerifyVerdict', () => {

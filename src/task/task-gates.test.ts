@@ -264,3 +264,121 @@ test('runGatesForTask: an empty commit warns but still completes', async () => {
         expect(captured.notifies.some(n => /not committed/.test(n.msg))).toBe(true)
     })
 })
+
+// ─── Gate trail (deps.record) ────────────────────────────────────────────────
+// The durable per-task record of every gate outcome. Motivated by the mx5 audit:
+// verdict text and enforce mode lived only in terminal notifies, so gate behavior
+// was unauditable from artifacts.
+
+test('record: clean pass path writes verify PASS, commit, enforce(edit) trail in order', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const deps = makeDeps({
+            record: (_cwd, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(trail).toEqual([
+            'verify: PASS',
+            'commit: task snapshot committed',
+            'enforce(edit): clean',
+            // the fake commit always "commits"; the differential guard's re-verify
+            // outcome is folded into the enforce line, not a second verify line
+            'enforce: fixes committed — re-verify PASS, kept'
+        ])
+    })
+})
+
+test('record: FAIL → ACCEPT path records verdict, recommendation, acceptance, flag mode', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const trail: string[] = []
+        const deps = makeDeps({
+            record: (_cwd, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'over-strict'}),
+            enforce: () => Promise.resolve({ok: true})
+        })
+        handle.queueSelect(ACCEPT_LABEL)
+        const r = await runGatesForTask(handle.ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(trail).toEqual([
+            'verify: FAIL — build exited 1',
+            'resolution: recommended ACCEPT',
+            'resolution: user ACCEPTED the work despite verify FAIL',
+            'commit: task snapshot committed',
+            // accept-override is not a clean signal ⇒ flag mode, no enforce commit
+            'enforce(flag): clean'
+        ])
+    })
+})
+
+test('record: enforce regression is recorded as re-verify FAILED → REVERTED', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            record: (_cwd, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => {
+                verifyCalls += 1
+                // First verify (gate) passes; re-verify after enforce regresses.
+                return Promise.resolve(
+                    verifyCalls === 1 ? {ok: true} : {ok: false, reason: 'onClick handler gone'}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            revert: () => Promise.resolve()
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(trail).toContain(
+            'enforce: fixes committed but re-verify FAILED (onClick handler gone) — REVERTED'
+        )
+    })
+})
+
+test('record: a throwing record dep never breaks the gate sequence', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const deps = makeDeps({
+            record: () => Promise.reject(new Error('disk full')),
+            verify: () => Promise.resolve({ok: true})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+    })
+})
+
+test('record: enforce skip (nothing committed) is recorded', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const deps = makeDeps({
+            record: (_cwd, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: () => Promise.resolve({committed: false, reason: 'auto-commit disabled'}),
+            enforce: () => Promise.reject(new Error('must not run'))
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(trail).toEqual([
+            'commit: skipped (auto-commit disabled)',
+            'enforce: skipped (nothing committed this round)'
+        ])
+    })
+})

@@ -9,7 +9,8 @@ import {
     setTaskSection,
     readSection,
     ensureTasksDir,
-    tasksDir
+    tasksDir,
+    appendGateRecord
 } from './task-io.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -213,6 +214,49 @@ describe('setTaskSection / readSection', () => {
             const {body} = await readTaskFile(cwd, 'TASK_0001')
             expect(body).toContain('## tasks\n\n- [ ] a')
             expect(body).not.toMatch(/## tasks\n\n\n/)
+        })
+    })
+})
+
+describe('appendGateRecord', () => {
+    test('creates the gates section on first append, then appends in order', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## spec\n\nGOAL x\n')
+            await appendGateRecord(cwd, 'TASK_0001', 'verify: PASS')
+            await appendGateRecord(cwd, 'TASK_0001', 'commit: task snapshot committed')
+            await appendGateRecord(cwd, 'TASK_0001', 'enforce(edit): clean')
+            const sec = await readSection(cwd, 'TASK_0001', 'gates')
+            expect(sec).not.toBeNull()
+            const lines = (sec ?? '').split('\n')
+            expect(lines).toHaveLength(3)
+            expect(lines[0]).toMatch(/^- \d{4}-\d{2}-\d{2}T[\d:.]+Z verify: PASS$/)
+            expect(lines[1]).toContain('commit: task snapshot committed')
+            expect(lines[2]).toContain('enforce(edit): clean')
+            // The spec section is untouched.
+            expect(await readSection(cwd, 'TASK_0001', 'spec')).toBe('GOAL x')
+        })
+    })
+
+    test('keeps $-sequences literal and flattens multi-line reasons to one line', async () => {
+        // Regression class: setTaskSection once expanded `$`-patterns via a string
+        // replacement; gate reasons are model output and may contain them, plus
+        // embedded newlines that would break the one-line-per-record trail.
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## spec\n\nGOAL x\n')
+            await appendGateRecord(
+                cwd,
+                'TASK_0001',
+                'verify: FAIL — regex `^\\+\\d$` broke\nline two $& $1'
+            )
+            const sec = (await readSection(cwd, 'TASK_0001', 'gates')) ?? ''
+            expect(sec.split('\n')).toHaveLength(1)
+            expect(sec).toContain('regex `^\\+\\d$` broke line two $& $1')
+        })
+    })
+
+    test('never throws when the task file is missing (best-effort trail)', async () => {
+        await withTmpTaskDir(async cwd => {
+            await appendGateRecord(cwd, 'TASK_9999', 'verify: PASS')
         })
     })
 })

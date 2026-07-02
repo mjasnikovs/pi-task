@@ -105,6 +105,16 @@ export interface GateDeps {
      * skips the revert and warns.
      */
     revert?: (cwd: string) => Promise<void>
+    /**
+     * Append one line to the task's durable gate trail (`## gates` in the task
+     * file). Every gate outcome — each verify verdict, the user's FAIL resolution,
+     * the commit result, enforce mode + verdict, the differential guard's decision —
+     * is recorded so the sequence is auditable from artifacts alone (the mx5 audit
+     * could not tell WHY 10 of 18 tasks show no enforce run: verdicts lived only in
+     * terminal notifies). Best-effort: absent in tests → skipped; failures are
+     * swallowed by the implementation, never by this sequence.
+     */
+    record?: (cwd: string, taskId: string, line: string) => Promise<void>
 }
 
 /** Inputs the sequence needs that vary per caller. */
@@ -187,6 +197,21 @@ export async function runGatesForTask(
     p: GateParams
 ): Promise<GateResult> {
     let active = ctxIn
+    // Durable per-task gate trail — every outcome below is also appended to the
+    // task file so the sequence is auditable from artifacts alone. Best-effort.
+    const rec = async (line: string): Promise<void> => {
+        try {
+            await deps.record?.(p.cwd, p.taskId, line)
+        } catch {
+            // recording must never break the gate sequence
+        }
+    }
+    const verdictLine = (v: VerifyOutcome): string =>
+        v.ok ?
+            v.reason ?
+                `verify: PASS (${v.reason})`
+            :   'verify: PASS'
+        :   `verify: FAIL — ${v.reason ?? 'did not verify'}`
     // GATE: actually RUN the task's verification against the just-finished work
     // BEFORE it is checked off or committed. Whether this produced a GENUINE clean
     // pass (a real signal ran and the work met it) also decides how the enforce pass
@@ -197,20 +222,24 @@ export async function runGatesForTask(
     if (deps.verify) {
         active.ui.notify(`${p.tag}: verifying "${p.title}"…`, 'info')
         let verified = await deps.verify(active, p.cwd, p.title, p.taskId)
+        await rec(verdictLine(verified))
         // A FAIL no longer dead-stops: offer the boxed AUTOFIX / ACCEPT / dismiss
         // picker. The USER always decides; AUTOFIX loops straight back to the gate
         // as many times as they keep choosing it (no attempt cap).
         while (!verified.ok) {
             const failReason = verified.reason ?? 'did not verify'
-            const rec: ResolutionOutcome =
+            const recOutcome: ResolutionOutcome =
                 deps.recommend ?
                     await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
                 :   {recommend: 'autofix', rationale: failReason}
-            const choice = await askVerifyResolution(active, p.title, failReason, rec)
+            await rec(`resolution: recommended ${recOutcome.recommend.toUpperCase()}`)
+            const choice = await askVerifyResolution(active, p.title, failReason, recOutcome)
             if (choice.action === 'cancel') {
+                await rec('resolution: user dismissed the verify-FAIL picker — paused')
                 return {kind: 'paused', ctx: active, reason: failReason}
             }
             if (choice.action === 'accept') {
+                await rec('resolution: user ACCEPTED the work despite verify FAIL')
                 active.ui.notify(
                     `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,
                     'warning'
@@ -219,6 +248,7 @@ export async function runGatesForTask(
             }
             // AUTOFIX: re-run the implementation turn with the failure (and any typed
             // guidance) prepended as a RE-ATTEMPT banner, then re-verify.
+            await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             active.ui.notify(`${p.tag}: autofixing "${p.title}"…`, 'info')
             const fixInstruction =
                 choice.guidance ? `${failReason}\n\nUser guidance: ${choice.guidance}` : failReason
@@ -233,6 +263,7 @@ export async function runGatesForTask(
             if (!fixRes.ok) return {kind: 'failed', ctx: active, reason: fixRes.reason}
             // Resume reuses the same inner task id, so p.taskId is stable.
             verified = await deps.verify(active, p.cwd, p.title, p.taskId)
+            await rec(verdictLine(verified))
         }
         // Loop exited because the work verified OR the user accepted the artifact. A
         // genuine clean pass is ok===true with NO reason; a no-op pass or an
@@ -246,8 +277,10 @@ export async function runGatesForTask(
     // so a passing task is durably recorded no matter what enforcement later finds.
     const commit = await deps.commit(p.cwd, `task: ${p.title} (${p.taskId})`)
     if (commit.committed) {
+        await rec('commit: task snapshot committed')
         active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
     } else {
+        await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
         active.ui.notify(
             `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
             'warning'
@@ -266,6 +299,9 @@ export async function runGatesForTask(
             'info'
         )
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
+        await rec(
+            `enforce(${mode}): ${verdict.ok ? `clean${verdict.reason ? ` (${verdict.reason})` : ''}` : (verdict.reason ?? 'not clean')}`
+        )
         if (!verdict.ok) {
             active.ui.notify(
                 `${p.tag}: guideline ${mode === 'edit' ? 'enforcement' : 'review'} on "${p.title}" — ${verdict.reason ?? 'not clean'} — continuing.`,
@@ -288,19 +324,29 @@ export async function runGatesForTask(
                     :   ({ok: true} as VerifyOutcome)
                 if (!after.ok) {
                     if (deps.revert) await deps.revert(p.cwd)
+                    await rec(
+                        `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${deps.revert ? 'REVERTED' : 'left in place (no revert available)'}`
+                    )
                     active.ui.notify(
                         `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,
                         'warning'
                     )
                 } else {
+                    await rec('enforce: fixes committed — re-verify PASS, kept')
                     active.ui.notify(
                         `${p.tag}: committed guideline fixes for "${p.title}".`,
                         'info'
                     )
                 }
+            } else {
+                await rec('enforce(edit): no fixes to commit')
             }
         }
         // 'flag' mode makes no edits — nothing to commit or revert.
+    } else if (deps.enforce) {
+        // deps.enforce wired but nothing was committed this round — record the skip
+        // so a missing enforce run is explainable from the trail (mx5 audit gap).
+        await rec('enforce: skipped (nothing committed this round)')
     }
     return {kind: 'done', ctx: active}
 }

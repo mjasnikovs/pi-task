@@ -39,6 +39,20 @@
  * genuinely-broken shipped build FAILs 3/3, and a genuine external-service gap — which
  * the OLD prompt wrongly blamed on the code 3/3 — now correctly PASSes 3/3.
  *
+ * The sibling failure class is GREP-THEATER (mx5 run 2, TASK_0002): the composed VERIFY
+ * block was grep-only, so the child "verified" a schema.sql containing INVALID SQL by
+ * grepping for its own broken text — while a live PostgreSQL sat reachable in the same
+ * container, never touched. The prompt now (a) says a grep-only VERIFY block does not cap
+ * the obligation to execute/apply an executable artifact, and (b) requires PROBING a
+ * declared external service before invoking the absent-service exception — reachable ⇒
+ * the real verification must run against it. A/B on the faithful fixture (invalid
+ * `generate always as` schema, grep-only VERIFY, unadvertised trust-auth PostgreSQL on
+ * the default port, DATABASE_URL unset — exactly the mx5 shape): old prompt false-PASSed
+ * 4/5; new prompt FAILed 5/5, each naming the real syntax error. Guards: explicit-URL
+ * variant old 5/5 / new 5/5 correct-FAIL (no regression), valid schema 3/3 PASS (no
+ * paranoia), unreachable-DB 2/3 PASS via the env-gap exception + 1 conservative FAIL
+ * that still named the genuine SQL defect (safe direction — only false-PASS trashes work).
+ *
  * It runs as a GATE right after the implementation turn, BEFORE the task is
  * checked off or committed. A FAIL stops the /task-auto run exactly like an
  * implementation failure: the task is left unchecked and uncommitted so
@@ -150,18 +164,31 @@ export function buildVerifyPrompt(spec: string): string {
         '3. Presence of a token / directive / string in a SOURCE file is NOT verification.',
         '   Judge the produced artifact and the real runtime behavior. A raw build directive',
         '   that SURVIVES into the built output means the build never ran — that is a FAIL.',
+        "   The spec's VERIFY block does not cap this obligation: if that block only greps or",
+        '   reads source files but the deliverable can be EXECUTED or APPLIED on this machine',
+        '   (a script, a schema, a server, a config a tool can load), you must ALSO execute or',
+        '   apply it and judge the real result. Grep-only checks passing while the artifact was',
+        '   never executed is NOT a PASS — a static match cannot prove an artifact works, only',
+        '   running it can.',
         '',
         '4. Treat the ACCEPTANCE criteria as the bar. If a command fails, or its real output',
         '   contradicts an ACCEPTANCE criterion, the work has NOT verified.',
         '',
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
-        '   documents as a prerequisite. If a command fails purely because such an external',
-        '   service is ABSENT from this machine — and NOT because the project misconfigures',
-        '   how it connects — note that as an environment gap and judge the rest; do not fail',
-        '   the code for it. But a command that fails because of how the PROJECT ITSELF is',
-        '   wired (config it owns but does not load, a wrong default, a command that cannot',
-        '   run unaided) is a defect, not an environment gap.',
+        '   documents as a prerequisite. Before you rely on that assumption, PROBE for the',
+        '   service with a cheap real check using the connection details the project/spec',
+        '   already declares (attempt the connection: pg_isready, a client one-liner, curl',
+        '   with a short timeout). If the probe shows the service IS reachable, the exception',
+        '   does NOT apply — you must run the real verification against it (apply the schema,',
+        '   run the suite, hit the endpoint) and judge the real result; falling back to static',
+        '   checks with the service available is NOT verification. Only if a command fails',
+        '   purely because such an external service is genuinely ABSENT from this machine —',
+        '   and NOT because the project misconfigures how it connects — note that as an',
+        '   environment gap and judge the rest; do not fail the code for it. But a command',
+        '   that fails because of how the PROJECT ITSELF is wired (config it owns but does',
+        '   not load, a wrong default, a command that cannot run unaided) is a defect, not an',
+        '   environment gap.',
         '',
         '6. If the spec legitimately has no runnable verification (a pure docs / config change',
         '   with nothing to build or run), validating it cleanly is a PASS.',
