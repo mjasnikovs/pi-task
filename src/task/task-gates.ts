@@ -6,9 +6,11 @@
  * just-finished work:
  *
  *   1. VERIFY — RUN the composed spec's VERIFY block in the real workspace and
- *      judge a PASS/FAIL. A FAIL offers the user a boxed AUTOFIX / ACCEPT / dismiss
- *      picker (the user always decides; AUTOFIX re-runs the implementation turn and
- *      loops back to the gate uncapped).
+ *      judge a PASS/FAIL. On a FAIL a fresh read-only child recommends AUTOFIX or
+ *      ACCEPT: an AUTOFIX recommendation re-runs the implementation turn UNATTENDED
+ *      (no prompt) and loops back to the gate, bounded by MAX_AUTO_AUTOFIX; the user
+ *      is shown the boxed picker only when the recommendation is ACCEPT (blessing the
+ *      artifact as-is) or when that unattended-autofix cap is reached.
  *   2. ENFORCE — hold the committed work to the project's AGENTS.md / CLAUDE.md
  *      rules. Runs in `edit` mode (fix in place) only when the verify gate produced
  *      a genuine clean pass to guard the edits against; otherwise `flag` mode
@@ -181,6 +183,17 @@ export type GateResult =
     | {kind: 'failed'; ctx: ExtensionCommandContext; reason?: string}
 
 /**
+ * How many times a verify FAIL may be auto-fixed UNATTENDED (the research
+ * recommended AUTOFIX, so pi re-runs the impl turn without prompting) before the
+ * loop falls back to the human picker. Each AUTOFIX is a full implementation
+ * re-run, so a non-converging loop must not run forever with nobody able to break
+ * it — after this many consecutive auto attempts that still FAIL, the picker is
+ * shown so a person can decide. A recommendation to ACCEPT always shows the picker
+ * regardless of this count (blessing an artifact as-is is a human's call).
+ */
+export const MAX_AUTO_AUTOFIX = 3
+
+/**
  * Show the boxed two-choice picker after a verify FAIL and return what the user
  * decided. The model-recommended card is placed first so the renderer tints it
  * green; the user ALWAYS makes the final call (there is no auto-pick). Mirrors the
@@ -251,10 +264,13 @@ export async function runGatesForTask(
         active.ui.notify(`${p.tag}: verifying "${p.title}"…`, 'info')
         let verified = await deps.verify(active, p.cwd, p.title, p.taskId)
         await rec(verdictLine(verified))
-        // A FAIL no longer dead-stops: offer the boxed AUTOFIX / ACCEPT / dismiss
-        // picker. The USER always decides; AUTOFIX loops straight back to the gate
-        // as many times as they keep choosing it (no attempt cap).
+        // A FAIL no longer dead-stops. When the research recommends AUTOFIX, pi
+        // re-runs the impl turn UNATTENDED (no picker) — the human is consulted only
+        // when the recommendation is ACCEPT (blessing the artifact as-is). The
+        // unattended fix is BOUNDED by MAX_AUTO_AUTOFIX: once that many consecutive
+        // auto attempts still FAIL, the picker returns so a person can break the loop.
         let lintFixAttempted = false
+        let autoFixCount = 0
         while (!verified.ok) {
             const failReason = verified.reason ?? 'did not verify'
             // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
@@ -282,7 +298,27 @@ export async function runGatesForTask(
                     await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
                 :   {recommend: 'autofix', rationale: failReason}
             await rec(`resolution: recommended ${recOutcome.recommend.toUpperCase()}`)
-            const choice = await askVerifyResolution(active, p.title, failReason, recOutcome)
+            // AUTO-RESOLVE the AUTOFIX path: when the research says the work is
+            // genuinely wrong, re-run the fix WITHOUT prompting the user. The picker is
+            // reserved for the ACCEPT recommendation (the human decides whether to bless
+            // an artifact the gate FAILed) and for the bounded fallback: after
+            // MAX_AUTO_AUTOFIX consecutive unattended attempts that still FAIL, hand
+            // control back so a person can break a non-converging loop.
+            const autoFixNow = recOutcome.recommend === 'autofix' && autoFixCount < MAX_AUTO_AUTOFIX
+            let choice: ResolutionChoice
+            if (autoFixNow) {
+                autoFixCount += 1
+                await rec(
+                    `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
+                )
+                active.ui.notify(
+                    `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (recommended, ${autoFixCount}/${MAX_AUTO_AUTOFIX})…`,
+                    'info'
+                )
+                choice = {action: 'autofix'}
+            } else {
+                choice = await askVerifyResolution(active, p.title, failReason, recOutcome)
+            }
             if (choice.action === 'cancel') {
                 await rec('resolution: user dismissed the verify-FAIL picker — paused')
                 return {kind: 'paused', ctx: active, reason: failReason}

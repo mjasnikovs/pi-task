@@ -10,8 +10,12 @@
  *   • Accept    — treat the artifact as good, override the gate, and proceed
  *                 (check off + commit) exactly as a PASS would.
  *
- * The user ALWAYS makes the final call. This module only computes which of the
- * two cards is tinted RECOMMENDED, by handing the FAIL reason + the task spec to
+ * The recommendation now also GATES whether the user is prompted at all: an
+ * AUTOFIX recommendation is auto-applied unattended (bounded — see
+ * task-gates.ts MAX_AUTO_AUTOFIX), and the picker is shown only when the
+ * recommendation is ACCEPT (blessing the artifact is a human's call) or when the
+ * unattended-autofix cap is reached. This module only computes which of the two
+ * cards is tinted RECOMMENDED, by handing the FAIL reason + the task spec to
  * a fresh read+bash child of the SAME local model and letting it INVESTIGATE the
  * real workspace: is the FAIL a genuine defect in the work (→ recommend AUTOFIX),
  * or a false alarm / an acceptable artifact the gate misjudged (→ recommend
@@ -23,9 +27,8 @@
  * through the full implementation runner, not this pass.) A read-only research
  * step can never itself change the tree it is judging.
  *
- * The verdict is advisory: a missing/garbled verdict defaults to recommending
- * AUTOFIX, the conservative choice (re-do the work rather than bless it). The
- * picker is shown regardless; this only moves the green tint.
+ * The verdict defaults to AUTOFIX when missing/garbled — the conservative choice
+ * (re-do the work rather than bless it), which is also the auto-applied path.
  */
 import {USER_CANCELLED} from './child-runner.js'
 

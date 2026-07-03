@@ -1,8 +1,8 @@
 import {expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
-import {runGatesForTask, type GateDeps, type GateParams} from './task-gates.js'
-import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
+import {runGatesForTask, MAX_AUTO_AUTOFIX, type GateDeps, type GateParams} from './task-gates.js'
+import {ACCEPT_LABEL} from './verify-resolution.js'
 
 /** A GateDeps whose runTask/commit always succeed; override per test. */
 function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
@@ -122,7 +122,8 @@ test('runGatesForTask: verify FAIL + user dismisses → paused, no check-off, no
                 return Promise.resolve({committed: true})
             },
             verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
-            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
+            // ACCEPT is the recommendation that surfaces the picker; dismissing it pauses.
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'broken'})
         })
         // No queueSelect → the picker is dismissed (cancel).
         const r = await runGatesForTask(
@@ -164,10 +165,10 @@ test('runGatesForTask: verify FAIL + ACCEPT → proceeds, commits, done', async 
     })
 })
 
-test('runGatesForTask: AUTOFIX loops back to the gate until the work verifies', async () => {
+test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) until it verifies', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
-        const {ctx} = handle
+        const {ctx, captured} = handle
         const fixInstructions: Array<string | undefined> = []
         let verifyCalls = 0
         const deps = makeDeps({
@@ -183,14 +184,38 @@ test('runGatesForTask: AUTOFIX loops back to the gate until the work verifies', 
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'})
         })
-        handle.queueSelect(AUTOFIX_LABEL)
-        handle.queueSelect(AUTOFIX_LABEL)
+        // No queueSelect: the picker must NOT be shown — AUTOFIX is auto-applied.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
         // Two AUTOFIX re-runs, each carrying the failure as its fixInstruction.
         expect(fixInstructions).toHaveLength(2)
         expect(fixInstructions.every(f => f?.includes('build exited 1'))).toBe(true)
         expect(verifyCalls).toBe(3)
+        // The user was never prompted — the fixes ran unattended.
+        expect(captured.selects).toHaveLength(0)
+    })
+})
+
+test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker after MAX_AUTO_AUTOFIX', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        let runTaskCalls = 0
+        const deps = makeDeps({
+            runTask: (_c, _cwd, _t, _opts) => {
+                runTaskCalls += 1
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            // Never converges, and the research keeps recommending AUTOFIX.
+            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'defect'})
+        })
+        // The cap-fallback picker is dismissed (no queueSelect) → paused.
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        // Exactly MAX_AUTO_AUTOFIX unattended re-runs, THEN the picker is shown once.
+        expect(runTaskCalls).toBe(MAX_AUTO_AUTOFIX)
+        expect(captured.selects).toHaveLength(1)
     })
 })
 
@@ -209,7 +234,7 @@ test('runGatesForTask: AUTOFIX re-run that fails → failed result with reason',
             verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'defect'})
         })
-        handle.queueSelect(AUTOFIX_LABEL)
+        // Recommended AUTOFIX runs unattended; its impl failure propagates.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('failed')
         if (r.kind === 'failed') expect(r.reason).toBe('model died')
@@ -219,7 +244,6 @@ test('runGatesForTask: AUTOFIX re-run that fails → failed result with reason',
 test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate', async () => {
     await withTmpTaskDir(async dir => {
         const interruptedHandle = makeFakeCtx(dir)
-        interruptedHandle.queueSelect(AUTOFIX_LABEL)
         const interruptedDeps = makeDeps({
             runTask: () =>
                 Promise.resolve({
@@ -239,7 +263,6 @@ test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate'
         expect(r1.kind).toBe('interrupted')
 
         const cancelledHandle = makeFakeCtx(dir)
-        cancelledHandle.queueSelect(AUTOFIX_LABEL)
         const cancelledDeps = makeDeps({
             runTask: () =>
                 Promise.resolve({taskId: 'TASK_0006', ok: false, sessionCancelled: true}),
