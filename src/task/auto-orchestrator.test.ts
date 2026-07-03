@@ -1419,3 +1419,122 @@ test('attachSpecRefs: idempotent when a decisions clause was already threaded', 
     const once = attachSpecRefs(['Scaffold [decisions: no vite]'], [])
     expect(attachSpecRefs(once, [])).toEqual(once)
 })
+
+// ─── Decompose coverage gate ─────────────────────────────────────────────────
+
+// Deps where decompose/coverage responses are scripted per call. Clarify always
+// says NONE so planAuto goes straight to decompose.
+function coverageDeps(
+    decomposeResponses: string[],
+    coverageResponses: Array<string | Error>
+): AutoDeps & {calls: {decompose: number; coverage: number; hints: string[]}} {
+    const calls = {decompose: 0, coverage: 0, hints: [] as string[]}
+    return {
+        calls,
+        runChild: (name, _tools, prompt) => {
+            if (name === 'auto-clarify') return Promise.resolve('NONE')
+            if (name === 'auto-decompose') {
+                calls.hints.push(prompt)
+                return Promise.resolve(decomposeResponses[calls.decompose++] ?? '')
+            }
+            if (name === 'decompose-coverage') {
+                const r = coverageResponses[calls.coverage++]
+                if (r instanceof Error) return Promise.reject(r)
+                return Promise.resolve(r ?? 'COVERAGE: COMPLETE')
+            }
+            return Promise.resolve('')
+        },
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        commit: () => Promise.resolve({committed: true})
+    }
+}
+
+test('coverage gate: INCOMPLETE verdict reprompts decompose with the missing areas', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            [
+                '- [ ] Scaffold project',
+                '- [ ] Scaffold project\n- [ ] Auth routes\n- [ ] Admin page'
+            ],
+            [
+                'COVERAGE: INCOMPLETE\nMISSING: auth routes\nMISSING: admin page',
+                'COVERAGE: COMPLETE'
+            ]
+        )
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        expect(d.calls.decompose).toBe(2)
+        // The retry prompt carries the judge's missing areas as a hint.
+        expect(d.calls.hints[1]).toContain('INCOMPLETE')
+        expect(d.calls.hints[1]).toContain('auth routes; admin page')
+        const {body} = await readTaskFile(dir, id!)
+        expect(parseTaskList(body).map(e => e.title)).toEqual([
+            'Scaffold project',
+            'Auth routes',
+            'Admin page'
+        ])
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('decompose produced 1 title(s)')
+        expect(log).toContain('INCOMPLETE — missing: auth routes; admin page')
+    })
+})
+
+test('coverage gate: a flaky shorter retry never replaces the longer list', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            ['- [ ] Task A\n- [ ] Task B\n- [ ] Task C', '- [ ] Lone degenerate task'],
+            [
+                'COVERAGE: INCOMPLETE\nMISSING: something',
+                'COVERAGE: COMPLETE' // judges the KEPT original list on round 2
+            ]
+        )
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        const {body} = await readTaskFile(dir, id!)
+        expect(parseTaskList(body).map(e => e.title)).toEqual(['Task A', 'Task B', 'Task C'])
+    })
+})
+
+test('coverage gate: COMPLETE verdict accepts the first list without a retry', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(['- [ ] Task A\n- [ ] Task B'], ['COVERAGE: COMPLETE'])
+        await planAuto(ctx, dir, 'build the app', d)
+        expect(d.calls.decompose).toBe(1)
+        expect(d.calls.coverage).toBe(1)
+    })
+})
+
+test('coverage gate: judge fault or prose verdict is best-effort — list accepted', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Throwing judge.
+        const dThrow = coverageDeps(['- [ ] Task A'], [new Error('boom')])
+        const id1 = await planAuto(ctx, dir, 'build the app', dThrow)
+        expect(parseTaskList((await readTaskFile(dir, id1!)).body).length).toBe(1)
+        // Prose (untagged) judge.
+        const dProse = coverageDeps(['- [ ] Task A'], ['looks fine to me'])
+        const id2 = await planAuto(ctx, dir, 'build the app', dProse)
+        expect(parseTaskList((await readTaskFile(dir, id2!)).body).length).toBe(1)
+        expect(dProse.calls.decompose).toBe(1)
+    })
+})
+
+test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            ['- [ ] Task A', '- [ ] Task A\n- [ ] Task B', '- [ ] Task A\n- [ ] Task B\n- [ ] C'],
+            [
+                'COVERAGE: INCOMPLETE\nMISSING: x',
+                'COVERAGE: INCOMPLETE\nMISSING: y',
+                'COVERAGE: INCOMPLETE\nMISSING: z'
+            ]
+        )
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        // 2 rounds: initial decompose + 2 retries, judge consulted twice, then stop.
+        expect(d.calls.decompose).toBe(3)
+        expect(d.calls.coverage).toBe(2)
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+    })
+})

@@ -47,6 +47,32 @@ export function parseDecomposeList(raw: string): string[] {
     return out
 }
 
+/** Parsed DECOMPOSE_COVERAGE_PROMPT verdict. */
+export interface CoverageVerdict {
+    kind: 'complete' | 'incomplete'
+    missing: string[]
+}
+
+/**
+ * Parse the coverage-triage child's verdict. Returns null when no COVERAGE tag
+ * is present (the model wrote prose) — the caller treats that as "accept the
+ * list as-is", so a malformed judgment can never block planning.
+ */
+export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
+    const tag = /^\s*COVERAGE:\s*(COMPLETE|INCOMPLETE)\s*$/im.exec(raw)
+    if (!tag) return null
+    if (tag[1].toUpperCase() === 'COMPLETE') return {kind: 'complete', missing: []}
+    const missing: string[] = []
+    for (const line of raw.split('\n')) {
+        const m = /^\s*MISSING:\s*(.+?)\s*$/i.exec(line)
+        if (m && m[1].length > 0) missing.push(m[1])
+        if (missing.length >= 8) break
+    }
+    // INCOMPLETE with no MISSING lines carries no actionable signal to reprompt
+    // with — treat it like an unparseable verdict rather than looping blind.
+    return missing.length === 0 ? null : {kind: 'incomplete', missing}
+}
+
 const CHECKBOX_RE = /^- \[([ xX])\]\s+(.+?)\s*$/
 const PRODUCED_ID_RE = /^(TASK_\d{4,})\s{2,}(.+)$/
 

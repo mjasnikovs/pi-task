@@ -5,6 +5,7 @@ import {
     findResumableAuto,
     parseTaskList,
     parseDecomposeList,
+    parseCoverageVerdict,
     buildAutoBody,
     checkOffTask
 } from './auto-io.js'
@@ -122,4 +123,17 @@ test('findResumableAuto: ignores completed, picks most-recently-updated resumabl
         await writeTaskFile(dir, fm('TASK_AUTO_0003', 'failed'), '\n## tasks\n')
         expect(await findResumableAuto(dir)).toBe('TASK_AUTO_0003')
     })
+})
+
+test('parseCoverageVerdict: COMPLETE, INCOMPLETE+missing, caps at 8, null on prose', () => {
+    expect(parseCoverageVerdict('COVERAGE: COMPLETE')).toEqual({kind: 'complete', missing: []})
+    expect(parseCoverageVerdict('  coverage: complete  ')).toEqual({kind: 'complete', missing: []})
+    expect(
+        parseCoverageVerdict('COVERAGE: INCOMPLETE\nMISSING: auth routes\nMISSING: admin page')
+    ).toEqual({kind: 'incomplete', missing: ['auth routes', 'admin page']})
+    const many = ['COVERAGE: INCOMPLETE', ...Array.from({length: 12}, (_, i) => `MISSING: a${i}`)]
+    expect(parseCoverageVerdict(many.join('\n'))!.missing.length).toBe(8)
+    // Prose without the tag, and INCOMPLETE with nothing actionable → null.
+    expect(parseCoverageVerdict('The list looks fine to me.')).toBeNull()
+    expect(parseCoverageVerdict('COVERAGE: INCOMPLETE')).toBeNull()
 })

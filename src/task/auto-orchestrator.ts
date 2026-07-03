@@ -11,13 +11,19 @@ import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-cod
 import {gateRunTask} from './orchestrator.js'
 import {parseClarifyList, parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
-import {AUTO_CLARIFY_PROMPT, AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
+import {
+    AUTO_CLARIFY_PROMPT,
+    AUTO_DECOMPOSE_PROMPT,
+    DECOMPOSE_COVERAGE_PROMPT
+} from './auto-prompts.js'
 import {GRILL_AUTO_ANSWER_PROMPT, GRILL_AUTO_FORMAT_HINT} from './prompts.js'
 import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {
     allocateAutoId,
     buildAutoBody,
     parseDecomposeList,
+    parseCoverageVerdict,
+    type CoverageVerdict,
     parseTaskList,
     checkOffTask,
     stampTaskInProgress,
@@ -46,6 +52,22 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 // when the model emits NONE), but a model that never says NONE would otherwise
 // barrage the user — the real mx5 run asked 10, several of them redundant.
 const MAX_CLARIFY_QUESTIONS = 8
+
+// Bounded coverage-triage rounds after decompose: judge → reprompt-with-missing
+// → judge again, at most. Two rounds so one flaky retry doesn't end the gate,
+// while a judge that keeps flagging can't loop the plan phase forever.
+const MAX_COVERAGE_ROUNDS = 2
+
+/** Reprompt prefix when the coverage triage found feature areas no task covers. */
+function coverageRepromptHint(missing: string[]): string {
+    return (
+        '[SYSTEM NOTE: Your previous task list was INCOMPLETE — no task covered: '
+        + missing.join('; ')
+        + '. Regenerate the FULL ordered checkbox list for the ENTIRE feature: every '
+        + 'task your previous list already had (reworded freely) PLUS tasks covering '
+        + 'the areas above. Output every task, one "- [ ] " line each, nothing else.]'
+    )
+}
 
 /**
  * Injectable seams so the planner and loop are testable without spawning pi.
@@ -459,16 +481,57 @@ export async function planAuto(
     const clarifications = answers.join('\n')
 
     // decompose
-    const listRaw = await deps.runChild(
-        'auto-decompose',
-        'read',
-        AUTO_DECOMPOSE_PROMPT(featureForModel, clarifications)
-    )
+    const decomposePrompt = AUTO_DECOMPOSE_PROMPT(featureForModel, clarifications)
+    const listRaw = await deps.runChild('auto-decompose', 'read', decomposePrompt)
+    let planTitles = parseDecomposeList(listRaw)
+    logPlanDebug(cwd, `decompose produced ${planTitles.length} title(s)`)
+    // Coverage gate: a stochastic degenerate completion (live mx5: ONE task +
+    // natural EOS for an 18KB design doc) is nonempty, so the length guard below
+    // never fires and the whole run "completes" after one task. Judge the list
+    // against the feature with a no-tools child; on INCOMPLETE, re-run decompose
+    // with the missing areas as a hint. Longest-list-wins so a flaky retry can
+    // never replace a better list; best-effort so a triage fault never blocks
+    // planning (mirrors triageClarifyQuestion).
+    for (let round = 0; round < MAX_COVERAGE_ROUNDS && planTitles.length > 0; round++) {
+        let verdict: CoverageVerdict | null
+        try {
+            verdict = parseCoverageVerdict(
+                await deps.runChild(
+                    'decompose-coverage',
+                    '',
+                    DECOMPOSE_COVERAGE_PROMPT(featureForModel, clarifications, planTitles)
+                )
+            )
+        } catch {
+            break
+        }
+        if (verdict === null || verdict.kind === 'complete') {
+            logPlanDebug(
+                cwd,
+                `decompose-coverage round ${round + 1}: `
+                    + (verdict === null ? 'no verdict — accepting list' : 'COMPLETE')
+            )
+            break
+        }
+        logPlanDebug(
+            cwd,
+            `decompose-coverage round ${round + 1}: INCOMPLETE — missing: `
+                + verdict.missing.join('; ').slice(0, 300)
+        )
+        const retryRaw = await deps.runChild(
+            'auto-decompose',
+            'read',
+            prependHint(coverageRepromptHint(verdict.missing), decomposePrompt)
+        )
+        const retryTitles = parseDecomposeList(retryRaw)
+        logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
+        if (retryTitles.length > planTitles.length) planTitles = retryTitles
+    }
     // Thread the feature's spec doc(s) into every title so each per-task
     // pipeline — which only ever sees its title — reads the real spec instead of
     // a lossy one-line paraphrase of it.
     const refs = await readableMentions(cwd, feature)
-    const titles = attachSpecRefs(parseDecomposeList(listRaw), refs)
+    const titles = attachSpecRefs(planTitles, refs)
     if (titles.length === 0) {
         announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
         return null
@@ -492,7 +555,8 @@ export async function planAuto(
 /** The two feature-level planning children, shown as steps in the loader. */
 const AUTO_PLAN_STEPS: Record<string, {step: string; stepNum: number}> = {
     'auto-clarify': {step: 'clarify', stepNum: 1},
-    'auto-decompose': {step: 'decompose', stepNum: 2}
+    'auto-decompose': {step: 'decompose', stepNum: 2},
+    'decompose-coverage': {step: 'coverage', stepNum: 2}
 }
 const AUTO_PLAN_STEP_TOTAL = 2
 

@@ -93,3 +93,43 @@ RULES:
   doc; phrase them as imperative directives (e.g. "use Bun's built-in bundler, do
   not add vite"). Do NOT invent decisions — only restate ones from CLARIFICATIONS.
 - Output the checkbox list and NOTHING else (no preamble, no numbering).`
+
+/**
+ * Coverage triage: judge whether a decomposed task list covers the whole
+ * feature. Guards the plan — the highest-leverage artifact in /task-auto —
+ * against a degenerate-but-nonempty decompose completion (live mx5: the model
+ * emitted ONE task for an 18KB design doc with a natural EOS, and the only
+ * existing gate was `titles.length === 0`, so the run "completed" after one
+ * task). Pure judgment over text already in hand, so it runs with --no-tools.
+ * Output MUST match parseCoverageVerdict.
+ */
+export const DECOMPOSE_COVERAGE_PROMPT = (
+    feature: string,
+    clarifications: string,
+    list: string[]
+): string =>
+    `You are auditing a task decomposition for completeness. Below is a FEATURE
+REQUEST (with any referenced design spec inlined), the CLARIFICATIONS the user
+settled, and the proposed ordered TASK LIST that is supposed to implement ALL
+of it. Each listed task will later get its own research and spec — so judge
+coverage only, not wording or level of detail.
+
+FEATURE REQUEST:
+${feature.trim()}
+
+CLARIFICATIONS:
+${clarifications.trim() || '(none)'}
+
+TASK LIST:
+${list.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+Judge ONE thing: taken together, do these tasks cover the whole feature end to
+end? An area is MISSING only when NO task plausibly covers it — do not flag
+wording, ordering, task size, or detail a task's own research will fill in.
+
+Output — no preamble, no markdown:
+COVERAGE: COMPLETE
+or
+COVERAGE: INCOMPLETE
+MISSING: <feature area no task covers>
+(one MISSING line per uncovered area, most important first, at most 8)`
