@@ -132,6 +132,20 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
+    test('forbids test-authored repair: a suite that patches the product is not verification', () => {
+        // Regression guard for the mx5 run-4 class, A/B-proven live (silent fixture:
+        // suite green ONLY because test setup ALTERs the schema and seeds around the
+        // broken seed script): shipped prompt false-PASSed 3/5, prompt with this rule
+        // 0/5 false-PASS naming the exact gap; honest fixture 3/3 PASS in both arms.
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        expect(p).toContain('test-authored repair')
+        expect(p).toMatch(/read its setup\/bootstrap/)
+        expect(p).toMatch(/seeding ordinary test data is fine/)
+        expect(p).toMatch(/proves the repaired copy/)
+        expect(p).toMatch(/own setup commands \(its migrations \/ seed scripts\)/)
+        expect(p).toMatch(/the column no migration creates/)
+    })
+
     test('external service STATE is as-shipped: schema surgery is forbidden', () => {
         // Regression guard for the observed DB-repair loophole: children (and the
         // live impl turn) ALTER TABLEd the shared test DB to make broken work pass.
