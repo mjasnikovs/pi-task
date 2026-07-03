@@ -1,7 +1,7 @@
 {
     "name": "@mjasnikovs/pi-task",
     "version": "0.17.18",
-    "description": "Deterministic spec-orchestration for local models, with a bundled real-time remote web view and web/docs/fetch/worker subagent tools.",
+    "description": "Deterministic task planning and spec-orchestration for local models — crash-safe /task pipelines with verify/enforce gates, a real-time remote web view, and web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -52,12 +52,30 @@
         "pi-package",
         "pi",
         "pi-extension",
+        "pi-coding-agent",
+        "pi.dev",
         "coding-agent",
+        "ai-agent",
+        "agent",
+        "subagent",
         "task-orchestration",
+        "spec-orchestration",
+        "spec-driven",
+        "task-planning",
+        "planning",
+        "autonomous",
         "local-llm",
+        "llm",
+        "llama-server",
         "remote",
-        "web"
+        "web-view",
+        "web-push"
     ],
+    "author": "mjasnikovs <mjasnikovs@googlemail.com>",
+    "homepage": "https://github.com/mjasnikovs/pi-task#readme",
+    "bugs": {
+        "url": "https://github.com/mjasnikovs/pi-task/issues"
+    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/mjasnikovs/pi-task.git"
