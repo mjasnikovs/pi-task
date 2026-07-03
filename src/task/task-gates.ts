@@ -285,7 +285,11 @@ export async function runGatesForTask(
                 )
                 const fix = await deps.lintFix(active, p.cwd, p.title, failReason)
                 await rec(
-                    `lint-fix: ${fix.ok ? 'applied — re-verifying' : `not applied (${fix.reason ?? 'failed'})`}`
+                    `lint-fix: ${
+                        fix.ok ?
+                            `applied${fix.reason ? ` (${fix.reason})` : ''} — re-verifying`
+                        :   `not applied (${fix.reason ?? 'failed'})`
+                    }`
                 )
                 if (fix.ok) {
                     verified = await deps.verify(active, p.cwd, p.title, p.taskId)
@@ -362,13 +366,20 @@ export async function runGatesForTask(
     // so a passing task is durably recorded no matter what enforcement later finds.
     const commit = await deps.commit(p.cwd, `task: ${p.title} (${p.taskId})`)
     if (commit.committed) {
-        await rec('commit: task snapshot committed')
+        await rec(`commit: task snapshot committed${commit.note ? ` (${commit.note})` : ''}`)
         active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
     } else {
         await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
+        // A benign skip ("nothing to commit", auto-commit off) is a warning. A real
+        // git failure is louder: it silently disables enforce AND every commit-based
+        // guard — mx5 run 4 lost all 10 commits (no container git identity) with only
+        // per-task warnings to show for it.
+        const gitFailure = /^git (commit|add) failed/.test(commit.reason ?? '')
         active.ui.notify(
-            `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
-            'warning'
+            gitFailure ?
+                `${p.tag}: COMMIT FAILED (${commit.reason}) — enforce and revert guards are disabled for this task.`
+            :   `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
+            gitFailure ? 'error' : 'warning'
         )
     }
     // With the task committed, hold its work to AGENTS.md / CLAUDE.md — but as a step

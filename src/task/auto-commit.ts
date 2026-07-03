@@ -12,7 +12,27 @@ export interface CommitResult {
     committed: boolean
     /** Short, human-readable reason when committed === false. */
     reason?: string
+    /** Set when the commit needed a fallback (e.g. self-supplied identity). */
+    note?: string
 }
+
+/**
+ * Does this git stderr describe a missing author identity? Seen live (mx5 run 4):
+ * the headless docker container has no HOME gitconfig, so EVERY per-task commit
+ * failed "Author identity unknown" — which silently disabled enforce and every
+ * commit-based differential guard for the whole run.
+ */
+export function isIdentityFailure(stderr: string): boolean {
+    return /identity unknown|unable to auto-detect email|user\.(name|email)/i.test(stderr)
+}
+
+/** Fallback identity for environments with no git config (headless containers). */
+export const FALLBACK_IDENTITY_ARGS = [
+    '-c',
+    'user.name=pi-task',
+    '-c',
+    'user.email=pi-task@local'
+] as const
 
 function firstLine(s: string): string {
     const line = s.split('\n').find(l => l.trim().length > 0)
@@ -60,10 +80,28 @@ export async function gitCommitAll(
     if (diff.aborted) return {committed: false, reason: 'cancelled'}
     if (diff.exitCode === 0) return {committed: false, reason: 'nothing to commit'}
 
-    // 4. Commit. A failure here is usually missing user.name/user.email config.
+    // 4. Commit. A failure here is usually missing user.name/user.email config —
+    //    retry once with a self-supplied identity rather than losing the snapshot
+    //    (and with it enforce + every differential guard) for the whole run.
     const commit = await git(cwd, ['commit', '-m', message], signal, spawnFn)
     if (commit.aborted) return {committed: false, reason: 'cancelled'}
     if (commit.exitCode !== 0) {
+        if (isIdentityFailure(commit.stderr || commit.stdout)) {
+            const retry = await git(
+                cwd,
+                [...FALLBACK_IDENTITY_ARGS, 'commit', '-m', message],
+                signal,
+                spawnFn
+            )
+            if (retry.aborted) return {committed: false, reason: 'cancelled'}
+            if (retry.exitCode === 0) {
+                return {committed: true, note: 'no git identity configured — used pi-task fallback'}
+            }
+            return {
+                committed: false,
+                reason: `git commit failed: ${firstLine(retry.stderr || retry.stdout)}`
+            }
+        }
         return {
             committed: false,
             reason: `git commit failed: ${firstLine(commit.stderr || commit.stdout)}`

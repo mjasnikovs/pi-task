@@ -94,6 +94,13 @@ describe('runRepoHealthCheck', () => {
         expect(out.reason).toContain('exited 3')
     })
 
+    test('exit 127 (command not found inside the script chain) → skipped, not failed', () => {
+        // Seen live: `bun run lint` exits 127 before node_modules exists — the tool
+        // is missing, not the code faulty. Same environment gap as ENOENT.
+        const dir = tmpRepo({'package.json': JSON.stringify({scripts: {lint: 'exit 127'}})})
+        expect(runRepoHealthCheck(dir).ok).toBe(true)
+    })
+
     test.skipIf(cargoInstalled)(
         'a tool that is not installed (ENOENT) is skipped, not failed',
         () => {

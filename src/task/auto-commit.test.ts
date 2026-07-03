@@ -69,17 +69,62 @@ test('gitCommitAll: git add failure surfaces its stderr', async () => {
     expect(res.reason).toMatch(/git add failed: fatal: index locked/)
 })
 
-test('gitCommitAll: commit failure (e.g. missing identity) is reported, not thrown', async () => {
+test('gitCommitAll: non-identity commit failure is reported, not thrown', async () => {
     const spawn = gitSpawn({
         'rev-parse': INSIDE,
         diff: STAGED,
         commit: {
             stdout: '',
             exitCode: 128,
-            stderr: 'Author identity unknown\n*** Please tell me who you are.\n'
+            stderr: 'fatal: unable to write new_index file\n'
         }
     })
     const res = await gitCommitAll('/repo', 'task: A (TASK_0006)', undefined, spawn)
     expect(res.committed).toBe(false)
-    expect(res.reason).toMatch(/git commit failed: Author identity unknown/)
+    expect(res.reason).toMatch(/git commit failed: fatal: unable to write new_index file/)
+})
+
+test('gitCommitAll: missing identity → retried with self-supplied fallback identity', async () => {
+    // The mx5 run-4 failure: a headless container with no gitconfig failed ALL 10
+    // per-task commits ("Author identity unknown"), silently disabling enforce and
+    // every commit-based guard. The fallback keeps the snapshot.
+    const seen: string[][] = []
+    const spawn = fakeSpawnByPrompt(args => {
+        seen.push([...args])
+        if (args[0] === 'rev-parse') return INSIDE
+        if (args[0] === 'diff') return STAGED
+        if (args[0] === 'commit') {
+            return {
+                stdout: '',
+                exitCode: 128,
+                stderr: 'Author identity unknown\n*** Please tell me who you are.\n'
+            }
+        }
+        return {stdout: '', exitCode: 0} // the `-c …identity… commit` retry succeeds
+    })
+    const res = await gitCommitAll('/repo', 'task: A (TASK_0006)', undefined, spawn)
+    expect(res.committed).toBe(true)
+    expect(res.note).toMatch(/no git identity configured/)
+    const retry = seen.find(a => a[0] === '-c')
+    expect(retry).toBeDefined()
+    expect(retry?.join(' ')).toContain('user.name=pi-task')
+    expect(retry?.join(' ')).toContain('user.email=pi-task@local')
+    expect(retry?.join(' ')).toContain('task: A (TASK_0006)')
+})
+
+test('gitCommitAll: identity fallback retry also failing → reported with retry stderr', async () => {
+    const spawn = fakeSpawnByPrompt(args => {
+        if (args[0] === 'rev-parse') return INSIDE
+        if (args[0] === 'diff') return STAGED
+        if (args[0] === 'commit') {
+            return {stdout: '', exitCode: 128, stderr: 'Author identity unknown\n'}
+        }
+        if (args[0] === '-c') {
+            return {stdout: '', exitCode: 128, stderr: 'fatal: repository locked\n'}
+        }
+        return {stdout: '', exitCode: 0}
+    })
+    const res = await gitCommitAll('/repo', 'task: A (TASK_0006)', undefined, spawn)
+    expect(res.committed).toBe(false)
+    expect(res.reason).toMatch(/git commit failed: fatal: repository locked/)
 })

@@ -108,6 +108,61 @@ test('runBoundedLintFix: deleted pre-existing untracked file trips the guard', a
     expect(r.reason).toContain('new-file.ts')
 })
 
+test('runBoundedLintFix: git failing AFTER the fix → guard inconclusive, converged fix kept', async () => {
+    // The mx5 run-4 misfire: the child verifiably edited only lint findings, but a
+    // git failure after it made every comparison read as "work gone" → two GOOD
+    // converged fixes rolled back. A git error must be inconclusive, never evidence.
+    const calls: string[][] = []
+    let postChild = false
+    const git: LintFixDeps['git'] = args => {
+        calls.push(args)
+        if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
+        if (args[0] === 'diff') {
+            return postChild ?
+                    Promise.resolve({exitCode: 128, stdout: ''}) // git broken after the fix
+                :   Promise.resolve({exitCode: 0, stdout: 'src/a.ts'})
+        }
+        if (args[0] === 'ls-files') {
+            return Promise.resolve({exitCode: 0, stdout: 'build.ts\nbun.lock\ncompose.yml'})
+        }
+        return Promise.resolve({exitCode: 0, stdout: ''})
+    }
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            runChild: () => {
+                postChild = true
+                return Promise.resolve('LINT-FIX: DONE')
+            }
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(r.reason).toContain('inconclusive')
+    // No rollback: the snapshot restore must NOT have run.
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: untracked probe git error → file not flagged as discarded', async () => {
+    const calls: string[][] = []
+    let lsCalls = 0
+    const git: LintFixDeps['git'] = args => {
+        calls.push(args)
+        if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
+        if (args[0] === 'ls-files') {
+            lsCalls++
+            // 1st: the pre-fix untracked listing; later: the per-file probe fails.
+            return lsCalls === 1 ?
+                    Promise.resolve({exitCode: 0, stdout: 'src/new-file.ts'})
+                :   Promise.resolve({exitCode: 128, stdout: ''})
+        }
+        return Promise.resolve({exitCode: 0, stdout: ''})
+    }
+    const r = await runBoundedLintFix(makeDeps({git}))
+    expect(r.ok).toBe(true)
+    expect(r.reason).toContain('inconclusive')
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
 test('runBoundedLintFix: health still failing → not applied (no guard trip)', async () => {
     const {git} = fakeGit({
         diff: ['src/a.ts', 'src/a.ts'],

@@ -318,21 +318,33 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             findings = []
         }
     }
-    let text: string
-    try {
-        text = await deps.runChild(
-            VERIFY_TOOLS,
-            buildVerifyPrompt(deps.spec, findings),
-            deps.signal
-        )
-    } catch (err) {
-        if (err instanceof Error && err.message === USER_CANCELLED) throw err
-        const msg = err instanceof Error ? err.message : String(err)
-        return {ok: false, reason: `verification pass could not run: ${msg}`}
+    // A child that emits NO verdict never judged the work (budget/context death mid-
+    // investigation — seen live: an 11-minute verify wandered, died verdict-less, and
+    // the resulting FAIL burned a full implementation re-run on an unjudged artifact).
+    // That is a verify-side fault, so retry the VERIFY once before reporting a FAIL.
+    for (let attempt = 1; ; attempt++) {
+        let text: string
+        try {
+            text = await deps.runChild(
+                VERIFY_TOOLS,
+                buildVerifyPrompt(deps.spec, findings),
+                deps.signal
+            )
+        } catch (err) {
+            if (err instanceof Error && err.message === USER_CANCELLED) throw err
+            const msg = err instanceof Error ? err.message : String(err)
+            return {ok: false, reason: `verification pass could not run: ${msg}`}
+        }
+        const verdict = parseVerifyVerdict(text)
+        if (verdict.pass) return {ok: true}
+        if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
+        return {
+            ok: false,
+            reason: `work did not verify: ${verdict.detail}${
+                verdict.detail === 'no verdict emitted' ? ' (after verify retry)' : ''
+            }`
+        }
     }
-    const verdict = parseVerifyVerdict(text)
-    if (verdict.pass) return {ok: true}
-    return {ok: false, reason: `work did not verify: ${verdict.detail}`}
 }
 
 export {VERIFY_TOOLS}

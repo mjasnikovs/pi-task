@@ -99,9 +99,16 @@ export function revertGuardViolations(preDirty: string[], stillDirty: Set<string
 
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
 
-async function dirtyFiles(deps: LintFixDeps): Promise<string[]> {
+/**
+ * Files differing from HEAD, or null when git itself failed. The distinction is
+ * load-bearing: mx5 run 4 rolled back two GOOD converged fixes because a git
+ * failure after the child read as "[] files still dirty" → every pre-existing work
+ * file looked reverted → false "discarded work". A git error is INCONCLUSIVE, not
+ * evidence of destruction.
+ */
+async function dirtyFiles(deps: LintFixDeps): Promise<string[] | null> {
     const r = await deps.git(['diff', '--name-only', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR])
-    if (r.exitCode !== 0) return []
+    if (r.exitCode !== 0) return null
     return r.stdout
         .split('\n')
         .map(l => l.trim())
@@ -114,14 +121,25 @@ async function dirtyFiles(deps: LintFixDeps): Promise<string[]> {
  */
 export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResult> {
     // Snapshot the full working state as a tree object (includes untracked files),
-    // then unstage so the child sees the tree exactly as it was.
-    const preDirty = await dirtyFiles(deps)
-    const preUntracked = (
-        await deps.git(['ls-files', '--others', '--exclude-standard', '--', '.', EXCLUDE_TASKS_DIR])
-    ).stdout
-        .split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 0)
+    // then unstage so the child sees the tree exactly as it was. A git failure at
+    // snapshot time leaves the guard without a baseline — it then runs vacuously
+    // (nothing to compare) rather than inventing violations.
+    const preDirty = (await dirtyFiles(deps)) ?? []
+    const preUntrackedRes = await deps.git([
+        'ls-files',
+        '--others',
+        '--exclude-standard',
+        '--',
+        '.',
+        EXCLUDE_TASKS_DIR
+    ])
+    const preUntracked =
+        preUntrackedRes.exitCode !== 0 ?
+            []
+        :   preUntrackedRes.stdout
+                .split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 0)
     let snapshot: string | null = null
     const add = await deps.git(['add', '-A'])
     if (add.exitCode === 0) {
@@ -141,15 +159,31 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     // REVERT-GUARD: every pre-existing work file must still differ from HEAD, and
     // every pre-existing untracked file must still exist. Trip → restore snapshot.
-    const stillDirty = new Set(await dirtyFiles(deps))
-    const violations = revertGuardViolations(preDirty, stillDirty)
-    for (const f of preUntracked) {
-        const probe = await deps.git(['ls-files', '--others', '--exclude-standard', '--', f])
-        const gone =
-            probe.stdout.trim().length === 0
-            // ...unless the child legitimately made it tracked-dirty (it edited it).
-            && !stillDirty.has(f)
-        if (gone) violations.push(f)
+    // Every comparison requires git to have actually SUCCEEDED: a git error after
+    // the child is inconclusive (proven live: it flagged the whole untracked file
+    // list as "discarded" while the child had verifiably edited only lint findings)
+    // — then the guard steps aside and the converge check below still decides.
+    const stillDirtyList = await dirtyFiles(deps)
+    let guardNote: string | undefined
+    const violations: string[] = []
+    if (stillDirtyList === null) {
+        guardNote = 'revert-guard inconclusive (git failed after fix) — converge check decides'
+    } else {
+        const stillDirty = new Set(stillDirtyList)
+        violations.push(...revertGuardViolations(preDirty, stillDirty))
+        for (const f of preUntracked) {
+            const probe = await deps.git(['ls-files', '--others', '--exclude-standard', '--', f])
+            if (probe.exitCode !== 0) {
+                // git error → unknown, not "gone"; note it once and move on.
+                guardNote ??= 'revert-guard partly inconclusive (git probe failed)'
+                continue
+            }
+            const gone =
+                probe.stdout.trim().length === 0
+                // ...unless the child legitimately made it tracked-dirty (it edited it).
+                && !stillDirty.has(f)
+            if (gone) violations.push(f)
+        }
     }
     if (violations.length > 0) {
         if (snapshot) {
@@ -170,5 +204,5 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     if (!health.ok) {
         return {ok: false, reason: `did not converge: ${health.reason}`}
     }
-    return {ok: true}
+    return {ok: true, reason: guardNote}
 }

@@ -248,6 +248,54 @@ describe('runWorkVerification', () => {
         expect(out).toEqual({ok: false, reason: 'work did not verify: the build is broken'})
     })
 
+    test('no-verdict child → verify retried once, second verdict wins', async () => {
+        // A verdict-less child never judged the work (budget death mid-investigation,
+        // seen live) — re-running the IMPLEMENTATION on an unjudged artifact wasted a
+        // full impl turn. The retry stays inside the verify gate.
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return runs === 1 ?
+                        'I looked at many files but ran out of budget…'
+                    :   'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(runs).toBe(2)
+    })
+
+    test('no verdict twice → blocked, reason says the retry happened', async () => {
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return 'still investigating, no conclusion'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('no verdict emitted (after verify retry)')
+        expect(runs).toBe(2)
+    })
+
+    test('a real FAIL verdict is NOT retried — one child run only', async () => {
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return 'WORK-VERIFIED: FAIL schema column missing'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(runs).toBe(1)
+    })
+
     test('passes VERIFY_TOOLS through to the child', async () => {
         let seenTools = ''
         await runWorkVerification({

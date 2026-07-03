@@ -127,6 +127,10 @@ export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutc
         const r = spawnSync(bin, args, {cwd, encoding: 'utf8', timeout: timeoutMs})
         // Tool missing (ENOENT) or killed by timeout → cannot conclude; skip it.
         if (r.error || r.status === null) continue
+        // Exit 127 = "command not found" INSIDE the script chain (e.g. `bun run lint`
+        // before node_modules exists — seen live failing TASK_0001's first verify).
+        // Same environment gap as ENOENT, just surfaced through the runner's shell.
+        if (r.status === 127) continue
         if (r.status !== 0) {
             return {
                 ok: false,
