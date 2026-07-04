@@ -433,7 +433,19 @@ export async function runGatesForTask(
                 )
             }
         }
-        if (mode === 'edit' && !enforceEditsBlocked) {
+        if (mode === 'edit' && !enforceEditsBlocked && editsMade === false) {
+            // KNOWN-clean tree (dirty dep ran and found no code edits): skip the
+            // enforce commit AND the differential re-verify outright. Without this
+            // gate the commit is never empty — the .pi-tasks gate-trail lines written
+            // above make it real — so mx5 run 5 burned a full model re-verify on an
+            // UNCHANGED tree for all ~29 tasks, and the 10 FAILs those re-verifies
+            // produced (all real, pre-existing defects) were "reverted" into the
+            // void: the revert dropped a bookkeeping-only commit and the defect
+            // reports were discarded while the tasks stayed PASS. No edits ⇒ nothing
+            // to guard ⇒ no commit, no re-verify, no revert. The trail lines ride
+            // along in the next ordinary commit.
+            await rec('enforce(edit): no code edits — enforce commit and re-verify skipped')
+        } else if (mode === 'edit' && !enforceEditsBlocked) {
             // Commit whatever the pass fixed as its own snapshot. A no-op when it made
             // no edits (nothing to commit) — then there is nothing to re-verify/revert.
             const enforceCommit = await deps.commit(

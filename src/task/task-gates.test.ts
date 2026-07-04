@@ -551,6 +551,88 @@ test('enforce edits passing repo health commit + differential-guard as before', 
     })
 })
 
+test('enforce with no code edits skips the enforce commit AND the differential re-verify', async () => {
+    // mx5 run 5 regression: enforce had nothing to do (no guideline files), yet the
+    // "enforce commit" was never empty — the .pi-tasks gate-trail lines made it real —
+    // so every task burned a full model re-verify of an UNCHANGED tree, and the 10
+    // genuine defect reports those re-verifies produced were "reverted" into the void
+    // (the revert dropped a bookkeeping-only commit) while the tasks stayed PASS.
+    // A KNOWN-clean tree (dirty ran and said false) must skip commit, re-verify, revert.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const commits: string[] = []
+        let verifyCalls = 0
+        let reverted = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => {
+                verifyCalls += 1
+                // If the differential re-verify DID run it would FAIL (a deeper pass
+                // finding a pre-existing bug) — the skip must keep that verdict from
+                // ever being produced and discarded.
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {ok: false, reason: 'pre-existing bug found on the second look'}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true, reason: 'no guideline files'}),
+            dirty: () => Promise.resolve(false),
+            revert: () => {
+                reverted++
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(verifyCalls).toBe(1) // gate verify only — no differential re-verify
+        expect(reverted).toBe(0)
+        expect(commits).toEqual(['task: A (TASK_0006)']) // no ENFORCE GUIDELINES commit
+        expect(trail).toContain(
+            'enforce(edit): no code edits — enforce commit and re-verify skipped'
+        )
+    })
+})
+
+test('enforce with real code edits still commits + differential-guards as before', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const commits: string[] = []
+        let verifyCalls = 0
+        let reverted = 0
+        const deps = makeDeps({
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve({ok: true})
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(true),
+            repoHealth: () => Promise.resolve({ok: true, reason: 'static checks passed'}),
+            revert: () => {
+                reverted++
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(verifyCalls).toBe(2) // gate verify + differential re-verify
+        expect(reverted).toBe(0)
+        expect(commits).toEqual(['task: A (TASK_0006)', 'ENFORCE GUIDELINES: A (TASK_0006)'])
+    })
+})
+
 test('enforce with a clean tree (no edits) skips the pre-commit health check', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

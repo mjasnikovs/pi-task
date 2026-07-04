@@ -489,9 +489,19 @@ export async function planAuto(
     // natural EOS for an 18KB design doc) is nonempty, so the length guard below
     // never fires and the whole run "completes" after one task. Judge the list
     // against the feature with a no-tools child; on INCOMPLETE, re-run decompose
-    // with the missing areas as a hint. Longest-list-wins so a flaky retry can
-    // never replace a better list; best-effort so a triage fault never blocks
+    // with the missing areas as a hint. Best-effort so a triage fault never blocks
     // planning (mirrors triageClarifyQuestion).
+    //
+    // A retry is adopted whenever it is NON-DEGENERATE — not only when it is
+    // strictly longer. The retry was generated WITH the judge's missing areas in
+    // its prompt, so it is the better-informed list, and the NEXT round's judge
+    // (not raw length) decides whether the gaps actually closed. Length survives
+    // only as a collapse floor against the one-task flake this gate exists for.
+    // mx5 run 5 (live): the hinted retry ADDED the flagged test-suite task but came
+    // back 29 titles vs the original 30 — strictly-longer discarded it, round 2
+    // re-judged the same unchanged list, and the known-incomplete plan shipped
+    // with no warning.
+    let unresolvedMissing: string[] | null = null
     for (let round = 0; round < MAX_COVERAGE_ROUNDS && planTitles.length > 0; round++) {
         let verdict: CoverageVerdict | null
         try {
@@ -503,9 +513,12 @@ export async function planAuto(
                 )
             )
         } catch {
+            // Judge fault: unknown coverage, not known-missing — stay silent.
+            unresolvedMissing = null
             break
         }
         if (verdict === null || verdict.kind === 'complete') {
+            unresolvedMissing = null
             logPlanDebug(
                 cwd,
                 `decompose-coverage round ${round + 1}: `
@@ -513,6 +526,7 @@ export async function planAuto(
             )
             break
         }
+        unresolvedMissing = verdict.missing
         logPlanDebug(
             cwd,
             `decompose-coverage round ${round + 1}: INCOMPLETE — missing: `
@@ -525,7 +539,28 @@ export async function planAuto(
         )
         const retryTitles = parseDecomposeList(retryRaw)
         logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
-        if (retryTitles.length > planTitles.length) planTitles = retryTitles
+        if (retryTitles.length > 0 && retryTitles.length * 2 >= planTitles.length) {
+            planTitles = retryTitles
+        } else {
+            logPlanDebug(
+                cwd,
+                `decompose retry discarded as degenerate (${retryTitles.length} vs ${planTitles.length} titles)`
+            )
+        }
+    }
+    // Rounds exhausted with the last judgment still INCOMPLETE: the plan ships (the
+    // gate is best-effort), but silently shipping a KNOWN-gapped plan is how mx5
+    // run 5 lost its whole test suite — tell the user what the judge last flagged.
+    if (unresolvedMissing !== null) {
+        logPlanDebug(
+            cwd,
+            `decompose-coverage exhausted ${MAX_COVERAGE_ROUNDS} round(s) still INCOMPLETE — missing: `
+                + unresolvedMissing.join('; ').slice(0, 300)
+        )
+        ctx.ui.notify(
+            `/task-auto: plan may be missing coverage — ${unresolvedMissing.join('; ').slice(0, 200)} — review the plan before running.`,
+            'warning'
+        )
     }
     // Thread the feature's spec doc(s) into every title so each per-task
     // pipeline — which only ever sees its title — reads the real spec instead of

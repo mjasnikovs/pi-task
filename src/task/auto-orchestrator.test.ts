@@ -1492,6 +1492,73 @@ test('coverage gate: a flaky shorter retry never replaces the longer list', asyn
         const id = await planAuto(ctx, dir, 'build the app', d)
         const {body} = await readTaskFile(dir, id!)
         expect(parseTaskList(body).map(e => e.title)).toEqual(['Task A', 'Task B', 'Task C'])
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('decompose retry discarded as degenerate (1 vs 3 titles)')
+    })
+})
+
+test('coverage gate: an equal-length retry that closes the gap IS adopted', async () => {
+    // mx5 run 5 regression: the judge flagged the missing test-suite task, the hinted
+    // retry ADDED it but came back 29 titles vs the original 30, and strictly-longer
+    // retention discarded the better-informed list — round 2 then re-judged the same
+    // unchanged plan. A non-degenerate retry must be adopted regardless of length;
+    // the NEXT round's judge decides whether the gaps closed.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            [
+                '- [ ] Scaffold\n- [ ] Auth routes\n- [ ] Admin page',
+                '- [ ] Scaffold\n- [ ] Auth routes\n- [ ] Test suite covering auth and admin'
+            ],
+            ['COVERAGE: INCOMPLETE\nMISSING: test suite', 'COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        const {body} = await readTaskFile(dir, id!)
+        expect(parseTaskList(body).map(e => e.title)).toEqual([
+            'Scaffold',
+            'Auth routes',
+            'Test suite covering auth and admin'
+        ])
+        // Round 2 judged the ADOPTED retry (COMPLETE), not the discarded original.
+        expect(d.calls.coverage).toBe(2)
+    })
+})
+
+test('coverage gate: rounds exhausted still INCOMPLETE → user is warned, not silent', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            [
+                '- [ ] Task A\n- [ ] Task B',
+                '- [ ] Task A\n- [ ] Task B',
+                '- [ ] Task A\n- [ ] Task B'
+            ],
+            [
+                'COVERAGE: INCOMPLETE\nMISSING: x',
+                'COVERAGE: INCOMPLETE\nMISSING: test suite for auth'
+            ]
+        )
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        expect(id).not.toBeNull() // best-effort: the plan still ships
+        const warn = captured.notifies.find(n => /plan may be missing coverage/.test(n.msg))
+        expect(warn).toBeDefined()
+        expect(warn!.msg).toContain('test suite for auth')
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain(
+            'exhausted 2 round(s) still INCOMPLETE — missing: test suite for auth'
+        )
+    })
+})
+
+test('coverage gate: COMPLETE on the second round leaves no exhaustion warning', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            ['- [ ] Task A\n- [ ] Task B', '- [ ] Task A\n- [ ] Task B\n- [ ] Tests'],
+            ['COVERAGE: INCOMPLETE\nMISSING: tests', 'COVERAGE: COMPLETE']
+        )
+        await planAuto(ctx, dir, 'build the app', d)
+        expect(captured.notifies.some(n => /plan may be missing coverage/.test(n.msg))).toBe(false)
     })
 })
 

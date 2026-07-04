@@ -59,9 +59,28 @@ describe('buildVerifyPrompt', () => {
         const p = buildVerifyPrompt('GOAL\nbuild it')
         expect(p).toContain('GOAL\nbuild it')
         expect(p).toContain('`bash`')
-        expect(p).toContain('CANNOT edit')
+        expect(p).toContain('never modify')
         expect(p).toContain('WORK-VERIFIED: PASS')
         expect(p).toContain('WORK-VERIFIED: FAIL')
+    })
+
+    test('rule 3d forbids the verifier itself substituting a copy for the artifact', () => {
+        // Regression guard for the mx5 run-5 class: the VERIFY CHILD (not the work)
+        // wrote final_verify.ts into the worktree, re-implemented the photos handler
+        // "EXACTLY as in photos.ts", served the copy on a scratch port, and passed a
+        // route the shipped app could not even serve (no Bun.serve existed). Rule 3b
+        // only bound tests shipped BY THE WORK; 3d must bind the verifier too, keep
+        // its scratch out of the repo (the file leaked into the next checkpoint
+        // commit), and make "the real artifact cannot be exercised" a FAIL, not a
+        // license to substitute.
+        const p = buildVerifyPrompt('GOAL\nx')
+        expect(p).toContain('3d. SELF-SUBSTITUTION')
+        expect(p).toContain('bind YOU')
+        expect(p).toMatch(/temp directory \(\/tmp\)/)
+        expect(p).toContain('NEVER inside the repository worktree')
+        expect(p).toMatch(/NEVER re-implement, copy, or paraphrase/)
+        expect(p).toContain('that inability IS the defect')
+        expect(p).toContain('Do not stand up a substitute')
     })
 
     test('anchors verification to the project as-shipped, run unaided', () => {
