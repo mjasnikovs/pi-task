@@ -80,7 +80,7 @@
         "type": "git",
         "url": "git+https://github.com/mjasnikovs/pi-task.git"
     },
-    "license": "MIT",
+    "license": "AGPL-3.0-only",
     "pi": {
         "extensions": [
             "dist/index.js"

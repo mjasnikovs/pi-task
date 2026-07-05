@@ -7,7 +7,7 @@
 **Deterministic spec-orchestration for local models — with bundled web, docs, fetch, and worker sub-agent tools.**
 
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 [![tests](https://img.shields.io/badge/tests-993%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
@@ -177,4 +177,12 @@ Built with [Bun](https://bun.sh), TypeScript (strict), and [TypeBox](https://git
 
 ## License
 
-[MIT](./LICENSE) © Edgars Mjasnikovs
+[AGPL-3.0-only](./LICENSE) © Edgars Mjasnikovs
+
+Free and open source under the GNU Affero General Public License v3.0: you may
+use, modify, and redistribute it, but any modified version you run — **including
+over a network as a hosted service** — must make its complete source available
+under the same license. Contributions are accepted under the
+[Contributor License Agreement](./CLA.md), which allows dual-licensing;
+for a commercial license that does not carry the AGPL's copyleft obligations,
+contact the author.
