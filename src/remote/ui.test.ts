@@ -291,10 +291,34 @@ describe('html()', () => {
         expect(m![1]).toContain('env(safe-area-inset-bottom')
     })
 
-    it('wraps long tool-call summaries so they stay inside the box', () => {
+    it('keeps a long tool-call summary on one line with an ellipsis (full text on expand/hover)', () => {
         const out = html('ws://localhost:7600/ws')
-        const m = out.match(/\.tool-call summary \{([^}]*)\}/)
+        // The summary is now a flex row; the label truncates with an ellipsis while
+        // the +N −M badge and elapsed time stay pinned right. (The old behavior hard-
+        // sliced the string at 64 chars mid-word — that must be gone.)
+        const m = out.match(/\.tool-label \{([^}]*)\}/)
         expect(m).not.toBeNull()
-        expect(m![1]).toMatch(/overflow-wrap|word-break/)
+        expect(m![1]).toContain('text-overflow: ellipsis')
+        expect(m![1]).toContain('white-space: nowrap')
+        expect(out).not.toContain('.slice(0, 64)')
+    })
+
+    it('summarizes tool calls by kind instead of dumping raw JSON', () => {
+        const out = html('ws://localhost:7600/ws')
+        // toolSummary (ui-tools.ts) turns {command} into "$ …", a path into "read …",
+        // etc., and addToolCall passes RAW args (not a pre-stringified blob).
+        expect(out).toContain('function toolSummary')
+        expect(out).toContain('function toolDiffHtml')
+        expect(out).toContain('toolSummary(toolName, args)')
+    })
+
+    it('renders assistant text as markdown but leaves user bubbles plain', () => {
+        const out = html('ws://localhost:7600/ws')
+        expect(out).toContain('function renderMarkdown')
+        // addBubble markdown-renders only the assistant role.
+        const m = out.match(/function addBubble\(role, text\) \{[\s\S]*?\n {4}\}/)
+        expect(m).not.toBeNull()
+        expect(m![0]).toContain("role === 'assistant'")
+        expect(m![0]).toContain('el.textContent = text')
     })
 })

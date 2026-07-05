@@ -40,6 +40,9 @@ interface SessionState {
     taskWidget: string[] | null
     prompt: PromptMessage | null
     context: ContextUsage | null
+    /** tool start timestamps (ms), keyed by toolCallId — kept off the serialized
+     *  parts so it never reaches the client; used only to compute elapsedMs. */
+    toolStarts: Record<string, number>
     /** Broadcast sink — swapped in tests via _setSink. */
     sink: (msg: unknown) => void
 }
@@ -54,6 +57,7 @@ function fresh(): SessionState {
         taskWidget: null,
         prompt: null,
         context: null,
+        toolStarts: {},
         sink: wsBroadcast
     }
 }
@@ -114,6 +118,7 @@ export function startTool(toolCallId: string, toolName: string, args: unknown): 
         isError: false,
         done: false
     })
+    s.toolStarts[toolCallId] = Date.now()
     s.sink({type: 'tool_start', toolCallId, toolName, args})
 }
 
@@ -132,10 +137,17 @@ export function endTool(
     const part = live.parts.find(
         (p): p is ToolPart => p.kind === 'tool' && p.toolCallId === toolCallId
     )
+    const startedAt = s.toolStarts[toolCallId]
+    let elapsedMs: number | undefined
+    if (startedAt != null) {
+        elapsedMs = Date.now() - startedAt
+        delete s.toolStarts[toolCallId]
+    }
     if (part) {
         part.result = result
         part.isError = isError
         part.done = true
+        if (elapsedMs != null) part.elapsedMs = elapsedMs
     } else {
         // tool_end without a matching start (shouldn't happen) — append a done tool.
         live.parts.push({
@@ -148,7 +160,7 @@ export function endTool(
             done: true
         })
     }
-    s.sink({type: 'tool_end', toolCallId, toolName, result, isError})
+    s.sink({type: 'tool_end', toolCallId, toolName, result, isError, elapsedMs})
 }
 
 export function agentEnd(context: ContextUsage): void {

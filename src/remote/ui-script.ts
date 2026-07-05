@@ -56,119 +56,14 @@ export function clientScript(wsUrl: string): string {
     let reconnectTimer = null;
     let ws = null;
 
-    const BT = String.fromCharCode(96);
-    const JS_LANGS = new Set(['js','jsx','mjs','cjs','javascript','ts','tsx','typescript']);
-    const JS_KW = new Set(['break','case','catch','class','const','continue','debugger',
-      'default','delete','do','else','export','extends','finally','for','from','function',
-      'if','import','in','instanceof','let','new','of','return','static','super','switch',
-      'this','throw','try','typeof','var','void','while','with','yield','async','await',
-      'type','interface','enum','implements','abstract','as','declare','namespace',
-      'readonly','undefined','null','true','false','override','satisfies']);
-
-    function escHtml(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
-    function syntaxHighlight(code, lang) {
-      if (!JS_LANGS.has((lang || '').toLowerCase())) return escHtml(code);
-      let r = '', i = 0;
-      while (i < code.length) {
-        const ch = code[i];
-        // Template literal
-        if (ch === BT) {
-          let j = i + 1;
-          while (j < code.length) {
-            if (code[j] === '\\\\') { j += 2; continue; }
-            if (code[j] === BT) { j++; break; }
-            j++;
-          }
-          r += '<span class="hl-str">' + escHtml(code.slice(i, j)) + '</span>';
-          i = j; continue;
-        }
-        // Single / double quoted string
-        if (ch === '"' || ch === "'") {
-          let j = i + 1;
-          while (j < code.length) {
-            if (code[j] === '\\\\') { j += 2; continue; }
-            if (code[j] === ch || code[j] === '\\n') break;
-            j++;
-          }
-          if (code[j] === ch) j++;
-          r += '<span class="hl-str">' + escHtml(code.slice(i, j)) + '</span>';
-          i = j; continue;
-        }
-        // Line comment
-        if (ch === '/' && code[i + 1] === '/') {
-          let j = i + 2;
-          while (j < code.length && code[j] !== '\\n') j++;
-          r += '<span class="hl-cmt">' + escHtml(code.slice(i, j)) + '</span>';
-          i = j; continue;
-        }
-        // Block comment
-        if (ch === '/' && code[i + 1] === '*') {
-          let j = i + 2;
-          while (j < code.length && !(code[j] === '*' && code[j + 1] === '/')) j++;
-          j += 2;
-          r += '<span class="hl-cmt">' + escHtml(code.slice(i, j)) + '</span>';
-          i = j; continue;
-        }
-        // Number
-        if (ch >= '0' && ch <= '9') {
-          let j = i;
-          if (code[i] === '0' && /[xXoObB]/.test(code[i + 1] || '')) {
-            j += 2; while (j < code.length && /[0-9a-fA-F_]/.test(code[j])) j++;
-          } else {
-            while (j < code.length && (code[j] >= '0' && code[j] <= '9' || code[j] === '_')) j++;
-            if (code[j] === '.') { j++; while (j < code.length && code[j] >= '0' && code[j] <= '9') j++; }
-            if (code[j] === 'e' || code[j] === 'E') {
-              j++; if (code[j] === '+' || code[j] === '-') j++;
-              while (j < code.length && code[j] >= '0' && code[j] <= '9') j++;
-            }
-            if (code[j] === 'n') j++;
-          }
-          r += '<span class="hl-num">' + escHtml(code.slice(i, j)) + '</span>';
-          i = j; continue;
-        }
-        // Identifier / keyword / function call
-        if (/[a-zA-Z_$]/.test(ch)) {
-          let j = i;
-          while (j < code.length && /[a-zA-Z0-9_$]/.test(code[j])) j++;
-          const word = code.slice(i, j);
-          if (JS_KW.has(word)) {
-            r += '<span class="hl-kw">' + word + '</span>';
-          } else if (code[j] === '(') {
-            r += '<span class="hl-fn">' + escHtml(word) + '</span>';
-          } else {
-            r += escHtml(word);
-          }
-          i = j; continue;
-        }
-        r += escHtml(ch); i++;
-      }
-      return r;
-    }
-
+    // Render assistant text as markdown (headers, lists, tables, emphasis, links)
+    // with fenced code blocks syntax-highlighted. renderMarkdown/syntaxHighlight are
+    // the pure functions from ui-render.ts / ui-highlight.ts, concatenated into this
+    // same <script> ahead of clientScript. innerHTML is safe because renderMarkdown
+    // escapes every span of literal text and only emits a fixed set of known tags.
     function setContent(el, text) {
-      el.innerHTML = '';
-      const BT3 = BT + BT + BT;
-      const re = new RegExp(BT3 + '([^\\n' + BT + ']*)\\n([\\s\\S]*?)' + BT3, 'g');
-      let last = 0, m;
-      while ((m = re.exec(text)) !== null) {
-        if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
-        const lang = m[1].trim();
-        const code = m[2];
-        const wrap = document.createElement('div');
-        wrap.className = 'code-block';
-        if (lang) { const lb = document.createElement('div'); lb.className = 'code-lang'; lb.textContent = lang; wrap.appendChild(lb); }
-        const pre = document.createElement('pre');
-        const codeEl = document.createElement('code');
-        codeEl.innerHTML = syntaxHighlight(code, lang);
-        pre.appendChild(codeEl);
-        wrap.appendChild(pre);
-        el.appendChild(wrap);
-        last = m.index + m[0].length;
-      }
-      if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+      el.classList.add('md');
+      el.innerHTML = renderMarkdown(text);
     }
 
     const COMMANDS = [
@@ -247,7 +142,10 @@ export function clientScript(wsUrl: string): string {
     function addBubble(role, text) {
       const el = document.createElement('div');
       el.className = 'bubble ' + role;
-      setContent(el, text);
+      // Only assistant text is markdown-rendered; user/error bubbles stay plain so a
+      // user's literal *asterisks* or backticks show verbatim.
+      if (role === 'assistant') setContent(el, text);
+      else el.textContent = text;
       chatLog.appendChild(el);
       scrollBottom();
       return el;
@@ -293,18 +191,48 @@ export function clientScript(wsUrl: string): string {
       stopSpinIfIdle();
     }
 
-    function addToolCall(toolName, argsStr, isError) {
-      // argsStr can be undefined (no args / JSON.stringify(undefined)); don't let
-      // that render as the literal "name: undefined" in the collapsed summary.
-      const label = (toolName + (argsStr ? ': ' + argsStr : '')).slice(0, 64);
+    // A finished/running tool card. args is the RAW args (object or JSON string) —
+    // toolSummary/toolBadge/toolDiffHtml (ui-tools.ts) turn it into a readable
+    // one-line summary, a +N −M badge, and (for edit/write) an expandable line diff.
+    function addToolCall(toolName, args, isError) {
       const d = document.createElement('details');
       d.className = 'tool-call' + (isError ? ' error' : '');
       const s = document.createElement('summary');
-      s.textContent = label;
+      const label = document.createElement('span');
+      label.className = 'tool-label';
+      label.textContent = toolSummary(toolName, args);
+      s.title = label.textContent;
+      s.appendChild(label);
+      const badge = toolBadge(toolName, args);
+      if (badge && (badge.added || badge.removed)) {
+        const b = document.createElement('span');
+        b.className = 'tool-badge';
+        b.textContent = '+' + badge.added + ' \\u2212' + badge.removed;
+        s.appendChild(b);
+      }
       d.appendChild(s);
+      const diffHtml = toolDiffHtml(toolName, args);
+      if (diffHtml) {
+        const dv = document.createElement('div');
+        dv.className = 'tool-diff';
+        dv.innerHTML = diffHtml;
+        d.appendChild(dv);
+      }
       chatLog.appendChild(d);
       scrollBottom();
       return d;
+    }
+
+    // Dim "· 1.2s" appended to a finished tool summary.
+    function appendElapsed(d, elapsedMs) {
+      const txt = fmtElapsed(elapsedMs);
+      if (!txt) return;
+      const s = d.querySelector('summary');
+      if (!s || s.querySelector('.tool-elapsed')) return;
+      const e = document.createElement('span');
+      e.className = 'tool-elapsed';
+      e.textContent = '\\u00B7 ' + txt;
+      s.appendChild(e);
     }
 
     function setEnabled(on) {
@@ -345,9 +273,9 @@ export function clientScript(wsUrl: string): string {
 
     // Render one tool part from the ordered parts list (running or finished).
     function renderToolPart(p) {
-      const argsStr = typeof p.args === 'string' ? p.args : JSON.stringify(p.args);
-      const d = addToolCall(p.toolName, argsStr, p.isError);
+      const d = addToolCall(p.toolName, p.args, p.isError);
       if (p.done) {
+        appendElapsed(d, p.elapsedMs);
         const pre = document.createElement('pre');
         pre.textContent = toolResultText(p.result);
         d.appendChild(pre);
@@ -604,8 +532,9 @@ export function clientScript(wsUrl: string): string {
       activeRecommended = msg.recommended || '';
       activeRecommended2 = msg.recommended2 || '';
       if (msg.recommended) {
-        // Mode A: recommendation(s) present.
-        promptRecText.textContent = msg.recommended;
+        // Mode A: recommendation(s) present. Render markdown in the panel so a
+        // recommendation with code/emphasis reads the same as an assistant bubble.
+        setContent(promptRecText, msg.recommended);
         showRecommendation();
       } else {
         // Mode B: no recommendation — the user must type an answer (or skip).
@@ -685,8 +614,7 @@ export function clientScript(wsUrl: string): string {
           break;
         case 'tool_start': {
           hideThinking();
-          const argsStr = typeof msg.args === 'string' ? msg.args : JSON.stringify(msg.args);
-          const d = addToolCall(msg.toolName, argsStr, false);
+          const d = addToolCall(msg.toolName, msg.args, false);
           const sp = document.createElement('span');
           sp.className = 'tool-spin spin';
           d.querySelector('summary').appendChild(sp);
@@ -700,6 +628,7 @@ export function clientScript(wsUrl: string): string {
             const sp = d.querySelector('.tool-spin');
             if (sp) { sp.remove(); stopSpinIfIdle(); }
             if (msg.isError) d.classList.add('error');
+            appendElapsed(d, msg.elapsedMs);
             const pre = document.createElement('pre');
             pre.textContent = toolResultText(msg.result);
             d.appendChild(pre);

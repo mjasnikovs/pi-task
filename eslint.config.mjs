@@ -18,7 +18,11 @@ export default tseslint.config(
             parserOptions: {
                 tsconfigRootDir: import.meta.dirname,
                 projectService: {
-                    allowDefaultProject: ['eslint.config.mjs', '.prettierrc.cjs'],
+                    allowDefaultProject: [
+                        'eslint.config.mjs',
+                        '.prettierrc.cjs',
+                        'scripts/*.ts'
+                    ],
                     defaultProject: 'tsconfig.json'
                 }
             }

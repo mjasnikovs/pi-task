@@ -16,6 +16,8 @@ export interface ToolPart {
     isError: boolean
     /** false while the tool is still running (result not in yet). */
     done: boolean
+    /** Wall-clock duration once finished, shown dimly in the tool summary. */
+    elapsedMs?: number
 }
 
 export type Part = TextPart | ToolPart

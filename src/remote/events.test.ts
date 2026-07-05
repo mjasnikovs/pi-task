@@ -112,7 +112,8 @@ describe('setupEvents', () => {
             toolCallId: 'id1',
             toolName: 'bash',
             result: 'output',
-            isError: false
+            isError: false,
+            elapsedMs: expect.any(Number)
         })
         expect(getState().live?.parts).toContainEqual({
             kind: 'tool',
@@ -121,7 +122,8 @@ describe('setupEvents', () => {
             args: {command: 'ls'},
             result: 'output',
             isError: false,
-            done: true
+            done: true,
+            elapsedMs: expect.any(Number)
         })
     })
 

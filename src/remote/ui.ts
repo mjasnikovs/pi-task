@@ -1,5 +1,8 @@
 import {STYLES} from './ui-styles.js'
 import {clientScript} from './ui-script.js'
+import {renderModule} from './ui-render.js'
+import {highlightModule} from './ui-highlight.js'
+import {toolsModule} from './ui-tools.js'
 
 export function html(wsUrl: string): string {
     const iconSvg = encodeURIComponent(
@@ -66,6 +69,9 @@ ${STYLES}
   </div>
   <div id="viewer"><span class="close" id="viewer-close">&#x2715;</span><div id="viewer-body"></div></div>
   <script>
+${renderModule()}
+${highlightModule()}
+${toolsModule()}
 ${clientScript(wsUrl)}
   </script>
 </body>

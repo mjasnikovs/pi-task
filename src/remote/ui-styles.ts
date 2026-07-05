@@ -93,19 +93,35 @@ export const STYLES = `    :root {
     .tool-call summary {
       padding: 6px 10px; color: var(--subtext1); cursor: pointer;
       user-select: none; list-style: none;
-      overflow-wrap: anywhere; word-break: break-word;
+      display: flex; align-items: center; gap: 8px;
     }
     .tool-call summary::-webkit-details-marker { display: none; }
-    .tool-call summary::before { content: "▶  "; }
-    .tool-call[open] > summary::before { content: "▼  "; }
+    .tool-call summary::before { content: "▶"; flex-shrink: 0; font-size: 9px; color: var(--subtext0); }
+    .tool-call[open] > summary::before { content: "▼"; }
     .tool-call.error > summary { color: var(--red); }
+    /* The summary is a single line: the label ellipsizes (full text in the title
+       tooltip / on expand), badges and timing stay pinned to the right. */
+    .tool-label {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: ui-monospace, monospace;
+    }
+    .tool-badge { flex-shrink: 0; color: var(--subtext0); font-size: 11px; }
+    .tool-elapsed { flex-shrink: 0; color: var(--subtext0); font-size: 11px; }
     .tool-call pre {
       padding: 8px 12px; overflow-y: auto;
       color: var(--subtext1); font-size: 11px; max-height: 280px;
       border-top: 1px solid var(--surface0);
       white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
     }
-    .tool-spin { color: var(--mauve); margin-left: 6px; font-family: ui-monospace, monospace; font-size: 13px; }
+    .tool-spin { color: var(--mauve); flex-shrink: 0; font-family: ui-monospace, monospace; font-size: 13px; }
+    /* Line diff for edit/write tools (tints derived from --green/--red). */
+    .tool-diff { border-top: 1px solid var(--surface0); overflow-x: auto; }
+    .diff { font-family: ui-monospace, monospace; font-size: 11px; padding: 4px 0; }
+    .diff-line { white-space: pre; padding: 0 10px; }
+    .diff-sign { display: inline-block; width: 1ch; margin-right: 8px; color: var(--subtext0); }
+    .diff-add { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+    .diff-del { background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); }
+    .diff-ctx { color: var(--subtext1); }
     .code-block {
       background: var(--crust); border: 1px solid var(--surface0);
       border-radius: 6px; overflow: hidden; margin: 4px 0;
@@ -124,6 +140,35 @@ export const STYLES = `    :root {
     .hl-cmt { color: var(--subtext0); font-style: italic; }
     .hl-num { color: var(--blue); }
     .hl-fn  { color: var(--yellow); }
+    /* Hand-rolled markdown, applied only to assistant bubbles + the recommendation
+       panel (both get the .md class from setContent). Block elements lay themselves
+       out, so switch off the container's pre-wrap for these. */
+    .md { white-space: normal; }
+    .md > :first-child { margin-top: 0; }
+    .md > :last-child { margin-bottom: 0; }
+    .md .md-h { color: var(--mauve); font-weight: 700; line-height: 1.3; margin: 10px 0 4px; }
+    .md .md-h1 { font-size: 1.35em; }
+    .md .md-h2 { font-size: 1.2em; }
+    .md .md-h3 { font-size: 1.08em; }
+    .md .md-h4, .md .md-h5, .md .md-h6 { font-size: 1em; }
+    .md .md-p { margin: 6px 0; }
+    .md .md-list { margin: 6px 0; padding-left: 22px; }
+    .md .md-list li { margin: 2px 0; }
+    .md .md-task { list-style: none; margin-left: -22px; }
+    .md .md-check { color: var(--green); }
+    .md .md-quote { border-left: 3px solid var(--surface2); margin: 6px 0; padding: 2px 0 2px 10px; color: var(--subtext1); }
+    .md .md-hr { border: none; border-top: 1px solid var(--surface1); margin: 10px 0; }
+    .md a { color: var(--blue); text-decoration: underline; }
+    .md strong { color: var(--text); font-weight: 700; }
+    .md em { font-style: italic; }
+    .md del { color: var(--subtext0); }
+    .md .md-code {
+      background: var(--crust); border: 1px solid var(--surface0);
+      border-radius: 4px; padding: 1px 4px; font-size: 0.92em;
+    }
+    .md .md-table { border-collapse: collapse; margin: 8px 0; font-size: 0.95em; display: block; overflow-x: auto; }
+    .md .md-table th, .md .md-table td { border: 1px solid var(--surface1); padding: 4px 8px; text-align: left; }
+    .md .md-table th { background: var(--surface0); color: var(--subtext1); }
     #input-bar {
       background: var(--mantle); padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
       display: flex; gap: 8px; flex-shrink: 0;
@@ -217,4 +262,13 @@ export const STYLES = `    :root {
     #viewer { position: fixed; inset: 24px; background: var(--mantle); border: 1px solid var(--surface2);
       border-radius: 8px; padding: 16px; overflow: auto; white-space: pre-wrap;
       overflow-wrap: anywhere; word-break: break-word; display: none; z-index: 70; }
-    #viewer .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--subtext0); }`
+    #viewer .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--subtext0); }
+    /* Desktop: center the transcript/status/input in a readable column instead of
+       hugging the left edge. The scrollbar stays at the true window edge; only the
+       content is inset. Mobile (below 960px) is unchanged. */
+    @media (min-width: 960px) {
+      #chat-log { padding-left: calc((100% - 920px) / 2); padding-right: calc((100% - 920px) / 2); }
+      #status-panel { padding-left: calc((100% - 920px) / 2 + 12px); padding-right: calc((100% - 920px) / 2 + 12px); }
+      #input-bar { padding-left: calc((100% - 920px) / 2); padding-right: calc((100% - 920px) / 2); }
+      #cmd-suggestions { left: calc((100% - 920px) / 2 + 16px); right: calc((100% - 920px) / 2 + 16px); }
+    }`

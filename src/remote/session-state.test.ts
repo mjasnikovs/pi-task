@@ -69,14 +69,16 @@ describe('session-state mutators', () => {
             args: {command: 'ls'},
             result: 'output',
             isError: false,
-            done: true
+            done: true,
+            elapsedMs: expect.any(Number)
         })
         expect(captured).toContainEqual({
             type: 'tool_end',
             toolCallId: 't1',
             toolName: 'bash',
             result: 'output',
-            isError: false
+            isError: false,
+            elapsedMs: expect.any(Number)
         })
     })
 
@@ -134,7 +136,8 @@ describe('snapshot()', () => {
                 args: {command: 'ls'},
                 result: 'ok',
                 isError: false,
-                done: true
+                done: true,
+                elapsedMs: expect.any(Number)
             }
         ])
     })
