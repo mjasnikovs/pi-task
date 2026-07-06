@@ -10,7 +10,7 @@ describe('HistoryBuffer', () => {
     it('addUserMessage appends a user Turn', () => {
         const buf = new HistoryBuffer()
         buf.addUserMessage('hello')
-        expect(buf.getEntries()).toEqual([{role: 'user', text: 'hello'}])
+        expect(buf.getEntries()).toEqual([{role: 'user', text: 'hello', ts: expect.any(Number)}])
     })
 
     it('addAssistantTurn appends an assistant Turn with ordered parts', () => {
@@ -29,20 +29,22 @@ describe('HistoryBuffer', () => {
             {kind: 'text' as const, text: 'done'}
         ]
         buf.addAssistantTurn(parts)
-        expect(buf.getEntries()).toEqual([{role: 'assistant', parts}])
+        expect(buf.getEntries()).toEqual([{role: 'assistant', parts, ts: expect.any(Number)}])
     })
 
     it('addSystemNote appends a system Turn', () => {
         const buf = new HistoryBuffer()
         buf.addSystemNote('Context compacted')
-        expect(buf.getEntries()).toEqual([{role: 'system', text: 'Context compacted'}])
+        expect(buf.getEntries()).toEqual([
+            {role: 'system', text: 'Context compacted', ts: expect.any(Number)}
+        ])
     })
 
     it('addError appends an assistant Turn flagged as error', () => {
         const buf = new HistoryBuffer()
         buf.addError('Connection error.')
         expect(buf.getEntries()).toEqual([
-            {role: 'assistant', text: 'Connection error.', error: true}
+            {role: 'assistant', text: 'Connection error.', error: true, ts: expect.any(Number)}
         ])
     })
 

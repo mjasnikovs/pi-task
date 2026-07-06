@@ -15,10 +15,28 @@ export interface PromptResolvedMessage {
     id: string
 }
 
-/** The single task-widget slot. `lines: null` clears it. */
+/** Structured task-widget payload — lets the browser render a real progress bar,
+ *  phase badge and elapsed clock instead of reflowing the terminal's text lines.
+ *  Always sent ALONGSIDE `lines`, which stays the authoritative fallback. */
+export interface WidgetData {
+    /** Head line, e.g. "TASK_0003 · auth routes" or "/task-auto · building". */
+    title: string
+    /** Current phase/stage label, e.g. "refine", "implementing", "enforcing guidelines". */
+    phase: string
+    /** Progress numerator (current step) — omitted for stages without numbering. */
+    done?: number
+    /** Progress denominator (total steps) — omitted for stages without numbering. */
+    total?: number
+    /** Pre-formatted elapsed clock, e.g. "2:14". */
+    elapsed?: string
+}
+
+/** The single task-widget slot. `lines: null` clears it. `data` carries the
+ *  structured view (null when clearing or when a producer only has text). */
 export interface WidgetMessage {
     type: 'widget'
     lines: string[] | null
+    data?: WidgetData | null
 }
 
 export interface NotifyMessage {

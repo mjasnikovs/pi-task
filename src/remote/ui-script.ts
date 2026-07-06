@@ -15,24 +15,78 @@ export function clientScript(wsUrl: string): string {
     const contextFill = document.getElementById('context-bar-fill');
     function setContextBar(usage) {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
+      setStatusChip(usage);
+    }
+    // Compact token count for the header chip (mirrors formatContextTokens).
+    function fmtTokens(n) {
+      if (n == null) return '';
+      if (n < 1000) return String(n);
+      if (n < 10000) return (n / 1000).toFixed(1) + 'k';
+      if (n < 1000000) return Math.round(n / 1000) + 'k';
+      return (n / 1000000).toFixed(1) + 'M';
+    }
+    function setStatusChip(usage) {
+      if (!usage) return;
+      var parts = [];
+      if (usage.percent != null) parts.push(Math.round(usage.percent) + '%');
+      if (usage.tokens != null && usage.contextWindow) {
+        parts.push(fmtTokens(usage.tokens) + '/' + fmtTokens(usage.contextWindow));
+      }
+      statusCtx.textContent = parts.join(' \\u00B7 ');
+    }
+    function setModelName(name) {
+      if (name && name !== modelName) { modelName = name; statusModel.textContent = name; }
+    }
+    // Connection dot: red disconnected, mauve pulsing while running, green idle.
+    function updateStatusDot() {
+      statusDot.className = !connected ? 'disconnected' : (agentRunning ? 'running' : 'idle');
     }
     const reconnectOverlay = document.getElementById('reconnect-overlay');
     const reconnectMsg = document.getElementById('reconnect-msg');
     const cmdSuggestions = document.getElementById('cmd-suggestions');
     const statusPanel = document.getElementById('status-panel');
+    const statusDot = document.getElementById('status-dot');
+    const statusModel = document.getElementById('status-model');
+    const statusCtx = document.getElementById('status-ctx');
+    const notifPanel = document.getElementById('notif-panel');
+    const notifList = document.getElementById('notif-list');
+    const notifToggle = document.getElementById('notif-toggle');
+    // Last ~20 toasts, newest first, for the bell dropdown history.
+    let notifHistory = [];
+    let modelName = '';
     // Widgets are keyed (e.g. 'pi-tasks', 'pi-task-auto'); track them per key so a
     // clear for one key can't be masked by a stale message from another.
     // Single authoritative task-widget slot. The snapshot and the live 'widget'
     // delta both set this; null hides the panel. (No more per-key map that could
     // strand an orphaned widget on screen.)
     let taskWidgetLines = null;
+    let taskWidgetData = null;
     function renderWidgets() {
+      // Structured payload wins (progress bar + phase badge + elapsed); the plain
+      // text lines are the fallback for older/unstructured producers.
+      if (taskWidgetData) { renderStructuredWidget(taskWidgetData); return; }
+      statusPanel.classList.remove('structured');
       if (taskWidgetLines && taskWidgetLines.length) {
         statusPanel.textContent = taskWidgetLines.join('\\n');
         statusPanel.style.display = 'block';
       } else {
         statusPanel.style.display = 'none';
       }
+    }
+    function renderStructuredWidget(d) {
+      statusPanel.classList.add('structured');
+      statusPanel.style.display = 'block';
+      var top = '<div class="widget-top">'
+        + '<span class="widget-title">' + escHtml(d.title || '') + '</span>'
+        + (d.phase ? '<span class="widget-phase">' + escHtml(d.phase) + '</span>' : '')
+        + (d.elapsed ? '<span class="widget-elapsed">' + escHtml(d.elapsed) + '</span>' : '')
+        + '</div>';
+      var bar = '';
+      if (d.total > 0 && d.done != null) {
+        var pct = Math.max(0, Math.min(100, Math.round((d.done / d.total) * 100)));
+        bar = '<div class="widget-bar"><div class="widget-bar-fill" style="width:' + pct + '%"></div></div>';
+      }
+      statusPanel.innerHTML = top + bar;
     }
     const promptCard = document.getElementById('prompt-card');
     const promptQ = document.getElementById('prompt-q');
@@ -55,6 +109,9 @@ export function clientScript(wsUrl: string): string {
     // into a red Stop while the agent is running.
     let agentRunning = false;
     let connected = false;
+    // Whether the current live turn produced any content — gates the trailing
+    // turn-timestamp so an empty/aborted turn doesn't leave a stray clock.
+    let turnHadContent = false;
     let stopArmed = false;
     let stopArmTimer = null;
     // The live thinking (<details>) block being streamed, and its accumulated text.
@@ -249,6 +306,7 @@ export function clientScript(wsUrl: string): string {
     // The input is disabled ONLY while disconnected or a prompt card is open — a
     // running agent no longer locks it, so messages can steer the live turn.
     function refreshComposer() {
+      updateStatusDot();
       const promptOpen = activePromptId !== null;
       inputEl.disabled = !connected || promptOpen;
       inputEl.placeholder = agentRunning
@@ -448,6 +506,23 @@ export function clientScript(wsUrl: string): string {
       return d;
     }
 
+    // Dim HH:MM shown under a turn's last bubble (local time).
+    function fmtClock(ts) {
+      if (!ts) return '';
+      var d = new Date(ts);
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      return pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    function addTurnTime(ts, roleClass) {
+      var clock = fmtClock(ts || Date.now());
+      if (!clock) return;
+      var el = document.createElement('div');
+      el.className = 'turn-time ' + roleClass;
+      el.textContent = clock;
+      chatLog.appendChild(el);
+      scrollBottom();
+    }
+
     // A muted, centered system note (e.g. "Context compacted").
     function addSystemLine(text) {
       const el = document.createElement('div');
@@ -462,9 +537,9 @@ export function clientScript(wsUrl: string): string {
     // parts (text segments + tool calls), so the layout matches the terminal's
     // interleaving instead of one merged blob with tools dumped at the end.
     function renderTurn(t) {
-      if (t.error) { addBubble('error', t.text); return; }
-      if (t.role === 'system') { addSystemLine(t.text); return; }
-      if (t.role === 'user') { addBubble('user', t.text); return; }
+      if (t.error) { addBubble('error', t.text); addTurnTime(t.ts, 'assistant'); return; }
+      if (t.role === 'system') { addSystemLine(t.text); addTurnTime(t.ts, 'system'); return; }
+      if (t.role === 'user') { addBubble('user', t.text); addTurnTime(t.ts, 'user'); return; }
       for (const p of (t.parts || [])) {
         if (p.kind === 'text') { if (p.text) addBubble('assistant', p.text); }
         else if (p.kind === 'thinking') {
@@ -472,6 +547,7 @@ export function clientScript(wsUrl: string): string {
         }
         else renderToolPart(p);
       }
+      addTurnTime(t.ts, 'assistant');
     }
 
     // Render the in-progress assistant turn from a snapshot, preserving order. The
@@ -521,6 +597,37 @@ export function clientScript(wsUrl: string): string {
       t.textContent = message;
       document.body.appendChild(t);
       setTimeout(function () { t.remove(); }, 4000);
+      recordNotif(message, level);
+    }
+
+    // Keep the last ~20 toasts (newest first) for the bell's history dropdown.
+    function recordNotif(message, level) {
+      notifHistory.unshift({message: message, level: level || 'info', ts: Date.now()});
+      if (notifHistory.length > 20) notifHistory.pop();
+      renderNotifList();
+    }
+    function renderNotifList() {
+      if (!notifHistory.length) {
+        notifList.innerHTML = '<div id="notif-empty">No notifications yet.</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < notifHistory.length; i++) {
+        var n = notifHistory[i];
+        html += '<div class="notif-item ' + escHtml(n.level) + '">'
+          + '<span class="notif-dot"></span>'
+          + '<span class="notif-msg">' + escHtml(n.message) + '</span>'
+          + '<span class="notif-time">' + fmtClock(n.ts) + '</span></div>';
+      }
+      notifList.innerHTML = html;
+    }
+
+    let notifOpen = false;
+    function setNotifOpen(open) {
+      notifOpen = open;
+      notifPanel.classList.toggle('open', open);
+      notifPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+      if (open) { renderNotifList(); updateNotifToggle(); }
     }
 
     const bell = document.getElementById('bell');
@@ -537,6 +644,12 @@ export function clientScript(wsUrl: string): string {
       var on = notifyEnabled();
       bell.textContent = on ? '\\u25C9' : '\\u25EF';
       bell.classList.toggle('on', on);
+      updateNotifToggle();
+    }
+    function updateNotifToggle() {
+      var on = notifyEnabled();
+      notifToggle.textContent = on ? 'On' : 'Enable';
+      notifToggle.classList.toggle('on', on);
     }
 
     // Why notifications can't be enabled here, or null if they can.
@@ -550,7 +663,17 @@ export function clientScript(wsUrl: string): string {
       return null;
     }
 
-    bell.addEventListener('click', function () {
+    // The bell opens the notification dropdown (history + push toggle); the push
+    // enable/disable lives on the toggle inside it.
+    bell.addEventListener('click', function (e) {
+      e.stopPropagation();
+      setNotifOpen(!notifOpen);
+    });
+    document.addEventListener('click', function (e) {
+      if (notifOpen && !notifPanel.contains(e.target) && e.target !== bell) setNotifOpen(false);
+    });
+
+    function togglePush() {
       // Turning OFF always works regardless of environment.
       if (localStorage.getItem(NOTIFY_KEY) === '1') {
         localStorage.setItem(NOTIFY_KEY, '0'); updateBell(); return;
@@ -574,7 +697,8 @@ export function clientScript(wsUrl: string): string {
           updateBell();
         });
       });
-    });
+    }
+    notifToggle.addEventListener('click', togglePush);
 
     // VAPID public key (base64url) -> Uint8Array for applicationServerKey.
     function urlB64ToUint8Array(base64) {
@@ -743,9 +867,12 @@ export function clientScript(wsUrl: string): string {
           for (const t of (msg.turns || [])) { try { renderTurn(t); } catch (e) {} }
           if (msg.live) { try { renderLiveTurn(msg.live); } catch (e) {} }
           taskWidgetLines = (msg.taskWidget && msg.taskWidget.length) ? msg.taskWidget : null;
+          taskWidgetData = msg.taskWidgetData || null;
           renderWidgets();
+          setModelName(msg.model);
           if (msg.context) setContextBar(msg.context); else contextFill.style.width = '0%';
           agentRunning = !!msg.agentRunning;
+          turnHadContent = !!(msg.live && msg.live.parts && msg.live.parts.length);
           if (msg.prompt) showPrompt(msg.prompt);
           refreshComposer();
           if (msg.agentRunning && !msg.live) showThinking();
@@ -755,11 +882,14 @@ export function clientScript(wsUrl: string): string {
           autoScroll = true;
           streamText = '';
           currentBubble = null;
+          turnHadContent = false;
           agentRunning = true;
+          setModelName(msg.model);
           refreshComposer();
           showThinking();
           break;
         case 'thinking_delta':
+          turnHadContent = true;
           hideThinking(); // drop the spinner-only bubble
           if (!currentThinking) {
             currentThinking = makeThinkingEl('', true);
@@ -779,6 +909,7 @@ export function clientScript(wsUrl: string): string {
           showThinking();
           break;
         case 'text_delta':
+          turnHadContent = true;
           if (!currentBubble) {
             hideThinking();
             finalizeThinking();
@@ -810,6 +941,7 @@ export function clientScript(wsUrl: string): string {
           }
           break;
         case 'tool_start': {
+          turnHadContent = true;
           hideThinking();
           finalizeThinking();
           const d = addToolCall(msg.toolName, msg.args, false);
@@ -840,9 +972,11 @@ export function clientScript(wsUrl: string): string {
         }
         case 'user_message':
           addBubble('user', msg.text);
+          addTurnTime(Date.now(), 'user');
           break;
         case 'system_note':
           addSystemLine(msg.text);
+          addTurnTime(Date.now(), 'system');
           break;
         case 'agent_error':
           hideThinking();
@@ -856,6 +990,8 @@ export function clientScript(wsUrl: string): string {
             stopSpinIfIdle();
           }
           addBubble('error', msg.message || 'Error');
+          if (turnHadContent) addTurnTime(Date.now(), 'assistant');
+          turnHadContent = false;
           agentRunning = false;
           refreshComposer();
           break;
@@ -864,7 +1000,10 @@ export function clientScript(wsUrl: string): string {
           finalizeThinking();
           currentBubble = null;
           streamText = '';
+          if (turnHadContent) addTurnTime(Date.now(), 'assistant');
+          turnHadContent = false;
           agentRunning = false;
+          setModelName(msg.model);
           refreshComposer();
           setContextBar(msg.contextUsage);
           break;
@@ -880,6 +1019,7 @@ export function clientScript(wsUrl: string): string {
           break;
         case 'widget':
           taskWidgetLines = (msg.lines && msg.lines.length) ? msg.lines : null;
+          taskWidgetData = msg.data || null;
           renderWidgets();
           break;
         case 'notify':
@@ -895,10 +1035,12 @@ export function clientScript(wsUrl: string): string {
           hideThinking();
           finalizeThinking();
           currentBubble = null; streamText = '';
+          turnHadContent = false;
           closePrompt();
           agentRunning = false;
           refreshComposer();
           taskWidgetLines = null;
+          taskWidgetData = null;
           renderWidgets();
           contextFill.style.width = '0%';
           break;

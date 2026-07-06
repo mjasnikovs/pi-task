@@ -36,6 +36,8 @@ export interface Turn {
     /** Ordered assistant content (text + tools). */
     parts?: Part[]
     error?: boolean
+    /** Epoch ms when the turn was committed — the client renders a dim HH:MM. */
+    ts?: number
 }
 
 export class HistoryBuffer {
@@ -68,7 +70,7 @@ export class HistoryBuffer {
     }
 
     private _push(entry: Turn): void {
-        this.entries.push(entry)
+        this.entries.push({ts: Date.now(), ...entry})
         if (this.entries.length > this.limit) {
             this.entries.shift()
         }

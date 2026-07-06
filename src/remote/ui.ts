@@ -43,8 +43,20 @@ ${STYLES}
   <div id="header">
     <span class="title">pi-task remote</span>
     <div class="hgroup">
-      <button id="bell" aria-label="Toggle notifications" title="Notifications">&#x25EF;</button>
+      <span id="status-chip" title="Connection · model · context">
+        <span id="status-dot" class="disconnected"></span>
+        <span id="status-model"></span>
+        <span id="status-ctx"></span>
+      </span>
+      <button id="bell" aria-label="Notifications" title="Notifications">&#x25EF;</button>
     </div>
+  </div>
+  <div id="notif-panel" aria-hidden="true">
+    <div id="notif-toggle-row">
+      <span id="notif-title">Notifications</span>
+      <button id="notif-toggle" type="button"></button>
+    </div>
+    <div id="notif-list"></div>
   </div>
   <div id="chat-wrap">
     <div id="chat-log"></div>

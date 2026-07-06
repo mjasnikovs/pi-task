@@ -9,6 +9,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {PHASE_INDEX, PHASE_ORDER, type PhaseName, type TaskState} from './task-types.js'
 import {titleForDisplay} from './parsers.js'
 import {setTaskWidget} from '../remote/session-state.js'
+import type {WidgetData} from '../remote/protocol.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,19 @@ export function buildWidgetLines(s: WidgetState, theme?: WidgetTheme): string[] 
     return lines
 }
 
+/** Structured mirror of buildWidgetLines for the browser's progress widget. */
+export function buildWidgetData(s: WidgetState): WidgetData {
+    const idx = PHASE_INDEX[s.phase]
+    const total = PHASE_ORDER.length
+    return {
+        title: `${s.taskId} · ${titleForDisplay(s)}`,
+        phase: s.phase,
+        done: Math.min(idx + 1, total),
+        total,
+        elapsed: formatDuration(Date.now() - s.startedAt)
+    }
+}
+
 // ─── Widget lifecycle ────────────────────────────────────────────────────────
 
 export function startWidget(
@@ -129,7 +143,7 @@ export function startWidget(
         } catch {
             /* stale ctx */
         }
-        setTaskWidget(plain)
+        setTaskWidget(plain, s ? buildWidgetData(s) : null)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -187,6 +201,27 @@ export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): s
     return lines
 }
 
+/** Structured mirror of buildAutoLoaderLines. Only the numbered planning stage
+ *  carries done/total; the enforce/verify/recommend/lint-fix passes are unnumbered. */
+export function buildAutoLoaderData(s: AutoLoaderState): WidgetData {
+    const phase =
+        s.kind === 'enforce' ? 'enforcing guidelines'
+        : s.kind === 'verify' ? 'verifying work'
+        : s.kind === 'recommend' ? 'assessing the failure'
+        : s.kind === 'lint-fix' ? 'fixing static findings'
+        : s.step
+    const d: WidgetData = {
+        title: `/task-auto · ${s.title}`,
+        phase,
+        elapsed: formatDuration(Date.now() - s.startedAt)
+    }
+    if (!s.kind || s.kind === 'planning') {
+        d.done = s.stepNum
+        d.total = s.stepTotal
+    }
+    return d
+}
+
 /**
  * Start the planning loader widget (same cadence/look as the phase widget).
  * Returns a disposer that stops the refresh and clears the widget. No-op
@@ -206,7 +241,7 @@ export function startAutoLoader(
         } catch {
             /* stale ctx */
         }
-        setTaskWidget(plain)
+        setTaskWidget(plain, s ? buildAutoLoaderData(s) : null)
     }
     render()
     const timer = setInterval(render, WIDGET_REFRESH_MS)
@@ -251,6 +286,16 @@ export function buildImplLines(s: ImplState, theme?: WidgetTheme): string[] {
     const trailer = lastLineTrailer(s.lastLine, theme)
     if (trailer) lines.push(trailer)
     return lines
+}
+
+/** Structured mirror of buildImplLines (the host implementation turn — no step
+ *  numbering, so no progress bar; just the phase badge and elapsed clock). */
+export function buildImplData(s: ImplState): WidgetData {
+    return {
+        title: `${s.taskId} · ${titleForDisplay(s)}`,
+        phase: 'implementing',
+        elapsed: formatDuration(Date.now() - s.startedAt)
+    }
 }
 
 export function flashTerminalWidget(

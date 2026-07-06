@@ -2,6 +2,9 @@ import {describe, expect, test} from 'bun:test'
 import {
     buildAutoLoaderLines,
     buildImplLines,
+    buildWidgetData,
+    buildAutoLoaderData,
+    buildImplData,
     formatContextDetail,
     WIDGET_LAST_LINE_MAX,
     type AutoLoaderState,
@@ -119,6 +122,55 @@ describe('formatContextDetail', () => {
 
     test('returns null when there is nothing to show', () => {
         expect(formatContextDetail({tokens: 0, contextWindow: 0, percent: 0})).toBeNull()
+    })
+})
+
+describe('structured WidgetData builders', () => {
+    test('buildWidgetData carries title, phase badge, progress, and elapsed', () => {
+        const d = buildWidgetData({
+            taskId: 'TASK_0001',
+            title: 'demo',
+            phase: 'grill',
+            startedAt: Date.now()
+        })
+        expect(d.title).toBe('TASK_0001 · demo')
+        expect(d.phase).toBe('grill')
+        expect(d.done).toBeGreaterThan(0)
+        expect(d.total).toBeGreaterThan(0)
+        expect(d.elapsed).toMatch(/^\d+:\d{2}$/)
+    })
+
+    test('buildAutoLoaderData numbers the planning stage but not the enforce pass', () => {
+        const planning = buildAutoLoaderData({
+            title: 'Add dark mode',
+            step: 'clarify',
+            stepNum: 1,
+            stepTotal: 2,
+            startedAt: Date.now()
+        })
+        expect(planning.title).toBe('/task-auto · Add dark mode')
+        expect(planning.phase).toBe('clarify')
+        expect(planning.done).toBe(1)
+        expect(planning.total).toBe(2)
+
+        const enforce = buildAutoLoaderData({
+            title: 'Add dark mode',
+            step: 'clarify',
+            stepNum: 1,
+            stepTotal: 2,
+            startedAt: Date.now(),
+            kind: 'enforce'
+        })
+        expect(enforce.phase).toBe('enforcing guidelines')
+        expect(enforce.done).toBeUndefined()
+        expect(enforce.total).toBeUndefined()
+    })
+
+    test('buildImplData is an unnumbered "implementing" phase', () => {
+        const d = buildImplData({taskId: 'TASK_0002', title: 'x', startedAt: Date.now()})
+        expect(d.title).toBe('TASK_0002 · x')
+        expect(d.phase).toBe('implementing')
+        expect(d.done).toBeUndefined()
     })
 })
 

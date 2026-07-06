@@ -26,6 +26,7 @@ import {
     WIDGET_KEY,
     WIDGET_REFRESH_MS,
     buildImplLines,
+    buildImplData,
     type ContextSnapshot,
     type ImplState
 } from './widget.js'
@@ -72,7 +73,7 @@ function render(): void {
     } catch {
         /* stale ctx */
     }
-    setTaskWidget(buildImplLines(state, undefined)) // un-themed for the wire
+    setTaskWidget(buildImplLines(state, undefined), buildImplData(state)) // un-themed for the wire
 }
 
 function startTimer(): void {

@@ -20,9 +20,9 @@ import {
 /** Mirror pi agent events into the authoritative SessionState. Each handler
  *  drives a mutator, which updates the snapshot AND broadcasts the live delta. */
 export function setupEvents(pi: ExtensionAPI): void {
-    pi.on('agent_start', (_event, _ctx) => {
+    pi.on('agent_start', (_event, ctx) => {
         setAgentIdle(false)
-        agentStart()
+        agentStart(ctx.model?.name)
     })
 
     pi.on('message_update', (event, _ctx) => {
@@ -69,7 +69,7 @@ export function setupEvents(pi: ExtensionAPI): void {
 
     pi.on('agent_end', (_event, ctx) => {
         setAgentIdle(true)
-        agentEnd(ctx.getContextUsage() as ContextUsage)
+        agentEnd(ctx.getContextUsage() as ContextUsage, ctx.model?.name)
         // Deliberately no push: agent_end fires on EVERY host turn — every chat
         // reply, every internal phase turn inside /task, and every internal /task
         // run inside /task-auto — so a "Task finished" push here floods the device.

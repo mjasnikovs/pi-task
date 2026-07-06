@@ -13,7 +13,7 @@
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {HistoryBuffer} from './history.js'
 import type {Turn, Part, ToolPart} from './history.js'
-import type {ContextUsage, PromptMessage} from './protocol.js'
+import type {ContextUsage, PromptMessage, WidgetData} from './protocol.js'
 
 export interface LiveTurn {
     /** Ordered assistant content (text segments + tool calls) for this run. */
@@ -29,8 +29,10 @@ export interface SnapshotMessage {
     live: LiveTurn | null
     agentRunning: boolean
     taskWidget: string[] | null
+    taskWidgetData: WidgetData | null
     prompt: PromptMessage | null
     context: ContextUsage | null
+    model: string | null
 }
 
 interface SessionState {
@@ -38,8 +40,11 @@ interface SessionState {
     live: LiveTurn | null
     agentRunning: boolean
     taskWidget: string[] | null
+    taskWidgetData: WidgetData | null
     prompt: PromptMessage | null
     context: ContextUsage | null
+    /** Human-readable active model name (e.g. "Qwen3.6 27B"), for the header chip. */
+    model: string | null
     /** tool start timestamps (ms), keyed by toolCallId — kept off the serialized
      *  parts so it never reaches the client; used only to compute elapsedMs. */
     toolStarts: Record<string, number>
@@ -55,8 +60,10 @@ function fresh(): SessionState {
         live: null,
         agentRunning: false,
         taskWidget: null,
+        taskWidgetData: null,
         prompt: null,
         context: null,
+        model: null,
         toolStarts: {},
         sink: wsBroadcast
     }
@@ -79,11 +86,12 @@ function ensureLive(s: SessionState): LiveTurn {
 
 // ─── Mutators ────────────────────────────────────────────────────────────────
 
-export function agentStart(): void {
+export function agentStart(model?: string): void {
     const s = getState()
     s.live = {parts: [], textOpen: false}
     s.agentRunning = true
-    s.sink({type: 'agent_start'})
+    if (model) s.model = model
+    s.sink({type: 'agent_start', model: s.model})
 }
 
 export function appendText(delta: string): void {
@@ -186,13 +194,14 @@ export function endTool(
     s.sink({type: 'tool_end', toolCallId, toolName, result, isError, elapsedMs})
 }
 
-export function agentEnd(context: ContextUsage): void {
+export function agentEnd(context: ContextUsage, model?: string): void {
     const s = getState()
     if (s.live) s.history.addAssistantTurn(s.live.parts)
     s.live = null
     s.agentRunning = false
     s.context = context
-    s.sink({type: 'agent_end', contextUsage: context})
+    if (model) s.model = model
+    s.sink({type: 'agent_end', contextUsage: context, model: s.model})
 }
 
 export function addUserTurn(text: string): void {
@@ -217,11 +226,13 @@ export function addSystemNote(text: string): void {
     s.sink({type: 'system_note', text})
 }
 
-/** The single task-widget slot. Empty/undefined lines clear it. */
-export function setTaskWidget(lines: string[] | null | undefined): void {
+/** The single task-widget slot. Empty/undefined lines clear it. `data` is the
+ *  structured view rendered by the browser; the lines remain the fallback. */
+export function setTaskWidget(lines: string[] | null | undefined, data?: WidgetData | null): void {
     const s = getState()
     s.taskWidget = lines && lines.length ? lines : null
-    s.sink({type: 'widget', lines: s.taskWidget})
+    s.taskWidgetData = s.taskWidget ? (data ?? null) : null
+    s.sink({type: 'widget', lines: s.taskWidget, data: s.taskWidgetData})
 }
 
 export function setPrompt(prompt: PromptMessage): void {
@@ -249,8 +260,11 @@ export function reset(): void {
     s.live = null
     s.agentRunning = false
     s.taskWidget = null
+    s.taskWidgetData = null
     s.prompt = null
     s.context = null
+    // Deliberately keep s.model: the active model doesn't change across a /new,
+    // so the header chip needn't blank and re-fill on every session switch.
     s.sink({type: 'reset'})
 }
 
@@ -263,7 +277,9 @@ export function snapshot(): SnapshotMessage {
         live: s.live ? {parts: [...s.live.parts], textOpen: s.live.textOpen} : null,
         agentRunning: s.agentRunning,
         taskWidget: s.taskWidget,
+        taskWidgetData: s.taskWidgetData,
         prompt: s.prompt,
-        context: s.context
+        context: s.context,
+        model: s.model
     }
 }

@@ -123,9 +123,26 @@ const snapshot = {
     ],
     live: null,
     agentRunning: false,
-    taskWidget: ['/task-auto · building', 'Task 3/8 — auth-routes', 'elapsed 2m14s'],
+    taskWidget: ['TASK_0003 · auth routes', 'phase 4/8 refine · 2:14'],
+    taskWidgetData: {
+        title: 'TASK_0003 · auth routes',
+        phase: 'refine',
+        done: 4,
+        total: 8,
+        elapsed: '2:14'
+    },
     prompt: null,
-    context: {percent: 62, tokens: 81000, contextWindow: 131072}
+    context: {percent: 62, tokens: 81000, contextWindow: 131072},
+    model: 'Qwen3.6 27B'
+}
+
+// Stamp the committed turns so the client renders dim HH:MM timestamps.
+{
+    let t = Date.now() - 6 * 60 * 1000
+    for (const turn of snapshot.turns as {ts?: number}[]) {
+        turn.ts = t
+        t += 90 * 1000
+    }
 }
 
 const promptMsg = {
@@ -173,6 +190,13 @@ const stub = `  <script>
           window.__push({type: 'thinking_delta', delta: 'It reads CSS vars off :root and never hard-codes hex.\\n'});
           window.__push({type: 'thinking_delta', delta: 'So the ramp helper must mix by name — I will verify that next.'});
         }
+        // #notif seeds a few toasts into history and opens the bell dropdown.
+        if (location.hash === '#notif') {
+          window.__push({type: 'notify', message: 'Task 3/8 started — auth-routes', level: 'info'});
+          window.__push({type: 'notify', message: 'Context full — compacting…', level: 'warning'});
+          window.__push({type: 'notify', message: '/task-auto failed: lint errors', level: 'error'});
+          setTimeout(function () { var b = document.getElementById('bell'); if (b) b.click(); }, 60);
+        }
         // #open expands every tool card so the diff body is visible in the shot.
         if (location.hash === '#open') {
           setTimeout(function () {
@@ -205,7 +229,8 @@ const SHOTS: Shot[] = [
     {mode: 'open', hash: '#open', size: '430,2400'},
     {mode: 'prompt', hash: '#prompt', size: '390,844'},
     {mode: 'live', hash: '#live', size: '390,844'},
-    {mode: 'think', hash: '#think', size: '390,844'}
+    {mode: 'think', hash: '#think', size: '390,844'},
+    {mode: 'notif', hash: '#notif', size: '390,844'}
 ]
 
 function shoot(shot: Shot, dumpDom: boolean): void {

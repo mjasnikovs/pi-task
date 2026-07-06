@@ -34,7 +34,7 @@ describe('session-state mutators', () => {
         agentStart()
         expect(getState().live).toEqual({parts: [], textOpen: false})
         expect(getState().agentRunning).toBe(true)
-        expect(captured).toContainEqual({type: 'agent_start'})
+        expect(captured).toContainEqual({type: 'agent_start', model: null})
     })
 
     it('appendText accumulates into the open text part and broadcasts the delta', () => {
@@ -123,7 +123,25 @@ describe('session-state mutators', () => {
         expect(getState().taskWidget).toEqual(['line'])
         setTaskWidget([])
         expect(getState().taskWidget).toBeNull()
-        expect(captured).toContainEqual({type: 'widget', lines: null})
+        expect(captured).toContainEqual({type: 'widget', lines: null, data: null})
+    })
+
+    it('setTaskWidget carries structured data alongside lines, snapshot, and clear', () => {
+        const data = {title: 'TASK_0001 · x', phase: 'refine', done: 2, total: 6, elapsed: '0:12'}
+        setTaskWidget(['TASK_0001 · x', 'phase 2/6 refine · 0:12'], data)
+        expect(getState().taskWidgetData).toEqual(data)
+        expect(captured).toContainEqual({type: 'widget', lines: expect.any(Array), data})
+        expect(snapshot().taskWidgetData).toEqual(data)
+        setTaskWidget(undefined) // clearing drops the structured view too
+        expect(getState().taskWidgetData).toBeNull()
+        expect(snapshot().taskWidgetData).toBeNull()
+    })
+
+    it('agentStart/agentEnd record the model name and carry it in the snapshot', () => {
+        agentStart('Qwen3.6 27B')
+        expect(captured).toContainEqual({type: 'agent_start', model: 'Qwen3.6 27B'})
+        agentEnd({tokens: 1, contextWindow: 2, percent: 50}, 'Qwen3.6 27B')
+        expect(snapshot().model).toBe('Qwen3.6 27B')
     })
 
     it('setPrompt / clearPrompt track the active prompt', () => {
@@ -182,11 +200,12 @@ describe('snapshot()', () => {
         addUserTurn('do it')
         addError('boom')
         const snap = snapshot()
-        expect(snap.turns).toContainEqual({role: 'user', text: 'do it'})
+        expect(snap.turns).toContainEqual({role: 'user', text: 'do it', ts: expect.any(Number)})
         expect(snap.turns).toContainEqual({
             role: 'assistant',
             text: 'boom',
-            error: true
+            error: true,
+            ts: expect.any(Number)
         })
     })
 
@@ -200,6 +219,7 @@ describe('snapshot()', () => {
         expect(snap.turns).toEqual([])
         expect(snap.live).toBeNull()
         expect(snap.taskWidget).toBeNull()
+        expect(snap.taskWidgetData).toBeNull()
         expect(snap.prompt).toBeNull()
         expect(snap.context).toBeNull()
         expect(snap.agentRunning).toBe(false)

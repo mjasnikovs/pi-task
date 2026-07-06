@@ -18,7 +18,8 @@ function makePiMock() {
 }
 
 const mockCtx = {
-    getContextUsage: () => ({tokens: 5000, contextWindow: 100000, percent: 5})
+    getContextUsage: () => ({tokens: 5000, contextWindow: 100000, percent: 5}),
+    model: {name: 'Qwen3.6 27B'}
 }
 
 describe('setupEvents', () => {
@@ -33,20 +34,22 @@ describe('setupEvents', () => {
         setupEvents(pi as never)
     })
 
-    it('broadcasts agent_start and opens a live turn', () => {
+    it('broadcasts agent_start (with model) and opens a live turn', () => {
         pi.emit('agent_start', {type: 'agent_start'})
-        expect(captured).toContainEqual({type: 'agent_start'})
+        expect(captured).toContainEqual({type: 'agent_start', model: 'Qwen3.6 27B'})
         expect(getState().agentRunning).toBe(true)
     })
 
-    it('broadcasts agent_end with contextUsage and stores it on the state', () => {
+    it('broadcasts agent_end with contextUsage + model and stores them on the state', () => {
         pi.emit('agent_start', {type: 'agent_start'})
         pi.emit('agent_end', {type: 'agent_end'})
         expect(captured).toContainEqual({
             type: 'agent_end',
-            contextUsage: {tokens: 5000, contextWindow: 100000, percent: 5}
+            contextUsage: {tokens: 5000, contextWindow: 100000, percent: 5},
+            model: 'Qwen3.6 27B'
         })
         expect(snapshot().context).toEqual({tokens: 5000, contextWindow: 100000, percent: 5})
+        expect(snapshot().model).toBe('Qwen3.6 27B')
     })
 
     it('accumulates text_delta into the live turn', () => {
@@ -150,7 +153,11 @@ describe('setupEvents', () => {
 
     it('records a user turn and broadcasts user_message on interactive input', () => {
         pi.emit('input', {type: 'input', text: 'do the thing', images: [], source: 'interactive'})
-        expect(snapshot().turns).toContainEqual({role: 'user', text: 'do the thing'})
+        expect(snapshot().turns).toContainEqual({
+            role: 'user',
+            text: 'do the thing',
+            ts: expect.any(Number)
+        })
         expect(captured).toContainEqual({type: 'user_message', text: 'do the thing'})
     })
 
@@ -168,7 +175,8 @@ describe('setupEvents', () => {
         expect(snapshot().turns).toContainEqual({
             role: 'assistant',
             text: 'Connection error.',
-            error: true
+            error: true,
+            ts: expect.any(Number)
         })
     })
 
@@ -219,6 +227,10 @@ describe('setupEvents', () => {
         // Completion is a persistent transcript note: a live delta now…
         expect(captured).toContainEqual({type: 'system_note', text: 'Context compacted'})
         // …and committed so it survives a reconnect.
-        expect(snapshot().turns).toContainEqual({role: 'system', text: 'Context compacted'})
+        expect(snapshot().turns).toContainEqual({
+            role: 'system',
+            text: 'Context compacted',
+            ts: expect.any(Number)
+        })
     })
 })

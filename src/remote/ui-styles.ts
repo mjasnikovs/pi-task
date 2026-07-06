@@ -43,6 +43,54 @@ export const STYLES = `    :root {
     }
     #bell:hover { color: var(--text); }
     #bell.on { color: var(--mauve); }
+    /* Header status chip: connection dot + model name + context usage. */
+    #status-chip { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--subtext0); }
+    #status-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--surface2); transition: background 0.2s ease;
+    }
+    #status-dot.idle { background: var(--green); }
+    #status-dot.running { background: var(--mauve); animation: dot-pulse 1.2s ease-in-out infinite; }
+    #status-dot.disconnected { background: var(--red); }
+    @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    @media (prefers-reduced-motion: reduce) { #status-dot.running { animation: none; } }
+    #status-model { color: var(--subtext1); }
+    #status-model:empty { display: none; }
+    #status-ctx { color: var(--subtext0); font-variant-numeric: tabular-nums; }
+    #status-ctx:empty { display: none; }
+    /* Notification bell dropdown: a push toggle row + the recent-toast history. */
+    #notif-panel {
+      display: none; position: fixed; z-index: 80;
+      top: calc(env(safe-area-inset-top, 0px) + 42px);
+      right: calc(env(safe-area-inset-right, 0px) + 12px);
+      width: min(320px, calc(100vw - 24px));
+      background: var(--mantle); border: 1px solid var(--surface1); border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); overflow: hidden;
+    }
+    #notif-panel.open { display: block; }
+    #notif-toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; border-bottom: 1px solid var(--surface0);
+    }
+    #notif-title { font-size: 12px; color: var(--subtext1); font-weight: 700; }
+    #notif-toggle {
+      background: var(--surface1); color: var(--text); border: none; border-radius: 6px;
+      padding: 4px 10px; font-family: inherit; font-size: 11px; cursor: pointer;
+    }
+    #notif-toggle:hover { filter: brightness(1.1); }
+    #notif-toggle.on { background: var(--mauve); color: var(--crust); font-weight: 700; }
+    #notif-list { max-height: 40dvh; overflow-y: auto; }
+    #notif-empty { padding: 14px 12px; color: var(--subtext0); font-size: 11px; text-align: center; }
+    .notif-item {
+      display: flex; align-items: baseline; gap: 8px; padding: 7px 12px;
+      border-bottom: 1px solid var(--surface0); font-size: 12px;
+    }
+    .notif-item:last-child { border-bottom: none; }
+    .notif-item .notif-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--blue); align-self: center; }
+    .notif-item.warning .notif-dot { background: var(--peach); }
+    .notif-item.error .notif-dot { background: var(--red); }
+    .notif-item .notif-msg { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; word-break: break-word; }
+    .notif-item .notif-time { flex-shrink: 0; color: var(--subtext0); font-size: 10px; font-variant-numeric: tabular-nums; }
     #chat-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
     #chat-log {
       flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 16px;
@@ -264,6 +312,27 @@ export const STYLES = `    :root {
     }
     #status-panel { padding: 6px 12px; border-bottom: 1px solid var(--surface1);
       color: var(--subtext1); white-space: pre-wrap; font-size: 13px; display: none; }
+    /* Structured task widget (progress bar + phase badge + elapsed). Replaces the
+       plain text lines when the server sends a structured data payload. */
+    #status-panel.structured { white-space: normal; display: block; }
+    .widget-top { display: flex; align-items: center; gap: 8px; }
+    .widget-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; color: var(--text); font-size: 13px; }
+    .widget-phase { flex-shrink: 0; background: var(--surface0); color: var(--mauve);
+      border-radius: 4px; padding: 1px 7px; font-size: 10px; letter-spacing: 0.03em;
+      text-transform: uppercase; }
+    .widget-elapsed { flex-shrink: 0; color: var(--subtext0); font-size: 11px;
+      font-variant-numeric: tabular-nums; }
+    .widget-bar { height: 4px; background: var(--surface0); border-radius: 2px;
+      overflow: hidden; margin-top: 6px; }
+    .widget-bar-fill { height: 100%; background: var(--mauve); border-radius: 2px;
+      transition: width 0.3s ease; }
+    /* Dim per-turn timestamp shown under a committed turn's bubble. */
+    .turn-time { font-size: 10px; color: var(--subtext0); opacity: 0.55; padding: 0 4px;
+      margin-top: -2px; }
+    .turn-time.user { align-self: flex-end; }
+    .turn-time.assistant, .turn-time.system { align-self: flex-start; }
+    .turn-time.system { align-self: center; }
     #prompt-card { position: fixed; left: 0; right: 0; bottom: 0; background: var(--mantle);
       border-top: 2px solid var(--mauve); padding: 16px 14px calc(16px + env(safe-area-inset-bottom, 0px));
       display: none; z-index: 50; max-height: 80dvh; overflow-y: auto; }
