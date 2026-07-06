@@ -138,6 +138,28 @@ describe('structured WidgetData builders', () => {
         expect(d.done).toBeGreaterThan(0)
         expect(d.total).toBeGreaterThan(0)
         expect(d.elapsed).toMatch(/^\d+:\d{2}$/)
+        expect(d.action).toBeUndefined()
+    })
+
+    test('buildWidgetData carries the current action from lastLine (capped)', () => {
+        const d = buildWidgetData({
+            taskId: 'TASK_0001',
+            title: 'demo',
+            phase: 'grill',
+            startedAt: Date.now(),
+            lastLine: 'worker:tooling: read: src/index.ts'
+        })
+        expect(d.action).toBe('worker:tooling: read: src/index.ts')
+
+        const long = buildWidgetData({
+            taskId: 'TASK_0001',
+            title: 'demo',
+            phase: 'grill',
+            startedAt: Date.now(),
+            lastLine: 'x'.repeat(400)
+        })
+        expect(long.action).toHaveLength(200)
+        expect(long.action?.endsWith('…')).toBe(true)
     })
 
     test('buildAutoLoaderData numbers the planning stage but not the enforce pass', () => {
@@ -146,12 +168,14 @@ describe('structured WidgetData builders', () => {
             step: 'clarify',
             stepNum: 1,
             stepTotal: 2,
-            startedAt: Date.now()
+            startedAt: Date.now(),
+            lastLine: 'decompose: 4 tasks'
         })
         expect(planning.title).toBe('/task-auto · Add dark mode')
         expect(planning.phase).toBe('clarify')
         expect(planning.done).toBe(1)
         expect(planning.total).toBe(2)
+        expect(planning.action).toBe('decompose: 4 tasks')
 
         const enforce = buildAutoLoaderData({
             title: 'Add dark mode',

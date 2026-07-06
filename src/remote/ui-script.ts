@@ -76,9 +76,12 @@ export function clientScript(wsUrl: string): string {
     function renderStructuredWidget(d) {
       statusPanel.classList.add('structured');
       statusPanel.style.display = 'block';
-      var top = '<div class="widget-top">'
-        + '<span class="widget-title">' + escHtml(d.title || '') + '</span>'
+      // Title on its own line (wraps to 2, never truncated to a stub).
+      var title = '<div class="widget-title">' + escHtml(d.title || '') + '</div>';
+      // Meta row: phase badge · step count · elapsed clock.
+      var meta = '<div class="widget-meta">'
         + (d.phase ? '<span class="widget-phase">' + escHtml(d.phase) + '</span>' : '')
+        + (d.total > 0 && d.done != null ? '<span class="widget-step">' + d.done + '/' + d.total + '</span>' : '')
         + (d.elapsed ? '<span class="widget-elapsed">' + escHtml(d.elapsed) + '</span>' : '')
         + '</div>';
       var bar = '';
@@ -86,7 +89,9 @@ export function clientScript(wsUrl: string): string {
         var pct = Math.max(0, Math.min(100, Math.round((d.done / d.total) * 100)));
         bar = '<div class="widget-bar"><div class="widget-bar-fill" style="width:' + pct + '%"></div></div>';
       }
-      statusPanel.innerHTML = top + bar;
+      // Current action — the terminal's last worker/child line, one ellipsized line.
+      var action = d.action ? '<div class="widget-action">↳ ' + escHtml(d.action) + '</div>' : '';
+      statusPanel.innerHTML = title + meta + bar + action;
     }
     const promptCard = document.getElementById('prompt-card');
     const promptQ = document.getElementById('prompt-q');

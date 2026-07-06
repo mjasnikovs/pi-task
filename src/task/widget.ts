@@ -86,6 +86,13 @@ export function formatContextDetail(usage: ContextSnapshot, theme?: WidgetTheme)
     return null
 }
 
+/** The current-action string for the structured widget (the browser ellipsizes
+ *  it to one line, so send it lightly capped rather than terminal-truncated). */
+function widgetAction(lastLine: string | undefined): string | undefined {
+    if (!lastLine) return undefined
+    return lastLine.length > 200 ? lastLine.slice(0, 199) + '…' : lastLine
+}
+
 /** Render the muted `↳ lastLine` trailer (truncated), or null when there's no line. */
 function lastLineTrailer(lastLine: string | undefined, theme?: WidgetTheme): string | null {
     if (!lastLine) return null
@@ -118,13 +125,16 @@ export function buildWidgetLines(s: WidgetState, theme?: WidgetTheme): string[] 
 export function buildWidgetData(s: WidgetState): WidgetData {
     const idx = PHASE_INDEX[s.phase]
     const total = PHASE_ORDER.length
-    return {
+    const d: WidgetData = {
         title: `${s.taskId} · ${titleForDisplay(s)}`,
         phase: s.phase,
         done: Math.min(idx + 1, total),
         total,
         elapsed: formatDuration(Date.now() - s.startedAt)
     }
+    const action = widgetAction(s.lastLine)
+    if (action) d.action = action
+    return d
 }
 
 // ─── Widget lifecycle ────────────────────────────────────────────────────────
@@ -219,6 +229,8 @@ export function buildAutoLoaderData(s: AutoLoaderState): WidgetData {
         d.done = s.stepNum
         d.total = s.stepTotal
     }
+    const action = widgetAction(s.lastLine)
+    if (action) d.action = action
     return d
 }
 
@@ -291,11 +303,14 @@ export function buildImplLines(s: ImplState, theme?: WidgetTheme): string[] {
 /** Structured mirror of buildImplLines (the host implementation turn — no step
  *  numbering, so no progress bar; just the phase badge and elapsed clock). */
 export function buildImplData(s: ImplState): WidgetData {
-    return {
+    const d: WidgetData = {
         title: `${s.taskId} · ${titleForDisplay(s)}`,
         phase: 'implementing',
         elapsed: formatDuration(Date.now() - s.startedAt)
     }
+    const action = widgetAction(s.lastLine)
+    if (action) d.action = action
+    return d
 }
 
 export function flashTerminalWidget(

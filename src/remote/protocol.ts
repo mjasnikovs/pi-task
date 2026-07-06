@@ -29,6 +29,9 @@ export interface WidgetData {
     total?: number
     /** Pre-formatted elapsed clock, e.g. "2:14". */
     elapsed?: string
+    /** The current action — the latest child/worker output line (the terminal's
+     *  `↳` trailer). Shown under the widget so the remote isn't blind to progress. */
+    action?: string
 }
 
 /** The single task-widget slot. `lines: null` clears it. `data` carries the

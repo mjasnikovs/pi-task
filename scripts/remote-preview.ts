@@ -123,13 +123,18 @@ const snapshot = {
     ],
     live: null,
     agentRunning: false,
-    taskWidget: ['TASK_0003 · auth routes', 'phase 4/8 refine · 2:14'],
+    taskWidget: [
+        'TASK_0022 · Implement Marketplace grid page with filters',
+        'phase 2/5 research · 2:48',
+        '↳ worker:tooling: read: /workspace/src/client/api-server-stubs.ts'
+    ],
     taskWidgetData: {
-        title: 'TASK_0003 · auth routes',
-        phase: 'refine',
-        done: 4,
-        total: 8,
-        elapsed: '2:14'
+        title: 'TASK_0022 · Implement Marketplace grid page with filters',
+        phase: 'research',
+        done: 2,
+        total: 5,
+        elapsed: '2:48',
+        action: 'worker:tooling: read: /workspace/src/client/api-server-stubs.ts'
     },
     prompt: null,
     context: {percent: 62, tokens: 81000, contextWindow: 131072},

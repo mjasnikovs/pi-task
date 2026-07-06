@@ -315,18 +315,27 @@ export const STYLES = `    :root {
     /* Structured task widget (progress bar + phase badge + elapsed). Replaces the
        plain text lines when the server sends a structured data payload. */
     #status-panel.structured { white-space: normal; display: block; }
-    .widget-top { display: flex; align-items: center; gap: 8px; }
-    .widget-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; color: var(--text); font-size: 13px; }
+    /* Title gets its own line and wraps (clamped to 2) — never truncated to a stub
+       the way the old single-row flex layout squeezed it on narrow/mobile widths. */
+    .widget-title { display: -webkit-box; -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--text);
+      font-size: 13px; line-height: 1.3; word-break: break-word; }
+    .widget-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
     .widget-phase { flex-shrink: 0; background: var(--surface0); color: var(--mauve);
       border-radius: 4px; padding: 1px 7px; font-size: 10px; letter-spacing: 0.03em;
       text-transform: uppercase; }
-    .widget-elapsed { flex-shrink: 0; color: var(--subtext0); font-size: 11px;
+    .widget-step { flex-shrink: 0; color: var(--subtext0); font-size: 11px;
       font-variant-numeric: tabular-nums; }
+    .widget-elapsed { flex-shrink: 0; margin-left: auto; color: var(--subtext0);
+      font-size: 11px; font-variant-numeric: tabular-nums; }
     .widget-bar { height: 4px; background: var(--surface0); border-radius: 2px;
       overflow: hidden; margin-top: 6px; }
     .widget-bar-fill { height: 100%; background: var(--mauve); border-radius: 2px;
       transition: width 0.3s ease; }
+    /* Current action — the terminal's ↳ worker trailer, one dim ellipsized line. */
+    .widget-action { margin-top: 6px; color: var(--subtext0); font-size: 11px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-variant-numeric: tabular-nums; }
     /* Dim per-turn timestamp shown under a committed turn's bubble. */
     .turn-time { font-size: 10px; color: var(--subtext0); opacity: 0.55; padding: 0 4px;
       margin-top: -2px; }
