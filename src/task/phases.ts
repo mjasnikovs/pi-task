@@ -246,6 +246,30 @@ export interface PhaseResearchDeps extends ExternalContextDeps {
 
 const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
 
+/** pi-worker-search + pi-worker-fetch, loaded into the APIS research worker only
+ *  when a Brave key is configured (the tool without a key just errors, and a weak
+ *  model burns calls on it). Search being absent from the research toolset was
+ *  STRUCTURAL: three consecutive audited runs made 0 search calls because the
+ *  child literally did not have the tool. */
+const SEARCH_EXTENSION_PATH = new URL('../workers/search-extension.js', import.meta.url).pathname
+
+/** Is live web search configured for this process? Mirrors search-core's env lookup. */
+export function searchConfigured(
+    getEnv: (k: string) => string | undefined = k => process.env[k]
+): boolean {
+    return Boolean(getEnv('BRAVE_SEARCH_API_KEY') ?? getEnv('BRAVE_API_KEY'))
+}
+
+/** Extra prompt block for the APIS worker when search is available — trigger-framed
+ *  (the validated shape for getting a local model to actually reach for search). */
+export const RESEARCH_SEARCH_HINT =
+    '\n\nLIVE WEB — use pi-worker-search for external facts your training data may have stale: '
+    + 'the CURRENT version of a framework/runtime the task pins, a breaking API change you are '
+    + 'not sure shipped, an error message you cannot explain from the code. Call '
+    + '`pi-worker-search(query)` first, then `pi-worker-fetch(url)` on the result you want to '
+    + 'read. Do NOT answer version or release questions from memory. Skip search entirely for '
+    + "anything the project's own files or pi-worker-docs already answer."
+
 /**
  * In-process guards loaded into the TOOLING worker only: block a re-read of any
  * file already read, and block any byte-identical grep/find/ls repeat, feeding
@@ -473,10 +497,21 @@ export async function phaseResearch(
         {
             section: 'APIS',
             label: 'worker:apis',
-            // Read-heavy: gets the orientation core (see note above).
-            prompt: appendNoThink(orientation.block + promptHeader + RESEARCH_APIS_PROMPT(refined)),
-            tools: 'read,grep,find,ls,pi-worker-docs',
-            extensions: [DOCS_EXTENSION_PATH]
+            // Read-heavy: gets the orientation core (see note above). Search/fetch
+            // ride along only when a Brave key exists — see SEARCH_EXTENSION_PATH.
+            prompt: appendNoThink(
+                orientation.block
+                    + promptHeader
+                    + RESEARCH_APIS_PROMPT(refined)
+                    + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+            ),
+            tools:
+                'read,grep,find,ls,pi-worker-docs'
+                + (searchConfigured() ? ',pi-worker-search,pi-worker-fetch' : ''),
+            extensions: [
+                DOCS_EXTENSION_PATH,
+                ...(searchConfigured() ? [SEARCH_EXTENSION_PATH] : [])
+            ]
         },
         {
             section: 'CONTEXT',

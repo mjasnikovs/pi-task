@@ -329,6 +329,44 @@ describe('runWorkVerification', () => {
         expect(runs).toBe(1)
     })
 
+    test('mutated run → verdict discarded (even a PASS), retried once on the restored tree', async () => {
+        // The mx5 run 6 shape: the child stashed the work away and judged the wrong
+        // tree. The git-state guard restored the state; the first verdict must be
+        // discarded regardless of its direction and the verify re-run.
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return 'WORK-VERIFIED: PASS'
+            },
+            mutationCheck: () =>
+                runs === 1 ?
+                    {mutated: true, detail: 'dropped 1 stash entry the child pushed'}
+                :   {mutated: false, detail: ''}
+        })
+        expect(out.ok).toBe(true)
+        expect(runs).toBe(2)
+    })
+
+    test('child mutates on the retry too → FAIL naming the guard, no third run', async () => {
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return 'WORK-VERIFIED: PASS'
+            },
+            mutationCheck: () => ({mutated: true, detail: 'restored worktree files'})
+        })
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('mutated repo state')
+        expect(out.reason).toContain('restored worktree files')
+        expect(runs).toBe(2)
+    })
+
     test('passes VERIFY_TOOLS through to the child', async () => {
         let seenTools = ''
         await runWorkVerification({

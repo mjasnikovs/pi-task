@@ -11,6 +11,7 @@ import {
     critiqueWithFallback,
     postCommitPhase,
     refineExistingFilesBlock,
+    searchConfigured,
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
@@ -2328,4 +2329,99 @@ describe('postCommitPhase label generation', () => {
             expect(widgetState.title).toBe('unchanged')
         })
     })
+})
+
+// ─── APIS worker: live web search wiring ─────────────────────────────────────
+
+/** Run phaseResearch with a spawn that records each worker's --tools + prompt. */
+async function observeResearchWorkers(
+    cwd: string
+): Promise<Array<{tools: string; prompt: string}>> {
+    await writeTaskFile(
+        cwd,
+        {
+            id: 'TASK_0001',
+            state: 'in_progress',
+            phase: 'research',
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+            title: 't'
+        },
+        '\n'
+    )
+    const observed: Array<{tools: string; prompt: string}> = []
+    const spawn: SpawnFn = (_cmd, args) => {
+        const argsArr = args as ReadonlyArray<string>
+        const toolsIdx = argsArr.indexOf('--tools')
+        const proc = makeProc()
+        queueMicrotask(() => {
+            observed.push({
+                tools: toolsIdx === -1 ? '' : argsArr[toolsIdx + 1],
+                prompt: proc.stdinData
+            })
+            proc.stdout!.emit(
+                'data',
+                Buffer.from(
+                    JSON.stringify({
+                        type: 'agent_end',
+                        messages: [{role: 'assistant', content: [{type: 'text', text: 'out'}]}]
+                    }) + '\n'
+                )
+            )
+            proc.emit('close', 0)
+        })
+        return proc
+    }
+    await phaseResearch(
+        {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+        'plain refined prompt',
+        {getFileInventory: async () => ''}
+    )
+    return observed
+}
+
+const apisWorker = (obs: Array<{tools: string; prompt: string}>) =>
+    obs.find(o => o.prompt.includes('NPM PACKAGES — use pi-worker-docs'))
+
+test('APIS worker gains search/fetch tools + hint when a Brave key is configured', async () => {
+    await withTmpTaskDir(async cwd => {
+        const prev = process.env.BRAVE_SEARCH_API_KEY
+        process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+        try {
+            const obs = await observeResearchWorkers(cwd)
+            const apis = apisWorker(obs)
+            expect(apis).toBeDefined()
+            expect(apis!.tools.split(',')).toContain('pi-worker-search')
+            expect(apis!.tools.split(',')).toContain('pi-worker-fetch')
+            expect(apis!.prompt).toContain('LIVE WEB — use pi-worker-search')
+        } finally {
+            if (prev === undefined) delete process.env.BRAVE_SEARCH_API_KEY
+            else process.env.BRAVE_SEARCH_API_KEY = prev
+        }
+    })
+})
+
+test('APIS worker has NO search tools without a key (the tool would only error)', async () => {
+    await withTmpTaskDir(async cwd => {
+        const prevA = process.env.BRAVE_SEARCH_API_KEY
+        const prevB = process.env.BRAVE_API_KEY
+        delete process.env.BRAVE_SEARCH_API_KEY
+        delete process.env.BRAVE_API_KEY
+        try {
+            const obs = await observeResearchWorkers(cwd)
+            const apis = apisWorker(obs)
+            expect(apis).toBeDefined()
+            expect(apis!.tools).toBe('read,grep,find,ls,pi-worker-docs')
+            expect(apis!.prompt).not.toContain('LIVE WEB')
+        } finally {
+            if (prevA !== undefined) process.env.BRAVE_SEARCH_API_KEY = prevA
+            if (prevB !== undefined) process.env.BRAVE_API_KEY = prevB
+        }
+    })
+})
+
+test('searchConfigured mirrors the search-core env contract (either key name)', () => {
+    expect(searchConfigured(() => undefined)).toBe(false)
+    expect(searchConfigured(k => (k === 'BRAVE_SEARCH_API_KEY' ? 'x' : undefined))).toBe(true)
+    expect(searchConfigured(k => (k === 'BRAVE_API_KEY' ? 'x' : undefined))).toBe(true)
 })

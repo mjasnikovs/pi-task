@@ -50,6 +50,46 @@ export async function git(
 }
 
 /**
+ * Paths with unmerged index entries (an in-progress merge conflict), deduped.
+ * Empty outside a git repo or on any git error — this is a GUARD input, and a
+ * guard that cannot conclude must not block.
+ *
+ * Why it exists (mx5 run 6): a stale `git stash pop` mid-task left two paths UU;
+ * every later commit was doomed, three verify passes ran against a conflicted
+ * tree, and — worse — a blind `git add -A` on that index would have silently
+ * "resolved" the conflict with whatever happened to be on disk.
+ */
+export async function gitUnmergedPaths(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<string[]> {
+    const r = await git(cwd, ['ls-files', '-u'], signal, spawnFn)
+    if (r.exitCode !== 0) return []
+    const out: string[] = []
+    for (const line of r.stdout.split('\n')) {
+        // `<mode> <sha> <stage>\t<path>`
+        const tab = line.indexOf('\t')
+        if (tab === -1) continue
+        const p = line.slice(tab + 1).trim()
+        if (p.length > 0 && !out.includes(p)) out.push(p)
+    }
+    return out
+}
+
+/** Sha of `refs/stash`, or null when there is no stash (or not a git repo). Used
+ *  to detect a stash created (or consumed) during a task and left behind — the
+ *  exact landmine that detonated mx5 run 6 two days after it was pushed. */
+export async function gitStashRef(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<string | null> {
+    const r = await git(cwd, ['rev-parse', '-q', '--verify', 'refs/stash'], signal, spawnFn)
+    return r.exitCode === 0 ? r.stdout.trim() : null
+}
+
+/**
  * Stage everything (`git add -A`) and commit it with `message`. Honors
  * .gitignore via git itself. Never throws — failures surface as
  * `{committed: false, reason}` so the caller can warn and keep going.
@@ -67,20 +107,34 @@ export async function gitCommitAll(
         return {committed: false, reason: 'not a git repository'}
     }
 
-    // 2. Stage all working-tree changes (new, modified, deleted).
+    // 2. REFUSE on an unmerged index: `git add -A` would silently "resolve" the
+    //    conflict by staging whatever is on disk, and the commit that followed
+    //    would bless a half-merged tree. Surface it instead — this state needs a
+    //    human (or the loop's own loud stop), not a snapshot.
+    const unmerged = await gitUnmergedPaths(cwd, signal, spawnFn)
+    if (unmerged.length > 0) {
+        return {
+            committed: false,
+            reason: `git commit blocked: unresolved merge conflict (${unmerged.slice(0, 3).join(', ')}${
+                unmerged.length > 3 ? `, +${unmerged.length - 3} more` : ''
+            })`
+        }
+    }
+
+    // 3. Stage all working-tree changes (new, modified, deleted).
     const add = await git(cwd, ['add', '-A'], signal, spawnFn)
     if (add.aborted) return {committed: false, reason: 'cancelled'}
     if (add.exitCode !== 0) {
         return {committed: false, reason: `git add failed: ${firstLine(add.stderr)}`}
     }
 
-    // 3. Anything staged? `git diff --cached --quiet` exits 0 when the index
+    // 4. Anything staged? `git diff --cached --quiet` exits 0 when the index
     //    matches HEAD (nothing to commit), 1 when there are staged changes.
     const diff = await git(cwd, ['diff', '--cached', '--quiet'], signal, spawnFn)
     if (diff.aborted) return {committed: false, reason: 'cancelled'}
     if (diff.exitCode === 0) return {committed: false, reason: 'nothing to commit'}
 
-    // 4. Commit. A failure here is usually missing user.name/user.email config —
+    // 5. Commit. A failure here is usually missing user.name/user.email config —
     //    retry once with a self-supplied identity rather than losing the snapshot
     //    (and with it enforce + every differential guard) for the whole run.
     const commit = await git(cwd, ['commit', '-m', message], signal, spawnFn)

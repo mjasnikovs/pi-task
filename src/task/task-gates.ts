@@ -336,11 +336,25 @@ export async function runGatesForTask(
                 break
             }
             // AUTOFIX: re-run the implementation turn with the failure (and any typed
-            // guidance) prepended as a RE-ATTEMPT banner, then re-verify.
+            // guidance) prepended as a RE-ATTEMPT banner, then re-verify. The
+            // recommendation child already LOCATED the defect while deciding (mx5
+            // run 6: it pinned the exact SQL alias bug and the afterAll DB-drop) —
+            // hand that diagnosis to the re-run so it fixes the located cause
+            // instead of re-deriving it from the bare FAIL line. Skipped when there
+            // is no researched rationale beyond the failure text itself.
             await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
             active.ui.notify(`${p.tag}: autofixing "${p.title}"…`, 'info')
-            const fixInstruction =
-                choice.guidance ? `${failReason}\n\nUser guidance: ${choice.guidance}` : failReason
+            const diagnosis =
+                (
+                    recOutcome.recommend === 'autofix'
+                    && recOutcome.rationale.length > 0
+                    && recOutcome.rationale !== failReason
+                ) ?
+                    `\n\nDIAGNOSIS (a read-only investigation of this failure found):\n${recOutcome.rationale}`
+                :   ''
+            const fixInstruction = `${failReason}${diagnosis}${
+                choice.guidance ? `\n\nUser guidance: ${choice.guidance}` : ''
+            }`
             const fixRes = await deps.runTask(active, p.cwd, p.title, {
                 resumeId: p.taskId,
                 planContext: p.planContext,
@@ -373,8 +387,9 @@ export async function runGatesForTask(
         // A benign skip ("nothing to commit", auto-commit off) is a warning. A real
         // git failure is louder: it silently disables enforce AND every commit-based
         // guard — mx5 run 4 lost all 10 commits (no container git identity) with only
-        // per-task warnings to show for it.
-        const gitFailure = /^git (commit|add) failed/.test(commit.reason ?? '')
+        // per-task warnings to show for it. "blocked" is the unmerged-index refusal
+        // (gitCommitAll) — the same severity: nothing can commit until it's resolved.
+        const gitFailure = /^git (commit|add) (failed|blocked)/.test(commit.reason ?? '')
         active.ui.notify(
             gitFailure ?
                 `${p.tag}: COMMIT FAILED (${commit.reason}) — enforce and revert guards are disabled for this task.`

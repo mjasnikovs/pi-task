@@ -310,6 +310,15 @@ export interface VerificationDeps {
      * into the child's prompt. A/B-proven load-bearing: the prompt rule alone caught
      * the class 2/5, rule + probe finding 5/5. ABSENT or empty → no probe block. */
     probe?: () => Promise<string[]>
+    /**
+     * Result of the git-state guard for the MOST RECENT runChild call (see
+     * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
+     * rewrites), which the guard then restored? A verdict computed on a mutated
+     * tree is untrustworthy in BOTH directions — the mx5 run 6 child stashed the
+     * work away and judged an empty tree — so it is discarded: the first mutated
+     * run is retried once on the restored tree; a second mutation is a FAIL that
+     * names the behavior. ABSENT → no guard (tests / non-git repos), unchanged. */
+    mutationCheck?: () => {mutated: boolean; detail: string}
 }
 
 /**
@@ -358,6 +367,20 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             if (err instanceof Error && err.message === USER_CANCELLED) throw err
             const msg = err instanceof Error ? err.message : String(err)
             return {ok: false, reason: `verification pass could not run: ${msg}`}
+        }
+        // A child that mutated the repo (git-state guard fired) judged a tree it had
+        // itself changed — its verdict is meaningless in both directions, so discard
+        // it BEFORE parsing. The guard already restored the state, so one retry runs
+        // on the pristine tree; a child that mutates again is reported as the fault.
+        const mutation = deps.mutationCheck?.()
+        if (mutation?.mutated) {
+            if (attempt === 1) continue
+            return {
+                ok: false,
+                reason:
+                    'verify child mutated repo state and its verdict was discarded '
+                    + `(state restored: ${mutation.detail.slice(0, 200)})`
+            }
         }
         const verdict = parseVerifyVerdict(text)
         if (verdict.pass) return {ok: true}

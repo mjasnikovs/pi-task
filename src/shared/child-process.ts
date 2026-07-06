@@ -34,7 +34,14 @@ export interface ProcLike extends EventEmitter {
 export type SpawnFn = (
     command: string,
     args: ReadonlyArray<string>,
-    options: {cwd: string; shell: boolean; stdio: ['ignore' | 'pipe', 'pipe', 'pipe']}
+    options: {
+        cwd: string
+        shell: boolean
+        stdio: ['ignore' | 'pipe', 'pipe', 'pipe']
+        /** Set only when the invocation needs env overrides (e.g. GIT_INDEX_FILE);
+         *  absent → the child inherits this process's environment as before. */
+        env?: NodeJS.ProcessEnv
+    }
 ) => ProcLike
 
 // ─── Result types ────────────────────────────────────────────────────────────
@@ -263,7 +270,12 @@ export class JsonEventSink {
 
 export function runChild(
     spawn: SpawnFn,
-    invocation: {command: string; args: ReadonlyArray<string>; stdin?: string},
+    invocation: {
+        command: string
+        args: ReadonlyArray<string>
+        stdin?: string
+        env?: NodeJS.ProcessEnv
+    },
     cwd: string,
     signal: AbortSignal | undefined,
     opts?: RunChildOptions
@@ -283,7 +295,8 @@ export function runChild(
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
             shell: false,
-            stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
+            stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+            ...(invocation.env ? {env: invocation.env} : {})
         })
 
         if (usesStdin) {
@@ -344,7 +357,7 @@ export function runChild(
 // ─── Convenience: spawn with default node child_process ──────────────────────
 
 export function runChildDefault(
-    invocation: {command: string; args: ReadonlyArray<string>},
+    invocation: {command: string; args: ReadonlyArray<string>; env?: NodeJS.ProcessEnv},
     cwd: string,
     signal: AbortSignal | undefined,
     opts?: RunChildOptions,

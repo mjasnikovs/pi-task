@@ -774,7 +774,7 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
  * (`completed` is not in RESUMABLE_STATES). Best-effort; a missing/empty id is a
  * no-op. Mirrors how /task-auto marks the parent run `failed` so resume re-runs it.
  */
-async function markResumable(cwd: string, taskId: string): Promise<void> {
+export async function markResumable(cwd: string, taskId: string): Promise<void> {
     if (!taskId) return
     try {
         await updateTaskFrontMatter(cwd, taskId, {state: 'failed'})

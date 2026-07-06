@@ -657,3 +657,61 @@ test('enforce with a clean tree (no edits) skips the pre-commit health check', a
         expect(healthCalls).toBe(0)
     })
 })
+
+test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fixInstruction", async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const fixInstructions: Array<string | undefined> = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            runTask: (_c, _cwd, _t, opts) => {
+                fixInstructions.push(opts?.fixInstruction)
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ? {ok: false, reason: 'suite fails'} : {ok: true}
+                )
+            },
+            recommend: () =>
+                Promise.resolve({
+                    recommend: 'autofix',
+                    rationale:
+                        'listings.ts filters on users.is_banned but the JOIN aliases the table as u'
+                })
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(fixInstructions).toHaveLength(1)
+        // The re-run gets the FAIL reason AND the located cause.
+        expect(fixInstructions[0]).toContain('suite fails')
+        expect(fixInstructions[0]).toContain('DIAGNOSIS')
+        expect(fixInstructions[0]).toContain('aliases the table as u')
+    })
+})
+
+test('runGatesForTask: no recommend dep → fixInstruction stays the bare failure (no duplicate)', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        const fixInstructions: Array<string | undefined> = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            runTask: (_c, _cwd, _t, opts) => {
+                fixInstructions.push(opts?.fixInstruction)
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ? {ok: false, reason: 'build exited 1'} : {ok: true}
+                )
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(fixInstructions).toHaveLength(1)
+        expect(fixInstructions[0]).toBe('build exited 1')
+    })
+})

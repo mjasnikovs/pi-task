@@ -1605,3 +1605,150 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
     })
 })
+
+// ─── Repo integrity guards + final integration gate ─────────────────────────
+
+test('runAutoLoop: unmerged index → stops LOUD before the task, nothing runs', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let taskRan = false
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () => {
+                taskRan = true
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
+            unmergedPaths: () =>
+                Promise.resolve(['src/server/routes/photos.ts', '.pi-tasks/TASK_AUTO_0001.md'])
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(taskRan).toBe(false)
+        const {frontMatter} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        expect(frontMatter.state).toBe('failed')
+        expect(
+            captured.notifies.some(
+                n => n.level === 'error' && /unresolved merge conflicts/.test(n.msg)
+            )
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: gate failure demotes the INNER task file from its handoff "completed"', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        // The inner task file as spec-handoff leaves it: state 'completed' before
+        // any work is verified (the exact run 6 mismark).
+        await writeTaskFile(dir, autoFm('TASK_0006', 'completed'), '## spec\nGOAL x\n')
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            verify: () => Promise.resolve({ok: false, reason: 'work did not verify: broken'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
+        }
+        // No queued select → picker dismissed → gate 'paused'.
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const inner = await readTaskFile(dir, 'TASK_0006')
+        expect(inner.frontMatter.state).toBe('failed')
+    })
+})
+
+test('runAutoLoop: stash stack changed during a task → loud warning names the task', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let stashCalls = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            stashRef: () => Promise.resolve(stashCalls++ === 0 ? null : 'abc123')
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(
+            captured.notifies.some(
+                n => n.level === 'warning' && /stash stack changed during "A"/.test(n.msg)
+            )
+        ).toBe(true)
+        // The run itself still completes — the warning is a tripwire, not a gate.
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})
+
+test('runAutoLoop: final gate FAIL + dismissed picker → run left failed, resume re-runs the gate', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let gateRuns = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => {
+                gateRuns++
+                return Promise.resolve({ok: false, reason: '`bun run test` exited 1 — 12 fail'})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(gateRuns).toBe(1)
+        const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
+        // All tasks stay checked (the work passed its own gates) but the RUN is
+        // failed, so /task-auto-resume re-enters the all-done branch and re-gates.
+        expect(parseTaskList(body).every(e => e.done)).toBe(true)
+        expect(frontMatter.state).toBe('failed')
+        expect(
+            captured.notifies.some(n => n.level === 'error' && /final integration gate/.test(n.msg))
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: final gate FAIL + user ACCEPTS → run completes with a warning', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'})
+        }
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        expect(
+            captured.notifies.some(
+                n => n.level === 'warning' && /final integration gate FAIL accepted/.test(n.msg)
+            )
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: final gate PASS → run completes without a picker', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let gateRuns = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => {
+                gateRuns++
+                return Promise.resolve({ok: true, reason: 'statics + `bun run test` passed'})
+            }
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(gateRuns).toBe(1)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        expect(captured.notifies.some(n => /complete — all 1 tasks done/.test(n.msg))).toBe(true)
+    })
+})

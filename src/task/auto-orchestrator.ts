@@ -8,7 +8,7 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {gateRunTask} from './orchestrator.js'
+import {gateRunTask, markResumable} from './orchestrator.js'
 import {parseClarifyList, parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {
@@ -47,6 +47,9 @@ import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import {buildGateDeps} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
+import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
+import {runFinalIntegrationGate} from './final-gate.js'
+import {getConfig} from '../config/config.js'
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
 // when the model emits NONE), but a model that never says NONE would otherwise
@@ -77,6 +80,27 @@ function coverageRepromptHint(missing: string[]): string {
  */
 export interface AutoDeps extends GateDeps {
     runChild: (name: string, tools: string, prompt: string) => Promise<string>
+    /**
+     * Paths with unmerged index entries (an in-progress merge conflict). The loop
+     * refuses to START a task on a conflicted tree — mx5 run 6 ran a full impl turn
+     * plus three verifies against one, with every commit doomed from the outset.
+     * Absent (tests) → treated as clean.
+     */
+    unmergedPaths?: (cwd: string) => Promise<string[]>
+    /**
+     * Sha of refs/stash or null. Compared around each task so a stash pushed (or
+     * consumed) during the task and left behind is called out — an orphan stash is
+     * exactly the landmine that detonated as an unresolvable conflict in run 6.
+     * Absent (tests) → the check is skipped.
+     */
+    stashRef?: (cwd: string) => Promise<string | null>
+    /**
+     * Whole-repo FINAL integration gate, run once when every task is checked off
+     * and BEFORE the run is declared complete (see final-gate.ts): the project's
+     * own static checks plus its own test/build commands, unaided. Absent (tests /
+     * gate off) → the run completes as before.
+     */
+    finalGate?: (cwd: string) => Promise<{ok: boolean; reason: string}>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -646,7 +670,16 @@ function defaultDeps(
                 stopLoader()
             }
         },
-        ...buildGateDeps({signal, parentContextWindow, runTask: gateRunTask})
+        ...buildGateDeps({signal, parentContextWindow, runTask: gateRunTask}),
+        // Loop-level repo integrity + run-end gate glue (see AutoDeps docs).
+        unmergedPaths: cwd2 => gitUnmergedPaths(cwd2, signal),
+        stashRef: cwd2 => gitStashRef(cwd2, signal),
+        // The final integration gate follows the `verify work` switch: it is the
+        // run-level half of the same verification story.
+        finalGate: cwd2 =>
+            getConfig().verifyWork ?
+                Promise.resolve(runFinalIntegrationGate(cwd2))
+            :   Promise.resolve({ok: true, reason: 'disabled'})
     }
 }
 
@@ -701,8 +734,68 @@ export async function runAutoLoop(
             const entries = parseTaskList(body)
             const next = entries.find(e => !e.done)
             if (!next) {
+                // FINAL INTEGRATION GATE: every task passed its own per-slice gates,
+                // but per-slice green has shipped a dead app twice (mx5 runs 3 & 5:
+                // statics clean, every protected route 500ing). Run the project's
+                // OWN whole-repo commands once, unaided, before declaring the run
+                // complete. On a FAIL the user decides: accept (complete anyway) or
+                // leave the run failed — a resume re-enters this branch and re-runs
+                // the gate, so fixing and resuming converges.
+                if (deps.finalGate) {
+                    active.ui.notify(`${id}: running final integration gate…`, 'info')
+                    const fin = await deps.finalGate(cwd)
+                    if (!fin.ok) {
+                        const question =
+                            `Final integration gate FAILED for ${id}.\n\n${fin.reason}\n\n`
+                            + 'All tasks are checked off — this is the whole-repo check '
+                            + '(the project’s own test/build/static commands, run unaided).'
+                        const answer = await new SessionUI(active).ask({
+                            localTitle: 'Final integration gate failed — how should pi proceed?',
+                            displayQuestion: question,
+                            question,
+                            recommended: 'Leave failed — I will fix and /task-auto-resume',
+                            recommended2: 'Accept — complete the run anyway',
+                            allowSkip: false,
+                            options: [
+                                {
+                                    label: 'Leave failed — I will fix and /task-auto-resume',
+                                    value: 'fail'
+                                },
+                                {label: 'Accept — complete the run anyway', value: 'accept'}
+                            ]
+                        })
+                        if (answer === undefined || !/^accept\b/i.test(answer.trim())) {
+                            await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                            announceDone(
+                                active,
+                                `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`,
+                                'error'
+                            )
+                            return
+                        }
+                        active.ui.notify(
+                            `${id}: final integration gate FAIL accepted by user — completing.`,
+                            'warning'
+                        )
+                    }
+                }
                 await updateTaskFrontMatter(cwd, id, {state: 'completed'})
                 announceDone(active, `${id} complete — all ${entries.length} tasks done.`, 'info')
+                return
+            }
+            // REFUSE to start on a conflicted tree: an unmerged index dooms every
+            // commit ahead and a `git add -A` would silently mis-resolve it. mx5
+            // run 6 burned a full impl turn + three verify passes exactly here.
+            const unmerged = deps.unmergedPaths ? await deps.unmergedPaths(cwd) : []
+            if (unmerged.length > 0) {
+                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                announceDone(
+                    active,
+                    `${id} stopped before "${next.title}" — the repository has unresolved merge conflicts `
+                        + `(${unmerged.slice(0, 3).join(', ')}${unmerged.length > 3 ? `, +${unmerged.length - 3} more` : ''}). `
+                        + 'Resolve them (git status), then /task-auto-resume.',
+                    'error'
+                )
                 return
             }
             active.ui.notify(
@@ -740,6 +833,10 @@ export async function runAutoLoop(
                     'info'
                 )
             }
+            // Stash ref before the task: compared after the gates so a stash pushed
+            // during the task (impl model or any child) and left behind is called
+            // out instead of silently waiting to detonate in a later task.
+            const stashBefore = deps.stashRef ? await deps.stashRef(cwd) : undefined
             const res = await deps.runTask(active, cwd, next.title, {
                 resumeId,
                 // Fence this step against re-expanding the whole referenced spec:
@@ -772,6 +869,7 @@ export async function runAutoLoop(
                 // this task's spec to finish it. (A plain ESC that the user
                 // follows with steering text never reaches here — that loops on
                 // the same task inside runSingleTask until a turn completes.)
+                await markResumable(cwd, res.taskId)
                 announceDone(
                     active,
                     `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
@@ -780,6 +878,10 @@ export async function runAutoLoop(
                 return
             }
             if (!res.ok) {
+                // Demote the INNER task file too: it reads `completed` from
+                // spec-handoff, and leaving it that way is how a failed run's task
+                // file claimed success in the run 6 audit.
+                await markResumable(cwd, res.taskId)
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                 // res.reason is set when the implementation turn itself died
                 // (e.g. a context-overflow 400) — surface it so the real cause
@@ -817,6 +919,7 @@ export async function runAutoLoop(
             })
             active = gate.ctx
             if (gate.kind === 'paused') {
+                await markResumable(cwd, res.taskId)
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                 announceDone(
                     active,
@@ -834,6 +937,7 @@ export async function runAutoLoop(
                 return
             }
             if (gate.kind === 'interrupted') {
+                await markResumable(cwd, res.taskId)
                 announceDone(
                     active,
                     `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
@@ -842,6 +946,7 @@ export async function runAutoLoop(
                 return
             }
             if (gate.kind === 'failed') {
+                await markResumable(cwd, res.taskId)
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                 const why = gate.reason ? ` — ${gate.reason.slice(0, 160)}` : ''
                 announceDone(
@@ -851,7 +956,18 @@ export async function runAutoLoop(
                 )
                 return
             }
-            // gate.kind === 'done' → fall through to the next task.
+            // gate.kind === 'done' → fall through to the next task, after checking
+            // no landmine stash was left behind by anything that ran in between.
+            if (deps.stashRef && stashBefore !== undefined) {
+                const stashAfter = await deps.stashRef(cwd)
+                if (stashAfter !== stashBefore) {
+                    active.ui.notify(
+                        `${id}: the git stash stack changed during "${next.title}" and was left that way — `
+                            + 'inspect `git stash list`; an orphan stash later pops as an unresolvable conflict.',
+                        'warning'
+                    )
+                }
+            }
         }
     } catch (err) {
         // Safety net: no failure inside the loop may propagate out of runAutoLoop,

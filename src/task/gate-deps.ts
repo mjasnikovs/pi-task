@@ -25,6 +25,7 @@ import {runRepoHealthCheck} from './repo-health-check.js'
 import {researchResolution} from './verify-resolution.js'
 import {findSubstitutionSuspects, type ChangedFile} from './substitution-probe.js'
 import {runBoundedLintFix} from './lint-fix.js'
+import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {formatLoopHint} from './child-runner.js'
 import {getConfig} from '../config/config.js'
@@ -113,6 +114,10 @@ export function buildGateDeps(params: {
     // output line and context usage, exactly like the single-task phase widget.
     let lastLine: string | undefined
     let contextUsage: ContextSnapshot | undefined
+    // What the git-state guard had to restore after the MOST RECENT verify/recommend
+    // child run (see git-state-guard.ts). runWorkVerification reads this through its
+    // mutationCheck dep to discard a verdict computed on a mutated tree.
+    let lastGuardReconcile: ReconcileResult | null = null
 
     // Shared runner for the per-task GATE children (verify + post-FAIL recommend).
     // Both are read-only passes of the same local model that must run to completion:
@@ -131,12 +136,21 @@ export function buildGateDeps(params: {
         async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
             lastLine = undefined
             contextUsage = undefined
+            lastGuardReconcile = null
             const startedAt = Date.now()
             const logPath = path.join(tasksDir(cwd2), logFile)
             const log = (msg: string): void => {
                 void fsp.appendFile(logPath, `${new Date().toISOString()} ${msg}\n`).catch(() => {})
             }
             log(`=== ${kind} start: ${taskTitle} ===`)
+            // GIT-STATE GUARD: these children are read-only BY CONTRACT, but the
+            // contract is prompt-level and the live model breaks it (mx5 run 6: the
+            // verify child `git stash`ed the task's uncommitted work and never popped
+            // — the impl was destroyed and the orphan stash detonated 2 days later).
+            // Snapshot before, deterministically restore after; lint-fix is excluded
+            // because editing is its job (it carries its own revert guard).
+            const guardSnapshot =
+                kind === 'verify' || kind === 'recommend' ? await captureGitState(cwd2, sig) : null
             const stopLoader = startAutoLoader(gateCtx, () => ({
                 title: taskTitle,
                 kind,
@@ -148,25 +162,44 @@ export function buildGateDeps(params: {
                 contextUsage
             }))
             try {
-                const r = await runWorker({
-                    prompt,
-                    cwd: cwd2,
-                    signal: sig,
-                    tools,
-                    timeoutMs: 0,
-                    loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                    onLine: line => {
-                        lastLine = line
-                        log(line)
-                    },
-                    onContextUsage: snapshot => {
-                        contextUsage = resolveContextUsage(
-                            snapshot,
-                            contextUsage,
-                            parentContextWindow
-                        )
+                let r
+                try {
+                    r = await runWorker({
+                        prompt,
+                        cwd: cwd2,
+                        signal: sig,
+                        tools,
+                        timeoutMs: 0,
+                        loop: {pathThreshold: Number.POSITIVE_INFINITY},
+                        onLine: line => {
+                            lastLine = line
+                            log(line)
+                        },
+                        onContextUsage: snapshot => {
+                            contextUsage = resolveContextUsage(
+                                snapshot,
+                                contextUsage,
+                                parentContextWindow
+                            )
+                        }
+                    })
+                } finally {
+                    // Restore whatever the child moved BEFORE any verdict/failure is
+                    // acted on — a crashed child must not skip the restore either.
+                    if (guardSnapshot) {
+                        const rec = await reconcileGitState(cwd2, guardSnapshot, sig)
+                        lastGuardReconcile = rec
+                        if (rec.mutated) {
+                            log(
+                                `=== ${kind} GIT-STATE GUARD — child mutated repo state; restored: ${rec.actions.join('; ')} ===`
+                            )
+                            gateCtx.ui.notify(
+                                `${taskTitle}: ${kind} child mutated repo state — restored (${rec.actions.join('; ').slice(0, 140)}).`,
+                                'warning'
+                            )
+                        }
                     }
-                })
+                }
                 if (r.loopHit) {
                     log(`=== ${kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
                     gateCtx.ui.notify(
@@ -305,7 +338,14 @@ export function buildGateDeps(params: {
                 // Deterministic self-verification probe: test files the task itself
                 // authored/changed become prompt-level findings mandating the child
                 // to drive the real artifact before trusting their green result.
-                probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects)
+                probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
+                // Git-state guard result of the most recent child run: a verdict
+                // computed on a tree the child itself mutated is discarded (the
+                // guard already restored the state — see git-state-guard.ts).
+                mutationCheck: () =>
+                    lastGuardReconcile?.mutated ?
+                        {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
+                    :   {mutated: false, detail: ''}
             })
         },
         lintFix: (fixCtx, cwd2, taskTitle, failReason) =>
