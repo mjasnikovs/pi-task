@@ -5,6 +5,8 @@ import {
     agentStart,
     appendText,
     textEnd,
+    appendThinking,
+    thinkingEnd,
     startTool,
     endTool,
     agentEnd,
@@ -80,6 +82,28 @@ describe('session-state mutators', () => {
             isError: false,
             elapsedMs: expect.any(Number)
         })
+    })
+
+    it('appendThinking accumulates a thinking part and broadcasts the delta', () => {
+        agentStart()
+        appendThinking('let me ')
+        appendThinking('reason')
+        expect(getState().live?.parts).toEqual([
+            {kind: 'thinking', text: 'let me reason', done: false}
+        ])
+        expect(captured).toContainEqual({type: 'thinking_delta', delta: 'reason'})
+    })
+
+    it('thinkingEnd closes the thinking part; following text starts a fresh bubble', () => {
+        agentStart()
+        appendThinking('hmm')
+        thinkingEnd()
+        appendText('here is the answer')
+        expect(getState().live?.parts).toEqual([
+            {kind: 'thinking', text: 'hmm', done: true},
+            {kind: 'text', text: 'here is the answer'}
+        ])
+        expect(captured).toContainEqual({type: 'thinking_end'})
     })
 
     it('keeps text segments separate across a text_end / tool boundary', () => {

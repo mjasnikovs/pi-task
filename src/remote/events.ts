@@ -6,6 +6,8 @@ import {
     agentStart,
     appendText,
     textEnd,
+    appendThinking,
+    thinkingEnd,
     startTool,
     updateTool,
     endTool,
@@ -27,6 +29,10 @@ export function setupEvents(pi: ExtensionAPI): void {
         const ae = event.assistantMessageEvent
         if (ae.type === 'text_delta' && 'delta' in ae && typeof ae.delta === 'string') {
             appendText(ae.delta)
+        } else if (ae.type === 'thinking_delta' && 'delta' in ae && typeof ae.delta === 'string') {
+            appendThinking(ae.delta)
+        } else if (ae.type === 'thinking_end') {
+            thinkingEnd()
         } else if (ae.type === 'error') {
             const errorMessage =
                 'error' in ae && ae.error && typeof ae.error.errorMessage === 'string' ?

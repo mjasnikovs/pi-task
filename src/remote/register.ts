@@ -1,6 +1,12 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {getConfig} from '../config/config.js'
-import {getBridge, dispatchRemoteLine, dispatchRemoteNewSession, makeShimmedCtx} from './bridge.js'
+import {
+    getBridge,
+    dispatchRemoteLine,
+    dispatchRemoteNewSession,
+    makeShimmedCtx,
+    interruptAgent
+} from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn} from './session-state.js'
 import {html} from './ui.js'
@@ -21,7 +27,7 @@ import type {ServerHandle} from './server.js'
 // but globalThis survives. This keeps the server running and messages flowing.
 type Shared = {
     server: ServerHandle | null
-    send: ((text: string, opts?: {deliverAs: 'followUp'}) => void) | null
+    send: ((text: string, opts?: {deliverAs: 'steer' | 'followUp'}) => void) | null
     serveResult: ServeResult | null
 }
 const _g = globalThis as unknown as Record<string, Shared | undefined>
@@ -50,12 +56,17 @@ export function registerRemote(pi: ExtensionAPI): void {
                         if (isAgentIdle()) {
                             S.send?.(plain)
                         } else {
-                            S.send?.(plain, {deliverAs: 'followUp'})
+                            // Mid-run: steer the live turn (inject the message into the
+                            // current generation) rather than queueing it for after, so a
+                            // remote nudge lands immediately — matching the composer's
+                            // "delivered mid-run" affordance.
+                            S.send?.(plain, {deliverAs: 'steer'})
                         }
                     }
                 })
             },
-            wsUrl => html(wsUrl)
+            wsUrl => html(wsUrl),
+            interruptAgent
         )
         // Hands-off HTTPS: point Tailscale serve at our port so phones get a
         // secure context. Best-effort — any failure degrades to the http URL.

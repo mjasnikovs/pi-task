@@ -7,6 +7,13 @@ export interface TextPart {
     text: string
 }
 
+export interface ThinkingPart {
+    kind: 'thinking'
+    text: string
+    /** false while thinking deltas are still streaming; true once thinking_end fires. */
+    done?: boolean
+}
+
 export interface ToolPart {
     kind: 'tool'
     toolCallId: string
@@ -20,7 +27,7 @@ export interface ToolPart {
     elapsedMs?: number
 }
 
-export type Part = TextPart | ToolPart
+export type Part = TextPart | ThinkingPart | ToolPart
 
 export interface Turn {
     role: 'user' | 'assistant' | 'system'

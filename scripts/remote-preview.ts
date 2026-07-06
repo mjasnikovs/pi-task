@@ -74,6 +74,11 @@ const snapshot = {
         {
             role: 'assistant',
             parts: [
+                {
+                    kind: 'thinking',
+                    text: 'The user wants the theme code and a test run.\nLet me read the styles first, then run the theme suite.\nIf a test fails I will patch the ramp helper and re-check.',
+                    done: true
+                },
                 {kind: 'text', text: MD},
                 {
                     kind: 'tool',
@@ -160,10 +165,18 @@ const stub = `  <script>
           window.__push({type: 'agent_start'});
           window.__push({type: 'text_delta', delta: 'Streaming a **live** reply with a fence:\\n\\n\`\`\`ts\\nconst x = 1;\\n\`\`\`'});
         }
+        // #think: agent running with a live thinking block streaming (Stop button
+        // visible, collapsed "✻ Thinking…" bubble with its spinner).
+        if (location.hash === '#think') {
+          window.__push({type: 'agent_start'});
+          window.__push({type: 'thinking_delta', delta: 'Let me reason about the theme system.\\n'});
+          window.__push({type: 'thinking_delta', delta: 'It reads CSS vars off :root and never hard-codes hex.\\n'});
+          window.__push({type: 'thinking_delta', delta: 'So the ramp helper must mix by name — I will verify that next.'});
+        }
         // #open expands every tool card so the diff body is visible in the shot.
         if (location.hash === '#open') {
           setTimeout(function () {
-            var ds = document.querySelectorAll('details.tool-call');
+            var ds = document.querySelectorAll('details.tool-call, details.thinking-block');
             for (var i = 0; i < ds.length; i++) ds[i].open = true;
           }, 50);
         }
@@ -191,7 +204,8 @@ const SHOTS: Shot[] = [
     {mode: 'default-wide', hash: '', size: '1280,800'},
     {mode: 'open', hash: '#open', size: '430,2400'},
     {mode: 'prompt', hash: '#prompt', size: '390,844'},
-    {mode: 'live', hash: '#live', size: '390,844'}
+    {mode: 'live', hash: '#live', size: '390,844'},
+    {mode: 'think', hash: '#think', size: '390,844'}
 ]
 
 function shoot(shot: Shot, dumpDom: boolean): void {

@@ -164,7 +164,9 @@ describe('renderMarkdown (block level)', () => {
     it('highlights a fenced code block and escapes its content', () => {
         const h = renderMarkdown()('```ts\nconst x = 1 // <hi>\n```')
         expect(h).toContain('<div class="code-block">')
+        expect(h).toContain('<div class="code-head">')
         expect(h).toContain('<div class="code-lang">ts</div>')
+        expect(h).toContain('<button class="copy-btn"') // copy button in the header
         expect(h).toContain('hl-kw') // `const` highlighted
         expect(h).toContain('&lt;hi&gt;') // content escaped, no raw tag
         expect(h).not.toContain('<hi>')

@@ -326,6 +326,40 @@ test('prompt_answer frame resolves the pending prompt', async () => {
     srv.stop()
 })
 
+test('interrupt frame invokes the onInterrupt callback', async () => {
+    let interrupts = 0
+    const srv = await startServer(
+        () => {},
+        () => '<html></html>',
+        () => interrupts++
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'interrupt'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(interrupts).toBe(1)
+    ws.close()
+    srv.stop()
+})
+
+test('interrupt is honored even while a prompt is pending', async () => {
+    setPrompt({type: 'prompt', id: '5', question: 'q', allowSkip: false})
+    let interrupts = 0
+    const srv = await startServer(
+        () => {},
+        () => '<html></html>',
+        () => interrupts++
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'interrupt'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(interrupts).toBe(1)
+    ws.close()
+    srv.stop()
+    reset()
+})
+
 test('plain message is ignored while a prompt is pending', async () => {
     setPrompt({type: 'prompt', id: '7', question: 'q', allowSkip: false})
     let got = ''

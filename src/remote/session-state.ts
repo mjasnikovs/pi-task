@@ -105,6 +105,29 @@ export function textEnd(): void {
     s.sink({type: 'text_end'})
 }
 
+/** Accumulate a reasoning/thinking delta into the current thinking part (a new
+ *  part opens when the previous one is closed or the last part isn't thinking).
+ *  Stored as a part kind so a reconnect snapshot replays the collapsed block. */
+export function appendThinking(delta: string): void {
+    const s = getState()
+    const live = ensureLive(s)
+    const last = live.parts[live.parts.length - 1]
+    if (last && last.kind === 'thinking' && !last.done) {
+        last.text += delta
+    } else {
+        live.parts.push({kind: 'thinking', text: delta, done: false})
+    }
+    live.textOpen = false // a following text delta begins a fresh bubble
+    s.sink({type: 'thinking_delta', delta})
+}
+
+export function thinkingEnd(): void {
+    const s = getState()
+    const last = s.live?.parts[s.live.parts.length - 1]
+    if (last && last.kind === 'thinking') last.done = true
+    s.sink({type: 'thinking_end'})
+}
+
 export function startTool(toolCallId: string, toolName: string, args: unknown): void {
     const s = getState()
     const live = ensureLive(s)

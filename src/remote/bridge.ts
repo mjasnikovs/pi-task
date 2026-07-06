@@ -165,6 +165,17 @@ export function publishNotify(message: string, level: 'info' | 'warning' | 'erro
 }
 
 /**
+ * Abort the running agent turn — the browser Stop button. `abort()` lives on the
+ * base ExtensionContext ("Abort the current agent operation") so it works for a
+ * host chat turn, a /task phase turn, or a /task-auto run alike. The shimmed ctx
+ * inherits it from the real event ctx via its prototype, so this is safe even
+ * before the user has run a command in the terminal. No-op when nothing is running.
+ */
+export function interruptAgent(): void {
+    getBridge().currentCtx?.abort()
+}
+
+/**
  * Mirror a task lifecycle notice (the kind pi-task shows on the terminal via
  * ctx.ui.notify) to connected remote viewers. Task failures and other
  * ctx.ui.notify calls bypass the host agent's event stream — the only thing

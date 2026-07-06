@@ -60,6 +60,27 @@ describe('setupEvents', () => {
         expect(getState().live?.parts).toContainEqual({kind: 'text', text: 'hello'})
     })
 
+    it('forwards thinking_delta/thinking_end into a thinking part', () => {
+        pi.emit('agent_start', {type: 'agent_start'})
+        pi.emit('message_update', {
+            type: 'message_update',
+            message: {},
+            assistantMessageEvent: {type: 'thinking_delta', delta: 'reasoning…'}
+        })
+        pi.emit('message_update', {
+            type: 'message_update',
+            message: {},
+            assistantMessageEvent: {type: 'thinking_end', content: 'reasoning…'}
+        })
+        expect(captured).toContainEqual({type: 'thinking_delta', delta: 'reasoning…'})
+        expect(captured).toContainEqual({type: 'thinking_end'})
+        expect(getState().live?.parts).toContainEqual({
+            kind: 'thinking',
+            text: 'reasoning…',
+            done: true
+        })
+    })
+
     it('does not emit text_delta for non-text events', () => {
         pi.emit('message_update', {
             type: 'message_update',

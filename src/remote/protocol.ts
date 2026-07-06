@@ -79,12 +79,17 @@ export interface ClientPromptAnswer {
     id: string
     value: string | undefined
 }
-export type ClientMessage = ClientChatMessage | ClientPromptAnswer
+/** Stop the running agent turn (the browser Stop button). */
+export interface ClientInterrupt {
+    type: 'interrupt'
+}
+export type ClientMessage = ClientChatMessage | ClientPromptAnswer | ClientInterrupt
 
 export function isClientMessage(x: unknown): x is ClientMessage {
     if (typeof x !== 'object' || x === null) return false
     const m = x as Record<string, unknown>
     if (m.type === 'message') return typeof m.text === 'string'
+    if (m.type === 'interrupt') return true
     if (m.type === 'prompt_answer') {
         return typeof m.id === 'string' && (m.value === undefined || typeof m.value === 'string')
     }

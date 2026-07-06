@@ -157,8 +157,12 @@ export function renderModule(): string {
       for (var k = 0; k < blocks.length; k++) {
         var b = blocks[k];
         if (b.type === 'code') {
-          out += '<div class="code-block">'
-            + (b.lang ? '<div class="code-lang">' + escHtml(b.lang) + '</div>' : '')
+          // Header row carries the language label and a copy button (wired by
+          // event delegation in clientScript — it reads the <code> textContent).
+          out += '<div class="code-block"><div class="code-head">'
+            + '<div class="code-lang">' + (b.lang ? escHtml(b.lang) : '') + '</div>'
+            + '<button class="copy-btn" type="button" aria-label="Copy code">Copy</button>'
+            + '</div>'
             + '<pre><code>' + syntaxHighlight(b.content, b.lang) + '</code></pre></div>';
         } else {
           out += renderProse(b.content);

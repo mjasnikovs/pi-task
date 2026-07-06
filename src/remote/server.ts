@@ -93,7 +93,8 @@ async function findPort(start: number, max: number): Promise<number> {
 
 export async function startServer(
     onMessage: MessageCallback,
-    getHtml: (wsUrl: string) => string
+    getHtml: (wsUrl: string) => string,
+    onInterrupt?: () => void
 ): Promise<ServerHandle> {
     const port = await findPort(8800, 100)
     const ips = getLocalIPs()
@@ -187,6 +188,10 @@ export async function startServer(
                 return // ignore malformed JSON
             }
             if (!isClientMessage(msg)) return
+            if (msg.type === 'interrupt') {
+                onInterrupt?.()
+                return
+            }
             if (msg.type === 'prompt_answer') {
                 answerPrompt(msg.id, msg.value)
                 return

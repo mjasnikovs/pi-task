@@ -13,6 +13,10 @@ test('isClientMessage accepts a plain message', () => {
     expect(isClientMessage({type: 'message', text: 'hi'})).toBe(true)
 })
 
+test('isClientMessage accepts an interrupt (browser Stop button)', () => {
+    expect(isClientMessage({type: 'interrupt'})).toBe(true)
+})
+
 test('isClientMessage rejects unknown and malformed', () => {
     expect(isClientMessage({type: 'nope'})).toBe(false)
     expect(isClientMessage(null)).toBe(false)

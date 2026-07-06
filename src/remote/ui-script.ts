@@ -50,6 +50,16 @@ export function clientScript(wsUrl: string): string {
     const toolCallMap = {};
     let currentBubble = null;
     let streamText = '';
+    // Composer state: input is enabled whenever connected AND no prompt card is
+    // open (messages typed mid-run steer the live turn); the Send button morphs
+    // into a red Stop while the agent is running.
+    let agentRunning = false;
+    let connected = false;
+    let stopArmed = false;
+    let stopArmTimer = null;
+    // The live thinking (<details>) block being streamed, and its accumulated text.
+    let currentThinking = null;
+    let thinkingText = '';
     let autoScroll = true;
     let reconnectDelay = 1000;
     let reconnectAnim = null;
@@ -144,7 +154,7 @@ export function clientScript(wsUrl: string): string {
       el.className = 'bubble ' + role;
       // Only assistant text is markdown-rendered; user/error bubbles stay plain so a
       // user's literal *asterisks* or backticks show verbatim.
-      if (role === 'assistant') setContent(el, text);
+      if (role === 'assistant') { setContent(el, text); attachBubbleCopy(el, text); }
       else el.textContent = text;
       chatLog.appendChild(el);
       scrollBottom();
@@ -235,10 +245,159 @@ export function clientScript(wsUrl: string): string {
       s.appendChild(e);
     }
 
-    function setEnabled(on) {
-      const allow = on && activePromptId === null;
-      inputEl.disabled = !allow;
-      sendBtn.disabled = !allow;
+    // Reconcile the composer (input + Send/Stop button) with the current state.
+    // The input is disabled ONLY while disconnected or a prompt card is open — a
+    // running agent no longer locks it, so messages can steer the live turn.
+    function refreshComposer() {
+      const promptOpen = activePromptId !== null;
+      inputEl.disabled = !connected || promptOpen;
+      inputEl.placeholder = agentRunning
+        ? 'message the agent — delivered mid-run'
+        : 'type a message\\u2026 (/ for commands)';
+      if (agentRunning && !promptOpen) {
+        // Send morphs into a red Stop that interrupts the running turn.
+        sendBtn.classList.add('stop');
+        sendBtn.disabled = !connected;
+        if (!stopArmed) sendBtn.textContent = 'Stop';
+      } else {
+        disarmStop();
+        sendBtn.classList.remove('stop');
+        sendBtn.textContent = 'Send';
+        sendBtn.disabled = !connected || promptOpen;
+      }
+    }
+
+    function disarmStop() {
+      stopArmed = false;
+      if (stopArmTimer) { clearTimeout(stopArmTimer); stopArmTimer = null; }
+      sendBtn.classList.remove('armed');
+      if (agentRunning) sendBtn.textContent = 'Stop';
+    }
+
+    function sendInterrupt() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'interrupt' }));
+      }
+    }
+
+    // Stop needs a two-tap confirm (same pattern as the prompt card's cancel):
+    // first tap arms it, a second tap within 3s actually interrupts.
+    function onSendClick() {
+      if (agentRunning && activePromptId === null) {
+        if (stopArmed) { disarmStop(); sendInterrupt(); return; }
+        stopArmed = true;
+        sendBtn.classList.add('armed');
+        sendBtn.textContent = 'Tap to stop';
+        if (stopArmTimer) clearTimeout(stopArmTimer);
+        stopArmTimer = setTimeout(function () {
+          stopArmed = false;
+          sendBtn.classList.remove('armed');
+          if (agentRunning) sendBtn.textContent = 'Stop';
+          stopArmTimer = null;
+        }, 3000);
+        return;
+      }
+      sendMessage();
+    }
+
+    // Copy source text to the clipboard, flashing the button. Falls back to a
+    // hidden textarea + execCommand for non-secure (plain-http LAN) contexts where
+    // navigator.clipboard is unavailable.
+    function flashCopied(btn) {
+      if (!btn) return;
+      const prev = btn.textContent;
+      btn.textContent = 'Copied';
+      btn.classList.add('copied');
+      setTimeout(function () { btn.textContent = prev; btn.classList.remove('copied'); }, 1200);
+    }
+    function fallbackCopy(text, btn) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        flashCopied(btn);
+      } catch (e) {}
+    }
+    function copyText(text, btn) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { flashCopied(btn); },
+          function () { fallbackCopy(text, btn); });
+      } else {
+        fallbackCopy(text, btn);
+      }
+    }
+    // One delegated handler for every copy button (code-block headers live inside
+    // markdown HTML; bubble buttons are appended in JS). Resolve the source text
+    // from whichever container the button sits in.
+    chatLog.addEventListener('click', function (e) {
+      const btn = e.target && e.target.closest ? e.target.closest('.copy-btn') : null;
+      if (!btn) return;
+      const block = btn.closest('.code-block');
+      if (block) {
+        const code = block.querySelector('code');
+        copyText(code ? code.textContent : '', btn);
+        return;
+      }
+      const bub = btn.closest('.bubble');
+      if (bub) copyText(bub.__copyText != null ? bub.__copyText : bub.textContent, btn);
+    });
+
+    // Attach a copy button to a finished assistant bubble and stash its raw text
+    // (the pre-markdown source) so the delegated handler copies the original.
+    function attachBubbleCopy(el, text) {
+      el.__copyText = text;
+      const b = document.createElement('button');
+      b.className = 'copy-btn bubble-copy';
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Copy message');
+      b.textContent = 'Copy';
+      el.appendChild(b);
+    }
+
+    // "✻ Thinking… (n lines)" collapsed-block summary.
+    function thinkingSummary(n) {
+      return '\\u273B Thinking\\u2026 (' + n + (n === 1 ? ' line' : ' lines') + ')';
+    }
+    function thinkingLineCount(text) {
+      return text ? text.split('\\n').length : 0;
+    }
+    // Build a collapsed thinking <details>. A live block keeps a spinner in the
+    // summary and stays open to further deltas; otherwise it's a finished, static one.
+    function makeThinkingEl(text, live) {
+      const d = document.createElement('details');
+      d.className = 'thinking-block';
+      const s = document.createElement('summary');
+      const lbl = document.createElement('span');
+      lbl.className = 'thinking-label';
+      lbl.textContent = thinkingSummary(thinkingLineCount(text));
+      s.appendChild(lbl);
+      if (live) {
+        const sp = document.createElement('span');
+        sp.className = 'thinking-spin spin';
+        s.appendChild(sp);
+      }
+      d.appendChild(s);
+      const body = document.createElement('div');
+      body.className = 'thinking-body';
+      body.textContent = text || '';
+      d.appendChild(body);
+      return d;
+    }
+    // Close out the live thinking block (drop its spinner) — called when the model
+    // moves on to text/tools, or the turn ends.
+    function finalizeThinking() {
+      if (currentThinking) {
+        const sp = currentThinking.querySelector('.thinking-spin');
+        if (sp) { sp.remove(); stopSpinIfIdle(); }
+        currentThinking = null;
+      }
+      thinkingText = '';
     }
 
     // Pull the human-readable text out of a tool result. Many tools (Read, Bash,
@@ -308,6 +467,9 @@ export function clientScript(wsUrl: string): string {
       if (t.role === 'user') { addBubble('user', t.text); return; }
       for (const p of (t.parts || [])) {
         if (p.kind === 'text') { if (p.text) addBubble('assistant', p.text); }
+        else if (p.kind === 'thinking') {
+          if (p.text) { chatLog.appendChild(makeThinkingEl(p.text, false)); scrollBottom(); }
+        }
         else renderToolPart(p);
       }
     }
@@ -334,6 +496,18 @@ export function clientScript(wsUrl: string): string {
             scrollBottom();
           } else if (p.text) {
             addBubble('assistant', p.text);
+          }
+        } else if (p.kind === 'thinking') {
+          if (last && !p.done) {
+            // Reconnected mid-thinking: keep the block live so further deltas flow in.
+            currentThinking = makeThinkingEl(p.text || '', true);
+            thinkingText = p.text || '';
+            chatLog.appendChild(currentThinking);
+            startSpin();
+            scrollBottom();
+          } else if (p.text) {
+            chatLog.appendChild(makeThinkingEl(p.text, false));
+            scrollBottom();
           }
         } else {
           renderToolPart(p);
@@ -453,7 +627,7 @@ export function clientScript(wsUrl: string): string {
       promptRec.style.display = 'none';
       activeRecommended2 = '';
       if (cancelArmTimer) { clearTimeout(cancelArmTimer); cancelArmTimer = null; }
-      setEnabled(true);
+      refreshComposer();
     }
 
     function makeBtn(label, cls, onClick) {
@@ -549,7 +723,7 @@ export function clientScript(wsUrl: string): string {
         promptInput.focus();
       }
       promptCard.style.display = 'block';
-      setEnabled(false);
+      refreshComposer();
     }
 
     function handleMsg(msg) {
@@ -561,6 +735,7 @@ export function clientScript(wsUrl: string): string {
           chatLog.innerHTML = '';
           closePrompt();
           hideThinking();
+          currentThinking = null; thinkingText = '';
           currentBubble = null; streamText = '';
           for (const k in toolCallMap) delete toolCallMap[k];
           // Per-turn try/catch: one malformed turn must never abort the rebuild
@@ -570,8 +745,9 @@ export function clientScript(wsUrl: string): string {
           taskWidgetLines = (msg.taskWidget && msg.taskWidget.length) ? msg.taskWidget : null;
           renderWidgets();
           if (msg.context) setContextBar(msg.context); else contextFill.style.width = '0%';
+          agentRunning = !!msg.agentRunning;
           if (msg.prompt) showPrompt(msg.prompt);
-          setEnabled(!msg.agentRunning && !msg.prompt);
+          refreshComposer();
           if (msg.agentRunning && !msg.live) showThinking();
           break;
         }
@@ -579,12 +755,33 @@ export function clientScript(wsUrl: string): string {
           autoScroll = true;
           streamText = '';
           currentBubble = null;
-          setEnabled(false);
+          agentRunning = true;
+          refreshComposer();
+          showThinking();
+          break;
+        case 'thinking_delta':
+          hideThinking(); // drop the spinner-only bubble
+          if (!currentThinking) {
+            currentThinking = makeThinkingEl('', true);
+            chatLog.appendChild(currentThinking);
+            thinkingText = '';
+            startSpin();
+          }
+          thinkingText += msg.delta;
+          currentThinking.querySelector('.thinking-body').textContent = thinkingText;
+          currentThinking.querySelector('.thinking-label').textContent =
+            thinkingSummary(thinkingLineCount(thinkingText));
+          scrollBottom();
+          break;
+        case 'thinking_end':
+          finalizeThinking();
+          // Model moves to text/tool next — show the spinner meanwhile.
           showThinking();
           break;
         case 'text_delta':
           if (!currentBubble) {
             hideThinking();
+            finalizeThinking();
             currentBubble = document.createElement('div');
             currentBubble.className = 'bubble assistant';
             const cursor = document.createElement('span');
@@ -604,7 +801,7 @@ export function clientScript(wsUrl: string): string {
           if (currentBubble) {
             const c = currentBubble.querySelector('.cursor');
             if (c) c.remove();
-            if (streamText) setContent(currentBubble, streamText);
+            if (streamText) { setContent(currentBubble, streamText); attachBubbleCopy(currentBubble, streamText); }
             // Close this message's bubble so the next text segment (after a tool or
             // the next message) starts a fresh bubble — matching the terminal.
             currentBubble = null;
@@ -614,6 +811,7 @@ export function clientScript(wsUrl: string): string {
           break;
         case 'tool_start': {
           hideThinking();
+          finalizeThinking();
           const d = addToolCall(msg.toolName, msg.args, false);
           const sp = document.createElement('span');
           sp.className = 'tool-spin spin';
@@ -648,22 +846,26 @@ export function clientScript(wsUrl: string): string {
           break;
         case 'agent_error':
           hideThinking();
+          finalizeThinking();
           if (currentBubble) {
             const c = currentBubble.querySelector('.cursor');
             if (c) c.remove();
-            if (streamText) setContent(currentBubble, streamText);
+            if (streamText) { setContent(currentBubble, streamText); attachBubbleCopy(currentBubble, streamText); }
             currentBubble = null;
             streamText = '';
             stopSpinIfIdle();
           }
           addBubble('error', msg.message || 'Error');
-          setEnabled(true);
+          agentRunning = false;
+          refreshComposer();
           break;
         case 'agent_end':
           hideThinking();
+          finalizeThinking();
           currentBubble = null;
           streamText = '';
-          setEnabled(true);
+          agentRunning = false;
+          refreshComposer();
           setContextBar(msg.contextUsage);
           break;
         case 'context':
@@ -691,8 +893,11 @@ export function clientScript(wsUrl: string): string {
           // A new session started — wipe the previous session's transcript.
           chatLog.innerHTML = '';
           hideThinking();
+          finalizeThinking();
           currentBubble = null; streamText = '';
           closePrompt();
+          agentRunning = false;
+          refreshComposer();
           taskWidgetLines = null;
           renderWidgets();
           contextFill.style.width = '0%';
@@ -712,11 +917,12 @@ export function clientScript(wsUrl: string): string {
       // The server records the message via addUserTurn and broadcasts a
       // user_message back to every client (us included), which renders the
       // bubble. Don't render it here too, or the sender sees it twice.
-      setEnabled(false);
-      showThinking();
+      // Mid-run the message steers the live turn (no state change here); when
+      // idle, optimistically show the spinner until agent_start lands.
+      if (!agentRunning) showThinking();
     }
 
-    sendBtn.addEventListener('click', sendMessage);
+    sendBtn.addEventListener('click', onSendClick);
     inputEl.addEventListener('keydown', (e) => {
       if (cmdActive.length > 0) {
         if (e.key === 'ArrowDown') { e.preventDefault(); cmdIndex = Math.min(cmdIndex + 1, cmdActive.length - 1); renderSuggestions(); return; }
@@ -746,7 +952,8 @@ export function clientScript(wsUrl: string): string {
         if (reconnectAnim) { clearInterval(reconnectAnim); reconnectAnim = null; }
         reconnectOverlay.classList.remove('visible');
         reconnectDelay = 1000;
-        setEnabled(true);
+        connected = true;
+        refreshComposer();
         // Self-heal on every (re)connect, not just page load: if the server
         // restarted it may have lost (or be rehydrating) our subscription, and
         // browsers can rotate it. Re-registering here covers reconnects the
@@ -760,7 +967,8 @@ export function clientScript(wsUrl: string): string {
       });
       sock.addEventListener('close', () => {
         if (ws !== sock) return;
-        setEnabled(false);
+        connected = false;
+        refreshComposer();
         reconnectOverlay.classList.add('visible');
         // Animate the same braille spinner used elsewhere, with a live countdown.
         const until = Date.now() + reconnectDelay;

@@ -67,7 +67,7 @@ export const STYLES = `    :root {
       line-height: 1.6; white-space: pre-wrap; word-break: break-word; font-size: 13px;
     }
     .bubble.user { background: var(--surface1); color: var(--text); align-self: flex-end; }
-    .bubble.assistant { background: var(--surface0); color: var(--text); align-self: flex-start; }
+    .bubble.assistant { background: var(--surface0); color: var(--text); align-self: flex-start; position: relative; }
     .bubble.error {
       background: var(--crust); color: var(--red); align-self: stretch;
       max-width: 100%; border: 1px solid var(--red); font-size: 12px;
@@ -86,6 +86,37 @@ export const STYLES = `    :root {
       color: var(--mauve); font-size: 15px; line-height: 1;
       font-family: ui-monospace, monospace;
     }
+    /* Collapsed reasoning block ("✻ Thinking… (n lines)"), muted + italic. */
+    .thinking-block { align-self: flex-start; max-width: 90%; font-size: 12px; }
+    .thinking-block > summary {
+      color: var(--subtext0); font-style: italic; cursor: pointer; list-style: none;
+      user-select: none; display: flex; align-items: center; gap: 8px; padding: 2px 0;
+    }
+    .thinking-block > summary::-webkit-details-marker { display: none; }
+    .thinking-block .thinking-spin {
+      color: var(--mauve); font-style: normal; font-family: ui-monospace, monospace;
+    }
+    .thinking-block .thinking-body {
+      color: var(--subtext0); font-style: italic; white-space: pre-wrap;
+      word-break: break-word; line-height: 1.5; margin: 4px 0 0 4px;
+      padding: 4px 0 2px 12px; border-left: 2px solid var(--surface1);
+    }
+    /* Copy buttons: on code-block headers and (floating) on finished assistant
+       bubbles. Wired by one delegated click handler in the client script. */
+    .copy-btn {
+      background: transparent; border: none; color: var(--subtext0); cursor: pointer;
+      font-family: inherit; font-size: 11px; padding: 2px 6px; border-radius: 4px;
+      line-height: 1.4;
+    }
+    .copy-btn:hover { color: var(--text); background: var(--surface1); }
+    .copy-btn.copied { color: var(--green); }
+    .bubble-copy {
+      position: absolute; top: 4px; right: 4px; opacity: 0;
+      background: var(--surface1); transition: opacity 0.12s ease;
+    }
+    .bubble.assistant:hover .bubble-copy { opacity: 1; }
+    /* Touch devices have no hover — keep the button faintly visible. */
+    @media (hover: none) { .bubble-copy { opacity: 0.55; } }
     .tool-call {
       background: var(--crust); border-radius: 6px; align-self: flex-start;
       max-width: 90%; font-size: 12px; border: 1px solid var(--surface0);
@@ -127,10 +158,16 @@ export const STYLES = `    :root {
       border-radius: 6px; overflow: hidden; margin: 4px 0;
       align-self: stretch; max-width: 100%; font-size: 12px;
     }
-    .code-lang {
-      background: var(--surface0); color: var(--subtext0);
-      font-size: 10px; padding: 3px 10px; letter-spacing: 0.05em;
+    /* Header row above a code block: language label on the left, copy button on
+       the right (the surface bar that used to live on .code-lang). */
+    .code-head {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--surface0);
     }
+    .code-lang {
+      color: var(--subtext0); font-size: 10px; padding: 3px 10px; letter-spacing: 0.05em;
+    }
+    .code-head .copy-btn { padding: 3px 10px; }
     .code-block code {
       display: block; padding: 10px 12px; overflow-x: auto;
       color: var(--text); white-space: pre; line-height: 1.55;
@@ -205,6 +242,13 @@ export const STYLES = `    :root {
       white-space: nowrap; align-self: flex-end;
     }
     #send:disabled, #input:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* While the agent runs, Send becomes a red Stop; the armed (tap-to-confirm)
+       state brightens it and adds a halo, mirroring the prompt card's cancel. */
+    #send.stop { background: var(--red); color: var(--crust); }
+    #send.stop.armed {
+      filter: brightness(1.12);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 45%, transparent);
+    }
     #reconnect-overlay {
       display: none; position: fixed; inset: 0;
       background: rgba(30,30,46,0.88); color: var(--subtext1);
