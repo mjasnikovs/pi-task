@@ -86,6 +86,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'enforce guidelines',
         description:
             "Check each /task and /task-auto commit against AGENTS.md/CLAUDE.md. Needs 'verify work' to FIX drift (fixes are reverted if they regress verification); without it, only reports violations. Enabling it makes /task wait for the implementation"
+    },
+    {
+        id: 'parallelResearchWorkers',
+        label: 'parallel research',
+        description:
+            'Run the 4 research workers concurrently. Leave OFF on a single-GPU local server (serial is measurably faster there); turn on only for a parallel-capable model backend'
     }
 ]
 

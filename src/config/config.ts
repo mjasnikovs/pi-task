@@ -10,6 +10,13 @@ export interface PiTaskConfig {
     orientation: boolean
     enforceGuidelines: boolean
     verifyWork: boolean
+    /**
+     * Run the four research workers concurrently instead of one at a time.
+     * DEFAULT OFF: serial was A/B-proven faster on a single-GPU local backend
+     * (concurrent streams split the GPU and slow each other ~4×, see
+     * phases.ts). Turn on only for a parallel-capable backend.
+     */
+    parallelResearchWorkers: boolean
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -18,7 +25,8 @@ const DEFAULTS: PiTaskConfig = {
     autoCommit: true,
     orientation: true,
     enforceGuidelines: true,
-    verifyWork: true
+    verifyWork: true,
+    parallelResearchWorkers: false
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')

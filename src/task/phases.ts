@@ -447,10 +447,10 @@ export async function phaseResearch(
     }
 
     // Per-worker timing split into wait (spawn → first byte) and work (first
-    // byte → exit). The workers run sequentially below, so each split is a clean
+    // byte → exit). With the default serial execution each split is a clean
     // per-worker measurement — waitMs the worker's own cold-start, workMs its
-    // generation+tool-call cost — not a Promise.all-relative wall-clock that
-    // conflates the two.
+    // generation+tool-call cost. Under the opt-in parallel mode the numbers are
+    // wall-clock-relative (queueing shows up in waitMs).
     const recordWorker = <T extends {waitMs: number; workMs: number}>(
         label: string,
         p: Promise<T>
@@ -471,7 +471,9 @@ export async function phaseResearch(
     //     each other ~4x (context worker measured 27s solo vs 128s under load),
     //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
     // Every worker runs /no_think (below), so sequential is the faster regime.
-    // Do NOT switch this back to Promise.all without re-running that A/B.
+    // Do NOT switch the DEFAULT back to concurrent without re-running that A/B;
+    // the opt-in `parallelResearchWorkers` config flag exists for backends that
+    // genuinely serve parallel streams.
     //
     // `/no_think` is the big win: these are agentic exploration loops, and on a
     // reasoning model the child would otherwise emit a full <think> trace at
@@ -537,21 +539,35 @@ export async function phaseResearch(
         }
     ]
 
-    // Run workers one at a time, persisting each worker's validated output the
-    // moment it succeeds. On a resume, a worker whose cached output is already on
-    // disk is skipped — so when one worker fails and the phase is re-run, the
-    // others don't burn minutes regenerating work that was already good. Each
-    // worker is validated inline (not in a second pass) so a failure throws
-    // before later workers run, and only trustworthy text is ever cached.
-    const sections: Array<{name: string; text: string}> = []
-    for (const spec of workerSpecs) {
+    // Persisting a worker's section is a read-modify-write of the shared task
+    // file, so writes are chained through one lock — a no-op in serial mode,
+    // load-bearing in parallel mode where two workers can settle together.
+    let persistChain: Promise<void> = Promise.resolve()
+    const persistSection = (heading: string, text: string): Promise<void> => {
+        const next = persistChain.then(() => setTaskSection(deps.cwd, deps.taskId, heading, text))
+        persistChain = next.catch(() => {})
+        return next
+    }
+
+    // One worker, cache-skip to persist: on a resume, a worker whose cached
+    // output is already on disk is skipped — so when one worker fails and the
+    // phase is re-run, the others don't burn minutes regenerating work that was
+    // already good. Each worker is validated inline (not in a second pass), so
+    // only trustworthy text is ever cached.
+    //
+    // A fatal failure (crash/empty/leak) still throws — the already-cached
+    // workers survive for the resume. A runaway (loop/timeout) degrades to its
+    // partial output instead, so one weak worker can't abort a whole auto-run;
+    // the degraded section is cached too, so a resume doesn't re-loop it.
+    const runSpec = async (
+        spec: (typeof workerSpecs)[number]
+    ): Promise<{name: string; text: string}> => {
         const cacheHeading = researchWorkerCacheHeading(spec.section)
         const cached = (await readSection(deps.cwd, deps.taskId, cacheHeading)) ?? ''
         if (cached.trim().length > 0) {
             deps.logDebug?.(`${spec.label}: cached — skipping re-run`)
             updateProgress()
-            sections.push({name: spec.section, text: cached.trim()})
-            continue
+            return {name: spec.section, text: cached.trim()}
         }
 
         deps.logDebug?.(`${spec.label}: start`)
@@ -577,10 +593,6 @@ export async function phaseResearch(
         )
         updateProgress()
 
-        // A fatal failure (crash/empty/leak) still throws — the already-cached
-        // workers survive for the resume. A runaway (loop/timeout) degrades to its
-        // partial output instead, so one weak worker can't abort a whole auto-run;
-        // the degraded section is cached too, so a resume doesn't re-loop it.
         const failure = classifyResearchWorker(spec.section, r)
         if (failure?.kind === 'fatal') throw failure.error
         const sectionText =
@@ -590,8 +602,30 @@ export async function phaseResearch(
         if (failure?.kind === 'runaway') {
             deps.logDebug?.(`${spec.label}: degraded — ${failure.reason}`)
         }
-        await setTaskSection(deps.cwd, deps.taskId, cacheHeading, sectionText)
-        sections.push({name: spec.section, text: sectionText})
+        await persistSection(cacheHeading, sectionText)
+        return {name: spec.section, text: sectionText}
+    }
+
+    const sections: Array<{name: string; text: string}> = []
+    if (!getConfig().parallelResearchWorkers) {
+        // Default: ONE AT A TIME (see the A/B note above the specs) — a fatal
+        // failure throws before later workers run.
+        for (const spec of workerSpecs) {
+            sections.push(await runSpec(spec))
+        }
+    } else {
+        // Opt-in for parallel-capable backends. allSettled (not all): every
+        // worker runs to its own outcome first, so one fatal failure cannot
+        // orphan the others' output — their sections persist for the resume
+        // before the failure is thrown. Assembly order stays the spec order
+        // regardless of completion order.
+        const settled = await Promise.allSettled(workerSpecs.map(spec => runSpec(spec)))
+        for (const s of settled) {
+            if (s.status === 'rejected') throw s.reason
+        }
+        for (const s of settled) {
+            if (s.status === 'fulfilled') sections.push(s.value)
+        }
     }
 
     // All workers succeeded — the assembled output below becomes the canonical

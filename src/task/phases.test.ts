@@ -31,6 +31,7 @@ import {
 import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
+import {getConfig} from '../config/config.js'
 import {writeTaskFile} from './task-io.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
@@ -426,6 +427,132 @@ describe('phaseResearch per-worker persistence', () => {
             expect(out).toMatch(/FILES\n\(degraded: research FILES worker stuck in a loop/i)
             expect(out).toContain('TOOLING\n- finding for tooling')
         })
+    })
+})
+
+describe('phaseResearch parallel workers (opt-in flag)', () => {
+    const MARKERS = {
+        files: 'content of a FILES section',
+        apis: 'content of an APIS section',
+        context: 'content of a CONTEXT section',
+        tooling: 'content of a TOOLING section'
+    }
+
+    function classify(args: ReadonlyArray<string>): keyof typeof MARKERS | 'other' {
+        const prompt = args[args.length - 1] ?? ''
+        for (const k of Object.keys(MARKERS) as Array<keyof typeof MARKERS>) {
+            if (prompt.includes(MARKERS[k])) return k
+        }
+        return 'other'
+    }
+
+    async function withParallelFlag(fn: () => Promise<void>): Promise<void> {
+        const cfg = getConfig()
+        const prev = cfg.parallelResearchWorkers
+        cfg.parallelResearchWorkers = true
+        try {
+            await fn()
+        } finally {
+            cfg.parallelResearchWorkers = prev
+        }
+    }
+
+    async function makeTask(cwd: string): Promise<void> {
+        await writeTaskFile(
+            cwd,
+            {
+                id: 'TASK_0001',
+                state: 'in_progress',
+                phase: 'research',
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-01T00:00:00Z',
+                title: 't'
+            },
+            '\n'
+        )
+    }
+
+    test('assembly order is the spec order even when completion order inverts', async () => {
+        await withParallelFlag(() =>
+            withTmpTaskDir(async cwd => {
+                await makeTask(cwd)
+                // FILES (first spec) finishes LAST; TOOLING (last spec) first.
+                const delays: Record<string, number> = {files: 120, apis: 80, context: 40}
+                const spawn = fakeSpawnByPrompt(args => {
+                    const which = classify(args)
+                    return {
+                        ...agentEndResponse(`- finding for ${which}`),
+                        closeDelayMs: delays[which] ?? 0
+                    }
+                })
+                const deps = {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn
+                }
+                const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                    getFileInventory: async () => ''
+                })
+                const order = ['FILES', 'APIS', 'CONTEXT', 'TOOLING'].map(s => out.indexOf(s))
+                expect(order.every(i => i >= 0)).toBe(true)
+                expect([...order].sort((a, b) => a - b)).toEqual(order)
+                expect(out).toContain('FILES\n- finding for files')
+                expect(out).toContain('TOOLING\n- finding for tooling')
+            })
+        )
+    })
+
+    test('one fatal worker does not orphan the others — their sections are cached before the throw', async () => {
+        await withParallelFlag(() =>
+            withTmpTaskDir(async cwd => {
+                await makeTask(cwd)
+                const spawns: Record<string, number> = {}
+                let apisShouldFail = true
+                const spawn = fakeSpawnByPrompt(args => {
+                    const which = classify(args)
+                    spawns[which] = (spawns[which] ?? 0) + 1
+                    // APIS fails fatally on run 1 while the others succeed
+                    // slower — allSettled must still persist all three.
+                    if (which === 'apis' && apisShouldFail) return agentEndResponse('')
+                    return {...agentEndResponse(`- finding for ${which}`), closeDelayMs: 40}
+                })
+                const deps = {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn
+                }
+                await expect(
+                    phaseResearch(deps, 'a refined goal with no mentions', {
+                        getFileInventory: async () => ''
+                    })
+                ).rejects.toThrow(/APIS worker produced no output/i)
+
+                expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain(
+                    'files'
+                )
+                expect(await readSection(cwd, 'TASK_0001', 'research worker CONTEXT')).toContain(
+                    'context'
+                )
+                expect(await readSection(cwd, 'TASK_0001', 'research worker TOOLING')).toContain(
+                    'tooling'
+                )
+                expect(await readSection(cwd, 'TASK_0001', 'research worker APIS')).toBeNull()
+
+                // Resume: only APIS re-runs; the cached three are skipped.
+                apisShouldFail = false
+                const before = {...spawns}
+                const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                    getFileInventory: async () => ''
+                })
+                expect(spawns.files).toBe(before.files)
+                expect(spawns.context).toBe(before.context)
+                expect(spawns.tooling).toBe(before.tooling)
+                expect(spawns.apis).toBe((before.apis ?? 0) + 1)
+                expect(out).toContain('APIS\n- finding for apis')
+            })
+        )
     })
 })
 
