@@ -22,6 +22,8 @@ import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
+import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
+import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {findSubstitutionSuspects, type ChangedFile} from './substitution-probe.js'
 import {runBoundedLintFix} from './lint-fix.js'
@@ -35,6 +37,14 @@ import {resolveContextUsage} from './context-usage.js'
 /** A function that re-runs a task's implementation turn (AUTOFIX). Injected by the
  *  command so this module stays free of the orchestrators (avoids an import cycle). */
 export type RunTaskFn = GateDeps['runTask']
+
+/** One bounded final-gate fix attempt (see final-gate-fix.ts): fix child →
+ *  shrink guard → gate re-run. Consumed by /task-auto's run-end gate branch. */
+export type FinalGateFixFn = (
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    failReason: string
+) => Promise<FinalFixResult>
 
 /** Keep the gate machinery's own artifacts out of every git pathspec below. */
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
@@ -108,7 +118,7 @@ export function buildGateDeps(params: {
     signal: AbortSignal
     parentContextWindow: number
     runTask: RunTaskFn
-}): GateDeps {
+}): GateDeps & {finalGateFix: FinalGateFixFn} {
     const {signal, parentContextWindow, runTask} = params
     // Captured by each gate child's loader so the widget mirrors the child's latest
     // output line and context usage, exactly like the single-task phase widget.
@@ -118,6 +128,14 @@ export function buildGateDeps(params: {
     // child run (see git-state-guard.ts). runWorkVerification reads this through its
     // mutationCheck dep to discard a verdict computed on a mutated tree.
     let lastGuardReconcile: ReconcileResult | null = null
+
+    // Restore tracked files to HEAD and drop files a pass created; the .pi-tasks
+    // trail/log writes made during the pass survive both. Shared by the enforce
+    // pre-commit gate (discardEdits) and the final-gate autofix shrink guard.
+    const discardTreeEdits = async (cwd2: string): Promise<void> => {
+        await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
+        await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
+    }
 
     // Shared runner for the per-task GATE children (verify + post-FAIL recommend).
     // Both are read-only passes of the same local model that must run to completion:
@@ -130,7 +148,7 @@ export function buildGateDeps(params: {
             gateCtx: ExtensionCommandContext,
             cwd2: string,
             taskTitle: string,
-            kind: 'verify' | 'recommend' | 'lint-fix',
+            kind: 'verify' | 'recommend' | 'lint-fix' | 'final-fix',
             logFile: string
         ) =>
         async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
@@ -370,12 +388,25 @@ export function buildGateDeps(params: {
             )
             return r.exitCode === 0 && r.stdout.trim().length > 0
         },
-        discardEdits: async cwd2 => {
-            // Restore tracked files to HEAD and drop files the pass created; the
-            // .pi-tasks trail/log writes made during the pass survive both.
-            await git(cwd2, ['checkout', '--', '.', EXCLUDE_TASKS_DIR], signal)
-            await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
-        },
+        discardEdits: discardTreeEdits,
+        finalGateFix: (fixCtx, cwd2, failReason) =>
+            runFinalGateAutofix({
+                cwd: cwd2,
+                signal,
+                failReason,
+                runChild: makeGateChild(
+                    fixCtx,
+                    cwd2,
+                    'final integration gate',
+                    'final-fix',
+                    'final-gate-debug.log'
+                ),
+                // The gate re-run is the only arbiter of convergence, and the
+                // shrink guard's discovery is the gate's own (see final-gate.ts).
+                gate: c => Promise.resolve(runFinalIntegrationGate(c)),
+                discoverLabels: discoverGateCommandLabels,
+                discard: discardTreeEdits
+            }),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the
             // recommendation reasons over the real contract (degrade to the bare title).

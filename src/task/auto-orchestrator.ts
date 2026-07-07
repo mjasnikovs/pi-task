@@ -45,10 +45,20 @@ import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remot
 import {pushNotify} from '../remote/push.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
-import {buildGateDeps} from './gate-deps.js'
+import {buildGateDeps, type FinalGateFixFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate} from './final-gate.js'
+import {
+    classifyFinalGateAnswer,
+    MAX_FINAL_GATE_AUTOFIX,
+    FINAL_LEAVE_LABEL,
+    FINAL_LEAVE_VALUE,
+    FINAL_ACCEPT_LABEL,
+    FINAL_ACCEPT_VALUE,
+    FINAL_AUTOFIX_LABEL,
+    FINAL_AUTOFIX_VALUE
+} from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
@@ -101,6 +111,14 @@ export interface AutoDeps extends GateDeps {
      * gate off) → the run completes as before.
      */
     finalGate?: (cwd: string) => Promise<{ok: boolean; reason: string}>
+    /**
+     * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
+     * offered as the picker's third option. Runs the fix child, applies the
+     * command-shrink guard, and re-runs the gate; the result's `ok` means the gate
+     * now passes. Absent (tests / no fix wiring) → the picker keeps only
+     * Leave-failed / Accept, exactly the pre-autofix behavior.
+     */
+    finalGateFix?: FinalGateFixFn
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -743,40 +761,105 @@ export async function runAutoLoop(
                 // the gate, so fixing and resuming converges.
                 if (deps.finalGate) {
                     active.ui.notify(`${id}: running final integration gate…`, 'info')
-                    const fin = await deps.finalGate(cwd)
-                    if (!fin.ok) {
+                    // Run-level gate trail on the parent task file — same durable
+                    // auditability contract as the per-task `## gates` records.
+                    const recGate = async (line: string): Promise<void> => {
+                        try {
+                            await deps.record?.(cwd, id, line)
+                        } catch {
+                            // recording must never break the gate
+                        }
+                    }
+                    let fin = await deps.finalGate(cwd)
+                    if (!fin.ok) await recGate(`final-gate: FAIL — ${fin.reason.slice(0, 300)}`)
+                    // Resolution loop: Leave-failed (recommended) / Autofix (bounded,
+                    // model-driven fix pass + gate re-run — run 7's gap: the picker
+                    // had NO automated fix path) / Accept. The user always decides;
+                    // after MAX_FINAL_GATE_AUTOFIX attempts that still FAIL the
+                    // autofix card is withdrawn so the loop cannot run unbounded.
+                    let fixAttempts = 0
+                    while (!fin.ok) {
+                        const canAutofix =
+                            deps.finalGateFix !== undefined && fixAttempts < MAX_FINAL_GATE_AUTOFIX
                         const question =
                             `Final integration gate FAILED for ${id}.\n\n${fin.reason}\n\n`
                             + 'All tasks are checked off — this is the whole-repo check '
                             + '(the project’s own test/build/static commands, run unaided).'
+                            + (fixAttempts > 0 ?
+                                `\n\nAutofix attempts so far: ${fixAttempts}/${MAX_FINAL_GATE_AUTOFIX}.`
+                            :   '')
                         const answer = await new SessionUI(active).ask({
                             localTitle: 'Final integration gate failed — how should pi proceed?',
                             displayQuestion: question,
                             question,
-                            recommended: 'Leave failed — I will fix and /task-auto-resume',
-                            recommended2: 'Accept — complete the run anyway',
+                            recommended: FINAL_LEAVE_LABEL,
+                            recommended2: canAutofix ? FINAL_AUTOFIX_LABEL : FINAL_ACCEPT_LABEL,
                             allowSkip: false,
                             options: [
-                                {
-                                    label: 'Leave failed — I will fix and /task-auto-resume',
-                                    value: 'fail'
-                                },
-                                {label: 'Accept — complete the run anyway', value: 'accept'}
+                                {label: FINAL_LEAVE_LABEL, value: FINAL_LEAVE_VALUE},
+                                ...(canAutofix ?
+                                    [{label: FINAL_AUTOFIX_LABEL, value: FINAL_AUTOFIX_VALUE}]
+                                :   []),
+                                {label: FINAL_ACCEPT_LABEL, value: FINAL_ACCEPT_VALUE}
                             ]
                         })
-                        if (answer === undefined || !/^accept\b/i.test(answer.trim())) {
-                            await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                            announceDone(
-                                active,
-                                `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`,
-                                'error'
+                        const choice = classifyFinalGateAnswer(answer)
+                        if (choice.action === 'accept') {
+                            await recGate('final-gate: FAIL accepted by user')
+                            active.ui.notify(
+                                `${id}: final integration gate FAIL accepted by user — completing.`,
+                                'warning'
                             )
-                            return
+                            break
                         }
-                        active.ui.notify(
-                            `${id}: final integration gate FAIL accepted by user — completing.`,
-                            'warning'
+                        if (choice.action === 'autofix' && canAutofix) {
+                            fixAttempts += 1
+                            await recGate(
+                                `final-gate: user chose AUTOFIX (attempt ${fixAttempts}/${MAX_FINAL_GATE_AUTOFIX})`
+                            )
+                            active.ui.notify(
+                                `${id}: final-gate autofix (${fixAttempts}/${MAX_FINAL_GATE_AUTOFIX}) — bounded fix pass, then the gate re-runs…`,
+                                'info'
+                            )
+                            const seed =
+                                choice.guidance ?
+                                    `${fin.reason}\n\nUser guidance: ${choice.guidance}`
+                                :   fin.reason
+                            const fix = await deps.finalGateFix!(active, cwd, seed)
+                            if (fix.ok) {
+                                await deps.commit(cwd, `FINAL GATE AUTOFIX (${id})`)
+                                await recGate(
+                                    `final-gate: autofix converged — ${fix.reason.slice(0, 200)}`
+                                )
+                                active.ui.notify(
+                                    `${id}: final integration gate PASSES after autofix — ${fix.reason.slice(0, 140)}`,
+                                    'info'
+                                )
+                                fin = {ok: true, reason: fix.reason}
+                                break
+                            }
+                            await recGate(
+                                `final-gate: autofix attempt ${fixAttempts} failed — ${fix.reason.slice(0, 200)}`
+                            )
+                            active.ui.notify(
+                                `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
+                                'warning'
+                            )
+                            // Work from the FRESH gate failure when the fix pass got
+                            // as far as re-running the gate; otherwise keep the last.
+                            fin = {ok: false, reason: fix.gateReason ?? fin.reason}
+                            continue
+                        }
+                        // Leave failed — the dismissal default, unchanged from the
+                        // two-option picker (an unavailable autofix demotes here too).
+                        await recGate('final-gate: left failed (user)')
+                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                        announceDone(
+                            active,
+                            `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`,
+                            'error'
                         )
+                        return
                     }
                 }
                 await updateTaskFrontMatter(cwd, id, {state: 'completed'})

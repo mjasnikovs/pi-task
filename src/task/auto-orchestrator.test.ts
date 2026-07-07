@@ -1752,3 +1752,124 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         expect(captured.notifies.some(n => /complete — all 1 tasks done/.test(n.msg))).toBe(true)
     })
 })
+
+test('runAutoLoop: final gate FAIL + user picks AUTOFIX → fix runs, gate green, run completes', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        let fixSeed = ''
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: (_cwd, message) => {
+                commits.push(message)
+                return Promise.resolve({committed: true})
+            },
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
+            finalGateFix: (_ctx, _cwd, failReason) => {
+                fixSeed = failReason
+                return Promise.resolve({ok: true, reason: 'statics + `bun run test` passed'})
+            }
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(fixSeed).toContain('`bun run test` exited 1')
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        expect(commits.some(m => /FINAL GATE AUTOFIX/.test(m))).toBe(true)
+        expect(captured.notifies.some(n => /PASSES after autofix/.test(n.msg))).toBe(true)
+        // The picker offered all three cards, Leave-failed first (recommended).
+        const picker = captured.selects.find(s => /Final integration gate FAILED/.test(s.title))
+        expect(picker).toBeDefined()
+        expect(picker!.options[0]).toBe('Leave failed — I will fix and /task-auto-resume')
+        expect(picker!.options).toContain('Autofix — run a bounded fix pass and re-run the gate')
+    })
+})
+
+test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the card is withdrawn', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let fixRuns = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
+            finalGateFix: () => {
+                fixRuns++
+                return Promise.resolve({
+                    ok: false,
+                    reason: 'did not converge: `bun run test` exited 1 — still',
+                    gateReason: '`bun run test` exited 1 — still'
+                })
+            }
+        }
+        const autofixLabel = 'Autofix — run a bounded fix pass and re-run the gate'
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        // Fourth picker: no autofix card queued answer left → dismissal → leave failed.
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(fixRuns).toBe(3)
+        const pickers = captured.selects.filter(s => /Final integration gate FAILED/.test(s.title))
+        expect(pickers.length).toBe(4)
+        expect(pickers[3].options).not.toContain(autofixLabel)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
+        // The later pickers carry the FRESH gate reason from the failed attempt.
+        expect(captured.selects.some(s => /exited 1 — still/.test(s.title))).toBe(true)
+    })
+})
+
+test('runAutoLoop: no finalGateFix dep → picker keeps only the two original cards', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        const picker = captured.selects.find(s => /Final integration gate FAILED/.test(s.title))
+        expect(picker).toBeDefined()
+        // Two cards + the built-in "type a different answer" fallback.
+        expect(picker!.options.filter(o => /^(Leave|Accept|Autofix)/.test(o))).toEqual([
+            'Leave failed — I will fix and /task-auto-resume',
+            'Accept — complete the run anyway'
+        ])
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
+    })
+})
+
+test('runAutoLoop: free text typed at the final-gate picker becomes autofix guidance', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let fixSeed = ''
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
+            finalGateFix: (_ctx, _cwd, failReason) => {
+                fixSeed = failReason
+                return Promise.resolve({ok: true, reason: 'statics passed'})
+            }
+        }
+        handle.queueSelect('✎ Type a different answer…')
+        handle.queueInput('move the e2e spec out of the unit glob')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(fixSeed).toContain('User guidance: move the e2e spec out of the unit glob')
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})

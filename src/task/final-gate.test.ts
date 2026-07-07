@@ -8,7 +8,11 @@ import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {discoverIntegrationCommands, runFinalIntegrationGate} from './final-gate.js'
+import {
+    discoverIntegrationCommands,
+    discoverGateCommandLabels,
+    runFinalIntegrationGate
+} from './final-gate.js'
 
 function makeDir(pkg?: object): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-final-gate-'))
@@ -85,5 +89,20 @@ describe('runFinalIntegrationGate', () => {
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
         expect(out.reason).not.toContain('SHOULD-NOT-RUN')
+    })
+})
+
+describe('discoverGateCommandLabels', () => {
+    test('combines the static and integration halves, deduplicated', () => {
+        const dir = makeDir({scripts: {lint: 'echo l', test: 'echo t', build: 'echo b'}})
+        expect(discoverGateCommandLabels(dir)).toEqual([
+            'bun run lint',
+            'bun run test',
+            'bun run build'
+        ])
+    })
+
+    test('nothing discoverable → empty (degrades to nothing-to-guard)', () => {
+        expect(discoverGateCommandLabels(makeDir())).toEqual([])
     })
 })

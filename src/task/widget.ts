@@ -188,8 +188,9 @@ export interface AutoLoaderState {
      *  pass and 'verify' is the per-task work-verification pass, neither of which
      *  has step numbering. 'recommend' is the read-only research that picks the
      *  recommended action after a verify FAIL. 'lint-fix' is the bounded fix pass
-     *  for a repo-health verify FAIL. */
-    kind?: 'planning' | 'enforce' | 'verify' | 'recommend' | 'lint-fix'
+     *  for a repo-health verify FAIL; 'final-fix' the bounded fix pass for a
+     *  final-integration-gate FAIL. */
+    kind?: 'planning' | 'enforce' | 'verify' | 'recommend' | 'lint-fix' | 'final-fix'
 }
 
 export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): string[] {
@@ -200,6 +201,7 @@ export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): s
         : s.kind === 'verify' ? `verifying work · ${elapsed}`
         : s.kind === 'recommend' ? `assessing the failure · ${elapsed}`
         : s.kind === 'lint-fix' ? `fixing static findings · ${elapsed}`
+        : s.kind === 'final-fix' ? `fixing the final gate · ${elapsed}`
         : `planning ${s.stepNum}/${s.stepTotal} ${s.step} · ${elapsed}`
     if (s.contextUsage) {
         const ctxDetail = formatContextDetail(s.contextUsage, theme)
@@ -219,6 +221,7 @@ export function buildAutoLoaderData(s: AutoLoaderState): WidgetData {
         : s.kind === 'verify' ? 'verifying work'
         : s.kind === 'recommend' ? 'assessing the failure'
         : s.kind === 'lint-fix' ? 'fixing static findings'
+        : s.kind === 'final-fix' ? 'fixing the final gate'
         : s.step
     const d: WidgetData = {
         title: `/task-auto · ${s.title}`,

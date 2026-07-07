@@ -30,7 +30,11 @@
 import {spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
-import {runRepoHealthCheck, type HealthCommand} from './repo-health-check.js'
+import {
+    runRepoHealthCheck,
+    discoverHealthCommands,
+    type HealthCommand
+} from './repo-health-check.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -106,6 +110,21 @@ export function discoverIntegrationCommands(cwd: string): {
         return {ecosystem: 'pyproject.toml', cmds: [['pytest', ['-q']]]}
     }
     return {ecosystem: null, cmds: []}
+}
+
+/**
+ * Labels (`bin args…`) of every command the gate CAN currently discover — the
+ * static half (repo-health) plus the integration half. Pure discovery, nothing
+ * runs. Used by the final-gate autofix shrink guard: a fix pass that makes a
+ * previously-discoverable command undiscoverable (deleted the script/target) is
+ * gaming the gate, not fixing the defect.
+ */
+export function discoverGateCommandLabels(cwd: string): string[] {
+    const labels = [
+        ...discoverHealthCommands(cwd).cmds,
+        ...discoverIntegrationCommands(cwd).cmds
+    ].map(([bin, args]) => `${bin} ${args.join(' ')}`)
+    return [...new Set(labels)]
 }
 
 /** Last ~`limit` chars of the command's combined output, one line, for the reason. */
