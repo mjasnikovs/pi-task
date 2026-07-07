@@ -272,6 +272,45 @@ describe('runWorkVerification', () => {
         expect(prompt2).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
+    test('env notes reach the prompt with the caveat; emitted ENV-NOTE lines are captured even on FAIL', async () => {
+        let prompt = ''
+        const appended: string[][] = []
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            envNotes: {
+                read: () => Promise.resolve('postgres at localhost:5432 absent'),
+                append: notes => {
+                    appended.push(notes)
+                    return Promise.resolve()
+                }
+            },
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'ENV-NOTE: bun 1.3.14 installed\nWORK-VERIFIED: FAIL suite needs the db'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(prompt).toContain('KNOWN ENVIRONMENT FACTS')
+        expect(prompt).toContain('postgres at localhost:5432 absent')
+        expect(prompt).toContain('NOT a license')
+        expect(prompt).toContain('ENV-NOTE: <one-line fact>')
+        expect(appended).toEqual([['bun 1.3.14 installed']])
+    })
+
+    test('an env-notes cache failure never blocks verification', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            envNotes: {
+                read: () => Promise.reject(new Error('disk broke')),
+                append: () => Promise.reject(new Error('disk broke'))
+            },
+            runChild: async () => 'WORK-VERIFIED: PASS'
+        })
+        expect(out.ok).toBe(true)
+    })
+
     test('FAIL verdict → blocked with reason', async () => {
         const out = await runWorkVerification({
             cwd: '/x',

@@ -68,6 +68,7 @@
  * verify, this is a pass (ok: true).
  */
 import {USER_CANCELLED} from './child-runner.js'
+import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
 
 /**
  * The verification child gets exactly two tools: `read` and `bash`.
@@ -135,7 +136,11 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * pure git shape (test files the task itself changed), so the mandate is
  * language- and framework-agnostic.
  */
-export function buildVerifyPrompt(spec: string, probeFindings?: string[]): string {
+export function buildVerifyPrompt(
+    spec: string,
+    probeFindings?: string[],
+    envNotes?: string
+): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
             [
@@ -150,6 +155,7 @@ export function buildVerifyPrompt(spec: string, probeFindings?: string[]): strin
                 ''
             ]
         :   []
+    const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
     return [
         'You are a strict verification pass running right after an AI coding agent',
         'finished a task and committed it. The agent is known to mark work "done"',
@@ -163,6 +169,7 @@ export function buildVerifyPrompt(spec: string, probeFindings?: string[]): strin
         'THE TASK SPEC (its ACCEPTANCE criteria and VERIFY block are the contract):',
         spec.trim(),
         '',
+        ...envBlock,
         ...probeBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
@@ -262,6 +269,8 @@ export function buildVerifyPrompt(spec: string, probeFindings?: string[]): strin
         'a required behavior missing — the verdict is FAIL, even if typecheck and lint are green',
         'and even if the gap seems minor. Never downgrade an unmet criterion to a warning note.',
         '',
+        ENV_NOTE_EMIT_INSTRUCTION,
+        '',
         'When you are done, output EXACTLY ONE of these as the final line:',
         "  WORK-VERIFIED: PASS              (the project's own command, run unaided, met the spec)",
         '  WORK-VERIFIED: FAIL <text>      (the shipped command failed or did not meet the spec; say what failed)',
@@ -319,6 +328,17 @@ export interface VerificationDeps {
      * run is retried once on the restored tree; a second mutation is a FAIL that
      * names the behavior. ABSENT → no guard (tests / non-git repos), unchanged. */
     mutationCheck?: () => {mutated: boolean; detail: string}
+    /**
+     * Per-run environment-facts cache (see env-notes.ts): `read` supplies the
+     * facts earlier gate children discovered (inlined into the prompt with the
+     * no-waiver caveat); `append` stores the `ENV-NOTE:` lines this child
+     * emitted, host-side. ABSENT → no block, no capture (tests unchanged).
+     * Facts only cut re-discovery time; verdict rules are unaffected.
+     */
+    envNotes?: {
+        read: () => Promise<string>
+        append: (notes: string[]) => Promise<void>
+    }
 }
 
 /**
@@ -351,6 +371,16 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             findings = []
         }
     }
+    // Environment facts from earlier gate children (best-effort; a cache failure
+    // must never block verification).
+    let envNotes = ''
+    if (deps.envNotes) {
+        try {
+            envNotes = await deps.envNotes.read()
+        } catch {
+            envNotes = ''
+        }
+    }
     // A child that emits NO verdict never judged the work (budget/context death mid-
     // investigation — seen live: an 11-minute verify wandered, died verdict-less, and
     // the resulting FAIL burned a full implementation re-run on an unjudged artifact).
@@ -360,13 +390,22 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(deps.spec, findings),
+                buildVerifyPrompt(deps.spec, findings, envNotes),
                 deps.signal
             )
         } catch (err) {
             if (err instanceof Error && err.message === USER_CANCELLED) throw err
             const msg = err instanceof Error ? err.message : String(err)
             return {ok: false, reason: `verification pass could not run: ${msg}`}
+        }
+        // Capture the environment facts the child shared — regardless of verdict
+        // (a FAIL run's discoveries are just as reusable).
+        if (deps.envNotes) {
+            try {
+                await deps.envNotes.append(extractEnvNotes(text))
+            } catch {
+                // best-effort cache
+            }
         }
         // A child that mutated the repo (git-state guard fired) judged a tree it had
         // itself changed — its verdict is meaningless in both directions, so discard

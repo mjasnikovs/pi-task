@@ -21,6 +21,7 @@ import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
+import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -363,7 +364,15 @@ export function buildGateDeps(params: {
                 mutationCheck: () =>
                     lastGuardReconcile?.mutated ?
                         {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
-                    :   {mutated: false, detail: ''}
+                    :   {mutated: false, detail: ''},
+                // Per-run environment-facts cache under .pi-tasks/ (survives
+                // discardEdits): earlier children's discoveries save this child
+                // the re-archaeology; its own ENV-NOTE lines are stored for the
+                // next one. Facts only — verdict rules unaffected.
+                envNotes: {
+                    read: () => readEnvNotes(cwd2),
+                    append: notes => appendEnvNotes(cwd2, notes)
+                }
             })
         },
         lintFix: (fixCtx, cwd2, taskTitle, failReason) =>
