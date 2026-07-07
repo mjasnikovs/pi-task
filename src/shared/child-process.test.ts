@@ -305,3 +305,27 @@ describe('runChild stall guard (dead model backend)', () => {
         expect(result.aborted).toBe(false)
     })
 })
+
+describe('summarizeToolArgs — search/fetch workers', () => {
+    test('pi-worker-search shows the quoted query, 60-char clipped', () => {
+        expect(summarizeToolArgs('pi-worker-search', {query: 'bun sql tagged template'})).toBe(
+            '"bun sql tagged template"'
+        )
+        const long = 'x'.repeat(80)
+        const out = summarizeToolArgs('pi-worker-search', {query: long})
+        expect(out).toBe(`"${'x'.repeat(59)}…"`)
+    })
+
+    test('pi-worker-fetch shows the url, 60-char clipped', () => {
+        expect(summarizeToolArgs('pi-worker-fetch', {url: 'https://bun.sh/docs', query: 'q'})).toBe(
+            'https://bun.sh/docs'
+        )
+        const long = `https://example.com/${'a'.repeat(80)}`
+        expect(summarizeToolArgs('pi-worker-fetch', {url: long})).toBe(long.slice(0, 59) + '…')
+    })
+
+    test('missing expected arg falls through to the generic fields', () => {
+        expect(summarizeToolArgs('pi-worker-search', {q: 'wrong-name'})).toBe('')
+        expect(summarizeToolArgs('pi-worker-fetch', {})).toBe('')
+    })
+})

@@ -429,6 +429,10 @@ export function runChildDefault(
 export function summarizeToolArgs(toolName: string, args: unknown): string {
     if (!args || typeof args !== 'object') return ''
     const a = args as Record<string, unknown>
+    const clip = (s: string): string => {
+        const one = s.replace(/\s+/g, ' ').trim()
+        return one.length > 60 ? one.slice(0, 59) + '…' : one
+    }
     if (toolName === 'bash' && typeof a.command === 'string') {
         return a.command.replace(/\s+/g, ' ').trim()
     }
@@ -437,9 +441,15 @@ export function summarizeToolArgs(toolName: string, args: unknown): string {
         && typeof a.module === 'string'
         && typeof a.query === 'string'
     ) {
-        const q = a.query.replace(/\s+/g, ' ').trim()
-        const truncated = q.length > 60 ? q.slice(0, 59) + '…' : q
-        return `${a.module} "${truncated}"`
+        return `${a.module} "${clip(a.query)}"`
+    }
+    // Search/fetch workers: without these the debug log shows a bare tool name
+    // and a run audit cannot tell WHAT was searched or fetched.
+    if (toolName === 'pi-worker-search' && typeof a.query === 'string') {
+        return `"${clip(a.query)}"`
+    }
+    if (toolName === 'pi-worker-fetch' && typeof a.url === 'string') {
+        return clip(a.url)
     }
     if (typeof a.file_path === 'string') return a.file_path
     if (typeof a.path === 'string') return a.path
