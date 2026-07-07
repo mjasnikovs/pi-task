@@ -486,7 +486,9 @@ export async function phaseResearch(
         /** Section heading this worker's output is assembled under. */
         section: string
         label: string
-        prompt: string
+        /** Static, or built from the sections completed so far (serial mode
+         *  hands APIS the finished FILES map; parallel mode hands it nothing). */
+        prompt: string | ((prior: ReadonlyArray<{name: string; text: string}>) => string)
         tools?: string
         extensions?: string[]
     }> = [
@@ -501,12 +503,20 @@ export async function phaseResearch(
             label: 'worker:apis',
             // Read-heavy: gets the orientation core (see note above). Search/fetch
             // ride along only when a Brave key exists — see SEARCH_EXTENSION_PATH.
-            prompt: appendNoThink(
-                orientation.block
-                    + promptHeader
-                    + RESEARCH_APIS_PROMPT(refined)
-                    + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
-            ),
+            // FILES' finished map rides along when available (serial default), so
+            // the worker doesn't re-derive where-things-live via docs-"."
+            // queries the FILES worker just answered (run-7 F7: up to 10
+            // duplicate `.`-decodes per task through the serial bottleneck).
+            prompt: prior =>
+                appendNoThink(
+                    orientation.block
+                        + promptHeader
+                        + RESEARCH_APIS_PROMPT(
+                            refined,
+                            prior.find(s => s.name === 'FILES')?.text || undefined
+                        )
+                        + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+                ),
             tools:
                 'read,grep,find,ls,pi-worker-docs'
                 + (searchConfigured() ? ',pi-worker-search,pi-worker-fetch' : ''),
@@ -560,7 +570,8 @@ export async function phaseResearch(
     // partial output instead, so one weak worker can't abort a whole auto-run;
     // the degraded section is cached too, so a resume doesn't re-loop it.
     const runSpec = async (
-        spec: (typeof workerSpecs)[number]
+        spec: (typeof workerSpecs)[number],
+        prior: ReadonlyArray<{name: string; text: string}>
     ): Promise<{name: string; text: string}> => {
         const cacheHeading = researchWorkerCacheHeading(spec.section)
         const cached = (await readSection(deps.cwd, deps.taskId, cacheHeading)) ?? ''
@@ -574,7 +585,7 @@ export async function phaseResearch(
         const r = await recordWorker(
             spec.label,
             runWorker({
-                prompt: spec.prompt,
+                prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,
                 cwd: deps.cwd,
                 signal: deps.signal,
                 spawn: deps.spawn,
@@ -609,17 +620,19 @@ export async function phaseResearch(
     const sections: Array<{name: string; text: string}> = []
     if (!getConfig().parallelResearchWorkers) {
         // Default: ONE AT A TIME (see the A/B note above the specs) — a fatal
-        // failure throws before later workers run.
+        // failure throws before later workers run, and each worker can see the
+        // finished sections before it (APIS builds on the FILES map).
         for (const spec of workerSpecs) {
-            sections.push(await runSpec(spec))
+            sections.push(await runSpec(spec, sections))
         }
     } else {
         // Opt-in for parallel-capable backends. allSettled (not all): every
         // worker runs to its own outcome first, so one fatal failure cannot
         // orphan the others' output — their sections persist for the resume
         // before the failure is thrown. Assembly order stays the spec order
-        // regardless of completion order.
-        const settled = await Promise.allSettled(workerSpecs.map(spec => runSpec(spec)))
+        // regardless of completion order. No prior sections exist here, so
+        // prompt builders get none (APIS runs map-less, as before this option).
+        const settled = await Promise.allSettled(workerSpecs.map(spec => runSpec(spec, [])))
         for (const s of settled) {
             if (s.status === 'rejected') throw s.reason
         }

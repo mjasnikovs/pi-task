@@ -140,7 +140,8 @@ Task:
 ${refined}`
 
 const RESEARCH_APIS_PROMPT = (
-    refined: string
+    refined: string,
+    filesMap?: string
 ) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools — and \`pi-worker-docs\` for installed npm packages — to identify the commands, functions, types, and interfaces the agent will use for the following task.
 
 NPM PACKAGES — use pi-worker-docs, NOT file reads: for any third-party npm package (e.g. "zod", "hono", "drizzle-orm"), call \`pi-worker-docs(module, query)\` to get its type signatures and API surface. Do NOT open node_modules source files directly — those reads are expensive and produce far more noise than the tool. The tool returns a compact, focused excerpt in a fraction of the token cost.
@@ -152,7 +153,16 @@ RUNTIME BUILTINS — verify, do NOT echo: a task (or the spec doc it references)
 APIS owns symbols and commands BY NAME ONLY. Do NOT include any file path or path fragment — no \`package.json\`, no \`./src/foo.ts\`, no \`package.json#scripts.lint\`. If the symbol is a script defined in package.json, write the invocation (\`npm run lint\`), not its location. If the symbol is a config file, it does not belong in APIS at all — it belongs in FILES.
 
 RELEVANCE — read carefully: list ONLY the symbols the agent will call, implement, modify, or directly depend on for THIS task. Do NOT enumerate the project's entire public surface or dump every exported function in a touched file. A symbol unrelated to the task does not belong here just because it sits in the same module. Keep the smallest sufficient set: include every symbol the task actually exercises and nothing more. There is no fixed limit — list as many as the task truly needs and no padding beyond that.
+${
+    filesMap ?
+        `
+PROJECT FILE MAP — already surveyed for this task by a prior worker (authoritative):
+${filesMap}
 
+USE THE MAP: where things live is ALREADY ANSWERED above. Do NOT re-derive it — never call \`pi-worker-docs(".", …)\` (or grep/find) for a question the map already answers: which file holds X, whether a path exists, what a file is for. Reserve \`.\`-queries for symbol-level facts the map cannot carry — signatures, parameter and return types, what a module exports. Go straight to the mapped files' symbols.
+`
+    :   ''
+}
 ${RESEARCH_INPUTS_NOT_DELIVERABLE}
 
 ${RESEARCH_READ_ONLY_CONSTRAINT}

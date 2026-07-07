@@ -430,6 +430,56 @@ describe('phaseResearch per-worker persistence', () => {
     })
 })
 
+describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
+    test("serial: APIS prompt carries FILES' finished section + the no-re-derive rule; parallel: it does not", async () => {
+        const run = async (): Promise<string> => {
+            let apisPrompt = ''
+            await withTmpTaskDir(async cwd => {
+                await writeTaskFile(
+                    cwd,
+                    {
+                        id: 'TASK_0001',
+                        state: 'in_progress',
+                        phase: 'research',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        title: 't'
+                    },
+                    '\n'
+                )
+                const spawn = fakeSpawnByPrompt(args => {
+                    const prompt = args[args.length - 1] ?? ''
+                    if (prompt.includes('content of an APIS section')) apisPrompt = prompt
+                    if (prompt.includes('content of a FILES section')) {
+                        return agentEndResponse('src/server/routes.ts  the route table')
+                    }
+                    return agentEndResponse('- finding')
+                })
+                await phaseResearch(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'a refined goal with no mentions',
+                    {getFileInventory: async () => ''}
+                )
+            })
+            return apisPrompt
+        }
+
+        const serialPrompt = await run()
+        expect(serialPrompt).toContain('PROJECT FILE MAP')
+        expect(serialPrompt).toContain('src/server/routes.ts  the route table')
+        expect(serialPrompt).toContain('USE THE MAP')
+
+        const cfg = getConfig()
+        cfg.parallelResearchWorkers = true
+        try {
+            const parallelPrompt = await run()
+            expect(parallelPrompt).not.toContain('PROJECT FILE MAP')
+        } finally {
+            cfg.parallelResearchWorkers = false
+        }
+    })
+})
+
 describe('phaseResearch parallel workers (opt-in flag)', () => {
     const MARKERS = {
         files: 'content of a FILES section',
