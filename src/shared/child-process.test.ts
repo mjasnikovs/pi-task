@@ -198,3 +198,110 @@ describe('summarizeToolArgs', () => {
         expect(summarizeToolArgs('unknown', {data: 'xyz'})).toBe('')
     })
 })
+
+describe('runChild stall guard (dead model backend)', () => {
+    /** A proc that emits `chunks` at `everyMs` intervals and never closes on its
+     *  own — only a kill() closes it (like a pi child wedged on a dead backend). */
+    function wedgedSpawn(chunks: number, everyMs: number): SpawnFn {
+        return (() => {
+            const p = makeProc()
+            let sent = 0
+            const feed = setInterval(() => {
+                if (sent < chunks) {
+                    p.stdout!.emit('data', Buffer.from('{"type":"noise"}\n'))
+                    sent++
+                }
+            }, everyMs)
+            const origKill = p.kill.bind(p)
+            p.kill = (sig: string) => {
+                origKill(sig)
+                clearInterval(feed)
+                setTimeout(() => p.emit('close', null), 5)
+                return true
+            }
+            return p
+        }) as unknown as SpawnFn
+    }
+
+    test('no output + unreachable endpoint → killed with stalled:true', async () => {
+        let probes = 0
+        const result = await runChild(wedgedSpawn(1, 5), noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            stall: {
+                afterMs: 80,
+                probe: () => {
+                    probes++
+                    return Promise.resolve(false)
+                }
+            }
+        })
+        expect(result.stalled).toBe(true)
+        expect(result.aborted).toBe(true)
+        expect(probes).toBe(1)
+    })
+
+    test('no output + REACHABLE endpoint → keeps waiting (prompt processing)', async () => {
+        let probes = 0
+        const spawn = (() => {
+            const p = makeProc()
+            // Silent for 3+ stall windows, then finishes honestly.
+            setTimeout(() => p.emit('close', 0), 300)
+            return p
+        }) as unknown as SpawnFn
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            stall: {
+                afterMs: 60,
+                probe: () => {
+                    probes++
+                    return Promise.resolve(true)
+                }
+            }
+        })
+        expect(result.stalled).toBeUndefined()
+        expect(result.aborted).toBe(false)
+        expect(probes).toBeGreaterThanOrEqual(1)
+    })
+
+    test('output progress resets the window — probe never fires for a chatty child', async () => {
+        let probes = 0
+        const spawn = (() => {
+            const p = makeProc()
+            let sent = 0
+            const feed = setInterval(() => {
+                p.stdout!.emit('data', Buffer.from('{"type":"noise"}\n'))
+                if (++sent === 6) {
+                    clearInterval(feed)
+                    p.emit('close', 0)
+                }
+            }, 40)
+            return p
+        }) as unknown as SpawnFn
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            stall: {
+                afterMs: 150,
+                probe: () => {
+                    probes++
+                    return Promise.resolve(false)
+                }
+            }
+        })
+        expect(result.stalled).toBeUndefined()
+        expect(probes).toBe(0)
+    })
+
+    test('a crashing probe proves nothing → keeps waiting', async () => {
+        const spawn = (() => {
+            const p = makeProc()
+            setTimeout(() => p.emit('close', 0), 200)
+            return p
+        }) as unknown as SpawnFn
+        const result = await runChild(spawn, noopInvocation, '/tmp', undefined, {
+            mode: 'json-events',
+            stall: {afterMs: 60, probe: () => Promise.reject(new Error('probe broke'))}
+        })
+        expect(result.stalled).toBeUndefined()
+        expect(result.aborted).toBe(false)
+    })
+})

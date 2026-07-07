@@ -17,6 +17,7 @@ import {
     leakedToolCallHint,
     MAX_LEAK_RETRIES
 } from '../shared/leaked-tool-call.js'
+import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -37,6 +38,16 @@ const DEFAULT_TOOLS = 'read,grep,find,ls'
  * so it never trips a legitimately slow run.
  */
 const RESEARCH_WORKER_TIMEOUT_MS = 240_000
+
+/**
+ * Output-stall window before the dead-backend probe fires (mx5 run 7: model
+ * server died mid-gate-child, the child hung MUTE for 64 minutes). This is NOT
+ * a wall-clock cap — output progress resets it, and even a fully stalled child
+ * is only killed when the model endpoint is actually unreachable. Sized so a
+ * long local prompt-processing pass (minutes of legitimate silence, server
+ * alive) just gets probed and waits on.
+ */
+const STALL_AFTER_MS = 180_000
 
 /** Restart hint after a wall-clock timeout — distinct from the loop hint. */
 const WORKER_TIMEOUT_HINT =
@@ -76,6 +87,13 @@ export interface RunWorkerInput {
      * entirely — no tool-call pattern will ever kill the worker.
      */
     loop?: {window?: number; threshold?: number; pathThreshold?: number} | false
+    /**
+     * Dead-backend stall guard override. Default ON: no output for
+     * STALL_AFTER_MS → probe the model endpoints pi is configured with →
+     * unreachable → kill + `stalled: true`. Pass `false` to disable, or
+     * override the window/probe (tests, harnesses).
+     */
+    stall?: {afterMs?: number; probe?: () => Promise<boolean>} | false
 }
 
 /**
@@ -150,6 +168,12 @@ export interface RunWorkerResult {
      * the caller must treat it as a failure.
      */
     timedOut?: boolean
+    /**
+     * Set when the stall guard killed the worker: no output progress AND the
+     * model endpoint unreachable. Check BEFORE `aborted` — the kill sets
+     * aborted too, and mislabeling this as a user cancel hides a dead backend.
+     */
+    stalled?: boolean
 }
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
@@ -198,6 +222,16 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 timeout.signal,
                 {
                     mode: 'json-events',
+                    ...(input.stall === false ?
+                        {}
+                    :   {
+                            stall: {
+                                afterMs: input.stall?.afterMs ?? STALL_AFTER_MS,
+                                probe:
+                                    input.stall?.probe
+                                    ?? (() => probeModelEndpoints(discoverModelEndpoints()))
+                            }
+                        }),
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
                         if (!loopDetector) return null
@@ -253,7 +287,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             workMs,
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(loopHit ? {loopHit} : {}),
-            ...(timedOut ? {timedOut: true} : {})
+            ...(timedOut ? {timedOut: true} : {}),
+            ...(result.stalled ? {stalled: true} : {})
         }
     }
 }

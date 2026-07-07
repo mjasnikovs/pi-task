@@ -61,6 +61,13 @@ export interface ChildResult {
      * Only populated in json-events mode.
      */
     modelError?: string
+    /**
+     * true when the stall guard killed the child: no output for the stall
+     * window AND the model endpoint probe found the backend unreachable.
+     * Callers must check this BEFORE `aborted` — the kill sets aborted too,
+     * and without the flag it would mislabel as a user cancel.
+     */
+    stalled?: boolean
 }
 
 // ─── JSON event-stream types (for mode: 'json-events') ──────────────────────
@@ -107,6 +114,17 @@ export interface RunChildJsonEventsOptions {
     onContextUsage?: (snapshot: ContextSnapshot) => void
     onToolCall?: (call: ToolCall) => LoopHit | null
     onFirstByte?: () => void
+    /**
+     * Dead-backend stall guard (mx5 run 7: model server died mid-child, the
+     * child hung MUTE for 64 minutes). Liveness is OUTPUT PROGRESS, not wall
+     * time: any stdout/stderr chunk resets the window, so honest long work is
+     * never killed. Only when nothing arrived for `afterMs` is `probe` asked
+     * whether the model backend is reachable — reachable → keep waiting
+     * (prompt processing legitimately emits nothing for minutes); unreachable
+     * → the child is killed and the result carries `stalled: true` so callers
+     * report the real cause instead of hanging or mislabeling a user cancel.
+     */
+    stall?: {afterMs: number; probe: () => Promise<boolean>}
 }
 
 export type RunChildOptions = RunChildTextOptions | RunChildJsonEventsOptions
@@ -317,8 +335,44 @@ export function runChild(
 
         const sink = opts?.mode === 'json-events' ? new JsonEventSink(opts, killProc) : null
 
+        // Dead-backend stall guard (json-events children only; see the option
+        // docs). Any output resets the window; a reachable probe also resets it
+        // so the next probe is a full window away, not every tick.
+        const stall = opts?.mode === 'json-events' ? opts.stall : undefined
+        let lastActivity = Date.now()
+        let stalled = false
+        let probing = false
+        const stallTimer =
+            stall ?
+                setInterval(
+                    () => {
+                        if (probing || Date.now() - lastActivity < stall.afterMs) return
+                        probing = true
+                        stall
+                            .probe()
+                            .then(reachable => {
+                                probing = false
+                                if (reachable || stalled) {
+                                    lastActivity = Date.now()
+                                    return
+                                }
+                                stalled = true
+                                killProc()
+                            })
+                            .catch(() => {
+                                // A probe that itself crashed proves nothing —
+                                // benefit of the doubt, keep waiting.
+                                probing = false
+                                lastActivity = Date.now()
+                            })
+                    },
+                    Math.max(50, Math.min(stall.afterMs / 2, 15_000))
+                )
+            :   undefined
+
         let firstByteFired = false
         proc.stdout?.on('data', (d: Buffer) => {
+            lastActivity = Date.now()
             if (!firstByteFired) {
                 firstByteFired = true
                 opts?.onFirstByte?.()
@@ -329,9 +383,11 @@ export function runChild(
             else stdout += chunk
         })
         proc.stderr?.on('data', (d: Buffer) => {
+            lastActivity = Date.now()
             stderr += d.toString()
         })
         proc.on('close', (code: number | null) => {
+            if (stallTimer) clearInterval(stallTimer)
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
             resolve({
@@ -340,10 +396,12 @@ export function runChild(
                 exitCode: code ?? 0,
                 aborted,
                 text,
-                modelError: sink?.modelError
+                modelError: sink?.modelError,
+                ...(stalled ? {stalled: true} : {})
             })
         })
         proc.on('error', () => {
+            if (stallTimer) clearInterval(stallTimer)
             resolve({stdout, stderr, exitCode: 1, aborted})
         })
 

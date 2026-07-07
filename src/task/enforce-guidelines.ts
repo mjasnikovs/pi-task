@@ -204,6 +204,7 @@ export interface EnforceChildResult {
     timedOut?: boolean
     loopHit?: unknown
     leakedToolCall?: unknown
+    stalled?: boolean
 }
 
 /**
@@ -224,6 +225,12 @@ export interface EnforceChildResult {
  * effects don't get re-classified as a user cancel or a crash.
  */
 export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
+    // Stall-kill must be matched BEFORE `aborted`: the kill sets aborted too,
+    // and mislabeling a dead model backend as a user cancel hides the cause
+    // (mx5 run 7: 64 minutes of silence).
+    if (r.stalled) {
+        return 'model server unreachable — the child produced no output and the model endpoint did not respond'
+    }
     if (r.timedOut) return 'enforcement child timed out'
     if (r.loopHit) return null // looped past the nudges → warning, handled by caller
     if (r.leakedToolCall) return 'enforcement child leaked a tool call'

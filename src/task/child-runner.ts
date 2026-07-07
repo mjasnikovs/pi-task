@@ -50,7 +50,7 @@ export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 resta
  * the same request won't fix it, so burning the budget only delays the report.
  */
 const CONNECTION_ERROR_RE =
-    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|fetch failed|network (?:error|timeout)|premature close|request timed out|terminated)\b/i
+    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|fetch failed|network (?:error|timeout)|premature close|request timed out|terminated|unreachable)\b/i
 
 export function isConnectionError(cause: string): boolean {
     return CONNECTION_ERROR_RE.test(cause)

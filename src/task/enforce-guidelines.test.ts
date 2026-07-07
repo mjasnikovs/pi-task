@@ -307,6 +307,12 @@ test('classifyEnforceChildFailure: aborted with no specific cause → user-cance
     expect(classifyEnforceChildFailure(childResult({aborted: true}))).toBe(USER_CANCELLED)
 })
 
+test('classifyEnforceChildFailure: stall-kill (also aborted) names the dead backend, NOT a cancel', () => {
+    const failure = classifyEnforceChildFailure(childResult({aborted: true, stalled: true}))
+    expect(failure).toContain('model server unreachable')
+    expect(failure).not.toBe(USER_CANCELLED)
+})
+
 test('classifyEnforceChildFailure: non-zero exit (not aborted) → exited <code>', () => {
     expect(classifyEnforceChildFailure(childResult({exitCode: 2}))).toBe(
         'enforcement child exited 2'

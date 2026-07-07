@@ -1,10 +1,12 @@
 import {describe, expect, test} from 'bun:test'
 import {runWorker} from './pi-worker-core.js'
+import type {SpawnFn} from '../shared/child-process.js'
 import {
     agentEndResponse,
     fakeSpawnByPrompt,
     fakeSpawnQueue,
-    loopResponse
+    loopResponse,
+    makeProc
 } from '../test-utils/fake-spawn.js'
 
 // A tool call the model wrote as text instead of invoking — never executed.
@@ -156,6 +158,32 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
         expect(r.timedOut).toBe(true)
+    })
+
+    test('a stall-killed worker surfaces stalled:true, once, with no silent restart', async () => {
+        let spawns = 0
+        const spawn = (() => {
+            spawns++
+            const p = makeProc()
+            // Emits nothing and never closes on its own (a child wedged on a
+            // dead backend) — only the stall guard's kill closes it.
+            const origKill = p.kill.bind(p)
+            p.kill = (sig: string) => {
+                origKill(sig)
+                setTimeout(() => p.emit('close', null), 5)
+                return true
+            }
+            return p
+        }) as unknown as SpawnFn
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            timeoutMs: 0,
+            stall: {afterMs: 50, probe: () => Promise.resolve(false)}
+        })
+        expect(r.stalled).toBe(true)
+        expect(spawns).toBe(1)
     })
 
     test('input.tools overrides the default tool set', async () => {
