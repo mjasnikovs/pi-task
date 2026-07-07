@@ -59,6 +59,14 @@ export interface AskSpec {
     question: string
     /** Primary recommended option, prefilled in the local TUI. */
     recommended?: string
+    /**
+     * Placeholder for the local TUI text input when there is NO recommended
+     * option. Local-only: the remote card must not see it, or it would render as
+     * an acceptable recommendation ("✓ Accept" answering with placeholder text).
+     * Used by the steer prompt, whose hint ("type guidance, or leave empty…") is
+     * instructional copy, not an answer.
+     */
+    localPlaceholder?: string
     /** Secondary recommended option shown as a second button on the remote. */
     recommended2?: string
     /** Whether the browser card shows a Skip button (answers with empty string). */
@@ -156,7 +164,9 @@ export class SessionUI {
                 signal
             })
         }
-        return this.ctx.ui.input(spec.localTitle, spec.recommended, {signal})
+        return this.ctx.ui.input(spec.localTitle, spec.recommended ?? spec.localPlaceholder, {
+            signal
+        })
     }
 }
 

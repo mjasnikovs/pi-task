@@ -106,6 +106,33 @@ test('remote off (no server, default broadcast): resolves from local, no crash',
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
 })
 
+test('localPlaceholder feeds the local input but never the remote card', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const ctx = fakeCtx({onInput: resolve => resolve('typed')})
+    // Capture the placeholder the local dialog receives (the steer prompt's
+    // "type guidance…" hint) — it must reach ui.input but MUST NOT surface on
+    // the remote card as a recommended answer.
+    let placeholder: string | undefined
+    const realInput = ctx.ui.input.bind(ctx.ui)
+    ctx.ui.input = (t, ph, o) => {
+        placeholder = ph
+        return realInput(t, ph, o)
+    }
+    const ui = new SessionUI(ctx, b)
+    await expect(
+        ui.ask({localTitle: 'T', question: 'Q', localPlaceholder: 'hint text', allowSkip: true})
+    ).resolves.toBe('typed')
+    expect(placeholder).toBe('hint text')
+    const prompt = b.sent.find(m => (m as {type: string}).type === 'prompt') as unknown as {
+        recommended?: string
+        question: string
+    }
+    expect(prompt).toBeDefined()
+    expect(prompt.recommended).toBeUndefined()
+    expect(prompt.question).toBe('Q')
+})
+
 // Mock ctx.ui.custom for the boxed picker: builds the real component, drives it
 // `down` rows then confirms with Enter — exercising the actual navigation +
 // onChoose wiring. `rendered` captures the component's lines for assertions.

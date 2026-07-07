@@ -48,7 +48,8 @@ import {
     publishNotify,
     publishLifecycleNotice,
     registerBridgeCommand,
-    getBridge
+    getBridge,
+    SessionUI
 } from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
@@ -424,8 +425,9 @@ export interface RunSingleTaskOptions {
      * Ask the user for a steering message after they interrupt (ESC) the
      * implementation turn. Return text to continue the same task as another turn,
      * or undefined/empty to pause the run. Only consulted with
-     * waitForImplementation. Defaults to a ctx.ui.input prompt; injectable so the
-     * steer loop is testable without a real dialog.
+     * waitForImplementation. Defaults to a bridged SessionUI.ask (local TUI input
+     * raced against a remote browser card); injectable so the steer loop is
+     * testable without a real dialog.
      */
     promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
     /**
@@ -456,6 +458,12 @@ export interface RunSingleTaskOptions {
 /** Dialog copy for the post-interrupt steering prompt. */
 const STEER_TITLE = 'Paused — steer the model'
 const STEER_PLACEHOLDER = 'Type guidance to continue this task, or leave empty to pause'
+/** Remote-card copy for the same prompt. The browser has no placeholder ghost
+ *  text, so the pause affordance must be spelled out in the question itself
+ *  (Skip = empty answer = pause, same as an empty local submit). */
+const STEER_QUESTION =
+    'Paused — the implementation was interrupted.\n'
+    + 'Type guidance to continue this task, or Skip to pause the run.'
 
 /**
  * The slice of the replacement-session context the steer loop needs.
@@ -640,7 +648,21 @@ async function steerUntilDone(
     ctx: SteerCtx,
     promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
 ): Promise<boolean> {
-    const ask = promptSteer ?? (c => c.ui.input(STEER_TITLE, STEER_PLACEHOLDER))
+    // Fan the prompt out through the bridge (local TUI input + remote browser
+    // card, first answer wins) instead of a raw ctx.ui.input: an interrupt can
+    // come from the remote Stop button just as well as a terminal ESC, and a
+    // terminal-only dialog leaves the remote viewer staring at a silently
+    // paused run. Remote Skip returns '' → same pause path as an empty local
+    // submit.
+    const ask =
+        promptSteer
+        ?? (c =>
+            new SessionUI(c).ask({
+                localTitle: STEER_TITLE,
+                localPlaceholder: STEER_PLACEHOLDER,
+                question: STEER_QUESTION,
+                allowSkip: true
+            }))
     while (wasInterrupted(ctx)) {
         const steer = await ask(ctx)
         if (steer === undefined || steer.trim().length === 0) return true // pause

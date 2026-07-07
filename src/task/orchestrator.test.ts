@@ -13,6 +13,8 @@ import {agentEndResponse, fakeSpawnByPrompt, type SpawnResponse} from '../test-u
 import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
+import {_setSink, reset as resetSessionState} from '../remote/session-state.js'
+import {broadcast as wsBroadcast} from '../remote/broadcast.js'
 import type {SpawnFn} from '../shared/child-process.js'
 
 const PHASE_TAGS = {
@@ -478,6 +480,45 @@ describe('runSingleTask', () => {
                 promptSteer: () => Promise.resolve(undefined)
             })
             expect(res.interrupted).toBe(true)
+        })
+    })
+
+    test('runSingleTask: the default steer prompt is bridged to remote viewers', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, setStopReason, captured} = makeFakeCtx(cwd)
+            setStopReason('aborted')
+            // Capture what the bridge broadcasts: a remote Stop must surface the
+            // same steer/pause prompt as a terminal ESC, not leave the browser
+            // staring at a silently paused run.
+            const sent: Array<{type: string}> = []
+            _setSink(msg => sent.push(msg as never))
+            try {
+                const res = await runSingleTask(ctx, cwd, 'run lint', {
+                    waitForImplementation: true,
+                    spawnFn: scriptedSpawn(happyScripts())
+                    // no promptSteer → the production default (SessionUI.ask) runs
+                })
+                // Local half: the TUI input with the steer title and placeholder.
+                const input = captured.inputs.find(i => i.title.includes('steer the model'))
+                expect(input).toBeDefined()
+                expect(input!.default).toContain('leave empty to pause')
+                // Remote half: a prompt card with Skip (=pause) and no recommended
+                // answer (the placeholder must not render as an acceptable one).
+                const prompt = sent.find(m => m.type === 'prompt') as {
+                    allowSkip?: boolean
+                    recommended?: string
+                    question?: string
+                }
+                expect(prompt).toBeDefined()
+                expect(prompt.allowSkip).toBe(true)
+                expect(prompt.recommended).toBeUndefined()
+                expect(prompt.question).toContain('Skip to pause')
+                // No queued local answer → undefined → the run pauses.
+                expect(res.interrupted).toBe(true)
+            } finally {
+                _setSink(wsBroadcast)
+                resetSessionState()
+            }
         })
     })
 
