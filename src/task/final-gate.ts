@@ -15,6 +15,10 @@
  * and lets their REAL exit codes decide:
  *
  *   - static analysis first (runRepoHealthCheck — cheap, precise), then
+ *   - lockfile↔manifest consistency (mx5 run 7, validated: the lockfile carried a
+ *     dependency no committed manifest declared, so the tree tested green here
+ *     but a FRESH CHECKOUT could not even install — each ecosystem's own offline
+ *     "is the lock in sync" command decides), then
  *   - the project's own `test` and `build` commands, run verbatim and unaided.
  *
  * Environment-gap safety, same contract as repo-health-check: a command that
@@ -113,6 +117,46 @@ export function discoverIntegrationCommands(cwd: string): {
 }
 
 /**
+ * Per-ecosystem lockfile↔manifest consistency checks. A check applies only when
+ * BOTH the manifest and its lockfile exist (no lockfile → nothing to verify),
+ * and every command is the ecosystem's own non-mutating "is the lock in sync
+ * with the manifest" form — validated to exit 0 fast on an in-sync tree and
+ * non-zero on a genuine desync, without touching the tree or (when in sync)
+ * the network.
+ */
+const LOCKFILE_CHECKS: Array<{manifest: string; lockfiles: string[]; cmd: HealthCommand}> = [
+    {
+        manifest: 'package.json',
+        lockfiles: ['bun.lock', 'bun.lockb'],
+        cmd: ['bun', ['install', '--frozen-lockfile', '--dry-run']]
+    },
+    {
+        manifest: 'package.json',
+        lockfiles: ['package-lock.json'],
+        cmd: ['npm', ['ci', '--dry-run']]
+    },
+    {
+        manifest: 'Cargo.toml',
+        lockfiles: ['Cargo.lock'],
+        cmd: ['cargo', ['metadata', '--locked', '--format-version', '1']]
+    },
+    {manifest: 'go.mod', lockfiles: ['go.sum'], cmd: ['go', ['mod', 'verify']]},
+    {manifest: 'pyproject.toml', lockfiles: ['uv.lock'], cmd: ['uv', ['lock', '--check']]},
+    {manifest: 'pyproject.toml', lockfiles: ['poetry.lock'], cmd: ['poetry', ['check', '--lock']]}
+]
+
+/** Every lockfile consistency check that applies to this tree (possibly none). */
+export function discoverLockfileChecks(cwd: string): HealthCommand[] {
+    const cmds: HealthCommand[] = []
+    for (const {manifest, lockfiles, cmd} of LOCKFILE_CHECKS) {
+        if (!existsSync(path.join(cwd, manifest))) continue
+        if (!lockfiles.some(f => existsSync(path.join(cwd, f)))) continue
+        cmds.push(cmd)
+    }
+    return cmds
+}
+
+/**
  * Labels (`bin args…`) of every command the gate CAN currently discover — the
  * static half (repo-health) plus the integration half. Pure discovery, nothing
  * runs. Used by the final-gate autofix shrink guard: a fix pass that makes a
@@ -122,6 +166,7 @@ export function discoverIntegrationCommands(cwd: string): {
 export function discoverGateCommandLabels(cwd: string): string[] {
     const labels = [
         ...discoverHealthCommands(cwd).cmds,
+        ...discoverLockfileChecks(cwd),
         ...discoverIntegrationCommands(cwd).cmds
     ].map(([bin, args]) => `${bin} ${args.join(' ')}`)
     return [...new Set(labels)]
@@ -136,32 +181,62 @@ function outputTail(stdout: string, stderr: string, limit = 400): string {
 }
 
 /**
- * Run the final gate: static analysis first, then the discovered integration
- * commands, whole-repo, verbatim, unaided. Deterministic and synchronous under
- * the hood (callers wrap in Promise.resolve). First real failure wins.
+ * Run one gate command with the env-gap contract: tool missing, timeout, or
+ * command-not-found inside the script chain (127) → environment gap, not a code
+ * fault → skipped (same contract as repo-health). Only a command that actually
+ * ran and exited non-zero fails.
+ */
+function runGateCommand(
+    cwd: string,
+    [bin, args]: HealthCommand,
+    timeoutMs: number
+): {outcome: 'skip' | 'pass'} | {outcome: 'fail'; status: number; tail: string} {
+    // env passed explicitly: bun's spawnSync resolves the binary against a
+    // startup snapshot of the environment, not the live process.env.
+    const r = spawnSync(bin, args, {
+        cwd,
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        env: {...process.env}
+    })
+    if (r.error || r.status === null || r.status === 127) return {outcome: 'skip'}
+    if (r.status !== 0) {
+        return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
+    }
+    return {outcome: 'pass'}
+}
+
+/**
+ * Run the final gate: static analysis first, then the lockfile consistency
+ * checks, then the discovered integration commands, whole-repo, verbatim,
+ * unaided. Deterministic and synchronous under the hood (callers wrap in
+ * Promise.resolve). First real failure wins.
  */
 export function runFinalIntegrationGate(cwd: string, timeoutMs = 900_000): FinalGateOutcome {
     const stat = runRepoHealthCheck(cwd)
     if (!stat.ok) return {ok: false, reason: `static checks: ${stat.reason}`}
+    const lockCmds = discoverLockfileChecks(cwd)
     const {ecosystem, cmds} = discoverIntegrationCommands(cwd)
-    if (!ecosystem || cmds.length === 0) {
+    if (lockCmds.length === 0 && (!ecosystem || cmds.length === 0)) {
         return {ok: true, reason: 'no integration command found (statics passed)'}
     }
     const ran: string[] = []
-    for (const [bin, args] of cmds) {
-        const label = `${bin} ${args.join(' ')}`
-        const r = spawnSync(bin, args, {cwd, encoding: 'utf8', timeout: timeoutMs})
-        // Tool missing, timeout, or command-not-found inside the script chain →
-        // environment gap, not a code fault; skip (same contract as repo-health).
-        if (r.error || r.status === null || r.status === 127) continue
-        if (r.status !== 0) {
-            const tail = outputTail(r.stdout ?? '', r.stderr ?? '')
-            return {
-                ok: false,
-                reason: `\`${label}\` exited ${r.status}${tail ? ` — ${tail}` : ''}`
+    for (const {prefix, list} of [
+        {prefix: 'lockfile check: ', list: lockCmds},
+        {prefix: '', list: cmds}
+    ]) {
+        for (const cmd of list) {
+            const label = `${cmd[0]} ${cmd[1].join(' ')}`
+            const r = runGateCommand(cwd, cmd, timeoutMs)
+            if (r.outcome === 'skip') continue
+            if (r.outcome === 'fail') {
+                return {
+                    ok: false,
+                    reason: `${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                }
             }
+            ran.push(label)
         }
-        ran.push(label)
     }
     return {
         ok: true,
