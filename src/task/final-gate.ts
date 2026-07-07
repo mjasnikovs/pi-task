@@ -19,7 +19,14 @@
  *     dependency no committed manifest declared, so the tree tested green here
  *     but a FRESH CHECKOUT could not even install — each ecosystem's own offline
  *     "is the lock in sync" command decides), then
- *   - the project's own `test` and `build` commands, run verbatim and unaided.
+ *   - the project's own `test` and `build` commands, run verbatim and unaided, then
+ *   - one boot exercise of the project's own start command (mx5 run 7, validated:
+ *     every static and test gate green, yet `bun run start` died in ~1s on a
+ *     self-inflicted EADDRINUSE — nothing had ever LAUNCHED the finished project).
+ *     No ports, URLs, or framework knowledge: fast non-zero exit → FAIL, quick
+ *     exit 0 → PASS (CLI-style), still alive after the grace window → PASS and
+ *     the whole process group is killed (scripts spawn children; a leaked child
+ *     server would mask every later boot check with a port collision).
  *
  * Environment-gap safety, same contract as repo-health-check: a command that
  * CANNOT run (ENOENT, exit 127 = command-not-found inside the script chain, or a
@@ -31,7 +38,7 @@
  * per-task gates kept excusing — and the caller puts a human on the decision
  * (accept / leave failed), so a genuine external gap can still be overridden.
  */
-import {spawnSync} from 'node:child_process'
+import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {
@@ -157,6 +164,87 @@ export function discoverLockfileChecks(cwd: string): HealthCommand[] {
 }
 
 /**
+ * The project's OWN launch command, if it declares one (package.json `start`,
+ * else `dev`; Makefile `run`). null means the project has nothing to boot —
+ * the boot check degrades to nothing-to-run.
+ */
+export function discoverBootCommand(cwd: string): HealthCommand | null {
+    if (existsSync(path.join(cwd, 'package.json'))) {
+        const s = packageScripts(cwd)
+        for (const name of ['start', 'dev']) {
+            if (s[name]) return ['bun', ['run', name]]
+        }
+        return null
+    }
+    if (existsSync(path.join(cwd, 'Makefile')) && makeHasTarget(cwd, 'run')) {
+        return ['make', ['run']]
+    }
+    return null
+}
+
+type BootOutcome = {outcome: 'skip' | 'pass'} | {outcome: 'fail'; detail: string}
+
+/**
+ * Exercise the start command ONCE, with no port/URL/framework knowledge — the
+ * command's own fate within the grace window decides:
+ *
+ *   - non-zero exit (or signal death) before the window closes → FAIL, output tail;
+ *   - exit 0 before the window closes → PASS (a CLI-style "run" that finished);
+ *   - still alive when the window closes → PASS, then the whole process group is
+ *     killed (detached spawn = own group; SIGTERM, escalating to SIGKILL).
+ *
+ * Env-gap contract as everywhere: spawn error (ENOENT) or exit 127 → skip.
+ */
+export function runBootCheck(
+    cwd: string,
+    [bin, args]: HealthCommand,
+    graceMs = 10_000
+): Promise<BootOutcome> {
+    return new Promise(resolve => {
+        const child = spawn(bin, args, {
+            cwd,
+            detached: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: {...process.env}
+        })
+        let out = ''
+        let err = ''
+        const cap = (s: string) => (s.length > 8000 ? s.slice(-8000) : s)
+        child.stdout?.on('data', (d: Buffer) => (out = cap(out + String(d))))
+        child.stderr?.on('data', (d: Buffer) => (err = cap(err + String(d))))
+        let settled = false
+        const settle = (r: BootOutcome) => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            resolve(r)
+        }
+        const killGroup = (sig: NodeJS.Signals) => {
+            try {
+                if (child.pid) process.kill(-child.pid, sig)
+            } catch {
+                // group already gone
+            }
+        }
+        const timer = setTimeout(() => {
+            settle({outcome: 'pass'})
+            killGroup('SIGTERM')
+            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+        }, graceMs)
+        child.on('error', () => settle({outcome: 'skip'}))
+        child.on('exit', (status, signal) => {
+            if (status === 0) return settle({outcome: 'pass'})
+            if (status === 127 || (status === null && signal === null)) {
+                return settle({outcome: 'skip'})
+            }
+            const what = status !== null ? `exited ${status}` : `was killed by ${signal}`
+            const tail = outputTail(out, err)
+            settle({outcome: 'fail', detail: `${what}${tail ? ` — ${tail}` : ''}`})
+        })
+    })
+}
+
+/**
  * Labels (`bin args…`) of every command the gate CAN currently discover — the
  * static half (repo-health) plus the integration half. Pure discovery, nothing
  * runs. Used by the final-gate autofix shrink guard: a fix pass that makes a
@@ -164,10 +252,12 @@ export function discoverLockfileChecks(cwd: string): HealthCommand[] {
  * gaming the gate, not fixing the defect.
  */
 export function discoverGateCommandLabels(cwd: string): string[] {
+    const boot = discoverBootCommand(cwd)
     const labels = [
         ...discoverHealthCommands(cwd).cmds,
         ...discoverLockfileChecks(cwd),
-        ...discoverIntegrationCommands(cwd).cmds
+        ...discoverIntegrationCommands(cwd).cmds,
+        ...(boot ? [boot] : [])
     ].map(([bin, args]) => `${bin} ${args.join(' ')}`)
     return [...new Set(labels)]
 }
@@ -208,16 +298,21 @@ function runGateCommand(
 
 /**
  * Run the final gate: static analysis first, then the lockfile consistency
- * checks, then the discovered integration commands, whole-repo, verbatim,
- * unaided. Deterministic and synchronous under the hood (callers wrap in
- * Promise.resolve). First real failure wins.
+ * checks, then the discovered integration commands, then one boot exercise of
+ * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
+ * First real failure wins.
  */
-export function runFinalIntegrationGate(cwd: string, timeoutMs = 900_000): FinalGateOutcome {
+export async function runFinalIntegrationGate(
+    cwd: string,
+    timeoutMs = 900_000,
+    bootGraceMs = 10_000
+): Promise<FinalGateOutcome> {
     const stat = runRepoHealthCheck(cwd)
     if (!stat.ok) return {ok: false, reason: `static checks: ${stat.reason}`}
     const lockCmds = discoverLockfileChecks(cwd)
-    const {ecosystem, cmds} = discoverIntegrationCommands(cwd)
-    if (lockCmds.length === 0 && (!ecosystem || cmds.length === 0)) {
+    const {cmds} = discoverIntegrationCommands(cwd)
+    const boot = discoverBootCommand(cwd)
+    if (lockCmds.length === 0 && cmds.length === 0 && !boot) {
         return {ok: true, reason: 'no integration command found (statics passed)'}
     }
     const ran: string[] = []
@@ -237,6 +332,14 @@ export function runFinalIntegrationGate(cwd: string, timeoutMs = 900_000): Final
             }
             ran.push(label)
         }
+    }
+    if (boot) {
+        const label = `${boot[0]} ${boot[1].join(' ')}`
+        const b = await runBootCheck(cwd, boot, bootGraceMs)
+        if (b.outcome === 'fail') {
+            return {ok: false, reason: `boot check: \`${label}\` ${b.detail}`}
+        }
+        if (b.outcome === 'pass') ran.push(label)
     }
     return {
         ok: true,

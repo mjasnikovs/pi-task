@@ -403,7 +403,7 @@ export function buildGateDeps(params: {
                 ),
                 // The gate re-run is the only arbiter of convergence, and the
                 // shrink guard's discovery is the gate's own (see final-gate.ts).
-                gate: c => Promise.resolve(runFinalIntegrationGate(c)),
+                gate: c => runFinalIntegrationGate(c),
                 discoverLabels: discoverGateCommandLabels,
                 discard: discardTreeEdits
             }),

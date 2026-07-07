@@ -696,7 +696,7 @@ function defaultDeps(
         // run-level half of the same verification story.
         finalGate: cwd2 =>
             getConfig().verifyWork ?
-                Promise.resolve(runFinalIntegrationGate(cwd2))
+                runFinalIntegrationGate(cwd2)
             :   Promise.resolve({ok: true, reason: 'disabled'})
     }
 }
