@@ -330,8 +330,25 @@ export const STYLES = `    :root {
       font-size: 11px; font-variant-numeric: tabular-nums; }
     .widget-bar { height: 4px; background: var(--surface0); border-radius: 2px;
       overflow: hidden; margin-top: 6px; }
-    .widget-bar-fill { height: 100%; background: var(--mauve); border-radius: 2px;
+    /* Fill carries a soft highlight band that sweeps left→right through the mauve,
+       so the bar reads as "working" even while the step count holds still. The
+       gradient tile is 2x the fill width and shifts one full period per cycle,
+       so the loop is seamless. Base color stays mauve for reduced-motion. */
+    .widget-bar-fill { height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg,
+        var(--mauve) 0%, var(--mauve) 38%, #ecdcfd 50%,
+        var(--mauve) 62%, var(--mauve) 100%);
+      background-size: 200% 100%;
+      box-shadow: 0 0 6px rgba(203, 166, 247, 0.45);
+      animation: bar-flow 2.4s linear infinite;
       transition: width 0.3s ease; }
+    @keyframes bar-flow {
+      from { background-position: 200% 0; }
+      to { background-position: 0% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .widget-bar-fill { animation: none; background: var(--mauve); }
+    }
     /* Current action — the terminal's ↳ worker trailer, one dim ellipsized line. */
     .widget-action { margin-top: 6px; color: var(--subtext0); font-size: 11px;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
