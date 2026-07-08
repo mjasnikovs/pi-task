@@ -61,7 +61,8 @@ import {
     isCritiqueClean
 } from './spec-validation.js'
 import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
-import {readContracts, buildContractsBlock} from './contracts.js'
+import {findSynthesizedWiring, wiringProbeText, readReferencedDocs} from './wiring-claims.js'
+import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -995,6 +996,35 @@ export async function phaseCritique(
     // ship a self-waiving VERIFY block — and feed the offending lines in as defects.
     const skipEscapes = findSkipEscapes(spec)
     const skipDefects = skipEscapes.length > 0 ? skipEscapeDefectText(skipEscapes) : null
+    // The cross-slice contract registry (run-8 F3): the design's pinned interface
+    // facts, quoted verbatim, that more than one slice touches. Threading them into
+    // critique lets the triage/rewrite RECONCILE a synthesized wiring specific (a
+    // fabricated uniform mount table) against the facts it must reproduce — the
+    // generation-side complement of the verify-side boundary check. Empty (single
+    // /task, or a design that pins no shared boundary) ⇒ no-op.
+    const registryRaw = await readContracts(deps.cwd).catch(() => '')
+    const contractsBlock = buildContractsVerifyBlock(registryRaw)
+    // DETERMINISTIC synthesized-wiring probe (run-8 F3, generation side). The registry
+    // alone is a WEAK catcher (live A/B: prompt+registry ~1/8) — the model's attention
+    // goes to the obvious VERIFY weakness and it rarely does the path-composition
+    // reasoning. The scanner NAMES the inferred mount mappings and juxtaposes the
+    // verbatim pinned facts, forcing focused reconciliation (probe+rule pattern, same
+    // lever as skip-escape / substitution-probe). FP-clean (1/18 files on the run-8
+    // trees). Grounding = the registry ∪ any design doc the spec/refined @-reference.
+    const wiring =
+        registryRaw.trim().length > 0 ?
+            findSynthesizedWiring(
+                spec,
+                registryRaw + '\n' + readReferencedDocs(deps.cwd, refined, spec),
+                registryRaw
+            )
+        :   []
+    const wiringProbe = wiring.length > 0 ? wiringProbeText(wiring, registryRaw) : null
+    if (wiringProbe) {
+        deps.logDebug?.(
+            `synthesized wiring flagged in spec: ${wiring.map(w => w.line).join(' | ')}`
+        )
+    }
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -1008,24 +1038,27 @@ export async function phaseCritique(
                 deps,
                 'critique-triage',
                 '',
-                appendNoThink(CRITIQUE_TRIAGE_PROMPT(spec, refined, qa))
+                appendNoThink(CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, contractsBlock))
             )
         } catch {
             verdict = null
         }
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
-            // A deterministic skip-escape overrides a CLEAN triage: the draft must be
-            // rewritten to remove it even if the model judged the rest clean.
+            // A deterministic skip-escape OR synthesized-wiring finding overrides a CLEAN
+            // triage: the draft must be rewritten to resolve it even if the model judged
+            // the rest clean (the model does not self-discover either reliably).
             if (isCritiqueClean(verdict)) {
-                if (skipDefects === null) return spec
+                if (skipDefects === null && wiringProbe === null) return spec
             } else {
                 triageDefects = verdict.trim()
             }
         }
     }
-    // Merge the deterministic skip-escape defects with any triage defects for the rewrite.
-    const rewriteDefects = [skipDefects, triageDefects].filter(Boolean).join('\n\n') || null
+    // Merge the deterministic skip-escape + synthesized-wiring defects with any triage
+    // defects for the rewrite (both are forced FOCUS items).
+    const rewriteDefects =
+        [skipDefects, wiringProbe, triageDefects].filter(Boolean).join('\n\n') || null
 
     const tRewrite = Date.now()
     try {
@@ -1033,7 +1066,15 @@ export async function phaseCritique(
             deps,
             'critique',
             'read',
-            problem => CRITIQUE_PROMPT(spec, refined, qa, problem !== null, rewriteDefects),
+            problem =>
+                CRITIQUE_PROMPT(
+                    spec,
+                    refined,
+                    qa,
+                    problem !== null,
+                    rewriteDefects,
+                    contractsBlock
+                ),
             text => {
                 // The rewrite (thinking on) sometimes prepends narration before
                 // GOAL; the prompt forbids it but this validator only checks for

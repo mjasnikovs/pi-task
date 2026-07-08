@@ -97,6 +97,7 @@ Rules:
 - Preserve every concrete identifier verbatim (paths, function names, ports, env vars, file:line refs).
 - Do not invent requirements not implied by the input.
 - If the task references a design/spec document (an @-path or a named spec file), READ it and treat it as authoritative. Carry its concrete schema verbatim into GOAL/CONSTRAINTS — table and column names, types, endpoint methods and paths, enum values. The task title is only a pointer into that spec: where the title and the spec disagree, follow the spec, and never introduce a table, column, endpoint, or dependency the spec does not define.
+- CITE interface WIRING, do NOT synthesize it. A wiring specific — how modules/endpoints/files connect (a mount prefix, a route/mount table, a module→path mapping, an exported function/type signature, a file or module layout) — must be citable from the design or the CROSS-SLICE CONTRACTS. The design often pins the interface FACTS (the exact endpoint paths, exported names, layouts) WITHOUT stating the wiring that produces them; when it does, any wiring you write MUST reproduce those pinned facts EXACTLY. Do NOT infer a "uniform" or "tidy" pattern from them — e.g. do not assume one module maps to one mount prefix when the design's pinned facts for that module do not all sit under a single prefix (that exact inference is a seam bug: the consumers follow the pinned facts, the assembly follows your invented pattern, and the seam ships broken). If the design pins neither the fact nor the wiring, leave the detail unspecified rather than inventing a specific.
 - Do not output any preamble, commentary, or markdown headings beyond the four sections above.
 ${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}${existingFiles && existingFiles.trim() ? `\n${existingFiles.trim()}\n` : ''}
 Task: ${raw}`
@@ -397,7 +398,8 @@ ${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}`
 const CRITIQUE_TRIAGE_PROMPT = (
     spec: string,
     refined: string,
-    qa: string
+    qa: string,
+    contracts?: string
 ) => `You are triaging an implementation spec for an AI coding agent. Decide whether it needs a rewrite. Do NOT rewrite it — only judge it.
 
 The refined task and the user's Q&A below are GROUND TRUTH. Judge the spec against them. Look for SUBSTANTIVE defects only:
@@ -406,7 +408,8 @@ The refined task and the user's Q&A below are GROUND TRUTH. Judge the spec again
 - a VERIFY block that is missing, unrunnable, full of placeholders, or does not exercise the surface the task touches
 - scope drift: requirements, files, or deliverables not implied by the refined task or Q&A
 - a dropped or weakened CONSTRAINT from the refined task
-
+- a synthesized interface WIRING specific — a mount/route table, a module→path mapping, an exported signature, a file layout — that the design does not pin AND that does not reproduce the design's pinned interface facts. A "uniform" pattern (one module → one mount prefix, etc.) applied to an interface whose pinned facts are NOT uniform is a SEAM BUG: flag it naming the pinned fact it contradicts.
+${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}
 Do NOT flag cosmetic wording, style, or anything you would change only to "polish" prose. The bar is: would this defect change what the agent builds or whether the work can be verified?
 
 Output format — read carefully:
@@ -427,7 +430,8 @@ const CRITIQUE_PROMPT = (
     refined: string,
     qa: string,
     addVerifyEmphasis: boolean,
-    triageDefects: string | null = null
+    triageDefects: string | null = null,
+    contracts?: string
 ) => `You are reviewing the implementation spec below for ambiguity, weak acceptance criteria, and missing or unrunnable VERIFY commands.
 
 CRITICAL FORMAT RULES (read first):
@@ -442,6 +446,7 @@ SCOPE RULES (equally critical — do not break these):
 - CONSTRAINTS from the refined task MUST be preserved in spirit. Do not silently drop or weaken them.
 - If the spec below is malformed, empty, or wrapped in a heredoc, reconstruct it from the refined task and Q&A — not from your own invention.
 - Your job is to tighten language, sharpen acceptance criteria, and ensure VERIFY is runnable. Not to redesign the task.
+- WIRING vs pinned facts: if the spec states interface wiring (a mount/route table, a module→path mapping, an exported signature, a file layout), reconcile EACH wiring specific against the design's pinned interface facts (the CROSS-SLICE CONTRACTS below, if present, are those facts quoted verbatim). Keep every wiring specific that reproduces the pinned facts exactly; CORRECT any that do not; and do NOT invent wiring the design leaves unspecified. Watch specifically for a "uniform" pattern (one module → one mount prefix, one naming scheme) applied to an interface whose pinned facts are NOT uniform — that is a seam bug, fix only the entry that breaks, and leave the conforming entries unchanged.
 
 Rewrite the spec in the same four-section format (GOAL, CONSTRAINTS, ACCEPTANCE, VERIFY). Fix any issues you find within the scope rules above.
 
@@ -454,6 +459,7 @@ VERIFY QUALITY CHECK (apply during the rewrite):
 - Never accept \`true\`, \`echo ok\`, or other no-op commands as VERIFY content.
 
 ${addVerifyEmphasis ? 'REQUIRED: The output MUST include a VERIFY: section followed by a ```sh fenced block of runnable shell commands. The previous attempt was missing this.' : ''}
+${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}
 ${
     triageDefects ?
         `FOCUS — a triage pass already found these specific defects. Fix every one of them in your rewrite (without breaking the scope rules above):\n${triageDefects}\n`

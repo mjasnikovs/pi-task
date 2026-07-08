@@ -188,6 +188,19 @@ describe('CRITIQUE_TRIAGE_PROMPT', () => {
         expect(p).toContain('REFINED_MARK')
         expect(p).toContain('QA_MARK')
     })
+
+    test('names the synthesized-wiring seam-bug defect type (F3, gen side)', () => {
+        const p = CRITIQUE_TRIAGE_PROMPT('spec', 'refined', 'qa')
+        expect(p).toContain('synthesized interface WIRING')
+        expect(p).toContain('SEAM BUG')
+    })
+
+    test('embeds the cross-slice contracts block when supplied, omits it otherwise', () => {
+        const withC = CRITIQUE_TRIAGE_PROMPT('spec', 'refined', 'qa', 'CONTRACTS_MARK')
+        expect(withC).toContain('CONTRACTS_MARK')
+        const without = CRITIQUE_TRIAGE_PROMPT('spec', 'refined', 'qa', '')
+        expect(without).not.toContain('CONTRACTS_MARK')
+    })
 })
 
 describe('CRITIQUE_PROMPT triage-defect focus block', () => {
@@ -200,5 +213,22 @@ describe('CRITIQUE_PROMPT triage-defect focus block', () => {
         const p = CRITIQUE_PROMPT('spec', 'refined', 'qa', false, 'ACCEPTANCE: criterion 2 vague')
         expect(p).toContain('FOCUS —')
         expect(p).toContain('ACCEPTANCE: criterion 2 vague')
+    })
+
+    test('carries the wiring-vs-pinned-facts reconcile rule and the contracts block', () => {
+        const p = CRITIQUE_PROMPT('spec', 'refined', 'qa', false, null, 'CONTRACTS_MARK')
+        expect(p).toContain('WIRING vs pinned facts')
+        expect(p).toContain('CONTRACTS_MARK')
+        expect(CRITIQUE_PROMPT('spec', 'refined', 'qa', false, null, '')).not.toContain(
+            'CONTRACTS_MARK'
+        )
+    })
+})
+
+describe('REFINE_PROMPT cite-not-synthesize wiring rule (F3, gen side)', () => {
+    test('instructs the model to cite, not synthesize, interface wiring', () => {
+        const p = REFINE_PROMPT('raw task')
+        expect(p).toContain('CITE interface WIRING')
+        expect(p).toContain('seam bug')
     })
 })
