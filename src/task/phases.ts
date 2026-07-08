@@ -61,6 +61,7 @@ import {
     isCritiqueClean
 } from './spec-validation.js'
 import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
+import {readContracts, buildContractsBlock} from './contracts.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -193,13 +194,30 @@ export async function refineExistingFilesBlock(deps: PhaseDeps): Promise<string>
     return block.trim().length === 0 ? '' : `${REFINE_PRESERVE_DIRECTIVE}\n\n${block.trim()}`
 }
 
+/**
+ * The read-only cross-slice contract block (see contracts.ts) for a phase that
+ * generates spec text — the verbatim interface facts the SOURCE design pins that
+ * more than one slice touches. Empty when the registry is absent/empty (single
+ * `/task` runs, or a design that pins no shared boundary), so this degrades to a
+ * no-op. Best-effort: a read fault yields '' rather than blocking the phase.
+ */
+export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
+    const contracts = await readContracts(deps.cwd).catch(() => '')
+    return buildContractsBlock(contracts)
+}
+
 export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
     const existingFiles = await refineExistingFilesBlock(deps).catch(() => '')
+    const contracts = await phaseContractsBlock(deps)
     return runPhaseWithLoopGuard(
         deps,
         'refine',
         'read',
-        hint => prependHint(hint, appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles))),
+        hint =>
+            prependHint(
+                hint,
+                appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles, contracts))
+            ),
         // refine's deliverable is a 4-section text rewrite that never strictly
         // needs a successful read — on a test-writing task against a large
         // existing codebase the model over-explores (re-reads source hunting for
@@ -924,11 +942,12 @@ export async function phaseCompose(
     research: string,
     qa: string
 ): Promise<string> {
+    const contracts = await phaseContractsBlock(deps)
     return runWithEmphasisRetry(
         deps,
         'compose',
         'read',
-        problem => COMPOSE_PROMPT(refined, research, qa, problem),
+        problem => COMPOSE_PROMPT(refined, research, qa, problem, contracts),
         text => {
             // Trim any "here's the spec:" preamble before validating, so a
             // strippable lead-in doesn't burn a full retry — and the stored

@@ -177,6 +177,20 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SKIP-ESCAPE NOTICE')
     })
 
+    test('injects the cross-slice contracts block mandating a boundary check', () => {
+        const contracts =
+            '"POST /api/listings/:id/photos" [anchor: Photos API]\n"GET /api/photos/:id"'
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], contracts)
+        expect(p).toContain('CROSS-SLICE CONTRACTS')
+        expect(p).toContain('- "POST /api/listings/:id/photos" [anchor: Photos API]')
+        expect(p).toMatch(/SEAM BUG — report FAIL/)
+        // Absent/empty contracts → no block.
+        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '')).not.toContain(
+            'CROSS-SLICE CONTRACTS'
+        )
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CROSS-SLICE CONTRACTS')
+    })
+
     test('injects deterministic prohibition findings under the no-waiver rule', () => {
         const findings = [
             'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'

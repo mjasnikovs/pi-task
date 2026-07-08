@@ -60,6 +60,12 @@ import {
     FINAL_AUTOFIX_VALUE
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
+import {
+    CONTRACT_EXTRACT_PROMPT,
+    parseContractLines,
+    keepGroundedContracts,
+    appendContracts
+} from './contracts.js'
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
 // when the model emits NONE), but a model that never says NONE would otherwise
@@ -668,6 +674,32 @@ export async function planAuto(
             'warning'
         )
     }
+    // Cross-slice contract registry (mx5 run 8, F3): now that the plan is settled,
+    // extract the interface facts MORE THAN ONE slice must agree on — endpoint paths,
+    // exported signatures, file layouts, env var names the DESIGN pins — into a
+    // run-level artifact each downstream refine/compose/verify reads. The extraction
+    // child EMITs `CONTRACT:` lines, but every quote is re-grounded HOST-SIDE against
+    // the design (keepGroundedContracts): a fact the child paraphrased or invented is
+    // not a substring of the doc and is dropped, so a fabricated contract — exactly
+    // the F3 bug — can never enter the registry. Best-effort: any fault here is
+    // swallowed (the registry is a sharpener, never a planning blocker).
+    try {
+        const contractRaw = await deps.runChild(
+            'contract-extract',
+            '',
+            CONTRACT_EXTRACT_PROMPT(featureForModel, planTitles)
+        )
+        const grounded = keepGroundedContracts(parseContractLines(contractRaw), featureForModel)
+        logPlanDebug(
+            cwd,
+            `contract extraction: ${grounded.length} grounded contract(s) kept`
+                + ` from ${parseContractLines(contractRaw).length} emitted`
+        )
+        await appendContracts(cwd, grounded)
+    } catch {
+        // best-effort registry
+    }
+
     // Thread the feature's spec doc(s) into every title so each per-task
     // pipeline — which only ever sees its title — reads the real spec instead of
     // a lossy one-line paraphrase of it.
@@ -697,7 +729,8 @@ export async function planAuto(
 const AUTO_PLAN_STEPS: Record<string, {step: string; stepNum: number}> = {
     'auto-clarify': {step: 'clarify', stepNum: 1},
     'auto-decompose': {step: 'decompose', stepNum: 2},
-    'decompose-coverage': {step: 'coverage', stepNum: 2}
+    'decompose-coverage': {step: 'coverage', stepNum: 2},
+    'contract-extract': {step: 'contracts', stepNum: 2}
 }
 const AUTO_PLAN_STEP_TOTAL = 2
 

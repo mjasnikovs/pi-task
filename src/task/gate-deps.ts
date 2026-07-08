@@ -22,6 +22,7 @@ import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
+import {readContracts} from './contracts.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -384,7 +385,13 @@ export function buildGateDeps(params: {
                 envNotes: {
                     read: () => readEnvNotes(cwd2),
                     append: notes => appendEnvNotes(cwd2, notes)
-                }
+                },
+                // Per-run cross-slice contract registry under .pi-tasks/ (F3): the
+                // verbatim interface facts the design pins that multiple slices
+                // share, so the verify child checks this slice's boundary against
+                // them. Empty on single-`/task` runs or a design with no shared
+                // boundary → no block.
+                contracts: () => readContracts(cwd2)
             })
         },
         lintFix: (fixCtx, cwd2, taskTitle, failReason) =>

@@ -1692,6 +1692,62 @@ test('distrust floor: a shorter-or-equal suspect retry keeps the original list',
     })
 })
 
+// ─── Cross-slice contract extraction (F3) ───────────────────────────────────
+
+test('contract extraction: grounded quotes stored, fabrications dropped', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // A big feature that pins a real split contract; the extraction child emits
+        // one grounded quote and one fabricated mount table (the exact F3 bug).
+        const feature =
+            'Photos API. Upload is POST /api/listings/:id/photos (nested under the listing). '
+            + 'Detail line. '.repeat(300)
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                if (name === 'auto-clarify') return Promise.resolve('NONE')
+                if (name === 'auto-decompose')
+                    return Promise.resolve('- [ ] Photos API\n- [ ] App assembly\n- [ ] Tests')
+                if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+                if (name === 'contract-extract')
+                    return Promise.resolve(
+                        [
+                            'CONTRACT: "POST /api/listings/:id/photos" [anchor: Photos API]',
+                            'CONTRACT: "/api/photos → photosRoutes" [anchor: fabricated]'
+                        ].join('\n')
+                    )
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        await planAuto(ctx, dir, feature, d)
+        const stored = await fsp.readFile(path.join(dir, '.pi-tasks', 'contracts.md'), 'utf8')
+        expect(stored).toContain('POST /api/listings/:id/photos')
+        expect(stored).not.toContain('photosRoutes') // fabrication never grounded
+    })
+})
+
+test('contract extraction: a child fault never blocks planning', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                if (name === 'auto-clarify') return Promise.resolve('NONE')
+                if (name === 'auto-decompose') return Promise.resolve('- [ ] A\n- [ ] B')
+                if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+                if (name === 'contract-extract') return Promise.reject(new Error('boom'))
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        expect(id).not.toBeNull() // extraction fault is swallowed
+    })
+})
+
 // ─── Repo integrity guards + final integration gate ─────────────────────────
 
 test('runAutoLoop: unmerged index → stops LOUD before the task, nothing runs', async () => {

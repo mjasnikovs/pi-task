@@ -69,6 +69,7 @@
  */
 import {USER_CANCELLED} from './child-runner.js'
 import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
+import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 
 /**
@@ -161,7 +162,8 @@ export function buildVerifyPrompt(
     probeFindings?: string[],
     envNotes?: string,
     prohibitionFindings?: string[],
-    skipEscapeFindings?: string[]
+    skipEscapeFindings?: string[],
+    contracts?: string
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -208,6 +210,8 @@ export function buildVerifyPrompt(
             ]
         :   []
     const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
+    const contractsBlock =
+        contracts && contracts.trim().length > 0 ? [buildContractsVerifyBlock(contracts)] : []
     return [
         'You are a strict verification pass running right after an AI coding agent',
         'finished a task and committed it. The agent is known to mark work "done"',
@@ -222,6 +226,7 @@ export function buildVerifyPrompt(
         spec.trim(),
         '',
         ...envBlock,
+        ...contractsBlock,
         ...probeBlock,
         ...prohibitionBlock,
         ...skipEscapeBlock,
@@ -482,6 +487,14 @@ export interface VerificationDeps {
         read: () => Promise<string>
         append: (notes: string[]) => Promise<void>
     }
+    /**
+     * Per-run cross-slice contract registry (see contracts.ts): `read` supplies the
+     * verbatim interface facts the SOURCE design pins that more than one slice
+     * touches, injected so the verify child checks THIS slice's boundary against
+     * them (F3 seam bugs are locally right but globally wrong). ABSENT/empty → no
+     * block (single `/task` runs, or a design pinning no shared boundary), unchanged.
+     */
+    contracts?: () => Promise<string>
 }
 
 /**
@@ -532,6 +545,16 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             envNotes = ''
         }
     }
+    // Cross-slice contracts from decompose-time extraction (best-effort; a read
+    // fault must never block verification).
+    let contracts = ''
+    if (deps.contracts) {
+        try {
+            contracts = await deps.contracts()
+        } catch {
+            contracts = ''
+        }
+    }
     // DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
     // block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
     // fallback. Injected so rule 5c fires reliably — the model does not self-discover a
@@ -547,7 +570,14 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(deps.spec, findings, envNotes, prohibitions, skipEscapes),
+                buildVerifyPrompt(
+                    deps.spec,
+                    findings,
+                    envNotes,
+                    prohibitions,
+                    skipEscapes,
+                    contracts
+                ),
                 deps.signal
             )
         } catch (err) {

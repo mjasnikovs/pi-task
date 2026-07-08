@@ -70,7 +70,8 @@ ${title}`
 const REFINE_PROMPT = (
     raw: string,
     planContext?: string,
-    existingFiles?: string
+    existingFiles?: string,
+    contracts?: string
 ) => `${planContext ? planContext + '\n\n---\n\n' : ''}You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.
 
 Output structure (four sections, exact headings, in this order):
@@ -97,7 +98,7 @@ Rules:
 - Do not invent requirements not implied by the input.
 - If the task references a design/spec document (an @-path or a named spec file), READ it and treat it as authoritative. Carry its concrete schema verbatim into GOAL/CONSTRAINTS — table and column names, types, endpoint methods and paths, enum values. The task title is only a pointer into that spec: where the title and the spec disagree, follow the spec, and never introduce a table, column, endpoint, or dependency the spec does not define.
 - Do not output any preamble, commentary, or markdown headings beyond the four sections above.
-${existingFiles && existingFiles.trim() ? `\n${existingFiles.trim()}\n` : ''}
+${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}${existingFiles && existingFiles.trim() ? `\n${existingFiles.trim()}\n` : ''}
 Task: ${raw}`
 
 // ─── Research fan-out prompts ─────────────────────────────────────────────────
@@ -336,7 +337,8 @@ const COMPOSE_PROMPT = (
     refined: string,
     research: string,
     qa: string,
-    retryProblem: string | null
+    retryProblem: string | null,
+    contracts?: string
 ) => `You are composing the final implementation spec for an AI coding agent. Combine the refined task, the research, and the user's Q&A answers into one spec.
 
 CRITICAL FORMAT RULES (read first):
@@ -383,7 +385,8 @@ Research:
 ${research}
 
 User Q&A:
-${qa}`
+${qa}
+${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}`
 
 // Fast triage pass run before the (expensive) full rewrite. It produces either
 // the single token CLEAN — meaning the compose draft needs no rewrite — or a
