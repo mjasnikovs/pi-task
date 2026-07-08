@@ -94,6 +94,12 @@ export interface VerifyOutcome {
     /** Short, human-readable reason. Always set when ok === false; on the pass
      *  path set to the no-op cause ('disabled', 'no spec to verify'). */
     reason?: string
+    /** True when the FAIL is specifically an UNOBSERVED outcome (rule 5c): a
+     *  spec-required behavioral check could not run because its tooling is absent.
+     *  The gate routes this straight to the human picker instead of an unattended
+     *  AUTOFIX re-run, which cannot provision a missing tool. Only meaningful when
+     *  ok === false. */
+    unobserved?: boolean
 }
 
 /**
@@ -319,8 +325,36 @@ export function buildVerifyPrompt(
         '   that is a FAIL naming the gap. Any schema surgery you performed to reach green IS the',
         '   defect.',
         '',
-        '6. If the spec legitimately has no runnable verification (a pure docs / config change',
-        '   with nothing to build or run), validating it cleanly is a PASS.',
+        '5c. A SPEC-REQUIRED CHECK THAT DID NOT ACTUALLY RUN IS NOT VERIFIED. The env-gap',
+        '   exception (rule 5) covers ONLY a genuinely EXTERNAL service the finished product',
+        "   connects to (a database, an API host). It does NOT cover a check the SPEC's own",
+        "   VERIFY block authored to OBSERVE the deliverable's required behavior. If such a",
+        '   check did not actually execute — the tool or runner it needs is not installed, or',
+        '   the VERIFY line short-circuits ITSELF with a skip-escape (`|| true`, `|| echo',
+        '   skipping`, `2>/dev/null || exit 0`, `command -v X ||` …) so a missing tool passes',
+        '   silently — then that behavior was NEVER OBSERVED. A skipped check is not a passed',
+        '   check: you may not count the area as verified, and "correctly skipped" is NOT a',
+        "   PASS. Do not let the work's own skip-escape waive the work's own gate. When a",
+        '   REQUIRED behavior could not be observed because its observation tooling is absent,',
+        '   the verdict is UNOBSERVED — report exactly what could not be observed and which',
+        '   tool was missing, so a human decides whether to provision the tool or accept the',
+        '   unproven behavior.',
+        '   DISCRIMINATOR (rule 5 vs rule 5c) — when something needed is absent, ask which it',
+        '   is: (rule 5, env-gap, do NOT fail the code) a SERVICE the FINISHED PRODUCT itself',
+        '   connects to at runtime to FUNCTION — a database, an API host, a message broker —',
+        '   whose absence is an environment gap; versus (rule 5c, UNOBSERVED) a HARNESS that',
+        '   exists only to OBSERVE or DRIVE the product during a check — a browser driver, a',
+        "   UI/terminal smoke, a snapshot or fuzz tool — whose absence leaves the product's own",
+        '   behavior unproven. The product NEEDS the former to work at all; it needs the latter',
+        '   only to be CHECKED. A command that fails because such a runtime SERVICE is absent',
+        '   stays a rule-5 env-gap and is NOT UNOBSERVED; a required behavior you could not',
+        '   OBSERVE because its test harness is absent IS UNOBSERVED.',
+        '',
+        '6. If the spec legitimately has no runnable verification at all (a pure docs / config',
+        '   change with nothing to build or run), validating it cleanly is a PASS. This is NOT',
+        '   the same as a required behavioral check that self-skipped or whose tool is absent',
+        '   (that is UNOBSERVED, rule 5c) — "nothing to verify" means the spec never demanded',
+        '   an observation, not that an observation was demanded and then dodged.',
         '',
         '7. Do NOT edit anything to make a check pass. Report what you actually saw.',
         '',
@@ -337,25 +371,46 @@ export function buildVerifyPrompt(
         'When you are done, output EXACTLY ONE of these as the final line:',
         "  WORK-VERIFIED: PASS              (the project's own command, run unaided, met the spec)",
         '  WORK-VERIFIED: FAIL <text>      (the shipped command failed or did not meet the spec; say what failed)',
+        '  WORK-VERIFIED: UNOBSERVED <text> (a spec-required behavioral check could not run because',
+        '                                    its observation tooling is absent — the behavior is',
+        '                                    unproven, not passed and not a code failure; rule 5c)',
         'Output the verdict line verbatim — it is parsed mechanically.'
     ].join('\n')
 }
 
 /**
- * Parse the child's verdict. Scans for the LAST `WORK-VERIFIED: PASS|FAIL` marker
- * (the model discusses before concluding, and bash output may echo the word
+ * Parse the child's verdict. Scans for the LAST `WORK-VERIFIED: PASS|FAIL|UNOBSERVED`
+ * marker (the model discusses before concluding, and bash output may echo the word
  * "VERIFY", so a distinct token and last-match win matter).
+ *
+ * UNOBSERVED (rule 5c) is a distinct third outcome: a spec-required behavioral check
+ * could not run because its observation tooling is absent, so the behavior is neither
+ * proven nor shown broken. It is NOT a pass (`pass: false`) but carries `unobserved`
+ * so the gate can route it straight to the human — an unattended AUTOFIX re-run cannot
+ * provision a missing tool, so it must never auto-loop on this.
  *
  * No marker at all is NOT a pass: a verification that cannot state a verdict is a
  * gray area, and the contract is that unverified work is reported as such.
  */
-export function parseVerifyVerdict(text: string): {pass: boolean; detail: string} {
-    const re = /WORK-VERIFIED:\s*(PASS|FAIL)\b[ \t]*(.*)/gi
+export function parseVerifyVerdict(text: string): {
+    pass: boolean
+    unobserved?: boolean
+    detail: string
+} {
+    const re = /WORK-VERIFIED:\s*(PASS|FAIL|UNOBSERVED)\b[ \t]*(.*)/gi
     let last: RegExpExecArray | null = null
     for (let m = re.exec(text); m !== null; m = re.exec(text)) last = m
     if (!last) return {pass: false, detail: 'no verdict emitted'}
-    const pass = last[1].toUpperCase() === 'PASS'
-    return {pass, detail: pass ? '' : last[2].trim() || 'unspecified failure'}
+    const kind = last[1].toUpperCase()
+    if (kind === 'PASS') return {pass: true, detail: ''}
+    if (kind === 'UNOBSERVED') {
+        return {
+            pass: false,
+            unobserved: true,
+            detail: last[2].trim() || 'a required behavior could not be observed'
+        }
+    }
+    return {pass: false, detail: last[2].trim() || 'unspecified failure'}
 }
 
 export interface VerificationDeps {
@@ -501,6 +556,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         const verdict = parseVerifyVerdict(text)
         if (verdict.pass) return {ok: true}
         if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
+        // UNOBSERVED (rule 5c): a spec-required behavioral check could not run because
+        // its tooling is absent. Block like any FAIL, but flag it so the gate hands it
+        // straight to the human — re-running the impl turn cannot install a missing tool.
+        if (verdict.unobserved) {
+            return {ok: false, unobserved: true, reason: `work unobserved: ${verdict.detail}`}
+        }
         return {
             ok: false,
             reason: `work did not verify: ${verdict.detail}${

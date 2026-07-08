@@ -196,6 +196,44 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
     })
 })
 
+test('runGatesForTask: UNOBSERVED verify FAIL forces the picker — never unattended AUTOFIX', async () => {
+    // rule 5c (run-8 F2): a spec-required behavioral check could not run because its
+    // tooling is absent. An unattended AUTOFIX cannot install a missing tool, so the
+    // gate must (a) skip the recommendation research (moot), (b) NOT auto-fix, and
+    // (c) show the human picker — even though the default tint is AUTOFIX, which for an
+    // ordinary FAIL would auto-apply without a prompt.
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        let runTaskCalls = 0
+        let recommendCalled = false
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls += 1
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    unobserved: true,
+                    reason: 'work unobserved: browser smoke requires an absent runner'
+                }),
+            recommend: () => {
+                recommendCalled = true
+                return Promise.resolve({recommend: 'autofix', rationale: 'x'})
+            }
+        })
+        // No queueSelect → the forced picker is dismissed (cancel) → paused.
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        // The picker WAS shown exactly once, and no unattended re-run happened.
+        expect(captured.selects).toHaveLength(1)
+        expect(runTaskCalls).toBe(0)
+        // The (moot) recommendation research was skipped.
+        expect(recommendCalled).toBe(false)
+    })
+})
+
 test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker after MAX_AUTO_AUTOFIX', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)

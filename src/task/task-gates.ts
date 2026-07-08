@@ -297,18 +297,33 @@ export async function runGatesForTask(
                     continue
                 }
             }
+            // UNOBSERVED (rule 5c): a spec-required behavioral check could not run because
+            // its observation tooling is absent. An unattended AUTOFIX re-run cannot install
+            // a missing tool, so it would only burn MAX_AUTO_AUTOFIX turns and re-FAIL — the
+            // decision (provision the tool, or accept the unproven behavior) is the human's.
+            // Skip the (moot) recommendation research and force the picker.
+            const isUnobserved = verified.unobserved === true
             const recOutcome: ResolutionOutcome =
-                deps.recommend ?
+                isUnobserved ? {recommend: 'autofix', rationale: failReason}
+                : deps.recommend ?
                     await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
                 :   {recommend: 'autofix', rationale: failReason}
-            await rec(`resolution: recommended ${recOutcome.recommend.toUpperCase()}`)
+            await rec(
+                isUnobserved ?
+                    'resolution: verify UNOBSERVED — spec-required check could not run (tooling absent); '
+                        + 'forcing the human picker, an unattended re-run cannot provision it'
+                :   `resolution: recommended ${recOutcome.recommend.toUpperCase()}`
+            )
             // AUTO-RESOLVE the AUTOFIX path: when the research says the work is
             // genuinely wrong, re-run the fix WITHOUT prompting the user. The picker is
             // reserved for the ACCEPT recommendation (the human decides whether to bless
             // an artifact the gate FAILed) and for the bounded fallback: after
             // MAX_AUTO_AUTOFIX consecutive unattended attempts that still FAIL, hand
             // control back so a person can break a non-converging loop.
-            const autoFixNow = recOutcome.recommend === 'autofix' && autoFixCount < MAX_AUTO_AUTOFIX
+            const autoFixNow =
+                !isUnobserved
+                && recOutcome.recommend === 'autofix'
+                && autoFixCount < MAX_AUTO_AUTOFIX
             let choice: ResolutionChoice
             if (autoFixNow) {
                 autoFixCount += 1

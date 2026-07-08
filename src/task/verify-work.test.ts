@@ -226,6 +226,37 @@ describe('buildVerifyPrompt', () => {
         expect(p).toMatch(/paired\s*\n?\s*negative control/)
     })
 
+    test('rule 5c: a spec-required check that self-skips or lacks tooling is UNOBSERVED, not PASS', () => {
+        // Regression guard for the mx5 run-8 F2 class: the only behavioral checks ever
+        // authored (browser smokes) were wrapped in `|| echo skipping`; the tool was
+        // absent, the checks silently skipped, and the verify child called it "correctly
+        // skipped" → PASS. The rule must (a) draw the line from rule 5's external-service
+        // env-gap, (b) name the skip-escape shapes, (c) route it to a distinct UNOBSERVED
+        // verdict, and (d) keep rule 6's "nothing to verify" case separate.
+        const p = buildVerifyPrompt('GOAL\nx')
+        expect(p).toContain('5c. A SPEC-REQUIRED CHECK THAT DID NOT ACTUALLY RUN IS NOT VERIFIED')
+        expect(p).toMatch(
+            /env-gap\s*\n?\s*exception \(rule 5\) covers ONLY a genuinely EXTERNAL service/
+        )
+        expect(p).toContain('|| echo')
+        expect(p).toContain('command -v X')
+        expect(p).toMatch(/"correctly skipped" is NOT a\s*\n?\s*PASS/)
+        expect(p).toMatch(/the verdict is\s*\n?\s*UNOBSERVED/)
+        // rule 6 stays distinct: nothing-to-verify is not a dodged observation
+        expect(p).toMatch(/"nothing to verify" means the spec never demanded/)
+        // the third verdict token is offered in the output contract
+        expect(p).toContain('WORK-VERIFIED: UNOBSERVED')
+        // the crisp discriminator that keeps rule 5 (absent runtime SERVICE = env-gap)
+        // apart from rule 5c (absent observation HARNESS = UNOBSERVED) — the local model
+        // over-fired on external-service gaps until this either/or was made explicit.
+        expect(p).toContain('DISCRIMINATOR (rule 5 vs rule 5c)')
+        expect(p).toMatch(/SERVICE the FINISHED PRODUCT itself[\s\S]*?connects to at runtime/)
+        expect(p).toMatch(/HARNESS that[\s\S]*?exists only to OBSERVE or DRIVE the product/)
+        expect(p).toMatch(
+            /NEEDS the former to work at all; it needs the latter[\s\S]*?only to be CHECKED/
+        )
+    })
+
     test('verdict discipline: an unmet acceptance criterion is a FAIL, not a warning', () => {
         // Regression guard for verdict leniency: a live child enumerated two real
         // acceptance violations as warnings and PASSed anyway.
@@ -258,6 +289,27 @@ describe('parseVerifyVerdict', () => {
 
     test('no marker is not a pass', () => {
         expect(parseVerifyVerdict('looks fine to me').pass).toBe(false)
+    })
+
+    test('UNOBSERVED verdict → not a pass, flagged unobserved, detail carried', () => {
+        expect(
+            parseVerifyVerdict('WORK-VERIFIED: UNOBSERVED browser smoke needs playwright')
+        ).toEqual({
+            pass: false,
+            unobserved: true,
+            detail: 'browser smoke needs playwright'
+        })
+    })
+
+    test('UNOBSERVED with no text still carries a default detail', () => {
+        const v = parseVerifyVerdict('WORK-VERIFIED: UNOBSERVED')
+        expect(v.pass).toBe(false)
+        expect(v.unobserved).toBe(true)
+        expect(v.detail.length).toBeGreaterThan(0)
+    })
+
+    test('a plain FAIL is not flagged unobserved', () => {
+        expect(parseVerifyVerdict('WORK-VERIFIED: FAIL build broke').unobserved).toBeUndefined()
     })
 
     test('echoed spec "VERIFY:" header does not false-trigger', () => {
@@ -437,6 +489,26 @@ describe('runWorkVerification', () => {
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('no verdict emitted (after verify retry)')
         expect(runs).toBe(2)
+    })
+
+    test('UNOBSERVED verdict → blocked with unobserved flag, not retried', async () => {
+        // rule 5c: a spec-required behavioral check could not run (tooling absent). This
+        // is a real verdict (not a no-verdict gray area), so it must not be retried, and
+        // it carries `unobserved` so the gate hands it straight to the human.
+        let runs = 0
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => {
+                runs++
+                return 'WORK-VERIFIED: UNOBSERVED browser smoke requires an absent runner'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(out.unobserved).toBe(true)
+        expect(out.reason).toContain('work unobserved')
+        expect(out.reason).toContain('absent runner')
+        expect(runs).toBe(1)
     })
 
     test('a real FAIL verdict is NOT retried — one child run only', async () => {
