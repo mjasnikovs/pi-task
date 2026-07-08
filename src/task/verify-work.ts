@@ -69,6 +69,7 @@
  */
 import {USER_CANCELLED} from './child-runner.js'
 import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
+import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
 
 /**
  * The verification child gets exactly two tools: `read` and `bash`.
@@ -159,7 +160,8 @@ export function buildVerifyPrompt(
     spec: string,
     probeFindings?: string[],
     envNotes?: string,
-    prohibitionFindings?: string[]
+    prohibitionFindings?: string[],
+    skipEscapeFindings?: string[]
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -189,6 +191,22 @@ export function buildVerifyPrompt(
                 ''
             ]
         :   []
+    const skipEscapeBlock =
+        skipEscapeFindings && skipEscapeFindings.length > 0 ?
+            [
+                "SKIP-ESCAPE NOTICE (deterministic, computed by the orchestrator from the spec's",
+                'OWN VERIFY block): these VERIFY commands wrap a required check in a fallback that',
+                'ANNOUNCES skipping it when a tool is absent — so the check can "pass" while never',
+                'actually running:',
+                ...skipEscapeFindings.map(f => `- ${f}`),
+                'Do NOT accept a skipped check as a passed check. For each, determine whether it',
+                'ACTUALLY ran and observed the real behavior. If its tool is absent so the required',
+                'behavior was never observed, that area is UNOBSERVED (rule 5c) — verdict UNOBSERVED,',
+                'not PASS. Only if you observe the required behavior another way (running the real',
+                'artifact directly) may it count as verified.',
+                ''
+            ]
+        :   []
     const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
     return [
         'You are a strict verification pass running right after an AI coding agent',
@@ -206,6 +224,7 @@ export function buildVerifyPrompt(
         ...envBlock,
         ...probeBlock,
         ...prohibitionBlock,
+        ...skipEscapeBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
@@ -513,6 +532,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             envNotes = ''
         }
     }
+    // DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
+    // block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
+    // fallback. Injected so rule 5c fires reliably — the model does not self-discover a
+    // graceful skip-escape (A/B: rule alone ~1-3/5), but acts on a finding naming the
+    // exact line, per the proven probe+rule pattern. Pure text analysis, no dep needed.
+    const skipEscapes = skipEscapeVerifyFindings(findSkipEscapes(deps.spec))
     // A child that emits NO verdict never judged the work (budget/context death mid-
     // investigation — seen live: an 11-minute verify wandered, died verdict-less, and
     // the resulting FAIL burned a full implementation re-run on an unjudged artifact).
@@ -522,7 +547,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(deps.spec, findings, envNotes, prohibitions),
+                buildVerifyPrompt(deps.spec, findings, envNotes, prohibitions, skipEscapes),
                 deps.signal
             )
         } catch (err) {

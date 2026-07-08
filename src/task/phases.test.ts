@@ -1716,6 +1716,38 @@ describe('phaseCritique conditional rewrite', () => {
         })
     })
 
+    test('a deterministic skip-escape overrides CLEAN triage and forces the rewrite (run-8 F2)', async () => {
+        await withTmpTaskDir(async cwd => {
+            const escapeSpec =
+                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"\n```\n'
+            const rewritten =
+                'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js\n```\n'
+            const promptsSeen: string[] = []
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] as string
+                promptsSeen.push(prompt)
+                // Triage says CLEAN — but the deterministic skip-escape must still force a rewrite.
+                if (prompt.includes('triaging an implementation spec'))
+                    return agentEndResponse('CLEAN')
+                return agentEndResponse(rewritten)
+            })
+            const out = await phaseCritique(
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                escapeSpec,
+                'refined',
+                'qa'
+            )
+            // Did NOT short-circuit despite CLEAN triage: the rewrite ran.
+            expect(out).toBe(rewritten.trim())
+            expect(promptsSeen.length).toBe(2)
+            const rewritePrompt = promptsSeen.find(p =>
+                p.includes('reviewing the implementation spec')
+            )!
+            expect(rewritePrompt).toContain('SKIP-ESCAPE in the VERIFY block')
+            expect(rewritePrompt).toContain('uismoke smoke.spec.js || echo')
+        })
+    })
+
     test('triage runs tool-less (--no-tools), the rewrite keeps read access', async () => {
         await withTmpTaskDir(async cwd => {
             const observed: Array<{argv: ReadonlyArray<string>; prompt: string}> = []

@@ -60,6 +60,7 @@ import {
     stripSpecPreamble,
     isCritiqueClean
 } from './spec-validation.js'
+import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -968,6 +969,13 @@ export async function phaseCritique(
     // When the draft is structurally sound and triage says CLEAN, return it as
     // is. Otherwise fall through to the rewrite, feeding the triage defects in
     // as a focus list. Triage failures are non-fatal — we just do the rewrite.
+    // DETERMINISTIC skip-escape gate (run-8 F2): a required VERIFY check wrapped in a
+    // skip-announcing `||` fallback (`… || echo "skipping (tool absent)"`) lets the
+    // check pass while never running. FP-measured 0/20 on the historical specs. When
+    // present, force the rewrite to strip it — never let the triage CLEAN short-circuit
+    // ship a self-waiving VERIFY block — and feed the offending lines in as defects.
+    const skipEscapes = findSkipEscapes(spec)
+    const skipDefects = skipEscapes.length > 0 ? skipEscapeDefectText(skipEscapes) : null
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -988,10 +996,17 @@ export async function phaseCritique(
         }
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
-            if (isCritiqueClean(verdict)) return spec
-            triageDefects = verdict.trim()
+            // A deterministic skip-escape overrides a CLEAN triage: the draft must be
+            // rewritten to remove it even if the model judged the rest clean.
+            if (isCritiqueClean(verdict)) {
+                if (skipDefects === null) return spec
+            } else {
+                triageDefects = verdict.trim()
+            }
         }
     }
+    // Merge the deterministic skip-escape defects with any triage defects for the rewrite.
+    const rewriteDefects = [skipDefects, triageDefects].filter(Boolean).join('\n\n') || null
 
     const tRewrite = Date.now()
     try {
@@ -999,7 +1014,7 @@ export async function phaseCritique(
             deps,
             'critique',
             'read',
-            problem => CRITIQUE_PROMPT(spec, refined, qa, problem !== null, triageDefects),
+            problem => CRITIQUE_PROMPT(spec, refined, qa, problem !== null, rewriteDefects),
             text => {
                 // The rewrite (thinking on) sometimes prepends narration before
                 // GOAL; the prompt forbids it but this validator only checks for

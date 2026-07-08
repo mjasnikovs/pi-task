@@ -163,6 +163,20 @@ describe('buildVerifyPrompt', () => {
         expect(p).toMatch(/wording states an exception/)
     })
 
+    test('injects deterministic skip-escape findings tied to rule 5c', () => {
+        const findings = [
+            'smoke.spec.js || echo "skipping (uismoke not installed)" — its `||` fallback…'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], findings)
+        expect(p).toContain('SKIP-ESCAPE NOTICE')
+        expect(p).toContain('- smoke.spec.js || echo')
+        expect(p).toMatch(/UNOBSERVED \(rule 5c\)/)
+        expect(p).toMatch(/Do NOT accept a skipped check as a passed check/)
+        // No findings → no block at all.
+        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [])).not.toContain('SKIP-ESCAPE NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SKIP-ESCAPE NOTICE')
+    })
+
     test('injects deterministic prohibition findings under the no-waiver rule', () => {
         const findings = [
             'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
@@ -341,6 +355,40 @@ describe('runWorkVerification', () => {
             runChild: async () => 'WORK-VERIFIED: PASS'
         })
         expect(out.ok).toBe(true)
+    })
+
+    test('a skip-escape in the spec VERIFY block reaches the child prompt (rule 5c finding)', async () => {
+        // The finding is computed deterministically from deps.spec — no injected dep.
+        let prompt = ''
+        const specWithEscape = [
+            'GOAL',
+            'ship a page',
+            'VERIFY:',
+            '```sh',
+            'uismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"',
+            '```'
+        ].join('\n')
+        await runWorkVerification({
+            cwd: '/x',
+            spec: specWithEscape,
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: UNOBSERVED tool absent'
+            }
+        })
+        expect(prompt).toContain('SKIP-ESCAPE NOTICE')
+        expect(prompt).toContain('uismoke smoke.spec.js || echo')
+        // A spec with no skip-escape gets no block.
+        let prompt2 = ''
+        await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx\nVERIFY:\n```sh\nbun run build\n```',
+            runChild: async (_t, p) => {
+                prompt2 = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(prompt2).not.toContain('SKIP-ESCAPE NOTICE')
     })
 
     test('probe findings reach the child prompt; a probe failure never blocks', async () => {
