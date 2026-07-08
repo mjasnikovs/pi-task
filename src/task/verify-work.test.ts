@@ -199,6 +199,33 @@ describe('buildVerifyPrompt', () => {
         expect(p).toMatch(/own migration\/schema files/)
     })
 
+    test('negative control: a success that cannot fail on wrong input is void evidence', () => {
+        // Regression guard for the mx5 run-8 F5 class: a catch-all fallback answered
+        // ANY method on ANY path with 200 + HTML, so the broken upload endpoint
+        // "succeeded" and the verify curl could not fail — the child false-PASSed.
+        // The rule must require a deliberately-wrong control and treat same-success on
+        // garbage as UNVERIFIED, stack-agnostically (HTTP / CLI / library / schema).
+        const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
+        expect(p).toContain('negative control is mandatory')
+        expect(p).toMatch(/a success you cannot make fail is not evidence/)
+        expect(p).toMatch(
+            /you must also run that same check with one input deliberately\s*\n?\s*wrong/
+        )
+        expect(p).toMatch(/nonsense path/)
+        // must recreate setup so a killed server / one-shot command is not an excuse to skip
+        expect(p).toMatch(/restart the server/)
+        expect(p).toMatch(/yields the same success/)
+        expect(p).toMatch(/catch-all fallback is masking it/)
+        // skipping the control is a FAIL, not a neutral pass
+        expect(p).toMatch(/skipping the control is not neutral/)
+        expect(p).toMatch(/unverified is a fail/)
+        // stack-agnostic surface: names non-HTTP artifact kinds too
+        expect(p).toMatch(/cli invocation/)
+        expect(p).toMatch(/library call/)
+        // reinforced in the verdict-discipline section
+        expect(p).toMatch(/paired\s*\n?\s*negative control/)
+    })
+
     test('verdict discipline: an unmet acceptance criterion is a FAIL, not a warning', () => {
         // Regression guard for verdict leniency: a live child enumerated two real
         // acceptance violations as warnings and PASSed anyway.
