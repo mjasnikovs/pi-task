@@ -26,6 +26,7 @@ import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
+import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
 import {findSubstitutionSuspects, type ChangedFile} from './substitution-probe.js'
 import {runBoundedLintFix} from './lint-fix.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
@@ -358,6 +359,17 @@ export function buildGateDeps(params: {
                 // authored/changed become prompt-level findings mandating the child
                 // to drive the real artifact before trusting their green result.
                 probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
+                // Deterministic prohibition probe: paths the spec forbids modifying
+                // that the task's diff modified anyway become prompt-level findings
+                // under the no-waiver rule — the child otherwise rarely runs `git
+                // diff` and cannot even see the violation.
+                prohibitionProbe: () => {
+                    const banned = spec ? extractProhibitions(spec) : []
+                    if (banned.length === 0) return Promise.resolve([])
+                    return collectChangedFiles(cwd2, signal).then(files =>
+                        findProhibitionViolations(banned, files)
+                    )
+                },
                 // Git-state guard result of the most recent child run: a verdict
                 // computed on a tree the child itself mutated is discarded (the
                 // guard already restored the state — see git-state-guard.ts).

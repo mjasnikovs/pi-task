@@ -151,6 +151,31 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
+    test('forbids violation excusal: a violated spec prohibition is a FAIL, no waiver authority', () => {
+        // Regression guard for the mx5 run-7 class (F5): the child saw "Do NOT modify
+        // server-side code" violated, waived it as "additive, tests pass with it", and
+        // PASSed. The verdict on a violated prohibition is not the verifier's to relax.
+        const p = buildVerifyPrompt('GOAL\nx')
+        expect(p).toContain('NO WAIVER AUTHORITY')
+        expect(p).toMatch(/additive, small, harmless/)
+        expect(p).toMatch(/because every test still passes/)
+        expect(p).toMatch(/fully REVERTED/)
+        expect(p).toMatch(/wording states an exception/)
+    })
+
+    test('injects deterministic prohibition findings under the no-waiver rule', () => {
+        const findings = [
+            'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', [], '', findings)
+        expect(p).toContain('PROHIBITION NOTICE')
+        expect(p).toContain('- src/server/index.ts — modified by this task')
+        expect(p).toContain('rule 4b applies')
+        // No findings → no block at all (empty array and undefined alike).
+        expect(buildVerifyPrompt('GOAL\nx', [], '', [])).not.toContain('PROHIBITION NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('PROHIBITION NOTICE')
+    })
+
     test('forbids test-authored repair: a suite that patches the product is not verification', () => {
         // Regression guard for the mx5 run-4 class, A/B-proven live (silent fixture:
         // suite green ONLY because test setup ALTERs the schema and seeds around the
@@ -270,6 +295,39 @@ describe('runWorkVerification', () => {
         })
         expect(out2.ok).toBe(true)
         expect(prompt2).not.toContain('SELF-VERIFICATION NOTICE')
+    })
+
+    test('prohibition findings reach the child prompt; a probe failure never blocks', async () => {
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            prohibitionProbe: () =>
+                Promise.resolve([
+                    'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
+                ]),
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(prompt).toContain('PROHIBITION NOTICE')
+        expect(prompt).toContain('src/server/index.ts — modified by this task')
+
+        // Prohibition probe throwing must degrade to "no block", not a failed gate.
+        let prompt2 = ''
+        const out2 = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            prohibitionProbe: () => Promise.reject(new Error('git broke')),
+            runChild: async (_t, p) => {
+                prompt2 = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out2.ok).toBe(true)
+        expect(prompt2).not.toContain('PROHIBITION NOTICE')
     })
 
     test('env notes reach the prompt with the caveat; emitted ENV-NOTE lines are captured even on FAIL', async () => {

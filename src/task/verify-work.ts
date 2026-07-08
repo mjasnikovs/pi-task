@@ -132,14 +132,28 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * `probeFindings` are the deterministic self-verification probe results (see
  * substitution-probe.ts): the TEST-THE-COPY class is caught 5/5 only when the
  * prompt carries both the rule (3b) AND a concrete finding naming the suspect
- * file — the rule alone got 2/5 attention on the live model. The findings are
+ * file — the rule alone got 2/5 attention on the local model. The findings are
  * pure git shape (test files the task itself changed), so the mandate is
  * language- and framework-agnostic.
+ *
+ * `prohibitionFindings` are the deterministic prohibition probe results (see
+ * prohibition-probe.ts): spec-forbidden paths the task's diff modified anyway.
+ * Same probe+rule design, same reason: the VIOLATION-EXCUSAL class (mx5 run 7:
+ * child saw "Do NOT modify server-side code" violated, waived it as "additive,
+ * tests pass", PASSed) needs both the no-waiver rule (4b) AND the concrete diff
+ * fact — the baseline child usually never runs `git diff` at all, so without the
+ * finding it cannot even SEE the violation. A/B on the live local model
+ * (violated-but-working fixture, everything green, forbidden file modified
+ * additively): old prompt 5/5 false-PASS (several runs affirmatively claimed the
+ * forbidden file was untouched); rule+finding 5/5 FAIL naming the constraint.
+ * Guard: honest-clean fixture (prohibition in spec, probe silent) 5/5 PASS — no
+ * paranoia. Reverted-violation ≡ clean at the diff level (no entry → no finding).
  */
 export function buildVerifyPrompt(
     spec: string,
     probeFindings?: string[],
-    envNotes?: string
+    envNotes?: string,
+    prohibitionFindings?: string[]
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -152,6 +166,20 @@ export function buildVerifyPrompt(
                 'behaviors directly against the real app / module / entry point and judge what IT',
                 'returns. Tests that intercept, re-implement, or stub the artifact prove only the',
                 'copy (rule 3b below).',
+                ''
+            ]
+        :   []
+    const prohibitionBlock =
+        prohibitionFindings && prohibitionFindings.length > 0 ?
+            [
+                'PROHIBITION NOTICE (deterministic, computed by the orchestrator from the',
+                "spec's own constraint lines and the task's diff): this task MODIFIED paths",
+                'the spec explicitly forbids modifying:',
+                ...prohibitionFindings.map(f => `- ${f}`),
+                'Read the exact constraint wording in the spec. Unless that wording itself',
+                'states an exception that covers this change, this is a violated prohibition:',
+                'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
+                'every test passes and the change looks harmless.',
                 ''
             ]
         :   []
@@ -171,6 +199,7 @@ export function buildVerifyPrompt(
         '',
         ...envBlock,
         ...probeBlock,
+        ...prohibitionBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
@@ -234,6 +263,19 @@ export function buildVerifyPrompt(
         '',
         '4. Treat the ACCEPTANCE criteria as the bar. If a command fails, or its real output',
         '   contradicts an ACCEPTANCE criterion, the work has NOT verified.',
+        '',
+        '4b. SPEC PROHIBITIONS ARE PART OF THE BAR — YOU HAVE NO WAIVER AUTHORITY: when the',
+        '   spec explicitly forbids something ("Do NOT modify X", "MUST NOT touch Y") and the',
+        '   shipped work does it anyway, that is a FAIL naming the violated constraint. You',
+        '   may not excuse a violation because it is additive, small, harmless, an improvement,',
+        '   or because every test still passes — "it works anyway" is exactly the waiver you do',
+        "   not have; relaxing a constraint is the spec owner's call, not yours. Check the",
+        "   task's own diff (git) against the spec's prohibitions — a forbidden file can be",
+        '   modified without any test noticing. Only two outcomes are not a FAIL: the',
+        '   violation was fully REVERTED (the shipped tree no longer violates), or the',
+        '   prohibition\'s own wording states an exception ("except…", "beyond what is needed',
+        '   for…") that covers the change — judged against that stated exception, not against',
+        '   your view of harmlessness.',
         '',
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
@@ -320,6 +362,12 @@ export interface VerificationDeps {
      * the class 2/5, rule + probe finding 5/5. ABSENT or empty → no probe block. */
     probe?: () => Promise<string[]>
     /**
+     * DETERMINISTIC prohibition probe (see prohibition-probe.ts): spec-forbidden
+     * paths the task's diff modified anyway, injected as prompt findings under the
+     * no-waiver rule (4b). Advisory, never auto-FAIL — real prohibitions can be
+     * conditional prose. ABSENT or empty → no prohibition block. */
+    prohibitionProbe?: () => Promise<string[]>
+    /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
@@ -371,6 +419,14 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             findings = []
         }
     }
+    let prohibitions: string[] = []
+    if (deps.prohibitionProbe) {
+        try {
+            prohibitions = await deps.prohibitionProbe()
+        } catch {
+            prohibitions = []
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -390,7 +446,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(deps.spec, findings, envNotes),
+                buildVerifyPrompt(deps.spec, findings, envNotes, prohibitions),
                 deps.signal
             )
         } catch (err) {
