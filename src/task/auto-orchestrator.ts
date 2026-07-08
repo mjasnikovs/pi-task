@@ -82,6 +82,39 @@ function coverageRepromptHint(missing: string[]): string {
     )
 }
 
+// Deterministic distrust floor for the coverage gate. The gate's judge is the
+// same stochastic model as the decompose call it guards, and live (mx5 2026-07-08,
+// A/B N=10) it rubber-stamps a 1-task plan for an 18KB spec 3/10 times — always
+// as the bare "COVERAGE: COMPLETE" line, which is byte-identical to a legitimate
+// verdict, so the rubber-stamp is NOT detectable from the judge's output. The
+// distrust signal must come from the input: a plan this small for a spec this
+// large is near-certainly the known degenerate-decompose flake (healthy runs on
+// the same inputs produce 10–30 titles). The floor only ever forces a REGENERATION
+// — it never rejects a plan on count alone (the v0.13.34 objection), so a model
+// that insists twice still ships its small plan, with a warning.
+const SUSPECT_PLAN_MAX_TITLES = 2
+const SUSPECT_PLAN_MIN_SPEC_CHARS = 4000
+
+function isSuspectPlan(titles: string[], featureForModel: string): boolean {
+    return (
+        titles.length > 0
+        && titles.length <= SUSPECT_PLAN_MAX_TITLES
+        && featureForModel.length >= SUSPECT_PLAN_MIN_SPEC_CHARS
+    )
+}
+
+/** Reprompt prefix for a suspect (degenerate-count) list; unlike
+ *  coverageRepromptHint there is no judge verdict yet, so no missing areas. */
+function suspectPlanHint(count: number): string {
+    return (
+        `[SYSTEM NOTE: Your previous answer contained only ${count} task(s), which `
+        + 'cannot decompose a feature specification of this size — it was almost '
+        + 'certainly an incomplete generation. Regenerate the FULL ordered checkbox '
+        + 'list for the ENTIRE feature, covering every part of the spec end to end. '
+        + 'Output every task, one "- [ ] " line each, nothing else.]'
+    )
+}
+
 /**
  * Injectable seams so the planner and loop are testable without spawning pi.
  * `runChild` is the planning-only seam used by planAuto; everything else (runTask,
@@ -527,6 +560,26 @@ export async function planAuto(
     const listRaw = await deps.runChild('auto-decompose', 'read', decomposePrompt)
     let planTitles = parseDecomposeList(listRaw)
     logPlanDebug(cwd, `decompose produced ${planTitles.length} title(s)`)
+    // Distrust floor (see isSuspectPlan): a ≤2-title plan for a multi-KB spec is
+    // regenerated once BEFORE the judge runs — the judge cannot be trusted to
+    // catch it (3/10 live false-pass) and a hinted retry heals it reliably
+    // (5/5 live). Longer list wins; a still-suspect plan falls through to the
+    // judge loop as before, so this never blocks planning.
+    if (isSuspectPlan(planTitles, featureForModel)) {
+        logPlanDebug(
+            cwd,
+            `decompose suspect (${planTitles.length} title(s) for a ${featureForModel.length}-char spec)`
+                + ` — raw output: ${listRaw.trim().slice(0, 300)}`
+        )
+        const retryRaw = await deps.runChild(
+            'auto-decompose',
+            'read',
+            prependHint(suspectPlanHint(planTitles.length), decomposePrompt)
+        )
+        const retryTitles = parseDecomposeList(retryRaw)
+        logPlanDebug(cwd, `decompose suspect-retry produced ${retryTitles.length} title(s)`)
+        if (retryTitles.length > planTitles.length) planTitles = retryTitles
+    }
     // Coverage gate: a stochastic degenerate completion (live mx5: ONE task +
     // natural EOS for an 18KB design doc) is nonempty, so the length guard below
     // never fires and the whole run "completes" after one task. Judge the list
@@ -566,6 +619,17 @@ export async function planAuto(
                 `decompose-coverage round ${round + 1}: `
                     + (verdict === null ? 'no verdict — accepting list' : 'COMPLETE')
             )
+            // A COMPLETE on a still-suspect plan is the judge's known live
+            // false-pass mode (bare verdict, indistinguishable from a real one).
+            // The plan still ships — the floor never rejects on count — but
+            // never silently: the user decides whether to trust it.
+            if (isSuspectPlan(planTitles, featureForModel)) {
+                ctx.ui.notify(
+                    `/task-auto: only ${planTitles.length} task(s) planned for a large spec`
+                        + ' and the regeneration did not grow the list — review the plan before running.',
+                    'warning'
+                )
+            }
             break
         }
         unresolvedMissing = verdict.missing

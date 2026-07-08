@@ -1606,6 +1606,92 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
     })
 })
 
+// ─── Decompose distrust floor (suspect-plan regeneration) ───────────────────
+
+// A feature long enough to trip the floor's spec-size condition (an inlined
+// design doc), with no @mentions so featureForModel === feature in tests.
+const BIG_FEATURE = 'Build the marketplace per this spec. ' + 'Spec detail line. '.repeat(300)
+
+test('distrust floor: a 1-title plan for a big spec is regenerated BEFORE the judge', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            ['- [ ] Lone scaffold task', '- [ ] Scaffold\n- [ ] Auth\n- [ ] Listings\n- [ ] Tests'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        // Regeneration fired without consulting the judge; judge then saw the
+        // healed list once.
+        expect(d.calls.decompose).toBe(2)
+        expect(d.calls.coverage).toBe(1)
+        expect(d.calls.hints[1]).toContain('incomplete generation')
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(4)
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('decompose suspect (1 title(s)')
+        expect(log).toContain('raw output: - [ ] Lone scaffold task')
+        expect(log).toContain('decompose suspect-retry produced 4 title(s)')
+    })
+})
+
+test('distrust floor: a still-suspect plan ships with a warning, never silently', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        // Retry does not grow the list; judge (false-)passes it.
+        const d = coverageDeps(
+            ['- [ ] Lone scaffold task', '- [ ] Lone scaffold task'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(id).not.toBeNull() // floor never rejects on count
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(1)
+        const warn = captured.notifies.find(n => /review the plan before running/.test(n.msg))
+        expect(warn).toBeDefined()
+        expect(warn!.msg).toContain('only 1 task(s)')
+    })
+})
+
+test('distrust floor: does not fire for a small feature prompt', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const d = coverageDeps(['- [ ] Lone task'], ['COVERAGE: COMPLETE'])
+        await planAuto(ctx, dir, 'add a --version flag', d)
+        expect(d.calls.decompose).toBe(1) // no forced regeneration
+        expect(captured.notifies.some(n => /review the plan before running/.test(n.msg))).toBe(
+            false
+        )
+    })
+})
+
+test('distrust floor: does not fire for a healthy list on a big spec', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const d = coverageDeps(['- [ ] Task A\n- [ ] Task B\n- [ ] Task C'], ['COVERAGE: COMPLETE'])
+        await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(d.calls.decompose).toBe(1)
+        expect(captured.notifies.some(n => /review the plan before running/.test(n.msg))).toBe(
+            false
+        )
+    })
+})
+
+test('distrust floor: a shorter-or-equal suspect retry keeps the original list', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Retry collapses to zero parseable titles → original 2-title list kept,
+        // judge loop still runs on it.
+        const d = coverageDeps(
+            ['- [ ] Task A\n- [ ] Task B', 'no checkbox lines here'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).map(e => e.title)).toEqual([
+            'Task A',
+            'Task B'
+        ])
+        expect(d.calls.coverage).toBe(1)
+    })
+})
+
 // ─── Repo integrity guards + final integration gate ─────────────────────────
 
 test('runAutoLoop: unmerged index → stops LOUD before the task, nothing runs', async () => {
