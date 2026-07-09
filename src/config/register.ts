@@ -2,7 +2,11 @@ import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-cod
 import {SettingsList, visibleWidth} from '@earendil-works/pi-tui'
 import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
 import {registerBridgeCommand} from '../remote/bridge.js'
-import {SEARCH_PROVIDERS, isSearchProvider} from '../workers/search-types.js'
+import {
+    SEARCH_PROVIDERS,
+    SEARCH_PROVIDER_LABELS,
+    providerForLabel
+} from '../workers/search-types.js'
 import {getConfig, saveConfig, type PiTaskConfig} from './config.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
@@ -108,10 +112,18 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
         id: 'searchProvider',
         label: 'search provider',
         description:
-            'Engine behind web search (pi-worker-search + freshness checks). exa and ddg need no API key; brave needs BRAVE_SEARCH_API_KEY',
-        values: SEARCH_PROVIDERS as unknown as string[]
+            'Engine behind web search (pi-worker-search + freshness checks). Exa and DuckDuckGo need no API key; Brave needs BRAVE_SEARCH_API_KEY',
+        // Display full engine names; the stored config value stays the short id.
+        values: SEARCH_PROVIDERS.map(p => SEARCH_PROVIDER_LABELS[p])
     }
 ]
+
+/** What /task-config shows for a setting's current value. */
+function displayValue(cfg: PiTaskConfig, id: keyof PiTaskConfig, isEnum: boolean): string {
+    if (id === 'searchProvider') return SEARCH_PROVIDER_LABELS[cfg.searchProvider]
+    if (isEnum) return String(cfg[id])
+    return cfg[id] ? 'on' : 'off'
+}
 
 function makeTheme(theme: Theme): SettingsListTheme {
     return {
@@ -128,12 +140,7 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
 
     if (ctx.mode !== 'tui') {
         const lines = ITEMS.map(
-            ({id, label, values}) =>
-                `${label.padEnd(22)} ${
-                    values ? String(cfg[id])
-                    : cfg[id] ? 'on'
-                    : 'off'
-                }`
+            ({id, label, values}) => `${label.padEnd(22)} ${displayValue(cfg, id, Boolean(values))}`
         )
         ctx.ui.notify(lines.join('  |  '), 'info')
         return
@@ -146,10 +153,7 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                 id,
                 label,
                 description,
-                currentValue:
-                    values ? String(cfg[id])
-                    : cfg[id] ? 'on'
-                    : 'off',
+                currentValue: displayValue(cfg, id, Boolean(values)),
                 values: values ?? ['on', 'off']
             }))
 
@@ -159,7 +163,8 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                 listTheme,
                 (id, newValue) => {
                     if (id === 'searchProvider') {
-                        if (isSearchProvider(newValue)) cfg.searchProvider = newValue
+                        const provider = providerForLabel(newValue)
+                        if (provider) cfg.searchProvider = provider
                     } else {
                         ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
                     }

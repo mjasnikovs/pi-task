@@ -11,7 +11,7 @@ import {getConfig} from '../config/config.js'
 const WIDGET_KEY = 'pi-task-brave-warning'
 
 const WARNING =
-    '⚠ pi-task: search provider is brave but BRAVE_SEARCH_API_KEY is not set — web search '
+    '⚠ pi-task: search provider is Brave but BRAVE_SEARCH_API_KEY is not set — web search '
     + 'is disabled. Get a free key at https://api.search.brave.com/app/keys or switch '
     + 'provider in /task-config'
 
