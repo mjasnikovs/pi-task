@@ -191,6 +191,25 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CROSS-SLICE CONTRACTS')
     })
 
+    test('injects deterministic test-assembly findings under rule 3f (F4)', () => {
+        const findings = [
+            'test/photos.test.ts imports and re-composes 2 leaf module(s) '
+                + '(src/server/routes/auth, src/server/routes/photos) that src/server/index.ts '
+                + 'is the ONLY production file to compose, yet it never imports src/server/index.ts'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', findings)
+        expect(p).toContain('TEST-ASSEMBLY NOTICE')
+        expect(p).toContain('- test/photos.test.ts imports and re-composes 2 leaf module(s)')
+        expect(p).toContain('rule 3f')
+        // The rule text itself is always present (naming the class); the notice block
+        // only when a finding is supplied.
+        expect(p).toContain('TEST-REBUILT ASSEMBLY')
+        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [])).not.toContain(
+            'TEST-ASSEMBLY NOTICE'
+        )
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('TEST-ASSEMBLY NOTICE')
+    })
+
     test('injects deterministic prohibition findings under the no-waiver rule', () => {
         const findings = [
             'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
@@ -436,6 +455,41 @@ describe('runWorkVerification', () => {
         })
         expect(out2.ok).toBe(true)
         expect(prompt2).not.toContain('SELF-VERIFICATION NOTICE')
+    })
+
+    test('test-assembly findings reach the child prompt; a probe failure never blocks', async () => {
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            testAssemblyProbe: () =>
+                Promise.resolve([
+                    'test/photos.test.ts imports and re-composes 2 leaf module(s) '
+                        + '(src/server/routes/auth, src/server/routes/photos) that '
+                        + 'src/server/index.ts is the ONLY production file to compose'
+                ]),
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(prompt).toContain('TEST-ASSEMBLY NOTICE')
+        expect(prompt).toContain('test/photos.test.ts')
+
+        // Probe throwing must degrade to "no block", not a failed gate.
+        let prompt2 = ''
+        const out2 = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            testAssemblyProbe: () => Promise.reject(new Error('git broke')),
+            runChild: async (_t, p) => {
+                prompt2 = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out2.ok).toBe(true)
+        expect(prompt2).not.toContain('TEST-ASSEMBLY NOTICE')
     })
 
     test('prohibition findings reach the child prompt; a probe failure never blocks', async () => {

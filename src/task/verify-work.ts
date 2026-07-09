@@ -163,7 +163,8 @@ export function buildVerifyPrompt(
     envNotes?: string,
     prohibitionFindings?: string[],
     skipEscapeFindings?: string[],
-    contracts?: string
+    contracts?: string,
+    testAssemblyFindings?: string[]
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -209,6 +210,24 @@ export function buildVerifyPrompt(
                 ''
             ]
         :   []
+    const testAssemblyBlock =
+        testAssemblyFindings && testAssemblyFindings.length > 0 ?
+            [
+                'TEST-ASSEMBLY NOTICE (deterministic, computed by the orchestrator from pure',
+                'import-graph shape): these test files rebuild production WIRING — they import the',
+                'same leaf modules the shipped entry composes and assemble their OWN copy of it,',
+                'instead of importing the production assembly:',
+                ...testAssemblyFindings.map(f => `- ${f}`),
+                'A green result on such a test proves that PRIVATE re-assembly, NOT the shipped',
+                'wiring — the copy can be wired differently (a different mount prefix, order, or',
+                'middleware) and pass while production is broken exactly at the seam the test was',
+                'meant to cover (rule 3f below). Before you count the covered area verified, drive',
+                'the behavior against the REAL shipped assembly/entry named above (start or invoke',
+                "the production entry point, not the test's hand-built app). If the real assembly",
+                'fails where the test passes, report FAIL and name the wiring seam.',
+                ''
+            ]
+        :   []
     const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
     const contractsBlock =
         contracts && contracts.trim().length > 0 ? [buildContractsVerifyBlock(contracts)] : []
@@ -230,6 +249,7 @@ export function buildVerifyPrompt(
         ...probeBlock,
         ...prohibitionBlock,
         ...skipEscapeBlock,
+        ...testAssemblyBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
@@ -308,6 +328,20 @@ export function buildVerifyPrompt(
         '   required behavior left without a discriminating check is UNVERIFIED, and',
         '   unverified is a FAIL, never a PASS. A wrong-input control exists for every',
         '   artifact — HTTP request, CLI invocation, library call, schema load, config parse.',
+        '',
+        '3f. TEST-REBUILT ASSEMBLY: a test proves only the copy if it RE-CONSTRUCTS wiring that',
+        '   also exists in production — assembling its own app / entry point / config out of the',
+        '   same leaf modules the shipped entry composes, instead of importing and exercising the',
+        '   production assembly. Such a test can wire the leaves differently from production (a',
+        '   different prefix, order, adapter, or middleware) and pass green while the SHIPPED',
+        '   wiring is broken at exactly the seam the test was meant to cover — its green result',
+        '   never touched the production assembly at all. Whenever a spec-required behavior is',
+        '   covered ONLY by tests that build their own composition of the real modules, that',
+        '   behavior is UNVERIFIED off those tests: exercise the REAL shipped entry/assembly (run',
+        '   or invoke the production entry point, hit the real composed surface) and judge THAT.',
+        '   If the real assembly fails where the copy passes, report FAIL naming the wiring seam',
+        '   (e.g. "the entry mounts <module> at <X> but the test mounts it at <Y>, so the real',
+        '   path is dead while the test is green").',
         '',
         '4. Treat the ACCEPTANCE criteria as the bar. If a command fails, or its real output',
         '   contradicts an ACCEPTANCE criterion, the work has NOT verified.',
@@ -468,6 +502,14 @@ export interface VerificationDeps {
      * conditional prose. ABSENT or empty → no prohibition block. */
     prohibitionProbe?: () => Promise<string[]>
     /**
+     * DETERMINISTIC test-assembly probe (see test-assembly.ts): authored test files
+     * that rebuild production WIRING — importing the leaf modules the shipped entry
+     * composes and assembling their own copy instead of the real assembly — become
+     * prompt findings under rule 3f (F4 test-the-copy, 3rd recurrence). Pure import-
+     * graph shape; the child then drives the real assembly before trusting the copy.
+     * ABSENT or empty → no test-assembly block. */
+    testAssemblyProbe?: () => Promise<string[]>
+    /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
@@ -535,6 +577,16 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             prohibitions = []
         }
     }
+    // Test-assembly findings feed the prompt (rule 3f); a probe failure must never
+    // block verification — it is an optional sharpener like the substitution probe.
+    let testAssembly: string[] = []
+    if (deps.testAssemblyProbe) {
+        try {
+            testAssembly = await deps.testAssemblyProbe()
+        } catch {
+            testAssembly = []
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -576,7 +628,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     envNotes,
                     prohibitions,
                     skipEscapes,
-                    contracts
+                    contracts,
+                    testAssembly
                 ),
                 deps.signal
             )

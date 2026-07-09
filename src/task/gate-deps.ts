@@ -28,7 +28,12 @@ import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.j
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
-import {findSubstitutionSuspects, type ChangedFile} from './substitution-probe.js'
+import {findSubstitutionSuspects, isTestFile, type ChangedFile} from './substitution-probe.js'
+import {
+    findTestRebuiltAssemblies,
+    testAssemblyVerifyFindings,
+    type RepoFile
+} from './test-assembly.js'
 import {runBoundedLintFix} from './lint-fix.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
@@ -108,6 +113,57 @@ export async function collectChangedFiles(
         return last.exitCode === 0 ? parseNumstat(last.stdout) : []
     }
     return files
+}
+
+/** Source extensions whose relative imports the test-assembly probe reasons over. */
+const SOURCE_EXT_RE = /\.(?:[cm]?[jt]sx?)$/
+/** Bounds so the probe stays cheap on large repos (it reads file text). */
+const MAX_PROBE_FILES = 4000
+const MAX_PROBE_FILE_BYTES = 512 * 1024
+
+/** Best-effort read of a repo file's text; unreadable/oversized → null (skipped). */
+async function readRepoFile(cwd: string, rel: string): Promise<RepoFile | null> {
+    try {
+        const buf = await fsp.readFile(path.join(cwd, rel))
+        if (buf.length > MAX_PROBE_FILE_BYTES) return null
+        return {path: rel, text: buf.toString('utf8')}
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Deterministic test-assembly probe input (see test-assembly.ts, run-8 F4): read the
+ * task's own changed TEST files plus the repo's tracked source files, and return the
+ * finding lines naming any test that rebuilds a production assembly it never imports.
+ * Pure import-graph shape; failures degrade to no findings (the probe is a sharpener,
+ * never a blocker). `changed` is the already-collected task diff, reused so the probe
+ * costs one extra tracked-file listing, not a second diff.
+ */
+async function collectTestAssemblyFindings(
+    cwd: string,
+    changed: ChangedFile[],
+    signal?: AbortSignal
+): Promise<string[]> {
+    const changedTests = changed.filter(f => isTestFile(f.path))
+    if (changedTests.length === 0) return []
+    const listed = await git(cwd, ['ls-files', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    if (listed.exitCode !== 0) return []
+    const sources = splitLines(listed.stdout)
+        .filter(p => SOURCE_EXT_RE.test(p))
+        .slice(0, MAX_PROBE_FILES)
+    const production: RepoFile[] = []
+    for (const rel of sources) {
+        if (isTestFile(rel)) continue
+        const f = await readRepoFile(cwd, rel)
+        if (f) production.push(f)
+    }
+    const testFiles: RepoFile[] = []
+    for (const {path: rel} of changedTests) {
+        const f = await readRepoFile(cwd, rel)
+        if (f) testFiles.push(f)
+    }
+    return testAssemblyVerifyFindings(findTestRebuiltAssemblies(testFiles, production))
 }
 
 /**
@@ -360,6 +416,14 @@ export function buildGateDeps(params: {
                 // authored/changed become prompt-level findings mandating the child
                 // to drive the real artifact before trusting their green result.
                 probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
+                // Deterministic test-assembly probe (F4): authored test files that
+                // rebuild production wiring — importing the leaf modules the shipped
+                // entry composes and assembling their own copy — become rule-3f
+                // findings so the child drives the REAL assembly, not the copy.
+                testAssemblyProbe: () =>
+                    collectChangedFiles(cwd2, signal).then(changed =>
+                        collectTestAssemblyFindings(cwd2, changed, signal)
+                    ),
                 // Deterministic prohibition probe: paths the spec forbids modifying
                 // that the task's diff modified anyway become prompt-level findings
                 // under the no-waiver rule — the child otherwise rarely runs `git
