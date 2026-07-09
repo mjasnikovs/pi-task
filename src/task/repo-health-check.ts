@@ -41,6 +41,33 @@ export interface HealthOutcome {
     reason: string
     /** Which manifest drove discovery, or null when none was found. */
     ecosystem: string | null
+    /**
+     * First lines of the failing command's combined stderr+stdout — captured so a
+     * FAIL is explainable from artifacts alone. Run-8 F8: five enforce passes were
+     * discarded on "`bun run lint` exited 2" and the cause was unreproducible
+     * post-run because only the exit code was recorded (exit 2 is the linter's
+     * CRASH class; findings exit 1 — the captured output is what tells them apart).
+     * Empty string on pass / skip.
+     */
+    output: string
+}
+
+/** How much of a failing command's output to keep — bounded so a wedged tool that
+ *  spews megabytes cannot bloat the trail. stderr leads (a crash trace lives there). */
+const HEALTH_OUTPUT_MAX_LINES = 40
+const HEALTH_OUTPUT_MAX_CHARS = 4000
+
+/** Combine a failing command's stderr+stdout into a bounded, first-N-lines snippet. */
+export function captureHealthOutput(stdout: string, stderr: string): string {
+    const combined = [stderr, stdout]
+        .map(s => (s ?? '').trim())
+        .filter(s => s.length > 0)
+        .join('\n')
+    if (combined.length === 0) return ''
+    let snippet = combined.split('\n').slice(0, HEALTH_OUTPUT_MAX_LINES).join('\n')
+    if (snippet.length > HEALTH_OUTPUT_MAX_CHARS)
+        snippet = `${snippet.slice(0, HEALTH_OUTPUT_MAX_CHARS)}…`
+    return snippet
 }
 
 /** One discovered command: the binary and its args, run from the repo root. */
@@ -121,7 +148,12 @@ export function discoverHealthCommands(cwd: string): {
 export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutcome {
     const {ecosystem, cmds} = discoverHealthCommands(cwd)
     if (!ecosystem || cmds.length === 0) {
-        return {ok: true, reason: 'no repo-wide static-analysis command found', ecosystem}
+        return {
+            ok: true,
+            reason: 'no repo-wide static-analysis command found',
+            ecosystem,
+            output: ''
+        }
     }
     for (const [bin, args] of cmds) {
         const r = spawnSync(bin, args, {cwd, encoding: 'utf8', timeout: timeoutMs})
@@ -135,9 +167,10 @@ export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutc
             return {
                 ok: false,
                 reason: `\`${bin} ${args.join(' ')}\` exited ${r.status}`,
-                ecosystem
+                ecosystem,
+                output: captureHealthOutput(r.stdout, r.stderr)
             }
         }
     }
-    return {ok: true, reason: `${ecosystem}: static checks passed`, ecosystem}
+    return {ok: true, reason: `${ecosystem}: static checks passed`, ecosystem, output: ''}
 }

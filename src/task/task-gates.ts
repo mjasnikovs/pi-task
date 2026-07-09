@@ -128,7 +128,7 @@ export interface GateDeps {
      * revert cycle. Checking before committing skips that cycle. Absent → the old
      * commit-then-differential path runs unchanged.
      */
-    repoHealth?: (cwd: string) => Promise<{ok: boolean; reason: string}>
+    repoHealth?: (cwd: string) => Promise<{ok: boolean; reason: string; output?: string}>
     /** Does the working tree hold changes (excluding .pi-tasks)? Lets the pre-commit
      *  health check run only when the enforce pass actually edited something. */
     dirty?: (cwd: string) => Promise<boolean>
@@ -192,6 +192,19 @@ export type GateResult =
  * regardless of this count (blessing an artifact as-is is a human's call).
  */
 export const MAX_AUTO_AUTOFIX = 3
+
+/**
+ * Bound a captured health-check output before it is embedded in a gate-trail line.
+ * appendGateRecord flattens newlines to spaces, so the trail stays one line per
+ * entry; this just caps the volume (a wedged tool can emit megabytes). The health
+ * check already trims to its own first-N lines — this is the trail-side ceiling.
+ */
+const TRAIL_OUTPUT_MAX_CHARS = 1200
+function clampOutput(output: string): string {
+    return output.length > TRAIL_OUTPUT_MAX_CHARS ?
+            `${output.slice(0, TRAIL_OUTPUT_MAX_CHARS)}…`
+        :   output
+}
 
 /**
  * Show the boxed two-choice picker after a verify FAIL and return what the user
@@ -418,12 +431,16 @@ export async function runGatesForTask(
     // with no enforce dep.
     if (deps.enforce && commit.committed) {
         const mode: 'edit' | 'flag' = verifyCleanPass ? 'edit' : 'flag'
-        active.ui.notify(
-            mode === 'edit' ?
-                `${p.tag}: enforcing AGENTS.md/CLAUDE.md on "${p.title}"…`
-            :   `${p.tag}: reviewing "${p.title}" against AGENTS.md/CLAUDE.md (no verify signal — report only)…`,
-            'info'
-        )
+        // BASELINE repo health, captured BEFORE the edit pass touches the tree, so the
+        // pre-commit gate below is DIFFERENTIAL: it can tell an enforce-CAUSED
+        // regression (was clean, now fails) from a repo that was ALREADY unhealthy
+        // (run-8 F8: five enforce passes were discarded on a lint that was already
+        // crashing — exit 2 — before enforce edited anything; the discard threw away
+        // good work for a fault it did not cause). Only meaningful in edit mode (flag
+        // makes no edits); the task's work is already committed so this reflects the
+        // committed state the pass is about to build on.
+        const healthBefore =
+            mode === 'edit' && deps.repoHealth ? await deps.repoHealth(p.cwd) : undefined
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
         // The child's verdict and its edits are independent facts: the pass has been
         // observed declaring "clean" while having edited files (which then get
@@ -444,22 +461,46 @@ export async function runGatesForTask(
         // and discards the bad edits outright. Only runs when the tree is actually
         // dirty (or dirtiness is unknowable); the differential guard below still
         // catches behavioral regressions the static check cannot see.
+        //
+        // The gate is DIFFERENTIAL, not absolute (run-8 F8): discard the edits only
+        // when they REGRESSED the health signal — clean before, failing after. A repo
+        // that was already failing before enforce ran is not enforce's fault, so its
+        // edits are KEPT (and the pre-existing failure is recorded, to be caught by the
+        // final integration gate, not blamed on this pass). The failing command's
+        // output is captured into the trail so the discard is explainable — F8 was
+        // unreproducible precisely because only the exit code was recorded.
         let enforceEditsBlocked = false
         if (mode === 'edit' && deps.repoHealth && editsMade !== false) {
-            const h = await deps.repoHealth(p.cwd)
-            if (!h.ok) {
+            const after = await deps.repoHealth(p.cwd)
+            // A regression needs a clean (or unknown) baseline turning to a fail. If
+            // healthBefore is undefined (repoHealth was absent at baseline time) treat
+            // the baseline as clean — the conservative absolute behavior.
+            const wasHealthyBefore = healthBefore?.ok ?? true
+            const regressed = !after.ok && wasHealthyBefore
+            if (regressed) {
                 enforceEditsBlocked = true
+                const outputTail = after.output ? ` — output:\n${clampOutput(after.output)}` : ''
                 if (deps.discardEdits) {
                     await deps.discardEdits(p.cwd)
-                    await rec(`enforce: edits discarded pre-commit (repo health: ${h.reason})`)
+                    await rec(
+                        `enforce: edits discarded pre-commit — REGRESSED repo health (${after.reason})${outputTail}`
+                    )
                 } else {
                     await rec(
-                        `enforce: edits FAILED repo health pre-commit (${h.reason}) — no discard available, left uncommitted`
+                        `enforce: edits REGRESSED repo health pre-commit (${after.reason}) — no discard available, left uncommitted${outputTail}`
                     )
                 }
                 active.ui.notify(
-                    `${p.tag}: guideline edits on "${p.title}" failed repo health (${h.reason.slice(0, 120)}) — discarded before commit.`,
+                    `${p.tag}: guideline edits on "${p.title}" regressed repo health (${after.reason.slice(0, 120)}) — discarded before commit.`,
                     'warning'
+                )
+            } else if (!after.ok) {
+                // Failing both before and after → not enforce's fault. Keep the edits;
+                // record that the repo entered the gate already unhealthy so the trail
+                // explains why a still-failing repo did NOT trigger a discard here.
+                const outputTail = after.output ? ` — output:\n${clampOutput(after.output)}` : ''
+                await rec(
+                    `enforce: repo health still failing after edits but was ALREADY failing before the pass (${after.reason}) — pre-existing, edits kept${outputTail}`
                 )
             }
         }

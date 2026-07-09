@@ -3,7 +3,11 @@ import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
 import {tmpdir} from 'node:os'
 import * as path from 'node:path'
-import {discoverHealthCommands, runRepoHealthCheck} from './repo-health-check.js'
+import {
+    captureHealthOutput,
+    discoverHealthCommands,
+    runRepoHealthCheck
+} from './repo-health-check.js'
 
 const cargoInstalled = spawnSync('cargo', ['--version']).error === undefined
 
@@ -61,6 +65,28 @@ describe('discoverHealthCommands', () => {
     })
 })
 
+describe('captureHealthOutput', () => {
+    test('empty streams → empty string', () => {
+        expect(captureHealthOutput('', '')).toBe('')
+    })
+
+    test('stderr leads (a crash trace lives there), then stdout', () => {
+        expect(captureHealthOutput('out-line', 'err-line')).toBe('err-line\nout-line')
+    })
+
+    test('caps at 40 lines', () => {
+        const many = Array.from({length: 100}, (_, i) => `line ${i}`).join('\n')
+        expect(captureHealthOutput(many, '').split('\n').length).toBe(40)
+    })
+
+    test('caps runaway length with an ellipsis', () => {
+        const huge = 'x'.repeat(10_000)
+        const out = captureHealthOutput(huge, '')
+        expect(out.length).toBeLessThan(10_000)
+        expect(out.endsWith('…')).toBe(true)
+    })
+})
+
 describe('runRepoHealthCheck', () => {
     test('no tooling → pass (nothing can regress) — the "no package.json" case', () => {
         const dir = tmpRepo({'index.html': '<h1>hi</h1>'})
@@ -80,6 +106,34 @@ describe('runRepoHealthCheck', () => {
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('bun run lint')
         expect(out.reason).toContain('exited 1')
+    })
+
+    test('a FAIL captures the failing command output (run-8 F8: exit code alone is unexplainable)', () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {lint: 'echo "src/a.ts:1  error  Unexpected token" && exit 1'}
+            })
+        })
+        const out = runRepoHealthCheck(dir)
+        expect(out.ok).toBe(false)
+        expect(out.output).toContain('src/a.ts:1  error  Unexpected token')
+    })
+
+    test('a stderr crash (exit 2) is captured too, so the crash class is distinguishable', () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({
+                scripts: {lint: 'echo "Cannot find module eslint" 1>&2 && exit 2'}
+            })
+        })
+        const out = runRepoHealthCheck(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('exited 2')
+        expect(out.output).toContain('Cannot find module eslint')
+    })
+
+    test('a PASS carries no output', () => {
+        const dir = tmpRepo({'package.json': JSON.stringify({scripts: {lint: 'true'}})})
+        expect(runRepoHealthCheck(dir).output).toBe('')
     })
 
     test('first failing command short-circuits (lint fails before typecheck runs)', () => {

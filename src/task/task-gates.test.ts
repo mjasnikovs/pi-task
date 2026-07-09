@@ -526,13 +526,14 @@ test('lint-fix: NOT attempted for a non-health verify FAIL', async () => {
 
 // ─── Enforce pre-commit repo-health gate ─────────────────────────────────────
 
-test('enforce edits failing repo health are discarded BEFORE commit (no cycle)', async () => {
+test('enforce edits that REGRESS repo health (clean before → fail after) are discarded BEFORE commit', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
         const commits: string[] = []
         let discarded = 0
         let reverted = 0
+        let healthCall = 0
         const deps = makeDeps({
             record: (_c, _i, line) => {
                 trail.push(line)
@@ -545,7 +546,19 @@ test('enforce edits failing repo health are discarded BEFORE commit (no cycle)',
             verify: () => Promise.resolve({ok: true}), // clean pass → EDIT mode
             enforce: () => Promise.resolve({ok: true}),
             dirty: () => Promise.resolve(true),
-            repoHealth: () => Promise.resolve({ok: false, reason: '`bun run lint` exited 1'}),
+            // Baseline (call 1) CLEAN; after enforce edits (call 2) FAILS → regression.
+            repoHealth: () => {
+                healthCall += 1
+                return Promise.resolve(
+                    healthCall === 1 ?
+                        {ok: true, reason: 'static checks passed', output: ''}
+                    :   {
+                            ok: false,
+                            reason: '`bun run lint` exited 1',
+                            output: 'src/a.ts:3:1  error  Parsing error'
+                        }
+                )
+            },
             discardEdits: () => {
                 discarded++
                 return Promise.resolve()
@@ -561,11 +574,63 @@ test('enforce edits failing repo health are discarded BEFORE commit (no cycle)',
         expect(reverted).toBe(0) // the commit+differential+revert cycle never ran
         // Only the task snapshot committed — never an ENFORCE GUIDELINES commit.
         expect(commits).toEqual(['task: A (TASK_0006)'])
-        expect(trail).toContain(
-            'enforce: edits discarded pre-commit (repo health: `bun run lint` exited 1)'
-        )
+        // Trail names the REGRESSION and embeds the failing output (F8: was unexplainable
+        // because only the exit code was recorded).
+        const discardLine = trail.find(l => l.startsWith('enforce: edits discarded pre-commit'))
+        expect(discardLine).toBeDefined()
+        expect(discardLine).toContain('REGRESSED repo health')
+        expect(discardLine).toContain('`bun run lint` exited 1')
+        expect(discardLine).toContain('src/a.ts:3:1  error  Parsing error')
         // P1b: verdict line no longer claims a bare "clean" when edits exist.
         expect(trail).toContain('enforce(edit): clean — edits in tree')
+    })
+})
+
+test('enforce edits are KEPT when repo was ALREADY failing before the pass (run-8 F8)', async () => {
+    // F8: five enforce passes were discarded on `bun run lint` exited 2 — the linter was
+    // already CRASHING before enforce touched anything, so the absolute guard threw away
+    // good work for a fault it did not cause. The differential guard keeps such edits.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const commits: string[] = []
+        let discarded = 0
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            commit: (_c, m) => {
+                commits.push(m)
+                return Promise.resolve({committed: true})
+            },
+            // Gate verify PASS (edit mode); differential re-verify after enforce PASS.
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(true),
+            // FAILING both before (baseline) and after → not a regression, not enforce's fault.
+            repoHealth: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: '`bun run lint` exited 2',
+                    output: 'Error: Cannot find module eslint-config\n    at require (...)'
+                }),
+            discardEdits: () => {
+                discarded++
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(discarded).toBe(0) // NOT discarded — the failure pre-dates the pass
+        // The edits are kept and committed as their own ENFORCE GUIDELINES snapshot.
+        expect(commits).toEqual(['task: A (TASK_0006)', 'ENFORCE GUIDELINES: A (TASK_0006)'])
+        const keptLine = trail.find(l => l.includes('ALREADY failing before'))
+        expect(keptLine).toBeDefined()
+        expect(keptLine).toContain('pre-existing, edits kept')
+        expect(keptLine).toContain('`bun run lint` exited 2')
+        // The captured crash output rides into the trail so F8 is explainable.
+        expect(keptLine).toContain('Cannot find module eslint-config')
     })
 })
 
@@ -671,7 +736,10 @@ test('enforce with real code edits still commits + differential-guards as before
     })
 })
 
-test('enforce with a clean tree (no edits) skips the pre-commit health check', async () => {
+test('enforce with a clean tree (no edits) runs only the baseline, not the after-check', async () => {
+    // The differential guard captures ONE baseline health snapshot before the edit
+    // pass; when the pass makes no edits (dirty === false) the after-check is skipped,
+    // so repoHealth runs exactly once (the baseline), never twice.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         let healthCalls = 0
@@ -681,7 +749,7 @@ test('enforce with a clean tree (no edits) skips the pre-commit health check', a
             dirty: () => Promise.resolve(false),
             repoHealth: () => {
                 healthCalls++
-                return Promise.resolve({ok: true, reason: ''})
+                return Promise.resolve({ok: true, reason: '', output: ''})
             },
             commit: (_c, m) =>
                 Promise.resolve(
@@ -692,7 +760,7 @@ test('enforce with a clean tree (no edits) skips the pre-commit health check', a
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        expect(healthCalls).toBe(0)
+        expect(healthCalls).toBe(1) // baseline only; no after-check on a clean tree
     })
 })
 
