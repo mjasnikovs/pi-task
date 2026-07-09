@@ -90,6 +90,28 @@ test('buildEnforcePrompt: states the read+edit / no-run / no-create / edit-only-
     expect(p).toMatch(/EDIT ONLY|only the changed files|do not modify anything outside/i)
 })
 
+test('buildEnforcePrompt: injects CHECK-GAMING findings with a fix directive (F6)', () => {
+    const findings = [
+        'src/server/index.ts: this task added a line stating its purpose is to make a '
+            + 'check pass — "// Return 401 so the verification test passes"'
+    ]
+    const p = buildEnforcePrompt('rules', 'diff', findings)
+    expect(p).toContain('CHECK-GAMING NOTICE')
+    expect(p).toContain('- src/server/index.ts: this task added a line')
+    expect(p).toMatch(/replace the check-gaming code|report it as a\s+VIOLATION/i)
+    // No findings → no block.
+    expect(buildEnforcePrompt('rules', 'diff', [])).not.toContain('CHECK-GAMING NOTICE')
+    expect(buildEnforcePrompt('rules', 'diff')).not.toContain('CHECK-GAMING NOTICE')
+})
+
+test('buildEnforceFlagPrompt: injects CHECK-GAMING findings with a report directive (F6)', () => {
+    const findings = ['a.ts: ... — "// to satisfy the linter"']
+    const p = buildEnforceFlagPrompt('rules', 'diff', findings)
+    expect(p).toContain('CHECK-GAMING NOTICE')
+    expect(p).toMatch(/REPORT it|do not fix/i)
+    expect(buildEnforceFlagPrompt('rules', 'diff', [])).not.toContain('CHECK-GAMING NOTICE')
+})
+
 test('ENFORCE_TOOLS is read,edit — no write (no new files), no grep/find/ls (no roaming)', () => {
     // Validated against the local model: with no write the pass cannot create files
     // (edit ENOENTs), and read is kept because the model needs to re-read its edits
@@ -150,6 +172,40 @@ test('runGuidelineEnforcement: default mode is edit (read,edit child)', async ()
         }
     })
     expect(usedTools).toBe(ENFORCE_TOOLS)
+})
+
+test('runGuidelineEnforcement: computes probe-gaming findings from the captured diff (F6)', async () => {
+    let sawPrompt = ''
+    await runGuidelineEnforcement({
+        cwd: '/repo',
+        discover: async () => docOf('rules'),
+        getDiff: async () =>
+            [
+                '+++ b/src/server/index.ts',
+                '+// Return 401 so the verification test passes',
+                '+app.get("/api/auth", c => c.json({}, 401))'
+            ].join('\n'),
+        runChild: async (_tools, prompt) => {
+            sawPrompt = prompt
+            return 'ENFORCE: CLEAN'
+        }
+    })
+    expect(sawPrompt).toContain('CHECK-GAMING NOTICE')
+    expect(sawPrompt).toContain('src/server/index.ts')
+})
+
+test('runGuidelineEnforcement: no gaming in the diff → no CHECK-GAMING block', async () => {
+    let sawPrompt = ''
+    await runGuidelineEnforcement({
+        cwd: '/repo',
+        discover: async () => docOf('rules'),
+        getDiff: async () => '+++ b/a.ts\n+export const add = (a, b) => a + b',
+        runChild: async (_tools, prompt) => {
+            sawPrompt = prompt
+            return 'ENFORCE: CLEAN'
+        }
+    })
+    expect(sawPrompt).not.toContain('CHECK-GAMING NOTICE')
 })
 
 // ─── parseEnforceVerdict ─────────────────────────────────────────────────────

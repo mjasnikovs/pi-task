@@ -28,6 +28,7 @@ import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.j
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
+import {findProbeGaming, parseAddedLines, type AddedLine} from './probe-gaming.js'
 import {findSubstitutionSuspects, isTestFile, type ChangedFile} from './substitution-probe.js'
 import {
     findTestRebuiltAssemblies,
@@ -113,6 +114,37 @@ export async function collectChangedFiles(
         return last.exitCode === 0 ? parseNumstat(last.stdout) : []
     }
     return files
+}
+
+/**
+ * Collect the task's added lines WITH CONTENT (path + text) for the probe-gaming
+ * probe (F6), which needs the actual line text the numstat-shape collector omits.
+ * Pre-commit the work is the tree-vs-HEAD diff plus untracked files (read whole, as
+ * all-added); on the post-enforce re-verify the tree is clean, so fall back to the
+ * last commit's diff. Failures degrade to an empty list — the probe is a sharpener,
+ * never a blocker. The `.pi-tasks/` bookkeeping is excluded from every git command.
+ */
+export async function collectAddedLines(cwd: string, signal?: AbortSignal): Promise<AddedLine[]> {
+    const tracked = await git(cwd, ['diff', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    const lines: AddedLine[] = tracked.exitCode === 0 ? parseAddedLines(tracked.stdout) : []
+    const untracked = await git(
+        cwd,
+        ['ls-files', '--others', '--exclude-standard', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    for (const name of splitLines(untracked.exitCode === 0 ? untracked.stdout : '')) {
+        try {
+            const content = await fsp.readFile(path.join(cwd, name), 'utf8')
+            for (const text of content.split('\n')) lines.push({path: name, text})
+        } catch {
+            // unreadable/binary — nothing to report
+        }
+    }
+    if (lines.length === 0) {
+        const last = await git(cwd, ['diff', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR], signal)
+        return last.exitCode === 0 ? parseAddedLines(last.stdout) : []
+    }
+    return lines
 }
 
 /** Source extensions whose relative imports the test-assembly probe reasons over. */
@@ -424,6 +456,11 @@ export function buildGateDeps(params: {
                     collectChangedFiles(cwd2, signal).then(changed =>
                         collectTestAssemblyFindings(cwd2, changed, signal)
                     ),
+                // Deterministic probe-gaming probe (F6): added lines whose stated
+                // purpose is to make a check pass rather than meet the requirement
+                // ("return 401 so the verification test passes") become rule-4c
+                // findings so the child verifies the real requirement, not the check.
+                probeGamingProbe: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
                 // Deterministic prohibition probe: paths the spec forbids modifying
                 // that the task's diff modified anyway become prompt-level findings
                 // under the no-waiver rule — the child otherwise rarely runs `git

@@ -164,7 +164,8 @@ export function buildVerifyPrompt(
     prohibitionFindings?: string[],
     skipEscapeFindings?: string[],
     contracts?: string,
-    testAssemblyFindings?: string[]
+    testAssemblyFindings?: string[],
+    probeGamingFindings?: string[]
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -191,6 +192,25 @@ export function buildVerifyPrompt(
                 'states an exception that covers this change, this is a violated prohibition:',
                 'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
                 'every test passes and the change looks harmless.',
+                ''
+            ]
+        :   []
+    const probeGamingBlock =
+        probeGamingFindings && probeGamingFindings.length > 0 ?
+            [
+                'CHECK-GAMING NOTICE (deterministic, computed by the orchestrator from the',
+                "task's diff): these added lines state their own purpose is to make a CHECK",
+                'pass (a test / verification / lint / gate), not to meet the requirement the',
+                'check stands for:',
+                ...probeGamingFindings.map(f => `- ${f}`),
+                'A check is a MESSENGER for a requirement. Code written to quiet the messenger',
+                'instead of meeting the requirement is a defect even when the check is green',
+                '(run-8 F6: a handler returned 401 "so the verification test passes" while the',
+                'real route stayed dead). Do NOT accept the passing check as proof. Read each',
+                "line's surrounding code and confirm the UNDERLYING requirement is genuinely",
+                'met — drive the real behavior directly (rule 4c). If the code only exists to',
+                'satisfy the check while the requirement is unmet, that is a FAIL naming the',
+                'gamed check and the unmet requirement.',
                 ''
             ]
         :   []
@@ -248,6 +268,7 @@ export function buildVerifyPrompt(
         ...contractsBlock,
         ...probeBlock,
         ...prohibitionBlock,
+        ...probeGamingBlock,
         ...skipEscapeBlock,
         ...testAssemblyBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
@@ -358,6 +379,18 @@ export function buildVerifyPrompt(
         '   prohibition\'s own wording states an exception ("except…", "beyond what is needed',
         '   for…") that covers the change — judged against that stated exception, not against',
         '   your view of harmlessness.',
+        '',
+        '4c. THE CHECK IS THE MESSENGER, NOT THE REQUIREMENT — code (or a comment) whose',
+        '   stated purpose is to make a check PASS, rather than to satisfy the requirement the',
+        '   check stands for, is a defect even when the check is green. The tell is the intent',
+        '   written down: "return X so the test passes", "hardcode this to satisfy the linter",',
+        '   "stub it out to appease CI". When you see such a line — or the CHECK-GAMING NOTICE',
+        '   above names one — do NOT treat the passing check as proof the requirement is met.',
+        '   Find the actual requirement the check was meant to prove and verify THAT directly',
+        '   against the real artifact (rule 3e negative control is the sharpest tool: a handler',
+        '   that answers the check-shaped request the same way for a WRONG input is gaming the',
+        '   check, not implementing the behavior). If the requirement is genuinely unmet while',
+        '   the check passes, the verdict is FAIL naming the gamed check and the real gap.',
         '',
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
@@ -510,6 +543,14 @@ export interface VerificationDeps {
      * ABSENT or empty → no test-assembly block. */
     testAssemblyProbe?: () => Promise<string[]>
     /**
+     * DETERMINISTIC probe-gaming probe (see probe-gaming.ts, run-8 F6): added lines
+     * in the task's diff whose stated purpose is to make a CHECK pass instead of
+     * meeting the requirement it stands for ("return 401 so the verification test
+     * passes"). Injected as findings under rule 4c so the child confirms the
+     * underlying requirement is genuinely met rather than trusting the green check.
+     * Pure diff-text analysis; ABSENT or empty → no probe block. */
+    probeGamingProbe?: () => Promise<string[]>
+    /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
@@ -587,6 +628,16 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             testAssembly = []
         }
     }
+    // Probe-gaming findings feed the prompt (rule 4c, F6); a probe failure must never
+    // block verification — an optional sharpener like the other diff-shape probes.
+    let probeGaming: string[] = []
+    if (deps.probeGamingProbe) {
+        try {
+            probeGaming = await deps.probeGamingProbe()
+        } catch {
+            probeGaming = []
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -629,7 +680,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     prohibitions,
                     skipEscapes,
                     contracts,
-                    testAssembly
+                    testAssembly,
+                    probeGaming
                 ),
                 deps.signal
             )

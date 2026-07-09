@@ -26,6 +26,7 @@ import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
 import {USER_CANCELLED} from './child-runner.js'
 import {TASKS_DIR_NAME} from './task-types.js'
+import {findProbeGamingInDiff} from './probe-gaming.js'
 
 /** Filenames discovered in the working directory (cwd only — no tree walk). */
 export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
@@ -110,11 +111,36 @@ export async function discoverGuidelines(
 }
 
 /**
+ * Render the deterministic probe-gaming findings (run-8 F6) as a prompt block, or
+ * an empty array when there are none. Shared by the edit and flag prompts: the
+ * finding is a concrete diff line whose stated purpose is to make a check pass
+ * rather than meet the requirement — the reliable lever the prompt rule leans on.
+ * The `action` line differs (fix vs report) between the two capability modes.
+ */
+function probeGamingEnforceBlock(findings: string[], action: string): string[] {
+    if (findings.length === 0) return []
+    return [
+        'CHECK-GAMING NOTICE (deterministic, computed from the diff): these added lines',
+        'state their own purpose is to make a CHECK pass (a test / verification / lint /',
+        'gate), not to meet the requirement the check stands for:',
+        ...findings.map(f => `- ${f}`),
+        'A check is a MESSENGER for a requirement; code written only to quiet the messenger',
+        'is a defect even when the check is green (run-8 F6: a handler returned 401 "so the',
+        `verification test passes" while the real route stayed dead). ${action}`,
+        ''
+    ]
+}
+
+/**
  * Build the enforcement child's prompt: the rules, the diff of the work just
  * done, and the contract for the final verdict line. Kept pure so the wording
  * is unit-tested without spawning pi.
  */
-export function buildEnforcePrompt(rulesText: string, diff: string): string {
+export function buildEnforcePrompt(
+    rulesText: string,
+    diff: string,
+    probeGamingFindings: string[] = []
+): string {
     return [
         'You are a strict guideline-enforcement pass running right after an AI coding',
         'agent finished a task and committed it. The agent is known to skip project',
@@ -133,6 +159,12 @@ export function buildEnforcePrompt(rulesText: string, diff: string): string {
         'CHANGES IN THE LAST COMMIT (verify these specifically against the rules):',
         diff.trim().length > 0 ? diff : '(no textual diff captured — nothing to verify)',
         '',
+        ...probeGamingEnforceBlock(
+            probeGamingFindings,
+            'Treat this as a violation: replace the check-gaming code with a real'
+                + ' implementation of the requirement, or if you cannot, report it as a'
+                + ' VIOLATION naming the gamed check.'
+        ),
         'Your job:',
         '1. Read each changed file and check it against EVERY rule above.',
         '2. For each violation you find, FIX it directly with your `edit` tool, then',
@@ -153,7 +185,11 @@ export function buildEnforcePrompt(rulesText: string, diff: string): string {
  * the wording is unit-tested without spawning pi. Used when there is no
  * verification signal to guard a destructive edit (see ENFORCE_FLAG_TOOLS).
  */
-export function buildEnforceFlagPrompt(rulesText: string, diff: string): string {
+export function buildEnforceFlagPrompt(
+    rulesText: string,
+    diff: string,
+    probeGamingFindings: string[] = []
+): string {
     return [
         'You are a strict guideline-enforcement REVIEW pass running right after an AI',
         'coding agent finished a task and committed it. The agent is known to skip',
@@ -169,6 +205,11 @@ export function buildEnforceFlagPrompt(rulesText: string, diff: string): string 
         'CHANGES IN THE LAST COMMIT (review these specifically against the rules):',
         diff.trim().length > 0 ? diff : '(no textual diff captured — nothing to verify)',
         '',
+        ...probeGamingEnforceBlock(
+            probeGamingFindings,
+            'Treat this as a violation and REPORT it (do not fix it): name the gamed check'
+                + ' and the requirement left unmet.'
+        ),
         'Read each changed file and check it against EVERY rule above. Do NOT attempt',
         'to fix anything — only report what you find.',
         '',
@@ -346,10 +387,16 @@ export async function runGuidelineEnforcement(deps: EnforcementDeps): Promise<En
     if (!doc) return {ok: true, reason: 'no guideline files'}
 
     const diff = await getDiff(deps.cwd, deps.signal)
+    // Deterministic probe-gaming findings (F6) straight from the captured diff — no
+    // extra git call, the diff is already in hand. Injected under the CHECK-GAMING
+    // rule so the child acts on a concrete line, not on self-discovered intent.
+    const probeGaming = findProbeGamingInDiff(diff)
     const flagOnly = deps.mode === 'flag'
     const tools = flagOnly ? ENFORCE_FLAG_TOOLS : ENFORCE_TOOLS
     const prompt =
-        flagOnly ? buildEnforceFlagPrompt(doc.text, diff) : buildEnforcePrompt(doc.text, diff)
+        flagOnly ?
+            buildEnforceFlagPrompt(doc.text, diff, probeGaming)
+        :   buildEnforcePrompt(doc.text, diff, probeGaming)
     let text: string
     try {
         text = await deps.runChild(tools, prompt, deps.signal)

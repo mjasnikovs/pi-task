@@ -210,6 +210,24 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('TEST-ASSEMBLY NOTICE')
     })
 
+    test('injects deterministic probe-gaming findings under rule 4c (F6)', () => {
+        const findings = [
+            'src/server/index.ts: this task added a line stating its purpose is to make a '
+                + 'check pass, not to meet the requirement — "// Return 401 so the verification test passes"'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], findings)
+        expect(p).toContain('CHECK-GAMING NOTICE (deterministic')
+        expect(p).toContain('- src/server/index.ts: this task added a line')
+        expect(p).toContain('rule 4c')
+        // The rule text itself is always present (and mentions the notice by name); the
+        // deterministic notice BLOCK only appears when a finding is supplied.
+        expect(p).toContain('THE CHECK IS THE MESSENGER, NOT THE REQUIREMENT')
+        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [])).not.toContain(
+            'CHECK-GAMING NOTICE (deterministic'
+        )
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CHECK-GAMING NOTICE (deterministic')
+    })
+
     test('injects deterministic prohibition findings under the no-waiver rule', () => {
         const findings = [
             'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
