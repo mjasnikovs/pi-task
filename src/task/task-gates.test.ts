@@ -165,6 +165,49 @@ test('runGatesForTask: verify FAIL + ACCEPT → proceeds, commits, done', async 
     })
 })
 
+test('runGatesForTask: verify FAIL + ACCEPT records a durable ACCEPT-debt (run 8 TASK_0012)', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        const debts: Array<{taskId: string; reason: string}> = []
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: false, reason: 'modified frozen path src/main.tsx'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'user call'}),
+            recordAcceptDebt: (_c, taskId, reason) => {
+                debts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        handle.queueSelect(ACCEPT_LABEL)
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        // The ACCEPT branch records the FAIL reason against the task for run-end re-check.
+        expect(debts).toEqual([{taskId: 'TASK_0006', reason: 'modified frozen path src/main.tsx'}])
+    })
+})
+
+test('runGatesForTask: an AUTOFIX that converges records NO accept-debt', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const debts: unknown[] = []
+        let verifyCalls = 0
+        const deps = makeDeps({
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(verifyCalls === 1 ? {ok: false, reason: 'x'} : {ok: true})
+            },
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real bug'}),
+            recordAcceptDebt: (_c, taskId, reason) => {
+                debts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(debts).toEqual([])
+    })
+})
+
 test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) until it verifies', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)

@@ -16,6 +16,7 @@ import {
     runBootCheck,
     runFinalIntegrationGate
 } from './final-gate.js'
+import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
 
 function makeDir(pkg?: object): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-final-gate-'))
@@ -318,5 +319,64 @@ describe('discoverGateCommandLabels', () => {
 
     test('nothing discoverable → empty (degrades to nothing-to-guard)', async () => {
         expect(discoverGateCommandLabels(makeDir())).toEqual([])
+    })
+})
+
+describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TASK_0012)', () => {
+    test('a non-static (frozen-path) debt is SURFACED on a PASS and kept in the ledger', async () => {
+        const dir = makeDir() // no manifest → statics + integration trivially pass
+        await recordAcceptDebt(dir, 'TASK_0012', 'modified frozen path src/main.tsx')
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.openDebts).toEqual([
+            {taskId: 'TASK_0012', reason: 'modified frozen path src/main.tsx'}
+        ])
+        expect(out.reason).toContain('ACCEPTED VERIFY-FAIL DEBT still open (1)')
+        expect(out.reason).toContain('TASK_0012')
+        // Behavioral debts are never auto-closed — the ledger still holds it for resume.
+        expect(await readAcceptDebts(dir)).toHaveLength(1)
+    })
+
+    test('a static-class debt is RESOLVED and PRUNED when the gate statics now pass', async () => {
+        const dir = makeDir({scripts: {lint: 'exit 0'}}) // static check passes
+        await recordAcceptDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.openDebts).toEqual([])
+        expect(out.reason).not.toContain('ACCEPTED VERIFY-FAIL DEBT')
+        // Provably resolved ⇒ pruned from the ledger so resume does not re-surface it.
+        expect(await readAcceptDebts(dir)).toEqual([])
+    })
+
+    test('a static-class debt stays OPEN and surfaces when the gate statics still fail', async () => {
+        const dir = makeDir({scripts: {lint: 'exit 1'}}) // static check fails
+        await recordAcceptDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('static checks:')
+        expect(out.openDebts).toHaveLength(1)
+        expect(out.reason).toContain('ACCEPTED VERIFY-FAIL DEBT still open (1)')
+        expect(await readAcceptDebts(dir)).toHaveLength(1)
+    })
+
+    test('mixed: static debt pruned, behavioral debt surfaced (only the provable one closes)', async () => {
+        const dir = makeDir({scripts: {lint: 'exit 0'}})
+        await recordAcceptDebt(dir, 'T9', 'repo health: lint exited 1')
+        await recordAcceptDebt(dir, 'T12', 'upload endpoint returned HTML not JSON')
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.openDebts).toEqual([
+            {taskId: 'T12', reason: 'upload endpoint returned HTML not JSON'}
+        ])
+        expect(await readAcceptDebts(dir)).toEqual([
+            {taskId: 'T12', reason: 'upload endpoint returned HTML not JSON'}
+        ])
+    })
+
+    test('no ledger → no debts, clean report (nothing to re-check)', async () => {
+        const out = await runFinalIntegrationGate(makeDir({scripts: {test: 'exit 0'}}))
+        expect(out.ok).toBe(true)
+        expect(out.openDebts).toEqual([])
+        expect(out.reason).not.toContain('ACCEPTED VERIFY-FAIL DEBT')
     })
 })

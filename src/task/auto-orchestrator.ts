@@ -49,6 +49,7 @@ import {buildGateDeps, type FinalGateFixFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate} from './final-gate.js'
+import type {AcceptDebt} from './accept-debt.js'
 import {
     classifyFinalGateAnswer,
     MAX_FINAL_GATE_AUTOFIX,
@@ -149,7 +150,7 @@ export interface AutoDeps extends GateDeps {
      * own static checks plus its own test/build commands, unaided. Absent (tests /
      * gate off) → the run completes as before.
      */
-    finalGate?: (cwd: string) => Promise<{ok: boolean; reason: string}>
+    finalGate?: (cwd: string) => Promise<{ok: boolean; reason: string; openDebts?: AcceptDebt[]}>
     /**
      * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
      * offered as the picker's third option. Runs the fix child, applies the
@@ -869,6 +870,23 @@ export async function runAutoLoop(
                     }
                     let fin = await deps.finalGate(cwd)
                     if (!fin.ok) await recGate(`final-gate: FAIL — ${fin.reason.slice(0, 300)}`)
+                    // ACCEPT-debt re-check surfacing (mx5 run 4 B3 / run 8 TASK_0012):
+                    // tasks the user accepted despite a verify-FAIL that the gate could
+                    // not prove resolved against the current tree. Surface them at the
+                    // gate moment — on PASS or FAIL — so a run never completes silently
+                    // carrying an accepted defect. Informational: the per-task ACCEPT was
+                    // already a human decision, so this reports, it does not re-fail.
+                    if (fin.openDebts && fin.openDebts.length > 0) {
+                        for (const d of fin.openDebts) {
+                            await recGate(
+                                `accept-debt STILL OPEN — ${d.taskId || '(unknown task)'} was ACCEPTED despite verify-FAIL: ${d.reason.slice(0, 240)}`
+                            )
+                        }
+                        active.ui.notify(
+                            `${id}: ${fin.openDebts.length} task(s) accepted despite verify-FAIL are STILL unresolved at run end — see the gate trail.`,
+                            'warning'
+                        )
+                    }
                     // Resolution loop: Leave-failed (recommended) / Autofix (bounded,
                     // model-driven fix pass + gate re-run — run 7's gap: the picker
                     // had NO automated fix path) / Accept. The user always decides;

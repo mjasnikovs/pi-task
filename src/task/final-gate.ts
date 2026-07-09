@@ -46,12 +46,26 @@ import {
     discoverHealthCommands,
     type HealthCommand
 } from './repo-health-check.js'
+import {
+    readAcceptDebts,
+    recheckAcceptDebts,
+    writeAcceptDebts,
+    buildAcceptDebtNote,
+    type AcceptDebt
+} from './accept-debt.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
     ok: boolean
     /** On a fail: the exact command, its exit code, and the tail of its output. */
     reason: string
+    /**
+     * ACCEPT-despite-verify-FAIL debts still open at run end (mx5 run 4 B3 / run 8
+     * TASK_0012): tasks the user blessed as-is despite a verify-FAIL that a
+     * deterministic re-check could not prove resolved. The caller surfaces them so a
+     * run never completes silently carrying an accepted defect. Empty/absent = none.
+     */
+    openDebts?: AcceptDebt[]
 }
 
 function packageScripts(cwd: string): Record<string, string> {
@@ -308,12 +322,30 @@ export async function runFinalIntegrationGate(
     bootGraceMs = 10_000
 ): Promise<FinalGateOutcome> {
     const stat = runRepoHealthCheck(cwd)
-    if (!stat.ok) return {ok: false, reason: `static checks: ${stat.reason}`}
+    // ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
+    // the user accepted despite a verify-FAIL and re-check each against the current
+    // tree. A static-class debt whose statics now pass is provably RESOLVED (a later
+    // task fixed it) and pruned; every other debt cannot be proven resolved
+    // deterministically, so it stays OPEN and is surfaced in this gate's report — a
+    // run may not complete silently carrying an accepted defect. FP-safe by
+    // construction (see accept-debt.ts). Best-effort: a ledger read/write failure
+    // must never break the gate.
+    const {open: openDebts, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
+        staticOk: stat.ok
+    })
+    if (resolved.length > 0) await writeAcceptDebts(cwd, openDebts)
+    const debtNote = buildAcceptDebtNote(openDebts)
+    const withDebts = (o: FinalGateOutcome): FinalGateOutcome => ({
+        ...o,
+        reason: `${o.reason}${debtNote}`,
+        openDebts
+    })
+    if (!stat.ok) return withDebts({ok: false, reason: `static checks: ${stat.reason}`})
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
     if (lockCmds.length === 0 && cmds.length === 0 && !boot) {
-        return {ok: true, reason: 'no integration command found (statics passed)'}
+        return withDebts({ok: true, reason: 'no integration command found (statics passed)'})
     }
     const ran: string[] = []
     for (const {prefix, list} of [
@@ -325,10 +357,10 @@ export async function runFinalIntegrationGate(
             const r = runGateCommand(cwd, cmd, timeoutMs)
             if (r.outcome === 'skip') continue
             if (r.outcome === 'fail') {
-                return {
+                return withDebts({
                     ok: false,
                     reason: `${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
-                }
+                })
             }
             ran.push(label)
         }
@@ -337,15 +369,15 @@ export async function runFinalIntegrationGate(
         const label = `${boot[0]} ${boot[1].join(' ')}`
         const b = await runBootCheck(cwd, boot, bootGraceMs)
         if (b.outcome === 'fail') {
-            return {ok: false, reason: `boot check: \`${label}\` ${b.detail}`}
+            return withDebts({ok: false, reason: `boot check: \`${label}\` ${b.detail}`})
         }
         if (b.outcome === 'pass') ran.push(label)
     }
-    return {
+    return withDebts({
         ok: true,
         reason:
             ran.length > 0 ?
                 `statics + ${ran.map(c => `\`${c}\``).join(', ')} passed`
             :   'statics passed (integration commands not runnable here)'
-    }
+    })
 }

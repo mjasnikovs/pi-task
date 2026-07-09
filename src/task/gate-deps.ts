@@ -23,6 +23,7 @@ import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-gu
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
+import {recordAcceptDebt} from './accept-debt.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -330,6 +331,9 @@ export function buildGateDeps(params: {
         // Durable per-task gate trail: every verdict/decision lands in the task
         // file's `## gates` section so gate behavior is auditable from artifacts.
         record: (cwd2, taskId, line) => appendGateRecord(cwd2, taskId, line),
+        // Durable ACCEPT-despite-verify-FAIL ledger under .pi-tasks/ (survives
+        // discardEdits): the final integration gate re-checks each debt at run end.
+        recordAcceptDebt: (cwd2, taskId, reason) => recordAcceptDebt(cwd2, taskId, reason),
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)

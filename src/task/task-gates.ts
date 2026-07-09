@@ -145,6 +145,14 @@ export interface GateDeps {
      * swallowed by the implementation, never by this sequence.
      */
     record?: (cwd: string, taskId: string, line: string) => Promise<void>
+    /**
+     * Record a durable ACCEPT-despite-verify-FAIL debt (task id + FAIL reason) to the
+     * run-level ledger (`.pi-tasks/accept-debt.md`, see accept-debt.ts). Called only on
+     * the picker's ACCEPT branch — the human blessed a failing artifact as-is, so the
+     * defect is real and recorded; the final integration gate re-checks it at run end
+     * and surfaces it if still open. Best-effort; absent in tests → no ledger written.
+     */
+    recordAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
 }
 
 /** Inputs the sequence needs that vary per caller. */
@@ -357,6 +365,15 @@ export async function runGatesForTask(
             }
             if (choice.action === 'accept') {
                 await rec('resolution: user ACCEPTED the work despite verify FAIL')
+                // Durable debt: the human blessed a FAILing artifact as-is, so the
+                // defect ships and nothing else revisits it (mx5 run 4 B3 / run 8
+                // TASK_0012). Record it to the run ledger; the final integration gate
+                // re-checks it at run end and surfaces it if still open. Best-effort.
+                try {
+                    await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
+                } catch {
+                    // recording must never break the gate sequence
+                }
                 active.ui.notify(
                     `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,
                     'warning'
