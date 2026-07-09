@@ -215,6 +215,7 @@ export function publicKey(): string {
  *  server→push-service→device, so it reaches a suspended iOS PWA that the
  *  in-page Notification API never could. */
 export async function pushNotify(title: string, body: string, tag?: string): Promise<void> {
+    if (process.env.NODE_ENV === 'test') return
     const targets = getSubscriptions()
     logPush(`event "${title}" -> ${targets.length} subscription(s)`)
     if (targets.length === 0) return // nobody subscribed — skip all VAPID/disk work
