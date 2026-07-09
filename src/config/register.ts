@@ -2,6 +2,7 @@ import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-cod
 import {SettingsList, visibleWidth} from '@earendil-works/pi-tui'
 import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
 import {registerBridgeCommand} from '../remote/bridge.js'
+import {SEARCH_PROVIDERS, isSearchProvider} from '../workers/search-types.js'
 import {getConfig, saveConfig, type PiTaskConfig} from './config.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
@@ -56,7 +57,11 @@ class BorderedBox implements Component {
     }
 }
 
-const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
+/**
+ * Every setting rendered by /task-config. Boolean settings omit `values` and
+ * toggle on/off; enum settings list their values and cycle through them.
+ */
+const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values?: string[]}[] = [
     {id: 'remote', label: 'remote', description: 'Remote UI server (QR code, phone access)'},
     {
         id: 'compressReasoning',
@@ -98,6 +103,13 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'research cache',
         description:
             'Cache docs/search/fetch results within one /task-auto run so sibling tasks reuse the first pipeline’s digest instead of re-fetching the same external docs. Per-run isolated, external-only, success-only'
+    },
+    {
+        id: 'searchProvider',
+        label: 'search provider',
+        description:
+            'Engine behind web search (pi-worker-search + freshness checks). exa and ddg need no API key; brave needs BRAVE_SEARCH_API_KEY',
+        values: SEARCH_PROVIDERS as unknown as string[]
     }
 ]
 
@@ -115,7 +127,14 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
     const cfg = {...getConfig()}
 
     if (ctx.mode !== 'tui') {
-        const lines = ITEMS.map(({id, label}) => `${label.padEnd(22)} ${cfg[id] ? 'on' : 'off'}`)
+        const lines = ITEMS.map(
+            ({id, label, values}) =>
+                `${label.padEnd(22)} ${
+                    values ? String(cfg[id])
+                    : cfg[id] ? 'on'
+                    : 'off'
+                }`
+        )
         ctx.ui.notify(lines.join('  |  '), 'info')
         return
     }
@@ -123,12 +142,15 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
     await ctx.ui.custom<void>(
         (_tui, theme, _kb, done) => {
             const listTheme = makeTheme(theme)
-            const items = ITEMS.map(({id, label, description}) => ({
+            const items = ITEMS.map(({id, label, description, values}) => ({
                 id,
                 label,
                 description,
-                currentValue: cfg[id] ? 'on' : 'off',
-                values: ['on', 'off']
+                currentValue:
+                    values ? String(cfg[id])
+                    : cfg[id] ? 'on'
+                    : 'off',
+                values: values ?? ['on', 'off']
             }))
 
             const list = new SettingsList(
@@ -136,7 +158,11 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                 10,
                 listTheme,
                 (id, newValue) => {
-                    cfg[id as keyof PiTaskConfig] = newValue === 'on'
+                    if (id === 'searchProvider') {
+                        if (isSearchProvider(newValue)) cfg.searchProvider = newValue
+                    } else {
+                        ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
+                    }
                     saveConfig(cfg).catch(() => {})
                 },
                 () => done(undefined)

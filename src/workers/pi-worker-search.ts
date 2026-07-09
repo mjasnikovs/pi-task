@@ -1,7 +1,11 @@
 import {Type} from '@sinclair/typebox'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
-import {braveSearch as defaultBraveSearch} from './brave-search.js'
+import {getConfig} from '../config/config.js'
+import type {braveSearch as defaultBraveSearch} from './brave-search.js'
+import type {ddgSearch as defaultDdgSearch} from './ddg-search.js'
+import type {exaSearch as defaultExaSearch} from './exa-search.js'
+import type {SearchProvider} from './search-types.js'
 import {search} from './search-core.js'
 import {makeWorkerTool} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
@@ -23,6 +27,9 @@ interface SearchDetails {
 
 export interface PiWorkerSearchInternals {
     braveSearch?: typeof defaultBraveSearch
+    exaSearch?: typeof defaultExaSearch
+    ddgSearch?: typeof defaultDdgSearch
+    provider?: SearchProvider
     getEnv?: (key: string) => string | undefined
 }
 
@@ -30,19 +37,20 @@ export function registerPiWorkerSearch(
     pi: ExtensionAPI,
     internals: PiWorkerSearchInternals = {}
 ): void {
+    const provider = (): SearchProvider => internals.provider ?? getConfig().searchProvider
+
     makeWorkerTool<typeof Params, SearchDetails>(pi, {
         name: 'pi-worker-search',
         label: 'Pi Worker Search',
         description:
-            'Search the live web via Brave Search. CALL THIS BEFORE ANSWERING any '
+            'Search the live web. CALL THIS BEFORE ANSWERING any '
             + 'question about current or version-specific external facts: '
             + 'library/framework versions and their APIs, latest releases, recently '
             + 'shipped features, current events, prices, or who currently holds a '
             + 'role. Your built-in knowledge is out of date — do NOT answer such '
             + 'questions from memory and do NOT shell out with bash to guess. Returns '
             + 'a compact markdown list of up to 10 results (title, URL, snippet); then '
-            + 'call `pi-worker-fetch` on the URL you want to read. '
-            + 'Requires BRAVE_SEARCH_API_KEY env var.',
+            + 'call `pi-worker-fetch` on the URL you want to read.',
         parameters: Params,
 
         async run(params, signal) {
@@ -50,8 +58,11 @@ export function registerPiWorkerSearch(
                 query: params.query,
                 count: params.count,
                 signal,
+                provider: internals.provider,
                 getEnv: internals.getEnv,
-                braveSearch: internals.braveSearch
+                braveSearch: internals.braveSearch,
+                exaSearch: internals.exaSearch,
+                ddgSearch: internals.ddgSearch
             })
 
             if (result.kind === 'no_key' || result.kind === 'error') {
@@ -80,8 +91,9 @@ export function registerPiWorkerSearch(
 
         // Cache search results per run (the same query re-run across sibling tasks hits
         // the live web anew otherwise). Count is part of the key — a larger request is a
-        // different result set.
-        cacheKey: params => `${normalizeQuery(params.query)}::${params.count ?? ''}`,
+        // different result set — and so is the provider: two engines' result sets for
+        // one query are different answers and must not serve for each other.
+        cacheKey: params => `${provider()}::${normalizeQuery(params.query)}::${params.count ?? ''}`,
         // Only a non-empty result set is worth caching; no-key, error, and empty results
         // (resultCount 0) fall through so a later attempt can succeed.
         cacheable: d => d.resultCount > 0

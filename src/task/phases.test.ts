@@ -2595,7 +2595,9 @@ const apisWorker = (obs: Array<{tools: string; prompt: string}>) =>
 test('APIS worker gains search/fetch tools + hint when a Brave key is configured', async () => {
     await withTmpTaskDir(async cwd => {
         const prev = process.env.BRAVE_SEARCH_API_KEY
+        const prevProvider = getConfig().searchProvider
         process.env.BRAVE_SEARCH_API_KEY = 'test-key'
+        getConfig().searchProvider = 'brave'
         try {
             const obs = await observeResearchWorkers(cwd)
             const apis = apisWorker(obs)
@@ -2606,16 +2608,19 @@ test('APIS worker gains search/fetch tools + hint when a Brave key is configured
         } finally {
             if (prev === undefined) delete process.env.BRAVE_SEARCH_API_KEY
             else process.env.BRAVE_SEARCH_API_KEY = prev
+            getConfig().searchProvider = prevProvider
         }
     })
 })
 
-test('APIS worker has NO search tools without a key (the tool would only error)', async () => {
+test('APIS worker has NO search tools with brave selected and no key (the tool would only error)', async () => {
     await withTmpTaskDir(async cwd => {
         const prevA = process.env.BRAVE_SEARCH_API_KEY
         const prevB = process.env.BRAVE_API_KEY
+        const prevProvider = getConfig().searchProvider
         delete process.env.BRAVE_SEARCH_API_KEY
         delete process.env.BRAVE_API_KEY
+        getConfig().searchProvider = 'brave'
         try {
             const obs = await observeResearchWorkers(cwd)
             const apis = apisWorker(obs)
@@ -2625,12 +2630,39 @@ test('APIS worker has NO search tools without a key (the tool would only error)'
         } finally {
             if (prevA !== undefined) process.env.BRAVE_SEARCH_API_KEY = prevA
             if (prevB !== undefined) process.env.BRAVE_API_KEY = prevB
+            getConfig().searchProvider = prevProvider
         }
     })
 })
 
-test('searchConfigured mirrors the search-core env contract (either key name)', () => {
-    expect(searchConfigured(() => undefined)).toBe(false)
-    expect(searchConfigured(k => (k === 'BRAVE_SEARCH_API_KEY' ? 'x' : undefined))).toBe(true)
-    expect(searchConfigured(k => (k === 'BRAVE_API_KEY' ? 'x' : undefined))).toBe(true)
+test('APIS worker keeps search tools on a keyless provider without any env key', async () => {
+    await withTmpTaskDir(async cwd => {
+        const prevA = process.env.BRAVE_SEARCH_API_KEY
+        const prevB = process.env.BRAVE_API_KEY
+        const prevProvider = getConfig().searchProvider
+        delete process.env.BRAVE_SEARCH_API_KEY
+        delete process.env.BRAVE_API_KEY
+        getConfig().searchProvider = 'exa'
+        try {
+            const obs = await observeResearchWorkers(cwd)
+            const apis = apisWorker(obs)
+            expect(apis).toBeDefined()
+            expect(apis!.tools.split(',')).toContain('pi-worker-search')
+            expect(apis!.prompt).toContain('LIVE WEB — use pi-worker-search')
+        } finally {
+            if (prevA !== undefined) process.env.BRAVE_SEARCH_API_KEY = prevA
+            if (prevB !== undefined) process.env.BRAVE_API_KEY = prevB
+            getConfig().searchProvider = prevProvider
+        }
+    })
+})
+
+test('searchConfigured mirrors the search-core contract (keyless providers always on; brave needs a key)', () => {
+    expect(searchConfigured(() => undefined, 'brave')).toBe(false)
+    expect(searchConfigured(k => (k === 'BRAVE_SEARCH_API_KEY' ? 'x' : undefined), 'brave')).toBe(
+        true
+    )
+    expect(searchConfigured(k => (k === 'BRAVE_API_KEY' ? 'x' : undefined), 'brave')).toBe(true)
+    expect(searchConfigured(() => undefined, 'exa')).toBe(true)
+    expect(searchConfigured(() => undefined, 'ddg')).toBe(true)
 })

@@ -39,7 +39,7 @@ describe('formatFreshnessSkippedBlock', () => {
         const out = formatFreshnessSkippedBlock(['Twitch'])
         expect(out).toBe(
             '### freshness-check skipped\n'
-                + 'Could not verify external services (BRAVE_SEARCH_API_KEY not set):\n'
+                + 'Could not verify external services (search provider is brave but BRAVE_SEARCH_API_KEY is not set):\n'
                 + '- Twitch'
         )
     })
@@ -48,7 +48,7 @@ describe('formatFreshnessSkippedBlock', () => {
         const out = formatFreshnessSkippedBlock(['Twitch', 'Stripe'])
         expect(out).toBe(
             '### freshness-check skipped\n'
-                + 'Could not verify external services (BRAVE_SEARCH_API_KEY not set):\n'
+                + 'Could not verify external services (search provider is brave but BRAVE_SEARCH_API_KEY is not set):\n'
                 + '- Twitch\n- Stripe'
         )
     })

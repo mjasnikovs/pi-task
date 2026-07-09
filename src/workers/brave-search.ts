@@ -1,13 +1,11 @@
+import type {SearchResult} from './search-types.js'
+
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
 const DEFAULT_COUNT = 10
 const MAX_COUNT = 20
 const DEFAULT_TIMEOUT_MS = 10_000
 
-export interface BraveResult {
-    title: string
-    url: string
-    description: string
-}
+export type BraveResult = SearchResult
 
 export interface BraveSearchOpts {
     apiKey: string

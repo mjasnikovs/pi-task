@@ -2,6 +2,7 @@ import * as fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import {isSearchProvider, type SearchProvider} from '../workers/search-types.js'
 
 export interface PiTaskConfig {
     remote: boolean
@@ -28,6 +29,12 @@ export interface PiTaskConfig {
      * collide).
      */
     researchCache: boolean
+    /**
+     * Which engine backs web search (pi-worker-search + freshness/enrichment).
+     * `exa` and `ddg` need no API key; `brave` needs BRAVE_SEARCH_API_KEY.
+     * DEFAULT `exa` so search works out of the box with zero configuration.
+     */
+    searchProvider: SearchProvider
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -40,7 +47,8 @@ const DEFAULTS: PiTaskConfig = {
     parallelResearchWorkers: false,
     // ON: the F10 live A/B showed no answer-quality regression (fidelity 3/3, quality
     // 3/3, 0 collisions; ~14.5s of repeated docs lookups collapse to 0ms on a hit).
-    researchCache: true
+    researchCache: true,
+    searchProvider: 'exa'
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')
@@ -58,6 +66,9 @@ if (!G.loaded) {
     try {
         const raw = fs.readFileSync(CONFIG_PATH, 'utf8')
         const parsed = JSON.parse(raw) as Partial<PiTaskConfig>
+        // A hand-edited or stale enum value must not leak an unknown provider
+        // into the dispatch switch — fall back to the default.
+        if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
         G.config = {...DEFAULTS, ...parsed}
     } catch {
         G.config = {...DEFAULTS}

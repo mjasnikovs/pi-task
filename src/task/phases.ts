@@ -15,6 +15,7 @@ import {
 } from '../workers/phantom-imports.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
+import type {SearchProvider} from '../workers/search-types.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {isIntegrationUnknown} from './unknown-routing.js'
 import {getFileInventory} from './file-inventory.js'
@@ -273,10 +274,15 @@ const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.
  *  child literally did not have the tool. */
 const SEARCH_EXTENSION_PATH = new URL('../workers/search-extension.js', import.meta.url).pathname
 
-/** Is live web search configured for this process? Mirrors search-core's env lookup. */
+/**
+ * Is live web search configured for this process? The keyless providers (exa,
+ * ddg) always are; only brave needs its API key — mirrors search-core's lookup.
+ */
 export function searchConfigured(
-    getEnv: (k: string) => string | undefined = k => process.env[k]
+    getEnv: (k: string) => string | undefined = k => process.env[k],
+    provider: SearchProvider = getConfig().searchProvider
 ): boolean {
+    if (provider !== 'brave') return true
     return Boolean(getEnv('BRAVE_SEARCH_API_KEY') ?? getEnv('BRAVE_API_KEY'))
 }
 
