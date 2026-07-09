@@ -445,10 +445,13 @@ export function buildGateDeps(params: {
                 // Per-run environment-facts cache under .pi-tasks/ (survives
                 // discardEdits): earlier children's discoveries save this child
                 // the re-archaeology; its own ENV-NOTE lines are stored for the
-                // next one. Facts only — verdict rules unaffected.
+                // next one, stamped with this task's id as their origin so a
+                // later child sees a cited fact is second-hand and must
+                // re-validate before excusing a failure (F7). Facts only —
+                // verdict rules unaffected.
                 envNotes: {
                     read: () => readEnvNotes(cwd2),
-                    append: notes => appendEnvNotes(cwd2, notes)
+                    append: notes => appendEnvNotes(cwd2, notes, taskId)
                 },
                 // Per-run cross-slice contract registry under .pi-tasks/ (F3): the
                 // verbatim interface facts the design pins that multiple slices
