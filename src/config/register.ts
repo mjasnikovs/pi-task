@@ -92,6 +92,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string}[] = [
         label: 'parallel research',
         description:
             'Run the 4 research workers concurrently. Leave OFF on a single-GPU local server (serial is measurably faster there); turn on only for a parallel-capable model backend'
+    },
+    {
+        id: 'researchCache',
+        label: 'research cache',
+        description:
+            'Cache docs/search/fetch results within one /task-auto run so sibling tasks reuse the first pipeline’s digest instead of re-fetching the same external docs. Per-run isolated, external-only, success-only'
     }
 ]
 

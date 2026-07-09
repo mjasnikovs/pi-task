@@ -4,6 +4,7 @@ import {Text} from '@earendil-works/pi-tui'
 import {braveSearch as defaultBraveSearch} from './brave-search.js'
 import {search} from './search-core.js'
 import {makeWorkerTool} from './shared.js'
+import {normalizeQuery} from './research-cache.js'
 
 const Params = Type.Object({
     query: Type.String({description: 'Search query.'}),
@@ -75,6 +76,14 @@ export function registerPiWorkerSearch(
                 text += theme.fg('dim', ` (count=${args.count})`)
             }
             return new Text(text, 0, 0)
-        }
+        },
+
+        // Cache search results per run (the same query re-run across sibling tasks hits
+        // the live web anew otherwise). Count is part of the key — a larger request is a
+        // different result set.
+        cacheKey: params => `${normalizeQuery(params.query)}::${params.count ?? ''}`,
+        // Only a non-empty result set is worth caching; no-key, error, and empty results
+        // (resultCount 0) fall through so a later attempt can succeed.
+        cacheable: d => d.resultCount > 0
     })
 }

@@ -20,6 +20,7 @@ import {type SpawnFn, runChild, CHILD_BASE_ARGS} from '../shared/child-process.j
 import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
 const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
@@ -327,6 +328,19 @@ export function registerPiWorkerDocs(
             text += theme.fg('accent', label)
             text += `\n${theme.fg('dim', `  query: ${truncated}`)}`
             return new Text(text, 0, 0)
-        }
+        },
+
+        // Cache npm-package answers per run (a package's installed types/README + latest
+        // version do not change within a run). A project-source `.` lookup is NOT cached:
+        // the working tree mutates as tasks implement, so its answer can go stale mid-run
+        // (the docs SQLite index already keys those on file mtime).
+        cacheKey: params =>
+            params.module === '.' ?
+                null
+            :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`,
+        // Only a completed lookup (child exited 0) is a real answer; not-installed,
+        // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
+        // through to a live retry next time.
+        cacheable: d => d.childExitCode === 0
     })
 }

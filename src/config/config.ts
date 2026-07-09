@@ -17,6 +17,17 @@ export interface PiTaskConfig {
      * phases.ts). Turn on only for a parallel-capable backend.
      */
     parallelResearchWorkers: boolean
+    /**
+     * Cache docs/search/fetch worker RESULTS for the duration of one /task-auto run
+     * so sibling tasks re-asking the same (package/url, query) reuse the first
+     * pipeline's digest instead of re-fetching (mx5 run-8 F10: the research phase
+     * burned 75 of 363 min largely re-fetching the same external docs across ~20
+     * siblings). Per-run isolated, external-only (project-source `.` lookups excluded),
+     * success-only. DEFAULT ON — the F10 live A/B showed no answer-quality regression
+     * (a cache hit serves byte-identical text to the first fetch; distinct queries never
+     * collide).
+     */
+    researchCache: boolean
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -26,7 +37,10 @@ const DEFAULTS: PiTaskConfig = {
     orientation: true,
     enforceGuidelines: true,
     verifyWork: true,
-    parallelResearchWorkers: false
+    parallelResearchWorkers: false,
+    // ON: the F10 live A/B showed no answer-quality regression (fidelity 3/3, quality
+    // 3/3, 0 collisions; ~14.5s of repeated docs lookups collapse to 0ms on a hit).
+    researchCache: true
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')

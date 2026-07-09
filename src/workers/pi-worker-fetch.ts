@@ -5,6 +5,7 @@ import {Text} from '@earendil-works/pi-tui'
 import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-clean.js'
 import {fetchFocused, formatResultText} from './fetch-core.js'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {normalizeQuery} from './research-cache.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -125,6 +126,15 @@ export function registerPiWorkerFetch(
             text += theme.fg('accent', args.url)
             text += `\n${theme.fg('dim', `  query: ${truncatedQuery}`)}`
             return new Text(text, 0, 0)
-        }
+        },
+
+        // Cache fetch answers per run (the same page re-fetched across sibling tasks
+        // otherwise). The URL is kept verbatim (path case can matter); the query is
+        // normalised. Both parts key the entry — same page, different question is a
+        // different answer.
+        cacheKey: params => `${params.url.trim()}::${normalizeQuery(params.query)}`,
+        // Only a completed fetch (child exited 0) is a real answer; invalid-URL,
+        // fetch failures, and aborts omit childExitCode:0 and fall through.
+        cacheable: d => d.childExitCode === 0
     })
 }

@@ -61,6 +61,7 @@ import {
     FINAL_AUTOFIX_VALUE
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
+import {configureResearchRun} from '../workers/research-cache.js'
 import {
     CONTRACT_EXTRACT_PROMPT,
     parseContractLines,
@@ -1196,6 +1197,10 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         return
     }
     autoRunning = true
+    // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
+    // every task's research phase share one run's cache; disabled ⇒ clears any token a
+    // prior run left, so nothing is cached.
+    configureResearchRun(getConfig().researchCache)
     const abort = new AbortController()
     const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
     let id: string | null
@@ -1238,6 +1243,9 @@ async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext)
     ctx.ui.notify(`Resuming ${id}…`, 'info')
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
+    // Fresh per-run research-cache id for the resumed run (F10); a resume re-fetches
+    // rather than reusing the interrupted run's digest — safe, only slightly less reuse.
+    configureResearchRun(getConfig().researchCache)
     const abort = new AbortController()
     // Resume only runs the loop (runTask); no planning children, so the loader
     // title is unused here — pass the id for clarity if that ever changes.

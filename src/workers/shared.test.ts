@@ -1,7 +1,11 @@
-import {test, expect} from 'bun:test'
+import {test, expect, afterEach} from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import {Type} from '@sinclair/typebox'
 import {Text} from '@earendil-works/pi-tui'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {RESEARCH_RUN_ID_ENV} from './research-cache.js'
 
 // ─── formatChildFailure ──────────────────────────────────────────────────────
 
@@ -105,4 +109,103 @@ test('makeWorkerTool delegates renderCall to the spec', () => {
     })
     const rendered = registered[0].renderCall!({q: 'x'}, {})
     expect(rendered).toBeInstanceOf(Text)
+})
+
+// ─── makeWorkerTool per-run research cache (F10) ──────────────────────────────
+
+const savedRunId = process.env[RESEARCH_RUN_ID_ENV]
+afterEach(() => {
+    if (savedRunId === undefined) delete process.env[RESEARCH_RUN_ID_ENV]
+    else process.env[RESEARCH_RUN_ID_ENV] = savedRunId
+})
+
+function tmpCwd(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'shared-cache-'))
+}
+
+/** A cacheable demo tool that counts run() invocations. */
+function cachingTool(opts?: {
+    cacheKey?: (p: {q: string}) => string | null
+    cacheable?: (d: {n: number}, t: string) => boolean
+}): {registered: RegisteredTool[]; calls: () => number} {
+    const {registered, api} = makePi()
+    let calls = 0
+    makeWorkerTool<typeof Params, {n: number}>(
+        api as unknown as Parameters<typeof makeWorkerTool>[0],
+        {
+            name: 'demo',
+            label: 'Demo',
+            description: 'd',
+            parameters: Params,
+            async run(params) {
+                calls++
+                return {text: `answer:${params.q}:${calls}`, details: {n: calls}}
+            },
+            renderCall: args => new Text(args.q, 0, 0),
+            cacheKey: opts?.cacheKey ?? (p => p.q),
+            cacheable: opts?.cacheable ?? (() => true)
+        }
+    )
+    return {registered, calls: () => calls}
+}
+
+test('a second identical call in the same run is served from cache (run not re-invoked)', async () => {
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-1'
+    const cwd = tmpCwd()
+    const tool = cachingTool()
+    const exec = tool.registered[0].execute
+
+    const first = await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
+    expect(first.content[0].text).toBe('answer:x:1')
+    const second = await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
+    // Identical text + details as the first call, and run() ran only once.
+    expect(second.content[0].text).toBe('answer:x:1')
+    expect(second.details).toEqual({n: 1})
+    expect(tool.calls()).toBe(1)
+
+    // A different query is a miss and runs again.
+    const third = await exec('id3', {q: 'y'}, undefined, undefined, {cwd})
+    expect(third.content[0].text).toBe('answer:y:2')
+    expect(tool.calls()).toBe(2)
+})
+
+test('with no run id set, nothing is cached (each call re-runs)', async () => {
+    delete process.env[RESEARCH_RUN_ID_ENV]
+    const cwd = tmpCwd()
+    const tool = cachingTool()
+    const exec = tool.registered[0].execute
+    await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
+    await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
+    expect(tool.calls()).toBe(2)
+})
+
+test('a cacheKey of null opts a call out of caching (e.g. project-source lookup)', async () => {
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-1'
+    const cwd = tmpCwd()
+    const tool = cachingTool({cacheKey: () => null})
+    const exec = tool.registered[0].execute
+    await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
+    await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
+    expect(tool.calls()).toBe(2)
+})
+
+test('a non-cacheable result (failure) is not stored — the next call retries', async () => {
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-1'
+    const cwd = tmpCwd()
+    const tool = cachingTool({cacheable: () => false})
+    const exec = tool.registered[0].execute
+    await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
+    await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
+    expect(tool.calls()).toBe(2)
+})
+
+test('a different run id does not see the prior run cache (isolation through the wrapper)', async () => {
+    const cwd = tmpCwd()
+    const tool = cachingTool()
+    const exec = tool.registered[0].execute
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-A'
+    await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-B'
+    await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
+    expect(tool.calls()).toBe(2)
 })
