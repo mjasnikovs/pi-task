@@ -85,6 +85,60 @@ test('runGatesForTask: clean verify ⇒ enforce EDIT mode; clean re-verify keeps
     })
 })
 
+test('runGatesForTask: frozen-path guard reverts an enforce edit to a spec-frozen path (edit mode)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const revertCalls: string[][] = []
+        const deps = makeDeps({
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () => Promise.resolve({ok: true}), // clean pass → EDIT mode
+            enforce: () => Promise.resolve({ok: true}),
+            dirty: () => Promise.resolve(false), // after the revert the tree is clean
+            frozenPaths: () => Promise.resolve(['src/server/index.ts']),
+            revertFrozenPaths: (_c, paths) => {
+                revertCalls.push(paths)
+                return Promise.resolve(['src/server/index.ts']) // the pass had touched it
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(revertCalls).toEqual([['src/server/index.ts']])
+        // The deny is recorded and surfaced.
+        expect(
+            trail.some(
+                l =>
+                    l.startsWith('enforce: frozen-path write DENIED')
+                    && l.includes('src/server/index.ts')
+            )
+        ).toBe(true)
+        expect(captured.notifies.some(n => /spec-frozen path/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runGatesForTask: frozen-path guard is a no-op when the spec froze nothing', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let revertCalled = false
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: true}),
+            enforce: () => Promise.resolve({ok: true}),
+            frozenPaths: () => Promise.resolve([]), // nothing frozen
+            revertFrozenPaths: (_c, paths) => {
+                revertCalled = true
+                return Promise.resolve(paths)
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        // No frozen paths ⇒ revert is never consulted.
+        expect(revertCalled).toBe(false)
+    })
+})
+
 test('runGatesForTask: enforce edits that REGRESS verify are reverted', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)

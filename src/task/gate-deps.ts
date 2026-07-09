@@ -29,6 +29,7 @@ import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.j
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
+import {frozenPathsFromSpec, revertFrozenPaths} from './frozen-path-guard.js'
 import {findProbeGaming, parseAddedLines, type AddedLine} from './probe-gaming.js'
 import {findSubstitutionSuspects, isTestFile, type ChangedFile} from './substitution-probe.js'
 import {
@@ -334,6 +335,26 @@ export function buildGateDeps(params: {
         // Durable ACCEPT-despite-verify-FAIL ledger under .pi-tasks/ (survives
         // discardEdits): the final integration gate re-checks each debt at run end.
         recordAcceptDebt: (cwd2, taskId, reason) => recordAcceptDebt(cwd2, taskId, reason),
+        // Frozen-path write-deny (see frozen-path-guard.ts): the concrete paths this
+        // task's spec forbids modifying, so the gate sequence can UNDO any edit the
+        // enforce EDIT pass makes to them before those edits are committed. Reads the
+        // same composed spec + extractProhibitions the verify probe consumes; empty on
+        // a spec that froze nothing → the guard is a no-op.
+        frozenPaths: async (cwd2, taskId) => {
+            try {
+                const {body} = await readTaskFile(cwd2, taskId)
+                return frozenPathsFromSpec(extractSpecForVerification(body))
+            } catch {
+                return []
+            }
+        },
+        // Restore those frozen paths to HEAD, discarding a gate child's edits to them;
+        // returns the files actually reverted (for the trail). Best-effort git shape.
+        revertFrozenPaths: (cwd2, paths) =>
+            revertFrozenPaths(paths, async args => {
+                const r = await git(cwd2, args, signal)
+                return {stdout: r.stdout, exitCode: r.exitCode}
+            }),
         commit: (cwd2, message) =>
             getConfig().autoCommit ?
                 gitCommitAll(cwd2, message, signal)

@@ -153,6 +153,21 @@ export interface GateDeps {
      * and surfaces it if still open. Best-effort; absent in tests → no ledger written.
      */
     recordAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
+     * The concrete paths this task's spec forbids modifying (its `Do NOT modify`
+     * CONSTRAINTS — see frozen-path-guard.ts / prohibition-probe.ts). Used to
+     * write-deny the enforce EDIT pass: a violating edit is reverted before it can
+     * be committed. Empty when the spec froze nothing → the guard is a no-op.
+     * Absent in tests / on a bare `/task` → the guard is skipped.
+     */
+    frozenPaths?: (cwd: string, taskId: string) => Promise<string[]>
+    /**
+     * Restore the given frozen paths to their committed (HEAD) state, discarding a
+     * gate child's edits to them, and return the files actually reverted. Prompt
+     * framing is A/B-proven insufficient for this class, so the deny is mechanical:
+     * the write is undone, not merely warned about. Absent → the guard warns only.
+     */
+    revertFrozenPaths?: (cwd: string, paths: string[]) => Promise<string[]>
 }
 
 /** Inputs the sequence needs that vary per caller. */
@@ -459,9 +474,35 @@ export async function runGatesForTask(
         const healthBefore =
             mode === 'edit' && deps.repoHealth ? await deps.repoHealth(p.cwd) : undefined
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
+        // FROZEN-PATH WRITE-DENY (mechanical, not prompt — the "MUST NOT edit"
+        // instruction is A/B-proven ~0–1/5 reliable on the weak model): the enforce
+        // EDIT pass runs read,edit and has been seen mutating a path the spec froze.
+        // Before its edits are inspected/committed below, restore any frozen path it
+        // touched to the committed task state, so the violating write cannot land in
+        // the ENFORCE GUIDELINES commit regardless of what the model intended. The
+        // task's OWN frozen-path edits (if any) are already in HEAD and are the verify
+        // prohibition-probe's job — this only undoes the gate child's edits on top.
+        // No-op when the spec froze nothing or the deps are absent (bare /task, tests).
+        if (mode === 'edit' && deps.frozenPaths && deps.revertFrozenPaths) {
+            const frozen = await deps.frozenPaths(p.cwd, p.taskId)
+            if (frozen.length > 0) {
+                const reverted = await deps.revertFrozenPaths(p.cwd, frozen)
+                if (reverted.length > 0) {
+                    await rec(
+                        `enforce: frozen-path write DENIED — reverted ${reverted.length} spec-frozen file(s) the edit pass modified: ${reverted.join(', ')}`
+                    )
+                    active.ui.notify(
+                        `${p.tag}: guideline edits on "${p.title}" touched spec-frozen path(s) (${reverted.join(', ').slice(0, 120)}) — reverted before commit.`,
+                        'warning'
+                    )
+                }
+            }
+        }
         // The child's verdict and its edits are independent facts: the pass has been
         // observed declaring "clean" while having edited files (which then get
         // committed as fixes) — record both so the trail cannot contradict itself.
+        // `editsMade` is read AFTER the frozen-path revert so a pass whose only edit
+        // was to a frozen path correctly shows a clean tree (nothing left to commit).
         const editsMade = mode === 'edit' && deps.dirty ? await deps.dirty(p.cwd) : undefined
         await rec(
             `enforce(${mode}): ${verdict.ok ? `clean${verdict.reason ? ` (${verdict.reason})` : ''}` : (verdict.reason ?? 'not clean')}${editsMade ? ' — edits in tree' : ''}`
