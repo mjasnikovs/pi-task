@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-993%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-1405%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -120,9 +120,13 @@ VAPID keys are generated once and persisted to `${XDG_DATA_HOME:-~/.local/share}
 Spawns an isolated child `pi --print` session with read + bash tools. Use it for noisy file/code work that would otherwise flood the main context.
 
 ### `pi-worker-search`
-Runs a Brave Search query and returns a compact markdown list (title · URL · snippet). Use it to discover candidate URLs before fetching.
+Runs a web search and returns a compact markdown list (title · URL · snippet). Use it to discover candidate URLs before fetching. The search engine is set in `/task-config` (default: **Exa**):
 
-> **Requires** `BRAVE_SEARCH_API_KEY` (also accepted as `BRAVE_API_KEY`). Grab a free key at [api.search.brave.com/app/keys](https://api.search.brave.com/app/keys).
+| Provider | Key required? |
+| --- | --- |
+| **Exa** (default) | No |
+| **DuckDuckGo** | No |
+| **Brave** | Yes — `BRAVE_SEARCH_API_KEY` (also accepted as `BRAVE_API_KEY`). Grab a free key at [api.search.brave.com/app/keys](https://api.search.brave.com/app/keys). |
 
 ### `pi-worker-fetch`
 Fetches a URL, cleans HTML to markdown ([Readability](https://github.com/mozilla/readability) + [Turndown](https://github.com/mixmark-io/turndown)), then hands it to an isolated child that extracts **only** the content answering your `query`. The parent never sees the raw page.
@@ -140,22 +144,25 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 
 ## Settings — `/task-config`
 
-Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`. All default to **on**:
+Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`.
 
-| Setting | What it does |
-| --- | --- |
-| **remote** | The remote UI server (QR code, phone access). Turn off to never start it. |
-| **compress reasoning** | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
-| **auto-commit** | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
-| **orientation** | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
-| **verify work** | After each `/task` (and `/task-auto` task) implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). |
-| **enforce guidelines** | After each `/task` (and `/task-auto` task) is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **remote** | on | The remote UI server (QR code, phone access). Turn off to never start it. |
+| **compress reasoning** | on | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
+| **auto-commit** | on | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
+| **orientation** | on | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
+| **verify work** | on | After each `/task` (and `/task-auto` task) implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). |
+| **enforce guidelines** | on | After each `/task` (and `/task-auto` task) is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
+| **parallel research** | off | Run the four research workers concurrently instead of one at a time. Leave off on a single-GPU local backend (concurrent streams split the GPU and slow each other down); turn on only for a parallel-capable model server. |
+| **research cache** | on | Cache docs/search/fetch worker results for the duration of one `/task-auto` run so sibling tasks re-asking the same package/URL + query reuse the first pipeline's digest instead of re-fetching. Per-run isolated, external-only (project-source `.` lookups excluded), success-only. |
+| **search provider** | Exa | Engine behind `pi-worker-search` and freshness/enrichment checks. **Exa** (default) and **DuckDuckGo** need no API key; **Brave** requires `BRAVE_SEARCH_API_KEY`. |
 
 ## Configuration
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required for web search. |
+| `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required only when the **Brave** search provider is selected in `/task-config`. |
 | `XDG_CACHE_HOME` | `pi-worker-docs` | Overrides the docs cache location (defaults to `~/.cache`). |
 | `XDG_DATA_HOME` | remote push | Where the VAPID keypair is stored (defaults to `~/.local/share`). |
 | `PI_REMOTE_PUSH_SUBJECT` | remote push | VAPID JWT `sub` contact. Defaults to the project URL; set your own `mailto:you@domain.com` or `https://…`. |
@@ -168,7 +175,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 993 tests across 70 files
+bun test src/      # 1405 tests across 94 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
