@@ -456,7 +456,7 @@ function autoFm(id: string, state = 'in_progress') {
 
 test('runAutoLoop: runs each title in order, checks boxes, completes', async () => {
     await withTmpTaskDir(async dir => {
-        const {ctx} = makeFakeCtx(dir)
+        const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(
             dir,
             autoFm('TASK_AUTO_0001'),
@@ -494,6 +494,9 @@ test('runAutoLoop: runs each title in order, checks boxes, completes', async () 
         const {frontMatter, body} = await readTaskFile(dir, 'TASK_AUTO_0001')
         expect(frontMatter.state).toBe('completed')
         expect(parseTaskList(body).every(e => e.done)).toBe(true)
+        // Each task announces its position so the user sees progress.
+        expect(captured.notifies.some(nf => /task 1\/2 — A/.test(nf.msg))).toBe(true)
+        expect(captured.notifies.some(nf => /task 2\/2 — B/.test(nf.msg))).toBe(true)
     })
 })
 

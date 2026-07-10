@@ -997,10 +997,12 @@ export async function runAutoLoop(
                 )
                 return
             }
-            active.ui.notify(
-                `${id}: task ${next.index + 1}/${entries.length} — ${next.title}`,
-                'info'
-            )
+            // Progress line. `ctx.ui.notify` is terminal-only, so a remote viewer
+            // never learns how far the run has gotten — mirror it into the session
+            // view too (transient toast, same as announceDone's info path).
+            const progressMsg = `${id}: task ${next.index + 1}/${entries.length} — ${next.title}`
+            active.ui.notify(progressMsg, 'info')
+            publishLifecycleNotice(progressMsg, 'info')
             // If this entry already has a stamped inner id, it was started in a
             // previous (interrupted) run — resume it from its saved phase rather
             // than spawning a fresh task. But the stamped inner file can be gone
