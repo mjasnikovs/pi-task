@@ -153,6 +153,114 @@ describe('reconcileGitState', () => {
     })
 })
 
+// mx5 run 9 items 1 & 2: a gate child that only leaves test-runner output behind
+// judged an equivalent tree — its verdict must stand (only the artifacts are cleaned),
+// and every restored path must be itemised so the trail says WHICH files moved.
+describe('verdict-taint classification', () => {
+    test('created untracked test-results file → cleaned, verdict NOT tainted, itemised', async () => {
+        const dir = makeRepo()
+        const snap = await captureGitState(dir)
+        // Fresh Playwright failure artifact — untracked, not gitignored.
+        fs.mkdirSync(path.join(dir, 'test-results', 'foo-chromium'), {recursive: true})
+        fs.writeFileSync(
+            path.join(dir, 'test-results', 'foo-chromium', 'error-context.md'),
+            'ctx\n'
+        )
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.mutated).toBe(true)
+        expect(rec.verdictTainted).toBe(false)
+        expect(
+            fs.existsSync(path.join(dir, 'test-results', 'foo-chromium', 'error-context.md'))
+        ).toBe(false)
+        expect(
+            rec.actions.some(a => a.startsWith('removed child-created file test-results/'))
+        ).toBe(true)
+    })
+
+    test('modified pre-existing untracked artifact (.last-run.json rerun) → not tainted, itemised', async () => {
+        const dir = makeRepo()
+        // Playwright left this from an earlier turn; it is untracked and pre-exists.
+        fs.mkdirSync(path.join(dir, 'test-results'), {recursive: true})
+        fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), 'old\n')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), 'new-run\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.mutated).toBe(true)
+        expect(rec.verdictTainted).toBe(false) // the 7-of-9 mx5 run-9 false discard
+        // Content restored, and the trail names the exact artifact (item 2).
+        expect(fs.readFileSync(path.join(dir, 'test-results', '.last-run.json'), 'utf8')).toBe(
+            'old\n'
+        )
+        expect(rec.actions).toContain('restored test-runner artifact test-results/.last-run.json')
+    })
+
+    test('modified TRACKED source file → verdict tainted, path itemised (not a generic string)', async () => {
+        const dir = makeRepo()
+        // Commit src.ts so it is tracked-in-HEAD (graded).
+        git(dir, 'add', 'src.ts')
+        git(dir, 'commit', '-q', '-m', 'track src')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 999 // hacked\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+        expect(rec.actions).toContain('restored modified file src.ts')
+        expect(fs.readFileSync(path.join(dir, 'src.ts'), 'utf8')).toBe(
+            'export const a = 2 // work in progress\n'
+        )
+    })
+
+    test('modified UNTRACKED non-artifact (impl new source) → tainted (closes the hole)', async () => {
+        const dir = makeRepo() // new-work.ts is untracked, source-shaped
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'new-work.ts'), 'export const fresh = false // to pass\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+        expect(rec.actions).toContain('restored modified file new-work.ts')
+    })
+
+    test('artifact-pattern path that is TRACKED is graded, not benign', async () => {
+        const dir = makeRepo()
+        // A project that commits its dist/ — editing it IS graded work.
+        fs.mkdirSync(path.join(dir, 'dist'), {recursive: true})
+        fs.writeFileSync(path.join(dir, 'dist', 'bundle.js'), 'v1\n')
+        git(dir, 'add', 'dist/bundle.js')
+        git(dir, 'commit', '-q', '-m', 'track dist')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'dist', 'bundle.js'), 'v2\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+        expect(rec.actions).toContain('restored modified file dist/bundle.js')
+    })
+
+    test('HEAD move and stash push are verdict-tainting', async () => {
+        const dir = makeRepo()
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'second')
+        const snap = await captureGitState(dir)
+        git(dir, 'checkout', '-q', 'HEAD~1')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+    })
+
+    test('many changed artifact files are itemised but capped at 20 + "…and N more"', async () => {
+        const dir = makeRepo()
+        fs.mkdirSync(path.join(dir, 'test-results'), {recursive: true})
+        for (let i = 0; i < 25; i++) {
+            fs.writeFileSync(path.join(dir, 'test-results', `r${i}.txt`), `v${i}\n`)
+        }
+        const snap = await captureGitState(dir)
+        for (let i = 0; i < 25; i++) {
+            fs.writeFileSync(path.join(dir, 'test-results', `r${i}.txt`), `changed${i}\n`)
+        }
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(false)
+        const itemised = rec.actions.filter(a => a.startsWith('restored test-runner artifact '))
+        // 20 concrete paths + 1 "…and 5 more" summary line.
+        expect(itemised.length).toBe(21)
+        expect(itemised.some(a => a === 'restored test-runner artifact …and 5 more')).toBe(true)
+    })
+})
+
 describe('withGitStateGuard', () => {
     test('returns the child result and the reconcile outcome', async () => {
         const dir = makeRepo()

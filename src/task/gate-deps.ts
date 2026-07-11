@@ -301,13 +301,23 @@ export function buildGateDeps(params: {
                         const rec = await reconcileGitState(cwd2, guardSnapshot, sig)
                         lastGuardReconcile = rec
                         if (rec.mutated) {
+                            // Distinguish the two outcomes in the trail: a tainting
+                            // mutation (graded work altered → verdict will be
+                            // discarded) vs benign cleanup (test-runner output the
+                            // child left behind → verdict stands).
+                            const label =
+                                rec.verdictTainted ?
+                                    'child mutated graded state (verdict discarded)'
+                                :   'cleaned child test-runner artifacts (verdict kept)'
                             log(
-                                `=== ${kind} GIT-STATE GUARD — child mutated repo state; restored: ${rec.actions.join('; ')} ===`
+                                `=== ${kind} GIT-STATE GUARD — ${label}; restored: ${rec.actions.join('; ')} ===`
                             )
-                            gateCtx.ui.notify(
-                                `${taskTitle}: ${kind} child mutated repo state — restored (${rec.actions.join('; ').slice(0, 140)}).`,
-                                'warning'
-                            )
+                            if (rec.verdictTainted) {
+                                gateCtx.ui.notify(
+                                    `${taskTitle}: ${kind} child mutated repo state — restored (${rec.actions.join('; ').slice(0, 140)}).`,
+                                    'warning'
+                                )
+                            }
                         }
                     }
                 }
@@ -498,10 +508,14 @@ export function buildGateDeps(params: {
                     )
                 },
                 // Git-state guard result of the most recent child run: a verdict
-                // computed on a tree the child itself mutated is discarded (the
-                // guard already restored the state — see git-state-guard.ts).
+                // computed on a tree the child itself mutated is discarded — but ONLY
+                // when the mutation touched graded state (verdictTainted). A child
+                // that merely left test-runner output behind (test-results/,
+                // playwright-report/ …) judged an equivalent tree; its verdict stands
+                // and the artifacts were still cleaned (mx5 run 9 lost 7 verdicts this
+                // way — see git-state-guard.ts).
                 mutationCheck: () =>
-                    lastGuardReconcile?.mutated ?
+                    lastGuardReconcile?.verdictTainted ?
                         {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
                     :   {mutated: false, detail: ''},
                 // Per-run environment-facts cache under .pi-tasks/ (survives

@@ -59,10 +59,44 @@ export interface GitStateSnapshot {
 }
 
 export interface ReconcileResult {
-    /** true → the child moved repo state; every detected move was restored. */
+    /** true → the child moved repo state; every detected move was restored. This
+     *  covers benign moves too (test-runner output), so it drives logging/notify —
+     *  NOT the verdict decision. Use `verdictTainted` for that. */
     mutated: boolean
+    /** true → the child changed *graded* state: a tracked-in-HEAD file was
+     *  modified/deleted, HEAD/branch was moved, a stash was pushed, or an untracked
+     *  non-artifact (source-shaped) file was modified/deleted. This is the real
+     *  mutate-to-pass class; a verdict computed on such a tree is discarded.
+     *
+     *  Deliberately false for child-CREATED files and for modified/deleted untracked
+     *  *test-runner artifacts* (test-results/, playwright-report/, coverage output,
+     *  *.tsbuildinfo, .last-run.json …): a gate child that merely ran the suite and
+     *  left its report behind judged a tree whose only difference from pre-run is
+     *  regenerable output — discarding a 49-min verify over that is the F-class this
+     *  splits off (mx5 run 9: 7 of 9 guard firings were pure test-results churn). */
+    verdictTainted: boolean
     /** Human-readable restore actions, for the debug log / notify / gate trail. */
     actions: string[]
+}
+
+/**
+ * Untracked paths that are regenerable test/build OUTPUT, not graded source. A gate
+ * child creating or rewriting one of these has not mutated the work under judgement,
+ * so its verdict stands. Gitignored files never reach the snapshot (git add -A skips
+ * them); this list is for the ones a typical project leaves UNIGNORED — Playwright's
+ * `test-results/` and `playwright-report/` above all, the exact churn that discarded
+ * verify verdicts across mx5 run 9. Kept deliberately narrow: anything not matched
+ * here that a child modifies/deletes is treated as graded state (verdict-tainting).
+ */
+const ARTIFACT_PATTERNS: readonly RegExp[] = [
+    /^(?:test-results|playwright-report|coverage|\.nyc_output|dist|build|\.next|\.turbo|\.svelte-kit)\//,
+    /(?:^|\/)\.last-run\.json$/,
+    /\.tsbuildinfo$/
+]
+
+function isBenignArtifact(relPath: string): boolean {
+    const p = relPath.replace(/\\/g, '/')
+    return ARTIFACT_PATTERNS.some(re => re.test(p))
 }
 
 interface GitRunner {
@@ -141,54 +175,109 @@ export async function captureGitState(
     }
 }
 
+/** Paths tracked in the commit `headSha` points at — the "graded" codebase a gate
+ *  child must not rewrite. Empty on any git error (the caller then treats every
+ *  modified/deleted path as tracked, i.e. verdict-tainting — fail safe). */
+async function trackedPathsAt(git: GitRunner, headSha: string): Promise<Set<string>> {
+    const r = await git(['ls-tree', '-r', '--name-only', headSha])
+    if (r.exitCode !== 0) return new Set()
+    return new Set(
+        r.stdout
+            .split('\n')
+            .map(l => l.trim())
+            .filter(l => l.length > 0)
+    )
+}
+
+/** Cap on itemised path lines per class, so a suite that rewrites hundreds of report
+ *  files cannot flood the gate trail. Beyond it, a single "…and N more" line. */
+const ITEMIZE_CAP = 20
+
+function pushCapped(actions: string[], verb: string, paths: string[]): void {
+    const shown = paths.slice(0, ITEMIZE_CAP)
+    for (const p of shown) actions.push(`${verb} ${p}`)
+    const extra = paths.length - shown.length
+    if (extra > 0) actions.push(`${verb} …and ${extra} more`)
+}
+
 /**
  * Restore every file recorded in `beforeTree` (content + deletions) and remove
  * files that exist in `afterTree` but not in `beforeTree` (files the child
  * created). Uses a throwaway index seeded from the snapshot tree; `checkout-index
  * -a -f` re-materialises the snapshot verbatim.
+ *
+ * Returns whether any restored change was *verdict-tainting* — a modified/deleted
+ * path that is tracked-in-HEAD or an untracked non-artifact (see isBenignArtifact).
+ * Creations and test-runner-artifact churn restore identically but do NOT taint.
+ * Each changed path is itemised (capped) so the gate trail says WHICH files moved.
  */
 async function restoreWorktree(
     cwd: string,
     git: GitRunner,
     beforeTree: string,
     afterTree: string,
+    tracked: Set<string>,
     actions: string[]
-): Promise<void> {
+): Promise<{tainted: boolean}> {
     const tmpIndex = path.join(
         os.tmpdir(),
         `pi-task-guard-restore-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
     )
     const env = {GIT_INDEX_FILE: tmpIndex}
+    let tainted = false
     try {
-        // Files present only in afterTree were created by the child — delete them
-        // BEFORE checkout so a restore failure cannot leave both halves stale.
-        const added = await git([
-            'diff-tree',
-            '-r',
-            '--diff-filter=A',
-            '--name-only',
-            beforeTree,
-            afterTree
-        ])
-        if (added.exitCode === 0) {
-            for (const rel of added.stdout.split('\n')) {
-                const name = rel.trim()
+        // Classify every path the child changed BEFORE touching the tree, so the
+        // itemised trail and the taint decision are computed from one diff.
+        const created: string[] = []
+        const artifactChanges: string[] = []
+        const gradedModified: string[] = []
+        const gradedDeleted: string[] = []
+        const status = await git(['diff-tree', '-r', '--name-status', beforeTree, afterTree])
+        if (status.exitCode === 0) {
+            for (const line of status.stdout.split('\n')) {
+                const trimmed = line.trim()
+                if (trimmed.length === 0) continue
+                // "M\tpath", "A\tpath", "D\tpath", "T\tpath" — no -M, so renames show
+                // as a D + an A pair; both get classified on their own merits.
+                const tab = trimmed.indexOf('\t')
+                if (tab < 0) continue
+                const code = trimmed[0]
+                const name = trimmed.slice(tab + 1).trim()
                 if (name.length === 0) continue
-                await fsp.rm(path.join(cwd, name), {force: true}).catch(() => {})
-                actions.push(`removed child-created file ${name}`)
+                if (code === 'A') {
+                    created.push(name)
+                } else if (isBenignArtifact(name) && !tracked.has(name)) {
+                    // Untracked, regenerable test/build output — not graded work.
+                    artifactChanges.push(name)
+                } else if (code === 'D') {
+                    gradedDeleted.push(name)
+                    tainted = true
+                } else {
+                    // M, T, and anything else touching a graded (tracked or
+                    // source-shaped untracked) path is the mutate-to-pass class.
+                    gradedModified.push(name)
+                    tainted = true
+                }
             }
         }
+        // Files the child created — delete them BEFORE checkout so a restore failure
+        // cannot leave both halves stale.
+        for (const name of created) {
+            await fsp.rm(path.join(cwd, name), {force: true}).catch(() => {})
+        }
+        pushCapped(actions, 'removed child-created file', created)
+        pushCapped(actions, 'restored modified file', gradedModified)
+        pushCapped(actions, 'restored deleted file', gradedDeleted)
+        pushCapped(actions, 'restored test-runner artifact', artifactChanges)
+
         const read = await git(['read-tree', beforeTree], env)
         if (read.exitCode !== 0) {
             actions.push('worktree restore FAILED (read-tree)')
-            return
+            return {tainted}
         }
         const co = await git(['checkout-index', '-a', '-f'], env)
-        actions.push(
-            co.exitCode === 0 ?
-                'restored worktree files from pre-run snapshot'
-            :   'worktree restore FAILED (checkout-index)'
-        )
+        if (co.exitCode !== 0) actions.push('worktree restore FAILED (checkout-index)')
+        return {tainted}
     } finally {
         await fsp.rm(tmpIndex, {force: true}).catch(() => {})
     }
@@ -213,9 +302,12 @@ export async function reconcileGitState(
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<ReconcileResult> {
-    if (!before.ok) return {mutated: false, actions: []}
+    if (!before.ok) return {mutated: false, verdictTainted: false, actions: []}
     const git = makeGit(cwd, signal, spawnFn)
     const actions: string[] = []
+    // A child that moved HEAD/branch or pushed a stash swallowed graded work — that
+    // is unambiguously verdict-tainting. Worktree classification adds to this.
+    let tainted = false
 
     // 1. HEAD / branch.
     const head = await git(['rev-parse', '-q', '--verify', 'HEAD'])
@@ -231,13 +323,23 @@ export async function reconcileGitState(
                 `checked HEAD back out to ${target}`
             :   `HEAD restore FAILED (checkout ${target})`
         )
+        tainted = true
     }
 
     // 2. Worktree content.
     if (before.treeSha) {
         const afterTree = await captureWorktreeTree(git)
         if (afterTree && afterTree !== before.treeSha) {
-            await restoreWorktree(cwd, git, before.treeSha, afterTree, actions)
+            const tracked = await trackedPathsAt(git, before.headSha)
+            const {tainted: worktreeTainted} = await restoreWorktree(
+                cwd,
+                git,
+                before.treeSha,
+                afterTree,
+                tracked,
+                actions
+            )
+            tainted = tainted || worktreeTainted
         }
     }
 
@@ -251,6 +353,9 @@ export async function reconcileGitState(
     }
     let stash = await stashNow()
     if (stash !== before.stashSha) {
+        // A child that pushed/popped a stash moved graded work in or out of the tree
+        // (mx5 run 6's stash-and-abandon) — always verdict-tainting.
+        tainted = true
         if (before.stashSha === null || (await stashContains(git, stash, before.stashSha))) {
             let dropped = 0
             while (stash !== before.stashSha && stash !== null && dropped < 10) {
@@ -269,7 +374,7 @@ export async function reconcileGitState(
         }
     }
 
-    return {mutated: actions.length > 0, actions}
+    return {mutated: actions.length > 0, verdictTainted: tainted, actions}
 }
 
 /** Is `ancestorStash` still reachable in the stash reflog chain at `tipSha`? Used to
