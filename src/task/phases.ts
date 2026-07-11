@@ -19,6 +19,11 @@ import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import type {SearchProvider} from '../workers/search-types.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {isIntegrationUnknown} from './unknown-routing.js'
+import {
+    extractUserDirectives,
+    preserveDirectivesBlock,
+    enforceDirectives
+} from './user-directives.js'
 import {getFileInventory} from './file-inventory.js'
 import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
@@ -212,14 +217,23 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
 export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
     const existingFiles = await refineExistingFilesBlock(deps).catch(() => '')
     const contracts = await phaseContractsBlock(deps)
-    return runPhaseWithLoopGuard(
+    // Imperative tool directives the user wrote into the RAW prompt ("via web
+    // search", "fetch <url>"). Refine paraphrases the task and a weak model drops
+    // these some of the time (mx5 run 9: "via web search" vanished, the whole run
+    // made 0 search calls). Hand them to refine as a MUST-PRESERVE block (belt) and
+    // re-check the output below (lever). Empty on an ordinary prompt → refine unchanged.
+    const directives = extractUserDirectives(raw)
+    const directivesBlock = preserveDirectivesBlock(directives)
+    const refined = await runPhaseWithLoopGuard(
         deps,
         'refine',
         'read',
         hint =>
             prependHint(
                 hint,
-                appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles, contracts))
+                appendNoThink(
+                    REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock)
+                )
             ),
         // refine's deliverable is a 4-section text rewrite that never strictly
         // needs a successful read — on a test-writing task against a large
@@ -230,6 +244,16 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         // from the title + design doc alone.
         {degradeOnExhaustion: true}
     )
+    // Deterministic backstop: if the refined spec still dropped a directive, append
+    // it verbatim rather than trusting the paraphrase. No model in this path.
+    const {text, appended} = enforceDirectives(refined, directives)
+    if (appended.length > 0) {
+        deps.logDebug?.(
+            `refine: re-attached ${appended.length} dropped user directive(s): `
+                + appended.map(d => d.kind).join(', ')
+        )
+    }
+    return text
 }
 
 export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Promise<string> {

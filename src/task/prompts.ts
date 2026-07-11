@@ -71,7 +71,8 @@ const REFINE_PROMPT = (
     raw: string,
     planContext?: string,
     existingFiles?: string,
-    contracts?: string
+    contracts?: string,
+    directives?: string
 ) => `${planContext ? planContext + '\n\n---\n\n' : ''}You receive a user's task description for an AI coding agent. Rewrite it to be unambiguous and actionable.
 
 Output structure (four sections, exact headings, in this order):
@@ -99,7 +100,7 @@ Rules:
 - If the task references a design/spec document (an @-path or a named spec file), READ it and treat it as authoritative. Carry its concrete schema verbatim into GOAL/CONSTRAINTS — table and column names, types, endpoint methods and paths, enum values. The task title is only a pointer into that spec: where the title and the spec disagree, follow the spec, and never introduce a table, column, endpoint, or dependency the spec does not define.
 - CITE interface WIRING, do NOT synthesize it. A wiring specific — how modules/endpoints/files connect (a mount prefix, a route/mount table, a module→path mapping, an exported function/type signature, a file or module layout) — must be citable from the design or the CROSS-SLICE CONTRACTS. The design often pins the interface FACTS (the exact endpoint paths, exported names, layouts) WITHOUT stating the wiring that produces them; when it does, any wiring you write MUST reproduce those pinned facts EXACTLY. Do NOT infer a "uniform" or "tidy" pattern from them — e.g. do not assume one module maps to one mount prefix when the design's pinned facts for that module do not all sit under a single prefix (that exact inference is a seam bug: the consumers follow the pinned facts, the assembly follows your invented pattern, and the seam ships broken). If the design pins neither the fact nor the wiring, leave the detail unspecified rather than inventing a specific.
 - Do not output any preamble, commentary, or markdown headings beyond the four sections above.
-${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}${existingFiles && existingFiles.trim() ? `\n${existingFiles.trim()}\n` : ''}
+${directives && directives.trim() ? `\n${directives.trim()}\n` : ''}${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}${existingFiles && existingFiles.trim() ? `\n${existingFiles.trim()}\n` : ''}
 Task: ${raw}`
 
 // ─── Research fan-out prompts ─────────────────────────────────────────────────
