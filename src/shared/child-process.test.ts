@@ -360,7 +360,10 @@ describe('runChild process-group reaping', () => {
         expect(opts.detached).toBeUndefined()
     })
 
-    test('reaps the whole process group on close (negative-pid signal)', async () => {
+    // Negative-pid group signalling is POSIX-only; on Windows the reap path uses
+    // `taskkill /T /F` (a spawn), which this process.kill spy does not observe.
+    const itPosix = process.platform === 'win32' ? test.skip : test
+    itPosix('reaps the whole process group on close (negative-pid signal)', async () => {
         const {spawn} = recordingSpawn(4242)
         const killed: Array<{pid: number; sig: string | number}> = []
         const realKill = process.kill

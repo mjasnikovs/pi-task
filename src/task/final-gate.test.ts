@@ -380,13 +380,22 @@ describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', ()
 
     test('port held by OUR OWN dev server → reaped, boot retried, and it passes', async () => {
         // First boot hits EADDRINUSE; after we "reap", the retry sees a clean start.
-        const startState = path.join(makeDir(), 'booted')
-        const startScript =
-            `const fs=require('fs');`
-            + `if(fs.existsSync(${JSON.stringify(startState)})){process.exit(0)}`
-            + `fs.writeFileSync(${JSON.stringify(startState)},'1');`
-            + `process.stderr.write('listen EADDRINUSE :3000');process.exit(1)`
-        const dir = makeDir({scripts: {start: `node -e "${startScript.replace(/"/g, '\\"')}"`}})
+        // The boot logic lives in a .mjs FILE (referenced as `node boot.mjs`) rather
+        // than an inline `node -e "…"` — the latter's nested quoting + a
+        // JSON-stringified Windows path (backslashes) break under cmd.exe on CI.
+        const dir = makeDir({scripts: {start: 'node boot.mjs'}})
+        fs.writeFileSync(
+            path.join(dir, 'boot.mjs'),
+            [
+                "import {existsSync, writeFileSync} from 'node:fs'",
+                // Resolve beside this script, so it works whatever the cwd is.
+                "const flag = new URL('booted', import.meta.url)",
+                'if (existsSync(flag)) process.exit(0)',
+                "writeFileSync(flag, '1')",
+                "process.stderr.write('listen EADDRINUSE :3000')",
+                'process.exit(1)'
+            ].join('\n')
+        )
         let reaped = 0
         const out = await runFinalIntegrationGate(dir, 900_000, 300, {
             findPortHolder: () => ({pid: 4242, command: 'bun run start'}),

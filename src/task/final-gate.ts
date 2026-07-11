@@ -213,9 +213,13 @@ function isAddressInUse(text: string): boolean {
     )
 }
 
-/** Best-effort port number from a bind-failure message, for the diagnosis line. */
+/** Best-effort port number from a bind-failure message, for the diagnosis line. The
+ *  digit run ends on any non-digit (a `(?!\d)` lookahead, NOT `\b`): runtimes often
+ *  print ":3000" flush against the next token with no separating space/newline
+ *  ("…:3000error: script exited"), where a trailing `\b` would never match. */
 function extractPort(text: string): number | null {
-    const m = /(?:port|:)\s*(\d{2,5})\b/i.exec(text) ?? /\baddress[^0-9]*(\d{2,5})\b/i.exec(text)
+    const m =
+        /(?:port|:)\s*(\d{2,5})(?!\d)/i.exec(text) ?? /\baddress[^0-9]*(\d{2,5})(?!\d)/i.exec(text)
     if (!m) return null
     const n = Number(m[1])
     return n > 0 && n < 65536 ? n : null
