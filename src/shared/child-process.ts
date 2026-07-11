@@ -1,4 +1,4 @@
-import {spawn as defaultSpawn} from 'node:child_process'
+import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
 
 /** Grace period between SIGTERM and SIGKILL (ms). */
@@ -28,6 +28,9 @@ export interface ProcLike extends EventEmitter {
     stdout: EventEmitter | null
     stderr: EventEmitter | null
     killed: boolean
+    /** OS pid; used to signal the child's whole process GROUP (orphan reaping). May
+     *  be undefined for a mock spawn or a spawn that failed. */
+    pid?: number
     kill(signal: string): boolean | void
 }
 
@@ -41,6 +44,11 @@ export type SpawnFn = (
         /** Set only when the invocation needs env overrides (e.g. GIT_INDEX_FILE);
          *  absent → the child inherits this process's environment as before. */
         env?: NodeJS.ProcessEnv
+        /** true → give the child its own process group (POSIX `detached`), so any
+         *  server it backgrounds (`bun run dev &`) can be reaped as a group when the
+         *  child exits instead of leaking as an orphan holding a port (mx5 run 9
+         *  item 3). Set only for model children (json-events); plumbing stays put. */
+        detached?: boolean
     }
 ) => ProcLike
 
@@ -310,10 +318,17 @@ export function runChild(
         // prompt is present we open stdin as a pipe; otherwise keep it 'ignore'
         // (git and other arg-only spawns are unaffected). See GitHub issue #1.
         const usesStdin = invocation.stdin !== undefined
+        // Model children (json-events) run arbitrary bash — they can `bun run dev &`
+        // a server that outlives the child and holds a port, wrecking the final gate
+        // with a self-inflicted EADDRINUSE (mx5 run 9 item 3). Spawn them in their
+        // OWN process group so every such grandchild can be reaped as a unit on exit.
+        // Plumbing (git, mode:'text') never backgrounds anything and stays in-group.
+        const ownGroup = opts?.mode === 'json-events'
         const proc = spawn(invocation.command, invocation.args, {
             cwd,
             shell: false,
             stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+            ...(ownGroup ? {detached: true} : {}),
             ...(invocation.env ? {env: invocation.env} : {})
         })
 
@@ -323,13 +338,34 @@ export function runChild(
             proc.stdin?.end()
         }
 
-        // One kill path, shared by user-abort and loop-kill: SIGTERM, then
-        // SIGKILL after a grace period if the child ignored the term.
+        // Reap the child's whole process group — the child itself AND anything it
+        // backgrounded. No-op unless the child owns a group (ownGroup) and we have a
+        // pid; ESRCH (group already gone) is swallowed. POSIX: negative-pid signals
+        // the group; Windows has no groups, so taskkill /T tears down the tree.
+        const reapGroup = (sig: NodeJS.Signals): void => {
+            if (!ownGroup || !proc.pid) return
+            try {
+                if (process.platform === 'win32') {
+                    spawnSyncDefault('taskkill', ['/pid', String(proc.pid), '/T', '/F'])
+                } else {
+                    process.kill(-proc.pid, sig)
+                }
+            } catch {
+                // group already gone
+            }
+        }
+
+        // One kill path, shared by user-abort and loop-kill: SIGTERM, then SIGKILL
+        // after a grace period if the child ignored the term. For a group-owning
+        // (model) child, ALSO sweep the group so anything it backgrounded dies with
+        // it — proc.kill hits only the leader, reapGroup the grandchildren.
         const killProc = (): void => {
             aborted = true
             proc.kill('SIGTERM')
+            if (ownGroup) reapGroup('SIGTERM')
             setTimeout(() => {
                 if (!proc.killed) proc.kill('SIGKILL')
+                if (ownGroup) reapGroup('SIGKILL')
             }, KILL_GRACE_MS)
         }
 
@@ -388,6 +424,14 @@ export function runChild(
         })
         proc.on('close', (code: number | null) => {
             if (stallTimer) clearInterval(stallTimer)
+            // The child has exited, but anything it backgrounded (a dev server) may
+            // still hold its process group and a port — reap the group so the next
+            // gate's boot check does not collide with our own orphan. Best-effort:
+            // SIGTERM now, SIGKILL shortly after for anything that ignored it.
+            if (ownGroup) {
+                reapGroup('SIGTERM')
+                setTimeout(() => reapGroup('SIGKILL'), 1_000).unref()
+            }
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
             resolve({

@@ -196,7 +196,87 @@ export function discoverBootCommand(cwd: string): HealthCommand | null {
     return null
 }
 
-type BootOutcome = {outcome: 'skip' | 'pass'} | {outcome: 'fail'; detail: string}
+type BootOutcome =
+    | {outcome: 'skip' | 'pass'}
+    | {outcome: 'fail'; detail: string}
+    // An address-already-in-use bind failure: the app code is fine, a process is
+    // sitting on the port (mx5 run 9: a gate child's orphaned `bun run dev` held
+    // :3000, so the final gate's own `bun run start` died with EADDRINUSE and got
+    // mislabeled an app FAIL). Handled distinctly from a real fail.
+    | {outcome: 'orphan-port'; detail: string; port: number | null}
+
+/** Recognise an "address already in use" bind failure across runtimes (Node
+ *  EADDRINUSE, Bun "Is port N in use?", Go "address already in use", generic). */
+function isAddressInUse(text: string): boolean {
+    return /EADDRINUSE|address already in use|address in use|port \d+ (?:is |already )?in use/i.test(
+        text
+    )
+}
+
+/** Best-effort port number from a bind-failure message, for the diagnosis line. */
+function extractPort(text: string): number | null {
+    const m = /(?:port|:)\s*(\d{2,5})\b/i.exec(text) ?? /\baddress[^0-9]*(\d{2,5})\b/i.exec(text)
+    if (!m) return null
+    const n = Number(m[1])
+    return n > 0 && n < 65536 ? n : null
+}
+
+/** Injectable environment probes for the boot check's orphan-port recovery, so the
+ *  reap-and-retry path is deterministically testable without a real listener. */
+export interface BootDeps {
+    /** The pid + command line holding `port` in LISTEN, or null if none/unknown. */
+    findPortHolder?: (port: number) => {pid: number; command: string} | null
+    /** Terminate a pid we attribute to ourselves; returns whether it was signalled. */
+    reap?: (pid: number) => boolean
+}
+
+/** Default port-holder lookup: `lsof` first, then `ss`/`fuser`. Returns null on any
+ *  failure (the diagnosis then omits the pid — never blocks). */
+function defaultFindPortHolder(port: number): {pid: number; command: string} | null {
+    try {
+        const t = spawnSync('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t', '-P', '-n'], {
+            encoding: 'utf8',
+            timeout: 4000
+        })
+        const pid = Number((t.stdout ?? '').split('\n')[0]?.trim())
+        if (!Number.isInteger(pid) || pid <= 0) return null
+        const ps = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], {
+            encoding: 'utf8',
+            timeout: 4000
+        })
+        return {pid, command: (ps.stdout ?? '').trim() || `pid ${pid}`}
+    } catch {
+        return null
+    }
+}
+
+function defaultReap(pid: number): boolean {
+    try {
+        process.kill(pid, 'SIGTERM')
+        setTimeout(() => {
+            try {
+                process.kill(pid, 'SIGKILL')
+            } catch {
+                // already gone
+            }
+        }, 1_000).unref()
+        return true
+    } catch {
+        return false
+    }
+}
+
+/** Does the port holder look like one of OUR gate children (a `dev`/`start` run of
+ *  the discovered boot command)? Only then do we reap it — never a foreign process
+ *  the user happens to be running. */
+function holderIsOurs(command: string, boot: HealthCommand): boolean {
+    const script = boot[1][boot[1].length - 1] ?? '' // 'start' | 'dev' | 'run'
+    const c = command.toLowerCase()
+    return (
+        (c.includes('bun') || c.includes('node') || c.includes('npm') || c.includes('make'))
+        && (c.includes(` ${script}`) || c.endsWith(script))
+    )
+}
 
 /**
  * Exercise the start command ONCE, with no port/URL/framework knowledge — the
@@ -262,6 +342,17 @@ export function runBootCheck(
             }
             const what = status !== null ? `exited ${status}` : `was killed by ${signal}`
             const tail = outputTail(out, err)
+            // A bind collision is an environment condition, not an app defect — hand
+            // it back distinctly so the gate can reap our own orphan and retry rather
+            // than reporting the app "crashed" (mx5 run 9 item 3).
+            if (isAddressInUse(`${out}\n${err}`)) {
+                settle({
+                    outcome: 'orphan-port',
+                    port: extractPort(`${out}\n${err}`),
+                    detail: `${what}${tail ? ` — ${tail}` : ''}`
+                })
+                return
+            }
             settle({outcome: 'fail', detail: `${what}${tail ? ` — ${tail}` : ''}`})
         })
     })
@@ -320,6 +411,30 @@ function runGateCommand(
 }
 
 /**
+ * Boot check hit an address-in-use bind failure. If the port is held by one of OUR
+ * own orphaned gate children (a `dev`/`start` run), reap it and retry the boot once
+ * so the app gets a fair launch; otherwise leave the (foreign) holder alone and let
+ * the caller emit the harness diagnosis. Never reaps a process we cannot attribute
+ * to ourselves.
+ */
+async function recoverOrphanPort(
+    cwd: string,
+    boot: HealthCommand,
+    first: {outcome: 'orphan-port'; detail: string; port: number | null},
+    bootGraceMs: number,
+    deps: BootDeps
+): Promise<BootOutcome> {
+    if (first.port === null) return first
+    const holder = (deps.findPortHolder ?? defaultFindPortHolder)(first.port)
+    if (!holder || !holderIsOurs(holder.command, boot)) return first
+    const reaped = (deps.reap ?? defaultReap)(holder.pid)
+    if (!reaped) return first
+    // Give the OS a moment to release the socket, then re-run the boot once.
+    await new Promise(r => setTimeout(r, 1_500))
+    return runBootCheck(cwd, boot, bootGraceMs)
+}
+
+/**
  * Run the final gate: static analysis first, then the lockfile consistency
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
@@ -328,7 +443,8 @@ function runGateCommand(
 export async function runFinalIntegrationGate(
     cwd: string,
     timeoutMs = 900_000,
-    bootGraceMs = 10_000
+    bootGraceMs = 10_000,
+    bootDeps: BootDeps = {}
 ): Promise<FinalGateOutcome> {
     const stat = runRepoHealthCheck(cwd)
     // ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
@@ -376,9 +492,26 @@ export async function runFinalIntegrationGate(
     }
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
-        const b = await runBootCheck(cwd, boot, bootGraceMs)
+        let b = await runBootCheck(cwd, boot, bootGraceMs)
+        if (b.outcome === 'orphan-port') {
+            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDeps)
+        }
         if (b.outcome === 'fail') {
             return withDebts({ok: false, reason: `boot check: \`${label}\` ${b.detail}`})
+        }
+        if (b.outcome === 'orphan-port') {
+            // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
+            // FAIL: name the port and (when known) the process squatting on it.
+            const holder =
+                b.port !== null ? (bootDeps.findPortHolder ?? defaultFindPortHolder)(b.port) : null
+            const who =
+                holder ? ` — held by an orphaned process (pid ${holder.pid}: ${holder.command})`
+                : b.port !== null ? ` — port ${b.port} is held by another process`
+                : ''
+            return withDebts({
+                ok: false,
+                reason: `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`
+            })
         }
         if (b.outcome === 'pass') ran.push(label)
     }

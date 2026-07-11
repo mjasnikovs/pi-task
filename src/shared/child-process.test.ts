@@ -329,3 +329,68 @@ describe('summarizeToolArgs — search/fetch workers', () => {
         expect(summarizeToolArgs('pi-worker-fetch', {})).toBe('')
     })
 })
+
+// mx5 run 9 item 3: model children run arbitrary bash and can `bun run dev &` a
+// server that outlives the child, holding a port and wrecking the final gate's own
+// `bun run start` with a self-inflicted EADDRINUSE. They must be spawned in their
+// own process group and that group reaped on exit; plumbing (text mode) must not be.
+describe('runChild process-group reaping', () => {
+    /** A spawn that records the options it was handed and returns a controllable proc. */
+    function recordingSpawn(pid: number | undefined): {spawn: SpawnFn; opts: {detached?: boolean}} {
+        const opts: {detached?: boolean} = {}
+        const spawn = ((_cmd: string, _args: string[], o: {detached?: boolean}) => {
+            opts.detached = o.detached
+            const p = makeProc()
+            p.pid = pid
+            queueMicrotask(() => p.emit('close', 0))
+            return p
+        }) as unknown as SpawnFn
+        return {spawn, opts}
+    }
+
+    test('json-events child is spawned detached (its own process group)', async () => {
+        const {spawn, opts} = recordingSpawn(4242)
+        await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'json-events'})
+        expect(opts.detached).toBe(true)
+    })
+
+    test('text child (git/plumbing) is NOT detached', async () => {
+        const {spawn, opts} = recordingSpawn(4242)
+        await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
+        expect(opts.detached).toBeUndefined()
+    })
+
+    test('reaps the whole process group on close (negative-pid signal)', async () => {
+        const {spawn} = recordingSpawn(4242)
+        const killed: Array<{pid: number; sig: string | number}> = []
+        const realKill = process.kill
+        // Intercept so the test never signals a real group; record the calls.
+        process.kill = ((p: number, s: string | number) => {
+            killed.push({pid: p, sig: s})
+            return true
+        }) as typeof process.kill
+        try {
+            await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'json-events'})
+        } finally {
+            process.kill = realKill
+        }
+        // The group (negative pid) got a SIGTERM once the child closed.
+        expect(killed.some(k => k.pid === -4242 && k.sig === 'SIGTERM')).toBe(true)
+    })
+
+    test('text child does not signal any process group on close', async () => {
+        const {spawn} = recordingSpawn(4242)
+        const killed: number[] = []
+        const realKill = process.kill
+        process.kill = ((p: number) => {
+            killed.push(p)
+            return true
+        }) as typeof process.kill
+        try {
+            await runChild(spawn, noopInvocation, '/tmp', undefined, {mode: 'text'})
+        } finally {
+            process.kill = realKill
+        }
+        expect(killed).toEqual([])
+    })
+})

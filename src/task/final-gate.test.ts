@@ -216,13 +216,15 @@ describe('runFinalIntegrationGate', () => {
         const dir = makeDir({
             scripts: {
                 test: 'exit 0',
-                start: 'node -e \'process.stderr.write("port 3000 in use"); process.exit(3)\''
+                // A genuine app crash (not a bind collision — that path is now the
+                // distinct orphan-port diagnosis; see the item-3 tests below).
+                start: 'node -e \'process.stderr.write("TypeError: boom"); process.exit(3)\''
             }
         })
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('boot check: `bun run start` exited 3')
-        expect(out.reason).toContain('port 3000 in use')
+        expect(out.reason).toContain('TypeError: boom')
     })
 
     test('a long-running start command PASSES the gate and is named', async () => {
@@ -315,6 +317,86 @@ describe('runBootCheck', () => {
     test('exit 127 inside the script chain is an env gap → skip', async () => {
         const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(127)'))
         expect(r.outcome).toBe('skip')
+    })
+
+    // mx5 run 9 item 3: a bind collision is an environment condition, not an app
+    // crash — it must be classified distinctly (orphan-port), never a bare FAIL.
+    test('EADDRINUSE bind failure → orphan-port with the port, not a FAIL', async () => {
+        const r = await runBootCheck(
+            os.tmpdir(),
+            nodeScript(
+                "process.stderr.write('error: listen EADDRINUSE: address already in use :3000'); process.exit(1)"
+            )
+        )
+        expect(r.outcome).toBe('orphan-port')
+        expect((r as {port: number | null}).port).toBe(3000)
+    })
+
+    test('Bun\'s "Is port N in use?" phrasing is also recognised', async () => {
+        const r = await runBootCheck(
+            os.tmpdir(),
+            nodeScript(
+                "process.stderr.write('Failed to start server. Is port 3000 in use?'); process.exit(1)"
+            )
+        )
+        expect(r.outcome).toBe('orphan-port')
+        expect((r as {port: number | null}).port).toBe(3000)
+    })
+
+    test('an ordinary non-zero exit is still a plain FAIL (not orphan-port)', async () => {
+        const r = await runBootCheck(
+            os.tmpdir(),
+            nodeScript("process.stderr.write('TypeError: undefined'); process.exit(1)")
+        )
+        expect(r.outcome).toBe('fail')
+    })
+})
+
+// mx5 run 9 item 3, layer (b): the final gate must reap OUR OWN orphaned dev server
+// and retry, or — if the port is held by something we cannot attribute to ourselves
+// — surface a HARNESS diagnosis rather than a bare app FAIL.
+describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', () => {
+    // A start script that binds a listener on the injected pid's behalf would need a
+    // real server; instead we drive the classifier + recovery with an EADDRINUSE
+    // start script and injected BootDeps, keeping the test hermetic.
+    const eaddrinuseStart = "process.stderr.write('listen EADDRINUSE :3000'); process.exit(1)"
+
+    test('port held by a FOREIGN process → harness diagnosis, not an app FAIL', async () => {
+        const dir = makeDir({scripts: {start: `node -e "${eaddrinuseStart}"`}})
+        let reaped = 0
+        const out = await runFinalIntegrationGate(dir, 900_000, 300, {
+            findPortHolder: () => ({pid: 99999, command: '/usr/bin/postgres -D /data'}),
+            reap: () => {
+                reaped++
+                return true
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(reaped).toBe(0) // never kill a process we don't own
+        expect(out.reason).toContain('orphaned process / port already in use')
+        expect(out.reason).toContain('harness condition, not an app fault')
+        expect(out.reason).not.toMatch(/exited 1\s*$/)
+    })
+
+    test('port held by OUR OWN dev server → reaped, boot retried, and it passes', async () => {
+        // First boot hits EADDRINUSE; after we "reap", the retry sees a clean start.
+        const startState = path.join(makeDir(), 'booted')
+        const startScript =
+            `const fs=require('fs');`
+            + `if(fs.existsSync(${JSON.stringify(startState)})){process.exit(0)}`
+            + `fs.writeFileSync(${JSON.stringify(startState)},'1');`
+            + `process.stderr.write('listen EADDRINUSE :3000');process.exit(1)`
+        const dir = makeDir({scripts: {start: `node -e "${startScript.replace(/"/g, '\\"')}"`}})
+        let reaped = 0
+        const out = await runFinalIntegrationGate(dir, 900_000, 300, {
+            findPortHolder: () => ({pid: 4242, command: 'bun run start'}),
+            reap: () => {
+                reaped++
+                return true
+            }
+        })
+        expect(reaped).toBe(1) // our own orphan was reaped
+        expect(out.ok).toBe(true) // retry booted clean
     })
 })
 
