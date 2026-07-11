@@ -141,6 +141,10 @@ function realGit(cwd: string): FrozenGit {
 function makeRepo(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-frozen-test-'))
     gitCli(dir, 'init', '-q', '-b', 'main')
+    // Pin line endings so LF fixtures round-trip byte-for-byte through git on
+    // Windows CI (which defaults to core.autocrlf=true). Repo-level so the
+    // product's revert git calls honor it too.
+    gitCli(dir, 'config', 'core.autocrlf', 'false')
     fs.writeFileSync(path.join(dir, 'schema.ts'), 'export const price = positive\n')
     fs.mkdirSync(path.join(dir, 'src'))
     fs.writeFileSync(path.join(dir, 'src', 'server.ts'), 'export const boot = 1\n')

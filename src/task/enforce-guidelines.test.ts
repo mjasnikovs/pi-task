@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 import {EventEmitter} from 'node:events'
+import {basename} from 'node:path'
 import {
     captureCommitDiff,
     discoverGuidelines,
@@ -21,7 +22,9 @@ import {USER_CANCELLED} from './child-runner.js'
 
 function fakeReader(files: Record<string, string>) {
     return async (p: string): Promise<string> => {
-        const name = p.split('/').pop()!
+        // discoverGuidelines builds the path with path.join → native separators
+        // on Windows; basename handles both '/' and '\'.
+        const name = basename(p)
         if (name in files) return files[name]
         throw new Error('ENOENT')
     }

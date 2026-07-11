@@ -65,6 +65,8 @@ test('delete from chunks fires the FTS5 delete trigger', () => {
 })
 
 test('defaultCachePath() ends with pi-worker/docs.sqlite', () => {
-    const p = defaultCachePath()
+    // defaultCachePath is a real filesystem path (native separators on Windows);
+    // normalize before the POSIX-style suffix check.
+    const p = defaultCachePath().replace(/\\/g, '/')
     expect(p.endsWith('/pi-worker/docs.sqlite')).toBe(true)
 })

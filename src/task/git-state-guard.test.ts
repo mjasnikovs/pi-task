@@ -23,6 +23,11 @@ function git(cwd: string, ...args: string[]): string {
 function makeRepo(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-guard-test-'))
     git(dir, 'init', '-q', '-b', 'main')
+    // Pin line endings so content round-trips byte-for-byte through git on
+    // Windows (the CI runner defaults to core.autocrlf=true, which would rewrite
+    // the LF fixtures to CRLF on checkout). Repo-level so the product's own git
+    // calls during reconcile honor it too, not just this file's git() helper.
+    git(dir, 'config', 'core.autocrlf', 'false')
     fs.writeFileSync(path.join(dir, 'committed.txt'), 'committed v1\n')
     fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 1\n')
     git(dir, 'add', '-A')

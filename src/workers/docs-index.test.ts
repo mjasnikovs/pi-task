@@ -1,5 +1,6 @@
 import {test, expect} from 'bun:test'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import {openCache} from './docs-cache.js'
 import {ensureIndexed} from './docs-index.js'
@@ -50,7 +51,7 @@ test('ensureIndexed is idempotent on second call (cache hit)', () => {
 
 test('ensureIndexed re-ingests when content hash changes', () => {
     const cache = openCache(':memory:')
-    const tmpPkgRoot = fs.mkdtempSync('/tmp/docs-index-test-')
+    const tmpPkgRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-index-test-'))
     try {
         fs.writeFileSync(
             path.join(tmpPkgRoot, 'package.json'),

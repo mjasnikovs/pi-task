@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {resolve} from 'node:path'
 import singleReadExtension from './single-read-extension.js'
 
 type Handler = (event: {toolName: string; input: unknown}) => unknown
@@ -27,7 +28,8 @@ describe('single-read-extension', () => {
         expect(handler!(ev)).toBeUndefined()
         const blocked = handler!(ev) as {block?: boolean; reason?: string}
         expect(blocked.block).toBe(true)
-        expect(blocked.reason).toContain('/tmp/x.ts')
+        // The guard keys on the resolved absolute path (native separators on Windows).
+        expect(blocked.reason).toContain(resolve(process.cwd(), '/tmp/x.ts'))
     })
 
     test('allows the first grep, blocks an identical repeat', () => {

@@ -165,7 +165,10 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         'INSERT INTO chunks (name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?)'
     )
     for (const abs of files.dts) {
-        const rel = path.relative(pkg.root, abs)
+        // Store the file identifier POSIX-style so indexed docs are identical
+        // across platforms (this value is a model-facing label, never re-joined
+        // to the filesystem — node reads forward slashes fine on Windows too).
+        const rel = path.relative(pkg.root, abs).replace(/\\/g, '/')
         let raw: string
         try {
             raw = fs.readFileSync(abs, 'utf8')
@@ -181,7 +184,7 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         }
     }
     if (files.readme) {
-        const rel = path.relative(pkg.root, files.readme)
+        const rel = path.relative(pkg.root, files.readme).replace(/\\/g, '/')
         const raw = fs.readFileSync(files.readme, 'utf8')
         const chunks = chunkReadme(raw)
         if (chunks.length) {
