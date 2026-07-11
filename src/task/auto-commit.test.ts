@@ -1,5 +1,9 @@
 import {expect, test} from 'bun:test'
-import {gitCommitAll, gitUnmergedPaths, gitStashRef} from './auto-commit.js'
+import {execFileSync} from 'node:child_process'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import {gitCommitAll, gitUnmergedPaths, gitStashRef, gitDropLastCommit} from './auto-commit.js'
 import {fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
 
 /**
@@ -179,4 +183,70 @@ test('gitStashRef: sha when a stash exists, null when not', async () => {
     expect(await gitStashRef('/repo', undefined, withStash)).toBe('abc123')
     const noStash = fakeSpawnByPrompt(() => ({stdout: '', exitCode: 1}))
     expect(await gitStashRef('/repo', undefined, noStash)).toBeNull()
+})
+
+// mx5 run 9 item 8: the enforce-revert path (`git reset --hard HEAD~1`) erased the
+// gate trail because .pi-tasks is TRACKED — TASK_0007/0008/0012 lost their whole
+// post-snapshot trail (the "commit:"/"enforce(edit)"/resolution lines), so a
+// committed-then-reverted task looked as if it had never been committed. The revert
+// must undo CODE and preserve the forensic trail. Real repo — the reset touches
+// actual files, so a faked spawn would test nothing.
+function realRepo(): {dir: string; g: (...a: string[]) => string} {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-autocommit-'))
+    const g = (...a: string[]): string =>
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], {
+            cwd: dir,
+            encoding: 'utf8'
+        }).trim()
+    g('init', '-q', '-b', 'main')
+    g('config', 'core.autocrlf', 'false')
+    return {dir, g}
+}
+
+test('gitDropLastCommit reverts code but PRESERVES the .pi-tasks trail (run 9 item 8)', async () => {
+    const {dir, g} = realRepo()
+    fs.mkdirSync(path.join(dir, '.pi-tasks'))
+    const trailPath = path.join(dir, '.pi-tasks', 'TASK_0001.md')
+    fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 1\n')
+    // Snapshot commit: as in task-gates, the "commit:" line is written AFTER this,
+    // so the snapshot's TASK.md only has the pre-commit trail.
+    fs.writeFileSync(trailPath, '## gates\n- verify: PASS\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'task: A (TASK_0001)')
+    // Post-snapshot trail lines (the ones the bug erased) + the enforce pass's edit.
+    fs.appendFileSync(trailPath, '- commit: task snapshot committed\n- enforce(edit): clean\n')
+    fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 1 // enforce reformatted\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'ENFORCE GUIDELINES')
+
+    // Re-verify regressed → drop the enforce commit.
+    await gitDropLastCommit(dir)
+
+    // Code is reverted to the verified snapshot…
+    expect(fs.readFileSync(path.join(dir, 'src.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(g('log', '--oneline', '-1')).toContain('task: A (TASK_0001)')
+    // …but every post-snapshot trail line survives (the regression erased these).
+    const trail = fs.readFileSync(trailPath, 'utf8')
+    expect(trail).toContain('commit: task snapshot committed')
+    expect(trail).toContain('enforce(edit): clean')
+})
+
+test('gitDropLastCommit preserves a nested .pi-tasks debug log across the reset', async () => {
+    const {dir, g} = realRepo()
+    fs.mkdirSync(path.join(dir, '.pi-tasks'))
+    fs.writeFileSync(path.join(dir, 'code.ts'), 'v1\n')
+    fs.writeFileSync(path.join(dir, '.pi-tasks', 'verify-debug.log'), 'run 1\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'task: B (TASK_0002)')
+    fs.appendFileSync(path.join(dir, '.pi-tasks', 'verify-debug.log'), 'run 2 (post-snapshot)\n')
+    fs.writeFileSync(path.join(dir, 'code.ts'), 'v2\n')
+    g('add', '-A')
+    g('commit', '-q', '-m', 'ENFORCE GUIDELINES')
+
+    await gitDropLastCommit(dir)
+
+    expect(fs.readFileSync(path.join(dir, 'code.ts'), 'utf8')).toBe('v1\n') // code reverted
+    expect(fs.readFileSync(path.join(dir, '.pi-tasks', 'verify-debug.log'), 'utf8')).toContain(
+        'run 2 (post-snapshot)'
+    ) // log preserved
 })

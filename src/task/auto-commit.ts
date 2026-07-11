@@ -6,7 +6,13 @@
  * outside a git repo, with nothing staged, or on any git error we report the
  * reason and let the loop continue (the task already succeeded).
  */
+import * as fsp from 'node:fs/promises'
+import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+
+/** The gate machinery's own state/forensic dir — the trail, debug logs, and per-run
+ *  ledgers. Preserved verbatim across a revert (see gitDropLastCommit). */
+const TRAIL_DIR = '.pi-tasks'
 
 export interface CommitResult {
     committed: boolean
@@ -172,11 +178,15 @@ export async function gitCommitAll(
  * `git reset --hard HEAD~1` throws the enforce commit away and brings back the
  * verified task commit underneath it.
  *
- * `reset --hard` is safe here precisely because it runs right after the enforce
- * commit: the working tree is clean (everything was just committed), so there is
- * no unrelated uncommitted work for it to destroy. HEAD~1 is the verified task
- * commit. The enforcement child runs `read,edit` with no `write`, so the dropped
- * commit contains only its in-place source edits — nothing else to preserve.
+ * `reset --hard` targets the enforce pass's in-place SOURCE edits. But it must NOT
+ * rewind the forensic gate trail: `.pi-tasks/` is frequently TRACKED (the per-task
+ * snapshots stage it via `git add -A`), so a bare reset restores TASK_00NN.md to the
+ * snapshot commit and ERASES every trail line written after it — the "commit: task
+ * snapshot committed", "enforce(edit): …", and resolution lines (mx5 run 9:
+ * TASK_0007/0008/0012 each lost their whole post-snapshot trail on this exact path,
+ * so a passing-then-reverted task looked like it had never been committed). So the
+ * trail is snapshotted before the reset and restored after — the revert undoes code,
+ * the audit log survives.
  *
  * Best-effort and never throws: a git failure is swallowed (the caller has
  * already decided to keep the verified work; a failed reset only leaves the
@@ -187,5 +197,48 @@ export async function gitDropLastCommit(
     signal?: AbortSignal,
     spawnFn?: SpawnFn
 ): Promise<void> {
+    const trail = await snapshotTrail(cwd)
     await git(cwd, ['reset', '--hard', 'HEAD~1'], signal, spawnFn)
+    await restoreTrail(cwd, trail)
+}
+
+/** Read every file under `.pi-tasks/` into memory (relative path → bytes). Best-effort:
+ *  a missing dir or unreadable file is skipped, so this never blocks the revert. */
+async function snapshotTrail(cwd: string): Promise<Map<string, Buffer>> {
+    const out = new Map<string, Buffer>()
+    const root = path.join(cwd, TRAIL_DIR)
+    const walk = async (dir: string): Promise<void> => {
+        let entries
+        try {
+            entries = await fsp.readdir(dir, {withFileTypes: true})
+        } catch {
+            return
+        }
+        for (const e of entries) {
+            const full = path.join(dir, e.name)
+            if (e.isDirectory()) await walk(full)
+            else if (e.isFile()) {
+                try {
+                    out.set(path.relative(cwd, full), await fsp.readFile(full))
+                } catch {
+                    // unreadable — skip
+                }
+            }
+        }
+    }
+    await walk(root)
+    return out
+}
+
+/** Re-materialise the snapshotted trail files, overwriting whatever the reset left. */
+async function restoreTrail(cwd: string, trail: Map<string, Buffer>): Promise<void> {
+    for (const [rel, buf] of trail) {
+        const full = path.join(cwd, rel)
+        try {
+            await fsp.mkdir(path.dirname(full), {recursive: true})
+            await fsp.writeFile(full, buf)
+        } catch {
+            // best-effort restore
+        }
+    }
 }
