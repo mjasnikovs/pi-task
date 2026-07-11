@@ -480,6 +480,58 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
     })
 })
 
+// mx5 run 9 item 5 — GUARANTEE the never-before-exercised search path stays wired.
+// Live validation showed the provider dispatch is healthy (exa + ddg return real
+// results) and the model DOES invoke pi-worker-search 5/5 when the task needs a
+// fresh fact and the hint is present; the "0 search calls" across runs traced to the
+// TASK never signalling a web need (item 4's dropped directive), not a broken path.
+// This deterministic guard fails if a refactor ever drops search from the APIS worker
+// (tool whitelist, extension, or the trigger hint), which WOULD silently re-break it.
+describe('phaseResearch search-path wiring (run 9 item 5)', () => {
+    test('APIS worker gets pi-worker-search + fetch tools, the search extension, and the trigger hint', async () => {
+        let apisArgs: ReadonlyArray<string> = []
+        let apisPrompt = ''
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of an APIS section')) {
+                    apisArgs = args
+                    apisPrompt = prompt
+                }
+                return agentEndResponse('- finding')
+            })
+            await phaseResearch(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'a refined goal with no mentions',
+                {getFileInventory: async () => ''}
+            )
+        })
+        // Default provider is exa (keyless) → searchConfigured() is true → the tool
+        // rides on every run. --tools carries the search + fetch workers…
+        const toolsIdx = apisArgs.indexOf('--tools')
+        const toolsCsv = toolsIdx >= 0 ? (apisArgs[toolsIdx + 1] ?? '') : ''
+        expect(toolsCsv).toContain('pi-worker-search')
+        expect(toolsCsv).toContain('pi-worker-fetch')
+        // …the search extension is loaded via -e…
+        expect(apisArgs.some(a => /search-extension/.test(a))).toBe(true)
+        // …and the trigger hint (the working lever, live-proven 5/5) is in the prompt.
+        expect(apisPrompt).toContain('pi-worker-search')
+        expect(apisPrompt.toLowerCase()).toContain('live web')
+    })
+})
+
 describe('phaseResearch parallel workers (opt-in flag)', () => {
     const MARKERS = {
         files: 'content of a FILES section',
