@@ -31,4 +31,10 @@ jobs:
         run: bun run build
 
       - name: Test
+        # Skip the live-model smoke tests: they require a running pi model
+        # endpoint, which CI has no access to. `pi` is on PATH here (installed
+        # as a dependency), so the tests' own `which pi` guard doesn't catch
+        # this — PI_SKIP_SMOKE is the documented escape hatch.
         run: bun run test
+        env:
+          PI_SKIP_SMOKE: "1"

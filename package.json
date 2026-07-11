@@ -14,7 +14,7 @@
     "scripts": {
         "build": "tsc -p tsconfig.build.json",
         "lint": "prettier --log-level warn --write 'src/**/*.ts' && eslint --fix . && tsc --noEmit",
-        "test": "cross-env AGENT=1 bun test src/",
+        "test": "cross-env AGENT=1 bun test --isolate src/",
         "prepublishOnly": "bun run build"
     },
     "peerDependencies": {
