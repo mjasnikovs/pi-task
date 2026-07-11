@@ -18,6 +18,17 @@ import {
 } from './final-gate.js'
 import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
 
+// Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
+// Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
+// which node's bare spawn can't resolve without a shell). Skip those on Windows
+// rather than pretend; the product paths they cover degrade to env-gap-skip there.
+const IS_WINDOWS = process.platform === 'win32'
+const itPosix = IS_WINDOWS ? test.skip : test
+
+/** A cross-platform child fixture: `node -e <script>` behaves identically on every
+ *  OS, unlike `sh -c` (no sh/POSIX-shell semantics on Windows). */
+const nodeScript = (script: string): [string, string[]] => [process.execPath, ['-e', script]]
+
 function makeDir(pkg?: object): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-final-gate-'))
     if (pkg) fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg, null, 2))
@@ -142,7 +153,9 @@ describe('runFinalIntegrationGate', () => {
     })
 
     test('command-not-found inside the script chain (127) is an env gap → skipped', async () => {
-        const dir = makeDir({scripts: {test: 'definitely-not-a-real-command-xyz'}})
+        // A command that exits 127 (command-not-found) is the env-gap contract;
+        // exit 127 explicitly so the case is deterministic on every OS's shell.
+        const dir = makeDir({scripts: {test: "node -e 'process.exit(127)'"}})
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
     })
@@ -155,7 +168,7 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).not.toContain('SHOULD-NOT-RUN')
     })
 
-    test('a lockfile desync FAILS the gate before any integration command runs', async () => {
+    itPosix('a lockfile desync FAILS the gate before any integration command runs', async () => {
         const dir = makeDir({scripts: {test: 'echo SHOULD-NOT-RUN && exit 1'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin(
@@ -171,7 +184,7 @@ describe('runFinalIntegrationGate', () => {
         )
     })
 
-    test('an in-sync lockfile passes and the check is named in the reason', async () => {
+    itPosix('an in-sync lockfile passes and the check is named in the reason', async () => {
         const dir = makeDir({scripts: {test: 'exit 0'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 0', async () => {
@@ -182,7 +195,7 @@ describe('runFinalIntegrationGate', () => {
         })
     })
 
-    test('a lock-check tool that cannot run (127) is an env gap → skipped', async () => {
+    itPosix('a lock-check tool that cannot run (127) is an env gap → skipped', async () => {
         const dir = makeDir({scripts: {test: 'exit 0'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 127', async () => {
@@ -191,7 +204,7 @@ describe('runFinalIntegrationGate', () => {
         })
     })
 
-    test('a lockfile check alone (no test/build scripts) still gates', async () => {
+    itPosix('a lockfile check alone (no test/build scripts) still gates', async () => {
         const dir = makeDir({name: 'x'})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin('npm', 'exit 1', async () => {
@@ -201,7 +214,10 @@ describe('runFinalIntegrationGate', () => {
 
     test('a crashing start command FAILS the gate after tests passed', async () => {
         const dir = makeDir({
-            scripts: {test: 'exit 0', start: 'echo "port 3000 in use" >&2 && exit 3'}
+            scripts: {
+                test: 'exit 0',
+                start: 'node -e \'process.stderr.write("port 3000 in use"); process.exit(3)\''
+            }
         })
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
@@ -242,27 +258,35 @@ describe('discoverBootCommand', () => {
 
 describe('runBootCheck', () => {
     test('fast non-zero exit → FAIL carrying the output tail', async () => {
-        const r = await runBootCheck('/tmp', ['sh', ['-c', 'echo boom >&2; exit 3']])
+        const r = await runBootCheck(
+            os.tmpdir(),
+            nodeScript("process.stderr.write('boom'); process.exit(3)")
+        )
         expect(r).toEqual({outcome: 'fail', detail: 'exited 3 — boom'})
     })
 
     test('quick exit 0 → PASS (CLI-style run that finished)', async () => {
-        const r = await runBootCheck('/tmp', ['sh', ['-c', 'exit 0']])
+        const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'))
         expect(r.outcome).toBe('pass')
     })
 
     test('still alive after the grace window → PASS, whole process group killed', async () => {
         const dir = makeDir()
         const pidFile = path.join(dir, 'child.pid')
-        const r = await runBootCheck(
-            dir,
-            ['sh', ['-c', `sleep 30 & echo $! > ${pidFile}; wait`]],
-            300
-        )
+        // A parent that spawns a long-lived grandchild, records its pid, and stays
+        // alive itself. The boot check must tear down the WHOLE tree (grandchild
+        // included), so a leaked server can't mask later boot checks — killGroup
+        // uses a process-group kill on POSIX and taskkill /T on Windows.
+        const fixture =
+            `const {spawn}=require('child_process');const fs=require('fs');`
+            + `const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{stdio:'ignore'});`
+            + `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));`
+            + `setTimeout(()=>{},600000)`
+        const r = await runBootCheck(dir, nodeScript(fixture), 300)
         expect(r.outcome).toBe('pass')
         const pid = Number(fs.readFileSync(pidFile, 'utf8').trim())
-        // The grandchild (sleep) must die with the group, not linger and mask
-        // later boot checks. Poll briefly — SIGTERM delivery is asynchronous.
+        // The grandchild must die with the tree, not linger. Poll briefly — kill
+        // delivery is asynchronous.
         let alive = true
         for (let i = 0; i < 40 && alive; i++) {
             await new Promise(res => setTimeout(res, 50))
@@ -275,19 +299,21 @@ describe('runBootCheck', () => {
         expect(alive).toBe(false)
     })
 
-    test('signal death within the window → FAIL naming the signal', async () => {
-        const r = await runBootCheck('/tmp', ['sh', ['-c', 'kill -SEGV $$']])
+    // Death by a Unix signal has no Windows equivalent (child.on('exit') never
+    // reports a signal there), so this behavior is POSIX-only.
+    itPosix('signal death within the window → FAIL naming the signal', async () => {
+        const r = await runBootCheck(os.tmpdir(), ['sh', ['-c', 'kill -SEGV $$']])
         expect(r.outcome).toBe('fail')
         expect((r as {detail: string}).detail).toContain('SIGSEGV')
     })
 
     test('missing binary (ENOENT) is an env gap → skip', async () => {
-        const r = await runBootCheck('/tmp', ['definitely-not-a-real-command-xyz', []])
+        const r = await runBootCheck(os.tmpdir(), ['definitely-not-a-real-command-xyz', []])
         expect(r.outcome).toBe('skip')
     })
 
     test('exit 127 inside the script chain is an env gap → skip', async () => {
-        const r = await runBootCheck('/tmp', ['sh', ['-c', 'exit 127']])
+        const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(127)'))
         expect(r.outcome).toBe('skip')
     })
 })

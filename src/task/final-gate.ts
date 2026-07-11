@@ -235,7 +235,16 @@ export function runBootCheck(
         }
         const killGroup = (sig: NodeJS.Signals) => {
             try {
-                if (child.pid) process.kill(-child.pid, sig)
+                if (!child.pid) return
+                if (process.platform === 'win32') {
+                    // Windows has no process groups / negative-pid kill. taskkill
+                    // /T tears down the whole tree (the detached child plus any
+                    // grandchildren it spawned); /F forces it, so the SIGTERM→
+                    // SIGKILL escalation collapses to one idempotent call.
+                    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
+                } else {
+                    process.kill(-child.pid, sig)
+                }
             } catch {
                 // group already gone
             }
