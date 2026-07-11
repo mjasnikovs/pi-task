@@ -3,6 +3,7 @@
  * critique) plus the config table that drives the orchestrator loop.
  */
 
+import {fileURLToPath} from 'node:url'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
@@ -265,14 +266,16 @@ export interface PhaseResearchDeps extends ExternalContextDeps {
     getFileInventory?: (cwd: string, signal?: AbortSignal) => Promise<string>
 }
 
-const DOCS_EXTENSION_PATH = new URL('../workers/docs-extension.js', import.meta.url).pathname
+const DOCS_EXTENSION_PATH = fileURLToPath(new URL('../workers/docs-extension.js', import.meta.url))
 
 /** pi-worker-search + pi-worker-fetch, loaded into the APIS research worker only
  *  when a Brave key is configured (the tool without a key just errors, and a weak
  *  model burns calls on it). Search being absent from the research toolset was
  *  STRUCTURAL: three consecutive audited runs made 0 search calls because the
  *  child literally did not have the tool. */
-const SEARCH_EXTENSION_PATH = new URL('../workers/search-extension.js', import.meta.url).pathname
+const SEARCH_EXTENSION_PATH = fileURLToPath(
+    new URL('../workers/search-extension.js', import.meta.url)
+)
 
 /**
  * Is live web search configured for this process? The keyless providers (exa,
@@ -304,8 +307,9 @@ export const RESEARCH_SEARCH_HINT =
  * healthy recorded run, so neither rule has a legitimate false positive here.
  * See single-read-guard.ts.
  */
-const SINGLE_READ_EXTENSION_PATH = new URL('../workers/single-read-extension.js', import.meta.url)
-    .pathname
+const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
+    new URL('../workers/single-read-extension.js', import.meta.url)
+)
 
 /**
  * Task-file heading under which a research worker's validated output is cached.
