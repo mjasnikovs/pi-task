@@ -900,7 +900,14 @@ export async function runAutoLoop(
                     // served app from a CLI: the boot check requires a listener only for
                     // the former (mx5 run 10 — a CSS watcher satisfied "still alive").
                     let fin = await deps.finalGate(cwd, body)
-                    if (!fin.ok) await recGate(`final-gate: FAIL — ${fin.reason.slice(0, 300)}`)
+                    // Record the outcome symmetrically (mx5 run 10 item 7): only FAIL was
+                    // ever trailed, so a PASSing gate was indistinguishable from a gate
+                    // that never ran. The PASS reason names the commands that were run.
+                    await recGate(
+                        fin.ok ?
+                            `final-gate: PASS — ${fin.reason.slice(0, 300)}`
+                        :   `final-gate: FAIL — ${fin.reason.slice(0, 300)}`
+                    )
                     // ACCEPT-debt re-check surfacing (mx5 run 4 B3 / run 8 TASK_0012):
                     // tasks the user accepted despite a verify-FAIL that the gate could
                     // not prove resolved against the current tree. Surface them at the

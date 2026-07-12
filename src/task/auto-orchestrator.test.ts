@@ -1881,11 +1881,16 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
         let gateRuns = 0
+        const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
             runTask: () =>
                 Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
             commit: () => Promise.resolve({committed: true}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
             finalGate: () => {
                 gateRuns++
                 return Promise.resolve({ok: true, reason: 'statics + `bun run test` passed'})
@@ -1895,6 +1900,9 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         expect(gateRuns).toBe(1)
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
         expect(captured.notifies.some(n => /complete — all 1 tasks done/.test(n.msg))).toBe(true)
+        // mx5 run 10 item 7: a PASS is trailed (distinct from a never-run gate) and
+        // names the commands that ran.
+        expect(trail).toContain('final-gate: PASS — statics + `bun run test` passed')
     })
 })
 
