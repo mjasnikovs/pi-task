@@ -562,7 +562,7 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
         expect(out.openDebts).toEqual([
             {taskId: 'TASK_0012', reason: 'modified frozen path src/main.tsx'}
         ])
-        expect(out.reason).toContain('ACCEPTED VERIFY-FAIL DEBT still open (1)')
+        expect(out.reason).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
         expect(out.reason).toContain('TASK_0012')
         // Behavioral debts are never auto-closed — the ledger still holds it for resume.
         expect(await readAcceptDebts(dir)).toHaveLength(1)
@@ -586,7 +586,7 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
         expect(out.openDebts).toHaveLength(1)
-        expect(out.reason).toContain('ACCEPTED VERIFY-FAIL DEBT still open (1)')
+        expect(out.reason).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
         expect(await readAcceptDebts(dir)).toHaveLength(1)
     })
 

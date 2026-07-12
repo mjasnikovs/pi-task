@@ -11,11 +11,13 @@ import * as path from 'node:path'
 import {
     acceptDebtFile,
     buildAcceptDebtNote,
+    describeDebt,
     isStaticClassDebt,
     parseAcceptDebts,
     readAcceptDebts,
     recheckAcceptDebts,
     recordAcceptDebt,
+    recordEnforceRevertDebt,
     writeAcceptDebts,
     type AcceptDebt
 } from './accept-debt.js'
@@ -23,6 +25,13 @@ import {
 function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-accept-debt-'))
 }
+
+// The verbatim mx5 run 10 TASK_0004 enforce re-verify FAIL — the terminal defect that
+// was found 8.5h before run end and erased by the revert that found it.
+const TASK_0004_DIAGNOSIS =
+    'work did not verify: Missing server entry point (src/server/index.ts) and dev script in '
+    + 'package.json — the Hono server cannot be started, so auth endpoints cannot be verified '
+    + 'against a live HTTP serve'
 
 describe('parseAcceptDebts', () => {
     test('splits task id from reason, tolerating id-less lines', () => {
@@ -153,8 +162,57 @@ describe('buildAcceptDebtNote', () => {
             {taskId: 'TASK_0012', reason: 'frozen-path violation'},
             {taskId: '', reason: 'behavioral fail'}
         ])
-        expect(note).toContain('ACCEPTED VERIFY-FAIL DEBT still open (2)')
+        expect(note).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (2)')
         expect(note).toContain('TASK_0012 — accepted despite verify-FAIL: frozen-path violation')
         expect(note).toContain('(unknown task) — accepted despite verify-FAIL: behavioral fail')
+    })
+
+    test('an enforce-revert debt is labelled distinctly from an accepted one', () => {
+        const note = buildAcceptDebtNote([
+            {taskId: 'TASK_0004', reason: TASK_0004_DIAGNOSIS, origin: 'enforce-revert'}
+        ])
+        expect(note).toContain('TASK_0004 — enforce re-verify FAILED then the edits were reverted')
+        expect(note).toContain('Missing server entry point')
+    })
+})
+
+// mx5 run 10 item 3: an enforce re-verify FAIL that indicts the ORIGINAL work must
+// survive the revert as a durable, gate-re-checked defect.
+describe('recordEnforceRevertDebt / origin round-trip', () => {
+    test('records a 3-field origin-tagged row that reads back with origin set', async () => {
+        const cwd = makeCwd()
+        await recordEnforceRevertDebt(cwd, 'TASK_0004', TASK_0004_DIAGNOSIS)
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.taskId).toBe('TASK_0004')
+        expect(debt.origin).toBe('enforce-revert')
+        expect(debt.reason).toContain('Missing server entry point')
+        // Stored as a 3-field tab row so old readers still parse id + reason.
+        const raw = fs.readFileSync(acceptDebtFile(cwd), 'utf8')
+        expect(raw.split('\t').length).toBe(3)
+        expect(raw.trimEnd().endsWith('enforce-revert')).toBe(true)
+    })
+
+    test('legacy 2-field rows still parse (origin absent = accepted)', () => {
+        const [d] = parseAcceptDebts('TASK_0012\tfrozen-path violation')
+        expect(d.origin).toBeUndefined()
+        expect(describeDebt(d)).toBe('accepted despite verify-FAIL')
+    })
+
+    test('an accepted debt and an enforce-revert debt with the same id/reason coexist', async () => {
+        const cwd = makeCwd()
+        await recordAcceptDebt(cwd, 'TASK_0004', 'the server cannot start')
+        await recordEnforceRevertDebt(cwd, 'TASK_0004', 'the server cannot start')
+        const debts = await readAcceptDebts(cwd)
+        expect(debts).toHaveLength(2)
+        expect(debts.map(d => d.origin ?? 'accepted').sort()).toEqual(['accepted', 'enforce-revert'])
+    })
+
+    test('a behavioral enforce-revert debt stays OPEN even when statics pass', () => {
+        const debts: AcceptDebt[] = [
+            {taskId: 'TASK_0004', reason: TASK_0004_DIAGNOSIS, origin: 'enforce-revert'}
+        ]
+        const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
+        expect(resolved).toHaveLength(0)
+        expect(open).toHaveLength(1)
     })
 })

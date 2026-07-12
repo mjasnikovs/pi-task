@@ -508,6 +508,45 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
     })
 })
 
+// mx5 run 10 item 3: the re-verify FAIL diagnosis must ALSO be persisted as a durable
+// defect (not only the per-task trail line that the final gate never re-reads), using
+// the verbatim run 10 TASK_0004 text as fixture.
+test('record: enforce-revert FAIL is persisted as a durable defect for the final gate', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const reverted: string[] = []
+        const debts: Array<{taskId: string; reason: string}> = []
+        let verifyCalls = 0
+        const diagnosis =
+            'work did not verify: Missing server entry point (src/server/index.ts) and dev script '
+            + 'in package.json — the Hono server cannot be started'
+        const deps = makeDeps({
+            record: () => Promise.resolve(),
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ? {ok: true} : {ok: false, reason: diagnosis}
+                )
+            },
+            enforce: () => Promise.resolve({ok: true}),
+            revert: c => {
+                reverted.push(c)
+                return Promise.resolve()
+            },
+            recordEnforceRevertDebt: (_c, taskId, reason) => {
+                debts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir, taskId: 'TASK_0004'}))
+        expect(r.kind).toBe('done')
+        expect(reverted).toHaveLength(1)
+        expect(debts).toHaveLength(1)
+        expect(debts[0].taskId).toBe('TASK_0004')
+        expect(debts[0].reason).toContain('Missing server entry point')
+    })
+})
+
 test('record: a throwing record dep never breaks the gate sequence', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

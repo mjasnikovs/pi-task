@@ -154,6 +154,14 @@ export interface GateDeps {
      */
     recordAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
     /**
+     * Record a durable ENFORCE-REVERT debt (mx5 run 10 item 3): the enforce re-verify
+     * FAILED and the enforce edits were reverted, but the FAIL indicts the ORIGINAL
+     * work (run 10 TASK_0004: "Missing server entry point … the Hono server cannot be
+     * started"). Without this the diagnosis dies with the revert; recorded, the final
+     * gate re-checks and surfaces it like an accept-debt. Best-effort; absent in tests.
+     */
+    recordEnforceRevertDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
      * The concrete paths this task's spec forbids modifying (its `Do NOT modify`
      * CONSTRAINTS — see frozen-path-guard.ts / prohibition-probe.ts). Used to
      * write-deny the enforce EDIT pass: a violating edit is reverted before it can
@@ -592,6 +600,17 @@ export async function runGatesForTask(
                     if (deps.revert) await deps.revert(p.cwd)
                     await rec(
                         `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${deps.revert ? 'REVERTED' : 'left in place (no revert available)'}`
+                    )
+                    // Persist the FAIL as a durable defect (mx5 run 10 item 3). The
+                    // revert restores the tree the ORIGINAL verify already blessed, so
+                    // this re-verify caught a defect that verify's earlier PASS missed —
+                    // erasing it with the enforce edits buried the terminal fault 8.5h
+                    // before run end. The final gate re-checks/surfaces it (static-class
+                    // auto-closes if a later task fixed the statics; else stays open).
+                    await deps.recordEnforceRevertDebt?.(
+                        p.cwd,
+                        p.taskId,
+                        after.reason ?? 'enforce re-verify failed'
                     )
                     active.ui.notify(
                         `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,

@@ -49,7 +49,7 @@ import {buildGateDeps, type FinalGateFixFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate} from './final-gate.js'
-import type {AcceptDebt} from './accept-debt.js'
+import {describeDebt, type AcceptDebt} from './accept-debt.js'
 import {
     classifyFinalGateAnswer,
     MAX_FINAL_GATE_AUTOFIX,
@@ -886,11 +886,11 @@ export async function runAutoLoop(
                     if (fin.openDebts && fin.openDebts.length > 0) {
                         for (const d of fin.openDebts) {
                             await recGate(
-                                `accept-debt STILL OPEN — ${d.taskId || '(unknown task)'} was ACCEPTED despite verify-FAIL: ${d.reason.slice(0, 240)}`
+                                `defect STILL OPEN — ${d.taskId || '(unknown task)'}: ${describeDebt(d)}: ${d.reason.slice(0, 240)}`
                             )
                         }
                         active.ui.notify(
-                            `${id}: ${fin.openDebts.length} task(s) accepted despite verify-FAIL are STILL unresolved at run end — see the gate trail.`,
+                            `${id}: ${fin.openDebts.length} recorded verify-FAIL defect(s) are STILL unresolved at run end — see the gate trail.`,
                             'warning'
                         )
                     }
