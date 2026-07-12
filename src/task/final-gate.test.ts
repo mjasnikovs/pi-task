@@ -66,6 +66,31 @@ describe('discoverIntegrationCommands', () => {
         ])
     })
 
+    // mx5 run 10 item 2: EVERY test-shaped script must run, not just `test`.
+    test('every test*/test:* script runs — plain test leads, then test:* / test-*, build last', async () => {
+        const dir = makeDir({
+            scripts: {
+                build: 'echo b',
+                'test:ct': 'echo ct',
+                test: 'echo t',
+                test_unit: 'echo u',
+                lint: 'echo l'
+            }
+        })
+        const {cmds} = discoverIntegrationCommands(dir)
+        expect(cmds).toEqual([
+            ['bun', ['run', 'test']],
+            ['bun', ['run', 'test:ct']],
+            ['bun', ['run', 'test_unit']],
+            ['bun', ['run', 'build']]
+        ])
+    })
+
+    test('a test:* script with no plain `test` is still discovered', async () => {
+        const dir = makeDir({scripts: {'test:ct': 'echo ct'}})
+        expect(discoverIntegrationCommands(dir).cmds).toEqual([['bun', ['run', 'test:ct']]])
+    })
+
     test('no manifest → nothing to run', async () => {
         const dir = makeDir()
         expect(discoverIntegrationCommands(dir)).toEqual({ecosystem: null, cmds: []})
@@ -151,6 +176,28 @@ describe('runFinalIntegrationGate', () => {
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('`bun run build` exited 2')
+    })
+
+    // mx5 run 10 item 2: `test:ct` (Playwright CT) must RUN in the gate, but on a box
+    // with no browsers installed it is an ENVIRONMENT gap, not a code FAIL. Playwright
+    // exits non-zero (not 127) with a recognisable "Executable doesn't exist" message.
+    test('a browser suite with no browsers installed is an env gap → skipped, not failed', async () => {
+        const dir = makeDir({
+            scripts: {
+                'test:ct': 'echo "Error: browserType.launch: Executable doesn\'t exist at /root/.cache/ms-playwright" && exit 1'
+            }
+        })
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+    })
+
+    test('a browser suite that fails for a REAL reason still FAILs the gate', async () => {
+        const dir = makeDir({
+            scripts: {'test:ct': 'echo "1 failed: Button renders wrong colour" && exit 1'}
+        })
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('`bun run test:ct` exited 1')
     })
 
     test('command-not-found inside the script chain (127) is an env gap → skipped', async () => {

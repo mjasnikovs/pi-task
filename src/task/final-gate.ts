@@ -101,9 +101,16 @@ export function discoverIntegrationCommands(cwd: string): {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
         const cmds: HealthCommand[] = []
-        for (const name of ['test', 'build']) {
-            if (s[name]) cmds.push(['bun', ['run', name]])
-        }
+        // Every test-shaped script, not just the one literally named `test` (mx5 run
+        // 10: `test:ct` — 89 Playwright component tests, the ONLY client-executing
+        // suite — never ran because the gate looked only for `test`/`build`). Plain
+        // `test` leads (richer, most common), then `test:*`/`test-*` in declaration
+        // order, then `build`. Env-gap SKIP still applies per command (a suite whose
+        // browser/runtime is absent skips, it does not fail — see runGateCommand).
+        const testNames = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
+        testNames.sort((a, b) => (a === 'test' ? -1 : b === 'test' ? 1 : 0))
+        for (const name of testNames) cmds.push(['bun', ['run', name]])
+        if (s.build) cmds.push(['bun', ['run', 'build']])
         return {ecosystem: 'package.json', cmds}
     }
     if (existsSync(path.join(cwd, 'Makefile'))) {
@@ -537,10 +544,21 @@ function outputTail(stdout: string, stderr: string, limit = 400): string {
 }
 
 /**
+ * A non-zero exit whose output shows an EXTERNAL runtime dependency is missing, not
+ * a code fault: a browser suite (Playwright/Cypress) whose browser binaries or system
+ * libraries were never installed here (mx5 run 10 item 2: `test:ct` must run in the
+ * gate, but on a box with no Playwright browsers it is an environment gap, not a FAIL).
+ * These exit non-zero (not 127), so they need output-shape recognition to skip.
+ */
+const ENV_GAP_OUTPUT_RE =
+    /Executable doesn't exist|playwright install|browserType\.\w+: Executable|(?:wasn't|weren't) installed|Host system is missing dependencies|No usable sandbox|Cypress verification|Cypress executable (?:not found|was not found)|browser(?:s)? (?:is|are)? ?not installed/i
+
+/**
  * Run one gate command with the env-gap contract: tool missing, timeout, or
  * command-not-found inside the script chain (127) → environment gap, not a code
- * fault → skipped (same contract as repo-health). Only a command that actually
- * ran and exited non-zero fails.
+ * fault → skipped (same contract as repo-health). Also skips a non-zero exit whose
+ * output shows a missing browser/runtime (ENV_GAP_OUTPUT_RE). Only a command that
+ * actually ran and exited non-zero for a real reason fails.
  */
 function runGateCommand(
     cwd: string,
@@ -557,6 +575,7 @@ function runGateCommand(
     })
     if (r.error || r.status === null || r.status === 127) return {outcome: 'skip'}
     if (r.status !== 0) {
+        if (ENV_GAP_OUTPUT_RE.test(`${r.stdout ?? ''}\n${r.stderr ?? ''}`)) return {outcome: 'skip'}
         return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
     }
     return {outcome: 'pass'}
