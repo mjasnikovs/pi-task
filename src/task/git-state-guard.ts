@@ -38,6 +38,7 @@
  * missing) disables the guard (capture returns ok:false and reconcile no-ops) —
  * the gate must keep working in non-git projects exactly as before.
  */
+import {readFileSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -97,6 +98,57 @@ const ARTIFACT_PATTERNS: readonly RegExp[] = [
 function isBenignArtifact(relPath: string): boolean {
     const p = relPath.replace(/\\/g, '/')
     return ARTIFACT_PATTERNS.some(re => re.test(p))
+}
+
+/**
+ * Regenerable machine state that is benign EVEN WHEN TRACKED — a project that
+ * mistakenly commits it (mx5 run 10 does exactly this) must not have a gate child's
+ * incidental rewrite of it discard the verdict. Two classes:
+ *   - Playwright component-test build cache (`ctCacheDir` — run 10 committed 60+
+ *     `.playwright-cache/assets/*.js` bundles; a `test:ct` run rewrites them every
+ *     time), and
+ *   - the test runner's `.last-run.json` run-state file.
+ * DELIBERATELY narrow: snapshot BASELINE images (`*-snapshots/*.png`) are NOT here —
+ * a child that rewrites a baseline to make a screenshot test pass is the real
+ * mutate-to-pass catch (run 10's other half), so those stay verdict-tainting.
+ */
+const ALWAYS_REGENERABLE_PATTERNS: readonly RegExp[] = [/(?:^|\/)\.last-run\.json$/]
+
+/** Playwright config files that may declare a custom `ctCacheDir`. */
+const CT_CONFIG_FILES = [
+    'playwright-ct.config.ts',
+    'playwright-ct.config.js',
+    'playwright.config.ts',
+    'playwright.config.js'
+] as const
+
+/** ctCacheDir defaults Playwright uses when a config does not override it. */
+const DEFAULT_CT_CACHE_DIRS = ['.playwright-cache', 'playwright/.cache']
+
+/**
+ * The component-test cache dir(s) for this project: the `ctCacheDir` any Playwright
+ * config declares, plus the known defaults. Read once per reconcile (best-effort — a
+ * missing/odd config just leaves the defaults). Normalised to a repo-relative prefix.
+ */
+function readCtCacheDirs(cwd: string): string[] {
+    const dirs = new Set<string>(DEFAULT_CT_CACHE_DIRS)
+    for (const f of CT_CONFIG_FILES) {
+        try {
+            const text = readFileSync(path.join(cwd, f), 'utf8')
+            const m = /ctCacheDir\s*:\s*['"`]([^'"`]+)['"`]/.exec(text)
+            if (m) dirs.add(m[1].replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, ''))
+        } catch {
+            // no such config, or unreadable — defaults stand
+        }
+    }
+    return [...dirs].filter(d => d.length > 0)
+}
+
+/** Is this path regenerable machine state that is benign even when tracked-in-HEAD? */
+function isAlwaysRegenerable(relPath: string, ctCacheDirs: readonly string[]): boolean {
+    const p = relPath.replace(/\\/g, '/')
+    if (ALWAYS_REGENERABLE_PATTERNS.some(re => re.test(p))) return true
+    return ctCacheDirs.some(d => p === d || p.startsWith(d + '/'))
 }
 
 interface GitRunner {
@@ -217,6 +269,7 @@ async function restoreWorktree(
     beforeTree: string,
     afterTree: string,
     tracked: Set<string>,
+    ctCacheDirs: readonly string[],
     actions: string[]
 ): Promise<{tainted: boolean}> {
     const tmpIndex = path.join(
@@ -246,8 +299,13 @@ async function restoreWorktree(
                 if (name.length === 0) continue
                 if (code === 'A') {
                     created.push(name)
-                } else if (isBenignArtifact(name) && !tracked.has(name)) {
-                    // Untracked, regenerable test/build output — not graded work.
+                } else if (
+                    isAlwaysRegenerable(name, ctCacheDirs)
+                    || (isBenignArtifact(name) && !tracked.has(name))
+                ) {
+                    // Regenerable test/build output — not graded work. Either an
+                    // always-regenerable class (ct cache / run-state, benign even when
+                    // tracked — mx5 run 10) or untracked test-runner output.
                     artifactChanges.push(name)
                 } else if (code === 'D') {
                     gradedDeleted.push(name)
@@ -331,12 +389,14 @@ export async function reconcileGitState(
         const afterTree = await captureWorktreeTree(git)
         if (afterTree && afterTree !== before.treeSha) {
             const tracked = await trackedPathsAt(git, before.headSha)
+            const ctCacheDirs = readCtCacheDirs(cwd)
             const {tainted: worktreeTainted} = await restoreWorktree(
                 cwd,
                 git,
                 before.treeSha,
                 afterTree,
                 tracked,
+                ctCacheDirs,
                 actions
             )
             tainted = tainted || worktreeTainted

@@ -232,6 +232,80 @@ describe('verdict-taint classification', () => {
         expect(rec.actions).toContain('restored modified file dist/bundle.js')
     })
 
+    // mx5 run 10 item 5: the ctCacheDir build cache (`.playwright-cache/*`) and the
+    // runner `.last-run.json` were COMMITTED, so a `test:ct` run rewriting them tripped
+    // the tracked→graded rule and discarded 3 verify verdicts. They are regenerable
+    // machine state — benign even when tracked — while snapshot PNGs stay tainting.
+    test('tracked ctCacheDir + .last-run.json rewrites are NOT verdict-tainting (run 10)', async () => {
+        const dir = makeRepo()
+        fs.mkdirSync(path.join(dir, '.playwright-cache', 'assets'), {recursive: true})
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'), 'v1\n')
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'index.html'), '<html>v1</html>\n')
+        fs.mkdirSync(path.join(dir, 'test-results'), {recursive: true})
+        fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{"status":"passed"}\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'commit ct cache + last-run (as run 10 did)')
+        const snap = await captureGitState(dir)
+        // The gate child runs `test:ct`, which rewrites the cache + run state.
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'), 'v2\n')
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'index.html'), '<html>v2</html>\n')
+        fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{"status":"failed"}\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(false)
+        expect(rec.mutated).toBe(true) // still restored + itemised, just not tainting
+        expect(rec.actions.some(a => a.includes('.playwright-cache/'))).toBe(true)
+    })
+
+    test('a tracked snapshot BASELINE png rewrite STAYS verdict-tainting (the real catch)', async () => {
+        const dir = makeRepo()
+        const snapDir = path.join(dir, 'tests', 'components', 'Select.ct.tsx-snapshots')
+        fs.mkdirSync(snapDir, {recursive: true})
+        const png = path.join(snapDir, 'Select-renders-select-with-options-1-chromium-linux.png')
+        fs.writeFileSync(png, 'baseline-v1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'commit snapshot baselines')
+        const snap = await captureGitState(dir)
+        // A child that rewrites a baseline to make a screenshot test pass — mutate-to-pass.
+        fs.writeFileSync(png, 'baseline-mutated-to-pass\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(true)
+    })
+
+    test('run-10 combined: ct-cache churn is benign but a co-occurring baseline rewrite taints', async () => {
+        const dir = makeRepo()
+        fs.mkdirSync(path.join(dir, '.playwright-cache', 'assets'), {recursive: true})
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'Badge-CqnzweoZ.js'), 'v1\n')
+        const snapDir = path.join(dir, 'tests', 'components', 'LoginPage.ct.tsx-snapshots')
+        fs.mkdirSync(snapDir, {recursive: true})
+        const png = path.join(snapDir, 'LoginPage-renders-1-chromium-linux.png')
+        fs.writeFileSync(png, 'baseline-v1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'commit cache + baseline')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'Badge-CqnzweoZ.js'), 'v2\n')
+        fs.writeFileSync(png, 'mutated\n')
+        const rec = await reconcileGitState(dir, snap)
+        // The PNG is the real mutate-to-pass — verdict must be discarded despite the
+        // benign cache churn alongside it.
+        expect(rec.verdictTainted).toBe(true)
+    })
+
+    test('a custom ctCacheDir declared in playwright-ct.config.ts is honoured', async () => {
+        const dir = makeRepo()
+        fs.writeFileSync(
+            path.join(dir, 'playwright-ct.config.ts'),
+            'export default defineConfig({ use: { ctCacheDir: "./build/ct-cache" } })\n'
+        )
+        fs.mkdirSync(path.join(dir, 'build', 'ct-cache'), {recursive: true})
+        fs.writeFileSync(path.join(dir, 'build', 'ct-cache', 'bundle.js'), 'v1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-q', '-m', 'commit custom ct cache')
+        const snap = await captureGitState(dir)
+        fs.writeFileSync(path.join(dir, 'build', 'ct-cache', 'bundle.js'), 'v2\n')
+        const rec = await reconcileGitState(dir, snap)
+        expect(rec.verdictTainted).toBe(false)
+    })
+
     test('HEAD move and stash push are verdict-tainting', async () => {
         const dir = makeRepo()
         git(dir, 'add', '-A')
