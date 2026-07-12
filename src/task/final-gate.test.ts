@@ -18,6 +18,7 @@ import {
     runFinalIntegrationGate
 } from './final-gate.js'
 import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
+import {appendDeclaredScripts} from './launch-contract.js'
 
 // Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
 // Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
@@ -206,6 +207,28 @@ describe('runFinalIntegrationGate', () => {
         const dir = makeDir({scripts: {test: "node -e 'process.exit(127)'"}})
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
+    })
+
+    // mx5 run 10 item 4: a script the design declared but the manifest never exposed
+    // (migrate/seed) is a launch-surface defect the final gate must FAIL on.
+    test('a declared script missing from the manifest FAILs the gate naming it', async () => {
+        const dir = makeDir({scripts: {dev: 'exit 0', build: 'exit 0', test: 'exit 0'}})
+        await appendDeclaredScripts(dir, ['dev', 'build', 'migrate', 'seed', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('launch contract:')
+        expect(out.reason).toContain('migrate')
+        expect(out.reason).toContain('seed')
+    })
+
+    test('every declared script present → the launch check passes silently', async () => {
+        const dir = makeDir({
+            scripts: {dev: 'exit 0', build: 'exit 0', migrate: 'exit 0', seed: 'exit 0', test: 'exit 0'}
+        })
+        await appendDeclaredScripts(dir, ['dev', 'build', 'migrate', 'seed', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.reason).not.toContain('launch contract')
     })
 
     test('a static (lint) failure gates BEFORE integration commands run', async () => {

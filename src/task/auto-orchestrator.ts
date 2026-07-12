@@ -68,6 +68,12 @@ import {
     keepGroundedContracts,
     appendContracts
 } from './contracts.js'
+import {
+    LAUNCH_EXTRACT_PROMPT,
+    parseScriptLines,
+    keepGroundedScripts,
+    appendDeclaredScripts
+} from './launch-contract.js'
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
 // when the model emits NONE), but a model that never says NONE would otherwise
@@ -703,6 +709,24 @@ export async function planAuto(
         await appendContracts(cwd, grounded)
     } catch {
         // best-effort registry
+    }
+
+    // Launch contract (mx5 run 10 item 4): extract the package/build SCRIPTS the design
+    // declares the project must expose (`migrate`/`seed` fell through decompose and
+    // shipped missing, unchecked). Each emitted name is re-grounded against the design
+    // (keepGroundedScripts — kept only if the design backticks it), so the final gate's
+    // manifest diff can never false-flag a hallucinated script. Best-effort.
+    try {
+        const scriptRaw = await deps.runChild('launch-extract', '', LAUNCH_EXTRACT_PROMPT(featureForModel))
+        const grounded = keepGroundedScripts(parseScriptLines(scriptRaw), featureForModel)
+        logPlanDebug(
+            cwd,
+            `launch-contract extraction: ${grounded.length} grounded script(s) kept`
+                + ` from ${parseScriptLines(scriptRaw).length} emitted`
+        )
+        await appendDeclaredScripts(cwd, grounded)
+    } catch {
+        // best-effort artifact
     }
 
     // Thread the feature's spec doc(s) into every title so each per-task

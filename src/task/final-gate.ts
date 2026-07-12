@@ -53,6 +53,7 @@ import {
     buildAcceptDebtNote,
     type AcceptDebt
 } from './accept-debt.js'
+import {readDeclaredScripts, missingDeclaredScripts} from './launch-contract.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -639,6 +640,20 @@ export async function runFinalIntegrationGate(
         openDebts
     })
     if (!stat.ok) return withDebts({ok: false, reason: `static checks: ${stat.reason}`})
+    // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
+    // scripts that fell through decompose and shipped missing, unchecked. Diff the
+    // plan-time-extracted declared scripts against the manifest; a missing one is a
+    // launch-surface defect. FP-safe: empty declared list (nothing grounded) → no check.
+    const declared = await readDeclaredScripts(cwd)
+    if (declared.length > 0) {
+        const missing = missingDeclaredScripts(declared, Object.keys(packageScripts(cwd)))
+        if (missing.length > 0) {
+            return withDebts({
+                ok: false,
+                reason: `launch contract: the design declares script(s) the shipped package.json does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
+            })
+        }
+    }
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
