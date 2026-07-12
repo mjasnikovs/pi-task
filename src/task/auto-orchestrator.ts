@@ -151,7 +151,10 @@ export interface AutoDeps extends GateDeps {
      * own static checks plus its own test/build commands, unaided. Absent (tests /
      * gate off) → the run completes as before.
      */
-    finalGate?: (cwd: string) => Promise<{ok: boolean; reason: string; openDebts?: AcceptDebt[]}>
+    finalGate?: (
+        cwd: string,
+        planText?: string
+    ) => Promise<{ok: boolean; reason: string; openDebts?: AcceptDebt[]}>
     /**
      * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
      * offered as the picker's third option. Runs the fix child, applies the
@@ -793,9 +796,9 @@ function defaultDeps(
         stashRef: cwd2 => gitStashRef(cwd2, signal),
         // The final integration gate follows the `verify work` switch: it is the
         // run-level half of the same verification story.
-        finalGate: cwd2 =>
+        finalGate: (cwd2, planText) =>
             getConfig().verifyWork ?
-                runFinalIntegrationGate(cwd2)
+                runFinalIntegrationGate(cwd2, undefined, undefined, undefined, planText)
             :   Promise.resolve({ok: true, reason: 'disabled'})
     }
 }
@@ -869,7 +872,10 @@ export async function runAutoLoop(
                             // recording must never break the gate
                         }
                     }
-                    let fin = await deps.finalGate(cwd)
+                    // Hand the parent plan (the task list) to the gate so it can tell a
+                    // served app from a CLI: the boot check requires a listener only for
+                    // the former (mx5 run 10 — a CSS watcher satisfied "still alive").
+                    let fin = await deps.finalGate(cwd, body)
                     if (!fin.ok) await recGate(`final-gate: FAIL — ${fin.reason.slice(0, 300)}`)
                     // ACCEPT-debt re-check surfacing (mx5 run 4 B3 / run 8 TASK_0012):
                     // tasks the user accepted despite a verify-FAIL that the gate could

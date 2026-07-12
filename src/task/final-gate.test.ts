@@ -9,6 +9,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    detectsServedApp,
     discoverBootCommand,
     discoverIntegrationCommands,
     discoverGateCommandLabels,
@@ -349,6 +350,72 @@ describe('runBootCheck', () => {
             nodeScript("process.stderr.write('TypeError: undefined'); process.exit(1)")
         )
         expect(r.outcome).toBe('fail')
+    })
+})
+
+// mx5 run 10 item 1: a watcher is not a server. For a served app the boot check must
+// observe a LISTENER before it PASSes — mere survival (a CSS/bundler --watch) or a
+// quick exit 0 (a type-only entrypoint that serves nothing) is a FAIL. The listener
+// probe is injected so these are deterministic without binding a real socket. Skipped
+// on Windows, where the pgid-based listener requirement collapses to survival.
+describe('runBootCheck — served-app listener requirement (run 10 item 1)', () => {
+    const alive = nodeScript('setTimeout(()=>{},600000)')
+
+    itPosix('watcher: stays alive but never listens → FAIL naming the missing socket', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 800, {
+            expectServer: true,
+            deps: {groupHasListener: () => false}
+        })
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('listening socket')
+    })
+
+    itPosix('type-only entrypoint: exits 0 without listening → FAIL', async () => {
+        const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'), 2000, {
+            expectServer: true,
+            deps: {groupHasListener: () => false}
+        })
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('listening socket')
+    })
+
+    itPosix('a listener owned by our group appears → PASS (early, before grace)', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {groupHasListener: () => true}
+        })
+        expect(r.outcome).toBe('pass')
+    })
+
+    itPosix('CLI project (expectServer off): staying alive still PASSes, no listener needed', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 500, {
+            expectServer: false,
+            deps: {groupHasListener: () => false}
+        })
+        expect(r.outcome).toBe('pass')
+    })
+})
+
+describe('detectsServedApp (run 10 item 1)', () => {
+    test('a server-framework dependency ⇒ served app', () => {
+        const dir = makeDir({dependencies: {hono: '^4', react: '^18'}})
+        expect(detectsServedApp(dir)).toBe(true)
+    })
+
+    test('a scoped framework family (@hono/*) also counts', () => {
+        const dir = makeDir({dependencies: {'@hono/zod-validator': '^0.2'}})
+        expect(detectsServedApp(dir)).toBe(true)
+    })
+
+    test('a pure client/CLI manifest ⇒ NOT a served app', () => {
+        const dir = makeDir({dependencies: {react: '^18', clsx: '^2', wouter: '^3'}})
+        expect(detectsServedApp(dir)).toBe(false)
+    })
+
+    test('plan/spec text promising a server flips a bare CLI manifest', () => {
+        const dir = makeDir({dependencies: {chalk: '^5'}})
+        expect(detectsServedApp(dir)).toBe(false)
+        expect(detectsServedApp(dir, 'The app serves /api and static dist/ over HTTP')).toBe(true)
     })
 })
 

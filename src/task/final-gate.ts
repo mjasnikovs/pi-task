@@ -232,6 +232,105 @@ export interface BootDeps {
     findPortHolder?: (port: number) => {pid: number; command: string} | null
     /** Terminate a pid we attribute to ourselves; returns whether it was signalled. */
     reap?: (pid: number) => boolean
+    /**
+     * Does process group `pgid` currently own a LISTENing TCP socket? Drives the
+     * served-app boot check (mx5 run 10): a watcher (`dev` = tailwind/bundler
+     * --watch) stays alive forever without ever listening, so "still alive after the
+     * grace window = PASS" blessed a project that cannot serve a single request.
+     * Injected so the listener requirement is deterministically testable without a
+     * real socket; the default probes ss/lsof + pgid.
+     */
+    groupHasListener?: (pgid: number) => boolean
+}
+
+/** Package deps that mean "this project stands up an HTTP server" — the deterministic
+ *  proxy for "the plan/spec promised a served app". Bare framework names plus the
+ *  scoped families whose presence implies a listener at runtime. */
+function isServerFrameworkDep(name: string): boolean {
+    return (
+        /^(?:hono|express|fastify|koa|polka|restify|next|nuxt|http-server|serve|ws|socket\.io)$/.test(
+            name
+        ) || /^@(?:hono|fastify|koa|nestjs|sveltejs|remix-run)\//.test(name)
+    )
+}
+
+/** Spec/plan phrasings that promise a listening server, for the text signal. */
+const SERVE_TEXT_RE =
+    /\b(?:https?\s+server|web\s+server|serves?\b|listen(?:s|ing)?\b|Bun\.serve|app\.listen|createServer|serve\s+(?:static|the)|\/api\/|endpoints?\b)/i
+
+/**
+ * Does the finished run stand up a listening HTTP server? Deterministic, from the
+ * built manifest (a server-framework dependency is the plan's own artifact) OR, when
+ * available, the plan/spec text. Used to decide whether the boot check must observe a
+ * LISTENER (served app) or may pass on mere survival / quick exit (CLI project).
+ */
+export function detectsServedApp(cwd: string, planText?: string): boolean {
+    try {
+        const j = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
+            dependencies?: Record<string, string>
+            devDependencies?: Record<string, string>
+        }
+        const all = {...(j.dependencies ?? {}), ...(j.devDependencies ?? {})}
+        if (Object.keys(all).some(isServerFrameworkDep)) return true
+    } catch {
+        // no/unreadable manifest → fall through to the text signal
+    }
+    return planText !== undefined && SERVE_TEXT_RE.test(planText)
+}
+
+/** Pids currently owning a LISTENing TCP socket (best-effort; ss first, then lsof).
+ *  Empty on any failure — the caller then cannot attribute a listener to our group
+ *  and the served-app check degrades to survival (never a false FAIL). */
+function listeningSocketPids(): number[] {
+    const pids = new Set<number>()
+    try {
+        const t = spawnSync('ss', ['-tlnpH'], {encoding: 'utf8', timeout: 4000})
+        if (!t.error && t.stdout) {
+            for (const m of t.stdout.matchAll(/pid=(\d+)/g)) pids.add(Number(m[1]))
+        }
+    } catch {
+        // ss missing — try lsof
+    }
+    if (pids.size === 0) {
+        try {
+            const t = spawnSync('lsof', ['-iTCP', '-sTCP:LISTEN', '-t', '-n', '-P'], {
+                encoding: 'utf8',
+                timeout: 4000
+            })
+            if (!t.error && t.stdout) {
+                for (const line of t.stdout.split('\n')) {
+                    const n = Number(line.trim())
+                    if (Number.isInteger(n) && n > 0) pids.add(n)
+                }
+            }
+        } catch {
+            // neither tool available
+        }
+    }
+    return [...pids]
+}
+
+/** Process-group id of `pid`, or null if it cannot be read. */
+function pgidOf(pid: number): number | null {
+    try {
+        const r = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
+            encoding: 'utf8',
+            timeout: 4000
+        })
+        const n = Number((r.stdout ?? '').trim())
+        return Number.isInteger(n) && n > 0 ? n : null
+    } catch {
+        return null
+    }
+}
+
+/** Default listener probe: any LISTENing socket owned by a pid in process group
+ *  `pgid` (the detached boot child IS its own group leader, so pgid === child.pid). */
+function defaultGroupHasListener(pgid: number): boolean {
+    for (const pid of listeningSocketPids()) {
+        if (pgidOf(pid) === pgid) return true
+    }
+    return false
 }
 
 /** Default port-holder lookup: `lsof` first, then `ss`/`fuser`. Returns null on any
@@ -283,7 +382,7 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
 }
 
 /**
- * Exercise the start command ONCE, with no port/URL/framework knowledge — the
+ * Exercise the start command ONCE. For a CLI project (`expectServer` false) the
  * command's own fate within the grace window decides:
  *
  *   - non-zero exit (or signal death) before the window closes → FAIL, output tail;
@@ -291,13 +390,26 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
  *   - still alive when the window closes → PASS, then the whole process group is
  *     killed (detached spawn = own group; SIGTERM, escalating to SIGKILL).
  *
+ * For a SERVED app (`expectServer` true — the spec/plan promised an HTTP server) mere
+ * survival is not enough: a watcher (`dev` = tailwind/bundler --watch) stays alive
+ * forever without ever listening, and a type-only entrypoint exits 0 in <1s having
+ * served nothing (mx5 run 10 — both were blessed by the survival rule). The boot then
+ * PASSes only once a LISTENing socket owned by our process group is observed; if the
+ * command exits, or the grace window closes, with no listener ever seen → FAIL naming
+ * that a listening server was expected. (The listener requirement needs pgid probing,
+ * absent on win32, where `expectServer` collapses to the survival rule — best-effort,
+ * never a false FAIL on a platform we cannot probe.)
+ *
  * Env-gap contract as everywhere: spawn error (ENOENT) or exit 127 → skip.
  */
 export function runBootCheck(
     cwd: string,
     [bin, args]: HealthCommand,
-    graceMs = 10_000
+    graceMs = 10_000,
+    opts: {expectServer?: boolean; deps?: BootDeps} = {}
 ): Promise<BootOutcome> {
+    const expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'
+    const groupHasListener = opts.deps?.groupHasListener ?? defaultGroupHasListener
     return new Promise(resolve => {
         const child = spawn(bin, args, {
             cwd,
@@ -307,6 +419,7 @@ export function runBootCheck(
         })
         let out = ''
         let err = ''
+        let listenerSeen = false
         const cap = (s: string) => (s.length > 8000 ? s.slice(-8000) : s)
         child.stdout?.on('data', (d: Buffer) => (out = cap(out + String(d))))
         child.stderr?.on('data', (d: Buffer) => (err = cap(err + String(d))))
@@ -315,6 +428,7 @@ export function runBootCheck(
             if (settled) return
             settled = true
             clearTimeout(timer)
+            if (poll) clearInterval(poll)
             resolve(r)
         }
         const killGroup = (sig: NodeJS.Signals) => {
@@ -333,14 +447,48 @@ export function runBootCheck(
                 // group already gone
             }
         }
-        const timer = setTimeout(() => {
+        const passAndKill = () => {
             settle({outcome: 'pass'})
             killGroup('SIGTERM')
             setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+        }
+        // Served apps only: poll for a listening socket owned by our process group.
+        // As soon as one appears the boot has demonstrably served → PASS early.
+        const poll =
+            expectServer ?
+                setInterval(() => {
+                    if (settled || !child.pid) return
+                    if (groupHasListener(child.pid)) {
+                        listenerSeen = true
+                        passAndKill()
+                    }
+                }, 500)
+            :   null
+        const timer = setTimeout(() => {
+            if (expectServer && !listenerSeen) {
+                settle({
+                    outcome: 'fail',
+                    detail: `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
+                })
+                killGroup('SIGTERM')
+                setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+                return
+            }
+            passAndKill()
         }, graceMs)
         child.on('error', () => settle({outcome: 'skip'}))
         child.on('exit', (status, signal) => {
-            if (status === 0) return settle({outcome: 'pass'})
+            if (status === 0) {
+                if (expectServer && !listenerSeen) {
+                    return settle({
+                        outcome: 'fail',
+                        detail:
+                            'exited 0 without ever opening a listening socket — the spec/dependencies '
+                            + 'promise an HTTP server, so a boot that serves nothing is not a launch'
+                    })
+                }
+                return settle({outcome: 'pass'})
+            }
             if (status === 127 || (status === null && signal === null)) {
                 return settle({outcome: 'skip'})
             }
@@ -426,7 +574,8 @@ async function recoverOrphanPort(
     boot: HealthCommand,
     first: {outcome: 'orphan-port'; detail: string; port: number | null},
     bootGraceMs: number,
-    deps: BootDeps
+    deps: BootDeps,
+    expectServer: boolean
 ): Promise<BootOutcome> {
     if (first.port === null) return first
     const holder = (deps.findPortHolder ?? defaultFindPortHolder)(first.port)
@@ -435,7 +584,7 @@ async function recoverOrphanPort(
     if (!reaped) return first
     // Give the OS a moment to release the socket, then re-run the boot once.
     await new Promise(r => setTimeout(r, 1_500))
-    return runBootCheck(cwd, boot, bootGraceMs)
+    return runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps})
 }
 
 /**
@@ -448,7 +597,8 @@ export async function runFinalIntegrationGate(
     cwd: string,
     timeoutMs = 900_000,
     bootGraceMs = 10_000,
-    bootDeps: BootDeps = {}
+    bootDeps: BootDeps = {},
+    planText?: string
 ): Promise<FinalGateOutcome> {
     const stat = runRepoHealthCheck(cwd)
     // ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
@@ -496,9 +646,10 @@ export async function runFinalIntegrationGate(
     }
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
-        let b = await runBootCheck(cwd, boot, bootGraceMs)
+        const expectServer = detectsServedApp(cwd, planText)
+        let b = await runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps: bootDeps})
         if (b.outcome === 'orphan-port') {
-            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDeps)
+            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDeps, expectServer)
         }
         if (b.outcome === 'fail') {
             return withDebts({ok: false, reason: `boot check: \`${label}\` ${b.detail}`})
