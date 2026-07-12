@@ -124,6 +124,33 @@ describe('JsonEventSink', () => {
         expect(lines).toEqual(['bash: ls -la', 'thinking…'])
     })
 
+    // mx5 run 10 item 6: the tool RESULT must reach the caller so the gate log can
+    // record what a `bash`/`curl` actually returned (the real tool_execution_end shape).
+    test('emits onToolResult on tool_execution_end with the combined output and isError', () => {
+        const results: Array<{name: string; isError: boolean; text: string}> = []
+        const s = sink({onToolResult: r => results.push(r)})
+        s.feed(
+            line({
+                type: 'tool_execution_end',
+                toolName: 'bash',
+                result: {content: [{type: 'text', text: 'HELLO_WORLD_123\n'}]},
+                isError: false
+            })
+        )
+        s.feed(
+            line({
+                type: 'tool_execution_end',
+                toolName: 'bash',
+                result: {content: [{type: 'text', text: 'curl: (7) Failed to connect to localhost port 3000'}]},
+                isError: true
+            })
+        )
+        expect(results).toEqual([
+            {name: 'bash', isError: false, text: 'HELLO_WORLD_123\n'},
+            {name: 'bash', isError: true, text: 'curl: (7) Failed to connect to localhost port 3000'}
+        ])
+    })
+
     test('calls onLoopKill when onToolCall reports a hit', () => {
         let killed = 0
         const hit: LoopHit = {call: {name: 'read', args: {}}, count: 5, windowSize: 20}

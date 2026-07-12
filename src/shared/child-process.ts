@@ -121,6 +121,13 @@ export interface RunChildJsonEventsOptions {
     onLine?: (line: string) => void
     onContextUsage?: (snapshot: ContextSnapshot) => void
     onToolCall?: (call: ToolCall) => LoopHit | null
+    /**
+     * Fires when a tool call finishes, carrying its RESULT (mx5 run 10 item 6: the
+     * verify debug log recorded the `bash:` command but never its output, so "verify
+     * claimed curl PASS on a server that cannot serve" was undecidable from the log).
+     * Text is the tool's combined output; `isError` distinguishes a failed call.
+     */
+    onToolResult?: (result: {name: string; isError: boolean; text: string}) => void
     onFirstByte?: () => void
     /**
      * Dead-backend stall guard (mx5 run 7: model server died mid-child, the
@@ -288,8 +295,26 @@ export class JsonEventSink {
                 const hit = opts.onToolCall({name: tn, args: evt.args})
                 if (hit) this.onLoopKill()
             }
+            return
+        }
+
+        if (t === 'tool_execution_end' && opts.onToolResult) {
+            const tn = typeof evt.toolName === 'string' ? evt.toolName : 'tool'
+            const res = evt.result as Record<string, unknown> | undefined
+            const text = toolResultText(res?.content)
+            opts.onToolResult({name: tn, isError: evt.isError === true, text})
         }
     }
+}
+
+/** Flatten a tool result's `content` array (pi's `{type,text}[]`) into one string. */
+function toolResultText(content: unknown): string {
+    if (!Array.isArray(content)) return ''
+    const parts: string[] = []
+    for (const c of content as Array<Record<string, unknown>>) {
+        if (c?.type === 'text' && typeof c.text === 'string') parts.push(c.text)
+    }
+    return parts.join('')
 }
 
 // ─── Unified runChild ────────────────────────────────────────────────────────

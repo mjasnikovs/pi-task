@@ -49,6 +49,20 @@ import {resolveContextUsage} from './context-usage.js'
  *  command so this module stays free of the orchestrators (avoids an import cycle). */
 export type RunTaskFn = GateDeps['runTask']
 
+/** Max chars of a tool result kept in the gate debug log (mx5 run 10 item 6). */
+const TOOL_RESULT_LOG_LIMIT = 300
+
+/**
+ * One-line, tail-kept, whitespace-flattened summary of a tool's output for the gate
+ * debug log. The TAIL is kept (a bind failure / final status / assertion lands at the
+ * end of the output) with a leading ellipsis when truncated; empty output → "(no output)".
+ */
+export function truncateToolResult(text: string, limit = TOOL_RESULT_LOG_LIMIT): string {
+    const flat = text.replace(/\s+/g, ' ').trim()
+    if (flat.length === 0) return '(no output)'
+    return flat.length > limit ? `…${flat.slice(-limit)}` : flat
+}
+
 /** One bounded final-gate fix attempt (see final-gate-fix.ts): fix child →
  *  shrink guard → gate re-run. Consumed by /task-auto's run-end gate branch. */
 export type FinalGateFixFn = (
@@ -286,6 +300,12 @@ export function buildGateDeps(params: {
                             lastLine = line
                             log(line)
                         },
+                        // Log tool OUTPUTS, not just the command (mx5 run 10 item 6):
+                        // without the result "verify claimed curl PASS on a server that
+                        // cannot serve" is undecidable from the log. Truncated, tail-kept
+                        // (a bind failure / status usually lands at the end), error-flagged.
+                        onToolResult: ({name, isError, text}) =>
+                            log(`↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`),
                         onContextUsage: snapshot => {
                             contextUsage = resolveContextUsage(
                                 snapshot,

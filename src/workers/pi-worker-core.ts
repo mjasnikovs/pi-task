@@ -62,6 +62,9 @@ export interface RunWorkerInput {
     extensions?: string[]
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
+    /** Called when a tool call FINISHES, with its (truncatable) result — lets a caller
+     *  log tool OUTPUTS, not just the command (mx5 run 10 item 6). */
+    onToolResult?: (result: {name: string; isError: boolean; text: string}) => void
     /**
      * Called for each context_usage snapshot the child emits (same `--mode json`
      * stream the phase children parse). Lets a caller's status widget show the
@@ -235,6 +238,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         return hit
                     },
                     onLine: input.onLine,
+                    onToolResult: input.onToolResult,
                     onContextUsage: input.onContextUsage
                 },
                 input.spawn
