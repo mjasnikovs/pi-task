@@ -8,6 +8,7 @@ import {
     providerForLabel
 } from '../workers/search-types.js'
 import {getConfig, saveConfig, type PiTaskConfig} from './config.js'
+import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
 
@@ -125,6 +126,40 @@ function displayValue(cfg: PiTaskConfig, id: keyof PiTaskConfig, isEnum: boolean
     return cfg[id] ? 'on' : 'off'
 }
 
+/**
+ * One /task-config toggle per installed host extension (GitHub issue #4).
+ * The id carries the entry path behind a prefix so the shared onChange handler
+ * can tell an extension toggle from a PiTaskConfig field.
+ */
+const EXT_ID_PREFIX = 'ext:'
+
+export function extensionItems(
+    extensions: InstalledExtension[],
+    whitelist: readonly string[]
+): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+    return extensions.map(e => ({
+        id: EXT_ID_PREFIX + e.path,
+        label: `ext: ${e.label}`,
+        description:
+            `Also load this extension (${e.origin}) in pi-task child sessions — needed when it `
+            + 'registers the model provider the children must use (e.g. pi-lmstudio). Children '
+            + 'otherwise run with extensions off; whitelist only provider-type extensions you '
+            + `trust, since children also get its tools and hooks. ${e.path}`,
+        currentValue: whitelist.includes(e.path) ? 'on' : 'off',
+        values: ['on', 'off']
+    }))
+}
+
+/** Apply an extension toggle to the config's whitelist (idempotent both ways). */
+export function applyExtensionToggle(
+    whitelist: readonly string[],
+    entryPath: string,
+    on: boolean
+): string[] {
+    const rest = whitelist.filter(p => p !== entryPath)
+    return on ? [...rest, entryPath] : rest
+}
+
 function makeTheme(theme: Theme): SettingsListTheme {
     return {
         label: (text, selected) => (selected ? theme.fg('accent', text) : text),
@@ -136,12 +171,21 @@ function makeTheme(theme: Theme): SettingsListTheme {
 }
 
 async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Promise<void> {
-    const cfg = {...getConfig()}
+    const cfg = {...getConfig(), extensionWhitelist: [...getConfig().extensionWhitelist]}
+
+    // Enumerated live at open so an installed extension appears and an
+    // uninstalled one vanishes without pi-task doing any bookkeeping. A failed
+    // enumeration only costs the extension toggles, never the whole menu.
+    const installed = await listInstalledExtensions({cwd: ctx.cwd}).catch(() => [])
 
     if (ctx.mode !== 'tui') {
         const lines = ITEMS.map(
             ({id, label, values}) => `${label.padEnd(22)} ${displayValue(cfg, id, Boolean(values))}`
         )
+        for (const e of installed) {
+            const state = cfg.extensionWhitelist.includes(e.path) ? 'on' : 'off'
+            lines.push(`${('ext: ' + e.label).padEnd(22)} ${state}`)
+        }
         ctx.ui.notify(lines.join('  |  '), 'info')
         return
     }
@@ -149,20 +193,29 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
     await ctx.ui.custom<void>(
         (_tui, theme, _kb, done) => {
             const listTheme = makeTheme(theme)
-            const items = ITEMS.map(({id, label, description, values}) => ({
-                id,
-                label,
-                description,
-                currentValue: displayValue(cfg, id, Boolean(values)),
-                values: values ?? ['on', 'off']
-            }))
+            const items = [
+                ...ITEMS.map(({id, label, description, values}) => ({
+                    id: id as string,
+                    label,
+                    description,
+                    currentValue: displayValue(cfg, id, Boolean(values)),
+                    values: values ?? ['on', 'off']
+                })),
+                ...extensionItems(installed, cfg.extensionWhitelist)
+            ]
 
             const list = new SettingsList(
                 items,
                 10,
                 listTheme,
                 (id, newValue) => {
-                    if (id === 'searchProvider') {
+                    if (id.startsWith(EXT_ID_PREFIX)) {
+                        cfg.extensionWhitelist = applyExtensionToggle(
+                            cfg.extensionWhitelist,
+                            id.slice(EXT_ID_PREFIX.length),
+                            newValue === 'on'
+                        )
+                    } else if (id === 'searchProvider') {
                         const provider = providerForLabel(newValue)
                         if (provider) cfg.searchProvider = provider
                     } else {
@@ -187,7 +240,8 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
 export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
         description:
-            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation, enforce guidelines).',
+            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation, '
+            + 'enforce guidelines, extension whitelist for child sessions).',
         handler: handleTaskConfig
     })
 }

@@ -1,10 +1,6 @@
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {
-    CHILD_BASE_ARGS,
-    runChildDefault,
-    type ContextSnapshot,
-    type SpawnFn
-} from '../shared/child-process.js'
+import {runChildDefault, type ContextSnapshot, type SpawnFn} from '../shared/child-process.js'
+import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector, type LoopHit} from '../task/loop-detector.js'
 import {
     LOOP_WINDOW,
@@ -62,7 +58,7 @@ export interface RunWorkerInput {
     spawn?: SpawnFn
     /** Comma-separated tool whitelist passed to `pi --tools`. Defaults to read,grep,find,ls. */
     tools?: string
-    /** Extension entry-point paths to load via `-e <path>` before CHILD_BASE_ARGS. */
+    /** Internal extension entry-point paths to load via `-e <path>` (see childBaseArgs). */
     extensions?: string[]
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
@@ -178,8 +174,7 @@ export interface RunWorkerResult {
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
     const tools = input.tools ?? DEFAULT_TOOLS
-    const extensionArgs = (input.extensions ?? []).flatMap(e => ['-e', e])
-    const baseArgs = [...extensionArgs, ...CHILD_BASE_ARGS, '--mode', 'json', '--tools', tools]
+    const baseArgs = [...childBaseArgs(input.extensions ?? []), '--mode', 'json', '--tools', tools]
     const timeoutMs = input.timeoutMs ?? RESEARCH_WORKER_TIMEOUT_MS
     let hint: string | null = null
     // Loop-kill and timeout share one restart budget, mirroring

@@ -13,9 +13,9 @@ import {
     type SpawnFn,
     type ContextSnapshot,
     type ToolCall,
-    type LoopHit,
-    CHILD_BASE_ARGS
+    type LoopHit
 } from '../shared/child-process.js'
+import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector} from './loop-detector.js'
 import {
     detectLeakedToolCall,
@@ -96,7 +96,7 @@ export function childArgs(tools: string): string[] {
     // runChild below / getPiInvocation), so a large inlined-design prompt can't
     // overflow the OS command-line limit (Windows `spawn ENAMETOOLONG`).
     const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
-    return [...CHILD_BASE_ARGS, '--mode', 'json', ...toolFlags]
+    return [...childBaseArgs(), '--mode', 'json', ...toolFlags]
 }
 
 // Sentinel error thrown when the user dismisses a grill-me dialog.

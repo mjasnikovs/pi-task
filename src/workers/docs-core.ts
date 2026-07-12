@@ -17,7 +17,8 @@ import {
 import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './docs-retrieve.js'
 import {npmVersionLookup as defaultNpmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {CHILD_BASE_ARGS, runChild, type SpawnFn} from '../shared/child-process.js'
+import {runChild, type SpawnFn} from '../shared/child-process.js'
+import {childBaseArgs} from '../shared/child-extensions.js'
 import {
     parseChildOutput,
     isExcerptInContent,
@@ -32,7 +33,7 @@ const NO_CACHE_TAIL = 5_000
 const NO_CACHE_TOTAL = NO_CACHE_HEAD + NO_CACHE_TAIL
 const NO_CACHE_MARKER = '\n\n[...content continues, truncated...]\n\n'
 
-const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
+const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 /**
  * Provenance of an auto-installed package's version, so the answer can state
@@ -582,7 +583,7 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     const {pkg, chunks, hitCache, indexingMs} = rawResult
     const concatenated = chunks.map(c => c.content).join('\n\n')
     const prompt = buildPrompt(pkg, input.query, concatenated)
-    const invocation = getPiInvocation([...CHILD_ARGS], prompt)
+    const invocation = getPiInvocation(childArgs(), prompt)
     const child = await runChild(spawn, invocation, input.cwd, input.signal)
 
     const parsed = parseChildOutput(child.stdout)

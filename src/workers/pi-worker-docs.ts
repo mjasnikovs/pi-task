@@ -16,14 +16,15 @@ import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
 } from './npm-version.js'
-import {type SpawnFn, runChild, CHILD_BASE_ARGS} from '../shared/child-process.js'
+import {type SpawnFn, runChild} from '../shared/child-process.js'
+import {childBaseArgs} from '../shared/child-extensions.js'
 import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
-const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
+const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 const RENDER_QUERY_MAX = 100
 
@@ -162,7 +163,7 @@ export function registerPiWorkerDocs(
                 }
                 const concatenated = chunks.map(c => c.content).join('\n\n')
                 const prompt = buildProjectPrompt(projectName, params.query, concatenated)
-                const invocation = getPiInvocation([...CHILD_ARGS], prompt)
+                const invocation = getPiInvocation(childArgs(), prompt)
                 const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
                 const failure = formatChildFailure(child, 'Project docs lookup aborted.')
@@ -290,7 +291,7 @@ export function registerPiWorkerDocs(
 
             const concatenated = chunks.map(c => c.content).join('\n\n')
             const prompt = buildPrompt(pkg, params.query, concatenated)
-            const invocation = getPiInvocation([...CHILD_ARGS], prompt)
+            const invocation = getPiInvocation(childArgs(), prompt)
             const child = await runChild(spawn, invocation, ctx.cwd, signal)
 
             const failure = formatChildFailure(child, 'Docs lookup aborted.')

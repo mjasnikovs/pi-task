@@ -35,6 +35,18 @@ export interface PiTaskConfig {
      * DEFAULT `exa` so search works out of the box with zero configuration.
      */
     searchProvider: SearchProvider
+    /**
+     * Absolute entry-point paths of host pi extensions to load into every child
+     * pi session via explicit `-e` flags (GitHub issue #4: a provider registered
+     * by an extension — e.g. pi-lmstudio — otherwise doesn't exist in children,
+     * which then can't resolve the default model and demand OAuth/API keys).
+     * Children keep `--no-extensions`, so discovery stays off and ONLY these
+     * load — the whitelist is strictly additive. Entries whose file no longer
+     * exists (extension uninstalled) are skipped at spawn time, never fatal.
+     * DEFAULT empty: child isolation is unchanged until the user opts in via
+     * /task-config, which enumerates the currently installed extensions.
+     */
+    extensionWhitelist: string[]
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -48,7 +60,17 @@ const DEFAULTS: PiTaskConfig = {
     // ON: the F10 live A/B showed no answer-quality regression (fidelity 3/3, quality
     // 3/3, 0 collisions; ~14.5s of repeated docs lookups collapse to 0ms on a hit).
     researchCache: true,
-    searchProvider: 'exa'
+    searchProvider: 'exa',
+    extensionWhitelist: []
+}
+
+/**
+ * A hand-edited config can hold anything; keep only string entries so a stray
+ * object/number can't reach the child argv as `-e [object Object]`.
+ */
+export function sanitizeExtensionWhitelist(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')
@@ -69,6 +91,7 @@ if (!G.loaded) {
         // A hand-edited or stale enum value must not leak an unknown provider
         // into the dispatch switch — fall back to the default.
         if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
+        parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
         G.config = {...DEFAULTS, ...parsed}
     } catch {
         G.config = {...DEFAULTS}

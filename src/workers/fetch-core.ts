@@ -1,7 +1,8 @@
 import {spawn as defaultSpawn} from 'node:child_process'
 import {fetchAndClean as defaultFetchAndClean, type CleanResult} from './html-clean.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {CHILD_BASE_ARGS, runChild, type SpawnFn} from '../shared/child-process.js'
+import {runChild, type SpawnFn} from '../shared/child-process.js'
+import {childBaseArgs} from '../shared/child-extensions.js'
 import {
     parseChildOutput,
     isExcerptInContent,
@@ -13,7 +14,7 @@ const HEAD_CHARS = 25_000
 const TAIL_CHARS = 5_000
 const TRUNCATION_MARKER = '\n\n[...page continues, truncated...]\n\n'
 
-const CHILD_ARGS = [...CHILD_BASE_ARGS, '--no-tools'] as readonly string[]
+const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 export interface FetchRawInput {
     url: string
@@ -66,7 +67,7 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         content: truncated
     })
 
-    const invocation = getPiInvocation([...CHILD_ARGS], prompt)
+    const invocation = getPiInvocation(childArgs(), prompt)
     const childResult = await runChild(spawnFn, invocation, input.cwd, input.signal)
 
     if (childResult.aborted) {
