@@ -70,6 +70,22 @@ import {
 } from './contracts.js'
 import {reconcileTitleSources} from './decompose-fidelity.js'
 import {
+    REQUIREMENT_EXTRACT_PROMPT,
+    COVERAGE_MAP_PROMPT,
+    parseRequirementLines,
+    keepGroundedRequirements,
+    capRequirements,
+    enumerateObligationPassages,
+    uncoveredPassages,
+    extractionRetryHint,
+    parseCoverageMap,
+    accountCoverage,
+    appendCarriedRequirements,
+    buildRequirementsLedger,
+    type RequirementEntry,
+    type CoverageAccounting
+} from './requirements.js'
+import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
     parseScriptLines,
@@ -574,8 +590,59 @@ export async function planAuto(
     }
     const clarifications = answers.join('\n')
 
+    // Requirement extraction (mx5 run 11, goal A): grounded requirement units,
+    // extracted from whatever structure the spec has, BEFORE decompose — they ride
+    // into the decompose prompt as a ledger (structure-mirroring can't discharge
+    // them) and drive the per-requirement coverage accounting below. Best-effort:
+    // a fault leaves reqEntries empty and the whole channel degrades to the old
+    // behavior (one-liners / doc-less features naturally yield few or none).
+    let reqEntries: RequirementEntry[] = []
+    try {
+        // Recall floor: the obligation-marked passages ride into the prompt as a
+        // checklist, and a marked passage that produced NO quote is hard evidence
+        // for one forced re-extraction (measured live: 1/5 extractions missed the
+        // entire marked testing section without this).
+        const passages = enumerateObligationPassages(featureForModel)
+        const extractOnce = async (hint: string | null): Promise<RequirementEntry[]> =>
+            keepGroundedRequirements(
+                parseRequirementLines(
+                    await deps.runChild(
+                        'requirement-extract',
+                        '',
+                        prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(featureForModel, passages))
+                    )
+                ),
+                featureForModel
+            )
+        reqEntries = await extractOnce(null)
+        const uncovered = uncoveredPassages(passages, reqEntries)
+        if (uncovered.length > 0) {
+            logPlanDebug(
+                cwd,
+                `requirement extraction: ${uncovered.length} obligation-marked passage(s) `
+                    + 'uncovered — forcing one re-extraction'
+            )
+            const retry = await extractOnce(extractionRetryHint(uncovered))
+            // Union of both grounded passes (keepGrounded dedupes).
+            reqEntries = keepGroundedRequirements([...reqEntries, ...retry], featureForModel)
+        }
+        // Bound with marked-passage priority — a plain first-N cap truncates the
+        // doc's tail sections (measured live: an eager model fills 40 top-down).
+        reqEntries = capRequirements(reqEntries, passages)
+        logPlanDebug(
+            cwd,
+            `requirement extraction: ${reqEntries.length} grounded requirement(s) kept`
+        )
+    } catch {
+        // best-effort channel
+    }
+
     // decompose
-    const decomposePrompt = AUTO_DECOMPOSE_PROMPT(featureForModel, clarifications)
+    const decomposePrompt = AUTO_DECOMPOSE_PROMPT(
+        featureForModel,
+        clarifications,
+        buildRequirementsLedger(reqEntries)
+    )
     // Parse + FIDELITY RECONCILIATION (mx5 run 11, goal B): ground each title's
     // [source: "…"] citation against the doc, strip the clause, and re-attach any
     // `+`-joined constraint fragment the paraphrased title dropped (the silently
@@ -635,7 +702,15 @@ export async function planAuto(
     // re-judged the same unchanged list, and the known-incomplete plan shipped
     // with no warning.
     let unresolvedMissing: string[] | null = null
+    // The last per-requirement accounting (goal A): completeness is computed
+    // HOST-SIDE from it — a holistic "COMPLETE" alone can no longer pass a plan
+    // while grounded requirements sit unowned (run 11: milestone-parity satisfied
+    // the judge while §10 Testing had zero tasks). Null when no requirements were
+    // extracted or every mapping call faulted (⇒ old judge-only behavior).
+    let accounting: CoverageAccounting | null = null
     for (let round = 0; round < MAX_COVERAGE_ROUNDS && planTitles.length > 0; round++) {
+        // Signal 1 — the holistic judge (kept as the belt; catches feature areas
+        // the requirement extraction itself missed). A fault yields no signal.
         let verdict: CoverageVerdict | null
         try {
             verdict = parseCoverageVerdict(
@@ -646,16 +721,45 @@ export async function planAuto(
                 )
             )
         } catch {
-            // Judge fault: unknown coverage, not known-missing — stay silent.
-            unresolvedMissing = null
-            break
+            verdict = null
         }
-        if (verdict === null || verdict.kind === 'complete') {
+        const verdictMissing = verdict?.kind === 'incomplete' ? verdict.missing : []
+        // Signal 2 — the per-requirement map (the lever): every grounded
+        // requirement gets a falsifiable verdict (TASK n / CROSS-CUTTING / NONE);
+        // the host, not the model, decides what is uncovered. A fault keeps the
+        // previous round's accounting.
+        if (reqEntries.length > 0) {
+            try {
+                const mapRaw = await deps.runChild(
+                    'coverage-map',
+                    '',
+                    COVERAGE_MAP_PROMPT(reqEntries, planTitles)
+                )
+                accounting = accountCoverage(
+                    reqEntries,
+                    parseCoverageMap(mapRaw, reqEntries.length, planTitles.length)
+                )
+                logPlanDebug(
+                    cwd,
+                    `coverage-map round ${round + 1}: ${accounting.mapped.length} task-mapped, `
+                        + `${accounting.crossCutting.length} cross-cutting, `
+                        + `${accounting.unmapped.length} unmapped`
+                )
+            } catch {
+                // mapping fault — keep whatever accounting an earlier round produced
+            }
+        }
+        const unmappedQuotes = (accounting?.unmapped ?? []).map(e => `"${e.quote}"`)
+        const missing = [...verdictMissing, ...unmappedQuotes]
+        if (missing.length === 0) {
             unresolvedMissing = null
             logPlanDebug(
                 cwd,
                 `decompose-coverage round ${round + 1}: `
-                    + (verdict === null ? 'no verdict — accepting list' : 'COMPLETE')
+                    + (verdict === null ? 'no judge verdict' : 'judge COMPLETE')
+                    + (reqEntries.length > 0 ?
+                        ' and every grounded requirement is task-mapped or cross-cutting'
+                    :   ' — accepting list')
             )
             // A COMPLETE on a still-suspect plan is the judge's known live
             // false-pass mode (bare verdict, indistinguishable from a real one).
@@ -670,16 +774,16 @@ export async function planAuto(
             }
             break
         }
-        unresolvedMissing = verdict.missing
+        unresolvedMissing = missing
         logPlanDebug(
             cwd,
             `decompose-coverage round ${round + 1}: INCOMPLETE — missing: `
-                + verdict.missing.join('; ').slice(0, 300)
+                + missing.join('; ').slice(0, 300)
         )
         const retryRaw = await deps.runChild(
             'auto-decompose',
             'read',
-            prependHint(coverageRepromptHint(verdict.missing), decomposePrompt)
+            prependHint(coverageRepromptHint(missing), decomposePrompt)
         )
         const retryTitles = parsePlan(retryRaw)
         logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
@@ -705,6 +809,25 @@ export async function planAuto(
             `/task-auto: plan may be missing coverage — ${unresolvedMissing.join('; ').slice(0, 200)} — review the plan before running.`,
             'warning'
         )
+    }
+    // Carry what no single task owns (goal A(b)/(c)): cross-cutting requirements
+    // become `.pi-tasks/requirements.md`, injected VERBATIM into every task's
+    // refine/compose (run 11: §10's test-first cadence had no carrier — the "spec
+    // is authoritative" pointer recovered it in 1 of ~6 tasks; content travels,
+    // pointers don't). Requirements still unmapped after the rounds are carried
+    // too — marked — and recorded user-visibly in the plan file, never dropped.
+    if (accounting !== null) {
+        await appendCarriedRequirements(cwd, accounting.crossCutting, accounting.unmapped)
+        if (accounting.crossCutting.length > 0 || accounting.unmapped.length > 0) {
+            ctx.ui.notify(
+                `/task-auto: carrying ${accounting.crossCutting.length} cross-cutting`
+                    + (accounting.unmapped.length > 0 ?
+                        ` and ${accounting.unmapped.length} unowned`
+                    :   '')
+                    + ' requirement(s) into every task — see .pi-tasks/requirements.md.',
+                'info'
+            )
+        }
     }
     // Cross-slice contract registry (mx5 run 8, F3): now that the plan is settled,
     // extract the interface facts MORE THAN ONE slice must agree on — endpoint paths,
@@ -780,7 +903,19 @@ export async function planAuto(
         updated_at: now,
         title: deriveTitle(feature)
     }
-    await writeTaskFile(cwd, fm, buildAutoBody(feature, clarifications, titles))
+    // Durable, user-visible coverage record (goal A(c)): what was carried and what
+    // stayed unowned lives in the plan file itself, not only in a transient toast.
+    const coverageNote =
+        accounting === null ? '' : (
+            [
+                `${reqEntries.length} grounded requirement(s): ${accounting.mapped.length} task-mapped, `
+                    + `${accounting.crossCutting.length} cross-cutting (carried into every task via `
+                    + `.pi-tasks/requirements.md), ${accounting.unmapped.length} unowned`,
+                ...accounting.crossCutting.map(e => `- carried: "${e.quote}"`),
+                ...accounting.unmapped.map(e => `- UNOWNED (no task covers this): "${e.quote}"`)
+            ].join('\n')
+        )
+    await writeTaskFile(cwd, fm, buildAutoBody(feature, clarifications, titles, coverageNote))
     return id
 }
 

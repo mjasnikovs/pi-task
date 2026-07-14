@@ -101,13 +101,21 @@ export function parseTaskList(body: string): TaskEntry[] {
     return entries
 }
 
-/** Build the initial AUTO-file body. */
-export function buildAutoBody(feature: string, clarifications: string, titles: string[]): string {
+/** Build the initial AUTO-file body. `coverage` is the requirement-level
+ *  accounting summary (goal A(c) — a durable, user-visible record of what was
+ *  carried cross-cutting and what stayed unowned); '' omits the section. */
+export function buildAutoBody(
+    feature: string,
+    clarifications: string,
+    titles: string[],
+    coverage = ''
+): string {
     const tasks = titles.map(t => `- [ ] ${t}`).join('\n')
     return (
         `\n## feature prompt\n\n${feature.trim() || '(none)'}\n\n`
         + `## clarifications\n\n${clarifications.trim() || '(none)'}\n\n`
         + `## tasks\n\n${tasks}\n`
+        + (coverage.trim().length > 0 ? `\n## coverage\n\n${coverage.trim()}\n` : '')
     )
 }
 

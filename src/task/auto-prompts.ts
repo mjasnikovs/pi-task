@@ -69,8 +69,16 @@ NONE`
 
 /**
  * Decompose: output a markdown checkbox list of task titles (one line each).
+ * `requirementsLedger` is buildRequirementsLedger's grounded quote list (goal E's
+ * belt): the spec's obligations ride into decompose explicitly, so mirroring the
+ * spec's own milestone/section structure cannot silently discharge them. '' ⇒
+ * the prompt is unchanged.
  */
-export const AUTO_DECOMPOSE_PROMPT = (feature: string, clarifications: string): string =>
+export const AUTO_DECOMPOSE_PROMPT = (
+    feature: string,
+    clarifications: string,
+    requirementsLedger = ''
+): string =>
     `Split this feature into an ordered list of implementation tasks. Each task
 will be handed, by its title, to a separate pipeline that does its own research
 and writes its own spec — so here you produce TITLES ONLY, not specs.
@@ -80,7 +88,7 @@ ${feature.trim()}
 
 CLARIFICATIONS:
 ${clarifications.trim() || '(none)'}
-
+${requirementsLedger.trim().length > 0 ? `\n${requirementsLedger.trim()}\n` : ''}
 RULES:
 - One task per line, as a markdown checkbox: "- [ ] <title>".
 - Each title is a short imperative phrase; optionally add " — <one key detail>".

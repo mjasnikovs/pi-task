@@ -29,6 +29,47 @@ import {parseDecomposeList} from '../src/task/auto-io.js'
 import {AUTO_DECOMPOSE_PROMPT} from '../src/task/auto-prompts.js'
 import {DECOMPOSE_SOURCE_RULE, reconcileTitleSources} from '../src/task/decompose-fidelity.js'
 import {
+    REQUIREMENT_EXTRACT_PROMPT,
+    COVERAGE_MAP_PROMPT,
+    parseRequirementLines,
+    keepGroundedRequirements,
+    capRequirements,
+    enumerateObligationPassages,
+    uncoveredPassages,
+    extractionRetryHint,
+    parseCoverageMap,
+    accountCoverage,
+    buildRequirementsLedger,
+    type RequirementEntry
+} from '../src/task/requirements.js'
+import {prependHint} from '../src/task/child-runner.js'
+
+/** The full NEW-arm extraction path: checklist floor + one forced retry on
+ *  uncovered obligation-marked passages (mirrors planAuto exactly). */
+export async function extractRequirementsNew(fx: LoadedFixture): Promise<RequirementEntry[]> {
+    const passages = enumerateObligationPassages(fx.featureForModel)
+    const once = async (hint: string | null): Promise<RequirementEntry[]> =>
+        keepGroundedRequirements(
+            parseRequirementLines(
+                await runPlanningChild(
+                    fx.cwd,
+                    '',
+                    prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(fx.featureForModel, passages))
+                )
+            ),
+            fx.featureForModel
+        )
+    let entries = await once(null)
+    const uncovered = uncoveredPassages(passages, entries)
+    if (uncovered.length > 0) {
+        entries = keepGroundedRequirements(
+            [...entries, ...(await once(extractionRetryHint(uncovered)))],
+            fx.featureForModel
+        )
+    }
+    return capRequirements(entries, passages)
+}
+import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
     parseScriptLines,
@@ -170,6 +211,41 @@ async function main(): Promise<void> {
             )
             raw = await runPlanningChild(fx.cwd, '', CONTRACT_EXTRACT_PROMPT(fx.featureForModel, list))
             parsed = keepGroundedContracts(parseContractLines(raw), fx.featureForModel).map(e => e.quote)
+        } else if (child === 'requirements') {
+            // OLD arm: bare extraction, no checklist floor, no forced retry.
+            raw = await runPlanningChild(fx.cwd, '', REQUIREMENT_EXTRACT_PROMPT(fx.featureForModel))
+            parsed = keepGroundedRequirements(
+                parseRequirementLines(raw),
+                fx.featureForModel
+            ).map(e => e.quote)
+        } else if (child === 'requirements-new') {
+            raw = ''
+            parsed = (await extractRequirementsNew(fx)).map(e => e.quote)
+        } else if (child === 'covmap') {
+            // Full new coverage path: extract requirements (floor+retry),
+            // decompose WITH the ledger, then map — the host-side accounting.
+            const reqs = await extractRequirementsNew(fx)
+            const plan = reconcileTitleSources(
+                parseDecomposeList(
+                    await runPlanningChild(
+                        fx.cwd,
+                        'read',
+                        AUTO_DECOMPOSE_PROMPT(fx.featureForModel, '', buildRequirementsLedger(reqs))
+                    )
+                ),
+                fx.featureForModel
+            )
+            raw = await runPlanningChild(fx.cwd, '', COVERAGE_MAP_PROMPT(reqs, plan.titles))
+            const acc = accountCoverage(
+                reqs,
+                parseCoverageMap(raw, reqs.length, plan.titles.length)
+            )
+            parsed = {
+                titles: plan.titles,
+                mapped: acc.mapped.length,
+                cross: acc.crossCutting.map(e => e.quote),
+                unmapped: acc.unmapped.map(e => e.quote)
+            }
         } else {
             console.error(`unknown child "${child}"`)
             process.exit(2)
