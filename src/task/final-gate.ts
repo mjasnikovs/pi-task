@@ -51,6 +51,7 @@ import {
     recheckAcceptDebts,
     writeAcceptDebts,
     buildAcceptDebtNote,
+    annotateDebtConflicts,
     type AcceptDebt
 } from './accept-debt.js'
 import {readDeclaredScripts, missingDeclaredScripts} from './launch-contract.js'
@@ -58,8 +59,21 @@ import {readDeclaredScripts, missingDeclaredScripts} from './launch-contract.js'
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
     ok: boolean
-    /** On a fail: the exact command, its exit code, and the tail of its output. */
+    /**
+     * On a fail: the exact command, its exit code, and the tail of its output — the
+     * MECHANICAL failure only. The accept-debt note is deliberately NOT folded in
+     * here (mx5 run 11): this string seeds the final-gate AUTOFIX child's prompt,
+     * and a debt included there is read as an instruction — the run-11 fix child
+     * `rm`'d a sibling task's verified deliverable to satisfy a recorded claim. The
+     * child cannot act on text it never receives; debts travel in `debtNote`.
+     */
     reason: string
+    /**
+     * Human-facing suffix listing the still-open accepted-defect claims (see
+     * buildAcceptDebtNote) — for the picker question and the trail, NEVER for the
+     * autofix seed. Absent when nothing is open.
+     */
+    debtNote?: string
     /**
      * ACCEPT-despite-verify-FAIL debts still open at run end (mx5 run 4 B3 / run 8
      * TASK_0012): tasks the user blessed as-is despite a verify-FAIL that a
@@ -612,6 +626,27 @@ async function recoverOrphanPort(
 }
 
 /**
+ * The task whose commit INTRODUCED `rel` (oldest `--diff-filter=A` commit whose
+ * subject carries the pi-task `(TASK_nnnn)` suffix — both the task snapshot and the
+ * ENFORCE commit shapes match). Null when the file predates the run, was never
+ * committed, git is unavailable, or the adding commit is not a task commit — every
+ * unknown degrades to "no conflict claim".
+ */
+export function taskThatIntroduced(cwd: string, rel: string): string | null {
+    const r = spawnSync('git', ['log', '--diff-filter=A', '--format=%s', '--', rel], {
+        cwd,
+        encoding: 'utf8'
+    })
+    if (r.error || r.status !== 0 || !r.stdout) return null
+    const subjects = r.stdout.trim().split('\n').filter(Boolean)
+    // Newest-first output; the LAST line is the original introduction (a
+    // delete-and-re-add later in history must not reattribute the file).
+    const first = subjects[subjects.length - 1] ?? ''
+    const m = /\((TASK_\d+)\)\s*$/.exec(first)
+    return m ? m[1] : null
+}
+
+/**
  * Run the final gate: static analysis first, then the lockfile consistency
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
@@ -633,14 +668,22 @@ export async function runFinalIntegrationGate(
     // run may not complete silently carrying an accepted defect. FP-safe by
     // construction (see accept-debt.ts). Best-effort: a ledger read/write failure
     // must never break the gate.
-    const {open: openDebts, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
+    const {open: openRaw, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
         staticOk: stat.ok
     })
-    if (resolved.length > 0) await writeAcceptDebts(cwd, openDebts)
+    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
+    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
+    // named file is another task's committed deliverable is a plan defect — surface
+    // the contradiction with the debt so nobody (human or child) treats the claim as
+    // a deletion instruction. Pure git-history lookup; degrades to no annotation.
+    const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
     const debtNote = buildAcceptDebtNote(openDebts)
+    // The debt note rides in its OWN field: `reason` stays the mechanical failure
+    // because it seeds the autofix child's prompt (see FinalGateOutcome.reason —
+    // run 11's fix child executed a recorded claim as an instruction).
     const withDebts = (o: FinalGateOutcome): FinalGateOutcome => ({
         ...o,
-        reason: `${o.reason}${debtNote}`,
+        ...(debtNote ? {debtNote} : {}),
         openDebts
     })
     if (!stat.ok) return withDebts({ok: false, reason: `static checks: ${stat.reason}`})

@@ -10,8 +10,10 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     acceptDebtFile,
+    annotateDebtConflicts,
     buildAcceptDebtNote,
     describeDebt,
+    extractExistenceClaims,
     isStaticClassDebt,
     parseAcceptDebts,
     readAcceptDebts,
@@ -217,5 +219,96 @@ describe('recordEnforceRevertDebt / origin round-trip', () => {
         const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved).toHaveLength(0)
         expect(open).toHaveLength(1)
+    })
+})
+
+// ─── Conflicting-claim classification (mx5 run 11) ───────────────────────────
+//
+// The three VERBATIM debts from the run-11 ledger (~/hub/mx5/.pi-tasks/
+// accept-debt.md). Only T9 is an existence-as-failure claim indicting a sibling's
+// deliverable — the final-gate autofix child, seeded with it, ran
+// `rm src/client/pages/admin.tsx` and destroyed TASK_0008's verified work.
+const RUN11_T1 =
+    'work did not verify: src/server/db.ts imports {SQL} (uppercase class constructor) instead '
+    + 'of the spec-mandated {sql} (lowercase tagged template function); the constraint '
+    + 'explicitly requires "import { sql } from \'bun\'" and the acceptance criteria state '
+    + 'db.ts must use that exact import form'
+const RUN11_T7 =
+    'work did not verify: src/client/api.ts was modified (import path changed from '
+    + "'../server/index.js' to './routes.js') despite the spec's prohibition \"Preserve all "
+    + 'existing files: src/client/api.ts" with no exception covering this change'
+const RUN11_T9 =
+    'work did not verify: Verification check #7 fails: src/client/pages/admin.tsx exists '
+    + '(introduced by prior TASK_0008, not this task). The shipped verification script exits '
+    + 'with code 1 at the admin page existence gate.'
+
+describe('extractExistenceClaims', () => {
+    test('run-11 T9: the path whose existence IS the failure is extracted', () => {
+        expect(extractExistenceClaims(RUN11_T9)).toEqual(['src/client/pages/admin.tsx'])
+    })
+
+    test('run-11 T1/T7: paths merely MENTIONED (import form, prohibition) never qualify', () => {
+        expect(extractExistenceClaims(RUN11_T1)).toEqual([])
+        expect(extractExistenceClaims(RUN11_T7)).toEqual([])
+    })
+
+    test('"must not exist" phrasing also qualifies; bare mentions do not', () => {
+        expect(extractExistenceClaims('src/pages/admin.tsx must not exist per scope')).toEqual([
+            'src/pages/admin.tsx'
+        ])
+        expect(extractExistenceClaims('the file src/pages/admin.tsx still exists')).toEqual([
+            'src/pages/admin.tsx'
+        ])
+        expect(extractExistenceClaims('src/pages/admin.tsx renders a blank page')).toEqual([])
+    })
+})
+
+describe('annotateDebtConflicts', () => {
+    const introducedBy = (p: string): string | null =>
+        p === 'src/client/pages/admin.tsx' ? 'TASK_0008' : null
+
+    test('run-11 ledger: exactly T9 is annotated, T1/T7 pass through untouched (0 FP)', () => {
+        const debts: AcceptDebt[] = [
+            {taskId: 'TASK_0001', reason: RUN11_T1, origin: 'enforce-revert'},
+            {taskId: 'TASK_0007', reason: RUN11_T7},
+            {taskId: 'TASK_0009', reason: RUN11_T9}
+        ]
+        const out = annotateDebtConflicts(debts, introducedBy)
+        expect(out[0].conflict).toBeUndefined()
+        expect(out[1].conflict).toBeUndefined()
+        expect(out[2].conflict).toContain("TASK_0008's committed deliverable")
+        expect(out[2].conflict).toContain('do NOT delete')
+        // Annotation copies; originals keep their fields.
+        expect(out[2].taskId).toBe('TASK_0009')
+        expect(out[2].reason).toBe(RUN11_T9)
+    })
+
+    test("a claim naming the debt task's OWN file is self-consistent — no conflict", () => {
+        const out = annotateDebtConflicts(
+            [{taskId: 'TASK_0008', reason: RUN11_T9.replace('check #7', 'check #1')}],
+            introducedBy
+        )
+        expect(out[0].conflict).toBeUndefined()
+    })
+
+    test('unknown introducer (file predates the run / not a task commit) → no conflict', () => {
+        const out = annotateDebtConflicts([{taskId: 'TASK_0009', reason: RUN11_T9}], () => null)
+        expect(out[0].conflict).toBeUndefined()
+    })
+})
+
+describe('buildAcceptDebtNote — conflicting claims', () => {
+    test('a conflicting debt carries its contradiction inline; the header disclaims instructions', () => {
+        const note = buildAcceptDebtNote([
+            {
+                taskId: 'TASK_0009',
+                reason: RUN11_T9,
+                conflict:
+                    "`src/client/pages/admin.tsx` is TASK_0008's committed deliverable — do NOT delete"
+            }
+        ])
+        expect(note).toContain('⚠ CONFLICTING CLAIM')
+        expect(note).toContain("TASK_0008's committed deliverable")
+        expect(note).toContain('not instructions to edit code')
     })
 })

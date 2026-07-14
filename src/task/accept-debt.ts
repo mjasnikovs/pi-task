@@ -58,6 +58,14 @@ export interface AcceptDebt {
     reason: string
     /** Absent in legacy 2-field records → treated as 'accepted'. */
     origin?: DebtOrigin
+    /**
+     * Set (never serialized) when the recorded reason CONFLICTS with the run itself:
+     * it asserts a file's existence is the failure, but that file is another task's
+     * committed deliverable (see annotateDebtConflicts). A conflicting debt is a
+     * PLAN defect to surface, never an instruction to act on — mx5 run 11's autofix
+     * child `rm`'d TASK_0008's verified admin page to satisfy exactly such a claim.
+     */
+    conflict?: string
 }
 
 export function acceptDebtFile(cwd: string): string {
@@ -215,17 +223,88 @@ export function recheckAcceptDebts(
     return {open, resolved}
 }
 
+// ─── Conflicting-claim classification (mx5 run 11) ──────────────────────────
+//
+// A recorded debt is a CLAIM about the tree, not an instruction to change it. The
+// one class a deterministic check can prove SELF-CONTRADICTORY is an
+// existence-as-failure claim ("<path> exists" fails the verify) whose named path is
+// a DIFFERENT task's committed deliverable: the plan shipped the file on purpose
+// and a sibling's verify indicts it — a plan defect (sibling scope-fence leaked
+// into a verify assertion), not a fixable fault. Run 11's TASK_0009 debt read
+// "src/client/pages/admin.tsx exists (introduced by prior TASK_0008…)" and the
+// final-gate autofix child, seeded with it, ran `rm` on the verified page.
+
+/** A path-like token: at least one directory separator, ending in a file name. */
+const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
+
+/**
+ * Extract the paths whose EXISTENCE the reason asserts as the failure — a path
+ * token immediately followed by "exists" / "still exists", or by "must/should not
+ * exist". Only this narrow shape qualifies: a reason that merely MENTIONS a path
+ * (a prohibition violation, a broken import) is an ordinary defect claim, not an
+ * existence assertion, and must never be flagged (run 11's T1/T7 debts name paths
+ * this way and are genuine).
+ */
+export function extractExistenceClaims(reason: string): string[] {
+    const out: string[] = []
+    for (const m of reason.matchAll(PATH_TOKEN_RE)) {
+        const after = reason.slice(m.index! + m[0].length)
+        if (
+            /^\s+(?:still\s+)?exists\b/.test(after)
+            || /^\s+(?:must|should)\s+not\s+exist\b/.test(after)
+        ) {
+            out.push(m[0])
+        }
+    }
+    return [...new Set(out)]
+}
+
+/**
+ * Annotate each debt whose existence-as-failure claim names a file INTRODUCED by a
+ * different task's commit (per `introducedBy`, typically git history) with a
+ * human-readable conflict statement. Everything degrades to no annotation: no
+ * existence claim, an unknown introducer, or the debt's own task introducing the
+ * file (then the claim is at least self-consistent) all pass through unchanged.
+ */
+export function annotateDebtConflicts(
+    debts: AcceptDebt[],
+    introducedBy: (path: string) => string | null
+): AcceptDebt[] {
+    return debts.map(d => {
+        for (const p of extractExistenceClaims(d.reason)) {
+            const producer = introducedBy(p)
+            if (producer && producer !== d.taskId) {
+                return {
+                    ...d,
+                    conflict:
+                        `\`${p}\` is ${producer}'s committed deliverable — this assertion `
+                        + `contradicts a sibling task's shipped work (a plan defect, not a fix `
+                        + `instruction); do NOT delete or rewrite that deliverable to satisfy it`
+                }
+            }
+        }
+        return d
+    })
+}
+
 /**
  * A one-line-per-debt suffix appended to the final gate's report reason so the still
  * -open accepted defects surface in the gate outcome the user sees (and in the fail
- * picker). Empty when nothing is open.
+ * picker). Empty when nothing is open. The header states the records' status
+ * explicitly: they are claims for the HUMAN, re-stated by the gate, never
+ * instructions — and a conflicting claim carries its contradiction inline.
  */
 export function buildAcceptDebtNote(open: AcceptDebt[]): string {
     if (open.length === 0) return ''
-    const items = open.map(d => `${d.taskId || '(unknown task)'} — ${describeDebt(d)}: ${d.reason}`)
+    const items = open.map(
+        d =>
+            `${d.taskId || '(unknown task)'} — ${describeDebt(d)}: ${d.reason}`
+            + (d.conflict ? `\n    ⚠ CONFLICTING CLAIM — ${d.conflict}` : '')
+    )
     return (
         `\n\nUNRESOLVED VERIFY-FAIL DEBT still open (${open.length}) — `
-        + 'these defects were recorded during the run and are NOT re-verified by this gate:\n'
+        + 'these defects were recorded during the run and are NOT re-verified by this gate. '
+        + 'They are records for a human decision, not instructions to edit code:\n'
         + items.map(i => `  - ${i}`).join('\n')
     )
 }

@@ -178,7 +178,7 @@ export interface AutoDeps extends GateDeps {
     finalGate?: (
         cwd: string,
         planText?: string
-    ) => Promise<{ok: boolean; reason: string; openDebts?: AcceptDebt[]}>
+    ) => Promise<{ok: boolean; reason: string; debtNote?: string; openDebts?: AcceptDebt[]}>
     /**
      * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
      * offered as the picker's third option. Runs the fix child, applies the
@@ -1082,7 +1082,9 @@ export async function runAutoLoop(
                     if (fin.openDebts && fin.openDebts.length > 0) {
                         for (const d of fin.openDebts) {
                             await recGate(
-                                `defect STILL OPEN — ${d.taskId || '(unknown task)'}: ${describeDebt(d)}: ${d.reason.slice(0, 240)}`
+                                `defect STILL OPEN — ${d.taskId || '(unknown task)'}: ${describeDebt(d)}: ${d.reason.slice(0, 240)}${
+                                    d.conflict ? ` [CONFLICTING CLAIM — ${d.conflict}]` : ''
+                                }`
                             )
                         }
                         active.ui.notify(
@@ -1099,8 +1101,11 @@ export async function runAutoLoop(
                     while (!fin.ok) {
                         const canAutofix =
                             deps.finalGateFix !== undefined && fixAttempts < MAX_FINAL_GATE_AUTOFIX
+                        // The picker question shows the debts (the HUMAN weighs them);
+                        // the autofix seed below deliberately does not — mx5 run 11's
+                        // fix child executed a debt claim as an `rm` instruction.
                         const question =
-                            `Final integration gate FAILED for ${id}.\n\n${fin.reason}\n\n`
+                            `Final integration gate FAILED for ${id}.\n\n${fin.reason}${fin.debtNote ?? ''}\n\n`
                             + 'All tasks are checked off — this is the whole-repo check '
                             + '(the project’s own test/build/static commands, run unaided).'
                             + (fixAttempts > 0 ?
@@ -1165,7 +1170,13 @@ export async function runAutoLoop(
                             )
                             // Work from the FRESH gate failure when the fix pass got
                             // as far as re-running the gate; otherwise keep the last.
-                            fin = {ok: false, reason: fix.gateReason ?? fin.reason}
+                            // The debt note is carried so the next picker still shows
+                            // the open claims (the seed never includes it).
+                            fin = {
+                                ok: false,
+                                reason: fix.gateReason ?? fin.reason,
+                                debtNote: fin.debtNote
+                            }
                             continue
                         }
                         // Leave failed — the dismissal default, unchanged from the

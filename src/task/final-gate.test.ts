@@ -15,7 +15,8 @@ import {
     discoverGateCommandLabels,
     discoverLockfileChecks,
     runBootCheck,
-    runFinalIntegrationGate
+    runFinalIntegrationGate,
+    taskThatIntroduced
 } from './final-gate.js'
 import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
 import {appendDeclaredScripts} from './launch-contract.js'
@@ -595,8 +596,11 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
         expect(out.openDebts).toEqual([
             {taskId: 'TASK_0012', reason: 'modified frozen path src/main.tsx'}
         ])
-        expect(out.reason).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
-        expect(out.reason).toContain('TASK_0012')
+        // The note rides in its own field: `reason` stays mechanical because it
+        // seeds the autofix child (mx5 run 11 — a debt in the seed became an `rm`).
+        expect(out.debtNote).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
+        expect(out.debtNote).toContain('TASK_0012')
+        expect(out.reason).not.toContain('UNRESOLVED VERIFY-FAIL DEBT')
         // Behavioral debts are never auto-closed — the ledger still holds it for resume.
         expect(await readAcceptDebts(dir)).toHaveLength(1)
     })
@@ -619,7 +623,8 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
         expect(out.openDebts).toHaveLength(1)
-        expect(out.reason).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
+        expect(out.debtNote).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
+        expect(out.reason).not.toContain('UNRESOLVED VERIFY-FAIL DEBT')
         expect(await readAcceptDebts(dir)).toHaveLength(1)
     })
 
@@ -641,6 +646,64 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
         const out = await runFinalIntegrationGate(makeDir({scripts: {test: 'exit 0'}}))
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([])
+        expect(out.debtNote).toBeUndefined()
         expect(out.reason).not.toContain('ACCEPTED VERIFY-FAIL DEBT')
+    })
+})
+
+describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () => {
+    const git = (dir: string, ...args: string[]): void => {
+        const r = Bun.spawnSync(['git', ...args], {cwd: dir})
+        if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.toString()}`)
+    }
+
+    /** A throwaway repo where TASK_0008's commit introduces the admin page. */
+    function makeRepoWithTaskCommits(): string {
+        const dir = makeDir()
+        git(dir, 'init', '-q')
+        git(dir, 'config', 'user.email', 'test@test')
+        git(dir, 'config', 'user.name', 'test')
+        fs.mkdirSync(path.join(dir, 'src/client/pages'), {recursive: true})
+        fs.writeFileSync(path.join(dir, 'src/client/pages/home.tsx'), 'export const Home = 1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-qm', 'task: Client shell (TASK_0006)')
+        fs.writeFileSync(path.join(dir, 'src/client/pages/admin.tsx'), 'export const Admin = 1\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-qm', 'task: Admin panel page with user ban toggle (TASK_0008)')
+        return dir
+    }
+
+    test('resolves the ORIGINAL introducing task commit, even after deletion', () => {
+        const dir = makeRepoWithTaskCommits()
+        expect(taskThatIntroduced(dir, 'src/client/pages/admin.tsx')).toBe('TASK_0008')
+        // The run-11 shape: the file was rm'd from the worktree — attribution holds.
+        fs.rmSync(path.join(dir, 'src/client/pages/admin.tsx'))
+        expect(taskThatIntroduced(dir, 'src/client/pages/admin.tsx')).toBe('TASK_0008')
+    })
+
+    test('a non-task commit or unknown file attributes to nobody', () => {
+        const dir = makeRepoWithTaskCommits()
+        fs.writeFileSync(path.join(dir, 'README.md'), 'x\n')
+        git(dir, 'add', '-A')
+        git(dir, 'commit', '-qm', 'docs: readme')
+        expect(taskThatIntroduced(dir, 'README.md')).toBeNull()
+        expect(taskThatIntroduced(dir, 'src/never/was.ts')).toBeNull()
+        expect(taskThatIntroduced(makeDir(), 'anything.ts')).toBeNull() // not a repo
+    })
+
+    test('gate outcome: T9-shaped debt is annotated CONFLICTING; reason stays mechanical', async () => {
+        const dir = makeRepoWithTaskCommits()
+        await recordAcceptDebt(
+            dir,
+            'TASK_0009',
+            'Verification check #7 fails: src/client/pages/admin.tsx exists (introduced by '
+                + 'prior TASK_0008, not this task).'
+        )
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.openDebts).toHaveLength(1)
+        expect(out.openDebts![0].conflict).toContain("TASK_0008's committed deliverable")
+        expect(out.debtNote).toContain('⚠ CONFLICTING CLAIM')
+        // The autofix seed (reason) must not carry the claim (run 11: it became `rm`).
+        expect(out.reason).not.toContain('admin.tsx')
     })
 })
