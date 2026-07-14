@@ -60,6 +60,7 @@ import {
     runnableDeclaredScripts
 } from './launch-contract.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
+import {runRenderCheck, type RenderOutcome} from './render-check.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -228,7 +229,12 @@ export function discoverBootCommand(cwd: string): HealthCommand | null {
 }
 
 type BootOutcome =
-    | {outcome: 'skip' | 'pass'}
+    | {
+          outcome: 'skip' | 'pass'
+          /** Set when the render check could not OBSERVE the served page (no browser,
+           *  undeterminable port) — surfaced by the gate as an UNOBSERVED warning. */
+          renderNote?: string
+      }
     | {outcome: 'fail'; detail: string}
     // An address-already-in-use bind failure: the app code is fine, a process is
     // sitting on the port (mx5 run 9: a gate child's orphaned `bun run dev` held
@@ -272,6 +278,20 @@ export interface BootDeps {
      * real socket; the default probes ss/lsof + pgid.
      */
     groupHasListener?: (pgid: number) => boolean
+    /**
+     * The (lowest) TCP port a listener owned by process group `pgid` is bound to,
+     * or null when it cannot be determined. Feeds the render check's URL; injected
+     * for tests, default probes ss/lsof + pgid.
+     */
+    groupListeningPort?: (pgid: number) => number | null
+    /**
+     * Load the served page once in a headless browser and judge the RENDERED DOM
+     * (mx5 runs 8/11: curl cannot execute JS, so a blank-mount app passed every
+     * gate). Runs only for a served app, against the live listener, before the
+     * boot child is killed. Absent → the boot check behaves exactly as before;
+     * the gate wires runRenderCheck by default for served apps.
+     */
+    renderProbe?: (url: string) => RenderOutcome
 }
 
 /** Package deps that mean "this project stands up an HTTP server" — the deterministic
@@ -309,36 +329,50 @@ export function detectsServedApp(cwd: string, planText?: string): boolean {
     return planText !== undefined && SERVE_TEXT_RE.test(planText)
 }
 
-/** Pids currently owning a LISTENing TCP socket (best-effort; ss first, then lsof).
+/** Listening TCP sockets as {pid, port} pairs (best-effort; ss first, then lsof).
  *  Empty on any failure — the caller then cannot attribute a listener to our group
  *  and the served-app check degrades to survival (never a false FAIL). */
-function listeningSocketPids(): number[] {
-    const pids = new Set<number>()
+function listeningSockets(): Array<{pid: number; port: number}> {
+    const out: Array<{pid: number; port: number}> = []
     try {
         const t = spawnSync('ss', ['-tlnpH'], {encoding: 'utf8', timeout: 4000})
         if (!t.error && t.stdout) {
-            for (const m of t.stdout.matchAll(/pid=(\d+)/g)) pids.add(Number(m[1]))
+            for (const line of t.stdout.split('\n')) {
+                const pm = /pid=(\d+)/.exec(line)
+                if (!pm) continue
+                // Column 4 (0-based 3) is the local address; the port is its last
+                // `:`-suffixed number ("0.0.0.0:3000", "[::]:3000").
+                const local = line.trim().split(/\s+/)[3] ?? ''
+                const portm = /:(\d+)$/.exec(local)
+                if (!portm) continue
+                out.push({pid: Number(pm[1]), port: Number(portm[1])})
+            }
         }
     } catch {
         // ss missing — try lsof
     }
-    if (pids.size === 0) {
+    if (out.length === 0) {
         try {
-            const t = spawnSync('lsof', ['-iTCP', '-sTCP:LISTEN', '-t', '-n', '-P'], {
+            const t = spawnSync('lsof', ['-iTCP', '-sTCP:LISTEN', '-n', '-P'], {
                 encoding: 'utf8',
                 timeout: 4000
             })
             if (!t.error && t.stdout) {
-                for (const line of t.stdout.split('\n')) {
-                    const n = Number(line.trim())
-                    if (Number.isInteger(n) && n > 0) pids.add(n)
+                for (const line of t.stdout.split('\n').slice(1)) {
+                    const cols = line.trim().split(/\s+/)
+                    const pid = Number(cols[1])
+                    const name = cols.find(c => /:\d+$/.test(c)) ?? ''
+                    const portm = /:(\d+)$/.exec(name)
+                    if (Number.isInteger(pid) && pid > 0 && portm) {
+                        out.push({pid, port: Number(portm[1])})
+                    }
                 }
             }
         } catch {
             // neither tool available
         }
     }
-    return [...pids]
+    return out
 }
 
 /** Process-group id of `pid`, or null if it cannot be read. */
@@ -358,10 +392,20 @@ function pgidOf(pid: number): number | null {
 /** Default listener probe: any LISTENing socket owned by a pid in process group
  *  `pgid` (the detached boot child IS its own group leader, so pgid === child.pid). */
 function defaultGroupHasListener(pgid: number): boolean {
-    for (const pid of listeningSocketPids()) {
+    for (const {pid} of listeningSockets()) {
         if (pgidOf(pid) === pgid) return true
     }
     return false
+}
+
+/** Default port lookup for the render check: the LOWEST port among the group's
+ *  listeners (a dev toolchain may open an HMR socket too; the app's own server
+ *  conventionally sits on the lower, configured port). Null when undeterminable. */
+function defaultGroupListeningPort(pgid: number): number | null {
+    const ports = listeningSockets()
+        .filter(({pid}) => pgidOf(pid) === pgid)
+        .map(({port}) => port)
+    return ports.length > 0 ? Math.min(...ports) : null
 }
 
 /** Default port-holder lookup: `lsof` first, then `ss`/`fuser`. Returns null on any
@@ -478,21 +522,44 @@ export function runBootCheck(
                 // group already gone
             }
         }
-        const passAndKill = () => {
-            settle({outcome: 'pass'})
+        const passAndKill = (renderNote?: string) => {
+            settle(renderNote ? {outcome: 'pass', renderNote} : {outcome: 'pass'})
+            killGroup('SIGTERM')
+            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
+        }
+        const failAndKill = (detail: string) => {
+            settle({outcome: 'fail', detail})
             killGroup('SIGTERM')
             setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
         }
         // Served apps only: poll for a listening socket owned by our process group.
-        // As soon as one appears the boot has demonstrably served → PASS early.
+        // As soon as one appears the boot has demonstrably served → run the render
+        // check against the LIVE listener (mx5 runs 8/11: a listener that serves a
+        // permanently blank page passed every curl-shaped check), then PASS/FAIL.
+        // The probe is spawnSync, so the interval cannot re-enter mid-check.
         const poll =
             expectServer ?
                 setInterval(() => {
                     if (settled || !child.pid) return
-                    if (groupHasListener(child.pid)) {
-                        listenerSeen = true
-                        passAndKill()
+                    if (!groupHasListener(child.pid)) return
+                    listenerSeen = true
+                    const probe = opts.deps?.renderProbe
+                    if (!probe) return passAndKill()
+                    const port = (opts.deps?.groupListeningPort ?? defaultGroupListeningPort)(
+                        child.pid
+                    )
+                    if (port === null) {
+                        return passAndKill(
+                            'render check UNOBSERVED: a listener was seen but its port could not be determined'
+                        )
                     }
+                    const rr = probe(`http://127.0.0.1:${port}/`)
+                    if (rr.outcome === 'fail') {
+                        return failAndKill(`listens on :${port} but ${rr.detail}`)
+                    }
+                    passAndKill(
+                        rr.outcome === 'skip' ? `render check UNOBSERVED: ${rr.note}` : undefined
+                    )
                 }, 500)
             :   null
         const timer = setTimeout(() => {
@@ -794,9 +861,21 @@ export async function runFinalIntegrationGate(
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
         const expectServer = detectsServedApp(cwd, planText)
-        let b = await runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps: bootDeps})
+        // Render check (mx5 runs 8/11): for a served app, load the live page in a
+        // headless browser and judge the RENDERED DOM — curl can't run JS, so a
+        // blank-mount app passed every prior "renders" check. Default to the real
+        // probe; tests inject their own. runRenderCheck env-gap-SKIPs when no
+        // browser exists, so a box without one never gets a false FAIL.
+        const bootDepsWithRender: BootDeps = {
+            ...bootDeps,
+            renderProbe: bootDeps.renderProbe ?? runRenderCheck
+        }
+        let b = await runBootCheck(cwd, boot, bootGraceMs, {
+            expectServer,
+            deps: bootDepsWithRender
+        })
         if (b.outcome === 'orphan-port') {
-            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDeps, expectServer)
+            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDepsWithRender, expectServer)
         }
         if (b.outcome === 'fail') {
             return withDebts({ok: false, reason: `boot check: \`${label}\` ${b.detail}`})
@@ -815,7 +894,12 @@ export async function runFinalIntegrationGate(
                 reason: `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`
             })
         }
-        if (b.outcome === 'pass') ran.push(label)
+        if (b.outcome === 'pass') {
+            ran.push(label)
+            // A listener that served, but whose page could not be OBSERVED to render
+            // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
+            if (b.renderNote) warnings.push(b.renderNote)
+        }
     }
     const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''
     return withDebts({

@@ -478,6 +478,79 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     )
 })
 
+// mx5 runs 8/11: a served listener is not enough — the page must RENDER. The
+// render probe is injected here so the flow is deterministic without a browser.
+describe('runBootCheck — render check on the served page (runs 8/11)', () => {
+    const alive = nodeScript('setTimeout(()=>{},600000)')
+
+    itPosix(
+        'a served page that renders blank → FAIL naming the port and the blank body',
+        async () => {
+            const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+                expectServer: true,
+                deps: {
+                    groupHasListener: () => true,
+                    groupListeningPort: () => 3000,
+                    renderProbe: url => {
+                        expect(url).toBe('http://127.0.0.1:3000/')
+                        return {
+                            outcome: 'fail',
+                            detail: 'the rendered body is EMPTY after client JS executed'
+                        }
+                    }
+                }
+            })
+            expect(r.outcome).toBe('fail')
+            expect((r as {detail: string}).detail).toContain(':3000')
+            expect((r as {detail: string}).detail).toContain('EMPTY')
+        }
+    )
+
+    itPosix('a served page that renders content → PASS, no warning', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                groupHasListener: () => true,
+                groupListeningPort: () => 3000,
+                renderProbe: () => ({outcome: 'pass', detail: 'rendered visible text'})
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect((r as {renderNote?: string}).renderNote).toBeUndefined()
+    })
+
+    itPosix('no browser (render SKIP) → PASS but UNOBSERVED renderNote', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                groupHasListener: () => true,
+                groupListeningPort: () => 3000,
+                renderProbe: () => ({outcome: 'skip', note: 'no headless browser found'})
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect((r as {renderNote: string}).renderNote).toContain('UNOBSERVED')
+    })
+
+    itPosix('a listener whose port is undeterminable → PASS but UNOBSERVED', async () => {
+        let probed = false
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                groupHasListener: () => true,
+                groupListeningPort: () => null,
+                renderProbe: () => {
+                    probed = true
+                    return {outcome: 'pass', detail: 'x'}
+                }
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect(probed).toBe(false) // no port ⇒ the probe is never called
+        expect((r as {renderNote: string}).renderNote).toContain('port could not be determined')
+    })
+})
+
 describe('detectsServedApp (run 10 item 1)', () => {
     test('a server-framework dependency ⇒ served app', () => {
         const dir = makeDir({dependencies: {hono: '^4', react: '^18'}})
@@ -585,6 +658,59 @@ describe('discoverGateCommandLabels', () => {
 
     test('nothing discoverable → empty (degrades to nothing-to-guard)', async () => {
         expect(discoverGateCommandLabels(makeDir())).toEqual([])
+    })
+})
+
+// mx5 runs 8/11: the whole gate must FAIL when the served app renders blank, and
+// surface UNOBSERVED when no browser could observe it. Injected render probe +
+// listener keep it hermetic (a real alive start script, faked observation).
+describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () => {
+    // hono dep ⇒ detectsServedApp; a start script that stays alive so the poll runs.
+    const servedApp = (): string =>
+        makeDir({
+            dependencies: {hono: '^4'},
+            scripts: {start: 'node -e "setTimeout(()=>{},600000)"'}
+        })
+
+    itPosix('a served app that renders blank FAILs the whole gate', async () => {
+        const dir = servedApp()
+        const out = await runFinalIntegrationGate(dir, 900_000, 5000, {
+            groupHasListener: () => true,
+            groupListeningPort: () => 3000,
+            renderProbe: () => ({
+                outcome: 'fail',
+                detail: 'the rendered body is EMPTY after client JS executed'
+            })
+        })
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('boot check')
+        expect(out.reason).toContain('EMPTY')
+    })
+
+    itPosix(
+        'a served app whose page cannot be observed → PASS with an UNOBSERVED warning',
+        async () => {
+            const dir = servedApp()
+            const out = await runFinalIntegrationGate(dir, 900_000, 5000, {
+                groupHasListener: () => true,
+                groupListeningPort: () => 3000,
+                renderProbe: () => ({outcome: 'skip', note: 'no headless browser found'})
+            })
+            expect(out.ok).toBe(true)
+            expect(out.reason).toContain('WARNING')
+            expect(out.reason).toContain('UNOBSERVED')
+        }
+    )
+
+    itPosix('a served app that renders content → clean PASS, no warning', async () => {
+        const dir = servedApp()
+        const out = await runFinalIntegrationGate(dir, 900_000, 5000, {
+            groupHasListener: () => true,
+            groupListeningPort: () => 3000,
+            renderProbe: () => ({outcome: 'pass', detail: 'rendered visible text'})
+        })
+        expect(out.ok).toBe(true)
+        expect(out.reason).not.toContain('WARNING')
     })
 })
 
