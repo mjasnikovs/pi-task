@@ -157,6 +157,28 @@ export async function appendDeclaredScripts(cwd: string, names: string[]): Promi
 }
 
 /**
+ * Boot-class script names: long-running serve/watch shapes the gate's BOOT check
+ * owns (it needs a listener, a grace window, and a group kill). These are never run
+ * as one-shot gate commands — a `dev` server run synchronously would only burn the
+ * timeout. Suffixed variants (`dev:client`, `start-prod`) are boot-class too.
+ */
+const BOOT_CLASS_RE = /^(?:dev|start|serve|preview|watch)(?:[:_-].*)?$/i
+
+/**
+ * The declared scripts the final gate must EXECUTE as one-shot commands (mx5 run
+ * 11): everything the launch contract declares that is neither boot-class (the
+ * boot check exercises those) nor already covered by the gate's integration
+ * commands (`covered`, case-insensitive — the test/build-shaped scripts that ran).
+ * Run 11 shipped `migrate` and `seed` broken (`.rows` on a Bun sql array —
+ * TypeError on first call) while the gate checked only that the scripts EXIST;
+ * existence is not launchability.
+ */
+export function runnableDeclaredScripts(declared: string[], covered: string[]): string[] {
+    const have = new Set(covered.map(s => s.toLowerCase()))
+    return declared.filter(n => !BOOT_CLASS_RE.test(n) && !have.has(n.toLowerCase()))
+}
+
+/**
  * Declared scripts the manifest does NOT expose (case-insensitive). Empty when every
  * declared script is present, or when nothing was declared (no check). This is the
  * deterministic lever the final gate FAILs on.

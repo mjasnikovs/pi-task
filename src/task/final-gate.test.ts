@@ -20,6 +20,7 @@ import {
 } from './final-gate.js'
 import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
 import {appendDeclaredScripts} from './launch-contract.js'
+import {appendEnvNotes} from './env-notes.js'
 
 // Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
 // Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
@@ -705,5 +706,98 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
         expect(out.debtNote).toContain('⚠ CONFLICTING CLAIM')
         // The autofix seed (reason) must not carry the claim (run 11: it became `rm`).
         expect(out.reason).not.toContain('admin.tsx')
+    })
+})
+
+// mx5 run 11: existence is not launchability — declared launch scripts must RUN.
+describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)', () => {
+    test('a declared script that dies on first call FAILs the gate with its output', async () => {
+        // The run-11 shape: migrate/seed shipped with a first-call TypeError
+        // (`.rows` on a Bun sql array result) and every gate stayed green.
+        const dir = makeDir({
+            scripts: {
+                test: 'exit 0',
+                migrate: `node -e "console.error('TypeError: undefined is not an object (evaluating result.rows)'); process.exit(1)"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['migrate', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('launch script: `bun run migrate` exited 1')
+        expect(out.reason).toContain('result.rows')
+    })
+
+    test('missing external infrastructure is an env gap, not a script fault', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: 'exit 0',
+                migrate: `node -e "console.error('connect ECONNREFUSED 127.0.0.1:5432'); process.exit(1)"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['migrate', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.reason).not.toContain('WARNING') // no excuse note → plain skip
+    })
+
+    test('an infra-gap skip whose script carries a standing EXCUSE note surfaces UNOBSERVED', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: 'exit 0',
+                migrate: `node -e "console.error('connect ECONNREFUSED 127.0.0.1:5432'); process.exit(1)"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['migrate', 'test'])
+        // The verbatim run-11 excuse-note class: the note excused the exact
+        // scripts that shipped broken.
+        await appendEnvNotes(
+            dir,
+            ['pre-existing scripts have .rows bug — migrate and seed fail, unrelated to this task'],
+            'TASK_0002'
+        )
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.reason).toContain('WARNING')
+        expect(out.reason).toContain('`migrate`')
+        expect(out.reason).toContain('UNOBSERVED')
+    })
+
+    test('boot-class declared scripts are NOT run as one-shots (the boot check owns them)', async () => {
+        // `watch` would exit 1 if executed; it must be excluded as boot-class.
+        const dir = makeDir({
+            scripts: {test: 'exit 0', watch: 'exit 1'}
+        })
+        await appendDeclaredScripts(dir, ['watch', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.reason).not.toContain('watch')
+    })
+
+    test('already-covered integration scripts are not run twice', async () => {
+        // `test` is declared AND an integration command; a double run would append
+        // to the marker file twice.
+        const dir = makeDir({
+            scripts: {test: `node -e "require('fs').appendFileSync('ran.txt','x')"`}
+        })
+        await appendDeclaredScripts(dir, ['test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(fs.readFileSync(path.join(dir, 'ran.txt'), 'utf8')).toBe('x')
+    })
+
+    test('launch scripts run in declared order, after integration commands', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: `node -e "require('fs').appendFileSync('order.txt','test;')"`,
+                migrate: `node -e "require('fs').appendFileSync('order.txt','migrate;')"`,
+                seed: `node -e "require('fs').appendFileSync('order.txt','seed;')"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['seed', 'migrate', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(fs.readFileSync(path.join(dir, 'order.txt'), 'utf8')).toBe('test;seed;migrate;')
+        expect(out.reason).toContain('`bun run seed`')
+        expect(out.reason).toContain('`bun run migrate`')
     })
 })

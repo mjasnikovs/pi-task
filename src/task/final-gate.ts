@@ -54,7 +54,12 @@ import {
     annotateDebtConflicts,
     type AcceptDebt
 } from './accept-debt.js'
-import {readDeclaredScripts, missingDeclaredScripts} from './launch-contract.js'
+import {
+    readDeclaredScripts,
+    missingDeclaredScripts,
+    runnableDeclaredScripts
+} from './launch-contract.js'
+import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -573,16 +578,28 @@ const ENV_GAP_OUTPUT_RE =
     /Executable doesn't exist|playwright install|browserType\.\w+: Executable|(?:wasn't|weren't) installed|Host system is missing dependencies|No usable sandbox|Cypress verification|Cypress executable (?:not found|was not found)|browser(?:s)? (?:is|are)? ?not installed/i
 
 /**
+ * A non-zero exit whose output shows the EXTERNAL INFRASTRUCTURE a launch script
+ * talks to is absent HERE — a database/daemon that is not running or not
+ * installed — rather than a fault in the script itself. Applied ONLY to
+ * launch-contract scripts (a migrate/seed against no DB is an environment gap on
+ * this box; the same wording in a `test` run is a real failure the suite must own).
+ */
+export const INFRA_GAP_OUTPUT_RE =
+    /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|is the server running|could not connect|cannot connect to the docker daemon|connect: connection|no such host/i
+
+/**
  * Run one gate command with the env-gap contract: tool missing, timeout, or
  * command-not-found inside the script chain (127) → environment gap, not a code
  * fault → skipped (same contract as repo-health). Also skips a non-zero exit whose
- * output shows a missing browser/runtime (ENV_GAP_OUTPUT_RE). Only a command that
- * actually ran and exited non-zero for a real reason fails.
+ * output shows a missing browser/runtime (ENV_GAP_OUTPUT_RE) — or, when the caller
+ * passes `extraGapRe` (launch scripts), missing external infrastructure. Only a
+ * command that actually ran and exited non-zero for a real reason fails.
  */
 function runGateCommand(
     cwd: string,
     [bin, args]: HealthCommand,
-    timeoutMs: number
+    timeoutMs: number,
+    extraGapRe?: RegExp
 ): {outcome: 'skip' | 'pass'} | {outcome: 'fail'; status: number; tail: string} {
     // env passed explicitly: bun's spawnSync resolves the binary against a
     // startup snapshot of the environment, not the live process.env.
@@ -594,7 +611,9 @@ function runGateCommand(
     })
     if (r.error || r.status === null || r.status === 127) return {outcome: 'skip'}
     if (r.status !== 0) {
-        if (ENV_GAP_OUTPUT_RE.test(`${r.stdout ?? ''}\n${r.stderr ?? ''}`)) return {outcome: 'skip'}
+        const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+        if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'skip'}
+        if (extraGapRe?.test(output)) return {outcome: 'skip'}
         return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
     }
     return {outcome: 'pass'}
@@ -725,6 +744,53 @@ export async function runFinalIntegrationGate(
             ran.push(label)
         }
     }
+    // EXECUTE the launch contract (mx5 run 11): every declared script that is
+    // neither boot-class (the boot check below owns those) nor already covered by
+    // the integration commands above RUNS as a one-shot, in declared order —
+    // existence is not launchability (`migrate`/`seed` shipped as first-call
+    // TypeErrors while the gate checked only that they exist). The env-gap
+    // contract extends to missing external INFRASTRUCTURE (no DB/daemon on this
+    // box → skip, not fail); a skip whose script also carries a standing EXCUSE
+    // note (F7) is surfaced as an UNOBSERVED warning — the note may be covering a
+    // real defect the gate could not reach here (run 11's "pre-existing .rows
+    // bug" note excused the exact scripts that shipped broken).
+    const warnings: string[] = []
+    if (declared.length > 0) {
+        const covered = cmds.flatMap(([bin, args]) =>
+            (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
+        )
+        const skippedLaunch: string[] = []
+        for (const name of runnableDeclaredScripts(declared, covered)) {
+            const cmd: HealthCommand = ['bun', ['run', name]]
+            const label = `${cmd[0]} ${cmd[1].join(' ')}`
+            const r = runGateCommand(cwd, cmd, Math.min(timeoutMs, 180_000), INFRA_GAP_OUTPUT_RE)
+            if (r.outcome === 'skip') {
+                skippedLaunch.push(name)
+                continue
+            }
+            if (r.outcome === 'fail') {
+                return withDebts({
+                    ok: false,
+                    reason: `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                })
+            }
+            ran.push(label)
+        }
+        if (skippedLaunch.length > 0) {
+            const notes = parseEnvNotes(await readEnvNotes(cwd)).filter(n => isExcuseNote(n.fact))
+            for (const name of skippedLaunch) {
+                const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+                const excuse = notes.find(n => re.test(n.fact))
+                if (excuse) {
+                    warnings.push(
+                        `launch script \`${name}\` could not run here (environment gap) and a `
+                            + `standing excuse note covers it ("${excuse.fact.slice(0, 160)}") — `
+                            + `UNOBSERVED: verify it by hand before trusting the launch surface`
+                    )
+                }
+            }
+        }
+    }
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
         const expectServer = detectsServedApp(cwd, planText)
@@ -751,11 +817,12 @@ export async function runFinalIntegrationGate(
         }
         if (b.outcome === 'pass') ran.push(label)
     }
+    const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''
     return withDebts({
         ok: true,
         reason:
-            ran.length > 0 ?
+            (ran.length > 0 ?
                 `statics + ${ran.map(c => `\`${c}\``).join(', ')} passed`
-            :   'statics passed (integration commands not runnable here)'
+            :   'statics passed (integration commands not runnable here)') + warningNote
     })
 }

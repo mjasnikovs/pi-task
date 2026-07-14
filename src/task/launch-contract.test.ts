@@ -15,7 +15,8 @@ import {
     launchContractFile,
     missingDeclaredScripts,
     parseScriptLines,
-    readDeclaredScripts
+    readDeclaredScripts,
+    runnableDeclaredScripts
 } from './launch-contract.js'
 
 function makeCwd(): string {
@@ -153,5 +154,27 @@ describe('appendDeclaredScripts / readDeclaredScripts', () => {
 
     test('reading a cwd with no artifact → empty list', async () => {
         expect(await readDeclaredScripts(makeCwd())).toEqual([])
+    })
+})
+
+describe('runnableDeclaredScripts (mx5 run 11 — existence is not launchability)', () => {
+    test('run-11 contract: boot-class and covered scripts drop, migrate/seed remain', () => {
+        expect(
+            runnableDeclaredScripts(['dev', 'build', 'migrate', 'seed', 'test'], ['test', 'build'])
+        ).toEqual(['migrate', 'seed'])
+    })
+
+    test('boot-class shapes with suffixes are excluded; declared order is kept', () => {
+        expect(
+            runnableDeclaredScripts(
+                ['seed', 'dev:client', 'start-prod', 'watch:css', 'preview', 'migrate'],
+                []
+            )
+        ).toEqual(['seed', 'migrate'])
+    })
+
+    test('coverage match is case-insensitive; empty declared → nothing to run', () => {
+        expect(runnableDeclaredScripts(['Migrate'], ['migrate'])).toEqual([])
+        expect(runnableDeclaredScripts([], ['test'])).toEqual([])
     })
 })
