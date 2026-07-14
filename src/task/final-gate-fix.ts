@@ -25,8 +25,26 @@
  * the child runs; any previously-discovered command that is no longer
  * discoverable afterwards rejects the attempt and discards its edits. A fix may
  * change what a command DOES, never make it disappear.
+ *
+ * WRITE-GUARD STACK (mx5 run 11): this child was added after the run-8 guard
+ * generation and inherited none of them — it ran `rm` on a sibling task's
+ * verified deliverable to satisfy a recorded debt claim and hand-copied a pinned
+ * contract to green the lint, with free bash and no trace. Every attempt now
+ * runs, deterministically and in order: frozen-path revert (when a freeze set is
+ * wired — see below) → deletion guard (a tracked file deleted without relocation
+ * rejects the attempt) → shrink guard (above) → probe-gaming scan over the added
+ * lines (a fix that SAYS it games a check rejects the attempt). Diff capture for
+ * every write-capable gate child lives at the gate-deps seam, keyed on the
+ * child's TOOLS, so the next write-capable kind cannot run invisibly either.
+ *
+ * The frozen-path deny is implemented but NOT wired by gate-deps: per-task
+ * frozen fences are task-SCOPED (they fence a task off a sibling's territory),
+ * and the measured union over the run-11 specs would have reverted the one
+ * legitimate whole-repo fix that run needed (migrate.ts — frozen by its own
+ * producing task). It activates only when a run-GLOBAL freeze source exists.
  */
 import {USER_CANCELLED} from './child-runner.js'
+import {findForbiddenDeletions, type TreeChangeSummary} from './write-guard.js'
 
 /** Same bounded-fix contract as lint-fix: edit in place, bash exists to RUN the
  *  failing command (and the project's own tooling), not to mutate git state. */
@@ -110,6 +128,10 @@ export function buildFinalFixPrompt(failReason: string): string {
         '     command pass. Relocating or scoping a file the runner was never meant',
         '     to pick up (per the project’s own config) is a legitimate fix;',
         '     deleting it or marking it skipped is not.',
+        '   - Do NOT delete tracked files at all. Every tracked file is a completed',
+        '     task’s committed deliverable; a deletion is detected and the whole fix',
+        '     is rejected. A legitimate relocation keeps the file (same file name)',
+        '     elsewhere in the tree.',
         '   - Do NOT remove or rename the project’s own commands (its test/build/',
         '     lint scripts or targets). Making the gate unable to find the command',
         '     is detected and the whole fix is rejected.',
@@ -167,14 +189,36 @@ export interface FinalFixDeps {
     /** Labels of every currently-discoverable gate command (static + integration),
      *  for the shrink guard. Pure discovery — nothing is executed. */
     discoverLabels: (cwd: string) => string[]
-    /** Discard the fix child's working-tree edits (shrink-guard trip only). Absent
+    /** Discard the fix child's working-tree edits (guard trips only). Absent
      *  → the violation is still rejected, edits are left for inspection. */
     discard?: (cwd: string) => Promise<void>
+    // ── Write-guard stack (mx5 run 11: this child ran UNGUARDED — free `rm`,
+    //    no diff capture, no frozen-path deny, no probe scan). All optional so
+    //    tests and older wirings degrade to the previous behavior; gate-deps
+    //    wires every one of them.
+    /** The fix child's tree changes (`git status --porcelain` shape) — diff capture
+     *  for the log and the deletion guard's input. The tree was clean before the
+     *  child ran (every task committed), so status IS the child's work. */
+    treeChanges?: () => Promise<TreeChangeSummary>
+    /** The union of every task spec's frozen (Do-NOT-modify) paths — the whole-run
+     *  write-deny set, since this child works across all slices at once. */
+    frozenPaths?: () => Promise<string[]>
+    /** Restore the given frozen paths to HEAD; returns the files actually reverted
+     *  (same mechanical deny the enforce pass carries — see frozen-path-guard.ts). */
+    revertFrozen?: (paths: string[]) => Promise<string[]>
+    /** Deterministic probe scan over the child's ADDED lines (probe-gaming, F6):
+     *  a fix written to game a check rather than meet it rejects the attempt —
+     *  run 11's autofix replaced the typed client with a hand-written contract
+     *  copy to green the lint. Findings are verbatim offending lines. */
+    probeScan?: () => Promise<string[]>
+    /** Write a timestamped line to the gate debug log (guard events). */
+    log?: (msg: string) => void
 }
 
 /**
- * Run one bounded final-gate fix attempt: snapshot discovery → child → shrink
- * guard → gate re-run. Never throws for an outcome; only a user cancel inside
+ * Run one bounded final-gate fix attempt: snapshot discovery → child → write-guard
+ * stack (diff capture → frozen-path revert → deletion guard → shrink guard → probe
+ * scan) → gate re-run. Never throws for an outcome; only a user cancel inside
  * runChild propagates (the caller's USER_CANCELLED path handles it).
  */
 export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixResult> {
@@ -193,6 +237,45 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return {ok: false, reason: `fix child failed: ${msg}`}
     }
 
+    const rejected = (what: string): FinalFixResult => ({
+        ok: false,
+        reason: `${what} — edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`
+    })
+
+    // (Diff capture — what the pass changed, durably — happens at the gate-deps
+    // seam for every write-capable child; here only the guards act on it.)
+
+    // FROZEN-PATH WRITE-DENY: undo the child's edits to any path a task spec
+    // froze, before anything downstream can act on them — same mechanical deny
+    // the enforce pass carries (prompt framing is A/B-proven insufficient).
+    // Non-fatal: the rest of the fix survives, only the frozen edits are undone.
+    if (deps.frozenPaths && deps.revertFrozen) {
+        const frozen = await deps.frozenPaths()
+        if (frozen.length > 0) {
+            const reverted = await deps.revertFrozen(frozen)
+            if (reverted.length > 0) {
+                deps.log?.(
+                    `final-fix FROZEN-PATH GUARD — reverted spec-frozen file(s) the fix pass modified: ${reverted.join(', ')}`
+                )
+            }
+        }
+    }
+
+    // DELETION GUARD (post-revert state): a tracked file the pass deleted without
+    // relocating it is a committed deliverable destroyed — reject the attempt.
+    if (deps.treeChanges) {
+        const gone = findForbiddenDeletions(await deps.treeChanges())
+        if (gone.length > 0) {
+            if (deps.discard) await deps.discard(deps.cwd)
+            const r = rejected(
+                `fix pass DELETED tracked file(s) (${gone.join(', ')}) — a completed task's `
+                    + `committed deliverable is not the fix child's to remove`
+            )
+            deps.log?.(`final-fix DELETION GUARD — ${r.reason}`)
+            return r
+        }
+    }
+
     // SHRINK GUARD: every gate command discoverable before the fix must still be
     // discoverable after it. A vanished command means the child "fixed" the gate
     // by removing the check — reject and (when possible) discard the edits.
@@ -200,11 +283,22 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     const vanished = before.filter(label => !after.has(label))
     if (vanished.length > 0) {
         if (deps.discard) await deps.discard(deps.cwd)
-        return {
-            ok: false,
-            reason:
-                `fix pass removed the gate's own command(s) (${vanished.join(', ')}) — `
-                + `edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`
+        return rejected(`fix pass removed the gate's own command(s) (${vanished.join(', ')})`)
+    }
+
+    // PROBE SCAN (F6): added lines whose stated purpose is to make a check pass
+    // rather than meet the requirement reject the attempt — there is no verify
+    // child downstream of this pass to judge the finding, and the probe is
+    // FP-measured at 1 true hit in 50,735 added lines on the real corpus.
+    if (deps.probeScan) {
+        const findings = await deps.probeScan()
+        if (findings.length > 0) {
+            if (deps.discard) await deps.discard(deps.cwd)
+            const r = rejected(
+                `fix pass added CHECK-GAMING code (${findings.slice(0, 2).join('; ').slice(0, 300)})`
+            )
+            deps.log?.(`final-fix PROBE-GAMING GUARD — ${r.reason}`)
+            return r
         }
     }
 

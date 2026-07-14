@@ -32,6 +32,7 @@ import {extractProhibitions, findProhibitionViolations} from './prohibition-prob
 import {frozenPathsFromSpec, revertFrozenPaths} from './frozen-path-guard.js'
 import {findProbeGaming, parseAddedLines, type AddedLine} from './probe-gaming.js'
 import {findSubstitutionSuspects, isTestFile, type ChangedFile} from './substitution-probe.js'
+import {parseTreeChanges, formatTreeChanges, type TreeChangeSummary} from './write-guard.js'
 import {
     findTestRebuiltAssemblies,
     testAssemblyVerifyFindings,
@@ -161,6 +162,19 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
         return last.exitCode === 0 ? parseAddedLines(last.stdout) : []
     }
     return lines
+}
+
+/**
+ * The working tree's current changes as a summary (write-guard shape): what a
+ * write-capable gate child changed, given the tree was clean when it started.
+ * Failures degrade to an empty summary — the guard then has nothing to reject.
+ */
+export async function collectTreeChanges(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<TreeChangeSummary> {
+    const r = await git(cwd, ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    return r.exitCode === 0 ? parseTreeChanges(r.stdout) : {modified: [], deleted: [], added: []}
 }
 
 /** Source extensions whose relative imports the test-assembly probe reasons over. */
@@ -353,6 +367,15 @@ export function buildGateDeps(params: {
                 const failure = classifyEnforceChildFailure(r)
                 log(failure ? `=== ${kind} end: FAIL — ${failure} ===` : `=== ${kind} end: ok ===`)
                 if (failure) throw new Error(failure)
+                // CAPABILITY-LEVEL diff capture (mx5 run 11): any WRITE-capable
+                // child — decided by its tools, not by which phase spawned it —
+                // gets its tree changes logged, so a future write-capable kind
+                // cannot run invisibly the way the final-fix child's `rm` did.
+                if (/\b(?:edit|bash|write)\b/.test(tools)) {
+                    log(
+                        `=== ${kind} tree changes: ${formatTreeChanges(await collectTreeChanges(cwd2, sig))} ===`
+                    )
+                }
                 return r.text
             } finally {
                 stopLoader()
@@ -600,7 +623,29 @@ export function buildGateDeps(params: {
                 // shrink guard's discovery is the gate's own (see final-gate.ts).
                 gate: c => runFinalIntegrationGate(c),
                 discoverLabels: discoverGateCommandLabels,
-                discard: discardTreeEdits
+                discard: discardTreeEdits,
+                // WRITE-GUARD STACK (mx5 run 11: this child ran with free bash and
+                // none of the run-8 guards — it rm'd a sibling task's verified
+                // deliverable and hand-copied a contract to green the lint). Diff
+                // capture happens at the makeGateChild seam; deletion guard +
+                // probe scan reject-and-discard here. The frozen-path deny
+                // (FinalFixDeps.frozenPaths/revertFrozen) is deliberately NOT
+                // wired: per-task fences are task-SCOPED ("this task must not
+                // touch a sibling's territory"), and the measured union over the
+                // run-11 specs would have reverted the one legitimate fix that
+                // run needed (migrate.ts, frozen by its own producing task). Wire
+                // it only when a run-GLOBAL freeze source exists (a design-level
+                // preserve registry), never a per-task union.
+                treeChanges: () => collectTreeChanges(cwd2, signal),
+                probeScan: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
+                log: msg => {
+                    void fsp
+                        .appendFile(
+                            path.join(tasksDir(cwd2), 'final-gate-debug.log'),
+                            `${new Date().toISOString()} ${msg}\n`
+                        )
+                        .catch(() => {})
+                }
             }),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the

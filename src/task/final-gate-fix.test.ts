@@ -201,3 +201,137 @@ describe('runFinalGateAutofix', () => {
         ).rejects.toThrow('__user_cancelled__')
     })
 })
+
+// ─── Write-guard stack (mx5 run 11: the unguarded final-fix child) ───────────
+
+describe('runFinalGateAutofix — write-guard stack', () => {
+    const clean = {modified: [], deleted: [], added: []}
+    const baseDeps = (over: Partial<FinalFixDeps>): FinalFixDeps => ({
+        cwd: '/tmp/x',
+        failReason: '`bun run test` exited 1',
+        runChild: () => Promise.resolve('FINAL-GATE-FIX: DONE'),
+        gate: () => Promise.resolve({ok: true, reason: 'gate green'}),
+        discoverLabels: () => ['bun run test'],
+        ...over
+    })
+
+    test('run-11 shape: a tracked-file deletion rejects the attempt and discards', async () => {
+        let discarded = false
+        let gateRuns = 0
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                treeChanges: () =>
+                    Promise.resolve({
+                        modified: ['src/client/main.tsx'],
+                        deleted: ['src/client/pages/admin.tsx'],
+                        added: []
+                    }),
+                discard: () => {
+                    discarded = true
+                    return Promise.resolve()
+                },
+                gate: () => {
+                    gateRuns++
+                    return Promise.resolve({ok: true, reason: 'never'})
+                }
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.reason).toContain('DELETED tracked file(s) (src/client/pages/admin.tsx)')
+        expect(r.reason).toContain('discarded')
+        expect(discarded).toBe(true)
+        expect(gateRuns).toBe(0) // rejected before the (expensive) gate re-run
+    })
+
+    test('a relocation (delete + same-name add) passes the deletion guard', async () => {
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                treeChanges: () =>
+                    Promise.resolve({
+                        modified: [],
+                        deleted: ['src/app.spec.ts'],
+                        added: ['e2e/app.spec.ts']
+                    })
+            })
+        )
+        expect(r.ok).toBe(true)
+    })
+
+    test('frozen-path revert runs BEFORE the deletion guard (a restored frozen delete does not reject)', async () => {
+        const calls: string[] = []
+        let post = false
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                frozenPaths: () => {
+                    calls.push('frozenPaths')
+                    return Promise.resolve(['src/server/index.ts'])
+                },
+                revertFrozen: paths => {
+                    calls.push(`revert:${paths.join(',')}`)
+                    post = true // the revert restores the frozen file
+                    return Promise.resolve(['src/server/index.ts'])
+                },
+                treeChanges: () => {
+                    calls.push('treeChanges')
+                    return Promise.resolve(
+                        post ? clean : {modified: [], deleted: ['src/server/index.ts'], added: []}
+                    )
+                },
+                log: msg => calls.push(`log:${msg.slice(0, 30)}`)
+            })
+        )
+        expect(r.ok).toBe(true)
+        expect(calls.filter(c => c.startsWith('revert:'))).toEqual(['revert:src/server/index.ts'])
+        expect(calls.some(c => c.startsWith('log:final-fix FROZEN-PATH GUARD'))).toBe(true)
+    })
+
+    test('a probe-gaming finding in the added lines rejects the attempt and discards', async () => {
+        let discarded = false
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                treeChanges: () => Promise.resolve(clean),
+                probeScan: () =>
+                    Promise.resolve([
+                        'src/routes.ts: // Return 401 so the verification test passes'
+                    ]),
+                discard: () => {
+                    discarded = true
+                    return Promise.resolve()
+                }
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.reason).toContain('CHECK-GAMING')
+        expect(r.reason).toContain('Return 401 so the verification test passes')
+        expect(discarded).toBe(true)
+    })
+
+    test('clean pass: no guard fires, gate arbitrates as before', async () => {
+        let gateRuns = 0
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                treeChanges: () => Promise.resolve(clean),
+                frozenPaths: () => Promise.resolve([]),
+                revertFrozen: () => Promise.resolve([]),
+                probeScan: () => Promise.resolve([]),
+                gate: () => {
+                    gateRuns++
+                    return Promise.resolve({ok: true, reason: 'gate green'})
+                }
+            })
+        )
+        expect(r.ok).toBe(true)
+        expect(gateRuns).toBe(1)
+    })
+
+    test('guards absent (older wiring / tests) → previous behavior unchanged', async () => {
+        const r = await runFinalGateAutofix(baseDeps({}))
+        expect(r.ok).toBe(true)
+    })
+
+    test('the prompt carries the deletion hard constraint (belt on the mechanical guard)', () => {
+        const p = buildFinalFixPrompt('`bun run test` exited 1')
+        expect(p).toContain('Do NOT delete tracked files')
+        expect(p).toContain('legitimate relocation keeps the file')
+    })
+})
