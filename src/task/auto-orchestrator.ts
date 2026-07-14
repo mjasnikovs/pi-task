@@ -68,6 +68,7 @@ import {
     keepGroundedContracts,
     appendContracts
 } from './contracts.js'
+import {reconcileTitleSources} from './decompose-fidelity.js'
 import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
@@ -575,8 +576,27 @@ export async function planAuto(
 
     // decompose
     const decomposePrompt = AUTO_DECOMPOSE_PROMPT(featureForModel, clarifications)
+    // Parse + FIDELITY RECONCILIATION (mx5 run 11, goal B): ground each title's
+    // [source: "…"] citation against the doc, strip the clause, and re-attach any
+    // `+`-joined constraint fragment the paraphrased title dropped (the silently
+    // stripped "+ tests" class). Applied to EVERY decompose output — initial,
+    // suspect-retry, coverage-retry — so no path ships an unreconciled list.
+    const parsePlan = (raw: string): string[] => {
+        const plan = reconcileTitleSources(parseDecomposeList(raw), featureForModel)
+        if (plan.sourced > 0 || plan.restored.length > 0) {
+            logPlanDebug(
+                cwd,
+                `decompose fidelity: ${plan.sourced}/${plan.titles.length} titles cited a grounded source; `
+                    + `${plan.restored.length} restoration(s)`
+                    + plan.restored
+                        .map(r => ` [task ${r.index + 1}: ${r.fragments.join(', ')}]`)
+                        .join('')
+            )
+        }
+        return plan.titles
+    }
     const listRaw = await deps.runChild('auto-decompose', 'read', decomposePrompt)
-    let planTitles = parseDecomposeList(listRaw)
+    let planTitles = parsePlan(listRaw)
     logPlanDebug(cwd, `decompose produced ${planTitles.length} title(s)`)
     // Distrust floor (see isSuspectPlan): a ≤2-title plan for a multi-KB spec is
     // regenerated once BEFORE the judge runs — the judge cannot be trusted to
@@ -594,7 +614,7 @@ export async function planAuto(
             'read',
             prependHint(suspectPlanHint(planTitles.length), decomposePrompt)
         )
-        const retryTitles = parseDecomposeList(retryRaw)
+        const retryTitles = parsePlan(retryRaw)
         logPlanDebug(cwd, `decompose suspect-retry produced ${retryTitles.length} title(s)`)
         if (retryTitles.length > planTitles.length) planTitles = retryTitles
     }
@@ -661,7 +681,7 @@ export async function planAuto(
             'read',
             prependHint(coverageRepromptHint(verdict.missing), decomposePrompt)
         )
-        const retryTitles = parseDecomposeList(retryRaw)
+        const retryTitles = parsePlan(retryRaw)
         logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
         if (retryTitles.length > 0 && retryTitles.length * 2 >= planTitles.length) {
             planTitles = retryTitles

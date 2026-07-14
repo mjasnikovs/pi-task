@@ -27,6 +27,7 @@ import {runChild} from '../src/task/child-runner.js'
 import {expandFeatureMentions} from '../src/task/auto-orchestrator.js'
 import {parseDecomposeList} from '../src/task/auto-io.js'
 import {AUTO_DECOMPOSE_PROMPT} from '../src/task/auto-prompts.js'
+import {DECOMPOSE_SOURCE_RULE, reconcileTitleSources} from '../src/task/decompose-fidelity.js'
 import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
@@ -134,8 +135,20 @@ async function main(): Promise<void> {
         let raw: string
         let parsed: unknown
         if (child === 'decompose') {
-            raw = await runPlanningChild(fx.cwd, 'read', AUTO_DECOMPOSE_PROMPT(fx.featureForModel, ''))
+            // OLD arm: the pre-source-rule prompt (rule stripped), no reconciliation.
+            raw = await runPlanningChild(
+                fx.cwd,
+                'read',
+                AUTO_DECOMPOSE_PROMPT(fx.featureForModel, '').replace(
+                    '\n' + DECOMPOSE_SOURCE_RULE,
+                    ''
+                )
+            )
             parsed = parseDecomposeList(raw)
+        } else if (child === 'decompose-new') {
+            raw = await runPlanningChild(fx.cwd, 'read', AUTO_DECOMPOSE_PROMPT(fx.featureForModel, ''))
+            const plan = reconcileTitleSources(parseDecomposeList(raw), fx.featureForModel)
+            parsed = plan
         } else if (child === 'launch') {
             // OLD arm: no candidates. NEW arm (launch-new): mechanical checklist.
             raw = await runPlanningChild(fx.cwd, '', LAUNCH_EXTRACT_PROMPT(fx.featureForModel))

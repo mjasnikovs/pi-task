@@ -62,9 +62,11 @@ export async function readContracts(cwd: string): Promise<string> {
 /**
  * Normalise for substring matching: collapse all whitespace runs to one space and
  * lowercase. Quoting across a line wrap or with reflowed spacing still matches the
- * source; casing differences do not defeat the anti-synthesis guard.
+ * source; casing differences do not defeat the anti-synthesis guard. Exported as
+ * the ONE grounding normaliser every "verbatim quote from the source doc" guard
+ * shares (contracts, decompose source anchors), so the rule can't drift.
  */
-function normalise(s: string): string {
+export function normalise(s: string): string {
     return s.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 

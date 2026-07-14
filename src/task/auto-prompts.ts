@@ -2,6 +2,7 @@
  * Prompts for /task-auto's two feature-level child calls. These produce a task
  * LIST only; all research/spec depth is /task's job, run per-title later.
  */
+import {DECOMPOSE_SOURCE_RULE} from './decompose-fidelity.js'
 
 /**
  * Clarify: asks ONE question at a time. Output MUST match parseClarifyList — a
@@ -92,6 +93,7 @@ RULES:
   none. These are explicit user choices that may contradict the referenced spec
   doc; phrase them as imperative directives (e.g. "use Bun's built-in bundler, do
   not add vite"). Do NOT invent decisions — only restate ones from CLARIFICATIONS.
+${DECOMPOSE_SOURCE_RULE}
 - Output the checkbox list and NOTHING else (no preamble, no numbering).`
 
 /**
