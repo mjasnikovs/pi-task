@@ -37,6 +37,7 @@ fork the breakdown). Account for the answers so far:
   real-time vs polling transport, search, deployment).
 - Skip anything /task will naturally resolve per-task during its own research.
 - Stay grounded in the referenced spec. If a design/spec doc is included above, do NOT propose a new subsystem, dependency, or requirement it does not call for, and do NOT re-ask a choice the spec already settles. Ask only about genuine forks the spec leaves open.
+- If the question or your SUGGESTED default locks the task breakdown to ONE part or structure of the spec (e.g. "follow the milestone list", "one task per section"), the SUGGESTED line must ALSO name the spec's other REQUIRED content that structure does not represent (a testing/security/quality section, cross-cutting rules) and state how each is carried — folded into every applicable task, or as its own task. Never present a structure-lock as settling the whole spec.
 
 YOU MUST propose a default answer for the question — every question you emit
 carries exactly one SUGGESTED line. Never omit it, never leave it blank, never

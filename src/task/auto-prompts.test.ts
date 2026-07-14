@@ -18,6 +18,12 @@ test('clarify prompt carries the prior Q&A so the next question can adapt', () =
     expect(p).not.toContain('(none yet)')
 })
 
+test('clarify prompt forbids presenting a structure-lock as settling the whole spec (goal E belt)', () => {
+    const p = AUTO_CLARIFY_PROMPT('implement @spec.md', '')
+    expect(p).toContain('locks the task breakdown to ONE part or structure')
+    expect(p).toContain('state how each is carried')
+})
+
 test('decompose prompt embeds feature + clarifications and demands a checkbox list', () => {
     const p = AUTO_DECOMPOSE_PROMPT('add billing', 'Q1: store?\nA1: redis')
     expect(p).toContain('add billing')
