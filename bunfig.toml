@@ -1,2 +1,2 @@
 [test]
-pathIgnorePatterns = ["dist/**"]
+pathIgnorePatterns = ["dist/**", "**/__fixtures__/**"]
