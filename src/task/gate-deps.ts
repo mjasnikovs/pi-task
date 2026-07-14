@@ -305,7 +305,9 @@ export function buildGateDeps(params: {
                         // cannot serve" is undecidable from the log. Truncated, tail-kept
                         // (a bind failure / status usually lands at the end), error-flagged.
                         onToolResult: ({name, isError, text}) =>
-                            log(`↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`),
+                            log(
+                                `↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`
+                            ),
                         onContextUsage: snapshot => {
                             contextUsage = resolveContextUsage(
                                 snapshot,

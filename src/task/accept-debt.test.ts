@@ -204,7 +204,10 @@ describe('recordEnforceRevertDebt / origin round-trip', () => {
         await recordEnforceRevertDebt(cwd, 'TASK_0004', 'the server cannot start')
         const debts = await readAcceptDebts(cwd)
         expect(debts).toHaveLength(2)
-        expect(debts.map(d => d.origin ?? 'accepted').sort()).toEqual(['accepted', 'enforce-revert'])
+        expect(debts.map(d => d.origin ?? 'accepted').sort()).toEqual([
+            'accepted',
+            'enforce-revert'
+        ])
     })
 
     test('a behavioral enforce-revert debt stays OPEN even when statics pass', () => {

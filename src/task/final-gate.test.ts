@@ -185,7 +185,8 @@ describe('runFinalIntegrationGate', () => {
     test('a browser suite with no browsers installed is an env gap → skipped, not failed', async () => {
         const dir = makeDir({
             scripts: {
-                'test:ct': 'echo "Error: browserType.launch: Executable doesn\'t exist at /root/.cache/ms-playwright" && exit 1'
+                'test:ct':
+                    'echo "Error: browserType.launch: Executable doesn\'t exist at /root/.cache/ms-playwright" && exit 1'
             }
         })
         const out = await runFinalIntegrationGate(dir)
@@ -223,7 +224,13 @@ describe('runFinalIntegrationGate', () => {
 
     test('every declared script present → the launch check passes silently', async () => {
         const dir = makeDir({
-            scripts: {dev: 'exit 0', build: 'exit 0', migrate: 'exit 0', seed: 'exit 0', test: 'exit 0'}
+            scripts: {
+                dev: 'exit 0',
+                build: 'exit 0',
+                migrate: 'exit 0',
+                seed: 'exit 0',
+                test: 'exit 0'
+            }
         })
         await appendDeclaredScripts(dir, ['dev', 'build', 'migrate', 'seed', 'test'])
         const out = await runFinalIntegrationGate(dir)
@@ -457,13 +464,16 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
         expect(r.outcome).toBe('pass')
     })
 
-    itPosix('CLI project (expectServer off): staying alive still PASSes, no listener needed', async () => {
-        const r = await runBootCheck(os.tmpdir(), alive, 500, {
-            expectServer: false,
-            deps: {groupHasListener: () => false}
-        })
-        expect(r.outcome).toBe('pass')
-    })
+    itPosix(
+        'CLI project (expectServer off): staying alive still PASSes, no listener needed',
+        async () => {
+            const r = await runBootCheck(os.tmpdir(), alive, 500, {
+                expectServer: false,
+                deps: {groupHasListener: () => false}
+            })
+            expect(r.outcome).toBe('pass')
+        }
+    )
 })
 
 describe('detectsServedApp (run 10 item 1)', () => {

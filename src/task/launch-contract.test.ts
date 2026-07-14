@@ -42,9 +42,9 @@ describe('parseScriptLines', () => {
 describe('keepGroundedScripts (the anti-fabrication guard)', () => {
     test('keeps only names the design backticks', () => {
         // `deploy` is NOT backticked in the design → dropped (a hallucinated script).
-        expect(
-            keepGroundedScripts(['dev', 'migrate', 'seed', 'deploy'], MX5_SCRIPTS_LINE)
-        ).toEqual(['dev', 'migrate', 'seed'])
+        expect(keepGroundedScripts(['dev', 'migrate', 'seed', 'deploy'], MX5_SCRIPTS_LINE)).toEqual(
+            ['dev', 'migrate', 'seed']
+        )
     })
 
     test('a design that never backticks a script name grounds nothing', () => {

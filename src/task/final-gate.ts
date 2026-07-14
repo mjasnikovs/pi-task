@@ -109,7 +109,11 @@ export function discoverIntegrationCommands(cwd: string): {
         // order, then `build`. Env-gap SKIP still applies per command (a suite whose
         // browser/runtime is absent skips, it does not fail — see runGateCommand).
         const testNames = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
-        testNames.sort((a, b) => (a === 'test' ? -1 : b === 'test' ? 1 : 0))
+        testNames.sort((a, b) =>
+            a === 'test' ? -1
+            : b === 'test' ? 1
+            : 0
+        )
         for (const name of testNames) cmds.push(['bun', ['run', name]])
         if (s.build) cmds.push(['bun', ['run', 'build']])
         return {ecosystem: 'package.json', cmds}

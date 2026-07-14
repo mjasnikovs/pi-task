@@ -45,7 +45,11 @@ export function parseScriptLines(text: string): string[] {
     const out: string[] = []
     for (const m of text.matchAll(/^[ \t]*SCRIPT:[ \t]*(.+)$/gim)) {
         // Take the first whitespace/comma-delimited token, stripping backticks/quotes.
-        const raw = m[1].trim().split(/[\s,]+/)[0]?.replace(/[`'"]/g, '') ?? ''
+        const raw =
+            m[1]
+                .trim()
+                .split(/[\s,]+/)[0]
+                ?.replace(/[`'"]/g, '') ?? ''
         if (SCRIPT_NAME_RE.test(raw)) out.push(raw)
     }
     return out

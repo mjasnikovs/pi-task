@@ -717,7 +717,11 @@ export async function planAuto(
     // (keepGroundedScripts — kept only if the design backticks it), so the final gate's
     // manifest diff can never false-flag a hallucinated script. Best-effort.
     try {
-        const scriptRaw = await deps.runChild('launch-extract', '', LAUNCH_EXTRACT_PROMPT(featureForModel))
+        const scriptRaw = await deps.runChild(
+            'launch-extract',
+            '',
+            LAUNCH_EXTRACT_PROMPT(featureForModel)
+        )
         const grounded = keepGroundedScripts(parseScriptLines(scriptRaw), featureForModel)
         logPlanDebug(
             cwd,

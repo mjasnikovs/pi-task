@@ -141,13 +141,21 @@ describe('JsonEventSink', () => {
             line({
                 type: 'tool_execution_end',
                 toolName: 'bash',
-                result: {content: [{type: 'text', text: 'curl: (7) Failed to connect to localhost port 3000'}]},
+                result: {
+                    content: [
+                        {type: 'text', text: 'curl: (7) Failed to connect to localhost port 3000'}
+                    ]
+                },
                 isError: true
             })
         )
         expect(results).toEqual([
             {name: 'bash', isError: false, text: 'HELLO_WORLD_123\n'},
-            {name: 'bash', isError: true, text: 'curl: (7) Failed to connect to localhost port 3000'}
+            {
+                name: 'bash',
+                isError: true,
+                text: 'curl: (7) Failed to connect to localhost port 3000'
+            }
         ])
     })
 

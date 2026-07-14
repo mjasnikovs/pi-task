@@ -239,7 +239,10 @@ describe('verdict-taint classification', () => {
     test('tracked ctCacheDir + .last-run.json rewrites are NOT verdict-tainting (run 10)', async () => {
         const dir = makeRepo()
         fs.mkdirSync(path.join(dir, '.playwright-cache', 'assets'), {recursive: true})
-        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'), 'v1\n')
+        fs.writeFileSync(
+            path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'),
+            'v1\n'
+        )
         fs.writeFileSync(path.join(dir, '.playwright-cache', 'index.html'), '<html>v1</html>\n')
         fs.mkdirSync(path.join(dir, 'test-results'), {recursive: true})
         fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{"status":"passed"}\n')
@@ -247,7 +250,10 @@ describe('verdict-taint classification', () => {
         git(dir, 'commit', '-q', '-m', 'commit ct cache + last-run (as run 10 did)')
         const snap = await captureGitState(dir)
         // The gate child runs `test:ct`, which rewrites the cache + run state.
-        fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'), 'v2\n')
+        fs.writeFileSync(
+            path.join(dir, '.playwright-cache', 'assets', 'AdminPage-CR5IyFZM.js'),
+            'v2\n'
+        )
         fs.writeFileSync(path.join(dir, '.playwright-cache', 'index.html'), '<html>v2</html>\n')
         fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{"status":"failed"}\n')
         const rec = await reconcileGitState(dir, snap)
