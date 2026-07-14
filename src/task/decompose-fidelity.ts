@@ -87,7 +87,10 @@ export function findDroppedPlusFragments(sourceLine: string, title: string): str
         for (const sub of raw.split(',')) {
             // A fragment runs to the next `+`/comma; strip trailing sentence
             // punctuation and markdown emphasis so "tests.**" compares as "tests".
-            const fragment = sub.replace(/[*_`]/g, '').replace(/[.,;:!?)\]]+\s*$/, '').trim()
+            const fragment = sub
+                .replace(/[*_`]/g, '')
+                .replace(/[.,;:!?)\]]+\s*$/, '')
+                .trim()
             if (fragment.length === 0) continue
             if (words(fragment).length === 0) continue
             if (!fragmentPresent(fragment, titleWords)) missing.push(fragment)

@@ -104,9 +104,9 @@ describe('findDroppedPlusFragments (the deterministic lever)', () => {
         expect(findDroppedPlusFragments(line, 'Ship the exporter with an import test')).toEqual([
             'import round-trip test'
         ])
-        expect(
-            findDroppedPlusFragments(line, 'Exporter plus an import round-trip test')
-        ).toEqual([])
+        expect(findDroppedPlusFragments(line, 'Exporter plus an import round-trip test')).toEqual(
+            []
+        )
     })
 })
 
