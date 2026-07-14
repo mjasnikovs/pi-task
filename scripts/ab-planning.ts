@@ -27,7 +27,12 @@ import {runChild} from '../src/task/child-runner.js'
 import {expandFeatureMentions} from '../src/task/auto-orchestrator.js'
 import {parseDecomposeList} from '../src/task/auto-io.js'
 import {AUTO_DECOMPOSE_PROMPT} from '../src/task/auto-prompts.js'
-import {LAUNCH_EXTRACT_PROMPT, parseScriptLines, keepGroundedScripts} from '../src/task/launch-contract.js'
+import {
+    LAUNCH_EXTRACT_PROMPT,
+    enumerateScriptCandidates,
+    parseScriptLines,
+    keepGroundedScripts
+} from '../src/task/launch-contract.js'
 import {CONTRACT_EXTRACT_PROMPT, parseContractLines, keepGroundedContracts} from '../src/task/contracts.js'
 
 const FIXTURES_DIR = fileURLToPath(new URL('../src/task/__fixtures__/planning', import.meta.url))
@@ -132,7 +137,18 @@ async function main(): Promise<void> {
             raw = await runPlanningChild(fx.cwd, 'read', AUTO_DECOMPOSE_PROMPT(fx.featureForModel, ''))
             parsed = parseDecomposeList(raw)
         } else if (child === 'launch') {
+            // OLD arm: no candidates. NEW arm (launch-new): mechanical checklist.
             raw = await runPlanningChild(fx.cwd, '', LAUNCH_EXTRACT_PROMPT(fx.featureForModel))
+            parsed = keepGroundedScripts(parseScriptLines(raw), fx.featureForModel)
+        } else if (child === 'launch-new') {
+            raw = await runPlanningChild(
+                fx.cwd,
+                '',
+                LAUNCH_EXTRACT_PROMPT(
+                    fx.featureForModel,
+                    enumerateScriptCandidates(fx.featureForModel)
+                )
+            )
             parsed = keepGroundedScripts(parseScriptLines(raw), fx.featureForModel)
         } else if (child === 'contract') {
             // Contract extraction wants the task list; use a decompose pass first.

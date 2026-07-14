@@ -9,7 +9,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     appendDeclaredScripts,
+    enumerateScriptCandidates,
     keepGroundedScripts,
+    LAUNCH_EXTRACT_PROMPT,
     launchContractFile,
     missingDeclaredScripts,
     parseScriptLines,
@@ -53,6 +55,66 @@ describe('keepGroundedScripts (the anti-fabrication guard)', () => {
 
     test('dedups case-insensitively', () => {
         expect(keepGroundedScripts(['seed', 'SEED'], MX5_SCRIPTS_LINE)).toEqual(['seed'])
+    })
+})
+
+describe('enumerateScriptCandidates (the mechanical recall floor — mx5 run 11)', () => {
+    const mx5Doc = fs.readFileSync(
+        path.join(import.meta.dir, '__fixtures__', 'planning', 'mx5-project.md'),
+        'utf8'
+    )
+
+    test('the real run-11 doc yields every declared script, including the §2-only test:ct', () => {
+        const candidates = enumerateScriptCandidates(mx5Doc)
+        for (const name of ['dev', 'build', 'migrate', 'seed', 'test', 'lint', 'test:ct']) {
+            expect(candidates).toContain(name)
+        }
+    })
+
+    test('package names never enter the checklist (their paragraphs do not say "script")', () => {
+        const candidates = enumerateScriptCandidates(mx5Doc)
+        for (const pkg of ['hono', 'zod', 'sharp', 'react', 'wouter']) {
+            expect(candidates).not.toContain(pkg)
+        }
+    })
+
+    test('"TypeScript"/"JavaScript" do not satisfy the word-bounded paragraph gate', () => {
+        expect(enumerateScriptCandidates('TypeScript `6.0.3` uses `strict` mode.')).toEqual([])
+    })
+
+    test('a paragraph that declares scripts yields its backticked simple tokens only', () => {
+        const doc =
+            'Scripts: `dev`, `build`, and `run the app` (see `src/index.ts`).\n\n'
+            + 'Dependencies: `express`, `pino`.'
+        // multi-word + path tokens rejected; the dependency paragraph is gated out
+        expect(enumerateScriptCandidates(doc)).toEqual(['dev', 'build'])
+    })
+
+    test('dedups case-insensitively across paragraphs', () => {
+        const doc = 'The `seed` script.\n\nRun the `SEED` script again.'
+        expect(enumerateScriptCandidates(doc)).toEqual(['seed'])
+    })
+
+    test('no doc / no backticks / no "script" word ⇒ no candidates', () => {
+        expect(enumerateScriptCandidates('')).toEqual([])
+        expect(enumerateScriptCandidates('Add rate limiting to the login endpoint.')).toEqual([])
+        expect(enumerateScriptCandidates('The `migrate` step runs first.')).toEqual([])
+    })
+})
+
+describe('LAUNCH_EXTRACT_PROMPT candidates block', () => {
+    test('candidates render as an explicit floor-not-ceiling checklist', () => {
+        const p = LAUNCH_EXTRACT_PROMPT('design text', ['dev', 'test:ct'])
+        expect(p).toContain('CANDIDATE TOKENS')
+        expect(p).toContain('  - dev')
+        expect(p).toContain('  - test:ct')
+        expect(p).toContain('a floor, not a ceiling')
+    })
+
+    test('no candidates ⇒ byte-identical to the pre-checklist prompt', () => {
+        const p = LAUNCH_EXTRACT_PROMPT('design text')
+        expect(p).not.toContain('CANDIDATE TOKENS')
+        expect(p).toBe(LAUNCH_EXTRACT_PROMPT('design text', []))
     })
 })
 

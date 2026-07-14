@@ -75,6 +75,42 @@ export function keepGroundedScripts(names: string[], sourceDoc: string): string[
     return kept
 }
 
+/**
+ * DETERMINISTIC RECALL (mx5 run 11): enumerate every backticked, script-name-shaped
+ * token in a paragraph that mentions the word "script", as extraction CANDIDATES.
+ *
+ * The run-11 failure this closes: `test:ct` is backticked in the design's §2 tooling
+ * paragraph, so the grounding guard would have KEPT it — but the extraction child
+ * anchored on §9's one-line summary (`dev`,`build`,`migrate`,`seed`,`test`) and never
+ * emitted it. Grounding can only DROP a candidate, never add one, so recall was
+ * entirely the model's, over a 20KB doc. This makes recall mechanical: the host
+ * enumerates candidates and hands them to the child as an explicit checklist; the
+ * model's job flips from recall (weak) to per-candidate classification (strong).
+ *
+ * The paragraph gate (`\bscripts?\b`, word-bounded so "TypeScript"/"JavaScript"
+ * don't match) is a grounded-context filter, not a tuned knob: a design declares a
+ * script by calling it one. It keeps package-name paragraphs (`hono`, `react`) out
+ * of the checklist so a weak model isn't invited to keep junk the grounding guard
+ * would then bless (every package name is backticked somewhere). A design with no
+ * such paragraph yields no candidates and the prompt is unchanged.
+ */
+export function enumerateScriptCandidates(sourceDoc: string): string[] {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const para of sourceDoc.split(/\n[ \t]*\n/)) {
+        if (!/\bscripts?\b/i.test(para)) continue
+        for (const m of para.matchAll(/`([^`\n]+)`/g)) {
+            const tok = m[1].trim()
+            if (!SCRIPT_NAME_RE.test(tok)) continue
+            const key = tok.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            out.push(tok)
+        }
+    }
+    return out.slice(0, MAX_SCRIPTS)
+}
+
 /** The stored declared-script list ('' when none recorded). */
 export async function readLaunchContractRaw(cwd: string): Promise<string> {
     try {
@@ -142,8 +178,13 @@ export function missingDeclaredScripts(declared: string[], manifestScripts: stri
  * The plan-time extraction prompt: the design in hand, emit the scripts it declares.
  * Runs with --no-tools (pure extraction). Every emitted name is re-grounded HOST-SIDE
  * (keepGroundedScripts), so a hallucinated script cannot reach the diff.
+ *
+ * `candidates` is enumerateScriptCandidates' mechanical checklist. It exists so the
+ * model cannot MISS a declared script buried far from the design's summary list (the
+ * run-11 `test:ct` hole); the model still classifies each candidate against the
+ * design, and the host grounding still applies. Empty ⇒ the prompt is unchanged.
  */
-export const LAUNCH_EXTRACT_PROMPT = (feature: string): string =>
+export const LAUNCH_EXTRACT_PROMPT = (feature: string, candidates: string[] = []): string =>
     [
         'You are recording the PACKAGE/BUILD SCRIPTS the design below says the finished',
         'project MUST expose (the `scripts` a package.json / Makefile / task runner must',
@@ -154,6 +195,18 @@ export const LAUNCH_EXTRACT_PROMPT = (feature: string): string =>
         'DESIGN (the ONLY source — name only scripts the design itself declares):',
         feature.trim(),
         '',
+        ...(candidates.length > 0 ?
+            [
+                'CANDIDATE TOKENS — found mechanically in the design near the word "script".',
+                'This checklist exists ONLY so you do not MISS a declared script; many of these',
+                'tokens are NOT scripts (config option names, tool names). For EACH candidate,',
+                'decide from the design whether it is a script the finished project must expose,',
+                'and emit it only if so. A declared script MISSING from this checklist must still',
+                'be emitted — the checklist is a floor, not a ceiling.',
+                candidates.map(c => `  - ${c}`).join('\n'),
+                ''
+            ]
+        :   []),
         'For each script the design declares by name, emit exactly:',
         '  SCRIPT: <name>',
         'one per line, the bare script name only (e.g. `SCRIPT: migrate`). RULES: (1) name',

@@ -70,6 +70,7 @@ import {
 } from './contracts.js'
 import {
     LAUNCH_EXTRACT_PROMPT,
+    enumerateScriptCandidates,
     parseScriptLines,
     keepGroundedScripts,
     appendDeclaredScripts
@@ -715,12 +716,17 @@ export async function planAuto(
     // declares the project must expose (`migrate`/`seed` fell through decompose and
     // shipped missing, unchecked). Each emitted name is re-grounded against the design
     // (keepGroundedScripts — kept only if the design backticks it), so the final gate's
-    // manifest diff can never false-flag a hallucinated script. Best-effort.
+    // manifest diff can never false-flag a hallucinated script. Recall is mechanical
+    // (mx5 run 11): enumerateScriptCandidates hands the child every backticked
+    // script-shaped token near the word "script" as a checklist, so a script declared
+    // far from the design's summary list (`test:ct` in §2 vs §9's five) can't be
+    // missed by a weak model's recall — the child classifies, it no longer recalls.
+    // Best-effort.
     try {
         const scriptRaw = await deps.runChild(
             'launch-extract',
             '',
-            LAUNCH_EXTRACT_PROMPT(featureForModel)
+            LAUNCH_EXTRACT_PROMPT(featureForModel, enumerateScriptCandidates(featureForModel))
         )
         const grounded = keepGroundedScripts(parseScriptLines(scriptRaw), featureForModel)
         logPlanDebug(
