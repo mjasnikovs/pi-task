@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-1504%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-1617%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -175,7 +175,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 1504 tests across 101 files
+bun test src/      # 1617 tests across 106 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
