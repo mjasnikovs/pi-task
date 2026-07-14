@@ -76,6 +76,7 @@ import {
 } from './verify-reconcile.js'
 import {existsSync} from 'node:fs'
 import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
+import {readRequirements, buildRequirementsBlock} from './requirements.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -220,9 +221,26 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
     return buildContractsBlock(contracts)
 }
 
+/**
+ * The carried-context blocks a GENERATIVE phase (refine, compose) receives: the
+ * cross-slice contracts plus the carried cross-cutting requirements (mx5 run 11,
+ * goals A/C — `.pi-tasks/requirements.md`, written at plan time). The verbatim
+ * requirement quotes travel INTO every task's spec generation, so a mandated
+ * methodology ("a test lands in the same change as each new route") reaches the
+ * task's GOAL/CONSTRAINTS and its VERIFY — a pointer back to the spec doc
+ * recovered the dropped §10 in only 1 of ~6 applicable run-11 tasks; content
+ * travels, pointers don't. Both blocks are '' outside their runs, so a bare
+ * /task is byte-identical to before.
+ */
+export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
+    const contracts = await phaseContractsBlock(deps)
+    const requirements = buildRequirementsBlock(await readRequirements(deps.cwd).catch(() => ''))
+    return [contracts, requirements].filter(b => b.length > 0).join('\n')
+}
+
 export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
     const existingFiles = await refineExistingFilesBlock(deps).catch(() => '')
-    const contracts = await phaseContractsBlock(deps)
+    const contracts = await phaseCarriedBlocks(deps)
     // Imperative tool directives the user wrote into the RAW prompt ("via web
     // search", "fetch <url>"). Refine paraphrases the task and a weak model drops
     // these some of the time (mx5 run 9: "via web search" vanished, the whole run
@@ -983,7 +1001,7 @@ export async function phaseCompose(
     research: string,
     qa: string
 ): Promise<string> {
-    const contracts = await phaseContractsBlock(deps)
+    const contracts = await phaseCarriedBlocks(deps)
     return runWithEmphasisRetry(
         deps,
         'compose',
