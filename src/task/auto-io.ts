@@ -13,7 +13,6 @@ import {readTextFile} from '../shared/fs-text.js'
 import {RESUMABLE_STATES} from './task-types.js'
 
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
-const MAX_TASKS = 30
 
 export interface TaskEntry {
     index: number
@@ -36,13 +35,21 @@ export async function allocateAutoId(cwd: string): Promise<string> {
     return `TASK_AUTO_${String(max + 1).padStart(4, '0')}`
 }
 
-/** Parse a decompose-phase model output into a clean list of titles. */
+/**
+ * Parse a decompose-phase model output into a clean list of titles.
+ *
+ * No cap: every title the model emits is kept. An arbitrary ceiling (was 30)
+ * silently dropped the tail of a large plan AND re-clipped every coverage retry,
+ * so a design that genuinely needed >N tasks could never escape the ceiling —
+ * it burned its coverage rounds and shipped a knowingly-gapped plan. The real
+ * bound on task count is the design's own grounded-requirement scope, enforced
+ * downstream by the coverage loop; this parser must not pre-empt it.
+ */
 export function parseDecomposeList(raw: string): string[] {
     const out: string[] = []
     for (const line of raw.split('\n')) {
         const m = /^\s*(?:-\s*\[\s*[xX ]?\s*\]\s*|-\s+|\d+[.)]\s+)(.+?)\s*$/.exec(line)
         if (m && m[1].trim().length > 0) out.push(m[1].trim())
-        if (out.length >= MAX_TASKS) break
     }
     return out
 }

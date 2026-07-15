@@ -37,7 +37,7 @@ test('allocateAutoId: ignores TASK_NNNN, increments from max AUTO', async () => 
     })
 })
 
-test('parseDecomposeList: parses checkbox / dash / numbered lines, caps, ignores junk', () => {
+test('parseDecomposeList: parses checkbox / dash / numbered lines, ignores junk', () => {
     const raw = ['- [ ] First task', '- Second task', '3. Third task', 'not a task line', ''].join(
         '\n'
     )
@@ -46,6 +46,13 @@ test('parseDecomposeList: parses checkbox / dash / numbered lines, caps, ignores
 
 test('parseDecomposeList: empty -> []', () => {
     expect(parseDecomposeList('nothing here\n')).toEqual([])
+})
+
+test('parseDecomposeList: no cap — keeps every title past the old 30 ceiling', () => {
+    const raw = Array.from({length: 45}, (_, i) => `- [ ] Task ${i + 1}`).join('\n')
+    const out = parseDecomposeList(raw)
+    expect(out).toHaveLength(45)
+    expect(out[44]).toBe('Task 45')
 })
 
 test('buildAutoBody + parseTaskList round-trip', () => {
