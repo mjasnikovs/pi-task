@@ -1496,7 +1496,7 @@ test('coverage gate: a flaky shorter retry never replaces the longer list', asyn
         const {body} = await readTaskFile(dir, id!)
         expect(parseTaskList(body).map(e => e.title)).toEqual(['Task A', 'Task B', 'Task C'])
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
-        expect(log).toContain('decompose retry discarded as degenerate (1 vs 3 titles)')
+        expect(log).toContain('decompose retry REJECTED — collapse floor (1 vs 3 titles)')
     })
 })
 
@@ -1536,8 +1536,12 @@ test('coverage gate: rounds exhausted still INCOMPLETE → user is warned, not s
                 '- [ ] Task A\n- [ ] Task B',
                 '- [ ] Task A\n- [ ] Task B'
             ],
+            // One verdict per SCORED plan: the initial list plus each retry (the
+            // retry is now judged before it can be adopted). All stay INCOMPLETE, so
+            // the loop exhausts and the last-scored plan's gap is what surfaces.
             [
                 'COVERAGE: INCOMPLETE\nMISSING: x',
+                'COVERAGE: INCOMPLETE\nMISSING: y',
                 'COVERAGE: INCOMPLETE\nMISSING: test suite for auth'
             ]
         )
@@ -1602,10 +1606,106 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
             ]
         )
         const id = await planAuto(ctx, dir, 'build the app', d)
-        // 2 rounds: initial decompose + 2 retries, judge consulted twice, then stop.
+        // 2 reprompt rounds: initial decompose + 2 retries. The judge scores every
+        // plan it might ship — the initial list AND each retry before adoption — so
+        // it is consulted 3× (was 2× when the final retry shipped unscored).
         expect(d.calls.decompose).toBe(3)
-        expect(d.calls.coverage).toBe(2)
+        expect(d.calls.coverage).toBe(3)
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+    })
+})
+
+// ─── Monotonic coverage replacement, end-to-end through planAuto (mx5 run 12) ──
+//
+// The wired proof for the A/B in coverage-loop.test.ts: a full-stack-shaped run
+// whose initial plan covers an area (the --json output) that a later coverage
+// regeneration DROPS while chasing an un-ownable NEGATIVE requirement. The loop
+// must keep the good plan, not adopt the dropping one. Non-web archetype (a CLI)
+// on purpose — the fix is the class, not a web-app special case.
+const DEDUP_CLI_SPEC = [
+    'Build a file-deduplication CLI.',
+    '',
+    'Behaviour:',
+    '- the CLI scans a directory tree for duplicate files',
+    '- a --json flag emits machine-readable output',
+    '- a summary report lists reclaimed space',
+    '',
+    'Safety: the tool must never delete a file without an explicit --apply flag.'
+].join('\n')
+
+const DEDUP_REQS = [
+    'REQUIREMENT: "the CLI scans a directory tree for duplicate files"',
+    'REQUIREMENT: "a --json flag emits machine-readable output"',
+    'REQUIREMENT: "a summary report lists reclaimed space"',
+    'REQUIREMENT: "the tool must never delete a file without an explicit --apply flag"'
+].join('\n')
+
+const DEDUP_GOOD =
+    '- [ ] Scan directory tree for duplicate files\n- [ ] Add a --json machine-readable output flag'
+const DEDUP_DROP =
+    '- [ ] Scan directory tree for duplicate files\n- [ ] Generate a summary report of reclaimed space'
+
+// Deterministic stub: the initial decompose yields the GOOD plan (has --json), and
+// every regeneration yields the DROPPING plan (has the summary report, no --json).
+// The judge always says COMPLETE — the host-side per-requirement map is what drives
+// the loop, mirroring the goal-A accounting.
+function dedupCliDeps(): AutoDeps & {calls: {decompose: number}} {
+    const calls = {decompose: 0}
+    return {
+        calls,
+        runChild: (name, _tools, prompt) => {
+            if (name === 'auto-clarify') return Promise.resolve('NONE')
+            if (name === 'requirement-extract') return Promise.resolve(DEDUP_REQS)
+            if (name === 'auto-decompose') {
+                calls.decompose++
+                return Promise.resolve(calls.decompose === 1 ? DEDUP_GOOD : DEDUP_DROP)
+            }
+            if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+            if (name === 'coverage-map') {
+                // Read the TASK LIST section only — the requirement quotes above it
+                // also mention --json / summary report, so scan the plan, not the reqs.
+                const tasks = prompt.split('TASK LIST:')[1] ?? ''
+                const hasJson = tasks.includes('--json')
+                const hasReport = /summary report/i.test(tasks)
+                return Promise.resolve(
+                    [
+                        'MAP: 1 -> TASK 1',
+                        `MAP: 2 -> ${hasJson ? 'TASK 2' : 'NONE'}`,
+                        `MAP: 3 -> ${hasReport ? 'TASK 2' : 'NONE'}`,
+                        'MAP: 4 -> NONE'
+                    ].join('\n')
+                )
+            }
+            return Promise.resolve('')
+        },
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        commit: () => Promise.resolve({committed: true})
+    }
+}
+
+test('coverage gate: a regeneration that DROPS a covered area is rejected, good plan ships', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const d = dedupCliDeps()
+        const id = await planAuto(ctx, dir, DEDUP_CLI_SPEC, d)
+        const titles = parseTaskList((await readTaskFile(dir, id!)).body).map(e => e.title)
+        // The good plan — with the --json task the regeneration dropped — ships…
+        expect(titles).toEqual([
+            'Scan directory tree for duplicate files',
+            'Add a --json machine-readable output flag'
+        ])
+        // …and the loop did NOT collapse to the dropping plan (no summary-report task).
+        expect(titles.some(t => /summary report/i.test(t))).toBe(false)
+        // The dropping retry WAS generated (regen happened) and was rejected by the
+        // monotonic guard — the fix is the guard firing, not regeneration never running.
+        expect(d.calls.decompose).toBeGreaterThan(1)
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('REJECTED — would drop 1 owned requirement(s)')
+        // The un-ownable negative is CARRIED (cross-cutting), not chased forever…
+        const reqsFile = await fsp.readFile(path.join(dir, '.pi-tasks', 'requirements.md'), 'utf8')
+        expect(reqsFile).toContain('must never delete')
+        // …and the still-uncovered report area is surfaced, never silently dropped.
+        expect(captured.notifies.some(n => /plan may be missing coverage/.test(n.msg))).toBe(true)
     })
 })
 

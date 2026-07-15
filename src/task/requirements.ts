@@ -209,6 +209,49 @@ export const REQUIREMENT_EXTRACT_PROMPT = (feature: string, passages: string[] =
 
 export type ReqMapping = {kind: 'task'; task: number} | {kind: 'cross'} | {kind: 'none'}
 
+/**
+ * A requirement no single task can ever OWN: a PROHIBITION (it states what must
+ * NOT exist or happen — there is no task that "delivers" an absence) or a GLOBAL
+ * POLICY (a product-wide rule every slice obeys, not one slice's deliverable). The
+ * per-task coverage map maps both to NONE forever, so left in the `unmapped` set
+ * they kept the decompose loop's verdict INCOMPLETE and forced it to regenerate
+ * the whole plan endlessly (mx5 run 12: 3 un-ownable NEGATIVE requirements drove a
+ * complete full-stack plan to be overwritten by a backend-only one). These belong
+ * in the CROSS-CUTTING carry — injected verbatim into every task — never fed back
+ * as a missing area.
+ *
+ * Deterministic and precision-biased: it only reclassifies clear prohibitions and
+ * clearly product-global policies. It does NOT need to catch every un-ownable line
+ * — the monotonic replacement rule (coverage-loop.ts) is the hard backstop, so a
+ * miss here can at most cost one wasted regeneration, never a dropped area. Spec-
+ * shape/domain agnostic: pure phrasing, no feature nouns.
+ */
+const PROHIBITION_RE =
+    /\b(?:must not|must never|shall not|should not|may not|cannot|can'?t|won'?t|do(?:es)? not|don'?t|doesn'?t|no|not|never|none|without|avoids?|prohibit(?:ed|s|ing)?|forbid(?:den|s)?|disallow(?:ed|s|ing)?|excludes?|excluded|neither|nor)\b/i
+// Kept narrow on purpose — bare "all"/"every"/"any" appear in plenty of ownable
+// feature statements ("lists all photos"), so the global branch keys only on
+// scope words that name the WHOLE product and is additionally gated by a modal.
+const GLOBAL_SCOPE_RE =
+    /\b(?:everywhere|throughout|always|global(?:ly)?|across (?:the|all|every)|site-?wide|app(?:lication)?-?wide|universal(?:ly)?|consistent(?:ly)?|entire (?:app|application|site|codebase|product|system|ui|project))\b/i
+const MODAL_RE = /\b(?:must|shall|should|require[sd]?|required|needs? to|has to|have to)\b/i
+
+export function isCrossCuttingRequirement(quote: string): boolean {
+    const q = quote.trim()
+    if (PROHIBITION_RE.test(q)) return true
+    if (GLOBAL_SCOPE_RE.test(q) && MODAL_RE.test(q)) return true
+    return false
+}
+
+/** Requirement INDICES a task owns (a `TASK n` verdict), the monotonic-replacement
+ *  signal (coverage-loop.ts). Index-aligned with the requirements list. */
+export function ownedRequirementIndices(mappings: ReqMapping[]): Set<number> {
+    const out = new Set<number>()
+    mappings.forEach((m, i) => {
+        if (m.kind === 'task') out.add(i)
+    })
+    return out
+}
+
 /** Per-requirement coverage verdicts against a task list. Runs with --no-tools. */
 export const COVERAGE_MAP_PROMPT = (requirements: RequirementEntry[], titles: string[]): string =>
     [
@@ -274,6 +317,12 @@ export function accountCoverage(
         const m = mappings[i] ?? {kind: 'none'}
         if (m.kind === 'task') acc.mapped.push({req: requirements[i], task: m.task})
         else if (m.kind === 'cross') acc.crossCutting.push(requirements[i])
+        // NONE — but a prohibition/global-policy requirement can never be OWNED by
+        // a task (it states an absence or a product-wide rule); the model maps it
+        // NONE every round, which used to force endless whole-plan regeneration.
+        // Carry it cross-cutting instead, so it stops driving the coverage loop.
+        else if (isCrossCuttingRequirement(requirements[i].quote))
+            acc.crossCutting.push(requirements[i])
         else acc.unmapped.push(requirements[i])
     }
     return acc

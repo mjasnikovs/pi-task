@@ -80,11 +80,13 @@ import {
     extractionRetryHint,
     parseCoverageMap,
     accountCoverage,
+    isCrossCuttingRequirement,
     appendCarriedRequirements,
     buildRequirementsLedger,
     type RequirementEntry,
     type CoverageAccounting
 } from './requirements.js'
+import {decideAdoption, groundedCoverage, type CoveragePlan} from './coverage-loop.js'
 import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
@@ -692,117 +694,163 @@ export async function planAuto(
     // with the missing areas as a hint. Best-effort so a triage fault never blocks
     // planning (mirrors triageClarifyQuestion).
     //
-    // A retry is adopted whenever it is NON-DEGENERATE — not only when it is
-    // strictly longer. The retry was generated WITH the judge's missing areas in
-    // its prompt, so it is the better-informed list, and the NEXT round's judge
-    // (not raw length) decides whether the gaps actually closed. Length survives
-    // only as a collapse floor against the one-task flake this gate exists for.
-    // mx5 run 5 (live): the hinted retry ADDED the flagged test-suite task but came
-    // back 29 titles vs the original 30 — strictly-longer discarded it, round 2
-    // re-judged the same unchanged list, and the known-incomplete plan shipped
-    // with no warning.
-    let unresolvedMissing: string[] | null = null
-    // The last per-requirement accounting (goal A): completeness is computed
-    // HOST-SIDE from it — a holistic "COMPLETE" alone can no longer pass a plan
-    // while grounded requirements sit unowned (run 11: milestone-parity satisfied
-    // the judge while §10 Testing had zero tasks). Null when no requirements were
-    // extracted or every mapping call faulted (⇒ old judge-only behavior).
-    let accounting: CoverageAccounting | null = null
-    for (let round = 0; round < MAX_COVERAGE_ROUNDS && planTitles.length > 0; round++) {
-        // Signal 1 — the holistic judge (kept as the belt; catches feature areas
-        // the requirement extraction itself missed). A fault yields no signal.
+    // Two hard-won invariants (mx5 run 12: a complete full-stack plan — 31
+    // requirements mapped, frontend pages present — was overwritten by a
+    // backend-only regeneration and shipped with only a toast, driven by 3 NEGATIVE
+    // requirements no task could own that kept the verdict INCOMPLETE forever):
+    //   • MONOTONIC replacement (coverage-loop.ts): a retry that DROPS a requirement
+    //     the current plan already owns is REJECTED, never adopted. Coverage can
+    //     only hold or grow across rounds — a worse regeneration can no longer
+    //     overwrite a better plan on the old `length*2` size floor alone.
+    //   • SHIP THE BEST, not the last: because adoption is monotone, the working
+    //     plan at exhaustion is the best-covered one seen, so it is what ships.
+    // Fix A rides in accountCoverage: an un-ownable prohibition/global-policy
+    // requirement is carried CROSS-CUTTING rather than fed back as a missing area,
+    // so it no longer forces the loop to regenerate at all. The monotonic rule is
+    // the hard backstop that holds even for un-ownable lines the classifier misses.
+    //
+    // Score one plan: the holistic judge (belt — catches areas the requirement
+    // extraction itself missed) plus, when requirements were extracted, the
+    // host-side per-requirement map (lever — every grounded requirement gets a
+    // falsifiable TASK/CROSS/NONE verdict). Best-effort: a fault degrades a signal,
+    // never blocks planning.
+    const scorePlan = async (
+        titles: string[]
+    ): Promise<{plan: CoveragePlan; accounting: CoverageAccounting | null; suspect: boolean}> => {
         let verdict: CoverageVerdict | null
         try {
             verdict = parseCoverageVerdict(
                 await deps.runChild(
                     'decompose-coverage',
                     '',
-                    DECOMPOSE_COVERAGE_PROMPT(featureForModel, clarifications, planTitles)
+                    DECOMPOSE_COVERAGE_PROMPT(featureForModel, clarifications, titles)
                 )
             )
         } catch {
             verdict = null
         }
         const verdictMissing = verdict?.kind === 'incomplete' ? verdict.missing : []
-        // Signal 2 — the per-requirement map (the lever): every grounded
-        // requirement gets a falsifiable verdict (TASK n / CROSS-CUTTING / NONE);
-        // the host, not the model, decides what is uncovered. A fault keeps the
-        // previous round's accounting.
+        let acc: CoverageAccounting | null = null
+        // The monotonic guard's owned-set is grounded DETERMINISTICALLY in
+        // requirement↔title token overlap — NOT the coverage-map model's TASK
+        // numbers. Live (Qwen3.6-27B) the model over-credits ownership, mapping a
+        // "--json output" requirement to a generic "scaffold + argument parser"
+        // task, so a plan with no --json task still "owned" it and the drop guard
+        // went blind (treatment 1/5). Grounding the drop-signal in the titles the
+        // model can't fake takes it back to 5/5. The model map still drives Fix A's
+        // cross-cutting/unmapped accounting below (that only affects reprompt
+        // aggressiveness, which the monotonic guard now backstops).
+        const covered = groundedCoverage(
+            reqEntries.map(e => e.quote),
+            titles,
+            isCrossCuttingRequirement
+        )
         if (reqEntries.length > 0) {
             try {
-                const mapRaw = await deps.runChild(
-                    'coverage-map',
-                    '',
-                    COVERAGE_MAP_PROMPT(reqEntries, planTitles)
+                const mappings = parseCoverageMap(
+                    await deps.runChild(
+                        'coverage-map',
+                        '',
+                        COVERAGE_MAP_PROMPT(reqEntries, titles)
+                    ),
+                    reqEntries.length,
+                    titles.length
                 )
-                accounting = accountCoverage(
-                    reqEntries,
-                    parseCoverageMap(mapRaw, reqEntries.length, planTitles.length)
-                )
+                acc = accountCoverage(reqEntries, mappings)
                 logPlanDebug(
                     cwd,
-                    `coverage-map round ${round + 1}: ${accounting.mapped.length} task-mapped, `
-                        + `${accounting.crossCutting.length} cross-cutting, `
-                        + `${accounting.unmapped.length} unmapped`
+                    `coverage-map (${titles.length} titles): ${acc.mapped.length} task-mapped, `
+                        + `${acc.crossCutting.length} cross-cutting, ${acc.unmapped.length} unmapped; `
+                        + `${covered.size} requirement(s) title-grounded`
                 )
             } catch {
-                // mapping fault — keep whatever accounting an earlier round produced
+                // mapping fault — Fix A accounting degrades; the grounded owned-set
+                // above still guards against drops.
             }
         }
-        const unmappedQuotes = (accounting?.unmapped ?? []).map(e => `"${e.quote}"`)
-        const missing = [...verdictMissing, ...unmappedQuotes]
-        if (missing.length === 0) {
-            unresolvedMissing = null
+        const missing = [...verdictMissing, ...(acc?.unmapped ?? []).map(e => `"${e.quote}"`)]
+        return {
+            plan: {titles, covered, missing},
+            accounting: acc,
+            suspect: isSuspectPlan(titles, featureForModel)
+        }
+    }
+
+    const hasRequirements = reqEntries.length > 0
+    // `best` is both the plan the next round reprompts FROM and the plan that
+    // ships — kept identical because adoption is monotone (see coverage-loop.ts).
+    let best = await scorePlan(planTitles)
+    // The carried accounting (cross-cutting + unowned) for the plan that ships.
+    let accounting: CoverageAccounting | null = best.accounting
+    let round = 0
+    for (;;) {
+        if (best.plan.titles.length === 0) break
+        if (best.plan.missing.length === 0) {
             logPlanDebug(
                 cwd,
-                `decompose-coverage round ${round + 1}: `
-                    + (verdict === null ? 'no judge verdict' : 'judge COMPLETE')
-                    + (reqEntries.length > 0 ?
-                        ' and every grounded requirement is task-mapped or cross-cutting'
+                'decompose-coverage: COMPLETE'
+                    + (hasRequirements ?
+                        ' — every grounded requirement is task-mapped or cross-cutting'
                     :   ' — accepting list')
             )
-            // A COMPLETE on a still-suspect plan is the judge's known live
-            // false-pass mode (bare verdict, indistinguishable from a real one).
-            // The plan still ships — the floor never rejects on count — but
-            // never silently: the user decides whether to trust it.
-            if (isSuspectPlan(planTitles, featureForModel)) {
+            // A COMPLETE on a still-suspect plan is the judge's known live false-pass
+            // mode (bare verdict, indistinguishable from a real one). The plan still
+            // ships — the floor never rejects on count — but never silently.
+            if (best.suspect) {
                 ctx.ui.notify(
-                    `/task-auto: only ${planTitles.length} task(s) planned for a large spec`
+                    `/task-auto: only ${best.plan.titles.length} task(s) planned for a large spec`
                         + ' and the regeneration did not grow the list — review the plan before running.',
                     'warning'
                 )
             }
             break
         }
-        unresolvedMissing = missing
+        if (round >= MAX_COVERAGE_ROUNDS) break
+        round++
         logPlanDebug(
             cwd,
-            `decompose-coverage round ${round + 1}: INCOMPLETE — missing: `
-                + missing.join('; ').slice(0, 300)
+            `decompose-coverage round ${round}: INCOMPLETE — missing: `
+                + best.plan.missing.join('; ').slice(0, 300)
         )
-        const retryRaw = await deps.runChild(
-            'auto-decompose',
-            'read',
-            prependHint(coverageRepromptHint(missing), decomposePrompt)
+        const retryTitles = parsePlan(
+            await deps.runChild(
+                'auto-decompose',
+                'read',
+                prependHint(coverageRepromptHint(best.plan.missing), decomposePrompt)
+            )
         )
-        const retryTitles = parsePlan(retryRaw)
         logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
-        if (retryTitles.length > 0 && retryTitles.length * 2 >= planTitles.length) {
-            planTitles = retryTitles
+        const cand = await scorePlan(retryTitles)
+        const decision = decideAdoption(best.plan, cand.plan, hasRequirements)
+        if (decision.adopt) {
+            best = cand
+            accounting = cand.accounting ?? accounting
+            logPlanDebug(cwd, `decompose retry ADOPTED — ${decision.reason}`)
         } else {
+            // Rejected: keep the better current plan. The loop re-checks it at the
+            // top (still incomplete ⇒ another bounded reprompt) but its coverage is
+            // never sacrificed to a worse regeneration.
             logPlanDebug(
                 cwd,
-                `decompose retry discarded as degenerate (${retryTitles.length} vs ${planTitles.length} titles)`
+                `decompose retry REJECTED — ${decision.reason}`
+                    + (decision.dropped.length > 0 ?
+                        ` [would drop: ${decision.dropped
+                            .map(i => `"${reqEntries[i].quote}"`)
+                            .join('; ')
+                            .slice(0, 200)}]`
+                    :   '')
             )
         }
     }
-    // Rounds exhausted with the last judgment still INCOMPLETE: the plan ships (the
-    // gate is best-effort), but silently shipping a KNOWN-gapped plan is how mx5
-    // run 5 lost its whole test suite — tell the user what the judge last flagged.
+    planTitles = best.plan.titles
+    // Exhausted still INCOMPLETE: the best plan ships (the gate is best-effort), but
+    // silently shipping a KNOWN-gapped plan is how mx5 run 5 lost its whole test
+    // suite — tell the user what is still uncovered.
+    const unresolvedMissing = best.plan.missing.length > 0 ? best.plan.missing : null
     if (unresolvedMissing !== null) {
         logPlanDebug(
             cwd,
-            `decompose-coverage exhausted ${MAX_COVERAGE_ROUNDS} round(s) still INCOMPLETE — missing: `
+            `decompose-coverage exhausted ${round} round(s) still INCOMPLETE — missing: `
                 + unresolvedMissing.join('; ').slice(0, 300)
         )
         ctx.ui.notify(
