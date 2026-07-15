@@ -98,6 +98,16 @@ describe('obligation-passage recall floor', () => {
         )
     })
 
+    test('CRLF line endings split into passages like LF (windows-latest checkout)', () => {
+        // A Windows-authored spec separates paragraphs with \r\n; the recall floor
+        // must still enumerate each marked passage (regression: windows CI kept the
+        // whole doc as one passage, so per-passage coverage evidence was impossible).
+        const lf = 'Intro prose.\n\nThe api MUST be RPC-only.\n\nTests are required per route.'
+        const crlf = lf.replace(/\n/g, '\r\n')
+        expect(enumerateObligationPassages(crlf)).toEqual(enumerateObligationPassages(lf))
+        expect(enumerateObligationPassages(crlf)).toHaveLength(2)
+    })
+
     test('uncoveredPassages: a passage with no overlapping kept quote is hard evidence', () => {
         const passages = enumerateObligationPassages(MX5_DOC)
         const cadence = passages.find(p => p.includes('Test-first cadence'))!

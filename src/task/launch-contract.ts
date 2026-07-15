@@ -97,7 +97,10 @@ export function keepGroundedScripts(names: string[], sourceDoc: string): string[
 export function enumerateScriptCandidates(sourceDoc: string): string[] {
     const out: string[] = []
     const seen = new Set<string>()
-    for (const para of sourceDoc.split(/\n[ \t]*\n/)) {
+    // Normalise CRLF/CR → LF first: a Windows-authored design would otherwise
+    // collapse into one paragraph (the split marker never matches `\r\n\r\n`),
+    // caps out on early package-name backticks, and drops the real scripts.
+    for (const para of sourceDoc.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n/)) {
         if (!/\bscripts?\b/i.test(para)) continue
         for (const m of para.matchAll(/`([^`\n]+)`/g)) {
             const tok = m[1].trim()

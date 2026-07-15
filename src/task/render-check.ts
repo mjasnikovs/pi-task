@@ -60,7 +60,7 @@ function onPath(bin: string): boolean {
  * virtual-time budget (validated live on this box: shell exits 0 in ~1s, full
  * chromium times out at 30s on the same http:// URL).
  */
-function playwrightCachedChromium(): string | null {
+export function playwrightCachedChromium(): string | null {
     const cache =
         process.env.PLAYWRIGHT_BROWSERS_PATH
         ?? (process.platform === 'darwin' ?

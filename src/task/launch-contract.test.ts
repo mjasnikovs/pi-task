@@ -101,6 +101,16 @@ describe('enumerateScriptCandidates (the mechanical recall floor — mx5 run 11)
         expect(enumerateScriptCandidates('Add rate limiting to the login endpoint.')).toEqual([])
         expect(enumerateScriptCandidates('The `migrate` step runs first.')).toEqual([])
     })
+
+    test('CRLF line endings parse identically to LF (windows-latest checkout)', () => {
+        // A Windows-authored design has \r\n between paragraphs; the paragraph
+        // gate must still split it (regression: windows CI collapsed the whole
+        // doc into one paragraph and capped out on early package backticks).
+        const lf = 'Scripts: `dev`, `build`.\n\nDependencies: `hono`, `zod`.'
+        const crlf = lf.replace(/\n/g, '\r\n')
+        expect(enumerateScriptCandidates(crlf)).toEqual(enumerateScriptCandidates(lf))
+        expect(enumerateScriptCandidates(crlf)).toEqual(['dev', 'build'])
+    })
 })
 
 describe('LAUNCH_EXTRACT_PROMPT candidates block', () => {

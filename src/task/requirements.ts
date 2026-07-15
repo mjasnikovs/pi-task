@@ -123,7 +123,10 @@ export function capRequirements(
  */
 export function enumerateObligationPassages(doc: string): string[] {
     const out: string[] = []
-    for (const para of doc.split(/\n[ \t]*\n/)) {
+    // Normalise CRLF/CR → LF: a Windows-authored spec would otherwise collapse
+    // into one giant paragraph (the split marker never matches `\r\n\r\n`) and
+    // the per-obligation recall floor would enumerate nothing.
+    for (const para of doc.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n/)) {
         const p = para.trim()
         if (p.length < MIN_QUOTE_LENGTH) continue
         if (!/\b(required|must)\b/i.test(p)) continue
