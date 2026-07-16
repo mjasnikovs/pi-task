@@ -38,6 +38,22 @@ pi install npm:@mjasnikovs/pi-task
 
 > Requires [`pi`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) (the Earendil coding agent) ≥ 0.80.
 
+## Quickstart
+
+One change — `/task` runs it through the full pipeline and hands the finished spec back in the same chat:
+
+```
+/task "add rate limiting to the /api/upload endpoint"
+```
+
+A whole plan — `/task-auto` splits it into an ordered task list and runs each one through `/task`:
+
+```
+/task-auto "Implement @MY_DETAILED_AND_LARGE_PLAN.md"
+```
+
+`@`-mentioning a file inlines its **contents**, so point it at the design doc you already wrote — no copy-paste.
+
 ## Slash commands
 
 | Command | What it does |
