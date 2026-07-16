@@ -584,8 +584,20 @@ export function buildGateDeps(params: {
                 contracts: () => readContracts(cwd2)
             })
         },
-        lintFix: (fixCtx, cwd2, taskTitle, failReason) =>
-            runBoundedLintFix({
+        lintFix: async (fixCtx, cwd2, taskTitle, taskId, failReason) => {
+            // Same frozen extraction the enforce guard and the verify rule-4b
+            // probe consume (mx5 run 12: the lint-fix child edited spec-frozen
+            // tsconfig.json because ESLint's own error text instructed it, then
+            // verify failed the TASK for that edit — the child must know the
+            // spec's do-not-touch list AND be mechanically denied it).
+            let frozenPaths: string[] = []
+            try {
+                const {body} = await readTaskFile(cwd2, taskId)
+                frozenPaths = frozenPathsFromSpec(extractSpecForVerification(body))
+            } catch {
+                // spec unreadable → no frozen paths; the guard degrades to a no-op
+            }
+            return runBoundedLintFix({
                 cwd: cwd2,
                 signal,
                 failReason,
@@ -594,8 +606,10 @@ export function buildGateDeps(params: {
                 git: async args => {
                     const r = await git(cwd2, args, signal)
                     return {exitCode: r.exitCode, stdout: r.stdout}
-                }
-            }),
+                },
+                frozenPaths
+            })
+        },
         // Deterministic static check + tree helpers for the enforce pre-commit gate.
         repoHealth: cwd2 => Promise.resolve(runRepoHealthCheck(cwd2)),
         dirty: async cwd2 => {

@@ -19,6 +19,25 @@ describe('buildLintFixPrompt', () => {
     })
 })
 
+describe('buildLintFixPrompt frozen paths', () => {
+    test('frozen paths become an explicit do-not-touch constraint with a BLOCKED escape', () => {
+        const p = buildLintFixPrompt('repo health: `bun run lint` exited 1', [
+            'tsconfig.json',
+            'src/server/index.ts'
+        ])
+        expect(p).toContain('SPEC-FROZEN PATHS')
+        expect(p).toContain('- tsconfig.json')
+        expect(p).toContain('- src/server/index.ts')
+        // The exact live trap must be named: the checker's error text instructing the edit.
+        expect(p).toContain('consider including it in the tsconfig.json')
+        expect(p).toContain('LINT-FIX: BLOCKED')
+    })
+    test('no frozen paths → the prompt is unchanged (no frozen block)', () => {
+        expect(buildLintFixPrompt('repo health: x')).not.toContain('SPEC-FROZEN')
+        expect(buildLintFixPrompt('repo health: x', [])).not.toContain('SPEC-FROZEN')
+    })
+})
+
 describe('revertGuardViolations', () => {
     test('a pre-dirty file now clean is a violation; still-dirty files are not', () => {
         expect(
@@ -161,6 +180,76 @@ test('runBoundedLintFix: untracked probe git error → file not flagged as disca
     expect(r.ok).toBe(true)
     expect(r.reason).toContain('inconclusive')
     expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: child edit to a clean frozen path → reverted, not applied (mx5 run 12)', async () => {
+    // The live incident shape: work file dirty throughout; tsconfig.json clean
+    // pre-child, modified by the child (status: pre '', post ' M tsconfig.json';
+    // third status call is revertFrozenPaths' own scoped check).
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts', 'src/feature.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', ' M tsconfig.json', ' M tsconfig.json']
+    })
+    let prompt = ''
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            frozenPaths: ['tsconfig.json'],
+            runChild: (_t, p) => {
+                prompt = p
+                return Promise.resolve('LINT-FIX: DONE')
+            }
+        })
+    )
+    // Belt: the child was told; suspenders: the edit was mechanically undone.
+    expect(prompt).toContain('SPEC-FROZEN PATHS')
+    expect(r.ok).toBe(false)
+    expect(r.reason).toContain('frozen-path')
+    expect(r.reason).toContain('tsconfig.json')
+    expect(calls.some(c => c[0] === 'checkout' && c.includes('HEAD'))).toBe(true)
+    expect(calls.some(c => c[0] === 'clean')).toBe(true)
+})
+
+test('runBoundedLintFix: frozen path ALREADY dirty pre-child → never reverted, fix applied', async () => {
+    // A frozen path carrying pre-existing (possibly task) work is not the
+    // child's doing — the guard must cost time, never work; rule 4b still sees it.
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts\ntsconfig.json', 'src/feature.ts\ntsconfig.json'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: [' M tsconfig.json', ' M tsconfig.json']
+    })
+    const r = await runBoundedLintFix(makeDeps({git, frozenPaths: ['tsconfig.json']}))
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: git status failing pre-child → frozen guard inconclusive, no revert', async () => {
+    const calls: string[][] = []
+    const git: LintFixDeps['git'] = args => {
+        calls.push(args)
+        if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
+        if (args[0] === 'status') return Promise.resolve({exitCode: 128, stdout: ''})
+        if (args[0] === 'diff') return Promise.resolve({exitCode: 0, stdout: 'src/feature.ts'})
+        return Promise.resolve({exitCode: 0, stdout: ''})
+    }
+    const r = await runBoundedLintFix(makeDeps({git, frozenPaths: ['tsconfig.json']}))
+    // Inconclusive is not license to revert — the converge check decides alone.
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: no frozenPaths → no status probes, prior behavior intact', async () => {
+    const {git, calls} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    const r = await runBoundedLintFix(makeDeps({git}))
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'status')).toBe(false)
 })
 
 test('runBoundedLintFix: health still failing → not applied (no guard trip)', async () => {

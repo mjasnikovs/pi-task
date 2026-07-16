@@ -119,6 +119,7 @@ export interface GateDeps {
         ctx: ExtensionCommandContext,
         cwd: string,
         taskTitle: string,
+        taskId: string,
         failReason: string
     ) => Promise<{ok: boolean; reason?: string}>
     /**
@@ -327,7 +328,7 @@ export async function runGatesForTask(
                     `${p.tag}: static findings on "${p.title}" — attempting bounded lint fix…`,
                     'info'
                 )
-                const fix = await deps.lintFix(active, p.cwd, p.title, failReason)
+                const fix = await deps.lintFix(active, p.cwd, p.title, p.taskId, failReason)
                 await rec(
                     `lint-fix: ${
                         fix.ok ?

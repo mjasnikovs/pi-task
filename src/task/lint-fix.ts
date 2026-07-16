@@ -27,7 +27,24 @@
  * Not-applied is never terminal: the caller falls through to the existing
  * recommend → AUTOFIX/ACCEPT/dismiss picker, so this pass can only make the loop
  * faster, never change what it can decide.
+ *
+ * FROZEN-PATH GUARD (mx5 run 12, TASK_0021/0022): the checker's own error text
+ * can INSTRUCT an edit to a spec-frozen file (typed ESLint: "playwright/index.ts
+ * was not found by the project … Consider either including it in the
+ * tsconfig.json") and this child complies — while the task's spec froze
+ * `tsconfig.json` and verify's rule-4b prohibition probe then fails the TASK for
+ * the gate child's edit. Two gates, contradictory rules, same file; the loop
+ * never converges (live: TASK_0021 burned all three unattended AUTOFIX rounds).
+ * Prompt framing alone is A/B-proven ~0–1/5 on the weak model (see
+ * frozen-path-guard.ts), so the deny is mechanical: the spec's frozen paths are
+ * threaded in via `frozenPaths`, injected into the prompt as a do-not-touch list
+ * (belt), and any frozen path the child still changed is deterministically
+ * reverted post-child and the fix reported not-applied (suspenders). Only paths
+ * that were CLEAN before the child ran are reverted — a frozen path already
+ * dirty with (possibly task) work is left alone, in the guard's safe direction:
+ * cost time, never work.
  */
+import {parseChangedFrozenFiles, revertFrozenPaths} from './frozen-path-guard.js'
 
 export interface LintFixResult {
     /** true → findings fixed, repo health passes, work preserved. */
@@ -47,6 +64,13 @@ export interface LintFixDeps {
     repoHealth: () => Promise<{ok: boolean; reason: string}>
     /** Run git in cwd; injected so the guard logic is unit-testable. */
     git: (args: string[]) => Promise<{exitCode: number; stdout: string}>
+    /**
+     * Paths the task's spec forbids modifying (frozenPathsFromSpec over the same
+     * composed spec verify judges). Injected into the child's prompt AND enforced
+     * deterministically post-child: a frozen path the child changed is reverted
+     * and the fix reported not-applied. Absent/empty → no-op, prior behavior.
+     */
+    frozenPaths?: string[]
 }
 
 /** The fix child edits and runs the checker; bash exists to RUN the check, not git. */
@@ -58,7 +82,21 @@ export const LINT_FIX_TOOLS = 'read,edit,bash'
  * an explicit ban on discarding work (both validation runs reached green via
  * `git checkout` of the work file until the guard existed).
  */
-export function buildLintFixPrompt(failReason: string): string {
+export function buildLintFixPrompt(failReason: string, frozenPaths: string[] = []): string {
+    const frozenBlock =
+        frozenPaths.length === 0 ?
+            []
+        :   [
+                '3b. HARD CONSTRAINT — SPEC-FROZEN PATHS. The task spec forbids modifying:',
+                ...frozenPaths.map(p => `   - ${p}`),
+                '   You must NOT edit, create, or delete anything at or under these paths,',
+                "   EVEN IF the checker's own error message suggests exactly that fix",
+                '   (e.g. "consider including it in the tsconfig.json"). Any change you make',
+                '   to a frozen path is detected and reverted, and the whole fix is rejected.',
+                '   If the check cannot pass without touching a frozen path, STOP and report',
+                '   LINT-FIX: BLOCKED with the reason.',
+                ''
+            ]
     return [
         'You are a bounded static-analysis fix pass. A verification gate just failed',
         `with: ${failReason}`,
@@ -81,6 +119,7 @@ export function buildLintFixPrompt(failReason: string): string {
         '   Reverting the work would make the findings vanish — that is destroying the',
         '   task, not fixing it, and it is detected and rejected.',
         '',
+        ...frozenBlock,
         '4. Re-run the check after editing and confirm it exits 0.',
         '',
         'End with exactly one line:',
@@ -116,8 +155,20 @@ async function dirtyFiles(deps: LintFixDeps): Promise<string[] | null> {
 }
 
 /**
- * Run the bounded fix: snapshot → child → revert-guard → converge check. Never
- * throws for an outcome; only a child-level user cancel propagates from runChild.
+ * Which spec-frozen paths currently show a change in `git status`? Null when git
+ * itself failed — inconclusive, not evidence (same discipline as dirtyFiles).
+ */
+async function frozenDirtySet(deps: LintFixDeps, frozen: string[]): Promise<Set<string> | null> {
+    if (frozen.length === 0) return new Set()
+    const r = await deps.git(['status', '--porcelain', '--', ...frozen])
+    if (r.exitCode !== 0) return null
+    return new Set(parseChangedFrozenFiles(r.stdout))
+}
+
+/**
+ * Run the bounded fix: snapshot → child → revert-guard → frozen-path guard →
+ * converge check. Never throws for an outcome; only a child-level user cancel
+ * propagates from runChild.
  */
 export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResult> {
     // Snapshot the full working state as a tree object (includes untracked files),
@@ -148,8 +199,19 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         await deps.git(['reset'])
     }
 
+    // FROZEN-PATH baseline: frozen paths already dirty BEFORE the child ran carry
+    // (possibly the task's own) work — the guard must never revert those, only
+    // changes the CHILD introduces on top of a clean frozen path. A git failure
+    // here disables the guard for this run (inconclusive ≠ license to revert).
+    const frozen = deps.frozenPaths ?? []
+    const preFrozenDirty = await frozenDirtySet(deps, frozen)
+
     try {
-        await deps.runChild(LINT_FIX_TOOLS, buildLintFixPrompt(deps.failReason), deps.signal)
+        await deps.runChild(
+            LINT_FIX_TOOLS,
+            buildLintFixPrompt(deps.failReason, frozen),
+            deps.signal
+        )
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         // A cancel must propagate so the caller's USER_CANCELLED path runs.
@@ -197,6 +259,33 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             reason:
                 `revert-guard: fix pass discarded work (${violations.slice(0, 3).join(', ')}`
                 + `${violations.length > 3 ? ', …' : ''}) — fix ${snapshot ? 'rolled back' : 'REJECTED but no snapshot to restore'}`
+        }
+    }
+
+    // FROZEN-PATH GUARD: a frozen path that was clean pre-child and is changed
+    // now is the child's edit — the exact write verify's rule-4b prohibition
+    // probe is guaranteed to fail the TASK for (mx5 run 12: ESLint's own error
+    // text instructed the tsconfig.json edit and the child complied, 5/5 in the
+    // live A/B). Revert JUST those paths (they were clean, so HEAD == pre-state:
+    // no work can be lost) and report not-applied so the caller falls through to
+    // the ordinary recommend → AUTOFIX/ACCEPT picker. Inconclusive git (either
+    // side) → guard steps aside; the verify probe still catches what survives.
+    if (preFrozenDirty !== null) {
+        const postFrozenDirty = await frozenDirtySet(deps, frozen)
+        if (postFrozenDirty !== null) {
+            const frozenViolations = [...postFrozenDirty].filter(f => !preFrozenDirty.has(f))
+            if (frozenViolations.length > 0) {
+                const reverted = await revertFrozenPaths(frozenViolations, deps.git)
+                return {
+                    ok: false,
+                    reason:
+                        `frozen-path: fix child modified spec-frozen path(s) `
+                        + `(${frozenViolations.slice(0, 3).join(', ')}`
+                        + `${frozenViolations.length > 3 ? ', …' : ''}) — `
+                        + `${reverted.length > 0 ? 'reverted' : 'REJECTED (revert found nothing to undo)'}; `
+                        + `the static findings need a fix that respects the spec's constraints`
+                }
+            }
         }
     }
 
