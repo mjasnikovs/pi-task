@@ -345,16 +345,26 @@ function formatEntry(e: RequirementEntry, marker?: string): string {
 }
 
 /**
- * Append carried requirements (cross-cutting, plus any left unmapped after the
- * retry rounds — better carried into every task than silently lost), deduped
- * against what is stored. Host-side only; children never write it. Best-effort.
+ * Append carried requirements, deduped against what is stored. Three channels,
+ * each better carried into every task than silently lost — host-side only,
+ * children never write it, best-effort:
+ *   • `crossCutting` — obligations no single task owns (policy/global rules).
+ *   • `unresolved`   — grounded requirements still unmapped after the retry rounds.
+ *   • `judgeFlagged` — free-text areas the holistic coverage judge flagged as
+ *     uncovered that requirement-extraction never captured as a tracked entry, so
+ *     the grounded channels above are structurally blind to them (mx5 2026-07-16:
+ *     §10's test-infra setup was seen ONLY by the judge and, having no carrier,
+ *     was warned-about then dropped). These are plain strings, not quotes of the
+ *     source; marked distinctly so a task can tell an inferred area from a verbatim
+ *     obligation.
  */
 export async function appendCarriedRequirements(
     cwd: string,
     crossCutting: RequirementEntry[],
-    unresolved: RequirementEntry[] = []
+    unresolved: RequirementEntry[] = [],
+    judgeFlagged: string[] = []
 ): Promise<void> {
-    if (crossCutting.length === 0 && unresolved.length === 0) return
+    if (crossCutting.length === 0 && unresolved.length === 0 && judgeFlagged.length === 0) return
     try {
         const existing = (await readRequirements(cwd)).split('\n').filter(l => l.trim().length > 0)
         const seen = new Set(
@@ -366,7 +376,11 @@ export async function appendCarriedRequirements(
         const merged = [...existing]
         for (const [entries, marker] of [
             [crossCutting, undefined],
-            [unresolved, 'no task owns this — surfaced at plan time']
+            [unresolved, 'no task owns this — surfaced at plan time'],
+            [
+                judgeFlagged.map(q => ({quote: q, anchor: ''})),
+                'judge-flagged uncovered area, no task owns this — surfaced at plan time'
+            ]
         ] as const) {
             for (const e of entries) {
                 const key = normalise(e.quote)

@@ -155,7 +155,11 @@ function scorePlan(
     // last-wins, not over-crediting, which the groundedCoverage tests cover).
     const covered =
         mode === 'treatment' ?
-            groundedCoverage(reqs.map(r => r.quote), p.titles, isCrossCuttingRequirement)
+            groundedCoverage(
+                reqs.map(r => r.quote),
+                p.titles,
+                isCrossCuttingRequirement
+            )
         :   ownedRequirementIndices(mappings)
     const missing =
         mode === 'treatment' ?
@@ -210,7 +214,11 @@ function runTreatment(a: Archetype): FixturePlan {
 
 /** Does the shipped plan still OWN a task for `area`? Grounded (the real check). */
 function ownsArea(a: Archetype, shipped: FixturePlan, area: string): boolean {
-    const owned = groundedCoverage(a.reqs.map(r => r.quote), shipped.titles, isCrossCuttingRequirement)
+    const owned = groundedCoverage(
+        a.reqs.map(r => r.quote),
+        shipped.titles,
+        isCrossCuttingRequirement
+    )
     return a.reqs.some((r, i) => r.area === area && owned.has(i))
 }
 
@@ -340,7 +348,9 @@ describe('groundedCoverage', () => {
         // The exact failure: the model maps "--json" → the scaffold/parser task, so
         // ownedRequirementIndices would say owned. groundedCoverage must not — no
         // title carries a --json/machine-readable token.
-        const quotes = ['a --json flag makes it emit machine-readable output instead of the human table']
+        const quotes = [
+            'a --json flag makes it emit machine-readable output instead of the human table'
+        ]
         const dropPlan = [
             'Scaffold the dedupe CLI entrypoint and argument parser',
             'Implement content-hash scanning to group duplicate files',
@@ -353,10 +363,16 @@ describe('groundedCoverage', () => {
     })
 
     test('plural/verb-s normalization: scan/scans, file/files, serialize/serializes match', () => {
-        expect(groundedCoverage(['scans a directory for files'], ['Scan directory, list file'], noCross).has(0)).toBe(
-            true
-        )
-        expect(groundedCoverage(['serializes a Range'], ['Range serialize step'], noCross).has(0)).toBe(true)
+        expect(
+            groundedCoverage(
+                ['scans a directory for files'],
+                ['Scan directory, list file'],
+                noCross
+            ).has(0)
+        ).toBe(true)
+        expect(
+            groundedCoverage(['serializes a Range'], ['Range serialize step'], noCross).has(0)
+        ).toBe(true)
     })
 
     test('cross-cutting requirements are excluded (plan-independent, cannot be dropped)', () => {
@@ -367,7 +383,9 @@ describe('groundedCoverage', () => {
 
     test('ubiquitous words alone do not manufacture coverage', () => {
         // Overlap only on stopwords (the/a/cli/add/mode…) must NOT count as covered.
-        expect(groundedCoverage(['the CLI adds a mode'], ['Build the CLI app'], noCross).size).toBe(0)
+        expect(groundedCoverage(['the CLI adds a mode'], ['Build the CLI app'], noCross).size).toBe(
+            0
+        )
     })
 })
 

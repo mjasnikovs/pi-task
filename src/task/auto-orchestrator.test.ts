@@ -1547,7 +1547,7 @@ test('coverage gate: rounds exhausted still INCOMPLETE → user is warned, not s
         )
         const id = await planAuto(ctx, dir, 'build the app', d)
         expect(id).not.toBeNull() // best-effort: the plan still ships
-        const warn = captured.notifies.find(n => /plan may be missing coverage/.test(n.msg))
+        const warn = captured.notifies.find(n => /no task fully owns/.test(n.msg))
         expect(warn).toBeDefined()
         expect(warn!.msg).toContain('test suite for auth')
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
@@ -1565,7 +1565,7 @@ test('coverage gate: COMPLETE on the second round leaves no exhaustion warning',
             ['COVERAGE: INCOMPLETE\nMISSING: tests', 'COVERAGE: COMPLETE']
         )
         await planAuto(ctx, dir, 'build the app', d)
-        expect(captured.notifies.some(n => /plan may be missing coverage/.test(n.msg))).toBe(false)
+        expect(captured.notifies.some(n => /no task fully owns/.test(n.msg))).toBe(false)
     })
 })
 
@@ -1705,7 +1705,119 @@ test('coverage gate: a regeneration that DROPS a covered area is rejected, good 
         const reqsFile = await fsp.readFile(path.join(dir, '.pi-tasks', 'requirements.md'), 'utf8')
         expect(reqsFile).toContain('must never delete')
         // …and the still-uncovered report area is surfaced, never silently dropped.
-        expect(captured.notifies.some(n => /plan may be missing coverage/.test(n.msg))).toBe(true)
+        expect(captured.notifies.some(n => /no task fully owns/.test(n.msg))).toBe(true)
+    })
+})
+
+// ─── #1/#2: judge-flagged carry + bonus round on late-exposed gap (mx5 2026-07-16)
+//
+// The mx5 failure this pair proves closed: the 55-title plan was ADOPTED on the
+// final coverage round AND was the first plan whose holistic judge flagged §10's
+// test-infra setup — an area requirement-extraction never captured as a tracked
+// entry. The round cap fired the same instant, so (a) there was no round left to
+// chase it and (b) it had no carrier, so it was warned-about then silently dropped.
+//
+// The spec carries three grounded requirements the plan covers incrementally, and
+// a fourth area the judge names ONLY once the third requirement is covered — i.e.
+// exposed by the adoption that lands on the last allowed round.
+const PIPELINE_SPEC = [
+    'Build a data pipeline tool.',
+    '',
+    'Behaviour:',
+    '- the parser reads yaml manifests',
+    '- the exporter writes csv reports',
+    '- the scheduler triggers cron jobs'
+].join('\n')
+
+const PIPELINE_REQS = [
+    'REQUIREMENT: "the parser reads yaml manifests"',
+    'REQUIREMENT: "the exporter writes csv reports"',
+    'REQUIREMENT: "the scheduler triggers cron jobs"'
+].join('\n')
+
+// Plans grow one covered requirement per round; the 3rd retry (the bonus) repeats
+// the fully-covered plan. Judge names the next requirement each round, then the
+// un-extracted "test harness" area only on the plan that covers all three — the
+// adoption at the cap. `finalVerdict` is what the bonus round's judge returns.
+function pipelineDeps(
+    finalVerdict: string
+): AutoDeps & {calls: {decompose: number; coverage: number}} {
+    const calls = {decompose: 0, coverage: 0}
+    const plans = [
+        '- [ ] Build the yaml parser',
+        '- [ ] Build the yaml parser\n- [ ] Add the csv exporter',
+        '- [ ] Build the yaml parser\n- [ ] Add the csv exporter\n- [ ] Wire the cron scheduler',
+        '- [ ] Build the yaml parser\n- [ ] Add the csv exporter\n- [ ] Wire the cron scheduler'
+    ]
+    const verdicts = [
+        'COVERAGE: INCOMPLETE\nMISSING: csv exporter',
+        'COVERAGE: INCOMPLETE\nMISSING: cron scheduler',
+        'COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline',
+        finalVerdict
+    ]
+    return {
+        calls,
+        runChild: (name, _tools, _prompt) => {
+            if (name === 'auto-clarify') return Promise.resolve('NONE')
+            if (name === 'requirement-extract') return Promise.resolve(PIPELINE_REQS)
+            if (name === 'auto-decompose') return Promise.resolve(plans[calls.decompose++] ?? '')
+            if (name === 'decompose-coverage')
+                return Promise.resolve(verdicts[calls.coverage++] ?? 'COVERAGE: COMPLETE')
+            // Every requirement is task-owned — keeps the grounded carry channels
+            // empty so the judge-flagged channel is the only thing under test.
+            if (name === 'coverage-map')
+                return Promise.resolve('MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1')
+            return Promise.resolve('')
+        },
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        commit: () => Promise.resolve({committed: true})
+    }
+}
+
+test('#2: an adoption at the round cap that exposes a new area buys one bonus round', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        // The bonus round's judge finally reports COMPLETE — the extra round chased
+        // the late-exposed gap to resolution, which MAX_COVERAGE_ROUNDS=2 alone
+        // (breaking the instant the 3rd requirement was covered) would have missed.
+        const d = pipelineDeps('COVERAGE: COMPLETE')
+        await planAuto(ctx, dir, PIPELINE_SPEC, d)
+        // initial + 2 base retries + 1 bonus retry.
+        expect(d.calls.decompose).toBe(4)
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('bonus round granted')
+        // Resolved on the bonus round ⇒ no exhaustion warning.
+        expect(captured.notifies.some(n => /no task fully owns/.test(n.msg))).toBe(false)
+    })
+})
+
+test('#2: the bonus round is granted at most once (a persistent judge cannot loop)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // The judge keeps flagging the same area on the bonus round too — the bonus
+        // is spent, and no second one is granted, so the loop still terminates.
+        const d = pipelineDeps('COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline')
+        await planAuto(ctx, dir, PIPELINE_SPEC, d)
+        expect(d.calls.decompose).toBe(4) // never a 5th — bounded to exactly one bonus
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
+    })
+})
+
+test('#1: a judge-flagged area with no owning task is carried into requirements.md', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        // The bonus round still can't cover the un-extracted area — at exhaustion it
+        // must be CARRIED (into every task) and marked, not merely warned then lost.
+        const d = pipelineDeps('COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline')
+        await planAuto(ctx, dir, PIPELINE_SPEC, d)
+        const reqsFile = await fsp.readFile(path.join(dir, '.pi-tasks', 'requirements.md'), 'utf8')
+        expect(reqsFile).toContain('test harness for the pipeline')
+        expect(reqsFile).toContain('judge-flagged uncovered area')
+        // And the user is told it is carried, not just that coverage is missing.
+        expect(
+            captured.notifies.some(n => /judge-flagged/.test(n.msg) && /requirement/.test(n.msg))
+        ).toBe(true)
     })
 })
 

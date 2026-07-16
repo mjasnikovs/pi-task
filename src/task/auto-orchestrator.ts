@@ -102,7 +102,19 @@ const MAX_CLARIFY_QUESTIONS = 8
 
 // Bounded coverage-triage rounds after decompose: judge → reprompt-with-missing
 // → judge again, at most. Two rounds so one flaky retry doesn't end the gate,
-// while a judge that keeps flagging can't loop the plan phase forever.
+// while a judge that keeps flagging can't loop the plan phase forever. Each round
+// spawns three model children (decompose + coverage-map + coverage-verdict), so
+// the ceiling is also a latency/spawn budget, not just a correctness bound.
+//
+// Why 2 is safe to sit this low: when this number was picked (2026-07-03) adoption
+// was LAST-WINS, so more rounds meant more chances to overwrite a good plan with a
+// worse regeneration — the cap was protective. Adoption is now MONOTONE
+// (coverage-loop.ts, 2026-07-15): a retry that drops owned coverage is rejected,
+// never adopted, so extra rounds can only hold or grow coverage. The one gap that
+// remained is that an adoption landing ON the last round can expose a NEW area with
+// no round left to chase it — handled surgically by a single bonus round granted
+// only in that exact case (see the loop), rather than by raising this ceiling for
+// every run.
 const MAX_COVERAGE_ROUNDS = 2
 
 /** Reprompt prefix when the coverage triage found feature areas no task covers. */
@@ -221,6 +233,18 @@ function logPlanDebug(cwd: string, msg: string): void {
     fsp.mkdir(dir, {recursive: true})
         .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
         .catch(() => {})
+}
+
+/** Normalise a missing-area string for cross-round identity — lowercased alnum
+ *  words, punctuation and quote-wrapping collapsed. Used only to tell whether an
+ *  adopted plan introduced a NEW gap versus re-surfacing the same one (#2 bonus
+ *  round); intentionally coarse, so trivial rewording of the same area does not
+ *  read as new and buy an extra round. */
+function normMissingArea(s: string): string {
+    return s
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
 }
 
 /**
@@ -716,7 +740,16 @@ export async function planAuto(
     // never blocks planning.
     const scorePlan = async (
         titles: string[]
-    ): Promise<{plan: CoveragePlan; accounting: CoverageAccounting | null; suspect: boolean}> => {
+    ): Promise<{
+        plan: CoveragePlan
+        accounting: CoverageAccounting | null
+        suspect: boolean
+        // The holistic-judge missing areas alone (NOT the quoted unmapped entries,
+        // which the grounded accounting already carries). This is the belt-only
+        // channel — areas requirement-extraction never captured, so nothing durable
+        // sees them unless carried explicitly at exhaustion (see the carry below).
+        judgeMissing: string[]
+    }> => {
         let verdict: CoverageVerdict | null
         try {
             verdict = parseCoverageVerdict(
@@ -772,7 +805,8 @@ export async function planAuto(
         return {
             plan: {titles, covered, missing},
             accounting: acc,
-            suspect: isSuspectPlan(titles, featureForModel)
+            suspect: isSuspectPlan(titles, featureForModel),
+            judgeMissing: verdictMissing
         }
     }
 
@@ -783,6 +817,17 @@ export async function planAuto(
     // The carried accounting (cross-cutting + unowned) for the plan that ships.
     let accounting: CoverageAccounting | null = best.accounting
     let round = 0
+    // #2: the round cap can be lifted ONCE. An adoption is a fresh whole-plan roll,
+    // so the plan that gets adopted can expose an uncovered area the pre-adoption
+    // plan never had — and if that adoption lands on the last allowed round, the
+    // loop breaks before the new gap ever gets a reprompt (mx5 2026-07-16: the
+    // 55-title plan was adopted on the final round AND was the first to reveal §10's
+    // test-infra gap; the cap fired the same instant, so it was never chased). Grant
+    // exactly one bonus round when — and only when — an adoption introduces a NEW
+    // missing area at the cap. Bounded to one so a judge that flags forever still
+    // cannot loop the plan phase; a persistent (non-new) gap never re-triggers it.
+    let roundCap = MAX_COVERAGE_ROUNDS
+    let bonusRoundUsed = false
     for (;;) {
         if (best.plan.titles.length === 0) break
         if (best.plan.missing.length === 0) {
@@ -805,7 +850,7 @@ export async function planAuto(
             }
             break
         }
-        if (round >= MAX_COVERAGE_ROUNDS) break
+        if (round >= roundCap) break
         round++
         logPlanDebug(
             cwd,
@@ -823,9 +868,34 @@ export async function planAuto(
         const cand = await scorePlan(retryTitles)
         const decision = decideAdoption(best.plan, cand.plan, hasRequirements)
         if (decision.adopt) {
+            // Snapshot the pre-adoption plan to decide whether this adoption earns a
+            // bonus round. Two guards keep the bonus off generic judge churn: it must
+            // be a real coverage GAIN (grounded covered-set strictly grew — a flaky
+            // judge that just relabels the same-shaped plan's gap does not qualify),
+            // and it must expose a NEW area (a gap already present is one we have or
+            // will reprompt against anyway). Requirements-path only: without grounded
+            // requirements "missing" is pure holistic-judge free-text that can change
+            // every round, so there is no trustworthy "grew"/"new" signal to gate on.
+            const priorCovered = best.plan.covered.size
+            const priorMissing = new Set(best.plan.missing.map(normMissingArea))
             best = cand
             accounting = cand.accounting ?? accounting
             logPlanDebug(cwd, `decompose retry ADOPTED — ${decision.reason}`)
+            if (
+                !bonusRoundUsed
+                && round >= roundCap
+                && hasRequirements
+                && cand.plan.covered.size > priorCovered
+                && cand.plan.missing.some(m => !priorMissing.has(normMissingArea(m)))
+            ) {
+                bonusRoundUsed = true
+                roundCap++
+                logPlanDebug(
+                    cwd,
+                    'decompose-coverage: bonus round granted — adoption grew coverage and '
+                        + 'exposed a new uncovered area at the cap'
+                )
+            }
         } else {
             // Rejected: keep the better current plan. The loop re-checks it at the
             // top (still incomplete ⇒ another bounded reprompt) but its coverage is
@@ -854,7 +924,10 @@ export async function planAuto(
                 + unresolvedMissing.join('; ').slice(0, 300)
         )
         ctx.ui.notify(
-            `/task-auto: plan may be missing coverage — ${unresolvedMissing.join('; ').slice(0, 200)} — review the plan before running.`,
+            `/task-auto: no task fully owns — ${unresolvedMissing.join('; ').slice(0, 200)}. `
+                + 'Carried into every task via .pi-tasks/requirements.md, but not as a dedicated '
+                + 'task. To give it one, stop now and add it to the plan in .pi-tasks/; otherwise '
+                + 'it proceeds.',
             'warning'
         )
     }
@@ -864,18 +937,28 @@ export async function planAuto(
     // is authoritative" pointer recovered it in 1 of ~6 tasks; content travels,
     // pointers don't). Requirements still unmapped after the rounds are carried
     // too — marked — and recorded user-visibly in the plan file, never dropped.
-    if (accounting !== null) {
-        await appendCarriedRequirements(cwd, accounting.crossCutting, accounting.unmapped)
-        if (accounting.crossCutting.length > 0 || accounting.unmapped.length > 0) {
-            ctx.ui.notify(
-                `/task-auto: carrying ${accounting.crossCutting.length} cross-cutting`
-                    + (accounting.unmapped.length > 0 ?
-                        ` and ${accounting.unmapped.length} unowned`
-                    :   '')
-                    + ' requirement(s) into every task — see .pi-tasks/requirements.md.',
-                'info'
-            )
-        }
+    //
+    // #1: the holistic-judge missing areas are carried as a THIRD channel. They are
+    // areas requirement-extraction never captured as a tracked entry (so the
+    // grounded accounting is structurally blind to them), seen only by the judge —
+    // exactly the class that, having no carrier, was warned-about then dropped (mx5
+    // 2026-07-16, §10 test-infra). Carried independent of `accounting` so a mapping
+    // fault (accounting === null) can't strand them either.
+    const carriedCrossCutting = accounting?.crossCutting ?? []
+    const carriedUnmapped = accounting?.unmapped ?? []
+    const carriedJudge = best.judgeMissing
+    if (carriedCrossCutting.length > 0 || carriedUnmapped.length > 0 || carriedJudge.length > 0) {
+        await appendCarriedRequirements(cwd, carriedCrossCutting, carriedUnmapped, carriedJudge)
+        const parts = [
+            carriedCrossCutting.length > 0 ? `${carriedCrossCutting.length} cross-cutting` : '',
+            carriedUnmapped.length > 0 ? `${carriedUnmapped.length} unowned` : '',
+            carriedJudge.length > 0 ? `${carriedJudge.length} judge-flagged` : ''
+        ].filter(p => p.length > 0)
+        ctx.ui.notify(
+            `/task-auto: carrying ${parts.join(', ')} requirement(s) into every task`
+                + ' — see .pi-tasks/requirements.md.',
+            'info'
+        )
     }
     // Cross-slice contract registry (mx5 run 8, F3): now that the plan is settled,
     // extract the interface facts MORE THAN ONE slice must agree on — endpoint paths,
