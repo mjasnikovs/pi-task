@@ -1,6 +1,6 @@
 <div align="center">
 
-![pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/pipeline.svg)
+![Local models drift. pi-task doesn't trust one prompt. Your ask runs through five fixed phases — refine, research, grill, compose, critique — and what comes out is a spec.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.svg)
 
 # pi-task
 
@@ -43,13 +43,13 @@ pi install npm:@mjasnikovs/pi-task
 One change — `/task` runs it through the full pipeline and hands the finished spec back in the same chat:
 
 ```
-/task "add rate limiting to the /api/upload endpoint"
+/task add rate limiting to the /api/upload endpoint
 ```
 
 A whole plan — `/task-auto` splits it into an ordered task list and runs each one through `/task`:
 
 ```
-/task-auto "Implement @MY_DETAILED_AND_LARGE_PLAN.md"
+/task-auto Implement @MY_DETAILED_AND_LARGE_PLAN.md
 ```
 
 `@`-mentioning a file inlines its **contents**, so point it at the design doc you already wrote — no copy-paste.
@@ -69,6 +69,12 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
+
+<div align="center">
+
+![pi-task pipeline: a /task request runs through refine, research, grill, compose and critique, then the final spec is delivered to your main pi session in the same chat. Every phase boundary is persisted to .pi-tasks/TASK_NNNN.md, so the task is crash-safe and resumable.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/pipeline.svg)
+
+</div>
 
 | Phase | Output section | What happens |
 | --- | --- | --- |

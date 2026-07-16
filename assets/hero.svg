@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="pi-task. Local models drift. pi-task doesn't trust one prompt. Your ask runs through five fixed phases — refine, research, grill, compose, critique — and what comes out is a spec.">
+  <defs>
+    <clipPath id="frame"><rect x="6" y="6" width="948" height="588" rx="18"/></clipPath>
+    <style>
+      .code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+      .ic   { fill:none; stroke-width:2.25; stroke-linecap:round; stroke-linejoin:round; }
+      .icf  { stroke:none; }
+      .ph   { font-size:18px; fill:#c9d1d9; }
+      .arw  { fill:none; stroke:#6e7681; stroke-width:2.07; stroke-linecap:round; stroke-linejoin:round; }
+    </style>
+  </defs>
+
+  <rect x="6" y="6" width="948" height="588" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- ── watermark ── -->
+  <defs>
+    <linearGradient id="mtFade" gradientUnits="userSpaceOnUse" x1="6" y1="0" x2="688" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="0.55" stop-color="#fff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="mtMask"><rect x="0" y="0" width="960" height="600" fill="url(#mtFade)"/></mask>
+  </defs>
+  <g clip-path="url(#frame)" mask="url(#mtMask)" fill="none" stroke="#a371f7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.0 594.0L75.6 530.2L139.4 550.5L203.2 486.7L275.7 518.6L342.4 449.0L412.0 501.2L484.5 460.6L559.9 521.5L629.5 486.7L687.5 594.0" stroke-width="1.5" opacity="0.12"/>
+    <path d="M264.1 330.1L6.0 594.0M264.1 330.1L130.7 594.0M264.1 330.1L255.4 594.0M264.1 330.1L380.1 594.0M264.1 330.1L504.8 594.0M264.1 330.1L629.5 594.0" stroke-width="1" opacity="0.08"/>
+    <path d="M56.8 538.9L56.8 594.0M95.9 556.3L95.9 594.0M148.1 475.1L148.1 594.0M191.6 495.4L191.6 594.0M226.4 405.5L226.4 594.0M264.1 330.1L264.1 594.0M290.2 382.3L290.2 594.0M316.3 364.9L316.3 594.0M351.1 443.2L351.1 594.0M385.9 422.9L385.9 594.0M423.6 489.6L423.6 594.0M458.4 469.3L458.4 594.0M499.0 530.2L499.0 594.0M539.6 515.7L539.6 594.0M586.0 567.9L586.0 594.0" stroke-width="1" opacity="0.07"/>
+    <path d="M6.0 594.0L56.8 538.9L95.9 556.3L148.1 475.1L191.6 495.4L226.4 405.5L264.1 330.1L290.2 382.3L316.3 364.9L351.1 443.2L385.9 422.9L423.6 489.6L458.4 469.3L499.0 530.2L539.6 515.7L586.0 567.9L629.5 594.0" stroke-width="2" opacity="0.30"/>
+    <circle cx="6.0" cy="594.0" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+    <circle cx="148.1" cy="475.1" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+    <circle cx="264.1" cy="330.1" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+    <circle cx="351.1" cy="443.2" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+    <circle cx="458.4" cy="469.3" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+    <circle cx="586.0" cy="567.9" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
+  </g>
+
+  <!-- ── logo lockup · π in a broken circle, drawn as paths (no font dependency) ── -->
+  <g transform="translate(371,59) scale(1.2500)" fill="none" stroke="#a371f7" stroke-width="2.40" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M30.18 4.98A20 20 0 1 0 41.66 14.61"/>
+    <path d="M13.5 17H34.5M19.5 17V32M28.5 17V32"/>
+  </g>
+  <text x="449" y="99" font-size="44" font-weight="700" fill="#e6edf3">pi-task</text>
+
+  <!-- ── headline ── -->
+  <text x="480" y="224" text-anchor="middle" font-size="82" font-weight="700" fill="#6e7681">Local models drift.</text>
+  <text x="480" y="319" text-anchor="middle" font-size="82" font-weight="700" fill="#e6edf3">pi-task doesn&#39;t trust</text>
+  <text x="480" y="414" text-anchor="middle" font-size="82" font-weight="700" fill="#e6edf3">one prompt.</text>
+
+  <!-- ── phase strip ── -->
+  <rect x="65" y="473" width="831" height="61" rx="30.5" fill="#161b22" fill-opacity="0.92" stroke="#30363d" stroke-width="1.5"/>
+  <g transform="translate(108,492.5) scale(0.9167)" stroke="#58a6ff">
+    <circle class="ic" cx="12" cy="12" r="10"/>
+    <path class="ic" d="M22 12h-4M6 12H2M12 6V2M12 22v-4"/>
+    <circle class="icf" cx="12" cy="12" r="2.4" fill="#58a6ff"/>
+  </g>
+  <text x="139" y="509.8" class="ph">refine</text>
+  <path class="arw" d="M195 503.5h17.2M206.6 496.8l6.7 6.7-6.7 6.7"/>
+  <g transform="translate(229,492.5) scale(0.9167)" stroke="#39c5cf">
+    <path class="ic" d="M9.56 9.83 15.44 6.67M10.1 12h4.79M9.56 14.17 15.44 17.33"/>
+    <circle class="icf" cx="5.5" cy="12" r="2.4" fill="#39c5cf"/>
+    <circle class="icf" cx="19.5" cy="4.5" r="2.1" fill="#39c5cf"/>
+    <circle class="icf" cx="19.5" cy="12" r="2.1" fill="#39c5cf"/>
+    <circle class="icf" cx="19.5" cy="19.5" r="2.1" fill="#39c5cf"/>
+  </g>
+  <text x="260" y="509.8" class="ph">research</text>
+  <path class="arw" d="M341 503.5h17.2M352.6 496.8l6.7 6.7-6.7 6.7"/>
+  <g transform="translate(375,492.5) scale(0.9167)" stroke="#d29922">
+    <path class="ic" d="M7.6 8.4a4.5 4.5 0 1 1 5.9 4.3c-.9.35-1.5 1.2-1.5 2.2v.6"/>
+    <circle class="icf" cx="12" cy="19.8" r="1.5" fill="#d29922"/>
+  </g>
+  <text x="406" y="509.8" class="ph">grill</text>
+  <path class="arw" d="M446 503.5h17.2M457.6 496.8l6.7 6.7-6.7 6.7"/>
+  <g transform="translate(480,492.5) scale(0.9167)" stroke="#3fb950">
+    <path class="ic" d="M12 2.5 22 7.5 12 12.5 2 7.5 12 2.5z"/>
+    <path class="ic" d="M2 16.5 12 21.5 22 16.5"/>
+  </g>
+  <text x="511" y="509.8" class="ph">compose</text>
+  <path class="arw" d="M597 503.5h17.2M608.5 496.8l6.7 6.7-6.7 6.7"/>
+  <g transform="translate(631,492.5) scale(0.9167)" stroke="#a371f7">
+    <path class="ic" d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"/>
+    <path class="ic" d="M23 4v6h-6"/>
+  </g>
+  <text x="662" y="509.8" class="ph">critique</text>
+  <path class="arw" d="M732 503.5h17.2M743.5 496.8l6.7 6.7-6.7 6.7"/>
+  <g transform="translate(766,492.5) scale(0.9167)" stroke="#3fb950">
+    <path class="ic" d="M14 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z"/>
+    <path class="ic" d="M14 2.5V8h5.5"/>
+    <path class="ic" d="M8.5 13.5h7M8.5 17.5h7"/>
+  </g>
+  <text x="797" y="509.8" class="ph" font-weight="600" fill="#3fb950">a spec</text>
+
+</svg>

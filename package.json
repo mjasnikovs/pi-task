@@ -85,6 +85,6 @@
         "extensions": [
             "dist/index.js"
         ],
-        "image": "https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/pipeline.png"
+        "image": "https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.png"
     }
 }
