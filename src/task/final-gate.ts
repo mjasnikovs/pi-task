@@ -67,14 +67,25 @@ export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
     ok: boolean
     /**
-     * On a fail: the exact command, its exit code, and the tail of its output — the
-     * MECHANICAL failure only. The accept-debt note is deliberately NOT folded in
+     * On a fail: the exact command(s), exit code(s), and output tail(s) — the
+     * MECHANICAL failures only. The accept-debt note is deliberately NOT folded in
      * here (mx5 run 11): this string seeds the final-gate AUTOFIX child's prompt,
      * and a debt included there is read as an instruction — the run-11 fix child
      * `rm`'d a sibling task's verified deliverable to satisfy a recorded claim. The
      * child cannot act on text it never receives; debts travel in `debtNote`.
+     * With multiple failures this is the numbered, ranked list (see `failures`).
      */
     reason: string
+    /**
+     * On a fail: EVERY section failure individually, ranked most load-bearing
+     * first — boot/render ("the app does not serve/render") outranks any single
+     * test failure. The gate runs every section and aggregates rather than
+     * early-returning (mx5 run 13: a bun-test glob failure shadowed the boot +
+     * render probe, so the user accepted the FAIL having only ever seen 1 failing
+     * CT test while the shipped app 404'd on every non-API GET). Callers trail
+     * each entry and show the full list wherever an ACCEPT decision is made.
+     */
+    failures?: string[]
     /**
      * Human-facing suffix listing the still-open accepted-defect claims (see
      * buildAcceptDebtNote) — for the picker question and the trail, NEVER for the
@@ -721,7 +732,17 @@ export {taskThatIntroduced}
  * Run the final gate: static analysis first, then the lockfile consistency
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
- * First real failure wins.
+ *
+ * EVERY section runs and failures AGGREGATE (mx5 run 13): the gate used to
+ * early-return on the first failing section, and the boot + render probe — built
+ * after run 11 exactly for "app serves blank/nothing" — was ordered last, so any
+ * earlier failure shadowed the most load-bearing signal. Run 13's user accepted
+ * the FAIL having seen only 1 failing CT test while the app 404'd on every
+ * non-API GET; boot/render never executed in any attempt. Now the outcome
+ * carries the full ranked failure list (boot/render first — "the app does not
+ * serve/render" outranks any single test), the ACCEPT decision is made on all of
+ * it, and autofix converges only when the whole list is empty. Per-section
+ * env-gap/INFRA_GAP skip semantics and orphan-port recovery are unchanged.
  */
 export async function runFinalIntegrationGate(
     cwd: string,
@@ -761,7 +782,14 @@ export async function runFinalIntegrationGate(
         ...(debtNote ? {debtNote} : {}),
         openDebts
     })
-    if (!stat.ok) return withDebts({ok: false, reason: `static checks: ${stat.reason}`})
+    // Aggregated failures across ALL sections (mx5 run 13 — see the function doc).
+    // rank 0 = boot/render ("does not serve/render" is the most load-bearing
+    // signal); rank 1 = everything else, kept in execution order by stable sort.
+    const failures: Array<{rank: number; text: string}> = []
+    const fail = (text: string, rank = 1): void => {
+        failures.push({rank, text})
+    }
+    if (!stat.ok) fail(`static checks: ${stat.reason}`)
     // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
     // scripts that fell through decompose and shipped missing, unchecked. Diff the
     // plan-time-extracted declared scripts against the manifest; a missing one is a
@@ -770,16 +798,15 @@ export async function runFinalIntegrationGate(
     if (declared.length > 0) {
         const missing = missingDeclaredScripts(declared, Object.keys(packageScripts(cwd)))
         if (missing.length > 0) {
-            return withDebts({
-                ok: false,
-                reason: `launch contract: the design declares script(s) the shipped package.json does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
-            })
+            fail(
+                `launch contract: the design declares script(s) the shipped package.json does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
+            )
         }
     }
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
-    if (lockCmds.length === 0 && cmds.length === 0 && !boot) {
+    if (lockCmds.length === 0 && cmds.length === 0 && !boot && failures.length === 0) {
         return withDebts({ok: true, reason: 'no integration command found (statics passed)'})
     }
     const ran: string[] = []
@@ -792,10 +819,8 @@ export async function runFinalIntegrationGate(
             const r = runGateCommand(cwd, cmd, timeoutMs)
             if (r.outcome === 'skip') continue
             if (r.outcome === 'fail') {
-                return withDebts({
-                    ok: false,
-                    reason: `${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
-                })
+                fail(`${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`)
+                continue
             }
             ran.push(label)
         }
@@ -816,7 +841,12 @@ export async function runFinalIntegrationGate(
             (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
         )
         const skippedLaunch: string[] = []
+        // A declared script the manifest doesn't expose is already a launch-contract
+        // failure above; executing it too would double-report (pre-aggregation the
+        // contract diff early-returned, so this loop could assume presence).
+        const present = new Set(Object.keys(packageScripts(cwd)).map(s => s.toLowerCase()))
         for (const name of runnableDeclaredScripts(declared, covered)) {
+            if (!present.has(name.toLowerCase())) continue
             const cmd: HealthCommand = ['bun', ['run', name]]
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             const r = runGateCommand(cwd, cmd, Math.min(timeoutMs, 180_000), INFRA_GAP_OUTPUT_RE)
@@ -825,10 +855,10 @@ export async function runFinalIntegrationGate(
                 continue
             }
             if (r.outcome === 'fail') {
-                return withDebts({
-                    ok: false,
-                    reason: `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
-                })
+                fail(
+                    `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                )
+                continue
             }
             ran.push(label)
         }
@@ -847,6 +877,9 @@ export async function runFinalIntegrationGate(
             }
         }
     }
+    // Boot + render ALWAYS runs (mx5 run 13): it is independent of test results by
+    // construction, and it carries the run's most load-bearing signal — earlier
+    // failures no longer shadow it. Its failures rank FIRST in the aggregate.
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
         const expectServer = detectsServedApp(cwd, planText)
@@ -867,9 +900,8 @@ export async function runFinalIntegrationGate(
             b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDepsWithRender, expectServer)
         }
         if (b.outcome === 'fail') {
-            return withDebts({ok: false, reason: `boot check: \`${label}\` ${b.detail}`})
-        }
-        if (b.outcome === 'orphan-port') {
+            fail(`boot check: \`${label}\` ${b.detail}`, 0)
+        } else if (b.outcome === 'orphan-port') {
             // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
             // FAIL: name the port and (when known) the process squatting on it.
             const holder =
@@ -878,17 +910,33 @@ export async function runFinalIntegrationGate(
                 holder ? ` — held by an orphaned process (pid ${holder.pid}: ${holder.command})`
                 : b.port !== null ? ` — port ${b.port} is held by another process`
                 : ''
-            return withDebts({
-                ok: false,
-                reason: `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`
-            })
-        }
-        if (b.outcome === 'pass') {
+            fail(
+                `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`,
+                0
+            )
+        } else if (b.outcome === 'pass') {
             ran.push(label)
             // A listener that served, but whose page could not be OBSERVED to render
             // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
             if (b.renderNote) warnings.push(b.renderNote)
         }
+    }
+    if (failures.length > 0) {
+        // Stable sort: boot/render (rank 0) leads, everything else keeps execution
+        // order. One failure keeps the exact single-failure wording; several become
+        // a numbered list so the trail, the ACCEPT picker, and the autofix seed all
+        // carry the complete ranked picture.
+        const texts = [...failures].sort((a, b) => a.rank - b.rank).map(f => f.text)
+        return withDebts({
+            ok: false,
+            reason:
+                texts.length === 1 ?
+                    texts[0]
+                :   `${texts.length} failures (ranked, most load-bearing first):\n${texts
+                        .map((t, i) => `${i + 1}. ${t}`)
+                        .join('\n')}`,
+            failures: texts
+        })
     }
     const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''
     return withDebts({

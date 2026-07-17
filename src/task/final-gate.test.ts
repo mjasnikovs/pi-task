@@ -240,16 +240,22 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).not.toContain('launch contract')
     })
 
-    test('a static (lint) failure gates BEFORE integration commands run', async () => {
-        const dir = makeDir({scripts: {lint: 'exit 1', test: 'echo SHOULD-NOT-RUN && exit 1'}})
+    // mx5 run 13: the gate AGGREGATES — an earlier section failure no longer
+    // shadows the later sections (the boot + render probe was ordered last and
+    // never ran, so the user accepted a FAIL seeing 1 CT test while the app
+    // 404'd on /). Statics failing now reports the integration failure too.
+    test('a static (lint) failure no longer shadows integration commands — both aggregate', async () => {
+        const dir = makeDir({scripts: {lint: 'exit 1', test: 'echo ALSO-RAN && exit 1'}})
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
-        expect(out.reason).not.toContain('SHOULD-NOT-RUN')
+        expect(out.reason).toContain('`bun run test` exited 1')
+        expect(out.reason).toContain('ALSO-RAN')
+        expect(out.failures).toHaveLength(2)
     })
 
-    itPosix('a lockfile desync FAILS the gate before any integration command runs', async () => {
-        const dir = makeDir({scripts: {test: 'echo SHOULD-NOT-RUN && exit 1'}})
+    itPosix('a lockfile desync aggregates with a failing integration command', async () => {
+        const dir = makeDir({scripts: {test: 'echo TEST-ALSO-FAILED && exit 1'}})
         fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}')
         await withFakeBin(
             'npm',
@@ -259,7 +265,8 @@ describe('runFinalIntegrationGate', () => {
                 expect(out.ok).toBe(false)
                 expect(out.reason).toContain('lockfile check: `npm ci --dry-run` exited 1')
                 expect(out.reason).toContain('lock and manifest are out of sync')
-                expect(out.reason).not.toContain('SHOULD-NOT-RUN')
+                expect(out.reason).toContain('TEST-ALSO-FAILED')
+                expect(out.failures).toHaveLength(2)
             }
         )
     })
@@ -711,6 +718,99 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
         })
         expect(out.ok).toBe(true)
         expect(out.reason).not.toContain('WARNING')
+    })
+})
+
+// mx5 run 13: runFinalIntegrationGate early-returned on the FIRST failing section,
+// so the boot + render probe (ordered last, and the run's most load-bearing signal)
+// never executed once any test failed — the user accepted the FAIL having seen only
+// 1 failing CT test while the shipped app 404'd on every non-API GET. The gate now
+// runs EVERY section, aggregates, and ranks boot/render failures first.
+describe('runFinalIntegrationGate — failure aggregation + ranking (run 13)', () => {
+    test('a single failure keeps the exact single-failure wording and rides in failures[]', async () => {
+        const dir = makeDir({scripts: {test: 'echo boom && exit 1'}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.failures).toEqual([out.reason])
+        expect(out.reason).not.toContain('failures (ranked')
+    })
+
+    test('multiple failures become a numbered list carrying every entry', async () => {
+        const dir = makeDir({scripts: {test: 'exit 1', build: 'exit 2'}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.failures).toHaveLength(2)
+        expect(out.reason).toContain('2 failures (ranked, most load-bearing first):')
+        expect(out.reason).toContain('1. `bun run test` exited 1')
+        expect(out.reason).toContain('2. `bun run build` exited 2')
+    })
+
+    test('the boot failure OUTRANKS earlier test failures — ranked first, run last', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: 'echo "1 test failed" && exit 1',
+                start: 'node -e \'process.stderr.write("TypeError: boom"); process.exit(3)\''
+            }
+        })
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.failures).toHaveLength(2)
+        expect(out.failures![0]).toContain('boot check: `bun run start` exited 3')
+        expect(out.failures![1]).toContain('`bun run test` exited 1')
+    })
+
+    // The run-13 replay (nexttask PROMPT 1 item 5): a failing bun-test glob (the
+    // playwright .spec collision) PLUS an unservable app (listener up, page never
+    // renders — no index.html producer). Baseline (early-return) showed ONLY the
+    // test failure; the aggregate must carry BOTH with the render failure FIRST.
+    itPosix('run-13 replay: failing test glob + unservable app → both, render first', async () => {
+        const dir = makeDir({
+            dependencies: {hono: '^4'},
+            scripts: {
+                test: 'echo "playwright .spec picked up by bun test: 63 errors" && exit 1',
+                start: 'node -e "setTimeout(()=>{},600000)"'
+            }
+        })
+        const out = await runFinalIntegrationGate(dir, 900_000, 5000, {
+            groupHasListener: () => true,
+            groupListeningPort: () => 3000,
+            renderProbe: () => ({
+                outcome: 'fail',
+                detail: 'GET / responded 404 — the rendered document is the not-found page'
+            })
+        })
+        expect(out.ok).toBe(false)
+        expect(out.failures).toHaveLength(2)
+        expect(out.failures![0]).toContain('boot check')
+        expect(out.failures![0]).toContain('404')
+        expect(out.failures![1]).toContain('`bun run test` exited 1')
+        // The reason (picker question + autofix seed) carries the full ranked list.
+        expect(out.reason).toContain('1. boot check')
+        expect(out.reason).toContain('2. `bun run test` exited 1')
+    })
+
+    test('launch-contract, launch-script and integration failures all aggregate', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: 'exit 1',
+                migrate: `node -e "console.error('TypeError: result.rows'); process.exit(1)"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['migrate', 'seed', 'test'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.failures).toHaveLength(3)
+        const joined = out.failures!.join('\n')
+        expect(joined).toContain('launch contract:')
+        expect(joined).toContain('seed')
+        expect(joined).toContain('`bun run test` exited 1')
+        expect(joined).toContain('launch script: `bun run migrate` exited 1')
+    })
+
+    test('a PASS carries no failures list', async () => {
+        const out = await runFinalIntegrationGate(makeDir({scripts: {test: 'exit 0'}}))
+        expect(out.ok).toBe(true)
+        expect(out.failures).toBeUndefined()
     })
 })
 

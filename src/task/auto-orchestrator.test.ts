@@ -2118,6 +2118,46 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
     })
 })
 
+// mx5 run 13: the gate aggregates every section failure, ranked boot/render first.
+// The trail must carry EVERY entry and the picker question the full ranked list —
+// the user accepted run 13's FAIL having seen only the 1 failing CT test while the
+// shadowed boot + render probe would have shown the app 404ing on every GET.
+test('runAutoLoop: aggregated final-gate FAIL → every entry trailed, full list in the picker', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const failures = [
+            'boot check: `bun run start` listens on :3000 but GET / responded 404',
+            '`bun run test:ct` exited 1 — 1 EditListing test failed'
+        ]
+        const reason = `2 failures (ranked, most load-bearing first):\n1. ${failures[0]}\n2. ${failures[1]}`
+        const trail: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            finalGate: () => Promise.resolve({ok: false, reason, failures})
+        }
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // Header + one trail line per ranked entry, boot first.
+        expect(trail).toContain('final-gate: FAIL — 2 failures (ranked, most load-bearing first)')
+        expect(trail.some(l => l.startsWith('final-gate FAIL 1/2: boot check'))).toBe(true)
+        expect(trail.some(l => l.startsWith('final-gate FAIL 2/2: `bun run test:ct`'))).toBe(true)
+        // The ACCEPT decision is made on the full defect list.
+        const picker = captured.selects.find(s => /Final integration gate FAILED/.test(s.title))
+        expect(picker).toBeDefined()
+        expect(picker!.title).toContain(failures[0])
+        expect(picker!.title).toContain(failures[1])
+    })
+})
+
 test('runAutoLoop: final gate FAIL + user picks AUTOFIX → fix runs, gate green, run completes', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)

@@ -192,7 +192,13 @@ export interface AutoDeps extends GateDeps {
     finalGate?: (
         cwd: string,
         planText?: string
-    ) => Promise<{ok: boolean; reason: string; debtNote?: string; openDebts?: AcceptDebt[]}>
+    ) => Promise<{
+        ok: boolean
+        reason: string
+        failures?: string[]
+        debtNote?: string
+        openDebts?: AcceptDebt[]
+    }>
     /**
      * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
      * offered as the picker's third option. Runs the fix child, applies the
@@ -1195,15 +1201,36 @@ export async function runAutoLoop(
                     // Hand the parent plan (the task list) to the gate so it can tell a
                     // served app from a CLI: the boot check requires a listener only for
                     // the former (mx5 run 10 — a CSS watcher satisfied "still alive").
+                    // Trail EVERY aggregated failure entry (mx5 run 13): the gate now
+                    // runs all sections and ranks the list; a single sliced reason
+                    // line would re-hide everything past the first entry.
+                    const trailGateFail = async (f: {
+                        reason: string
+                        failures?: string[]
+                    }): Promise<void> => {
+                        const list = f.failures ?? [f.reason]
+                        if (list.length <= 1) {
+                            await recGate(`final-gate: FAIL — ${f.reason.slice(0, 300)}`)
+                            return
+                        }
+                        await recGate(
+                            `final-gate: FAIL — ${list.length} failures (ranked, most load-bearing first)`
+                        )
+                        for (const [i, entry] of list.entries()) {
+                            await recGate(
+                                `final-gate FAIL ${i + 1}/${list.length}: ${entry.slice(0, 300)}`
+                            )
+                        }
+                    }
                     let fin = await deps.finalGate(cwd, body)
                     // Record the outcome symmetrically (mx5 run 10 item 7): only FAIL was
                     // ever trailed, so a PASSing gate was indistinguishable from a gate
                     // that never ran. The PASS reason names the commands that were run.
-                    await recGate(
-                        fin.ok ?
-                            `final-gate: PASS — ${fin.reason.slice(0, 300)}`
-                        :   `final-gate: FAIL — ${fin.reason.slice(0, 300)}`
-                    )
+                    if (fin.ok) {
+                        await recGate(`final-gate: PASS — ${fin.reason.slice(0, 300)}`)
+                    } else {
+                        await trailGateFail(fin)
+                    }
                     // ACCEPT-debt re-check surfacing (mx5 run 4 B3 / run 8 TASK_0012):
                     // tasks the user accepted despite a verify-FAIL that the gate could
                     // not prove resolved against the current tree. Surface them at the
@@ -1301,12 +1328,23 @@ export async function runAutoLoop(
                             )
                             // Work from the FRESH gate failure when the fix pass got
                             // as far as re-running the gate; otherwise keep the last.
-                            // The debt note is carried so the next picker still shows
-                            // the open claims (the seed never includes it).
+                            // The full ranked list rides along (and is re-trailed
+                            // when fresh) so the next picker and the next fix seed
+                            // still carry every entry, not just the first. The debt
+                            // note is carried so the next picker still shows the
+                            // open claims (the seed never includes it).
                             fin = {
                                 ok: false,
                                 reason: fix.gateReason ?? fin.reason,
+                                failures:
+                                    fix.gateReason !== undefined ? fix.gateFailures : fin.failures,
                                 debtNote: fin.debtNote
+                            }
+                            if (
+                                fix.gateReason !== undefined
+                                && (fix.gateFailures?.length ?? 0) > 1
+                            ) {
+                                await trailGateFail(fin)
                             }
                             continue
                         }

@@ -106,19 +106,24 @@ export function extractFailingCommand(reason: string): string | null {
 /**
  * Build the fix child's prompt. Generic by construction: the only project facts
  * in it are the gate's own failure text — the command comes from the project's
- * discovered manifest, never from a hardcoded ecosystem.
+ * discovered manifest, never from a hardcoded ecosystem. The seed may carry
+ * SEVERAL failures (the gate aggregates every section since mx5 run 13, ranked
+ * most load-bearing first); convergence means the WHOLE list is empty, so the
+ * child is told to fix all of them.
  */
 export function buildFinalFixPrompt(failReason: string): string {
     return [
         'You are a bounded fix pass for a FAILED whole-repo integration gate.',
         'Every task in this run is complete and committed; then the project’s own',
-        'integration command was run against the assembled repository and failed:',
+        'integration commands were run against the assembled repository and failed:',
         '',
         failReason.trim(),
         '',
-        'Your ONLY job is to make that command pass by fixing the DEFECT it reveals.',
+        'Your ONLY job is to fix the DEFECT(s) those failures reveal. When several',
+        'failures are listed they are ranked most load-bearing first — fix ALL of',
+        'them; the gate only converges when every one passes.',
         '',
-        '1. Re-run the exact failing command first and read its full output.',
+        '1. Re-run each exact failing command first and read its full output.',
         '2. Diagnose the root cause, then fix it with the smallest correct change.',
         '   The project’s own manifests, configs and conventions define what',
         '   correct means — follow them, do not invent new structure.',
@@ -139,9 +144,9 @@ export function buildFinalFixPrompt(failReason: string): string {
         '     revert, stash, clean). The work in this repository is finished and',
         '     committed — reverting it is destroying the run, not fixing it.',
         '',
-        '4. Re-run the failing command after your fix and confirm it exits 0. The',
-        '   gate is re-run mechanically after you finish — your claim is not the',
-        '   verdict, the real exit code is.',
+        '4. Re-run the failing command(s) after your fix and confirm they exit 0.',
+        '   The gate is re-run mechanically after you finish — your claim is not',
+        '   the verdict, the real exit codes are.',
         '',
         'End with exactly one line:',
         '  FINAL-GATE-FIX: DONE',
@@ -174,6 +179,9 @@ export interface FinalFixResult {
     /** On a did-not-converge outcome: the FRESH gate failure, so the caller's next
      *  picker (and next fix attempt) works from the current state, not the stale one. */
     gateReason?: string
+    /** The fresh gate's individual ranked failures (see FinalGateOutcome.failures),
+     *  so the caller can trail each entry — never just the first. */
+    gateFailures?: string[]
 }
 
 export interface FinalFixDeps {
@@ -184,8 +192,10 @@ export interface FinalFixDeps {
     failReason: string
     /** Run the fix child; same closure shape the other gate children use. */
     runChild: (tools: string, prompt: string, signal?: AbortSignal) => Promise<string>
-    /** Re-run the final integration gate — the only arbiter of convergence. */
-    gate: (cwd: string) => Promise<{ok: boolean; reason: string}>
+    /** Re-run the final integration gate — the only arbiter of convergence.
+     *  Converges only when the gate's FULL aggregated failure list is empty
+     *  (ok=true); `failures` rides through so the caller sees every entry. */
+    gate: (cwd: string) => Promise<{ok: boolean; reason: string; failures?: string[]}>
     /** Labels of every currently-discoverable gate command (static + integration),
      *  for the shrink guard. Pure discovery — nothing is executed. */
     discoverLabels: (cwd: string) => string[]
@@ -313,7 +323,8 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return {
             ok: false,
             reason: `did not converge: ${fin.reason}`,
-            gateReason: fin.reason
+            gateReason: fin.reason,
+            gateFailures: fin.failures
         }
     }
     return {ok: true, reason: fin.reason}

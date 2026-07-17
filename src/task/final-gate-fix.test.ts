@@ -65,6 +65,17 @@ describe('buildFinalFixPrompt', () => {
         expect(p).toContain('FINAL-GATE-FIX: DONE')
         expect(p).toContain('FINAL-GATE-FIX: BLOCKED')
     })
+
+    test('a multi-failure seed is carried whole and the child is told to fix ALL', () => {
+        const seed =
+            '2 failures (ranked, most load-bearing first):\n'
+            + '1. boot check: `bun run start` listens on :3000 but GET / responded 404\n'
+            + '2. `bun run test` exited 1 — 1 CT test failed'
+        const p = buildFinalFixPrompt(seed)
+        expect(p).toContain(seed)
+        expect(p).toContain('fix ALL')
+        expect(p).toContain('every one passes')
+    })
 })
 
 describe('parseFinalFixMarker', () => {
@@ -132,6 +143,25 @@ describe('runFinalGateAutofix', () => {
         expect(r.ok).toBe(false)
         expect(r.reason).toContain('did not converge')
         expect(r.gateReason).toBe('`bun run test` exited 1 — still')
+    })
+
+    test('the fresh gate’s RANKED failure list rides through (run 13 aggregation)', async () => {
+        const failures = [
+            'boot check: `bun run start` listens on :3000 but GET / responded 404',
+            '`bun run test` exited 1 — 1 CT test failed'
+        ]
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                gate: () =>
+                    Promise.resolve({
+                        ok: false,
+                        reason: `2 failures (ranked, most load-bearing first):\n1. ${failures[0]}\n2. ${failures[1]}`,
+                        failures
+                    })
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.gateFailures).toEqual(failures)
     })
 
     test('SHRINK GUARD: a discovered command vanishing → edits discarded, gate never re-run', async () => {
