@@ -44,7 +44,7 @@
  * dirty with (possibly task) work is left alone, in the guard's safe direction:
  * cost time, never work.
  */
-import {parseChangedFrozenFiles, revertFrozenPaths} from './frozen-path-guard.js'
+import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-path-guard.js'
 
 export interface LintFixResult {
     /** true → findings fixed, repo health passes, work preserved. */
@@ -60,8 +60,10 @@ export interface LintFixDeps {
     failReason: string
     /** Run the fix child; same closure shape the other gate children use. */
     runChild: (tools: string, prompt: string, signal?: AbortSignal) => Promise<string>
-    /** The deterministic whole-repo static check to converge against. */
-    repoHealth: () => Promise<{ok: boolean; reason: string}>
+    /** The deterministic whole-repo static check to converge against. `output`
+     *  (the failing command's captured text, when the impl provides it) lets the
+     *  non-convergence path trace the findings to a spec-frozen path. */
+    repoHealth: () => Promise<{ok: boolean; reason: string; output?: string}>
     /** Run git in cwd; injected so the guard logic is unit-testable. */
     git: (args: string[]) => Promise<{exitCode: number; stdout: string}>
     /**
@@ -291,6 +293,28 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     const health = await deps.repoHealth()
     if (!health.ok) {
+        // FROZEN-PATH TRACE on non-convergence (PROMPT 1 layer B): when the child
+        // was honest — it did NOT touch the frozen path, so the guard above never
+        // tripped — but the check is still red and its own output NAMES a frozen
+        // path (typed ESLint: "playwright/index.ts was not found by the project …
+        // consider including it in the tsconfig.json"), the findings can only be
+        // fixed by an edit this task's spec forbids. Report it under the same
+        // `frozen-path:` prefix as the guard trip, so the gate loop can route
+        // straight to the human picker instead of burning unattended AUTOFIX
+        // rounds an impl re-run under the same freeze cannot converge out of.
+        const implicated = frozen.filter(p =>
+            pathNamedIn(`${health.reason}\n${health.output ?? ''}`, p)
+        )
+        if (implicated.length > 0) {
+            return {
+                ok: false,
+                reason:
+                    `frozen-path: static findings implicate spec-frozen path(s) `
+                    + `(${implicated.slice(0, 3).join(', ')}`
+                    + `${implicated.length > 3 ? ', …' : ''}) — did not converge `
+                    + `(${health.reason}); a fix under this task's constraints cannot converge`
+            }
+        }
         return {ok: false, reason: `did not converge: ${health.reason}`}
     }
     return {ok: true, reason: guardNote}

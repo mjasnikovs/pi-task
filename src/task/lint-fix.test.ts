@@ -283,3 +283,81 @@ test('runBoundedLintFix: child error → not applied; user cancel propagates', a
         )
     ).rejects.toThrow('__user_cancelled__')
 })
+
+test('runBoundedLintFix: non-convergence whose output names a frozen path → frozen-path: reason (honest-BLOCKED trace)', async () => {
+    // The child was honest — it never touched tsconfig.json, so the frozen guard
+    // has nothing to revert — but the check stays red and typed-ESLint's own
+    // output names the frozen path. The findings can only be fixed by an edit
+    // this task's spec forbids: report it under the same `frozen-path:` prefix
+    // so the gate loop routes to the picker instead of burning AUTOFIX rounds.
+    const {git, calls} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', '']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            frozenPaths: ['tsconfig.json'],
+            repoHealth: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: '`bun run lint` exited 1',
+                    output: 'playwright/index.ts was not found by the project service. Consider either including it in the tsconfig.json or…'
+                })
+        })
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/^frozen-path:/)
+    expect(r.reason).toContain('tsconfig.json')
+    expect(r.reason).toContain('did not converge')
+    // No guard trip: nothing was reverted (the child made no frozen edit).
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: non-convergence NOT naming a frozen path → plain did-not-converge', async () => {
+    const {git} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', '']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            frozenPaths: ['tsconfig.json'],
+            repoHealth: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: '`bun run lint` exited 1',
+                    output: 'src/a.ts:3:1  error  no-unused-vars'
+                })
+        })
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/^did not converge/)
+})
+
+test('runBoundedLintFix: frozen-path trace matches whole path tokens only (tsconfig.json5 ≠ tsconfig.json)', async () => {
+    const {git} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', '']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            frozenPaths: ['tsconfig.json'],
+            repoHealth: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: '`bun run lint` exited 1',
+                    output: 'error in tsconfig.json5 and config/tsconfig.json only'
+                })
+        })
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/^did not converge/)
+})

@@ -23,7 +23,7 @@ import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-gu
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
-import {recordAcceptDebt, recordEnforceRevertDebt} from './accept-debt.js'
+import {recordAcceptDebt, recordEnforceRevertDebt, recordFrozenBlockedDebt} from './accept-debt.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -392,6 +392,11 @@ export function buildGateDeps(params: {
         recordAcceptDebt: (cwd2, taskId, reason) => recordAcceptDebt(cwd2, taskId, reason),
         recordEnforceRevertDebt: (cwd2, taskId, reason) =>
             recordEnforceRevertDebt(cwd2, taskId, reason),
+        // Durable cross-task-contradiction ledger (PROMPT 1 layer B): a repo-health
+        // FAIL whose only fix is an edit to a path this task's spec froze — recorded
+        // when the gate loop routes it to the picker, re-checked by the final gate.
+        recordFrozenBlockedDebt: (cwd2, taskId, reason) =>
+            recordFrozenBlockedDebt(cwd2, taskId, reason),
         // Frozen-path write-deny (see frozen-path-guard.ts): the concrete paths this
         // task's spec forbids modifying, so the gate sequence can UNDO any edit the
         // enforce EDIT pass makes to them before those edits are committed. Reads the

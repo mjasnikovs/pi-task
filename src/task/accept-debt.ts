@@ -49,8 +49,13 @@ const FIELD_SEP = '\t'
  *     server entry point … the Hono server cannot be started"), so the terminal defect
  *     was FOUND and then erased by the very mechanism that found it. Persisted here so
  *     the final gate re-checks and surfaces it instead of letting it die with the revert.
+ *   - 'frozen-blocked' — a repo-health verify-FAIL whose only fix is an edit to a path
+ *     THIS task's spec froze (mx5 run 12: `bun run lint` permanently red because the
+ *     created files need a tsconfig registration every spec forbids). Cross-task
+ *     contradiction: no unattended re-run can converge, so the gate loop records the
+ *     defect and routes to the human picker instead of burning AUTOFIX rounds.
  */
-export type DebtOrigin = 'accepted' | 'enforce-revert'
+export type DebtOrigin = 'accepted' | 'enforce-revert' | 'frozen-blocked'
 
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
@@ -103,7 +108,9 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
-            ...(origin === 'enforce-revert' ? {origin: 'enforce-revert' as const} : {})
+            ...(origin === 'enforce-revert' || origin === 'frozen-blocked' ?
+                {origin: origin as DebtOrigin}
+            :   {})
         })
     }
     return out
@@ -124,8 +131,8 @@ function normaliseReason(reason: string): string {
 
 function serialize(d: AcceptDebt): string {
     // Legacy 2-field shape for 'accepted' (backward compatible); a 3rd origin field
-    // only for the enforce-revert class, so old readers/files round-trip unchanged.
-    return d.origin === 'enforce-revert' ?
+    // only for the non-accepted classes, so old readers/files round-trip unchanged.
+    return d.origin && d.origin !== 'accepted' ?
             `${d.taskId}${FIELD_SEP}${d.reason}${FIELD_SEP}${d.origin}`
         :   `${d.taskId}${FIELD_SEP}${d.reason}`
 }
@@ -175,6 +182,26 @@ export async function recordEnforceRevertDebt(
         taskId: taskId.trim(),
         reason: normaliseReason(reason),
         origin: 'enforce-revert'
+    })
+}
+
+/**
+ * Record a FROZEN-BLOCKED debt (mx5 run 12 / PROMPT 1 layer B): a repo-health FAIL
+ * whose static findings can only be fixed by editing a path this task's spec froze —
+ * a cross-task contradiction no unattended re-run may resolve. Recorded when the gate
+ * loop routes to the picker (regardless of what the human then picks), so the final
+ * gate re-checks it at run end. Static-class by reason prefix (`repo health: …`), so
+ * it auto-closes iff the final gate's own static check passes.
+ */
+export async function recordFrozenBlockedDebt(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(reason),
+        origin: 'frozen-blocked'
     })
 }
 
@@ -311,7 +338,11 @@ export function buildAcceptDebtNote(open: AcceptDebt[]): string {
 
 /** One-line provenance label for a debt, for the surfaced report. */
 export function describeDebt(d: AcceptDebt): string {
-    return d.origin === 'enforce-revert' ?
-            'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)'
-        :   'accepted despite verify-FAIL'
+    if (d.origin === 'enforce-revert') {
+        return 'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)'
+    }
+    if (d.origin === 'frozen-blocked') {
+        return 'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)'
+    }
+    return 'accepted despite verify-FAIL'
 }

@@ -163,6 +163,14 @@ export interface GateDeps {
      */
     recordEnforceRevertDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
     /**
+     * Record a durable FROZEN-BLOCKED debt (mx5 run 12 / PROMPT 1 layer B): a
+     * repo-health FAIL whose only fix is an edit to a path THIS task's spec froze —
+     * a cross-task contradiction. Recorded when the loop routes such a FAIL to the
+     * picker (whatever the human then picks, the defect is real and no task may fix
+     * it), so the final gate re-checks it at run end. Best-effort; absent in tests.
+     */
+    recordFrozenBlockedDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
      * The concrete paths this task's spec forbids modifying (its `Do NOT modify`
      * CONSTRAINTS — see frozen-path-guard.ts / prohibition-probe.ts). Used to
      * write-deny the enforce EDIT pass: a violating edit is reverted before it can
@@ -316,6 +324,15 @@ export async function runGatesForTask(
         // auto attempts still FAIL, the picker returns so a person can break the loop.
         let lintFixAttempted = false
         let autoFixCount = 0
+        // Set when the bounded lint-fix reports the `frozen-path:` rejection: the
+        // repo-health FAIL can only be fixed by editing a path THIS task's spec
+        // froze (mx5 run 12's unsatisfiable registration pair). An impl re-run is
+        // under the same freeze — rule 4b fails the task if it complies with the
+        // linter — so unattended AUTOFIX rounds CANNOT converge and are skipped;
+        // the picker is forced with the cross-task contradiction named, and the
+        // defect is recorded as a durable debt for the final gate.
+        let frozenContradiction: string | null = null
+        let frozenDebtRecorded = false
         while (!verified.ok) {
             const failReason = verified.reason ?? 'did not verify'
             // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
@@ -341,6 +358,9 @@ export async function runGatesForTask(
                     await rec(verdictLine(verified))
                     continue
                 }
+                if ((fix.reason ?? '').startsWith('frozen-path:')) {
+                    frozenContradiction = fix.reason ?? null
+                }
             }
             // UNOBSERVED (rule 5c): a spec-required behavioral check could not run because
             // its observation tooling is absent. An unattended AUTOFIX re-run cannot install
@@ -348,8 +368,27 @@ export async function runGatesForTask(
             // decision (provision the tool, or accept the unproven behavior) is the human's.
             // Skip the (moot) recommendation research and force the picker.
             const isUnobserved = verified.unobserved === true
+            // FROZEN-BLOCKED (cross-task contradiction): skip the recommendation
+            // research too — it would only re-derive what the deterministic lint-fix
+            // rejection already proved. The picker shows the contradiction; ACCEPT
+            // records the (already-recorded) defect as the human's call. Applies
+            // only while the FAIL is still the repo-health one the contradiction
+            // explains — a later, different FAIL gets the ordinary resolution path.
+            const isFrozenBlocked =
+                frozenContradiction !== null && failReason.startsWith('repo health:')
             const recOutcome: ResolutionOutcome =
                 isUnobserved ? {recommend: 'autofix', rationale: failReason}
+                : isFrozenBlocked ?
+                    {
+                        recommend: 'accept',
+                        rationale:
+                            `${frozenContradiction} — the failing static check can only be fixed by `
+                            + `editing a path this task's spec freezes (a cross-task contradiction: `
+                            + `the spec forbids the very edit the repo needs; the "owning" earlier `
+                            + `step already completed). An implementation re-run under the same `
+                            + `freeze cannot converge. ACCEPT records it as durable debt the final `
+                            + `gate re-checks; fixing it needs a plan-level change, not a re-run.`
+                    }
                 : deps.recommend ?
                     await deps.recommend(active, p.cwd, p.title, p.taskId, failReason)
                 :   {recommend: 'autofix', rationale: failReason}
@@ -357,8 +396,28 @@ export async function runGatesForTask(
                 isUnobserved ?
                     'resolution: verify UNOBSERVED — spec-required check could not run (tooling absent); '
                         + 'forcing the human picker, an unattended re-run cannot provision it'
+                : isFrozenBlocked ?
+                    'resolution: repo-health FAIL is blocked by spec-frozen path(s) — cross-task '
+                    + 'contradiction; unattended AUTOFIX skipped (an impl re-run under the same '
+                    + 'freeze cannot converge), forcing the human picker'
                 :   `resolution: recommended ${recOutcome.recommend.toUpperCase()}`
             )
+            if (isFrozenBlocked && !frozenDebtRecorded) {
+                frozenDebtRecorded = true
+                // Durable regardless of what the human picks next: the contradiction
+                // is real, cross-task, and outside this task's power to fix — the
+                // final gate must surface it at run end (static-class: it auto-closes
+                // iff the run-end static check passes).
+                try {
+                    await deps.recordFrozenBlockedDebt?.(
+                        p.cwd,
+                        p.taskId,
+                        `${failReason} — ${frozenContradiction}`
+                    )
+                } catch {
+                    // recording must never break the gate sequence
+                }
+            }
             // AUTO-RESOLVE the AUTOFIX path: when the research says the work is
             // genuinely wrong, re-run the fix WITHOUT prompting the user. The picker is
             // reserved for the ACCEPT recommendation (the human decides whether to bless
@@ -367,6 +426,7 @@ export async function runGatesForTask(
             // control back so a person can break a non-converging loop.
             const autoFixNow =
                 !isUnobserved
+                && !isFrozenBlocked
                 && recOutcome.recommend === 'autofix'
                 && autoFixCount < MAX_AUTO_AUTOFIX
             let choice: ResolutionChoice
@@ -393,10 +453,14 @@ export async function runGatesForTask(
                 // defect ships and nothing else revisits it (mx5 run 4 B3 / run 8
                 // TASK_0012). Record it to the run ledger; the final integration gate
                 // re-checks it at run end and surfaces it if still open. Best-effort.
-                try {
-                    await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
-                } catch {
-                    // recording must never break the gate sequence
+                // The frozen-blocked routing above already recorded this defect (with
+                // the contradiction named) — don't double-enter it in the ledger.
+                if (!frozenDebtRecorded) {
+                    try {
+                        await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
+                    } catch {
+                        // recording must never break the gate sequence
+                    }
                 }
                 active.ui.notify(
                     `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,

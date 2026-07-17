@@ -957,3 +957,119 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
         expect(fixInstructions[0]).toBe('build exited 1')
     })
 })
+
+// ─── Frozen-blocked routing (mx5 run 12 / PROMPT 1 layer B) ──────────────────
+
+test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, no recommend research, durable debt, picker forced', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        const trail: string[] = []
+        const debts: Array<{taskId: string; reason: string}> = []
+        let runTaskCalls = 0
+        let acceptDebts = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
+            lintFix: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: "frozen-path: fix child modified spec-frozen path(s) (tsconfig.json) — reverted; the static findings need a fix that respects the spec's constraints"
+                }),
+            // The deterministic rejection already proved the contradiction — the
+            // recommendation research must be skipped entirely.
+            recommend: () => Promise.reject(new Error('recommend must not run')),
+            recordFrozenBlockedDebt: (_c, taskId, reason) => {
+                debts.push({taskId, reason})
+                return Promise.resolve()
+            },
+            recordAcceptDebt: () => {
+                acceptDebts++
+                return Promise.resolve()
+            }
+        })
+        handle.queueSelect(ACCEPT_LABEL)
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        // No unattended impl re-run: it is under the same freeze and cannot converge.
+        expect(runTaskCalls).toBe(0)
+        // One durable debt, static-class (repo health: prefix) with the contradiction named.
+        expect(debts).toHaveLength(1)
+        expect(debts[0].taskId).toBe('TASK_0006')
+        expect(debts[0].reason).toMatch(/^repo health:/)
+        expect(debts[0].reason).toContain('frozen-path:')
+        // The ACCEPT branch must not double-enter the already-recorded defect.
+        expect(acceptDebts).toBe(0)
+        expect(
+            trail.some(l => l.includes('cross-task') && l.includes('unattended AUTOFIX skipped'))
+        ).toBe(true)
+    })
+})
+
+test('frozen-blocked: picker dismissed → paused, debt still recorded (the contradiction is real regardless)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const debts: string[] = []
+        const deps = makeDeps({
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 1'}),
+            lintFix: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: "frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json) — did not converge (`bun run lint` exited 1); a fix under this task's constraints cannot converge"
+                }),
+            recommend: () => Promise.reject(new Error('recommend must not run')),
+            recordFrozenBlockedDebt: (_c, _t, reason) => {
+                debts.push(reason)
+                return Promise.resolve()
+            }
+        })
+        // No queueSelect → picker dismissed → paused.
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('paused')
+        expect(debts).toHaveLength(1)
+    })
+})
+
+test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUTOFIXes as before', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let runTaskCalls = 0
+        let verifyCalls = 0
+        let frozenDebts = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => {
+                verifyCalls++
+                return Promise.resolve(
+                    verifyCalls <= 1 ?
+                        {ok: false, reason: 'repo health: `bun run lint` exited 1'}
+                    :   {ok: true}
+                )
+            },
+            lintFix: () =>
+                Promise.resolve({ok: false, reason: 'did not converge: `bun run lint` exited 1'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'fixable statics'}),
+            recordFrozenBlockedDebt: () => {
+                frozenDebts++
+                return Promise.resolve()
+            }
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        // The unattended AUTOFIX path stays intact for reasons without the prefix.
+        expect(runTaskCalls).toBe(1)
+        expect(frozenDebts).toBe(0)
+    })
+})

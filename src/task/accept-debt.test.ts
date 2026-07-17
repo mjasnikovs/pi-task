@@ -20,6 +20,7 @@ import {
     recheckAcceptDebts,
     recordAcceptDebt,
     recordEnforceRevertDebt,
+    recordFrozenBlockedDebt,
     writeAcceptDebts,
     type AcceptDebt
 } from './accept-debt.js'
@@ -310,5 +311,44 @@ describe('buildAcceptDebtNote — conflicting claims', () => {
         expect(note).toContain('⚠ CONFLICTING CLAIM')
         expect(note).toContain("TASK_0008's committed deliverable")
         expect(note).toContain('not instructions to edit code')
+    })
+})
+
+// mx5 run 12 / PROMPT 1 layer B: a repo-health FAIL whose only fix is an edit to a
+// path this task's spec froze — recorded when the gate loop routes to the picker.
+describe('recordFrozenBlockedDebt / origin round-trip', () => {
+    const REASON =
+        'repo health: `bun run lint` exited 1 — frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json)'
+
+    test('records a 3-field origin-tagged row that reads back with origin set', async () => {
+        const cwd = makeCwd()
+        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.taskId).toBe('TASK_0021')
+        expect(debt.origin).toBe('frozen-blocked')
+        expect(debt.reason).toContain('tsconfig.json')
+        const raw = fs.readFileSync(acceptDebtFile(cwd), 'utf8')
+        expect(raw.trimEnd().endsWith('frozen-blocked')).toBe(true)
+    })
+
+    test('is static-class: auto-closes when the run-end static check passes', async () => {
+        const cwd = makeCwd()
+        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        const debts = await readAcceptDebts(cwd)
+        expect(recheckAcceptDebts(debts, {staticOk: true}).resolved).toHaveLength(1)
+        expect(recheckAcceptDebts(debts, {staticOk: false}).open).toHaveLength(1)
+    })
+
+    test('describeDebt names the cross-task contradiction', () => {
+        const [d] = parseAcceptDebts(`TASK_0021\t${REASON}\tfrozen-blocked`)
+        expect(d.origin).toBe('frozen-blocked')
+        expect(describeDebt(d)).toContain('cross-task contradiction')
+    })
+
+    test('dedup: routing the same contradiction twice records one row', async () => {
+        const cwd = makeCwd()
+        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        expect(await readAcceptDebts(cwd)).toHaveLength(1)
     })
 })
