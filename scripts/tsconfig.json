@@ -1,0 +1,13 @@
+{
+    // Typed-ESLint project for the scripts/ harnesses: typescript-eslint's
+    // allowDefaultProject glob hard-caps at 8 files, and scripts/ outgrew it.
+    // A real (noEmit) project has no cap and gives the harnesses full typed
+    // linting; the build tsconfig (tsconfig.build.json) is unaffected.
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "..",
+        "noEmit": true,
+        "declaration": false
+    },
+    "include": ["./**/*.ts", "../src/**/*.ts"]
+}
