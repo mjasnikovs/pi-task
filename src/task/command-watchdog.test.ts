@@ -1,0 +1,140 @@
+import {describe, expect, test} from 'bun:test'
+import {CommandWatchdog, reminderMessage, type WatchdogDeps} from './command-watchdog.js'
+
+/**
+ * A synchronous fake scheduler: records armed timers and lets the test fire one
+ * by id, so the state machine is exercised without real time passing.
+ */
+function makeHarness(timeoutMs: number) {
+    let nextId = 0
+    const timers = new Map<number, () => void>()
+    const fired: {toolCallId: string; toolName: string; timeoutMs: number}[] = []
+    let currentTimeout = timeoutMs
+
+    const deps: WatchdogDeps = {
+        getTimeoutMs: () => currentTimeout,
+        schedule: fn => {
+            const id = nextId++
+            timers.set(id, fn)
+            return id
+        },
+        cancel: handle => {
+            timers.delete(handle as number)
+        },
+        onFire: (toolCallId, toolName, ms) => fired.push({toolCallId, toolName, timeoutMs: ms})
+    }
+
+    return {
+        watchdog: new CommandWatchdog(deps),
+        fired,
+        /** Fire the timer with the given handle id, as the real clock would. */
+        elapse: (handle: number) => timers.get(handle)?.(),
+        armedCount: () => timers.size,
+        setTimeout: (ms: number) => {
+            currentTimeout = ms
+        }
+    }
+}
+
+describe('CommandWatchdog', () => {
+    test('a command that overruns is fired with its tool name and the ceiling', () => {
+        const h = makeHarness(900_000)
+        h.watchdog.onStart('call-1', 'bash')
+        expect(h.armedCount()).toBe(1)
+        h.elapse(0)
+        expect(h.fired).toEqual([{toolCallId: 'call-1', toolName: 'bash', timeoutMs: 900_000}])
+    })
+
+    test('a command that ends before the ceiling never fires', () => {
+        const h = makeHarness(900_000)
+        h.watchdog.onStart('call-1', 'bash')
+        h.watchdog.onEnd('call-1')
+        expect(h.armedCount()).toBe(0)
+        // Firing a disarmed timer is a no-op (the fn was cancelled).
+        h.elapse(0)
+        expect(h.fired).toHaveLength(0)
+    })
+
+    test('off (0 / non-positive) never arms', () => {
+        const h = makeHarness(0)
+        h.watchdog.onStart('call-1', 'bash')
+        expect(h.armedCount()).toBe(0)
+        expect(h.fired).toHaveLength(0)
+    })
+
+    test('the ceiling is read per start, so a config change takes effect next command', () => {
+        const h = makeHarness(0)
+        h.watchdog.onStart('call-1', 'bash') // off → no arm
+        expect(h.armedCount()).toBe(0)
+        h.setTimeout(300_000)
+        h.watchdog.onStart('call-2', 'bash') // now armed
+        expect(h.armedCount()).toBe(1)
+    })
+
+    test('a duplicate start for the same id does not leak the earlier timer', () => {
+        const h = makeHarness(900_000)
+        h.watchdog.onStart('call-1', 'bash')
+        h.watchdog.onStart('call-1', 'bash')
+        // Only the latest timer remains armed.
+        expect(h.armedCount()).toBe(1)
+    })
+
+    test('an already-ended call that races the timer does not fire', () => {
+        const h = makeHarness(900_000)
+        h.watchdog.onStart('call-1', 'bash')
+        // Simulate the end handler running, then a stale timer callback: elapse
+        // after onEnd cancelled it — nothing should fire.
+        h.watchdog.onEnd('call-1')
+        h.elapse(0)
+        expect(h.fired).toHaveLength(0)
+    })
+
+    test('clearAll cancels every armed timer', () => {
+        const h = makeHarness(900_000)
+        h.watchdog.onStart('call-1', 'bash')
+        h.watchdog.onStart('call-2', 'grep')
+        expect(h.armedCount()).toBe(2)
+        h.watchdog.clearAll()
+        expect(h.armedCount()).toBe(0)
+        h.elapse(0)
+        h.elapse(1)
+        expect(h.fired).toHaveLength(0)
+    })
+
+    test('a second command is guarded after the first fires', () => {
+        const h = makeHarness(600_000)
+        h.watchdog.onStart('call-1', 'bash')
+        h.elapse(0)
+        expect(h.fired).toHaveLength(1)
+        h.watchdog.onStart('call-2', 'bash')
+        h.elapse(1)
+        expect(h.fired).toHaveLength(2)
+        expect(h.fired[1]!.toolCallId).toBe('call-2')
+    })
+})
+
+describe('reminderMessage', () => {
+    test('names the tool, the minutes, and the timeout fix', () => {
+        const msg = reminderMessage('bash', 900_000)
+        expect(msg).toContain('`bash`')
+        expect(msg).toContain('15 minutes')
+        expect(msg).toContain('timeout')
+        expect(msg).toContain('cancelled')
+    })
+
+    test('tells the model the killed command produced no result (anti-fabrication)', () => {
+        // A live run showed the model claim the killed server was "now running";
+        // the reminder must explicitly deny any success/started-process claim.
+        const msg = reminderMessage('bash', 300_000)
+        expect(msg).toContain('produced NO result')
+        expect(msg.toLowerCase()).toContain('do not claim')
+    })
+
+    test('singular minute has no trailing s', () => {
+        expect(reminderMessage('bash', 60_000)).toContain('1 minute and')
+    })
+
+    test('sub-minute ceilings round up to at least 1 minute (never "0 minutes")', () => {
+        expect(reminderMessage('bash', 30_000)).toContain('1 minute')
+    })
+})

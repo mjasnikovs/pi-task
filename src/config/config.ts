@@ -47,6 +47,46 @@ export interface PiTaskConfig {
      * /task-config, which enumerates the currently installed extensions.
      */
     extensionWhitelist: string[]
+    /**
+     * Wall-clock ceiling (ms) on a SINGLE tool execution in the MAIN session
+     * before the command watchdog cancels it and reminds the model to set its
+     * own timeout. Local models routinely run a command that never returns
+     * (e.g. `godot --headless` with no timeout, a dev server, a hung test) and
+     * the run wedges until the user manually aborts. pi's bash tool has an
+     * OPTIONAL timeout with NO default (bash.js), so a command the model didn't
+     * bound runs forever; this is the missing default, enforced from the host
+     * side via ctx.abort() (which kills the tool's whole process tree) plus an
+     * auto-reminder turn. Tool-agnostic: it arms on any tool execution, though
+     * in practice only bash runs long enough to trip it. 0 = off.
+     * DEFAULT 15 min: long enough for a real build/test suite, short enough that
+     * a true hang doesn't cost half an hour of dead time.
+     */
+    requestTimeoutMs: number
+}
+
+/**
+ * The command-watchdog timeout choices offered by /task-config, newest-first in
+ * the cycle order the picker shows. The stored config value is the ms number;
+ * the label is display-only (mirrors the searchProvider label/value split).
+ */
+export const COMMAND_TIMEOUT_OPTIONS: ReadonlyArray<{label: string; ms: number}> = [
+    {label: '5 min', ms: 5 * 60_000},
+    {label: '10 min', ms: 10 * 60_000},
+    {label: '15 min', ms: 15 * 60_000},
+    {label: '30 min', ms: 30 * 60_000},
+    {label: 'off', ms: 0}
+] as const
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * A hand-edited or stale config could carry any number (or a string); pin it to
+ * one of the offered choices so the watchdog never arms on a nonsense value.
+ */
+export function sanitizeRequestTimeoutMs(value: unknown): number {
+    return COMMAND_TIMEOUT_OPTIONS.some(o => o.ms === value) ?
+            (value as number)
+        :   DEFAULT_REQUEST_TIMEOUT_MS
 }
 
 const DEFAULTS: PiTaskConfig = {
@@ -61,7 +101,8 @@ const DEFAULTS: PiTaskConfig = {
     // 3/3, 0 collisions; ~14.5s of repeated docs lookups collapse to 0ms on a hit).
     researchCache: true,
     searchProvider: 'exa',
-    extensionWhitelist: []
+    extensionWhitelist: [],
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS
 }
 
 /**
@@ -92,6 +133,7 @@ if (!G.loaded) {
         // into the dispatch switch — fall back to the default.
         if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
         parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
+        parsed.requestTimeoutMs = sanitizeRequestTimeoutMs(parsed.requestTimeoutMs)
         G.config = {...DEFAULTS, ...parsed}
     } catch {
         G.config = {...DEFAULTS}

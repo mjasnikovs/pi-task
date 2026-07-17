@@ -7,7 +7,7 @@ import {
     SEARCH_PROVIDER_LABELS,
     providerForLabel
 } from '../workers/search-types.js'
-import {getConfig, saveConfig, type PiTaskConfig} from './config.js'
+import {COMMAND_TIMEOUT_OPTIONS, getConfig, saveConfig, type PiTaskConfig} from './config.js'
 import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
@@ -116,12 +116,29 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             'Engine behind web search (pi-worker-search + freshness checks). Exa and DuckDuckGo need no API key; Brave needs BRAVE_SEARCH_API_KEY',
         // Display full engine names; the stored config value stays the short id.
         values: SEARCH_PROVIDERS.map(p => SEARCH_PROVIDER_LABELS[p])
+    },
+    {
+        id: 'requestTimeoutMs',
+        label: 'command timeout',
+        description:
+            'Cancel a single command that runs longer than this and remind the model to set '
+            + 'its own timeout. Catches a local model that runs a command which never returns '
+            + '(hung build, dev server, no-timeout check) so the run stops itself instead of '
+            + 'waiting for a manual abort. off disables it',
+        // Display human labels; the stored config value stays the ms number.
+        values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
     }
 ]
+
+/** Human label for the stored command-timeout ms (falls back to the raw ms). */
+function timeoutLabel(ms: number): string {
+    return COMMAND_TIMEOUT_OPTIONS.find(o => o.ms === ms)?.label ?? `${ms}ms`
+}
 
 /** What /task-config shows for a setting's current value. */
 function displayValue(cfg: PiTaskConfig, id: keyof PiTaskConfig, isEnum: boolean): string {
     if (id === 'searchProvider') return SEARCH_PROVIDER_LABELS[cfg.searchProvider]
+    if (id === 'requestTimeoutMs') return timeoutLabel(cfg.requestTimeoutMs)
     if (isEnum) return String(cfg[id])
     return cfg[id] ? 'on' : 'off'
 }
@@ -218,6 +235,9 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                     } else if (id === 'searchProvider') {
                         const provider = providerForLabel(newValue)
                         if (provider) cfg.searchProvider = provider
+                    } else if (id === 'requestTimeoutMs') {
+                        const opt = COMMAND_TIMEOUT_OPTIONS.find(o => o.label === newValue)
+                        if (opt) cfg.requestTimeoutMs = opt.ms
                     } else {
                         ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
                     }
@@ -241,7 +261,7 @@ export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
         description:
             'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation, '
-            + 'enforce guidelines, extension whitelist for child sessions).',
+            + 'enforce guidelines, command timeout, extension whitelist for child sessions).',
         handler: handleTaskConfig
     })
 }
