@@ -44,7 +44,7 @@ export interface Prohibition {
  * ("must not be modified"). Deliberately verb-scoped to modification — a "do not
  * add a dependency" style rule names no path and is the prompt rule's job.
  */
-const PROHIBITION_RE =
+export const PROHIBITION_RE =
     /\b(?:do\s+not|don'?t|must\s+not|never)\s+(?:be\s+)?(?:modify|modified|touch|touched|edit|edited|change|changed|alter|altered|rewrite|rewritten|overwrite|overwritten|delete|deleted|remove|removed)\b/i
 
 /**

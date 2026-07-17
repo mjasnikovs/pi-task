@@ -74,6 +74,7 @@ import {
     absenceProbeText,
     siblingTitlesFromPlanContext
 } from './verify-reconcile.js'
+import {findFrozenPathConflicts, frozenConflictProbeText} from './frozen-conflict.js'
 import {existsSync} from 'node:fs'
 import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
 import {readRequirements, buildRequirementsBlock} from './requirements.js'
@@ -1035,7 +1036,8 @@ export async function phaseCritique(
     spec: string,
     refined: string,
     qa: string,
-    planContext?: string
+    planContext?: string,
+    research?: string
 ): Promise<string> {
     // Fast triage before the expensive full rewrite. The rewrite regenerates
     // the entire spec from scratch and is the costliest tail of the pipeline
@@ -1104,6 +1106,23 @@ export async function phaseCritique(
                 + absenceConflicts.map(c => `${c.assertion.target} (${c.against})`).join(' | ')
         )
     }
+    // DETERMINISTIC unsatisfiable-pair probe (mx5 run 12 root cause): a blanket
+    // frozen path ("Do NOT modify `tsconfig.json` … handled in steps 1–2") whose
+    // registration edit the spec's OWN body — or the task's RESEARCH the spec was
+    // composed from (live drafts sometimes drop the nuance while shipping the
+    // freeze and the creation) — says the deliverable requires ("must also be
+    // included …"). Shipped as-is, the created files turn the repo-wide static
+    // check permanently red and no task is allowed to fix it — every later task
+    // burns its AUTOFIX rounds on it. Forced into the rewrite like the other
+    // probes: the rewrite must grant scoped ownership or drop the creation.
+    const frozenConflicts = findFrozenPathConflicts(spec, research)
+    const frozenProbe = frozenConflicts.length > 0 ? frozenConflictProbeText(frozenConflicts) : null
+    if (frozenProbe) {
+        deps.logDebug?.(
+            'unsatisfiable freeze/requires-edit pair flagged in spec: '
+                + frozenConflicts.map(c => c.path).join(' | ')
+        )
+    }
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -1124,12 +1143,17 @@ export async function phaseCritique(
         }
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
-            // A deterministic skip-escape, synthesized-wiring, or plan-contradiction
-            // finding overrides a CLEAN triage: the draft must be rewritten to resolve
-            // it even if the model judged the rest clean (the model does not
-            // self-discover any of them reliably).
+            // A deterministic skip-escape, synthesized-wiring, plan-contradiction,
+            // or unsatisfiable-pair finding overrides a CLEAN triage: the draft must
+            // be rewritten to resolve it even if the model judged the rest clean
+            // (the model does not self-discover any of them reliably).
             if (isCritiqueClean(verdict)) {
-                if (skipDefects === null && wiringProbe === null && absenceProbe === null) {
+                if (
+                    skipDefects === null
+                    && wiringProbe === null
+                    && absenceProbe === null
+                    && frozenProbe === null
+                ) {
                     return spec
                 }
             } else {
@@ -1138,9 +1162,12 @@ export async function phaseCritique(
         }
     }
     // Merge the deterministic skip-escape + synthesized-wiring + plan-contradiction
-    // defects with any triage defects for the rewrite (all are forced FOCUS items).
+    // + unsatisfiable-pair defects with any triage defects for the rewrite (all are
+    // forced FOCUS items).
     const rewriteDefects =
-        [skipDefects, wiringProbe, absenceProbe, triageDefects].filter(Boolean).join('\n\n') || null
+        [skipDefects, wiringProbe, absenceProbe, frozenProbe, triageDefects]
+            .filter(Boolean)
+            .join('\n\n') || null
 
     const tRewrite = Date.now()
     try {
@@ -1177,7 +1204,7 @@ export async function phaseCritique(
 
 export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promise<string> {
     try {
-        return await phaseCritique(d, p.spec, p.refined, p.qa, p.planContext)
+        return await phaseCritique(d, p.spec, p.refined, p.qa, p.planContext, p.research)
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg !== 'no_verify_block') throw err

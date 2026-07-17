@@ -51,6 +51,22 @@ export function frozenPathsFromSpec(spec: string | null | undefined): string[] {
     return [...seen]
 }
 
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * Does this prose/tool-output text NAME the given path? Word-bounded on both
+ * sides so `tsconfig.json` matches `` `tsconfig.json` ``, `(tsconfig.json:18)`
+ * and a bare mention, but never `foo.tsconfig.json`, `config/tsconfig.json`
+ * (a different file) or `tsconfig.json5`/`tsconfig.json.bak`. Shared by the
+ * compose-time unsatisfiable-pair detector (frozen-conflict.ts) and lint-fix's
+ * non-convergence trace, so "the text names a frozen path" means one thing.
+ */
+export function pathNamedIn(text: string, path: string): boolean {
+    const p = path.replace(/^\.\//, '').replace(/\/+$/, '')
+    if (p.length === 0) return false
+    return new RegExp(`(?:^|[^\\w./-])${escapeRe(p)}(?!\\.?[\\w-])`, 'im').test(text)
+}
+
 /**
  * Parse `git status --porcelain` output (already scoped to the frozen pathspec)
  * into the list of changed files, for the gate-trail record and to decide whether
