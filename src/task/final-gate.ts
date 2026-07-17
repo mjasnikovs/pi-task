@@ -505,6 +505,12 @@ export function runBootCheck(
             stdio: ['ignore', 'pipe', 'pipe'],
             env: {...process.env}
         })
+        // Best-effort cleanup only: killGroup below can silently fail to reap the
+        // process (platform/sandbox-specific — observed on a GH Actions Linux
+        // runner where the group-kill did not take, hanging the whole `bun test
+        // --isolate` run on the leaked child's piped stdio). unref() so a child
+        // we already tried to kill can never itself keep this process alive.
+        child.unref()
         let out = ''
         let err = ''
         let listenerSeen = false

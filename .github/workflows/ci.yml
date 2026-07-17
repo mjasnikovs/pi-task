@@ -9,6 +9,11 @@ jobs:
   build-and-test:
     name: build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Normal runtime is ~2-6 min. Backstop against a full hang (observed once:
+    # a leaked detached child process's piped stdio kept the runner alive
+    # indefinitely — see final-gate.ts runBootCheck's child.unref() fix) rather
+    # than silently burning Actions minutes for hours.
+    timeout-minutes: 15
     strategy:
       # Don't cancel the Linux job when Windows fails (or vice versa) — we want
       # to see both results. Windows is the reason this matrix exists: two
