@@ -21,6 +21,8 @@ import {
     recordAcceptDebt,
     recordEnforceRevertDebt,
     recordFrozenBlockedDebt,
+    recordCrossTaskDeletionDebt,
+    extractDeletedDebtPath,
     writeAcceptDebts,
     type AcceptDebt
 } from './accept-debt.js'
@@ -350,5 +352,64 @@ describe('recordFrozenBlockedDebt / origin round-trip', () => {
         await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
         await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
         expect(await readAcceptDebts(cwd)).toHaveLength(1)
+    })
+})
+
+describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 PROMPT 2)', () => {
+    test('records a machine-parseable origin-tagged row naming path and owner', async () => {
+        const cwd = makeCwd()
+        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {
+            path: 'playwright/index.ts',
+            owner: 'TASK_0020'
+        })
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.taskId).toBe('TASK_0021')
+        expect(debt.origin).toBe('cross-task-deletion')
+        expect(debt.reason).toContain('`playwright/index.ts`')
+        expect(debt.reason).toContain('TASK_0020')
+        expect(extractDeletedDebtPath(debt.reason)).toBe('playwright/index.ts')
+        expect(describeDebt(debt)).toContain('DELETED')
+    })
+
+    test('extractDeletedDebtPath: only the fixed record shape parses', () => {
+        expect(extractDeletedDebtPath('deleted `a/b.ts` — TASK_0002…')).toBe('a/b.ts')
+        expect(extractDeletedDebtPath('the file a/b.ts was deleted')).toBeNull()
+        expect(extractDeletedDebtPath('')).toBeNull()
+    })
+
+    test('resolved iff the deleted file is back in the tree; never closed by staticOk', async () => {
+        const cwd = makeCwd()
+        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {
+            path: 'playwright/index.ts',
+            owner: 'TASK_0020'
+        })
+        const debts = await readAcceptDebts(cwd)
+        // Still missing: stays open even when statics pass (not a static-class debt).
+        const still = recheckAcceptDebts(debts, {staticOk: true, fileExists: () => false})
+        expect(still.open).toHaveLength(1)
+        expect(still.resolved).toHaveLength(0)
+        // Restored: the deterministic existence check closes it.
+        const restored = recheckAcceptDebts(debts, {
+            staticOk: false,
+            fileExists: rel => rel === 'playwright/index.ts'
+        })
+        expect(restored.resolved).toHaveLength(1)
+        expect(restored.open).toHaveLength(0)
+        // No fileExists wired (older caller): surfaced, never silently closed.
+        const noDep = recheckAcceptDebts(debts, {staticOk: true})
+        expect(noDep.open).toHaveLength(1)
+    })
+
+    test('a throwing fileExists is inconclusive — the debt stays open', async () => {
+        const cwd = makeCwd()
+        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {path: 'a/b.ts', owner: 'TASK_0002'})
+        const debts = await readAcceptDebts(cwd)
+        const out = recheckAcceptDebts(debts, {
+            staticOk: true,
+            fileExists: () => {
+                throw new Error('fs broke')
+            }
+        })
+        expect(out.open).toHaveLength(1)
     })
 })

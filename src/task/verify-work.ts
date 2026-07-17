@@ -71,6 +71,7 @@ import {USER_CANCELLED} from './child-runner.js'
 import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
 import {buildContractsVerifyBlock} from './contracts.js'
 import {findSkipEscapes, skipEscapeVerifyFindings} from './skip-escape.js'
+import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-provenance.js'
 
 /**
  * The verification child gets exactly two tools: `read` and `bash`.
@@ -102,6 +103,12 @@ export interface VerifyOutcome {
      *  AUTOFIX re-run, which cannot provision a missing tool. Only meaningful when
      *  ok === false. */
     unobserved?: boolean
+    /** The deterministic cross-task deletion findings (see task-provenance.ts) that
+     *  were live when this verdict was produced: sibling tasks' committed
+     *  deliverables this task's diff deletes. Carried on a FAIL so the gate loop
+     *  can record each as a durable debt if the user ACCEPTs anyway — the deletion
+     *  then ships in the next commit and the final gate must re-check it. */
+    crossTaskDeletions?: CrossTaskDeletion[]
 }
 
 /**
@@ -165,7 +172,8 @@ export function buildVerifyPrompt(
     skipEscapeFindings?: string[],
     contracts?: string,
     testAssemblyFindings?: string[],
-    probeGamingFindings?: string[]
+    probeGamingFindings?: string[],
+    crossTaskDeletionFindings?: string[]
 ): string {
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
@@ -192,6 +200,23 @@ export function buildVerifyPrompt(
                 'states an exception that covers this change, this is a violated prohibition:',
                 'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
                 'every test passes and the change looks harmless.',
+                ''
+            ]
+        :   []
+    const crossTaskDeletionBlock =
+        crossTaskDeletionFindings && crossTaskDeletionFindings.length > 0 ?
+            [
+                'CROSS-TASK DELETION NOTICE (deterministic, computed by the orchestrator from',
+                "git provenance over the task's diff): this task's work DELETED committed",
+                'deliverable(s) that a DIFFERENT, already-completed task introduced:',
+                ...crossTaskDeletionFindings.map(f => `- ${f}`),
+                "A sibling task's verified, committed deliverable is not this task's to remove.",
+                'Deleting the file a checker complains about is the cheapest way to turn a red',
+                'check green — the finding vanishes with the file — and it destroys finished',
+                'work (rule 4d). A green check suite on the shrunken tree is NOT a waiver.',
+                "Unless THIS task's spec explicitly REQUIRES removing exactly that file, the",
+                'verdict is FAIL naming the deleted file and its owning task — even if every',
+                'check passes and the deletion made them pass.',
                 ''
             ]
         :   []
@@ -268,6 +293,7 @@ export function buildVerifyPrompt(
         ...contractsBlock,
         ...probeBlock,
         ...prohibitionBlock,
+        ...crossTaskDeletionBlock,
         ...probeGamingBlock,
         ...skipEscapeBlock,
         ...testAssemblyBlock,
@@ -391,6 +417,17 @@ export function buildVerifyPrompt(
         '   that answers the check-shaped request the same way for a WRONG input is gaming the',
         '   check, not implementing the behavior). If the requirement is genuinely unmet while',
         '   the check passes, the verdict is FAIL naming the gamed check and the real gap.',
+        '',
+        "4d. A SIBLING TASK'S COMMITTED DELIVERABLE IS NOT THIS TASK'S TO DELETE — check the",
+        "   task's own diff (git) for DELETED tracked files. A file that a DIFFERENT completed",
+        "   task introduced and committed, deleted by this task's work, is finished work",
+        '   destroyed — usually to make a red check go green (the file the checker complains',
+        '   about simply disappears; that is quieting the messenger, rule 4c, not fixing the',
+        '   defect). A passing check suite on the shrunken tree is not a waiver. Only two',
+        "   outcomes are not a FAIL: THIS task's spec explicitly requires that removal, or",
+        '   the deletion is a genuine relocation (the same file lives on elsewhere in the',
+        '   tree). Otherwise the verdict is FAIL naming the deleted file and the task that',
+        '   owns it.',
         '',
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
@@ -551,6 +588,15 @@ export interface VerificationDeps {
      * Pure diff-text analysis; ABSENT or empty → no probe block. */
     probeGamingProbe?: () => Promise<string[]>
     /**
+     * DETERMINISTIC cross-task deletion probe (see task-provenance.ts, mx5 run 12
+     * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
+     * provenance) differs from the current task — a sibling's committed deliverable
+     * destroyed, typically to green a check. Injected as prompt findings under rule
+     * 4d (MANDATORY + verdict-gating, the A/B-proven shape — buried rules score
+     * 0/5), and carried structurally on a FAIL outcome so an ACCEPT records each as
+     * a durable debt. ABSENT or empty → no block. */
+    crossTaskDeletionProbe?: () => Promise<CrossTaskDeletion[]>
+    /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
@@ -638,6 +684,17 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             probeGaming = []
         }
     }
+    // Cross-task deletion findings feed the prompt (rule 4d) AND ride on a FAIL
+    // outcome (structured) so an ACCEPT can record them as durable debts. A probe
+    // failure must never block verification.
+    let crossDeletions: CrossTaskDeletion[] = []
+    if (deps.crossTaskDeletionProbe) {
+        try {
+            crossDeletions = await deps.crossTaskDeletionProbe()
+        } catch {
+            crossDeletions = []
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -681,7 +738,8 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     skipEscapes,
                     contracts,
                     testAssembly,
-                    probeGaming
+                    probeGaming,
+                    crossTaskDeletionVerifyFindings(crossDeletions)
                 ),
                 deps.signal
             )
@@ -716,17 +774,27 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         const verdict = parseVerifyVerdict(text)
         if (verdict.pass) return {ok: true}
         if (verdict.detail === 'no verdict emitted' && attempt === 1) continue
+        // Structured cross-task deletion findings ride on every FAIL outcome: if the
+        // human ACCEPTs the failing artifact, the deletions ship in the next commit
+        // and the gate loop must record each as a durable debt (see task-gates.ts).
+        const deletions = crossDeletions.length > 0 ? {crossTaskDeletions: crossDeletions} : {}
         // UNOBSERVED (rule 5c): a spec-required behavioral check could not run because
         // its tooling is absent. Block like any FAIL, but flag it so the gate hands it
         // straight to the human — re-running the impl turn cannot install a missing tool.
         if (verdict.unobserved) {
-            return {ok: false, unobserved: true, reason: `work unobserved: ${verdict.detail}`}
+            return {
+                ok: false,
+                unobserved: true,
+                reason: `work unobserved: ${verdict.detail}`,
+                ...deletions
+            }
         }
         return {
             ok: false,
             reason: `work did not verify: ${verdict.detail}${
                 verdict.detail === 'no verdict emitted' ? ' (after verify retry)' : ''
-            }`
+            }`,
+            ...deletions
         }
     }
 }

@@ -240,6 +240,37 @@ test('runGatesForTask: verify FAIL + ACCEPT records a durable ACCEPT-debt (run 8
     })
 })
 
+test('runGatesForTask: ACCEPT with cross-task deletions records one debt per deletion (run 12 PROMPT 2)', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        const deletionDebts: Array<{taskId: string; path: string; owner: string}> = []
+        const deps = makeDeps({
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: 'work did not verify: deleted sibling deliverables',
+                    crossTaskDeletions: [
+                        {path: 'playwright-ct.config.ts', owner: 'TASK_0020'},
+                        {path: 'playwright/index.ts', owner: 'TASK_0020'}
+                    ]
+                }),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'user call'}),
+            recordCrossTaskDeletionDebt: (_c, taskId, del) => {
+                deletionDebts.push({taskId, ...del})
+                return Promise.resolve()
+            }
+        })
+        handle.queueSelect(ACCEPT_LABEL)
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(deletionDebts).toEqual([
+            {taskId: 'TASK_0006', path: 'playwright-ct.config.ts', owner: 'TASK_0020'},
+            {taskId: 'TASK_0006', path: 'playwright/index.ts', owner: 'TASK_0020'}
+        ])
+    })
+})
+
 test('runGatesForTask: an AUTOFIX that converges records NO accept-debt', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

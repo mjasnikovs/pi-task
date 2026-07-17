@@ -61,6 +61,7 @@ import {
 } from './launch-contract.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {runRenderCheck, type RenderOutcome} from './render-check.js'
+import {taskThatIntroduced} from './task-provenance.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -711,26 +712,10 @@ async function recoverOrphanPort(
     return runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps})
 }
 
-/**
- * The task whose commit INTRODUCED `rel` (oldest `--diff-filter=A` commit whose
- * subject carries the pi-task `(TASK_nnnn)` suffix — both the task snapshot and the
- * ENFORCE commit shapes match). Null when the file predates the run, was never
- * committed, git is unavailable, or the adding commit is not a task commit — every
- * unknown degrades to "no conflict claim".
- */
-export function taskThatIntroduced(cwd: string, rel: string): string | null {
-    const r = spawnSync('git', ['log', '--diff-filter=A', '--format=%s', '--', rel], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.error || r.status !== 0 || !r.stdout) return null
-    const subjects = r.stdout.trim().split('\n').filter(Boolean)
-    // Newest-first output; the LAST line is the original introduction (a
-    // delete-and-re-add later in history must not reattribute the file).
-    const first = subjects[subjects.length - 1] ?? ''
-    const m = /\((TASK_\d+)\)\s*$/.exec(first)
-    return m ? m[1] : null
-}
+// File → introducing-task provenance moved to task-provenance.ts (mx5 run-12
+// PROMPT 2 extracted it for the cross-task deletion guards); re-exported so
+// existing importers keep working.
+export {taskThatIntroduced}
 
 /**
  * Run the final gate: static analysis first, then the lockfile consistency
@@ -755,7 +740,11 @@ export async function runFinalIntegrationGate(
     // construction (see accept-debt.ts). Best-effort: a ledger read/write failure
     // must never break the gate.
     const {open: openRaw, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
-        staticOk: stat.ok
+        staticOk: stat.ok,
+        // Cross-task-deletion debts auto-close iff the deleted file is back in the
+        // tree — a deterministic existence check, corroborating the per-file
+        // provenance the record already carries.
+        fileExists: rel => existsSync(path.join(cwd, rel))
     })
     if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
     // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose

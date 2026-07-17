@@ -54,8 +54,14 @@ const FIELD_SEP = '\t'
  *     created files need a tsconfig registration every spec forbids). Cross-task
  *     contradiction: no unattended re-run can converge, so the gate loop records the
  *     defect and routes to the human picker instead of burning AUTOFIX rounds.
+ *   - 'cross-task-deletion' — the task's work DELETED a sibling task's committed
+ *     deliverable (mx5 run 12 PROMPT 2: a fix child deleted TASK_0020's playwright ct
+ *     files to green a lint) and the user ACCEPTed the verify-FAIL anyway, so the
+ *     deletion ships in the next commit. Recorded so the final gate re-checks it:
+ *     resolved iff the named file is back in the tree (a later task restored it),
+ *     otherwise surfaced.
  */
-export type DebtOrigin = 'accepted' | 'enforce-revert' | 'frozen-blocked'
+export type DebtOrigin = 'accepted' | 'enforce-revert' | 'frozen-blocked' | 'cross-task-deletion'
 
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
@@ -108,7 +114,11 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
-            ...(origin === 'enforce-revert' || origin === 'frozen-blocked' ?
+            ...((
+                origin === 'enforce-revert'
+                || origin === 'frozen-blocked'
+                || origin === 'cross-task-deletion'
+            ) ?
                 {origin: origin as DebtOrigin}
             :   {})
         })
@@ -205,6 +215,38 @@ export async function recordFrozenBlockedDebt(
     })
 }
 
+/**
+ * Record a CROSS-TASK DELETION debt (mx5 run 12 PROMPT 2): the task's work deleted a
+ * file a DIFFERENT task's commit introduced, verify FAILed, and the user ACCEPTed —
+ * so the deletion survives into the next commit. The reason is a fixed machine-
+ * parseable shape (`deleted \`<path>\` …`) so the final gate's re-check can extract
+ * the path and prove the debt resolved iff the file is back in the tree.
+ */
+export async function recordCrossTaskDeletionDebt(
+    cwd: string,
+    taskId: string,
+    deletion: {path: string; owner: string}
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(
+            `deleted \`${deletion.path}\` — ${deletion.owner}'s committed deliverable, removed by this task's work`
+        ),
+        origin: 'cross-task-deletion'
+    })
+}
+
+/**
+ * The deleted path a cross-task-deletion debt names (the fixed shape
+ * recordCrossTaskDeletionDebt writes). Null on any other reason text — an
+ * unextractable path means the re-check cannot prove anything, so the debt
+ * stays open (surface, never re-hide).
+ */
+export function extractDeletedDebtPath(reason: string): string | null {
+    const m = /^deleted `([^`]+)`/.exec(reason.trim())
+    return m ? m[1] : null
+}
+
 /** Overwrite the ledger with exactly these records (used to prune resolved debts). */
 export async function writeAcceptDebts(cwd: string, debts: AcceptDebt[]): Promise<void> {
     try {
@@ -233,17 +275,31 @@ export function isStaticClassDebt(reason: string): boolean {
 
 /**
  * Re-check the ledger against the current run state. A static-class debt is RESOLVED
- * iff the final gate's own static check now passes (`staticOk`); every other debt
- * stays OPEN (unprovable ⇒ surface, never re-hide). FP-safe: the only auto-close is
- * the one a deterministic check can stand behind.
+ * iff the final gate's own static check now passes (`staticOk`); a cross-task-deletion
+ * debt is RESOLVED iff the file it names is back in the tree (`fileExists` — a later
+ * task or a human restored it, so the deletion no longer holds); every other debt
+ * stays OPEN (unprovable ⇒ surface, never re-hide). FP-safe: the only auto-closes are
+ * ones a deterministic check can stand behind.
  */
 export function recheckAcceptDebts(
     debts: AcceptDebt[],
-    opts: {staticOk: boolean}
+    opts: {staticOk: boolean; fileExists?: (rel: string) => boolean}
 ): {open: AcceptDebt[]; resolved: AcceptDebt[]} {
     const open: AcceptDebt[] = []
     const resolved: AcceptDebt[] = []
     for (const d of debts) {
+        if (d.origin === 'cross-task-deletion') {
+            const p = extractDeletedDebtPath(d.reason)
+            let restored: boolean
+            try {
+                restored = p !== null && opts.fileExists?.(p) === true
+            } catch {
+                restored = false // an existence-check fault is inconclusive, not proof
+            }
+            if (restored) resolved.push(d)
+            else open.push(d)
+            continue
+        }
         if (opts.staticOk && isStaticClassDebt(d.reason)) resolved.push(d)
         else open.push(d)
     }
@@ -343,6 +399,9 @@ export function describeDebt(d: AcceptDebt): string {
     }
     if (d.origin === 'frozen-blocked') {
         return 'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)'
+    }
+    if (d.origin === 'cross-task-deletion') {
+        return "a sibling task's committed deliverable was DELETED by this task's work and the deletion was accepted (still missing from the tree)"
     }
     return 'accepted despite verify-FAIL'
 }

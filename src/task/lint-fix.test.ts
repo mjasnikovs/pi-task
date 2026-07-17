@@ -252,6 +252,110 @@ test('runBoundedLintFix: no frozenPaths → no status probes, prior behavior int
     expect(calls.some(c => c[0] === 'status')).toBe(false)
 })
 
+test('runBoundedLintFix: child DELETING a sibling task deliverable → restored, not applied (mx5 run 12 PROMPT 2)', async () => {
+    // The 17:53:44 live shape: the sibling's ct files are CLEAN tracked files —
+    // neither pre-dirty nor pre-untracked, so the revert-guard is blind — and
+    // deleting them greens the lint. The provenance guard must catch it.
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts', 'src/feature.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        // pre-child tree clean of deletions; post-child the ct files are gone.
+        status: ['', ' D playwright-ct.config.ts\n D playwright/index.ts']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            currentTaskId: 'TASK_0021',
+            introducedBy: () => Promise.resolve('TASK_0020')
+        })
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/^cross-task-deletion:/)
+    expect(r.reason).toContain('TASK_0020')
+    expect(r.reason).toContain('playwright-ct.config.ts')
+    // The deleted paths were restored from HEAD (they were clean — no work lost).
+    expect(
+        calls.some(
+            c => c[0] === 'checkout' && c.includes('HEAD') && c.includes('playwright/index.ts')
+        )
+    ).toBe(true)
+})
+
+test("runBoundedLintFix: child deleting the CURRENT task's own file → not flagged, fix applied", async () => {
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts', 'src/feature.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', ' D src/mine.ts']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            currentTaskId: 'TASK_0021',
+            introducedBy: () => Promise.resolve('TASK_0021')
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test("runBoundedLintFix: deletion already present PRE-child (task work) → not the child's, applied", async () => {
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts', 'src/feature.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: [' D playwright-ct.config.ts', ' D playwright-ct.config.ts']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            currentTaskId: 'TASK_0021',
+            introducedBy: () => Promise.resolve('TASK_0020')
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: unknown provenance steps aside (inconclusive ≠ evidence)', async () => {
+    const {git, calls} = fakeGit({
+        diff: ['src/feature.ts', 'src/feature.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123'],
+        status: ['', ' D legacy/pre-run.ts']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            currentTaskId: 'TASK_0021',
+            introducedBy: () => Promise.resolve(null)
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
+test('runBoundedLintFix: git status failing pre-child disarms the deletion guard', async () => {
+    const calls: string[][] = []
+    const git: LintFixDeps['git'] = args => {
+        calls.push(args)
+        if (args[0] === 'write-tree') return Promise.resolve({exitCode: 0, stdout: 'abc123'})
+        if (args[0] === 'status') return Promise.resolve({exitCode: 128, stdout: ''})
+        if (args[0] === 'diff') return Promise.resolve({exitCode: 0, stdout: 'src/feature.ts'})
+        return Promise.resolve({exitCode: 0, stdout: ''})
+    }
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            currentTaskId: 'TASK_0021',
+            introducedBy: () => Promise.resolve('TASK_0020')
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.some(c => c[0] === 'checkout')).toBe(false)
+})
+
 test('runBoundedLintFix: health still failing → not applied (no guard trip)', async () => {
     const {git} = fakeGit({
         diff: ['src/a.ts', 'src/a.ts'],

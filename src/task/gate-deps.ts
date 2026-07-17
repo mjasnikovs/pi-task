@@ -23,7 +23,12 @@ import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-gu
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
-import {recordAcceptDebt, recordEnforceRevertDebt, recordFrozenBlockedDebt} from './accept-debt.js'
+import {
+    recordAcceptDebt,
+    recordEnforceRevertDebt,
+    recordFrozenBlockedDebt,
+    recordCrossTaskDeletionDebt
+} from './accept-debt.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -32,7 +37,13 @@ import {extractProhibitions, findProhibitionViolations} from './prohibition-prob
 import {frozenPathsFromSpec, revertFrozenPaths} from './frozen-path-guard.js'
 import {findProbeGaming, parseAddedLines, type AddedLine} from './probe-gaming.js'
 import {findSubstitutionSuspects, isTestFile, type ChangedFile} from './substitution-probe.js'
-import {parseTreeChanges, formatTreeChanges, type TreeChangeSummary} from './write-guard.js'
+import {
+    parseTreeChanges,
+    parseNameStatusChanges,
+    formatTreeChanges,
+    type TreeChangeSummary
+} from './write-guard.js'
+import {taskThatIntroduced, findCrossTaskDeletions} from './task-provenance.js'
 import {
     findTestRebuiltAssemblies,
     testAssemblyVerifyFindings,
@@ -175,6 +186,27 @@ export async function collectTreeChanges(
 ): Promise<TreeChangeSummary> {
     const r = await git(cwd, ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR], signal)
     return r.exitCode === 0 ? parseTreeChanges(r.stdout) : {modified: [], deleted: [], added: []}
+}
+
+/**
+ * The task's changes for the cross-task deletion probe: the working tree's status
+ * when the work is uncommitted (pre-commit verify), else the LAST COMMIT's
+ * name-status diff (the post-enforce re-verify runs on a clean tree, where that
+ * commit IS the task's work). Failures degrade to an empty summary — the probe is
+ * a sharpener, never a blocker. Same fallback discipline as collectChangedFiles.
+ */
+export async function collectTaskTreeChanges(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<TreeChangeSummary> {
+    const now = await collectTreeChanges(cwd, signal)
+    if (now.modified.length + now.deleted.length + now.added.length > 0) return now
+    const last = await git(
+        cwd,
+        ['diff', '--name-status', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    return last.exitCode === 0 ? parseNameStatusChanges(last.stdout) : now
 }
 
 /** Source extensions whose relative imports the test-assembly probe reasons over. */
@@ -397,6 +429,11 @@ export function buildGateDeps(params: {
         // when the gate loop routes it to the picker, re-checked by the final gate.
         recordFrozenBlockedDebt: (cwd2, taskId, reason) =>
             recordFrozenBlockedDebt(cwd2, taskId, reason),
+        // Durable cross-task-deletion ledger (PROMPT 2): a sibling's committed
+        // deliverable this task's diff deletes, ACCEPTed into a commit anyway —
+        // the final gate re-checks it (resolved iff the file is back in the tree).
+        recordCrossTaskDeletionDebt: (cwd2, taskId, deletion) =>
+            recordCrossTaskDeletionDebt(cwd2, taskId, deletion),
         // Frozen-path write-deny (see frozen-path-guard.ts): the concrete paths this
         // task's spec forbids modifying, so the gate sequence can UNDO any edit the
         // enforce EDIT pass makes to them before those edits are committed. Reads the
@@ -548,6 +585,17 @@ export function buildGateDeps(params: {
                 // ("return 401 so the verification test passes") become rule-4c
                 // findings so the child verifies the real requirement, not the check.
                 probeGamingProbe: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
+                // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
+                // tracked files this task's diff DELETES whose introducing commit
+                // belongs to a DIFFERENT task — a sibling's committed deliverable
+                // destroyed (typically to green a check). Injected under rule 4d and
+                // carried on a FAIL so an ACCEPT records durable debts.
+                crossTaskDeletionProbe: () =>
+                    collectTaskTreeChanges(cwd2, signal).then(changes =>
+                        findCrossTaskDeletions(changes, taskId, rel =>
+                            taskThatIntroduced(cwd2, rel)
+                        )
+                    ),
                 // Deterministic prohibition probe: paths the spec forbids modifying
                 // that the task's diff modified anyway become prompt-level findings
                 // under the no-waiver rule — the child otherwise rarely runs `git
@@ -612,7 +660,14 @@ export function buildGateDeps(params: {
                     const r = await git(cwd2, args, signal)
                     return {exitCode: r.exitCode, stdout: r.stdout}
                 },
-                frozenPaths
+                frozenPaths,
+                // Cross-task deletion guard (mx5 run 12 PROMPT 2): the revert-guard
+                // is blind to a clean tracked sibling deliverable, so deleting one
+                // greens the lint and the pass returns ok. Provenance is the
+                // discriminator — the guard restores a sibling's deleted file and
+                // reports not-applied naming the owner.
+                currentTaskId: taskId,
+                introducedBy: rel => Promise.resolve(taskThatIntroduced(cwd2, rel))
             })
         },
         // Deterministic static check + tree helpers for the enforce pre-commit gate.

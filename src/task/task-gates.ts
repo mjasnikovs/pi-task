@@ -171,6 +171,18 @@ export interface GateDeps {
      */
     recordFrozenBlockedDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
     /**
+     * Record a durable CROSS-TASK DELETION debt (mx5 run 12 PROMPT 2): the task's
+     * work deleted a file a DIFFERENT task's commit introduced, verify FAILed with
+     * the deterministic finding attached, and the user ACCEPTed anyway — the
+     * deletion ships in the next commit, so the final gate must re-check it
+     * (resolved iff the file is back in the tree). Best-effort; absent in tests.
+     */
+    recordCrossTaskDeletionDebt?: (
+        cwd: string,
+        taskId: string,
+        deletion: {path: string; owner: string}
+    ) => Promise<void>
+    /**
      * The concrete paths this task's spec forbids modifying (its `Do NOT modify`
      * CONSTRAINTS — see frozen-path-guard.ts / prohibition-probe.ts). Used to
      * write-deny the enforce EDIT pass: a violating edit is reverted before it can
@@ -458,6 +470,19 @@ export async function runGatesForTask(
                 if (!frozenDebtRecorded) {
                     try {
                         await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
+                    } catch {
+                        // recording must never break the gate sequence
+                    }
+                }
+                // Cross-task deletions the verify probe detected ship in the next
+                // commit with this ACCEPT — record each as its own durable debt so
+                // the final gate re-checks them (mx5 run 12 PROMPT 2). Best-effort.
+                for (const del of verified.crossTaskDeletions ?? []) {
+                    try {
+                        await deps.recordCrossTaskDeletionDebt?.(p.cwd, p.taskId, del)
+                        await rec(
+                            `accept-debt: cross-task deletion recorded — ${del.path} (${del.owner}'s deliverable)`
+                        )
                     } catch {
                         // recording must never break the gate sequence
                     }

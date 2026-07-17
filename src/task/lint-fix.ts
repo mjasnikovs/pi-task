@@ -43,8 +43,23 @@
  * that were CLEAN before the child ran are reverted — a frozen path already
  * dirty with (possibly task) work is left alone, in the guard's safe direction:
  * cost time, never work.
+ *
+ * CROSS-TASK DELETION GUARD (mx5 run 12 PROMPT 2, verify-debug.log 17:53:44): the
+ * revert-guard above is outcome-based but blind to a CLEAN tracked file — a
+ * sibling task's committed deliverable is neither pre-dirty nor pre-untracked, so
+ * DELETING it slips both checks, and if the lint converges the pass returns ok
+ * (confirmed live: the child deleted TASK_0020's playwright ct files to green a
+ * typed-lint it was frozen out of fixing properly). The discriminator is
+ * PROVENANCE, not deletion per se: a tracked file the CHILD deleted whose
+ * introducing task (per `introducedBy`, git history) differs from the CURRENT
+ * task is restored from HEAD and the fix reported not-applied naming the owner.
+ * Same-task deletions, unknown provenance, relocations, and any git error all
+ * step aside — the guard may only cost time, never work. Armed only when both
+ * `currentTaskId` and `introducedBy` are wired.
  */
 import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-path-guard.js'
+import {parseTreeChanges, type TreeChangeSummary} from './write-guard.js'
+import {findCrossTaskDeletions} from './task-provenance.js'
 
 export interface LintFixResult {
     /** true → findings fixed, repo health passes, work preserved. */
@@ -73,6 +88,17 @@ export interface LintFixDeps {
      * and the fix reported not-applied. Absent/empty → no-op, prior behavior.
      */
     frozenPaths?: string[]
+    /**
+     * The CURRENT task's id, for the cross-task deletion guard's provenance
+     * discriminator. Absent → the guard is disarmed (prior behavior).
+     */
+    currentTaskId?: string
+    /**
+     * file → introducing task id (git provenance, see task-provenance.ts); null on
+     * any unknown — inconclusive is never evidence. Absent → the cross-task
+     * deletion guard is disarmed (prior behavior).
+     */
+    introducedBy?: (rel: string) => Promise<string | null>
 }
 
 /** The fix child edits and runs the checker; bash exists to RUN the check, not git. */
@@ -157,6 +183,17 @@ async function dirtyFiles(deps: LintFixDeps): Promise<string[] | null> {
 }
 
 /**
+ * The whole tree's current changes (`git status --porcelain` shape), or null when
+ * git itself failed — inconclusive, not evidence (same discipline as dirtyFiles).
+ * Feeds the cross-task deletion guard's pre/post comparison.
+ */
+async function treeChanges(deps: LintFixDeps): Promise<TreeChangeSummary | null> {
+    const r = await deps.git(['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR])
+    if (r.exitCode !== 0) return null
+    return parseTreeChanges(r.stdout)
+}
+
+/**
  * Which spec-frozen paths currently show a change in `git status`? Null when git
  * itself failed — inconclusive, not evidence (same discipline as dirtyFiles).
  */
@@ -207,6 +244,13 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     // here disables the guard for this run (inconclusive ≠ license to revert).
     const frozen = deps.frozenPaths ?? []
     const preFrozenDirty = await frozenDirtySet(deps, frozen)
+
+    // CROSS-TASK DELETION baseline: deletions already in the tree pre-child are
+    // the task's own (uncommitted) work, not the child's — only deletions the
+    // CHILD introduces on top are candidates. A git failure here disarms the
+    // guard for this run (inconclusive ≠ evidence).
+    const deletionGuardArmed = Boolean(deps.currentTaskId && deps.introducedBy)
+    const preChanges = deletionGuardArmed ? await treeChanges(deps) : null
 
     try {
         await deps.runChild(
@@ -261,6 +305,42 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             reason:
                 `revert-guard: fix pass discarded work (${violations.slice(0, 3).join(', ')}`
                 + `${violations.length > 3 ? ', …' : ''}) — fix ${snapshot ? 'rolled back' : 'REJECTED but no snapshot to restore'}`
+        }
+    }
+
+    // CROSS-TASK DELETION GUARD: a tracked file the CHILD deleted whose
+    // introducing task differs from the current task is a sibling's committed
+    // deliverable destroyed to go green (mx5 run 12: the child deleted TASK_0020's
+    // playwright ct files and the pass returned ok — the revert-guard above only
+    // watches pre-dirty and pre-untracked files, and a clean tracked sibling file
+    // is neither). Restore JUST those paths from HEAD (they were clean pre-child,
+    // so nothing of the task's work can be lost) and report not-applied naming the
+    // owner. Inconclusive on any side — git error, unknown provenance, same-task
+    // deletion, relocation — steps aside.
+    if (deletionGuardArmed && preChanges !== null) {
+        const postChanges = await treeChanges(deps)
+        if (postChanges !== null) {
+            const preDeleted = new Set(preChanges.deleted)
+            const crossDeletions = await findCrossTaskDeletions(
+                {
+                    modified: postChanges.modified,
+                    added: postChanges.added,
+                    deleted: postChanges.deleted.filter(p => !preDeleted.has(p))
+                },
+                deps.currentTaskId!,
+                deps.introducedBy!
+            )
+            if (crossDeletions.length > 0) {
+                await deps.git(['checkout', '-f', 'HEAD', '--', ...crossDeletions.map(d => d.path)])
+                const named = crossDeletions.map(d => `${d.path} — ${d.owner}'s deliverable`)
+                return {
+                    ok: false,
+                    reason:
+                        `cross-task-deletion: fix child DELETED sibling task deliverable(s) `
+                        + `(${named.slice(0, 3).join('; ')}${crossDeletions.length > 3 ? '; …' : ''}) `
+                        + `— restored from HEAD; deleting another task's committed work is not a fix`
+                }
+            }
         }
     }
 

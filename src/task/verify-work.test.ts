@@ -332,6 +332,39 @@ describe('buildVerifyPrompt', () => {
     })
 })
 
+describe('buildVerifyPrompt — cross-task deletion (rule 4d, mx5 run 12 PROMPT 2)', () => {
+    test('rule 4d is always present and gates the verdict', () => {
+        const p = buildVerifyPrompt('GOAL\nx')
+        expect(p).toContain("4d. A SIBLING TASK'S COMMITTED DELIVERABLE")
+        expect(p).toContain('DELETED tracked files')
+        // Verdict-gating: the rule names FAIL, and the two non-FAIL escapes.
+        expect(p).toMatch(/verdict is FAIL naming the deleted file/)
+        expect(p).toContain('relocation')
+    })
+    test('findings become a MANDATORY notice naming file and owner', () => {
+        const p = buildVerifyPrompt(
+            'GOAL\nx',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            [
+                "`playwright/index.ts` — introduced and committed by TASK_0020, DELETED by this task's work"
+            ]
+        )
+        expect(p).toContain('CROSS-TASK DELETION NOTICE')
+        expect(p).toContain('`playwright/index.ts`')
+        expect(p).toContain('TASK_0020')
+        // The notice itself carries the verdict mandate — buried rules score 0/5.
+        expect(p).toMatch(/verdict is FAIL naming the deleted file and its owning task/)
+        // No findings → no notice block.
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CROSS-TASK DELETION NOTICE')
+    })
+})
+
 describe('parseVerifyVerdict', () => {
     test('PASS verdict', () => {
         expect(parseVerifyVerdict('ran build ok\nWORK-VERIFIED: PASS')).toEqual({
@@ -771,5 +804,62 @@ describe('runWorkVerification', () => {
                 }
             })
         ).rejects.toThrow(USER_CANCELLED)
+    })
+
+    test('cross-task deletion probe: findings reach the prompt AND ride on a FAIL outcome', async () => {
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            crossTaskDeletionProbe: async () => [{path: 'playwright/index.ts', owner: 'TASK_0020'}],
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: FAIL deleted a sibling deliverable'
+            }
+        })
+        expect(prompt).toContain('CROSS-TASK DELETION NOTICE')
+        expect(prompt).toContain('TASK_0020')
+        expect(out.ok).toBe(false)
+        // Structured findings ride on the FAIL so an ACCEPT can record debts.
+        expect(out.crossTaskDeletions).toEqual([{path: 'playwright/index.ts', owner: 'TASK_0020'}])
+    })
+
+    test('cross-task deletion findings ride on an UNOBSERVED outcome too', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            crossTaskDeletionProbe: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}],
+            runChild: async () => 'WORK-VERIFIED: UNOBSERVED tool absent'
+        })
+        expect(out.ok).toBe(false)
+        expect(out.unobserved).toBe(true)
+        expect(out.crossTaskDeletions).toEqual([{path: 'a/b.ts', owner: 'TASK_0002'}])
+    })
+
+    test('a PASS carries no deletion findings; a throwing probe degrades to none', async () => {
+        const pass = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            crossTaskDeletionProbe: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}],
+            runChild: async () => 'WORK-VERIFIED: PASS'
+        })
+        expect(pass.ok).toBe(true)
+        expect(pass.crossTaskDeletions).toBeUndefined()
+
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            crossTaskDeletionProbe: async () => {
+                throw new Error('git broke')
+            },
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: FAIL nope'
+            }
+        })
+        expect(out.ok).toBe(false)
+        expect(out.crossTaskDeletions).toBeUndefined()
+        expect(prompt).not.toContain('CROSS-TASK DELETION NOTICE')
     })
 })

@@ -86,6 +86,45 @@ export function parseTreeChanges(porcelain: string): TreeChangeSummary {
     return {modified: [...modified], deleted: [...deleted], added: [...added]}
 }
 
+/**
+ * Parse `git diff --name-status` output (tab-separated: `M\tpath`, `A\tpath`,
+ * `D\tpath`, `R100\told\tnew`, `C75\told\tnew`) into the same change summary. Used
+ * where the working tree is already clean and the last COMMIT's diff is the record
+ * of the task's changes (the post-enforce re-verify fallback). A rename entry
+ * contributes its source to `deleted` and its target to `added`, matching
+ * parseTreeChanges so the relocation allowance below reads both shapes identically;
+ * a copy's source still exists, so only its target counts (as added).
+ */
+export function parseNameStatusChanges(nameStatus: string): TreeChangeSummary {
+    const modified = new Set<string>()
+    const deleted = new Set<string>()
+    const added = new Set<string>()
+    for (const raw of nameStatus.split('\n')) {
+        const parts = raw.split('\t').map(s => s.trim())
+        const code = parts[0] ?? ''
+        if (code.length === 0 || !parts[1]) continue
+        if (code.startsWith('R')) {
+            deleted.add(parts[1])
+            if (parts[2]) added.add(parts[2])
+            continue
+        }
+        if (code.startsWith('C')) {
+            added.add(parts[2] ?? parts[1])
+            continue
+        }
+        if (code.startsWith('D')) {
+            deleted.add(parts[1])
+            continue
+        }
+        if (code.startsWith('A')) {
+            added.add(parts[1])
+            continue
+        }
+        modified.add(parts[1])
+    }
+    return {modified: [...modified], deleted: [...deleted], added: [...added]}
+}
+
 const basename = (p: string): string => {
     const i = p.lastIndexOf('/')
     return i === -1 ? p : p.slice(i + 1)

@@ -4,7 +4,12 @@
  * semantics are exercised end-to-end in final-gate-fix.test.ts.
  */
 import {describe, expect, test} from 'bun:test'
-import {findForbiddenDeletions, formatTreeChanges, parseTreeChanges} from './write-guard.js'
+import {
+    findForbiddenDeletions,
+    formatTreeChanges,
+    parseTreeChanges,
+    parseNameStatusChanges
+} from './write-guard.js'
 
 describe('parseTreeChanges', () => {
     test('classifies modified / deleted / untracked entries', () => {
@@ -77,5 +82,33 @@ describe('formatTreeChanges', () => {
 
     test('clean tree reads as no changes', () => {
         expect(formatTreeChanges(parseTreeChanges(''))).toBe('(no tree changes)')
+    })
+})
+
+describe('parseNameStatusChanges', () => {
+    test('classifies name-status codes; renames split into deleted source + added target', () => {
+        const out = parseNameStatusChanges(
+            [
+                'M\tsrc/a.ts',
+                'A\tsrc/new.ts',
+                'D\tplaywright/index.ts',
+                'R100\told.ts\tnew-place/old.ts'
+            ].join('\n')
+        )
+        expect(out.modified).toEqual(['src/a.ts'])
+        expect(out.added.sort()).toEqual(['new-place/old.ts', 'src/new.ts'])
+        expect(out.deleted.sort()).toEqual(['old.ts', 'playwright/index.ts'])
+    })
+    test("a copy's source still exists — only the target counts", () => {
+        const out = parseNameStatusChanges('C75\tsrc/a.ts\tsrc/a-copy.ts')
+        expect(out.deleted).toEqual([])
+        expect(out.added).toEqual(['src/a-copy.ts'])
+    })
+    test('blank and malformed lines are skipped', () => {
+        expect(parseNameStatusChanges('\n\nD\n')).toEqual({modified: [], deleted: [], added: []})
+    })
+    test('feeds findForbiddenDeletions identically to the porcelain shape', () => {
+        const changes = parseNameStatusChanges('D\tsrc/dead.ts\nR100\tsrc/moved.ts\tlib/moved.ts')
+        expect(findForbiddenDeletions(changes)).toEqual(['src/dead.ts'])
     })
 })
