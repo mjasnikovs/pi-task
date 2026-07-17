@@ -5,6 +5,7 @@
  * This module currently holds the planning half (AutoDeps + planAuto). The run
  * loop, command handlers, and defaultDeps are added by the next task.
  */
+import {existsSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -87,6 +88,13 @@ import {
     type CoverageAccounting
 } from './requirements.js'
 import {decideAdoption, groundedCoverage, type CoveragePlan} from './coverage-loop.js'
+import {
+    findSpecDanglingArtifacts,
+    titlesCoverArtifact,
+    danglingMissingText,
+    danglingCarryText,
+    type DanglingRef
+} from './artifact-closure.js'
 import {
     LAUNCH_EXTRACT_PROMPT,
     enumerateScriptCandidates,
@@ -669,6 +677,30 @@ export async function planAuto(
         // best-effort channel
     }
 
+    // Artifact-production closure, plan side (mx5 run 13, PROMPT 2): runtime
+    // files the spec REFERENCES (server snippets, prose "serve the built
+    // index.html") that neither its file tree, its parsed build outputs, nor the
+    // existing scaffold produce. Sentence-grounded coverage credited the SERVING
+    // side and reported "0 unowned" while nothing ever CREATED the file — so
+    // these ride the coverage loop's `missing` list as unowned areas until some
+    // task title claims the artifact (grounded in titles, which the coverage-map
+    // model cannot fake — the run-12 lesson). Deterministic and best-effort.
+    let specDangling: DanglingRef[] = []
+    try {
+        specDangling = findSpecDanglingArtifacts(featureForModel, rel =>
+            existsSync(path.join(cwd, rel))
+        )
+        if (specDangling.length > 0) {
+            logPlanDebug(
+                cwd,
+                `artifact closure: ${specDangling.length} dangling runtime artifact(s) in the `
+                    + `spec: ${specDangling.map(d => d.path).join(', ')}`
+            )
+        }
+    } catch {
+        // best-effort channel
+    }
+
     // decompose
     const decomposePrompt = AUTO_DECOMPOSE_PROMPT(
         featureForModel,
@@ -808,6 +840,12 @@ export async function planAuto(
             }
         }
         const missing = [...verdictMissing, ...(acc?.unmapped ?? []).map(e => `"${e.quote}"`)]
+        // Unclaimed dangling artifacts are unowned areas: they force a coverage
+        // round that assigns a producing task, and clear as soon as a title
+        // names the file.
+        for (const d of specDangling) {
+            if (!titlesCoverArtifact(titles, d)) missing.push(danglingMissingText(d))
+        }
         return {
             plan: {titles, covered, missing},
             accounting: acc,
@@ -953,12 +991,31 @@ export async function planAuto(
     const carriedCrossCutting = accounting?.crossCutting ?? []
     const carriedUnmapped = accounting?.unmapped ?? []
     const carriedJudge = best.judgeMissing
-    if (carriedCrossCutting.length > 0 || carriedUnmapped.length > 0 || carriedJudge.length > 0) {
-        await appendCarriedRequirements(cwd, carriedCrossCutting, carriedUnmapped, carriedJudge)
+    // Dangling artifacts still unclaimed by any title of the SHIPPING plan are a
+    // fourth channel: the producing obligation travels verbatim into every task
+    // (whichever task builds the referencing side must also produce the file),
+    // and the final gate re-checks the shipped tree regardless.
+    const carriedDangling = specDangling
+        .filter(d => !titlesCoverArtifact(planTitles, d))
+        .map(danglingCarryText)
+    if (
+        carriedCrossCutting.length > 0
+        || carriedUnmapped.length > 0
+        || carriedJudge.length > 0
+        || carriedDangling.length > 0
+    ) {
+        await appendCarriedRequirements(
+            cwd,
+            carriedCrossCutting,
+            carriedUnmapped,
+            carriedJudge,
+            carriedDangling
+        )
         const parts = [
             carriedCrossCutting.length > 0 ? `${carriedCrossCutting.length} cross-cutting` : '',
             carriedUnmapped.length > 0 ? `${carriedUnmapped.length} unowned` : '',
-            carriedJudge.length > 0 ? `${carriedJudge.length} judge-flagged` : ''
+            carriedJudge.length > 0 ? `${carriedJudge.length} judge-flagged` : '',
+            carriedDangling.length > 0 ? `${carriedDangling.length} dangling-artifact` : ''
         ].filter(p => p.length > 0)
         ctx.ui.notify(
             `/task-auto: carrying ${parts.join(', ')} requirement(s) into every task`

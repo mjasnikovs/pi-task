@@ -62,6 +62,7 @@ import {
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {runRenderCheck, type RenderOutcome} from './render-check.js'
 import {taskThatIntroduced} from './task-provenance.js'
+import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -920,6 +921,19 @@ export async function runFinalIntegrationGate(
             // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
             if (b.renderNote) warnings.push(b.renderNote)
         }
+    }
+    // Artifact-production closure (mx5 run 13, PROMPT 2): a runtime file
+    // reference with NO producer anywhere ships silently — the server read
+    // `Bun.file('dist/index.html')` while the build emitted only app.css +
+    // main.js, so every non-API GET 404'd behind 32/32 green checkoffs.
+    // Deterministic scan of the shipped tree (literal refs only, positive
+    // producer evidence required — see artifact-closure.ts); each dangle is a
+    // ranked failure naming referencer + missing path. Rank 0: "the app cannot
+    // serve what it references" is the same load-bearing class as boot/render.
+    try {
+        for (const d of findDanglingArtifacts(cwd)) fail(danglingGateFailureText(d), 0)
+    } catch {
+        // best-effort scan — a scanner fault must never break the gate
     }
     if (failures.length > 0) {
         // Stable sort: boot/render (rank 0) leads, everything else keeps execution

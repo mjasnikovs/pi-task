@@ -357,14 +357,27 @@ function formatEntry(e: RequirementEntry, marker?: string): string {
  *     was warned-about then dropped). These are plain strings, not quotes of the
  *     source; marked distinctly so a task can tell an inferred area from a verbatim
  *     obligation.
+ *   • `danglingArtifacts` — runtime files the spec references but nothing
+ *     produces (mx5 run 13: the served `index.html` no task, tree entry, or
+ *     build output ever created), still unclaimed by any title at coverage
+ *     exhaustion. Deterministically extracted (artifact-closure.ts), so like
+ *     judge areas they are host-authored strings, not source quotes.
  */
 export async function appendCarriedRequirements(
     cwd: string,
     crossCutting: RequirementEntry[],
     unresolved: RequirementEntry[] = [],
-    judgeFlagged: string[] = []
+    judgeFlagged: string[] = [],
+    danglingArtifacts: string[] = []
 ): Promise<void> {
-    if (crossCutting.length === 0 && unresolved.length === 0 && judgeFlagged.length === 0) return
+    if (
+        crossCutting.length === 0
+        && unresolved.length === 0
+        && judgeFlagged.length === 0
+        && danglingArtifacts.length === 0
+    ) {
+        return
+    }
     try {
         const existing = (await readRequirements(cwd)).split('\n').filter(l => l.trim().length > 0)
         const seen = new Set(
@@ -380,6 +393,10 @@ export async function appendCarriedRequirements(
             [
                 judgeFlagged.map(q => ({quote: q, anchor: ''})),
                 'judge-flagged uncovered area, no task owns this — surfaced at plan time'
+            ],
+            [
+                danglingArtifacts.map(q => ({quote: q, anchor: ''})),
+                'dangling runtime artifact, nothing produces it — surfaced at plan time'
             ]
         ] as const) {
             for (const e of entries) {

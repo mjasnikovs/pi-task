@@ -1,0 +1,853 @@
+/**
+ * artifact-closure — dangling runtime file references (the run-13 index.html
+ * class, nexttask PROMPT 2).
+ *
+ * The failure this closes (mx5 run 13, validated): a runtime file reference with
+ * NO producer anywhere in the plan shipped silently. The server's SPA fallback
+ * read `Bun.file('dist/index.html')`; the build emitted only `app.css` +
+ * `main.js`; no task, script, or build output ever CREATES `index.html` — so the
+ * shipped app 404'd on every non-API GET while coverage reported "0 unowned"
+ * (sentence-grounded coverage credited the SERVING side to the server task and
+ * was structurally blind to the missing PRODUCING side). The spec itself was
+ * internally dangling: its prose required serving `index.html` while its file
+ * tree and build section never defined it.
+ *
+ * Two seams consume this module:
+ *   • plan-time (auto-orchestrator): refs extracted from the SPEC's own snippets
+ *     that neither the spec's file tree, its build outputs, nor the existing
+ *     scaffold produce become UNOWNED areas — they ride the coverage loop's
+ *     `missing` list (forcing a round that assigns a producing task) and are
+ *     carried into `.pi-tasks/requirements.md` when still unowned at exhaustion.
+ *   • final gate: the shipped tree is scanned; a dangling reference is a ranked
+ *     failure naming referencer + missing path (rides PROMPT 1's aggregation).
+ *
+ * FP discipline (the run-12 groundedCoverage lesson — ground in artifacts the
+ * model can't fake, and the standing guard direction — inconclusive is NEVER
+ * evidence):
+ *   • literal string paths only; any dynamic expression steps aside.
+ *   • a ref is DANGLING only on POSITIVE producer evidence: it must sit under a
+ *     directory whose outputs we could actually ENUMERATE (parsed build
+ *     script/flags) and not be among them — or be a missing source-extension
+ *     script entrypoint, which nothing ever builds. A ref under a directory
+ *     produced by machinery we could NOT enumerate (vite/tsc/next/unknown
+ *     commands that mention it) is OPAQUE and always steps aside.
+ *   • gitignored-but-built paths therefore never fire: being built means a
+ *     producer names them (exact file, enumerable stem, or opaque dir).
+ *   • existence is checked on the live tree (existsSync), so anything already
+ *     present — committed, generated, or hand-made — is satisfied.
+ *
+ * Note the mx5 server GUARDED its read (`if (!(await htmlFile.exists())) return
+ * c.notFound()`): an existence guard is exactly how the bug presents (permanent
+ * 404), so guarded reads deliberately do NOT step aside.
+ */
+import {existsSync, readdirSync, readFileSync, statSync} from 'node:fs'
+import * as path from 'node:path'
+
+export interface RuntimeRef {
+    /** Repo-relative normalized path (posix separators, no leading ./). */
+    path: string
+    /** Where the reference lives: repo-relative file, `package.json scripts.X`, or 'spec'. */
+    referencer: string
+    /** The construct that matched (Bun.file, readFile, script src, …). */
+    construct: string
+    /** file = must exist as a file; dir = a static root that must exist as a directory. */
+    kind: 'file' | 'dir'
+}
+
+export interface DanglingRef extends RuntimeRef {
+    /** Why the producer resolution came up empty (human- and prompt-readable). */
+    reason: string
+}
+
+/** Everything the tree/scripts/build POSITIVELY produce. */
+export interface ProducedOutputs {
+    /** Exact output files (tailwind -o, --outfile, redirects, Bun.write, cp dest…). */
+    files: Set<string>
+    /** Enumerable outdir → output STEMS (basename sans extension) it emits —
+     *  from parsed Bun.build entrypoints, explicit output files, source args. */
+    enumerable: Map<string, Set<string>>
+    /** Dirs produced by machinery we could not enumerate (vite/tsc/next/unknown
+     *  commands naming them) — everything under them steps aside. */
+    opaque: Set<string>
+    /** Dirs known to be created (mkdir, outdirs) — satisfies dir-kind refs. */
+    dirs: Set<string>
+}
+
+export function emptyProducers(): ProducedOutputs {
+    return {files: new Set(), enumerable: new Map(), opaque: new Set(), dirs: new Set()}
+}
+
+/** Normalize a literal path: posix separators, strip ./ prefixes, query/hash
+ *  tails (HTML), trailing slash. Returns null when the literal is not a
+ *  checkable relative path (URL, absolute, template hole, glob — step aside). */
+export function normalizeRefPath(raw: string): string | null {
+    let p = raw.trim().replace(/\\/g, '/')
+    // Markdown/shell wrapping (a spec bullet's `-o dist/app.css` arrives with a
+    // trailing backtick) — strip wrapping quote characters at both ends.
+    p = p.replace(/^[`'"]+/, '').replace(/[`'"]+$/, '')
+    // HTML-side noise: ?query / #fragment tails.
+    p = p.replace(/[?#].*$/, '')
+    if (p.length === 0 || p.length > 200) return null
+    // Dynamic/glob/scheme/absolute — inconclusive, never evidence. A remaining
+    // quote or whitespace mid-token means we mis-tokenized — step aside.
+    if (/\$\{|[*?]|^[a-z][a-z0-9+.-]*:|^\/\/|^~|[`'"\s]/i.test(p)) return null
+    while (p.startsWith('./')) p = p.slice(2)
+    if (p.startsWith('/')) p = p.slice(1) // root-relative (HTML) → resolve from repo root
+    p = p.replace(/\/+$/, '')
+    if (p.length === 0 || p === '.' || p === '..') return null
+    if (p.startsWith('node_modules/') || p.includes('/node_modules/')) return null
+    return p
+}
+
+const stem = (p: string): string => path.posix.basename(p).replace(/\.[^.]+$/, '')
+const hasExt = (p: string): boolean => /\.[A-Za-z0-9]{1,8}$/.test(path.posix.basename(p))
+/** Source-only extensions nothing ships un-built: a missing one of these is hard
+ *  evidence on its own (a script entrypoint like `bun src/server/index.ts`). */
+const SOURCE_ONLY_EXT_RE = /\.(?:ts|tsx|mts|cts|jsx)$/i
+
+/** Strip comment-only lines (`// …`, `* …`) — a ref quoted in a comment is not a
+ *  runtime read. Inline comments are left alone (strings may contain `//`). */
+function stripCommentLines(src: string): string {
+    return src
+        .split('\n')
+        .filter(l => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
+        .join('\n')
+}
+
+interface Pattern {
+    re: RegExp
+    construct: string
+    kind: 'file' | 'dir'
+}
+
+// Literal-first-argument read-side constructs. `[^'"\`\n]` keeps the argument on
+// one line and free of a closing quote; normalizeRefPath rejects `${…}` holes.
+const JS_READ_PATTERNS: Pattern[] = [
+    {re: /\bBun\.file\(\s*(['"`])([^'"`\n]+)\1/g, construct: 'Bun.file', kind: 'file'},
+    {re: /\breadFile(?:Sync)?\(\s*(['"`])([^'"`\n]+)\1/g, construct: 'readFile', kind: 'file'},
+    {
+        re: /\bcreateReadStream\(\s*(['"`])([^'"`\n]+)\1/g,
+        construct: 'createReadStream',
+        kind: 'file'
+    },
+    {re: /\bsendFile\(\s*(['"`])([^'"`\n]+)\1/g, construct: 'sendFile', kind: 'file'},
+    {
+        re: /\bserveStatic\(\s*\{[^}]*?\broot:\s*(['"`])([^'"`\n]+)\1/g,
+        construct: 'serveStatic root',
+        kind: 'dir'
+    },
+    {
+        re: /\b(?:express|app)\.static\(\s*(['"`])([^'"`\n]+)\1/g,
+        construct: 'express.static root',
+        kind: 'dir'
+    }
+]
+
+// Local-asset references in HTML: script/link/img only — an <a href> is a route,
+// not a file the server must materialize.
+const HTML_PATTERNS: Pattern[] = [
+    {re: /<script\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1/gi, construct: 'script src', kind: 'file'},
+    {re: /<link\b[^>]*\bhref\s*=\s*(['"])([^'"]+)\1/gi, construct: 'link href', kind: 'file'},
+    {re: /<img\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1/gi, construct: 'img src', kind: 'file'}
+]
+
+/** Extract runtime refs from one JS/TS source. */
+export function extractJsRefs(source: string, referencer: string): RuntimeRef[] {
+    const src = stripCommentLines(source)
+    const out: RuntimeRef[] = []
+    for (const {re, construct, kind} of JS_READ_PATTERNS) {
+        re.lastIndex = 0
+        for (let m = re.exec(src); m !== null; m = re.exec(src)) {
+            const p = normalizeRefPath(m[2])
+            if (p === null) continue
+            if (kind === 'file' && !hasExt(p)) continue // route-/name-shaped, not a file
+            out.push({path: p, referencer, construct, kind})
+        }
+    }
+    return out
+}
+
+/** Extract local-asset refs from one HTML source. */
+export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[] {
+    const out: RuntimeRef[] = []
+    for (const {re, construct, kind} of HTML_PATTERNS) {
+        re.lastIndex = 0
+        for (let m = re.exec(source); m !== null; m = re.exec(source)) {
+            const p = normalizeRefPath(m[2])
+            if (p === null) continue
+            if (!hasExt(p)) continue // extension-less href/src = route or directory
+            out.push({path: p, referencer, construct, kind})
+        }
+    }
+    return out
+}
+
+/** A path-shaped shell token: contains a separator or an extension, no shell
+ *  metacharacters, not a flag. */
+function isPathToken(t: string): boolean {
+    if (t.startsWith('-') || t.length === 0 || t.length > 200) return false
+    if (/["'`$(){}<>|;&*?[\]]/.test(t)) return false
+    return t.includes('/') || hasExt(t)
+}
+
+/** Script entrypoints: `bun x.ts`, `bun run x.ts`, `node x.js`, `tsx x.ts` —
+ *  the first path-shaped source arg of a runner command. */
+export function extractScriptEntrypoints(body: string, referencer: string): RuntimeRef[] {
+    const out: RuntimeRef[] = []
+    for (const cmd of splitShellCommands(body)) {
+        const toks = cmd.trim().split(/\s+/)
+        let i = 0
+        if (['bun', 'bunx', 'node', 'tsx', 'deno'].includes(toks[i] ?? '')) {
+            i++
+            if (toks[i] === 'run') i++
+            while (toks[i]?.startsWith('-')) i++
+            const cand = toks[i]
+            if (cand !== undefined && isPathToken(cand) && /\.(?:ts|tsx|js|mjs|cjs)$/.test(cand)) {
+                const p = normalizeRefPath(cand)
+                if (p !== null)
+                    out.push({path: p, referencer, construct: 'script entrypoint', kind: 'file'})
+            }
+        }
+    }
+    return out
+}
+
+/** Split a package.json script body into individual commands (`&&`, `||`, `;`,
+ *  `|`, background `&`, newlines). */
+function splitShellCommands(body: string): string[] {
+    return body
+        .split(/&&|\|\||[;|&]|\n/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+}
+
+function addEnumerable(prod: ProducedOutputs, dir: string, stems: Iterable<string>): void {
+    const d = prod.enumerable.get(dir) ?? new Set<string>()
+    for (const s of stems) d.add(s)
+    prod.enumerable.set(dir, d)
+    prod.dirs.add(dir)
+}
+
+function addFile(prod: ProducedOutputs, file: string): void {
+    prod.files.add(file)
+    const dir = path.posix.dirname(file)
+    if (dir !== '.') addEnumerable(prod, dir, [stem(file)])
+}
+
+/** Tools that never materialize project files on their own — their leftover path
+ *  args must not escalate a directory to opaque. */
+const KNOWN_NON_PRODUCING_RE =
+    /^(?:prettier|eslint|tsc|bun|bunx|npx|node|tsx|deno|jest|vitest|mocha|playwright|cypress|grep|cat|echo|rm|test|cross-env|env|git|curl|wget|true|false|exit|sleep|kill|mkdir|cp|mv|touch|concurrently|npm-run-all|wait-on)$/
+
+/** Bundlers/compilers whose OUTPUT DIRECTORY is known but whose exact output
+ *  file set we cannot enumerate statically — the dir becomes opaque. */
+const OPAQUE_TOOL_DIRS: Array<{re: RegExp; dirs: string[]}> = [
+    {re: /\bvite\s+build\b|\bvite\b\s*$/, dirs: ['dist']},
+    {re: /\bnext\s+build\b/, dirs: ['.next', 'out']},
+    {re: /\btsup\b/, dirs: ['dist']},
+    {re: /\bwebpack\b/, dirs: ['dist', 'build']},
+    {re: /\brollup\b/, dirs: ['dist']},
+    {re: /\bparcel\s+build\b/, dirs: ['dist']},
+    {re: /\breact-scripts\s+build\b/, dirs: ['build']},
+    {re: /\bng\s+build\b/, dirs: ['dist']},
+    {re: /\bastro\s+build\b/, dirs: ['dist']},
+    {re: /\bnuxt\s+(?:build|generate)\b/, dirs: ['.output', 'dist']}
+]
+
+/**
+ * Producer facts from ONE shell command: output flags (`-o x`, `--outfile x`,
+ * `--outdir d`), redirects, `cp`/`mv`/`touch` destinations, `mkdir` dirs, known
+ * opaque bundlers. Leftover path tokens of an UNRECOGNIZED command escalate any
+ * directory they point into to opaque — that command may produce there, and
+ * inconclusive is never evidence. `escalate: false` disables that escalation
+ * for command text embedded in PROSE (a markdown bullet's surrounding words
+ * tokenize as junk "commands" and would opaque half the spec's paths).
+ */
+export function collectProducersFromCommand(
+    cmd: string,
+    prod: ProducedOutputs,
+    opts: {escalate?: boolean} = {}
+): void {
+    let rest = cmd.replace(/2>&1|&>\s*\S+|2>\s*\S+/g, ' ')
+    for (const {re, dirs} of OPAQUE_TOOL_DIRS) {
+        if (re.test(rest)) for (const d of dirs) prod.opaque.add(d)
+    }
+    // Redirect target.
+    rest = rest.replace(/>>?\s*([^\s&|;]+)/g, (_, f: string) => {
+        const p = normalizeRefPath(f)
+        if (p !== null && p !== 'dev/null') addFile(prod, p)
+        return ' '
+    })
+    // Explicit output flags. --outdir/--out-dir is always a dir; -o/--output/
+    // --outfile decide by extension (tailwind -o dist/app.css vs esbuild -o dir).
+    const flagRe = /(?:^|\s)(--out(?:file|put|dir|-dir)?|-o)(?:=|\s+)([^\s&|;]+)/g
+    const sourceArgs: string[] = []
+    rest = rest.replace(flagRe, (_, flag: string, val: string) => {
+        const p = normalizeRefPath(val)
+        if (p === null) return ' '
+        if (flag === '--outdir' || flag === '--out-dir') addEnumerable(prod, p, [])
+        else if (hasExt(p)) addFile(prod, p)
+        else addEnumerable(prod, p, [])
+        return ' '
+    })
+    const toks = rest.trim().split(/\s+/)
+    const bin = (toks[0] ?? '').replace(/^.*\//, '')
+    if (bin === 'mkdir') {
+        for (const t of toks.slice(1)) {
+            const p = t.startsWith('-') ? null : normalizeRefPath(t)
+            if (p !== null) prod.dirs.add(p)
+        }
+        return
+    }
+    if (bin === 'cp' || bin === 'mv') {
+        const args = toks.slice(1).filter(t => !t.startsWith('-'))
+        const dest = args[args.length - 1]
+        const p = dest !== undefined ? normalizeRefPath(dest) : null
+        if (p !== null && args.length >= 2) {
+            if (hasExt(p)) addFile(prod, p)
+            else prod.opaque.add(p) // dir dest: contents unenumerable
+        }
+        return
+    }
+    if (bin === 'touch') {
+        for (const t of toks.slice(1)) {
+            const p = t.startsWith('-') ? null : normalizeRefPath(t)
+            if (p !== null) addFile(prod, p)
+        }
+        return
+    }
+    // Source-shaped args (a bundler's entrypoints) contribute stems to any
+    // outdir this same command declared.
+    for (const t of toks.slice(1)) {
+        if (isPathToken(t) && /\.(?:ts|tsx|js|jsx|mjs|cjs|css|html)$/.test(t)) {
+            const p = normalizeRefPath(t)
+            if (p !== null) sourceArgs.push(p)
+        }
+    }
+    // (flagRe already consumed outdirs; attribute stems to dirs declared here.)
+    // Re-scan the ORIGINAL command for the outdirs it declared:
+    const declaredDirs: string[] = []
+    const dirFlagRe = /(?:^|\s)--out(?:dir|-dir)(?:=|\s+)([^\s&|;]+)/g
+    for (let m = dirFlagRe.exec(cmd); m !== null; m = dirFlagRe.exec(cmd)) {
+        const p = normalizeRefPath(m[1])
+        if (p !== null) declaredDirs.push(p)
+    }
+    for (const d of declaredDirs) addEnumerable(prod, d, sourceArgs.map(stem))
+    // Unrecognized command: any leftover path token pointing INTO a directory
+    // makes that directory opaque — the tool may generate arbitrary files there.
+    if ((opts.escalate ?? true) && !KNOWN_NON_PRODUCING_RE.test(bin) && !/^@/.test(bin)) {
+        for (const t of toks.slice(1)) {
+            if (!isPathToken(t)) continue
+            const p = normalizeRefPath(t)
+            if (p === null) continue
+            const dir = hasExt(p) ? path.posix.dirname(p) : p
+            if (dir !== '.') prod.opaque.add(dir)
+        }
+    }
+}
+
+/**
+ * Producer facts from JS/TS source: write-side calls (`Bun.write`,
+ * `writeFile(Sync)`, `createWriteStream`, `copyFile` dest, `mkdir(Sync)`),
+ * `Bun.build({entrypoints, outdir})` (enumerable — unless a `naming` option
+ * makes the output names underivable, then opaque), `outfile:`, and `Bun.spawn`
+ * argv arrays re-fed through the shell-command collector (the mx5 build.ts
+ * shape: tailwind's `-o dist/app.css` lives in a spawn array).
+ */
+export function collectProducersFromSource(source: string, prod: ProducedOutputs): void {
+    const src = stripCommentLines(source)
+    const litRe = (call: string): RegExp =>
+        new RegExp(String.raw`\b${call}\(\s*(['"\`])([^'"\`\n]+)\1`, 'g')
+    for (const call of [
+        'Bun\\.write',
+        'writeFile(?:Sync)?',
+        'appendFile(?:Sync)?',
+        'createWriteStream'
+    ]) {
+        const re = litRe(call)
+        for (let m = re.exec(src); m !== null; m = re.exec(src)) {
+            const p = normalizeRefPath(m[2])
+            if (p !== null && hasExt(p)) addFile(prod, p)
+        }
+    }
+    const cpRe = /\bcopyFile(?:Sync)?\(\s*[^,()]+,\s*(['"`])([^'"`\n]+)\1/g
+    for (let m = cpRe.exec(src); m !== null; m = cpRe.exec(src)) {
+        const p = normalizeRefPath(m[2])
+        if (p !== null) addFile(prod, p)
+    }
+    const mkRe = /\bmkdir(?:Sync)?\(\s*(['"`])([^'"`\n]+)\1/g
+    for (let m = mkRe.exec(src); m !== null; m = mkRe.exec(src)) {
+        const p = normalizeRefPath(m[2])
+        if (p !== null) prod.dirs.add(p)
+    }
+    // Bun.build blocks: pair each `outdir` with the `entrypoints` in the same
+    // options object (nearest preceding within the call's brace span — a simple
+    // window keeps this robust to formatting without a real parser).
+    const buildRe = /Bun\.build\(\s*\{([\s\S]{0,2000}?)\}\s*\)/g
+    for (let m = buildRe.exec(src); m !== null; m = buildRe.exec(src)) {
+        const body = m[1]
+        const outdirM = /\boutdir:\s*(['"`])([^'"`\n]+)\1/.exec(body)
+        const outfileM = /\boutfile:\s*(['"`])([^'"`\n]+)\1/.exec(body)
+        if (outfileM) {
+            const p = normalizeRefPath(outfileM[2])
+            if (p !== null) addFile(prod, p)
+        }
+        if (!outdirM) continue
+        const dir = normalizeRefPath(outdirM[2])
+        if (dir === null) continue
+        if (/\bnaming:/.test(body)) {
+            prod.opaque.add(dir) // custom naming — outputs underivable
+            continue
+        }
+        const entryM = /\bentrypoints:\s*\[([^\]]*)\]/.exec(body)
+        const entries: string[] = []
+        if (entryM) {
+            const lit = /(['"`])([^'"`\n]+)\1/g
+            for (let em = lit.exec(entryM[1]); em !== null; em = lit.exec(entryM[1])) {
+                const p = normalizeRefPath(em[2])
+                if (p !== null) entries.push(p)
+            }
+        }
+        if (entries.length === 0 && entryM === null) {
+            prod.opaque.add(dir) // dynamic entrypoints — cannot enumerate
+        } else {
+            addEnumerable(prod, dir, entries.map(stem))
+        }
+    }
+    // Bun.spawn / spawnSync argv arrays → re-parse as a shell command.
+    const spawnRe = /\bspawn(?:Sync)?\(\s*\[([^\]]*)\]/gi
+    for (let m = spawnRe.exec(src); m !== null; m = spawnRe.exec(src)) {
+        const lit = /(['"`])([^'"`\n]*)\1/g
+        const argv: string[] = []
+        for (let am = lit.exec(m[1]); am !== null; am = lit.exec(m[1])) argv.push(am[2])
+        if (argv.length > 0) collectProducersFromCommand(argv.join(' '), prod)
+    }
+}
+
+/** Best-effort `outDir` from tsconfig-family files (JSONC-tolerant). tsc mirrors
+ *  arbitrary source names into it, so it is always OPAQUE. */
+function collectTsconfigOutDirs(cwd: string, prod: ProducedOutputs): void {
+    let names: string[]
+    try {
+        names = readdirSync(cwd).filter(n => /^tsconfig(\..+)?\.json$/.test(n))
+    } catch {
+        return
+    }
+    for (const n of names) {
+        try {
+            const m = /"outDir"\s*:\s*"([^"]+)"/.exec(readFileSync(path.join(cwd, n), 'utf8'))
+            if (m) {
+                const p = normalizeRefPath(m[1])
+                if (p !== null) prod.opaque.add(p)
+            }
+        } catch {
+            // unreadable config — nothing to learn
+        }
+    }
+}
+
+/** vite/astro-style config: `outDir: 'x'` (opaque), plus their default `dist`. */
+function collectBundlerConfigOutDirs(cwd: string, prod: ProducedOutputs): void {
+    for (const n of [
+        'vite.config.ts',
+        'vite.config.js',
+        'vite.config.mts',
+        'vite.config.mjs',
+        'astro.config.mjs',
+        'astro.config.ts'
+    ]) {
+        const f = path.join(cwd, n)
+        if (!existsSync(f)) continue
+        prod.opaque.add('dist')
+        try {
+            const m = /\boutDir:\s*(['"`])([^'"`\n]+)\1/.exec(readFileSync(f, 'utf8'))
+            if (m) {
+                const p = normalizeRefPath(m[2])
+                if (p !== null) prod.opaque.add(p)
+            }
+        } catch {
+            // default already recorded
+        }
+    }
+}
+
+/** package.json scripts of `cwd` (empty on any fault). */
+function packageScripts(cwd: string): Record<string, string> {
+    try {
+        const j = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
+            scripts?: Record<string, string>
+        }
+        return j.scripts ?? {}
+    } catch {
+        return {}
+    }
+}
+
+/**
+ * Discover everything the project's own machinery produces: package.json script
+ * bodies, build files those scripts run (plus conventional root build files),
+ * tsconfig/vite outDirs.
+ */
+export function discoverProducers(cwd: string): ProducedOutputs {
+    const prod = emptyProducers()
+    const scripts = packageScripts(cwd)
+    const buildFiles = new Set<string>(
+        ['build.ts', 'build.js', 'build.mjs'].filter(f => existsSync(path.join(cwd, f)))
+    )
+    for (const body of Object.values(scripts)) {
+        for (const cmd of splitShellCommands(body)) {
+            collectProducersFromCommand(cmd, prod)
+            // A script that runs a local JS/TS file may produce through it —
+            // parse that file's source too (the mx5 `bun build.ts` shape).
+            for (const t of cmd.split(/\s+/)) {
+                if (isPathToken(t) && /\.(?:ts|js|mjs|cjs)$/.test(t)) {
+                    const p = normalizeRefPath(t)
+                    if (p !== null && existsSync(path.join(cwd, p))) buildFiles.add(p)
+                }
+            }
+        }
+    }
+    for (const f of buildFiles) {
+        try {
+            collectProducersFromSource(readFileSync(path.join(cwd, f), 'utf8'), prod)
+        } catch {
+            // unreadable build file: its outdirs stay whatever the scripts said
+        }
+    }
+    collectTsconfigOutDirs(cwd, prod)
+    collectBundlerConfigOutDirs(cwd, prod)
+    return prod
+}
+
+const underDir = (p: string, dir: string): boolean => p === dir || p.startsWith(dir + '/')
+
+/**
+ * Resolve refs against existence + producers. DANGLING requires POSITIVE
+ * evidence (see the module doc): the ref sits under an ENUMERATED output dir
+ * and is not among its outputs, or is a missing source-only-extension file
+ * (nothing ever builds a `.ts`/`.tsx`). Everything inconclusive steps aside.
+ */
+export function resolveDanglingRefs(
+    refs: RuntimeRef[],
+    prod: ProducedOutputs,
+    exists: (rel: string) => boolean
+): DanglingRef[] {
+    const out: DanglingRef[] = []
+    const seen = new Set<string>()
+    for (const ref of refs) {
+        const p = ref.path
+        // Candidate bases: repo root and the referencing file's directory (a JS
+        // relative read may resolve from either at runtime; HTML relative src
+        // resolves from its own dir). Satisfied under ANY plausible base.
+        const bases = ['']
+        const refDir = path.posix.dirname(ref.referencer.replace(/\\/g, '/'))
+        if (
+            refDir !== '.'
+            && !ref.referencer.startsWith('package.json')
+            && ref.referencer !== 'spec'
+        ) {
+            bases.push(refDir)
+        }
+        const candidates = bases
+            .map(b => path.posix.normalize(b === '' ? p : `${b}/${p}`))
+            .filter(c => !c.startsWith('..'))
+        if (candidates.length === 0) continue // escapes the repo — cannot ground
+        if (candidates.some(c => exists(c))) continue
+        if (ref.kind === 'dir') {
+            const satisfied = candidates.some(
+                c =>
+                    prod.dirs.has(c)
+                    || prod.opaque.has(c)
+                    || prod.enumerable.has(c)
+                    || [...prod.files].some(f => underDir(f, c))
+                    || [...prod.opaque].some(d => underDir(c, d))
+            )
+            if (satisfied) continue
+            // A static root that neither exists nor is produced is only flagged
+            // when the project HAS producer machinery at all — a bare repo with
+            // no scripts yields no evidence either way.
+            if (prod.dirs.size + prod.enumerable.size + prod.opaque.size + prod.files.size === 0) {
+                continue
+            }
+            push(ref, `directory does not exist and no script or build step creates it`)
+            continue
+        }
+        const isSatisfied = candidates.some(c => {
+            if (prod.files.has(c)) return true
+            if ([...prod.opaque].some(d => underDir(c, d))) return true
+            for (const [dir, stems] of prod.enumerable) {
+                if (underDir(path.posix.dirname(c), dir) && stems.has(stem(c))) return true
+            }
+            return false
+        })
+        if (isSatisfied) continue
+        // Positive-evidence branches:
+        const underEnumerable = candidates.some(c =>
+            [...prod.enumerable.keys()].some(d => underDir(path.posix.dirname(c), d))
+        )
+        if (underEnumerable) {
+            push(ref, 'it sits in a build output directory whose parsed outputs do not include it')
+            continue
+        }
+        if (SOURCE_ONLY_EXT_RE.test(p) && ref.construct === 'script entrypoint') {
+            push(ref, 'the script entrypoint file does not exist and nothing generates sources')
+        }
+        // Everything else: inconclusive — step aside.
+    }
+    return out
+
+    function push(ref: RuntimeRef, reason: string): void {
+        const key = `${ref.referencer} ${ref.path}`
+        if (seen.has(key)) return
+        seen.add(key)
+        out.push({...ref, reason})
+    }
+}
+
+// Directories never scanned for referencing sources: VCS/dep/artifact trees,
+// every discovered produced dir (bundled output re-referencing its own chunks is
+// noise), and test/fixture/doc trees — those reference fixture paths and quoted
+// examples freely and are not the runtime serving surface this guard protects.
+const SKIP_DIR_RE =
+    /^(?:\.git|node_modules|\.pi-tasks|dist|build|out|coverage|target|vendor|__pycache__|\.venv|venv|tmp|test|tests|__tests__|__fixtures__|fixtures|e2e|examples|example|docs|doc)$/
+const SKIP_FILE_RE = /\.(?:test|spec|stories)\.[a-z]+$|\.d\.[mc]?ts$/i
+const SCAN_JS_RE = /\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i
+const SCAN_HTML_RE = /\.html?$/i
+const MAX_SCAN_FILES = 3000
+const MAX_FILE_BYTES = 400_000
+
+/** Walk the tree for scannable sources (bounded, deterministic order). */
+function scanCandidates(cwd: string, prod: ProducedOutputs): string[] {
+    const out: string[] = []
+    const producedDirs = new Set(
+        [...prod.dirs, ...prod.opaque, ...prod.enumerable.keys()].map(d => d.split('/')[0])
+    )
+    const walk = (rel: string): void => {
+        if (out.length >= MAX_SCAN_FILES) return
+        let entries: string[]
+        try {
+            entries = readdirSync(path.join(cwd, rel)).sort()
+        } catch {
+            return
+        }
+        for (const name of entries) {
+            if (out.length >= MAX_SCAN_FILES) return
+            const relPath = rel === '' ? name : `${rel}/${name}`
+            let st
+            try {
+                st = statSync(path.join(cwd, relPath))
+            } catch {
+                continue
+            }
+            if (st.isDirectory()) {
+                if (name.startsWith('.') || SKIP_DIR_RE.test(name)) continue
+                if (rel === '' && producedDirs.has(name)) continue
+                walk(relPath)
+            } else if (st.isFile() && st.size <= MAX_FILE_BYTES) {
+                if (SKIP_FILE_RE.test(name)) continue
+                if (SCAN_JS_RE.test(name) || SCAN_HTML_RE.test(name)) out.push(relPath)
+            }
+        }
+    }
+    walk('')
+    return out
+}
+
+/**
+ * FINAL-GATE seam: scan the shipped tree for dangling runtime references.
+ * Deterministic, read-only, best-effort (throws nothing in normal operation;
+ * callers still guard). Producers are discovered first (scripts + build files +
+ * configs), then every authored source contributes refs AND runtime write-side
+ * producers (an app that writes its own cache file satisfies its own read).
+ */
+export function findDanglingArtifacts(cwd: string): DanglingRef[] {
+    const prod = discoverProducers(cwd)
+    const refs: RuntimeRef[] = []
+    for (const rel of scanCandidates(cwd, prod)) {
+        let src: string
+        try {
+            src = readFileSync(path.join(cwd, rel), 'utf8')
+        } catch {
+            continue
+        }
+        if (SCAN_HTML_RE.test(rel)) {
+            refs.push(...extractHtmlRefs(src, rel))
+        } else {
+            refs.push(...extractJsRefs(src, rel))
+            collectProducersFromSource(src, prod)
+        }
+    }
+    for (const [name, body] of Object.entries(packageScripts(cwd))) {
+        refs.push(...extractScriptEntrypoints(body, `package.json scripts.${name}`))
+    }
+    return resolveDanglingRefs(refs, prod, rel => existsSync(path.join(cwd, rel)))
+}
+
+/** Ranked-failure text for the final gate (names referencer + missing path). */
+export function danglingGateFailureText(d: DanglingRef): string {
+    return (
+        `dangling artifact: \`${d.referencer}\` references \`${d.path}\` (${d.construct}) `
+        + `but nothing in the tree, build outputs, or scripts produces it — ${d.reason}`
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Plan-time seam: the SPEC's own snippets referencing artifacts the spec never
+// defines (mx5 run 13: DESIGN/PROJECT.md L224 required serving index.html; the
+// file tree (§7) and build section (§9) never defined it).
+// ---------------------------------------------------------------------------
+
+/** Does the spec LIST the file as its own artifact — a file-tree entry or a
+ *  bullet whose first token is (or ends with) the basename? Prose that merely
+ *  mentions the name mid-sentence ("serves the built index.html") does NOT
+ *  count: that is the CONSUMING side, exactly what must not self-satisfy. */
+export function specListsFile(spec: string, refPath: string): boolean {
+    const base = path.posix.basename(refPath).toLowerCase()
+    for (const line of spec.split('\n')) {
+        const cleaned = line
+            .replace(/[│├└─┬┼]/g, ' ')
+            .replace(/^[\s*+-]+/, '')
+            .replace(/[`'"]/g, '')
+            .trim()
+        const tok = (cleaned.split(/\s+/)[0] ?? '').toLowerCase()
+        if (tok === base || tok.endsWith('/' + base)) return true
+    }
+    return false
+}
+
+/** Consuming-side prose verbs: a spec sentence that SERVES/READS/LOADS a
+ *  backticked file is referencing it at runtime (mx5 run 13, the exact line:
+ *  "**SPA fallback:** non-`/api` GETs serve the built `index.html`."). */
+const PROSE_CONSUME_RE = /\b(?:serves?|serving|served|fallback|reads?|loads?|renders?)\b/i
+/** Runtime-artifact extensions the prose channel accepts. Prose is the loosest
+ *  signal, so it is whitelist-tight: a backticked dotted identifier (`c.var.user`,
+ *  `Bun.password.hash` — measured FPs on the real mx5 spec) must never read as a
+ *  file, and doc files a spec tells the READER to read (`README.md`) don't
+ *  count either. Code-construct refs are not subject to this list. */
+const PROSE_ASSET_EXT_RE =
+    /\.(?:html?|css|m?js|cjs|json|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|otf|wasm|webmanifest|xml|csv|sql|ya?ml|toml|pdf|mp[34]|db|sqlite)$/i
+
+/** Backticked, asset-extension, path-shaped tokens on consuming-verb lines. */
+export function extractSpecProseRefs(spec: string): RuntimeRef[] {
+    const out: RuntimeRef[] = []
+    for (const line of spec.split('\n')) {
+        if (!PROSE_CONSUME_RE.test(line)) continue
+        const tick = /`([^`\n]+)`/g
+        for (let m = tick.exec(line); m !== null; m = tick.exec(line)) {
+            const tok = m[1]
+            if (!/^[\w./-]+$/.test(tok)) continue // code fragments, not paths
+            const p = normalizeRefPath(tok)
+            if (p === null || !PROSE_ASSET_EXT_RE.test(p)) continue
+            out.push({
+                path: p,
+                referencer: 'spec',
+                construct: 'spec prose (serve/read)',
+                kind: 'file'
+            })
+        }
+    }
+    return out
+}
+
+/**
+ * PLAN-TIME seam: runtime refs in the spec's snippets AND consuming prose that
+ * neither the existing scaffold (`fileExists`), the spec's parsed build
+ * outputs, nor its own file tree produce. Each result becomes an UNOWNED
+ * coverage area until some task title claims the artifact.
+ */
+export function findSpecDanglingArtifacts(
+    spec: string,
+    fileExists: (rel: string) => boolean
+): DanglingRef[] {
+    const prod = emptyProducers()
+    collectProducersFromSource(spec, prod)
+    // Shell-looking lines in the spec (build/script snippets) contribute
+    // producers too: only lines carrying an output-flag shape, and never
+    // markdown blockquotes (`> …` is quoting, not a shell redirect), so prose
+    // cannot feed the producer table and mask a real dangle.
+    for (const line of spec.split('\n')) {
+        if (line.trimStart().startsWith('>')) continue
+        if (/(?:^|\s)(?:--out(?:file|put|dir|-dir)?|-o)(?:=|\s)/.test(line)) {
+            for (const cmd of splitShellCommands(line)) {
+                collectProducersFromCommand(cmd, prod, {escalate: false})
+            }
+        }
+    }
+    // package.json-snippet script lines (`"build": "bun build.ts"`) — parse the
+    // body for producers.
+    const scriptLineRe = /"([A-Za-z0-9:_-]+)"\s*:\s*"([^"\n]+)"/g
+    for (let m = scriptLineRe.exec(spec); m !== null; m = scriptLineRe.exec(spec)) {
+        const body = m[2]
+        if (/^(?:bun|bunx|node|tsx|npm|npx|deno)\b|--out|-o\s/.test(body)) {
+            for (const cmd of splitShellCommands(body)) collectProducersFromCommand(cmd, prod)
+        }
+    }
+    // Code-construct refs resolve exactly like tree refs.
+    const codeRefs: RuntimeRef[] = [
+        ...extractJsRefs(spec, 'spec'),
+        ...extractHtmlRefs(spec, 'spec')
+    ]
+    const dangling = resolveDanglingRefs(codeRefs, prod, fileExists)
+    // Prose refs carry no directory, so they resolve by BASENAME against the
+    // declared outputs — and dangle ONLY when the spec positively declares an
+    // enumerable output set that does not include them (a spec with no
+    // parseable build machinery, or any opaque producer, yields no verdict —
+    // inconclusive is never evidence).
+    const declaredStemCount = [...prod.enumerable.values()].reduce((n, s) => n + s.size, 0)
+    const hasOutputEvidence = prod.files.size > 0 || declaredStemCount > 0
+    const producedBasenames = new Set([...prod.files].map(f => path.posix.basename(f)))
+    const producedStems = new Set([
+        ...[...prod.files].map(stem),
+        ...[...prod.enumerable.values()].flatMap(s => [...s])
+    ])
+    const seen = new Set(dangling.map(d => path.posix.basename(d.path)))
+    for (const ref of extractSpecProseRefs(spec)) {
+        const base = path.posix.basename(ref.path)
+        if (seen.has(base)) continue
+        if (!hasOutputEvidence || prod.opaque.size > 0) continue
+        const satisfied =
+            fileExists(ref.path)
+            || [...prod.dirs, ...prod.enumerable.keys()].some(d => fileExists(`${d}/${ref.path}`))
+            || producedBasenames.has(base)
+            || producedStems.has(stem(ref.path))
+        if (satisfied) continue
+        seen.add(base)
+        dangling.push({
+            ...ref,
+            reason: 'the spec declares its build outputs and none of them is this file'
+        })
+    }
+    // The spec's own file tree / artifact bullets are plan-time producers: a
+    // listed file is an artifact some task will create.
+    return dangling.filter(d => !specListsFile(spec, d.path))
+}
+
+/** Does some task title claim the artifact (by basename or full path)? Titles
+ *  are the one plan artifact the model cannot fake ownership INTO — mentioning
+ *  the file is the grounded signal a producing task exists. */
+export function titlesCoverArtifact(titles: string[], ref: {path: string}): boolean {
+    const base = path.posix.basename(ref.path).toLowerCase()
+    const full = ref.path.toLowerCase()
+    return titles.some(t => {
+        const tl = t.toLowerCase()
+        return tl.includes(base) || tl.includes(full)
+    })
+}
+
+/** Coverage-loop `missing` entry for an unowned dangling artifact. */
+export function danglingMissingText(d: DanglingRef): string {
+    return (
+        `dangling runtime artifact \`${d.path}\` — referenced by the spec (${d.construct}) `
+        + `but no file tree entry, build output, or task produces it; add a task that `
+        + `creates it or makes the build emit it`
+    )
+}
+
+/** Carried-requirement line when still unowned at coverage exhaustion. */
+export function danglingCarryText(d: DanglingRef): string {
+    return (
+        `runtime artifact \`${d.path}\` is referenced (${d.construct}) but NOTHING creates it — `
+        + `whichever task builds the referencing side must also produce this file or wire the `
+        + `build to emit it`
+    )
+}

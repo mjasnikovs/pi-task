@@ -202,6 +202,22 @@ describe('carried-requirements artifact', () => {
         await appendCarriedRequirements(cwd, [])
         expect(fs.existsSync(requirementsFile(cwd))).toBe(false)
     })
+
+    test('dangling-artifact channel (run 13 PROMPT 2) carries with its own marker', async () => {
+        const cwd = makeCwd()
+        await appendCarriedRequirements(
+            cwd,
+            [],
+            [],
+            [],
+            ['runtime artifact `dist/index.html` is referenced (spec prose) but NOTHING creates it']
+        )
+        const raw = await readRequirements(cwd)
+        expect(raw).toContain('dist/index.html')
+        expect(raw).toContain(
+            '[dangling runtime artifact, nothing produces it — surfaced at plan time]'
+        )
+    })
 })
 
 describe('injection blocks', () => {

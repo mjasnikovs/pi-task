@@ -814,6 +814,51 @@ describe('runFinalIntegrationGate — failure aggregation + ranking (run 13)', (
     })
 })
 
+describe('runFinalIntegrationGate — dangling-artifact closure (run 13, PROMPT 2)', () => {
+    test('a runtime ref with no producer FAILS the gate, ranked with the load-bearing class', async () => {
+        // The run-13 shape: server reads dist/index.html; the build enumerable
+        // outputs are main.js (Bun.build entrypoint) + app.css (tailwind -o) —
+        // index.html has no producer anywhere. Statics/tests are green.
+        const dir = makeDir({scripts: {test: 'exit 0', build: 'node build.js'}})
+        fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(dir, 'build.js'),
+            [
+                'Bun.spawn(["bunx", "@tailwindcss/cli", "-i", "src/index.css", "-o", "dist/app.css"])',
+                'await Bun.build({entrypoints: ["src/main.tsx"], outdir: "dist"})'
+            ].join('\n')
+        )
+        fs.writeFileSync(path.join(dir, 'src', 'server.ts'), "Bun.file('dist/index.html')")
+        // `bun run build` will fail here too (no real sources) — the point is
+        // the dangling failure is PRESENT and carries referencer + path.
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        const dangling = (out.failures ?? []).filter(f => f.startsWith('dangling artifact:'))
+        expect(dangling).toHaveLength(1)
+        expect(dangling[0]).toContain('src/server.ts')
+        expect(dangling[0]).toContain('dist/index.html')
+        // rank 0: it precedes ordinary (rank 1) failures in the ranked list.
+        expect(out.failures![0]).toBe(dangling[0])
+    })
+
+    test('goes quiet when a producer exists (cp into dist) — no gate failure', async () => {
+        const dir = makeDir({
+            scripts: {
+                test: 'exit 0',
+                build: 'node build.js && cp src/template.html dist/index.html'
+            }
+        })
+        fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
+        fs.writeFileSync(
+            path.join(dir, 'build.js'),
+            'await Bun.build({entrypoints: ["src/main.tsx"], outdir: "dist"})'
+        )
+        fs.writeFileSync(path.join(dir, 'src', 'server.ts'), "Bun.file('dist/index.html')")
+        const out = await runFinalIntegrationGate(dir)
+        expect((out.failures ?? []).filter(f => f.startsWith('dangling artifact:'))).toHaveLength(0)
+    })
+})
+
 describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TASK_0012)', () => {
     test('a non-static (frozen-path) debt is SURFACED on a PASS and kept in the ledger', async () => {
         const dir = makeDir() // no manifest → statics + integration trivially pass
