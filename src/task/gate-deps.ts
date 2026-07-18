@@ -13,6 +13,7 @@
  * path-revisit disabled because re-running the same check IS the job), each with a
  * status widget and a per-gate debug log under .pi-tasks/.
  */
+import {existsSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -51,6 +52,13 @@ import {
     type RepoFile
 } from './test-assembly.js'
 import {runBoundedLintFix} from './lint-fix.js'
+import {findForeignPaths, foreignPathVerifyFindings, repairForeignPaths} from './foreign-path.js'
+import {
+    findScriptEscapesInManifest,
+    scriptEscapeVerifyFindings,
+    type ScriptEscapeFinding
+} from './script-escape.js'
+import {assessRunnerGlobs, runnerGlobVerifyFindings} from './runner-globs.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {formatLoopHint} from './child-runner.js'
@@ -174,6 +182,130 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
         return last.exitCode === 0 ? parseAddedLines(last.stdout) : []
     }
     return lines
+}
+
+/**
+ * Deterministic sandbox-path-leak pass (see foreign-path.ts, mx5 run 13 PROMPT 4
+ * item 1): find absolute paths the task committed that resolve nowhere on this
+ * machine while the real file sits in the repo, REPAIR the ones whose relative
+ * form provably resolves, and return verify findings for whatever is left.
+ *
+ * The repair runs here, before the verify child, for the same reason lint-fix
+ * does: the defect is mechanical and the correct target is already known, so
+ * spending an AUTOFIX round (or a human) on a path substitution is waste. What it
+ * cannot repair still reaches the child under rule 4e. Failures degrade to no
+ * findings — a sharpener, never a blocker.
+ */
+async function collectForeignPathFindings(
+    cwd: string,
+    signal?: AbortSignal,
+    logDebug?: (m: string) => void
+): Promise<string[]> {
+    const lines = await collectAddedLines(cwd, signal)
+    if (lines.length === 0) return []
+    const findings = findForeignPaths(
+        lines,
+        abs => existsSync(abs),
+        rel => existsSync(path.join(cwd, rel))
+    )
+    if (findings.length === 0) return []
+    const {repaired, remaining} = await repairForeignPaths(findings, {
+        readFile: rel => fsp.readFile(path.join(cwd, rel), 'utf8'),
+        writeFile: (rel, text) => fsp.writeFile(path.join(cwd, rel), text, 'utf8'),
+        existsInRepo: rel => existsSync(path.join(cwd, rel))
+    })
+    for (const r of repaired) logDebug?.(`sandbox path leak repaired — ${r}`)
+    for (const f of remaining) {
+        logDebug?.(`sandbox path leak NOT repaired — ${f.file}: ${f.absolute}`)
+    }
+    return foreignPathVerifyFindings(remaining)
+}
+
+/** Manifests whose `scripts` the check-script scanner understands. */
+const MANIFEST_RE = /(^|\/)package\.json$/
+
+/**
+ * Deterministic neutered-check-script pass (see script-escape.ts, mx5 run 13 PROMPT
+ * 4 item 4): check-class scripts that cannot report failure, in a manifest THIS
+ * task changed.
+ *
+ * Scoped to manifests the task touched, so the finding lands on the task that
+ * authored the script rather than being re-served to every later task. A script
+ * neutered by an earlier task is the whole-repo final gate's business, which
+ * re-checks the shipped manifest at run end regardless of who wrote it.
+ *
+ * Failures degrade to no findings — a sharpener, never a blocker.
+ */
+async function collectScriptEscapeFindings(cwd: string, signal?: AbortSignal): Promise<string[]> {
+    const changed = await collectChangedFiles(cwd, signal)
+    const manifests = changed.map(f => f.path).filter(p => MANIFEST_RE.test(p))
+    const findings: ScriptEscapeFinding[] = []
+    for (const rel of manifests) {
+        try {
+            findings.push(
+                ...findScriptEscapesInManifest(await fsp.readFile(path.join(cwd, rel), 'utf8'))
+            )
+        } catch {
+            // unreadable/absent manifest — nothing to report
+        }
+    }
+    return scriptEscapeVerifyFindings(findings)
+}
+
+/** Playwright config filenames, in the order playwright itself resolves them. */
+const PLAYWRIGHT_CONFIGS = [
+    'playwright.config.ts',
+    'playwright.config.js',
+    'playwright.config.mts',
+    'playwright-ct.config.ts',
+    'playwright-ct.config.js'
+]
+
+/** Read a repo file as text, or null when absent/unreadable. */
+async function readOrNull(cwd: string, rel: string): Promise<string | null> {
+    try {
+        return await fsp.readFile(path.join(cwd, rel), 'utf8')
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Deterministic test-runner glob-collision pass (see runner-globs.ts, mx5 runs 7 AND
+ * 13, PROMPT 4 item 2): the manifest declares both `bun test` and `playwright test`
+ * without a provably disjoint file set, so `bun test` imports the playwright specs
+ * and dies during collection.
+ *
+ * Whole-repo rather than diff-scoped, unlike the neutered-script probe: a collision
+ * is a property of the PAIR of declarations, and the task that completes the pair is
+ * rarely the one that will be blamed by a diff. It is cheap (two small file reads)
+ * and silent unless both runners are actually declared. Failures degrade to no
+ * findings — a sharpener, never a blocker.
+ */
+async function collectRunnerGlobFindings(cwd: string): Promise<string[]> {
+    const manifestText = await readOrNull(cwd, 'package.json')
+    if (manifestText === null) return []
+    let scripts: Record<string, string>
+    try {
+        const parsed: unknown = JSON.parse(manifestText)
+        const raw = (parsed as {scripts?: unknown} | null)?.scripts
+        if (typeof raw !== 'object' || raw === null) return []
+        scripts = raw as Record<string, string>
+    } catch {
+        return []
+    }
+    let playwrightConfig: string | null = null
+    for (const name of PLAYWRIGHT_CONFIGS) {
+        playwrightConfig = await readOrNull(cwd, name)
+        if (playwrightConfig !== null) break
+    }
+    return runnerGlobVerifyFindings(
+        assessRunnerGlobs({
+            scripts,
+            bunfig: await readOrNull(cwd, 'bunfig.toml'),
+            playwrightConfig
+        })
+    )
 }
 
 /**
@@ -612,6 +744,37 @@ export function buildGateDeps(params: {
                             taskThatIntroduced(cwd2, rel)
                         )
                     ),
+                // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
+                // 1): absolute paths committed from the authoring child's own
+                // environment (`/workspace/src/shared`) that resolve nowhere here.
+                // Repaired deterministically where the relative form provably
+                // resolves; the remainder is injected under rule 4e, whose point is
+                // that such a path breaks the BUILD — so the checks that would have
+                // caught it report nothing rather than failing.
+                foreignPathProbe: () =>
+                    collectForeignPathFindings(
+                        cwd2,
+                        signal,
+                        msg =>
+                            void fsp
+                                .appendFile(
+                                    path.join(tasksDir(cwd2), 'verify-debug.log'),
+                                    `${new Date().toISOString()} ${msg}\n`
+                                )
+                                .catch(() => {})
+                    ),
+                // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
+                // item 4): a check script this task authored that cannot fail
+                // (`… || true`, an inverted-grep launder). Injected under rule 4f,
+                // because the child provably cannot find this by running the
+                // script — it passes, which IS the defect.
+                scriptEscapeProbe: () => collectScriptEscapeFindings(cwd2, signal),
+                // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
+                // PROMPT 4 item 2): both `bun test` and `playwright test` declared
+                // with no proof their file sets are disjoint. Injected under rule
+                // 4g — the collision kills the suite during COLLECTION, which does
+                // not look like a test failure.
+                runnerGlobProbe: () => collectRunnerGlobFindings(cwd2),
                 // Deterministic prohibition probe: paths the spec forbids modifying
                 // that the task's diff modified anyway become prompt-level findings
                 // under the no-waiver rule — the child otherwise rarely runs `git

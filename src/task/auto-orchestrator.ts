@@ -46,7 +46,7 @@ import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remot
 import {pushNotify} from '../remote/push.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
-import {buildGateDeps, type FinalGateFixFn} from './gate-deps.js'
+import {buildGateDeps, collectTreeChanges, type FinalGateFixFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate} from './final-gate.js'
@@ -59,7 +59,9 @@ import {
     FINAL_ACCEPT_LABEL,
     FINAL_ACCEPT_VALUE,
     FINAL_AUTOFIX_LABEL,
-    FINAL_AUTOFIX_VALUE
+    FINAL_AUTOFIX_VALUE,
+    STRANDED_FIX_COMMIT,
+    strandedFixNote
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode, yoloPickAnswer, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
@@ -216,6 +218,14 @@ export interface AutoDeps extends GateDeps {
      * Leave-failed / Accept, exactly the pre-autofix behavior.
      */
     finalGateFix?: FinalGateFixFn
+    /**
+     * Paths currently uncommitted in the working tree (`git status` shape), used to
+     * detect SUB-FIXES a non-converging final-gate autofix left behind (mx5 run 13
+     * PROMPT 4 item 3). Every task is committed by the time the final gate runs, so
+     * anything dirty here is the fix pass's own work. Absent → the stranded-fix
+     * handling is skipped entirely (prior behavior).
+     */
+    pendingChanges?: (cwd: string) => Promise<string[]>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -1199,7 +1209,14 @@ function defaultDeps(
         finalGate: (cwd2, planText) =>
             getConfig().verifyWork ?
                 runFinalIntegrationGate(cwd2, undefined, undefined, undefined, planText)
-            :   Promise.resolve({ok: true, reason: 'disabled'})
+            :   Promise.resolve({ok: true, reason: 'disabled'}),
+        // Uncommitted paths, for the stranded-sub-fix handling around the final-gate
+        // picker (mx5 run 13 PROMPT 4 item 3). Every task is committed by the time
+        // the gate runs, so whatever is dirty here belongs to the fix pass.
+        pendingChanges: async cwd2 => {
+            const changes = await collectTreeChanges(cwd2, signal)
+            return [...changes.modified, ...changes.added, ...changes.deleted].sort()
+        }
     }
 }
 
@@ -1330,6 +1347,19 @@ export async function runAutoLoop(
                     // after MAX_FINAL_GATE_AUTOFIX attempts that still FAIL the
                     // autofix card is withdrawn so the loop cannot run unbounded.
                     let fixAttempts = 0
+                    // Sub-fixes a non-converging autofix attempt left uncommitted.
+                    // Refreshed after every attempt; drives the picker note and the
+                    // accept-time commit (mx5 run 13 PROMPT 4 item 3).
+                    let stranded: string[] = []
+                    const refreshStranded = async (): Promise<void> => {
+                        if (!deps.pendingChanges) return
+                        try {
+                            stranded = await deps.pendingChanges(cwd)
+                        } catch {
+                            // Inconclusive: say nothing rather than claim a clean tree.
+                            stranded = []
+                        }
+                    }
                     while (!fin.ok) {
                         const canAutofix =
                             deps.finalGateFix !== undefined && fixAttempts < MAX_FINAL_GATE_AUTOFIX
@@ -1343,6 +1373,10 @@ export async function runAutoLoop(
                             + (fixAttempts > 0 ?
                                 `\n\nAutofix attempts so far: ${fixAttempts}/${MAX_FINAL_GATE_AUTOFIX}.`
                             :   '')
+                            // Never let a partial repair be invisible at the moment
+                            // the human decides (run 13: a bunfig fix that made
+                            // `bun run test` pass 116/116 was stranded by an ACCEPT).
+                            + strandedFixNote(stranded)
                         // YOLO: keep autofixing WHILE the card is still offered — the
                         // loop withdraws it after MAX_FINAL_GATE_AUTOFIX, so the cap
                         // that bounds a non-converging fix pass still bounds this —
@@ -1386,8 +1420,34 @@ export async function runAutoLoop(
                         const choice = classifyFinalGateAnswer(answer)
                         if (choice.action === 'accept') {
                             await recGate('final-gate: FAIL accepted by user')
+                            // STRANDED SUB-FIXES: the run completes here, so anything
+                            // the fix pass repaired but never committed would be lost
+                            // to the next `git checkout` while HEAD keeps the defect
+                            // it fixed. Commit it as its own, named commit — the
+                            // ACCEPT is a decision about the FAILING gate, never an
+                            // instruction to throw away work (mx5 run 13 item 3).
+                            if (stranded.length > 0) {
+                                try {
+                                    const sha = await deps.commit(cwd, STRANDED_FIX_COMMIT(id))
+                                    await recGate(
+                                        `final-gate: committed ${stranded.length} stranded fix-pass change(s)`
+                                            + `${sha ? ` as ${sha}` : ''} — ${stranded.slice(0, 8).join(', ')}`
+                                    )
+                                } catch (err) {
+                                    // Never break the completion path over this — but
+                                    // say so, so the changes are not silently lost.
+                                    await recGate(
+                                        `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
+                                            + `change(s) (${err instanceof Error ? err.message : String(err)}) — `
+                                            + `they remain UNCOMMITTED in the working tree: ${stranded.slice(0, 8).join(', ')}`
+                                    )
+                                }
+                            }
                             active.ui.notify(
-                                `${id}: final integration gate FAIL accepted by user — completing.`,
+                                `${id}: final integration gate FAIL accepted by user — completing.`
+                                    + (stranded.length > 0 ?
+                                        ` ${stranded.length} uncommitted fix-pass change(s) committed separately.`
+                                    :   ''),
                                 'warning'
                             )
                             break
@@ -1421,6 +1481,16 @@ export async function runAutoLoop(
                             await recGate(
                                 `final-gate: autofix attempt ${fixAttempts} failed — ${fix.reason.slice(0, 200)}`
                             )
+                            // The attempt's edits survive a non-convergence (only a
+                            // guard trip discards). Find out what they are NOW, so
+                            // the next picker shows them and an ACCEPT can commit them.
+                            await refreshStranded()
+                            if (stranded.length > 0) {
+                                await recGate(
+                                    `final-gate: autofix attempt ${fixAttempts} left ${stranded.length} `
+                                        + `uncommitted change(s) — ${stranded.slice(0, 8).join(', ')}`
+                                )
+                            }
                             active.ui.notify(
                                 `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
                                 'warning'
@@ -1454,10 +1524,23 @@ export async function runAutoLoop(
                                 `final-gate: left failed — autofix budget spent, nobody to ask ${YOLO_STAMP}`
                             :   'final-gate: left failed (user)'
                         )
+                        // Leaving the run failed hands the working tree back to the
+                        // user, so uncommitted fix-pass edits are theirs to keep or
+                        // drop — but they must be VISIBLE, not discovered later by a
+                        // stray `git status` (mx5 run 13 item 3).
+                        if (stranded.length > 0) {
+                            await recGate(
+                                `final-gate: ${stranded.length} uncommitted fix-pass change(s) left in the `
+                                    + `working tree — ${stranded.slice(0, 8).join(', ')}`
+                            )
+                        }
                         await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                         announceDone(
                             active,
-                            `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`,
+                            `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`
+                                + (stranded.length > 0 ?
+                                    ` NOTE: ${stranded.length} uncommitted fix-pass change(s) are in your working tree (${stranded.slice(0, 4).join(', ')}).`
+                                :   ''),
                             'error'
                         )
                         return

@@ -2230,6 +2230,146 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
     })
 })
 
+// ── Stranded sub-fixes (mx5 run 13 PROMPT 4 item 3) ──────────────────────────
+// A non-converging fix attempt KEEPS its edits (only a guard trip discards) and
+// deps.commit runs only on fix.ok — so run 13's bunfig.toml repair, which made
+// `bun run test` pass 116/116, was still uncommitted when the user accepted the
+// FAIL, leaving HEAD broken and the repair invisible.
+
+/** Deps for a run whose single autofix attempt does not converge but edits the tree. */
+function strandedDeps(
+    commits: string[],
+    pending: string[] = ['bunfig.toml'],
+    trail: string[] = []
+): AutoDeps {
+    return {
+        runChild: () => Promise.resolve(''),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        commit: (_cwd, message) => {
+            commits.push(message)
+            return Promise.resolve({committed: true, sha: 'abc1234'})
+        },
+        record: (_c, _id, line) => {
+            trail.push(line)
+            return Promise.resolve()
+        },
+        finalGate: () => Promise.resolve({ok: false, reason: '`bun run test:ct` exited 1'}),
+        finalGateFix: () =>
+            Promise.resolve({
+                ok: false,
+                reason: 'did not converge: `bun run test:ct` exited 1',
+                gateReason: '`bun run test:ct` exited 1'
+            }),
+        pendingChanges: () => Promise.resolve(pending)
+    }
+}
+
+test('runAutoLoop: a non-converging fix pass surfaces its uncommitted changes in the next picker', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits))
+        const pickers = captured.selects.filter(s => /Final integration gate FAILED/.test(s.title))
+        // First picker: nothing stranded yet. Second: the attempt's edits are named.
+        expect(pickers[0].title).not.toMatch(/UNCOMMITTED/)
+        expect(pickers[1].title).toMatch(/UNCOMMITTED: the fix pass left 1 change\(s\)/)
+        expect(pickers[1].title).toContain('bunfig.toml')
+    })
+})
+
+test('runAutoLoop: ACCEPT commits the stranded fix pass changes instead of dropping them', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits, ['bunfig.toml'], trail))
+        // Its OWN commit, distinct from the converged-autofix commit.
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(true)
+        expect(commits.some(m => /FINAL GATE AUTOFIX/.test(m))).toBe(false)
+        expect(trail.some(l => /committed 1 stranded fix-pass change\(s\)/.test(l))).toBe(true)
+        expect(trail.some(l => l.includes('bunfig.toml'))).toBe(true)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})
+
+test('runAutoLoop: LEAVE-failed keeps stranded changes in the tree but names them', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Leave failed — I will fix and /task-auto-resume')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits, ['bunfig.toml'], trail))
+        // The user keeps the working tree — nothing is committed for them...
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
+        // ...but the changes are announced, not left to a stray `git status`.
+        expect(
+            trail.some(l => /uncommitted fix-pass change\(s\) left in the working tree/.test(l))
+        ).toBe(true)
+        expect(captured.notifies.some(n => /uncommitted fix-pass change/.test(n.msg))).toBe(true)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
+    })
+})
+
+test('runAutoLoop: a clean tree after a failed fix pass adds no stranded noise anywhere', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits, [], trail))
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
+        expect(trail.some(l => /stranded fix-pass/.test(l))).toBe(false)
+        expect(captured.selects.every(s => !/UNCOMMITTED/.test(s.title))).toBe(true)
+    })
+})
+
+test('runAutoLoop: without the pendingChanges dep the stranded handling is skipped entirely', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const d = {...strandedDeps(commits), pendingChanges: undefined}
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+    })
+})
+
+test('runAutoLoop: a pendingChanges failure is inconclusive — nothing is claimed or committed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const d: AutoDeps = {
+            ...strandedDeps(commits),
+            pendingChanges: () => Promise.reject(new Error('git exploded'))
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
+        expect(captured.selects.every(s => !/UNCOMMITTED/.test(s.title))).toBe(true)
+    })
+})
+
 test('runAutoLoop: no finalGateFix dep → picker keeps only the two original cards', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)

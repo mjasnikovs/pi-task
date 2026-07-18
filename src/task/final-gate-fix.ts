@@ -171,6 +171,44 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
     return {blocked: false, note: last[2].trim() || undefined}
 }
 
+/**
+ * STRANDED SUB-FIXES (mx5 run 13, PROMPT 4 item 3).
+ *
+ * A fix attempt that does not converge keeps its edits: they are NOT discarded
+ * (only a guard trip discards), and `deps.commit` runs only on `fix.ok`. So a
+ * partial fix that genuinely repaired something sits in the working tree, uncommitted,
+ * and if the user then ACCEPTs the FAIL the run completes around it — leaving HEAD
+ * broken while the repair is invisible unless someone runs `git status`.
+ *
+ * That is exactly what run 13 shipped: the fix child's bunfig.toml change made
+ * `bun run test` pass 116/116, attempt 1 did not converge overall, the user accepted
+ * the FAIL, and the tree still shows the file modified while HEAD's `bun run test` is
+ * broken. The repair and the breakage were BOTH real; only the repair was discarded
+ * by default.
+ *
+ * The rule: a partial fix is either committed (its own commit, named in the trail) or
+ * explicitly surfaced — never silently stranded.
+ */
+
+/** Commit subject for partial fixes committed alongside an accepted gate FAIL. */
+export const STRANDED_FIX_COMMIT = (runId: string): string =>
+    `FINAL GATE PARTIAL FIX (${runId}) — accepted with gate still failing`
+
+/**
+ * The picker/trail line describing what a non-converging fix pass left behind.
+ * Empty string when the tree is clean — the caller then says nothing at all.
+ */
+export function strandedFixNote(paths: string[]): string {
+    if (paths.length === 0) return ''
+    const shown = paths.slice(0, 8).join(', ')
+    return (
+        `\n\nUNCOMMITTED: the fix pass left ${paths.length} change(s) in the working tree `
+        + `(${shown}${paths.length > 8 ? ', …' : ''}). These are NOT in HEAD. Accepting will `
+        + `commit them as their own commit so they are not lost; leaving the run failed keeps `
+        + `them in your working tree.`
+    )
+}
+
 export interface FinalFixResult {
     /** true → the fix child ran AND the re-run gate passed. */
     ok: boolean

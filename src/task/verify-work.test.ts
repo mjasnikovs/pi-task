@@ -177,6 +177,77 @@ describe('buildVerifyPrompt', () => {
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SKIP-ESCAPE NOTICE')
     })
 
+    test('injects sandbox-path-leak findings tied to rule 4e', () => {
+        const findings = [
+            'playwright-ct.config.ts — committed the absolute path `/workspace/src/shared`…'
+        ]
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
+            foreignPaths: findings
+        })
+        expect(p).toContain('SANDBOX PATH LEAK NOTICE')
+        expect(p).toContain('- playwright-ct.config.ts — committed the absolute path')
+        // The verdict-gating mandate, and the distinctive "green means nothing"
+        // instruction: a leak breaks the BUILD, so the suite reports zero work.
+        expect(p).toMatch(/the verdict is FAIL naming the file and the path \(rule 4e\)/)
+        expect(p).toMatch(/count\s+the tests\/steps that ran, not the exit code/)
+        // The standing rule is present even without a finding...
+        expect(buildVerifyPrompt('GOAL\nx')).toContain(
+            '4e. AN ABSOLUTE PATH TO PROJECT FILES IS A DEFECT'
+        )
+        // ...but the NOTICE block only appears with findings.
+        expect(
+            buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {foreignPaths: []})
+        ).not.toContain('SANDBOX PATH LEAK NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SANDBOX PATH LEAK NOTICE')
+    })
+
+    test('injects neutered-check-script findings tied to rule 4f', () => {
+        const findings = ['`lint`: tsc --noEmit || true — it ends in `|| true`, so the script…']
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
+            scriptEscapes: findings
+        })
+        expect(p).toContain('NEUTERED CHECK SCRIPT NOTICE')
+        expect(p).toContain('- `lint`: tsc --noEmit || true')
+        // The key instruction: running the script cannot reveal the defect.
+        expect(p).toMatch(/You CANNOT discover this by running the script/)
+        expect(p).toMatch(/the verdict is FAIL naming the script \(rule 4f\)/)
+        expect(buildVerifyPrompt('GOAL\nx')).toContain(
+            '4f. A CHECK THAT CANNOT FAIL PROVES NOTHING'
+        )
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('NEUTERED CHECK SCRIPT NOTICE')
+    })
+
+    test('injects runner glob-collision findings tied to rule 4g', () => {
+        const findings = ['`test` runs bun test, which scans the whole project…']
+        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
+            runnerGlobs: findings
+        })
+        expect(p).toContain('TEST-RUNNER GLOB COLLISION NOTICE')
+        expect(p).toContain('- `test` runs bun test')
+        // The distinctive mandate: collection-time death, so count what RAN.
+        expect(p).toMatch(/errors during collection has verified nothing/)
+        expect(buildVerifyPrompt('GOAL\nx')).toContain('4g. TWO RUNNERS, ONE FILE SET, NO RESULTS')
+        expect(buildVerifyPrompt('GOAL\nx')).not.toContain('TEST-RUNNER GLOB COLLISION NOTICE')
+    })
+
+    test('the three project-surface findings are independent', () => {
+        const all = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
+            foreignPaths: ['fp'],
+            scriptEscapes: ['se'],
+            runnerGlobs: ['rg']
+        })
+        expect(all).toContain('SANDBOX PATH LEAK NOTICE')
+        expect(all).toContain('NEUTERED CHECK SCRIPT NOTICE')
+        expect(all).toContain('TEST-RUNNER GLOB COLLISION NOTICE')
+        // One present does not drag the others in.
+        const one = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
+            scriptEscapes: ['se']
+        })
+        expect(one).toContain('NEUTERED CHECK SCRIPT NOTICE')
+        expect(one).not.toContain('SANDBOX PATH LEAK NOTICE')
+        expect(one).not.toContain('TEST-RUNNER GLOB COLLISION NOTICE')
+    })
+
     test('injects the cross-slice contracts block mandating a boundary check', () => {
         const contracts =
             '"POST /api/listings/:id/photos" [anchor: Photos API]\n"GET /api/photos/:id"'

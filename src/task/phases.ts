@@ -68,6 +68,7 @@ import {
     isCritiqueClean
 } from './spec-validation.js'
 import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
+import {findScriptEscapesInText, scriptEscapeDefectText} from './script-escape.js'
 import {findSynthesizedWiring, wiringProbeText, readReferencedDocs} from './wiring-claims.js'
 import {
     findAbsenceConflicts,
@@ -1211,6 +1212,19 @@ export async function phaseCritique(
             'grep-theater VERIFY flagged in spec: ' + grepOnly.map(f => f.target).join(' | ')
         )
     }
+    // DETERMINISTIC neutered-check-script probe (mx5 run 13, PROMPT 4 item 4): a
+    // spec that DICTATES a check script which cannot fail — `"lint": "… || true"`,
+    // or a checker laundered through an inverted grep. Whatever task implements
+    // that spec writes the disarmed script into package.json, and from then on
+    // every gate that runs it (repo-health verify, the final integration gate)
+    // reads a constant. Cheapest to kill here, in the spec, before it is authored.
+    const scriptEscapes = findScriptEscapesInText(spec)
+    const scriptProbe = scriptEscapes.length > 0 ? scriptEscapeDefectText(scriptEscapes) : null
+    if (scriptProbe) {
+        deps.logDebug?.(
+            'neutered check script dictated by spec: ' + scriptEscapes.map(f => f.name).join(' | ')
+        )
+    }
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -1232,9 +1246,10 @@ export async function phaseCritique(
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
             // A deterministic skip-escape, synthesized-wiring, plan-contradiction,
-            // unsatisfiable-pair, or grep-theater finding overrides a CLEAN triage: the draft must
-            // be rewritten to resolve it even if the model judged the rest clean
-            // (the model does not self-discover any of them reliably).
+            // unsatisfiable-pair, grep-theater, or neutered-check-script finding
+            // overrides a CLEAN triage: the draft must be rewritten to resolve it
+            // even if the model judged the rest clean (the model does not
+            // self-discover any of them reliably).
             if (isCritiqueClean(verdict)) {
                 if (
                     skipDefects === null
@@ -1242,6 +1257,7 @@ export async function phaseCritique(
                     && absenceProbe === null
                     && frozenProbe === null
                     && grepOnlyProbe === null
+                    && scriptProbe === null
                 ) {
                     return spec
                 }
@@ -1251,10 +1267,18 @@ export async function phaseCritique(
         }
     }
     // Merge the deterministic skip-escape + synthesized-wiring + plan-contradiction
-    // + unsatisfiable-pair + grep-theater defects with any triage defects for the
-    // rewrite (all are forced FOCUS items).
+    // + unsatisfiable-pair + grep-theater + neutered-script defects with any triage
+    // defects for the rewrite (all are forced FOCUS items).
     const rewriteDefects =
-        [skipDefects, wiringProbe, absenceProbe, frozenProbe, grepOnlyProbe, triageDefects]
+        [
+            skipDefects,
+            wiringProbe,
+            absenceProbe,
+            frozenProbe,
+            grepOnlyProbe,
+            scriptProbe,
+            triageDefects
+        ]
             .filter(Boolean)
             .join('\n\n') || null
 

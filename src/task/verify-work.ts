@@ -173,8 +173,26 @@ export function buildVerifyPrompt(
     contracts?: string,
     testAssemblyFindings?: string[],
     probeGamingFindings?: string[],
-    crossTaskDeletionFindings?: string[]
+    crossTaskDeletionFindings?: string[],
+    /**
+     * The mx5 run-13 (PROMPT 4) probes, grouped rather than appended as three more
+     * positional parameters — this signature was already at its limit. Each key is
+     * an independent finding list; absent/empty emits no block.
+     */
+    projectSurface: {
+        /** Sandbox-leaked absolute paths (rule 4e) — see foreign-path.ts. */
+        foreignPaths?: string[]
+        /** Check scripts that cannot fail (rule 4f) — see script-escape.ts. */
+        scriptEscapes?: string[]
+        /** Colliding test-runner globs (rule 4g) — see runner-globs.ts. */
+        runnerGlobs?: string[]
+    } = {}
 ): string {
+    const {
+        foreignPaths: foreignPathFindings,
+        scriptEscapes: scriptEscapeFindings,
+        runnerGlobs: runnerGlobFindings
+    } = projectSurface
     const probeBlock =
         probeFindings && probeFindings.length > 0 ?
             [
@@ -255,6 +273,60 @@ export function buildVerifyPrompt(
                 ''
             ]
         :   []
+    const foreignPathBlock =
+        foreignPathFindings && foreignPathFindings.length > 0 ?
+            [
+                'SANDBOX PATH LEAK NOTICE (deterministic, computed by the orchestrator by',
+                "resolving every absolute path in the task's diff against THIS machine): this",
+                'task committed absolute paths that do not exist here, while the real file they',
+                'name sits inside this repo:',
+                ...foreignPathFindings.map(f => `- ${f}`),
+                "These are paths from the authoring agent's OWN environment, baked into a file",
+                'that ships. The command that reads such a path does not fail a check — it fails',
+                'to BUILD, so the checks that would have caught it never run and report nothing',
+                '(mx5 run 13: a leaked `/workspace` vite alias made `test:ct` collect 63 tests',
+                'and run 0, and the suite stayed dead for the rest of the run). A green or',
+                'EMPTY result from any command that reads these files is therefore NOT evidence.',
+                'Run the affected command yourself and confirm it actually EXECUTES work — count',
+                'the tests/steps that ran, not the exit code. Unless the leaked path resolves on',
+                'this machine, the verdict is FAIL naming the file and the path (rule 4e).',
+                ''
+            ]
+        :   []
+    const scriptEscapeBlock =
+        scriptEscapeFindings && scriptEscapeFindings.length > 0 ?
+            [
+                'NEUTERED CHECK SCRIPT NOTICE (deterministic, computed by the orchestrator from',
+                'the manifest THIS task changed): these check scripts cannot report failure —',
+                'their exit status is 0 no matter what the checker finds:',
+                ...scriptEscapeFindings.map(f => `- ${f}`),
+                'You CANNOT discover this by running the script: it passes, which is the whole',
+                'defect (mx5 run 13 shipped a `lint` whose typecheck was disarmed by an inverted',
+                'grep and a `|| true` tail; every gate that ran it reported success without',
+                'measuring anything). A green result from one of these scripts is NOT evidence',
+                'for any acceptance criterion. To judge the area it claims to cover, run the',
+                'underlying checker DIRECTLY and unmodified (e.g. `tsc --noEmit` rather than',
+                '`npm run lint`) and judge THAT output. Unless the task spec explicitly requires',
+                'the script to tolerate failure, the verdict is FAIL naming the script (rule 4f).',
+                ''
+            ]
+        :   []
+    const runnerGlobBlock =
+        runnerGlobFindings && runnerGlobFindings.length > 0 ?
+            [
+                'TEST-RUNNER GLOB COLLISION NOTICE (deterministic, computed by the orchestrator',
+                "from the manifest's declared runners and their config): two test runners claim",
+                'the same files:',
+                ...runnerGlobFindings.map(f => `- ${f}`),
+                "The scanning runner will import the other's spec files and abort on a module",
+                'loaded outside its own runner — so the suite dies WHOLESALE rather than',
+                'reporting failures (this is the THIRD occurrence: mx5 runs 7 and 13). Run both',
+                'test commands yourself and confirm each collects and runs its own files and only',
+                'its own. A run that errors during collection has verified nothing, whatever its',
+                'exit code says (rule 4g).',
+                ''
+            ]
+        :   []
     const testAssemblyBlock =
         testAssemblyFindings && testAssemblyFindings.length > 0 ?
             [
@@ -296,6 +368,9 @@ export function buildVerifyPrompt(
         ...crossTaskDeletionBlock,
         ...probeGamingBlock,
         ...skipEscapeBlock,
+        ...foreignPathBlock,
+        ...scriptEscapeBlock,
+        ...runnerGlobBlock,
         ...testAssemblyBlock,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
@@ -428,6 +503,32 @@ export function buildVerifyPrompt(
         '   the deletion is a genuine relocation (the same file lives on elsewhere in the',
         '   tree). Otherwise the verdict is FAIL naming the deleted file and the task that',
         '   owns it.',
+        '',
+        '4e. AN ABSOLUTE PATH TO PROJECT FILES IS A DEFECT — a committed path like',
+        "   `/workspace/src/shared` or `/home/<someone>/proj/src` names the authoring agent's",
+        '   OWN machine, not this one. Its distinctive damage is that it breaks the run BEFORE',
+        '   any check reports: a bad alias/config path makes the tool fail to RESOLVE or BUILD,',
+        '   so a suite "passes" having executed nothing. Treat a command that reports no',
+        '   failures but also no WORK — 0 tests run, 0 files emitted, an empty report — as',
+        '   unverified, never as green. Confirm the count of things that actually ran. A path',
+        '   to project-internal files must be relative to the file that carries it, or computed',
+        '   at runtime; if one does not resolve here, the verdict is FAIL naming file and path.',
+        '',
+        '4f. A CHECK THAT CANNOT FAIL PROVES NOTHING — before you cite a check script',
+        "   (`npm run lint`, `bun run test`) as evidence, read its DEFINITION in the project's",
+        '   manifest. A script ending in `|| true`, `; exit 0`, or piping a checker into an',
+        '   inverted grep exits 0 unconditionally: its green result is a constant, not a',
+        '   measurement, and running it again only reproduces the constant. When a script is',
+        '   built that way, run the underlying checker directly and judge its real output; and',
+        '   unless the spec required that tolerance, the script itself is a defect — the',
+        '   verdict is FAIL naming it.',
+        '',
+        '4g. TWO RUNNERS, ONE FILE SET, NO RESULTS — when a project declares more than one',
+        '   test runner, check that each collects only its own files. A runner that scans for',
+        "   `*.test.*` / `*.spec.*` project-wide will import another runner's specs and abort",
+        '   during COLLECTION. That failure mode looks nothing like a test failure: you get an',
+        '   import error, or a suite that reports zero tests. Always read how many tests each',
+        '   command actually COLLECTED and RAN; zero collected is never a pass.',
         '',
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
@@ -597,6 +698,31 @@ export interface VerificationDeps {
      * a durable debt. ABSENT or empty → no block. */
     crossTaskDeletionProbe?: () => Promise<CrossTaskDeletion[]>
     /**
+     * DETERMINISTIC sandbox-path-leak probe (see foreign-path.ts, mx5 run 13
+     * PROMPT 4 item 1): absolute paths this task committed that exist only inside
+     * the authoring child's own environment — `/workspace/src/shared` in a vite
+     * alias — while the real file sits at `src/shared` here. The probe REPAIRS
+     * what it can deterministically first; only leaks it could not repair reach
+     * this hook, injected under rule 4e (MANDATORY + verdict-gating, the same
+     * shape as 4d — a leak makes the affected command fail to BUILD, so the
+     * checks that would notice never run at all). ABSENT or empty → no block. */
+    foreignPathProbe?: () => Promise<string[]>
+    /**
+     * DETERMINISTIC neutered-check-script probe (see script-escape.ts, mx5 run 13
+     * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
+     * exit status cannot be non-zero (`… || true`, an inverted-grep launder). The
+     * damage is second-order — the script still "passes", so the gates that run it
+     * report success without measuring anything — which is exactly why the child
+     * cannot discover it by running the check. ABSENT or empty → no block. */
+    scriptEscapeProbe?: () => Promise<string[]>
+    /**
+     * DETERMINISTIC test-runner glob-collision probe (see runner-globs.ts, mx5 runs
+     * 7 AND 13, PROMPT 4 item 2): the manifest declares two runners whose file sets
+     * are not provably disjoint, so the scanning one imports the other's specs and
+     * dies during COLLECTION. Injected under rule 4g. UNKNOWN (one runner, or
+     * disjointness proven) yields nothing. ABSENT or empty → no block. */
+    runnerGlobProbe?: () => Promise<string[]>
+    /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
@@ -695,6 +821,36 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             crossDeletions = []
         }
     }
+    // Sandbox-path-leak findings the deterministic repair could NOT fix, injected
+    // under rule 4e. A probe failure must never block verification.
+    let foreignPaths: string[] = []
+    if (deps.foreignPathProbe) {
+        try {
+            foreignPaths = await deps.foreignPathProbe()
+        } catch {
+            foreignPaths = []
+        }
+    }
+    // Neutered check scripts in a manifest this task changed, injected under rule
+    // 4f. A probe failure must never block verification.
+    let scriptEscapes: string[] = []
+    if (deps.scriptEscapeProbe) {
+        try {
+            scriptEscapes = await deps.scriptEscapeProbe()
+        } catch {
+            scriptEscapes = []
+        }
+    }
+    // Colliding test-runner globs, injected under rule 4g. A probe failure must
+    // never block verification.
+    let runnerGlobs: string[] = []
+    if (deps.runnerGlobProbe) {
+        try {
+            runnerGlobs = await deps.runnerGlobProbe()
+        } catch {
+            runnerGlobs = []
+        }
+    }
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -739,7 +895,12 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
                     contracts,
                     testAssembly,
                     probeGaming,
-                    crossTaskDeletionVerifyFindings(crossDeletions)
+                    crossTaskDeletionVerifyFindings(crossDeletions),
+                    {
+                        foreignPaths,
+                        scriptEscapes,
+                        runnerGlobs
+                    }
                 ),
                 deps.signal
             )
