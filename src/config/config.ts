@@ -66,6 +66,21 @@ export interface PiTaskConfig {
      * a true hang doesn't cost half an hour of dead time.
      */
     requestTimeoutMs: number
+    /**
+     * UNATTENDED AUTO-PICK (see task/yolo.ts): wherever pi-task would stop and ask,
+     * take the option it already marks RECOMMENDED, stamp the artifact `(YOLO)` so
+     * an audit can tell a machine decided, and never notify. Lets a local model run
+     * a throwaway/test project end to end with nobody watching.
+     *
+     * Decided PER SITE, before the prompt is built — so the lone prompt notification
+     * (SessionUI.ask) is suppressed structurally, and the existing unattended budgets
+     * (MAX_AUTO_AUTOFIX, MAX_FINAL_GATE_AUTOFIX) still bound the loops they were
+     * written to bound. An auto-pick may cost time, never work: a question with no
+     * recommendation, or one the anti-synthesis guard demoted, is SKIPPED, not
+     * invented.
+     * DEFAULT OFF — this is never the behaviour of a normal, watched run.
+     */
+    yoloMode: boolean
 }
 
 /**
@@ -106,7 +121,9 @@ const DEFAULTS: PiTaskConfig = {
     researchCache: true,
     searchProvider: 'exa',
     extensionWhitelist: [],
-    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS
+    requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    // OFF: auto-answering is for unattended throwaway runs only.
+    yoloMode: false
 }
 
 /**
@@ -138,6 +155,10 @@ if (!G.loaded) {
         if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
         parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
         parsed.requestTimeoutMs = sanitizeRequestTimeoutMs(parsed.requestTimeoutMs)
+        // A hand-edited `"yoloMode": "false"` is a truthy string — it must not
+        // silently switch a watched run into unattended auto-pick. Only a real
+        // boolean counts; anything else falls back to the OFF default.
+        if (typeof parsed.yoloMode !== 'boolean') delete parsed.yoloMode
         G.config = {...DEFAULTS, ...parsed}
     } catch {
         G.config = {...DEFAULTS}

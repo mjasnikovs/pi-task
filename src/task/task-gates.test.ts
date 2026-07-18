@@ -3,6 +3,8 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {runGatesForTask, MAX_AUTO_AUTOFIX, type GateDeps, type GateParams} from './task-gates.js'
 import {ACCEPT_LABEL} from './verify-resolution.js'
+import {getConfig} from '../config/config.js'
+import {YOLO_STAMP} from './yolo.js'
 
 /** A GateDeps whose runTask/commit always succeed; override per test. */
 function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
@@ -1102,5 +1104,130 @@ test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUT
         // The unattended AUTOFIX path stays intact for reasons without the prefix.
         expect(runTaskCalls).toBe(1)
         expect(frozenDebts).toBe(0)
+    })
+})
+
+// ─── YOLO mode (unattended auto-pick) ────────────────────────────────────────
+//
+// The flag is read from the process-global config (getConfig), so each test flips
+// it and restores it — mirroring how a real run reads it once per decision.
+
+async function withYolo(fn: () => Promise<void>): Promise<void> {
+    const cfg = getConfig()
+    const prev = cfg.yoloMode
+    cfg.yoloMode = true
+    try {
+        await fn()
+    } finally {
+        cfg.yoloMode = prev
+    }
+}
+
+test('runGatesForTask: YOLO auto-ACCEPTS a verify FAIL the picker would show — no prompt', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        const yoloDebts: Array<{taskId: string; reason: string}> = []
+        const humanDebts: unknown[] = []
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
+            recordAcceptDebt: (_c, taskId, reason) => {
+                humanDebts.push({taskId, reason})
+                return Promise.resolve()
+            },
+            recordYoloAcceptDebt: (_c, taskId, reason) => {
+                yoloDebts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        // No queueSelect: reaching the picker would return undefined ⇒ 'cancel' ⇒ paused.
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        // The prompt was never built (which is what suppresses its notification).
+        expect(captured.selects).toHaveLength(0)
+        // Provenance splits: the yolo recorder, never the "a human decided" one.
+        expect(yoloDebts).toEqual([{taskId: 'TASK_0006', reason: 'over-strict check'}])
+        expect(humanDebts).toEqual([])
+    })
+})
+
+test('runGatesForTask: without the flag the SAME FAIL still shows the picker', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        const yoloDebts: unknown[] = []
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
+            recordYoloAcceptDebt: (_c, taskId, reason) => {
+                yoloDebts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        handle.queueSelect(ACCEPT_LABEL)
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('done')
+        expect(captured.selects).toHaveLength(1)
+        expect(yoloDebts).toEqual([])
+    })
+})
+
+test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never re-enters autofix', async () => {
+    // The regression this pins: a central "auto-pick the recommended card" hook would
+    // answer AUTOFIX at the picker (AUTOFIX is still the recommended card there) and
+    // loop forever, defeating the very cap that exists to break a non-converging fix.
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        let runTaskCalls = 0
+        const yoloDebts: unknown[] = []
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            // Never converges: every verify FAILs, and the research keeps saying AUTOFIX.
+            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'}),
+            recordYoloAcceptDebt: (_c, taskId, reason) => {
+                yoloDebts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        // Exactly the unattended budget — the auto-ACCEPT then terminates the loop.
+        expect(runTaskCalls).toBe(MAX_AUTO_AUTOFIX)
+        expect(yoloDebts).toHaveLength(1)
+        expect(captured.selects).toHaveLength(0)
+    })
+})
+
+test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        const deps = makeDeps({
+            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            }
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        const resolution = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
+        expect(resolution).toBeDefined()
+        expect(resolution).toContain(YOLO_STAMP)
+        // …and never claims a person made the call.
+        expect(trail.some(l => /user ACCEPTED/.test(l))).toBe(false)
     })
 })

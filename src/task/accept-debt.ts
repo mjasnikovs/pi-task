@@ -54,6 +54,11 @@ const FIELD_SEP = '\t'
  *     created files need a tsconfig registration every spec forbids). Cross-task
  *     contradiction: no unattended re-run can converge, so the gate loop records the
  *     defect and routes to the human picker instead of burning AUTOFIX rounds.
+ *   - 'yolo-accepted'   — YOLO MODE (unattended auto-pick, see yolo.ts) took the
+ *     verify-FAIL picker's terminal option with nobody watching. It is NOT the
+ *     'accepted' class and must never collapse into it: 'accepted' asserts a HUMAN
+ *     weighed this failing artifact and blessed it, which is exactly the assurance
+ *     an auto-pick cannot give. Same re-check treatment, honest provenance.
  *   - 'cross-task-deletion' — the task's work DELETED a sibling task's committed
  *     deliverable (mx5 run 12 PROMPT 2: a fix child deleted TASK_0020's playwright ct
  *     files to green a lint) and the user ACCEPTed the verify-FAIL anyway, so the
@@ -61,7 +66,12 @@ const FIELD_SEP = '\t'
  *     resolved iff the named file is back in the tree (a later task restored it),
  *     otherwise surfaced.
  */
-export type DebtOrigin = 'accepted' | 'enforce-revert' | 'frozen-blocked' | 'cross-task-deletion'
+export type DebtOrigin =
+    | 'accepted'
+    | 'enforce-revert'
+    | 'frozen-blocked'
+    | 'cross-task-deletion'
+    | 'yolo-accepted'
 
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
@@ -118,6 +128,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
                 origin === 'enforce-revert'
                 || origin === 'frozen-blocked'
                 || origin === 'cross-task-deletion'
+                || origin === 'yolo-accepted'
             ) ?
                 {origin: origin as DebtOrigin}
             :   {})
@@ -233,6 +244,24 @@ export async function recordCrossTaskDeletionDebt(
             `deleted \`${deletion.path}\` — ${deletion.owner}'s committed deliverable, removed by this task's work`
         ),
         origin: 'cross-task-deletion'
+    })
+}
+
+/**
+ * Record a YOLO-ACCEPTED debt: unattended auto-pick took the verify-FAIL picker's
+ * ACCEPT branch because there was nobody to ask (yolo.ts). Its own origin — and
+ * therefore its own line in the final gate's surfaced report — so a later audit
+ * reading only the artifacts can never read it as "a human decided this".
+ */
+export async function recordYoloAcceptDebt(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(reason),
+        origin: 'yolo-accepted'
     })
 }
 
@@ -402,6 +431,9 @@ export function describeDebt(d: AcceptDebt): string {
     }
     if (d.origin === 'cross-task-deletion') {
         return "a sibling task's committed deliverable was DELETED by this task's work and the deletion was accepted (still missing from the tree)"
+    }
+    if (d.origin === 'yolo-accepted') {
+        return 'auto-ACCEPTED by YOLO mode despite verify-FAIL (unattended — no human weighed this)'
     }
     return 'accepted despite verify-FAIL'
 }

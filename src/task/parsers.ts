@@ -8,9 +8,33 @@ import {MAX_GRILL_QUESTIONS} from './phases.js'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/**
+ * WHY an auto-answer came back `unknown` — the producers are otherwise
+ * indistinguishable at the call site, and they are NOT equivalent: only
+ * 'api-synthesis' marks a recommendation a machine must never take (see
+ * task/yolo.ts). Mechanical tag, never a text pattern-match:
+ *   - 'model-unknown' — the child itself emitted UNKNOWN (or the parser salvaged a
+ *     bare recommendation): a genuine open fork carrying a best-effort suggestion.
+ *   - 'api-synthesis' — the answer was ANSWERED, then DEMOTED because it names an
+ *     API identifier absent from the research and the question, in a namespace the
+ *     research covers (mx5 run 13: an invented `Bun.mkdirSync` reached requirements
+ *     AND the VERIFY block). The suggestion rides along for a HUMAN to judge.
+ *   - 'integration' — an integration/build-wiring unknown no fetched doc grounded;
+ *     a wrong guess is a structural landmine, so the model's answer is offered as
+ *     a recommendation instead of being taken silently.
+ *   - 'threw' — the child failed; there is no recommendation at all.
+ */
+export type AutoAnswerUnknownReason = 'model-unknown' | 'api-synthesis' | 'integration' | 'threw'
+
 export type AutoAnswer =
     | {kind: 'answered'; text: string; raw: string}
-    | {kind: 'unknown'; suggested?: string; alt?: string; raw: string}
+    | {
+          kind: 'unknown'
+          suggested?: string
+          alt?: string
+          raw: string
+          reason?: AutoAnswerUnknownReason
+      }
 
 /** One /task-auto clarify question with its model-recommended default answer. */
 export interface ClarifyQuestion {
@@ -163,7 +187,8 @@ export function parseAutoAnswer(raw: string): AutoAnswer {
             kind: 'unknown',
             ...(suggested !== undefined && {suggested}),
             ...(alt !== undefined && {alt}),
-            raw
+            raw,
+            reason: 'model-unknown'
         }
     }
     // Last-resort salvage: the model emitted no tag at all. Take the first line
@@ -173,8 +198,8 @@ export function parseAutoAnswer(raw: string): AutoAnswer {
     // "wrong format" the user sees; better to offer no default and let them
     // answer than to pre-fill a meaningless preamble.
     const salvaged = lines.find(l => !l.endsWith(':'))
-    if (salvaged) return {kind: 'unknown', suggested: salvaged, raw}
-    return {kind: 'unknown', raw}
+    if (salvaged) return {kind: 'unknown', suggested: salvaged, raw, reason: 'model-unknown'}
+    return {kind: 'unknown', raw, reason: 'model-unknown'}
 }
 
 // ─── Verify tooling output parser ────────────────────────────────────────────

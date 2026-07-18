@@ -129,6 +129,17 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             + 'unbounded',
         // Display human labels; the stored config value stays the ms number.
         values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
+    },
+    {
+        id: 'yoloMode',
+        label: 'yolo mode',
+        description:
+            'UNATTENDED: auto-answer every question with the option pi already recommends, '
+            + 'and show no prompts at all — clarify/grill answers, the verify-FAIL picker '
+            + '(auto-ACCEPT, recorded as a yolo debt), and the final-gate picker (autofix '
+            + 'while the budget lasts, then leave the run FAILED). Every auto-pick is stamped '
+            + '(YOLO) in the task file and debt ledger. For THROWAWAY/TEST projects you are '
+            + 'not watching — a real run should decide these itself'
     }
 ]
 

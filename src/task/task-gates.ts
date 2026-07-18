@@ -40,6 +40,7 @@ import {
     type ResolutionChoice
 } from './verify-resolution.js'
 import {SessionUI} from '../remote/bridge.js'
+import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -154,6 +155,14 @@ export interface GateDeps {
      * and surfaces it if still open. Best-effort; absent in tests → no ledger written.
      */
     recordAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
+     * Record a durable YOLO-ACCEPTED debt: the same ACCEPT branch, but reached by an
+     * unattended auto-pick (yolo mode) rather than a human. Separate dep — and
+     * separate ledger origin — because collapsing the two would let an auto-pick
+     * read as "a human blessed this" in the final gate's run-end report. Best-effort;
+     * absent in tests → no ledger written.
+     */
+    recordYoloAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
     /**
      * Record a durable ENFORCE-REVERT debt (mx5 run 10 item 3): the enforce re-verify
      * FAILED and the enforce edits were reverted, but the FAIL indicts the ORIGINAL
@@ -441,8 +450,20 @@ export async function runGatesForTask(
                 && !isFrozenBlocked
                 && recOutcome.recommend === 'autofix'
                 && autoFixCount < MAX_AUTO_AUTOFIX
+            // YOLO: the picker is unreachable with nobody watching, and by the time
+            // we are here the unattended AUTOFIX budget is ALREADY spent (autoFixNow
+            // is false) — so the only option left that terminates is ACCEPT, recorded
+            // as its own 'yolo-accepted' debt. Deliberately NOT a re-entry into
+            // autofix: MAX_AUTO_AUTOFIX exists to break a non-converging loop, and an
+            // auto-pick here would restart the budget from the site that proves it ran out.
+            const yoloChoice = autoFixNow ? null : yoloVerifyResolution(isYoloMode())
             let choice: ResolutionChoice
-            if (autoFixNow) {
+            if (yoloChoice !== null) {
+                choice = yoloChoice
+                await rec(
+                    `resolution: auto-ACCEPTED despite verify FAIL — autofix budget spent, nobody to ask ${YOLO_STAMP}`
+                )
+            } else if (autoFixNow) {
                 autoFixCount += 1
                 await rec(
                     `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
@@ -460,7 +481,8 @@ export async function runGatesForTask(
                 return {kind: 'paused', ctx: active, reason: failReason}
             }
             if (choice.action === 'accept') {
-                await rec('resolution: user ACCEPTED the work despite verify FAIL')
+                const byYolo = yoloChoice !== null
+                if (!byYolo) await rec('resolution: user ACCEPTED the work despite verify FAIL')
                 // Durable debt: the human blessed a FAILing artifact as-is, so the
                 // defect ships and nothing else revisits it (mx5 run 4 B3 / run 8
                 // TASK_0012). Record it to the run ledger; the final integration gate
@@ -469,7 +491,14 @@ export async function runGatesForTask(
                 // the contradiction named) — don't double-enter it in the ledger.
                 if (!frozenDebtRecorded) {
                     try {
-                        await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
+                        // Provenance splits here, mandatorily: an auto-pick writes the
+                        // 'yolo-accepted' origin, never the plain 'accepted' one that
+                        // asserts a human weighed the failing artifact.
+                        if (byYolo) {
+                            await deps.recordYoloAcceptDebt?.(p.cwd, p.taskId, failReason)
+                        } else {
+                            await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
+                        }
                     } catch {
                         // recording must never break the gate sequence
                     }
@@ -488,7 +517,9 @@ export async function runGatesForTask(
                     }
                 }
                 active.ui.notify(
-                    `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.`,
+                    `${p.tag}: accepted "${p.title}" despite verify FAIL (${failReason.slice(0, 120)}) — proceeding.${
+                        byYolo ? ` ${YOLO_STAMP}` : ''
+                    }`,
                     'warning'
                 )
                 break

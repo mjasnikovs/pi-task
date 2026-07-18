@@ -9,6 +9,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    recordYoloAcceptDebt,
     acceptDebtFile,
     annotateDebtConflicts,
     buildAcceptDebtNote,
@@ -411,5 +412,40 @@ describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 P
             }
         })
         expect(out.open).toHaveLength(1)
+    })
+})
+
+describe('recordYoloAcceptDebt — an auto-pick never masquerades as a human call', () => {
+    test("round-trips through parseAcceptDebts as 'yolo-accepted', NOT 'accepted'", async () => {
+        const cwd = makeCwd()
+        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'boot check: GET / returned 404')
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.taskId).toBe('TASK_0007')
+        expect(debt.origin).toBe('yolo-accepted')
+        // The whitelist is the load-bearing part: an origin missing from it silently
+        // degrades to legacy 'accepted' = "a human decided this".
+        expect(debt.origin).not.toBe('accepted')
+        expect(parseAcceptDebts(fs.readFileSync(acceptDebtFile(cwd), 'utf8'))[0].origin).toBe(
+            'yolo-accepted'
+        )
+    })
+
+    test('the surfaced report says plainly that nobody weighed it', async () => {
+        const cwd = makeCwd()
+        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1')
+        const [debt] = await readAcceptDebts(cwd)
+        expect(describeDebt(debt)).toMatch(/YOLO/)
+        expect(describeDebt(debt)).toMatch(/unattended|no human/i)
+        expect(buildAcceptDebtNote([debt])).toContain('TASK_0007')
+    })
+
+    test('re-checked like any other debt: static-class closes on a clean tree, others stay open', async () => {
+        const cwd = makeCwd()
+        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1')
+        await recordYoloAcceptDebt(cwd, 'TASK_0008', 'the edit listing page renders blank')
+        const debts = await readAcceptDebts(cwd)
+        const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
+        expect(resolved.map(d => d.taskId)).toEqual(['TASK_0007'])
+        expect(open.map(d => d.taskId)).toEqual(['TASK_0008'])
     })
 })

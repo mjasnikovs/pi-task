@@ -93,6 +93,7 @@ import {
     type PhaseDeps
 } from './child-runner.js'
 import {SessionUI} from '../remote/bridge.js'
+import {isYoloMode, yoloPickAutoAnswer, YOLO_STAMP} from './yolo.js'
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
@@ -895,7 +896,15 @@ export async function phaseAutoAnswer(
                     deps.logDebug?.(
                         'grill-auto: answer still carries an unverified API — surfacing to user'
                     )
-                    parsed = {kind: 'unknown', suggested, raw: still.raw}
+                    parsed = {
+                        kind: 'unknown',
+                        suggested,
+                        raw: still.raw,
+                        // Tagged so a call site can tell this producer from the other
+                        // two: the suggestion is PROVEN to name an unverified API, so
+                        // it may only be judged by a human (yolo.ts must not take it).
+                        reason: 'api-synthesis'
+                    }
                 } else {
                     parsed = reasked
                 }
@@ -915,12 +924,12 @@ export async function phaseAutoAnswer(
                 `grill-auto: integration unknown unresolved by fetch — surfacing to user `
                     + `instead of auto-answering: ${question.replace(/\s+/g, ' ').slice(0, 120)}`
             )
-            return {kind: 'unknown', suggested: parsed.text, raw: parsed.raw}
+            return {kind: 'unknown', suggested: parsed.text, raw: parsed.raw, reason: 'integration'}
         }
         return parsed
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        return {kind: 'unknown', raw: `(threw: ${msg})`}
+        return {kind: 'unknown', raw: `(threw: ${msg})`, reason: 'threw'}
     }
 }
 
@@ -999,6 +1008,21 @@ export async function phaseGrill(
             // locally — each answer in its own bounding box, the recommended one
             // tinted green; an open question shows the bare text prompt.
             const twoOption = plainSuggested !== undefined && plainAlt !== undefined
+            // YOLO: take the recommended option and never build the prompt (which
+            // is also what suppresses its notification — see yolo.ts). An answer the
+            // anti-synthesis guard demoted, or a question with no recommendation at
+            // all, is SKIPPED instead: costing the spec one unanswered fork is the
+            // guard direction, promoting a hallucination is not.
+            const yolo = yoloPickAutoAnswer(isYoloMode(), auto)
+            if (yolo !== null) {
+                answer =
+                    yolo.kind === 'answer' ?
+                        stripInlineMarkdown(yolo.answer)
+                    :   `(skipped — ${yolo.note})`
+                out.push(`A${n + 1}: ${answer} ${YOLO_STAMP}`)
+                qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer} ${YOLO_STAMP}`)
+                continue
+            }
             const options =
                 twoOption ?
                     [

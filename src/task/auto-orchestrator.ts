@@ -62,6 +62,7 @@ import {
     FINAL_AUTOFIX_VALUE
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
+import {isYoloMode, yoloPickAnswer, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
 import {configureResearchRun} from '../workers/research-cache.js'
 import {
     CONTRACT_EXTRACT_PROMPT,
@@ -578,6 +579,22 @@ export async function planAuto(
         // the recommended one tinted green; an open question shows the bare text
         // prompt. No verbose "Recommended:" / "press Enter to accept" scaffolding.
         const twoOption = plainSuggested !== undefined && plainAlt !== undefined
+        // YOLO: take the recommended option (index 0 / the green card) without ever
+        // building the prompt. Clarify has no anti-synthesis channel — it runs before
+        // any research — so the only step-aside here is a question that carries no
+        // recommendation to take; that one is skipped rather than guessed.
+        const yolo = yoloPickAnswer(isYoloMode(), {
+            ...(plainSuggested !== undefined && {suggested: plainSuggested}),
+            ...(plainAlt !== undefined && {alt: plainAlt})
+        })
+        if (yolo !== null) {
+            const auto = yolo.kind === 'answer' ? yolo.answer : `(skipped — ${yolo.note})`
+            answers.push(
+                `Q${answers.length + 1}: ${plainQ}\n`
+                    + `A${answers.length + 1}: ${auto} ${YOLO_STAMP}`
+            )
+            continue
+        }
         const options =
             twoOption ?
                 [
@@ -1326,21 +1343,46 @@ export async function runAutoLoop(
                             + (fixAttempts > 0 ?
                                 `\n\nAutofix attempts so far: ${fixAttempts}/${MAX_FINAL_GATE_AUTOFIX}.`
                             :   '')
-                        const answer = await new SessionUI(active).ask({
-                            localTitle: 'Final integration gate failed — how should pi proceed?',
-                            displayQuestion: question,
-                            question,
-                            recommended: FINAL_LEAVE_LABEL,
-                            recommended2: canAutofix ? FINAL_AUTOFIX_LABEL : FINAL_ACCEPT_LABEL,
-                            allowSkip: false,
-                            options: [
-                                {label: FINAL_LEAVE_LABEL, value: FINAL_LEAVE_VALUE},
-                                ...(canAutofix ?
-                                    [{label: FINAL_AUTOFIX_LABEL, value: FINAL_AUTOFIX_VALUE}]
-                                :   []),
-                                {label: FINAL_ACCEPT_LABEL, value: FINAL_ACCEPT_VALUE}
-                            ]
-                        })
+                        // YOLO: keep autofixing WHILE the card is still offered — the
+                        // loop withdraws it after MAX_FINAL_GATE_AUTOFIX, so the cap
+                        // that bounds a non-converging fix pass still bounds this —
+                        // then LEAVE the run failed. Never 'accept': an unattended run
+                        // that could not green the whole-repo gate has not produced a
+                        // working project, and mx5 run 13 shows what an accepted FAIL
+                        // looks like afterwards (a shipped app that 404s at `/`).
+                        const yoloFinal = yoloFinalGateChoice(isYoloMode(), canAutofix)
+                        if (yoloFinal !== null) {
+                            await recGate(
+                                `final-gate: auto-chose ${yoloFinal.action.toUpperCase()} ${YOLO_STAMP}`
+                            )
+                        }
+                        const answer =
+                            yoloFinal !== null ?
+                                yoloFinal.action === 'autofix' ?
+                                    FINAL_AUTOFIX_VALUE
+                                :   FINAL_LEAVE_VALUE
+                            :   await new SessionUI(active).ask({
+                                    localTitle:
+                                        'Final integration gate failed — how should pi proceed?',
+                                    displayQuestion: question,
+                                    question,
+                                    recommended: FINAL_LEAVE_LABEL,
+                                    recommended2:
+                                        canAutofix ? FINAL_AUTOFIX_LABEL : FINAL_ACCEPT_LABEL,
+                                    allowSkip: false,
+                                    options: [
+                                        {label: FINAL_LEAVE_LABEL, value: FINAL_LEAVE_VALUE},
+                                        ...(canAutofix ?
+                                            [
+                                                {
+                                                    label: FINAL_AUTOFIX_LABEL,
+                                                    value: FINAL_AUTOFIX_VALUE
+                                                }
+                                            ]
+                                        :   []),
+                                        {label: FINAL_ACCEPT_LABEL, value: FINAL_ACCEPT_VALUE}
+                                    ]
+                                })
                         const choice = classifyFinalGateAnswer(answer)
                         if (choice.action === 'accept') {
                             await recGate('final-gate: FAIL accepted by user')
@@ -1407,7 +1449,11 @@ export async function runAutoLoop(
                         }
                         // Leave failed — the dismissal default, unchanged from the
                         // two-option picker (an unavailable autofix demotes here too).
-                        await recGate('final-gate: left failed (user)')
+                        await recGate(
+                            yoloFinal !== null ?
+                                `final-gate: left failed — autofix budget spent, nobody to ask ${YOLO_STAMP}`
+                            :   'final-gate: left failed (user)'
+                        )
                         await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                         announceDone(
                             active,

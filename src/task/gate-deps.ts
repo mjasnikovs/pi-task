@@ -27,7 +27,8 @@ import {
     recordAcceptDebt,
     recordEnforceRevertDebt,
     recordFrozenBlockedDebt,
-    recordCrossTaskDeletionDebt
+    recordCrossTaskDeletionDebt,
+    recordYoloAcceptDebt
 } from './accept-debt.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
@@ -431,6 +432,7 @@ export function buildGateDeps(params: {
         // Durable ACCEPT-despite-verify-FAIL ledger under .pi-tasks/ (survives
         // discardEdits): the final integration gate re-checks each debt at run end.
         recordAcceptDebt: (cwd2, taskId, reason) => recordAcceptDebt(cwd2, taskId, reason),
+        recordYoloAcceptDebt: (cwd2, taskId, reason) => recordYoloAcceptDebt(cwd2, taskId, reason),
         recordEnforceRevertDebt: (cwd2, taskId, reason) =>
             recordEnforceRevertDebt(cwd2, taskId, reason),
         // Durable cross-task-contradiction ledger (PROMPT 1 layer B): a repo-health
