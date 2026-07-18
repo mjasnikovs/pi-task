@@ -11,7 +11,9 @@ import {
     normalizeQuery,
     researchCacheFile,
     lookupResearch,
-    storeResearch
+    storeResearch,
+    depsFingerprint,
+    resumeResearchRun
 } from './research-cache.js'
 
 function tmpCwd(): string {
@@ -118,4 +120,109 @@ test('store is best-effort — an unwritable tasks dir does not throw', async ()
     await fsp.writeFile(path.join(cwd, '.pi-tasks'), 'x', 'utf8')
     await storeResearch(cwd, 'r', 'k', 'v', {})
     expect(await lookupResearch(cwd, 'r', 'k')).toBeUndefined()
+})
+
+// ─── resume reuse (mx5 run 13: three resumes discarded a 201-entry cache) ─────
+
+async function seed(cwd: string, deps: Record<string, string> | null): Promise<void> {
+    if (deps !== null) {
+        await fsp.writeFile(
+            path.join(cwd, 'package.json'),
+            JSON.stringify({name: 'x', dependencies: deps}),
+            'utf8'
+        )
+    }
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
+    await storeResearch(cwd, 'run-orig', 'pi-worker-docs hono::hc client', 'answer', {})
+}
+
+test('depsFingerprint is stable under key order and formatting, and moves on a version bump', async () => {
+    const a = tmpCwd()
+    const b = tmpCwd()
+    await fsp.writeFile(
+        path.join(a, 'package.json'),
+        '{"name":"x","dependencies":{"hono":"^4.6.0","zod":"^3.23.0"}}',
+        'utf8'
+    )
+    await fsp.writeFile(
+        path.join(b, 'package.json'),
+        JSON.stringify({dependencies: {zod: '^3.23.0', hono: '^4.6.0'}, name: 'x'}, null, 4),
+        'utf8'
+    )
+    expect(await depsFingerprint(a)).toBe(await depsFingerprint(b))
+
+    await fsp.writeFile(
+        path.join(b, 'package.json'),
+        '{"dependencies":{"hono":"^4.7.0","zod":"^3.23.0"}}',
+        'utf8'
+    )
+    expect(await depsFingerprint(b)).not.toBe(await depsFingerprint(a))
+    // An unreadable manifest yields no fingerprint at all — no evidence of freshness.
+    expect(await depsFingerprint(tmpCwd())).toBeUndefined()
+})
+
+test('a resume REUSES the interrupted run id when the dependency surface is unchanged', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    const res = await resumeResearchRun(cwd, true)
+    expect(res.reused).toBe(true)
+    expect(res.runId).toBe('run-orig')
+    expect(res.entries).toBe(1)
+    // The whole point: the digest survives the resume.
+    expect(await lookupResearch(cwd, res.runId!, 'pi-worker-docs hono::hc client')).toEqual({
+        text: 'answer',
+        details: {}
+    })
+})
+
+test('a resume takes a FRESH id when a dependency version moved', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    await fsp.writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify({name: 'x', dependencies: {hono: '^4.7.0'}}),
+        'utf8'
+    )
+    const res = await resumeResearchRun(cwd, true)
+    expect(res.reused).toBe(false)
+    expect(res.runId).not.toBe('run-orig')
+    expect(await lookupResearch(cwd, res.runId!, 'pi-worker-docs hono::hc client')).toBeUndefined()
+})
+
+test('a resume takes a FRESH id when the cache predates fingerprinting or has no manifest', async () => {
+    // Fingerprint-less file (written by an older version) ⇒ cannot prove freshness.
+    const legacy = tmpCwd()
+    await fsp.mkdir(path.dirname(researchCacheFile(legacy)), {recursive: true})
+    await fsp.writeFile(
+        researchCacheFile(legacy),
+        JSON.stringify({runId: 'run-old', entries: {k: {text: 't', details: {}, at: 1}}}),
+        'utf8'
+    )
+    expect((await resumeResearchRun(legacy, true)).reused).toBe(false)
+
+    // No cache file at all.
+    expect((await resumeResearchRun(tmpCwd(), true)).reused).toBe(false)
+})
+
+test('resume with caching disabled clears the token and reuses nothing', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    const res = await resumeResearchRun(cwd, false)
+    expect(res.runId).toBeUndefined()
+    expect(res.reused).toBe(false)
+    expect(process.env[RESEARCH_RUN_ID_ENV]).toBeUndefined()
+})
+
+test('the fingerprint is frozen at the run first write, so a mid-run install denies reuse', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    // A task installs something mid-run, then more digests are stored under the SAME id.
+    await fsp.writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify({name: 'x', dependencies: {hono: '^4.6.0', sharp: '^0.33.0'}}),
+        'utf8'
+    )
+    await storeResearch(cwd, 'run-orig', 'pi-worker-docs sharp::resize', 'a2', {})
+    // The stored fingerprint still describes the pre-install surface ⇒ no reuse.
+    expect((await resumeResearchRun(cwd, true)).reused).toBe(false)
 })

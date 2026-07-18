@@ -65,7 +65,7 @@ import {
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode, yoloPickAnswer, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
-import {configureResearchRun} from '../workers/research-cache.js'
+import {configureResearchRun, resumeResearchRun} from '../workers/research-cache.js'
 import {
     CONTRACT_EXTRACT_PROMPT,
     parseContractLines,
@@ -1813,9 +1813,14 @@ async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext)
     ctx.ui.notify(`Resuming ${id}…`, 'info')
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
-    // Fresh per-run research-cache id for the resumed run (F10); a resume re-fetches
-    // rather than reusing the interrupted run's digest — safe, only slightly less reuse.
-    configureResearchRun(getConfig().researchCache)
+    // Reuse the interrupted run's research-cache id when the cache proves it still
+    // describes the same dependency surface (F10). mx5 run 13 resumed three times and
+    // each resume's fresh id discarded a working 201-entry cache; anything inconclusive
+    // still falls back to a fresh id and a re-fetch. See resumeResearchRun.
+    const research = await resumeResearchRun(cwd, getConfig().researchCache)
+    if (research.reused) {
+        logPlanDebug(cwd, `research cache: resume reused ${research.entries} entr(ies)`)
+    }
     const abort = new AbortController()
     // Resume only runs the loop (runTask); no planning children, so the loader
     // title is unused here — pass the id for clarity if that ever changes.
