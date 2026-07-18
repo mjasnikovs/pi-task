@@ -41,6 +41,8 @@ import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
+import {armCancelListener, disarmCancelListener} from './cancel-input.js'
 import {refineExistingFilesBlock} from './phases.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
@@ -1222,11 +1224,10 @@ function defaultDeps(
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
 
-let cancelRequested = false
 let autoRunning = false
 
 export function requestAutoCancel(): void {
-    cancelRequested = true
+    requestCancel()
 }
 
 /**
@@ -1255,7 +1256,7 @@ export async function runAutoLoop(
     id: string,
     deps: AutoDeps
 ): Promise<void> {
-    cancelRequested = false
+    resetCancel()
     // Each task runs in its own fresh session (deps.runTask → ctx.newSession),
     // which tears down the current session and leaves the ctx we passed in stale.
     // Adopt the replacement ctx the runner hands back and use it for all further
@@ -1263,7 +1264,7 @@ export async function runAutoLoop(
     let active = ctx
     try {
         for (;;) {
-            if (cancelRequested) {
+            if (cancelCheckpoint('loop-top')) {
                 announceDone(active, `${id} cancelled — resume with /task-auto-resume.`, 'warning')
                 return
             }
@@ -1278,6 +1279,18 @@ export async function runAutoLoop(
                 // complete. On a FAIL the user decides: accept (complete anyway) or
                 // leave the run failed — a resume re-enters this branch and re-runs
                 // the gate, so fixing and resuming converges.
+                // SAFE CHECKPOINT (pre-final-gate): every task is checked off and
+                // committed and the whole-repo gate has not started. A resume
+                // re-enters this same branch and runs the gate then, so the run is
+                // left exactly where it was — not silently declared complete.
+                if (cancelCheckpoint('pre-final-gate')) {
+                    announceDone(
+                        active,
+                        `${id} cancelled before the final integration gate — resume with /task-auto-resume.`,
+                        'warning'
+                    )
+                    return
+                }
                 if (deps.finalGate) {
                     active.ui.notify(`${id}: running final integration gate…`, 'info')
                     // Run-level gate trail on the parent task file — same durable
@@ -1606,6 +1619,18 @@ export async function runAutoLoop(
             // during the task (impl model or any child) and left behind is called
             // out instead of silently waiting to detonate in a later task.
             const stashBefore = deps.stashRef ? await deps.stashRef(cwd) : undefined
+            // SAFE CHECKPOINT (pre-task): the tree is committed and no inner task
+            // is stamped yet, so stopping here just leaves this entry unchecked —
+            // a resume restarts it from scratch. Cheapest possible stop, and the
+            // last one before we commit to a ~30-minute task.
+            if (cancelCheckpoint('pre-task')) {
+                announceDone(
+                    active,
+                    `${id} cancelled before "${next.title}" — resume with /task-auto-resume.`,
+                    'warning'
+                )
+                return
+            }
             const res = await deps.runTask(active, cwd, next.title, {
                 resumeId,
                 // Fence this step against re-expanding the whole referenced spec:
@@ -1642,6 +1667,20 @@ export async function runAutoLoop(
                 announceDone(
                     active,
                     `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
+                    'warning'
+                )
+                return
+            }
+            // A phase-boundary cancel surfaces here as a plain !res.ok: the runner
+            // caught its own USER_CANCELLED and wrote state 'cancelled' (resumable)
+            // to the inner file. Claim it BEFORE the failure branch, or a
+            // user-requested stop is announced in red as "stopped … fix and
+            // resume". The inner file is already resumable and the parent stays
+            // in_progress, matching the loop-top cancel.
+            if (!res.ok && isCancelRequested()) {
+                announceDone(
+                    active,
+                    `${id} cancelled during "${next.title}" — resume with /task-auto-resume.`,
                     'warning'
                 )
                 return
@@ -1751,7 +1790,7 @@ export async function runAutoLoop(
         await updateTaskFrontMatter(cwd, id, {state: 'failed'}).catch(() => {})
         announceDone(active, `${id} stopped: ${msg} — fix and run /task-auto-resume.`, 'error')
     } finally {
-        cancelRequested = false
+        resetCancel()
     }
 }
 
@@ -1767,39 +1806,42 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         return
     }
     autoRunning = true
-    // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
-    // every task's research phase share one run's cache; disabled ⇒ clears any token a
-    // prior run left, so nothing is cached.
-    configureResearchRun(getConfig().researchCache)
-    const abort = new AbortController()
-    const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
-    let id: string | null
+    // Take delivery of a typed /task-auto-cancel for the WHOLE run, planning
+    // included — planning is children too, so the host is not streaming and the
+    // ordinary command path cannot reach us.
+    armTerminalCancel(ctx)
     try {
-        id = await planAuto(ctx, cwd, raw, deps)
-    } catch (err) {
-        autoRunning = false
-        const msg = err instanceof Error ? err.message : String(err)
-        if (msg === USER_CANCELLED) {
+        // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
+        // every task's research phase share one run's cache; disabled ⇒ clears any token a
+        // prior run left, so nothing is cached.
+        configureResearchRun(getConfig().researchCache)
+        const abort = new AbortController()
+        const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
+        let id: string | null
+        try {
+            id = await planAuto(ctx, cwd, raw, deps)
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            if (msg === USER_CANCELLED) {
+                announceDone(ctx, '/task-auto cancelled.', 'warning')
+                return
+            }
+            announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
+            return
+        }
+        if (!id) return
+        // Check for a cancel that was requested during the planning phase before the
+        // loop resets the flag.
+        if (isCancelRequested()) {
+            resetCancel()
             announceDone(ctx, '/task-auto cancelled.', 'warning')
             return
         }
-        announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
-        return
-    }
-    if (!id) {
+        await runAutoLoop(ctx, cwd, id, deps)
+    } finally {
         autoRunning = false
-        return
+        disarmCancelListener()
     }
-    // Check for a cancel that was requested during the planning phase before the
-    // loop resets the flag.
-    if (cancelRequested) {
-        cancelRequested = false
-        autoRunning = false
-        announceDone(ctx, '/task-auto cancelled.', 'warning')
-        return
-    }
-    await runAutoLoop(ctx, cwd, id, deps)
-    autoRunning = false
 }
 
 async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -1813,19 +1855,24 @@ async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext)
     ctx.ui.notify(`Resuming ${id}…`, 'info')
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
-    // Reuse the interrupted run's research-cache id when the cache proves it still
-    // describes the same dependency surface (F10). mx5 run 13 resumed three times and
-    // each resume's fresh id discarded a working 201-entry cache; anything inconclusive
-    // still falls back to a fresh id and a re-fetch. See resumeResearchRun.
-    const research = await resumeResearchRun(cwd, getConfig().researchCache)
-    if (research.reused) {
-        logPlanDebug(cwd, `research cache: resume reused ${research.entries} entr(ies)`)
+    armTerminalCancel(ctx)
+    try {
+        // Reuse the interrupted run's research-cache id when the cache proves it still
+        // describes the same dependency surface (F10). mx5 run 13 resumed three times and
+        // each resume's fresh id discarded a working 201-entry cache; anything inconclusive
+        // still falls back to a fresh id and a re-fetch. See resumeResearchRun.
+        const research = await resumeResearchRun(cwd, getConfig().researchCache)
+        if (research.reused) {
+            logPlanDebug(cwd, `research cache: resume reused ${research.entries} entr(ies)`)
+        }
+        const abort = new AbortController()
+        // Resume only runs the loop (runTask); no planning children, so the loader
+        // title is unused here — pass the id for clarity if that ever changes.
+        await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
+    } finally {
+        autoRunning = false
+        disarmCancelListener()
     }
-    const abort = new AbortController()
-    // Resume only runs the loop (runTask); no planning children, so the loader
-    // title is unused here — pass the id for clarity if that ever changes.
-    await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
-    autoRunning = false
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await
@@ -1835,7 +1882,36 @@ async function handleTaskAutoCancel(_args: string, ctx: ExtensionCommandContext)
         return
     }
     requestAutoCancel()
-    ctx.ui.notify('Stopping /task-auto after the current task…', 'warning')
+    ctx.ui.notify(CANCEL_ACK, 'warning')
+}
+
+/**
+ * What the user is told the moment the request lands. Deliberately does NOT
+ * promise "after the current task": the request is now honoured at the next safe
+ * checkpoint (see cancel-points.ts), which mid-spec-pipeline is the end of the
+ * current phase, not the end of the task.
+ */
+const CANCEL_ACK = 'Stopping /task-auto at the next safe checkpoint…'
+
+/**
+ * Deliver a /task-auto-cancel typed in the terminal while a run owns the main
+ * loop. `armCancelListener` watches raw stdin, so it works during the spec
+ * phases and the gates — the windows where pi would otherwise queue the line
+ * until after the run (see cancel-input.ts). The remote path is unaffected:
+ * dispatchRemoteLine invokes the handler directly.
+ */
+function armTerminalCancel(ctx: ExtensionCommandContext): void {
+    armCancelListener(ctx, live => {
+        requestAutoCancel()
+        // `live` is the ctx the listener is currently installed on — the captured
+        // one is stale the moment a task replaces the session.
+        try {
+            live.ui.notify(CANCEL_ACK, 'warning')
+        } catch {
+            /* the acknowledgement must never break the cancel itself */
+        }
+        publishLifecycleNotice(CANCEL_ACK, 'warning')
+    })
 }
 
 // ─── Registration ────────────────────────────────────────────────────────────

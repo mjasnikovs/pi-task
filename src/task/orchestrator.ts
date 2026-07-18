@@ -59,7 +59,9 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
 import {titleForDisplay} from './parsers.js'
-import {type PhaseDeps} from './child-runner.js'
+import {USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {cancelCheckpoint} from './cancel-points.js'
+import {rearmCancelListener} from './cancel-input.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
@@ -305,6 +307,18 @@ export class TaskRunner {
                 await setTaskSection(cwd, id, phase.section, out)
                 this._pc[phase.field] = out
                 await postCommitPhase(phase, this._deps, this._pc, out)
+                // SAFE CHECKPOINT (phase boundary): this phase's output is on disk
+                // and the next `advance()` has not moved front-matter forward, so a
+                // resume re-enters at exactly this phase. Without this the whole
+                // spec pipeline (refine→critique, ~4.5 min on the mx5 run, research
+                // alone ~3 min) runs to completion after a cancel is requested.
+                // Throwing USER_CANCELLED reuses the existing cancellation path:
+                // handleFailure leaves the task resumable and /task-auto's catch
+                // announces the resume hint.
+                if (cancelCheckpoint(`phase:${phase.name}`)) {
+                    this._deps.logDebug?.(`cancel: stopping after phase ${phase.name}`)
+                    throw new Error(USER_CANCELLED)
+                }
             }
 
             // All phases done — hand off the spec.
@@ -787,6 +801,11 @@ export async function runSingleTask(
         withSession: async newCtx => {
             freshCtx = newCtx
             getBridge().currentCtx = newCtx // keep remote dispatch ctx fresh across session replacement
+            // Same reason, for the terminal: pi clears every extension terminal
+            // input listener when the old session is invalidated, and that
+            // happens at the START of each task — precisely the window a typed
+            // /task-auto-cancel has to survive. No-op unless a run armed one.
+            rearmCancelListener(newCtx)
             const runner = new TaskRunner(
                 newCtx,
                 cwd,

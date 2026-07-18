@@ -51,6 +51,15 @@ export interface FakeCtxHandle {
      */
     setStopReason: (reason: string | undefined, errorMessage?: string) => void
     /**
+     * Type a line into the fake editor and press Enter, exactly as a user does
+     * while a command owns the main loop: the bytes go to the raw terminal-input
+     * listeners FIRST (pi dispatches those before the focused component), and a
+     * listener returning consume:true swallows the line. Returns true when it
+     * was consumed. Use this instead of calling a command handler directly to
+     * prove a command is actually DELIVERABLE mid-run.
+     */
+    typeLine: (text: string) => boolean
+    /**
      * Script the session entries reported by sessionManager.getEntries() as a
      * sequence of snapshots, one per turn. Each waitForIdle() advances to the next
      * snapshot (clamped at the last), modelling a session whose branch evolves as
@@ -89,6 +98,14 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     const editorQueue: Array<string | undefined> = []
     // The stopReason runSingleTask reads after waitForIdle to detect a user ESC.
     // Shared across generations so the value survives session replacement.
+    // Raw terminal-input listeners and editor text. pi clears the listeners when
+    // a session is invalidated (InteractiveMode.resetExtensionUI), so the fake
+    // does too — that teardown is what silently broke /task-auto-cancel delivery
+    // across per-task session replacement.
+    let terminalHandlers = new Set<
+        (data: string) => {consume?: boolean; data?: string} | undefined
+    >()
+    let editorText = ''
     let lastStopReason: string | undefined
     let lastErrorMessage: string | undefined
     // Scripted entries-per-turn (see setIdleEntries). Shared across generations,
@@ -182,8 +199,16 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                     captured.widgets.push({key, state: widgetState})
                 }),
                 setEditorText: guard((s: string) => {
+                    editorText = s
                     captured.editorTexts.push(s)
                 }),
+                getEditorText: guard(() => editorText),
+                onTerminalInput: guard(
+                    (h: (data: string) => {consume?: boolean; data?: string} | undefined) => {
+                        terminalHandlers.add(h)
+                        return () => terminalHandlers.delete(h)
+                    }
+                ),
                 editor: guard(async (title: string, content: string) => {
                     captured.editors.push({title, content})
                     if (editorQueue.length === 0) return undefined
@@ -224,6 +249,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                     // teardownCurrent invalidates the current ctx before the
                     // replacement ctx is created and handed to withSession.
                     state.stale = true
+                    // Mirror InteractiveMode: invalidating the session clears
+                    // every extension terminal-input listener.
+                    terminalHandlers = new Set()
                     const fresh = makeCtx()
                     await withSession(fresh)
                     return {cancelled: false}
@@ -253,6 +281,14 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         setStopReason: (reason: string | undefined, errorMessage?: string) => {
             lastStopReason = reason
             lastErrorMessage = errorMessage
+        },
+        typeLine: (text: string) => {
+            editorText = text
+            for (const h of terminalHandlers) {
+                const r = h('\r')
+                if (r?.consume) return true
+            }
+            return false
         },
         setIdleEntries: (snapshots: unknown[][]) => {
             idleEntries = snapshots
