@@ -372,6 +372,19 @@ test('classifyEnforceChildFailure: stall-kill (also aborted) names the dead back
     expect(failure).not.toBe(USER_CANCELLED)
 })
 
+test('classifyEnforceChildFailure: command-watchdog kill (also aborted) names the hung command, NOT a cancel', () => {
+    // The command watchdog kills the child through its abort signal, so `aborted`
+    // is set exactly as it is for a stall-kill. Reported as a user cancel, a gate
+    // child wedged on an unbounded `bun run dev` would look like the USER stopped
+    // it — and its truncated text could be parsed as a real verdict.
+    const failure = classifyEnforceChildFailure(
+        childResult({aborted: true, commandTimedOut: {toolName: 'bash', timeoutMs: 900_000}})
+    )
+    expect(failure).toContain('bash')
+    expect(failure).toContain('15 minutes')
+    expect(failure).not.toBe(USER_CANCELLED)
+})
+
 test('classifyEnforceChildFailure: non-zero exit (not aborted) → exited <code>', () => {
     expect(classifyEnforceChildFailure(childResult({exitCode: 2}))).toBe(
         'enforcement child exited 2'

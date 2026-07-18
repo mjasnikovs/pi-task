@@ -83,6 +83,13 @@ export interface ChildResult {
 export interface ToolCall {
     name: string
     args: unknown
+    /**
+     * pi's id for this tool call, carried on both `tool_execution_start` and
+     * `tool_execution_end` so a caller can pair them (the command watchdog arms
+     * on start and disarms on the matching end). Optional because the loop
+     * detector — the other consumer — keys on name+args and never needs it.
+     */
+    toolCallId?: string
 }
 
 export interface LoopHit {
@@ -127,7 +134,12 @@ export interface RunChildJsonEventsOptions {
      * claimed curl PASS on a server that cannot serve" was undecidable from the log).
      * Text is the tool's combined output; `isError` distinguishes a failed call.
      */
-    onToolResult?: (result: {name: string; isError: boolean; text: string}) => void
+    onToolResult?: (result: {
+        name: string
+        isError: boolean
+        text: string
+        toolCallId?: string
+    }) => void
     onFirstByte?: () => void
     /**
      * Dead-backend stall guard (mx5 run 7: model server died mid-child, the
@@ -287,12 +299,13 @@ export class JsonEventSink {
 
         if (t === 'tool_execution_start') {
             const tn = typeof evt.toolName === 'string' ? evt.toolName : 'tool'
+            const id = typeof evt.toolCallId === 'string' ? evt.toolCallId : undefined
             if (opts.onLine) {
                 const detail = summarizeToolArgs(tn, evt.args)
                 opts.onLine(detail ? `${tn}: ${detail}` : tn)
             }
             if (opts.onToolCall) {
-                const hit = opts.onToolCall({name: tn, args: evt.args})
+                const hit = opts.onToolCall({name: tn, args: evt.args, toolCallId: id})
                 if (hit) this.onLoopKill()
             }
             return
@@ -300,9 +313,10 @@ export class JsonEventSink {
 
         if (t === 'tool_execution_end' && opts.onToolResult) {
             const tn = typeof evt.toolName === 'string' ? evt.toolName : 'tool'
+            const id = typeof evt.toolCallId === 'string' ? evt.toolCallId : undefined
             const res = evt.result as Record<string, unknown> | undefined
             const text = toolResultText(res?.content)
-            opts.onToolResult({name: tn, isError: evt.isError === true, text})
+            opts.onToolResult({name: tn, isError: evt.isError === true, text, toolCallId: id})
         }
     }
 }

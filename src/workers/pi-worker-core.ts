@@ -1,5 +1,11 @@
 import {getPiInvocation} from '../shared/pi-invocation.js'
-import {runChildDefault, type ContextSnapshot, type SpawnFn} from '../shared/child-process.js'
+import {
+    runChildDefault,
+    type ContextSnapshot,
+    type SpawnFn,
+    type ToolCall
+} from '../shared/child-process.js'
+import {CommandWatchdog, commandTimeoutHint, realTimerDeps} from '../shared/command-watchdog.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector, type LoopHit} from '../task/loop-detector.js'
 import {
@@ -45,7 +51,12 @@ const RESEARCH_WORKER_TIMEOUT_MS = 240_000
  */
 const STALL_AFTER_MS = 180_000
 
-/** Restart hint after a wall-clock timeout — distinct from the loop hint. */
+/**
+ * Restart hint after a WHOLE-WORKER wall-clock timeout — distinct from both the
+ * loop hint and the per-command hint. This one diagnoses over-exploration, which
+ * is what the whole-worker cap actually catches. A single hung COMMAND is a
+ * different fault with a different fix, and gets commandTimeoutHint instead.
+ */
 const WORKER_TIMEOUT_HINT =
     '[SYSTEM NOTE: Your previous attempt ran out of time before answering — you '
     + 'were exploring too long. Be decisive: do the minimum reads/greps needed, '
@@ -64,7 +75,12 @@ export interface RunWorkerInput {
     onLine?: (line: string) => void
     /** Called when a tool call FINISHES, with its (truncatable) result — lets a caller
      *  log tool OUTPUTS, not just the command (mx5 run 10 item 6). */
-    onToolResult?: (result: {name: string; isError: boolean; text: string}) => void
+    onToolResult?: (result: {
+        name: string
+        isError: boolean
+        text: string
+        toolCallId?: string
+    }) => void
     /**
      * Called for each context_usage snapshot the child emits (same `--mode json`
      * stream the phase children parse). Lets a caller's status widget show the
@@ -78,6 +94,25 @@ export interface RunWorkerInput {
      * own) — for a pass that must be allowed to finish however long it takes.
      */
     timeoutMs?: number
+    /**
+     * PER-TOOL-CALL wall-clock ceiling in ms — the child-side half of the command
+     * watchdog (see shared/command-watchdog.ts). Arms on each tool_execution_start
+     * and disarms on the matching end; on overrun the child is killed and, within
+     * the shared restart budget, re-spawned with commandTimeoutHint.
+     *
+     * WHY SEPARATE FROM `timeoutMs`: that one bounds the whole worker and is
+     * deliberately 0 (unbounded) for gate children, which must run to completion.
+     * Neither it nor the stall guard can catch a hung command — the stall guard
+     * treats a reachable model endpoint as proof of life, which it is, even while
+     * a `bun run dev` the model forgot to bound blocks the child forever.
+     *
+     * This is the ceiling for the FIRST attempt; each restart halves it (see
+     * commandCeilingForAttempt), so a model that ignores the hint cannot spend
+     * the full ceiling again on every retry.
+     *
+     * 0 / omitted = off, so every existing caller is unchanged.
+     */
+    commandTimeoutMs?: number
     /**
      * Per-worker loop-detector tuning. Defaults to the read-only research/impl
      * guard (LOOP_WINDOW / LOOP_THRESHOLD, path threshold = exact threshold). An
@@ -173,6 +208,99 @@ export interface RunWorkerResult {
      * aborted too, and mislabeling this as a user cancel hides a dead backend.
      */
     stalled?: boolean
+    /**
+     * Set when the command watchdog killed the worker's FINAL attempt: one tool
+     * call outran `commandTimeoutMs` (a command the model never bounded). Like
+     * loopHit/timedOut the text is partial — treat as a failure. Names the tool
+     * so the caller's trail says which call hung rather than just "aborted".
+     *
+     * Check BEFORE `aborted`, same reasoning as `stalled`: the kill aborts too.
+     */
+    commandTimedOut?: {toolName: string; timeoutMs: number}
+}
+
+/**
+ * The per-command ceiling for attempt N, halving each time a hang recurs.
+ *
+ * The first attempt gets the full configured ceiling — a genuinely slow build or
+ * test suite deserves it. But every restart carries commandTimeoutHint, which
+ * tells the model in as many words to bound its command; a SECOND hang means it
+ * ignored an explicit instruction, and a third means it ignored it twice. Giving
+ * a non-complying child the full ceiling again would put the worst case at
+ * 3 × 15 min = 45 minutes of dead time, resting entirely on the model obeying
+ * prose. Halving bounds it at ~26 min while costing a complying child nothing.
+ *
+ * Floored at 30s so repeated halving cannot shrink the ceiling to something no
+ * real command could finish inside — but never ABOVE the configured ceiling
+ * itself, or a caller asking for 10s would silently get 30.
+ */
+export function commandCeilingForAttempt(baseMs: number, restarts: number): number {
+    if (!(baseMs > 0)) return 0
+    const floor = Math.min(baseMs, 30_000)
+    return Math.max(floor, Math.round(baseMs / 2 ** restarts))
+}
+
+/** What the command watchdog recorded when it killed an attempt. */
+interface CommandKill {
+    toolName: string
+    timeoutMs: number
+    /** The command line itself, when the tool carried one — quoted into the hint
+     *  so the fresh child knows which call it must not repeat unbounded. */
+    detail?: string
+}
+
+/**
+ * Build the child-side command watchdog for ONE attempt: a per-tool-call timer
+ * machine (shared with the main session) whose `onFire` aborts `signal`, which
+ * runChild turns into a process-GROUP kill — reaping the hung command itself,
+ * not just the pi child holding it.
+ *
+ * Returns null when the watchdog is off, so the caller keeps the plain timeout
+ * signal and no per-call bookkeeping happens at all.
+ */
+function commandWatch(timeoutMs: number): {
+    onStart: (call: ToolCall) => void
+    onEnd: (toolCallId: string | undefined) => void
+    killed: () => CommandKill | undefined
+    signal: AbortSignal
+    clear: () => void
+} | null {
+    if (!(timeoutMs > 0)) return null
+    const ctrl = new AbortController()
+    // pi's toolCallId pairs start↔end. When it is absent (a fake stream in a
+    // test, an older pi), fall back to one shared slot: tool executions in a
+    // child are sequential, so a single slot is still correctly paired.
+    const key = (id: string | undefined): string => id ?? 'anon'
+    const details = new Map<string, string>()
+    let killed: CommandKill | undefined
+
+    const watchdog = new CommandWatchdog({
+        getTimeoutMs: () => timeoutMs,
+        ...realTimerDeps,
+        onFire: (toolCallId, toolName, ms) => {
+            killed = {
+                toolName,
+                timeoutMs: ms,
+                ...(details.has(toolCallId) ? {detail: details.get(toolCallId)!} : {})
+            }
+            ctrl.abort()
+        }
+    })
+
+    return {
+        onStart: call => {
+            const id = key(call.toolCallId)
+            const args = call.args as {command?: unknown} | undefined
+            if (typeof args?.command === 'string') {
+                details.set(id, args.command.slice(0, 120))
+            }
+            watchdog.onStart(id, call.name)
+        },
+        onEnd: id => watchdog.onEnd(key(id)),
+        killed: () => killed,
+        signal: ctrl.signal,
+        clear: () => watchdog.clearAll()
+    }
 }
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
@@ -212,12 +340,19 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // caller couldn't distinguish from a crash.
         let loopHit: LoopHit | undefined
         const timeout = workerTimeout(input.signal, timeoutMs)
+        // Per-tool-call watchdog for this attempt (null when off). Its abort is
+        // OR'd with the worker timeout / external cancel into the child's signal.
+        const cmdWatch = commandWatch(
+            commandCeilingForAttempt(input.commandTimeoutMs ?? 0, restarts)
+        )
+        const childSignal =
+            cmdWatch ? AbortSignal.any([timeout.signal, cmdWatch.signal]) : timeout.signal
         let result
         try {
             result = await runChildDefault(
                 invocation,
                 input.cwd,
-                timeout.signal,
+                childSignal,
                 {
                     mode: 'json-events',
                     ...(input.stall === false ?
@@ -232,31 +367,56 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         }),
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
+                        cmdWatch?.onStart(call)
                         if (!loopDetector) return null
                         const hit = loopDetector.record(call)
                         if (hit && !loopHit) loopHit = hit
                         return hit
                     },
                     onLine: input.onLine,
-                    onToolResult: input.onToolResult,
+                    // Always wired when the watchdog is on — the sink only emits
+                    // tool_execution_end if a handler exists, and without it every
+                    // timer would stay armed and fire on a finished command.
+                    onToolResult:
+                        cmdWatch ?
+                            r => {
+                                cmdWatch.onEnd(r.toolCallId)
+                                input.onToolResult?.(r)
+                            }
+                        :   input.onToolResult,
                     onContextUsage: input.onContextUsage
                 },
                 input.spawn
             )
         } finally {
             timeout.cleanup()
+            cmdWatch?.clear()
         }
         const tEnd = Date.now()
         const waitMs = tFirstByte === null ? tEnd - tStart : tFirstByte - tStart
         const workMs = tFirstByte === null ? 0 : tEnd - tFirstByte
         const text = result.text ?? ''
         const timedOut = timeout.timedOut()
+        const commandKill = cmdWatch?.killed()
 
         // A loop-kill gets the same restart-with-hint treatment every other phase
         // already gets (runPhaseWithLoopGuard) — name the offending call so the
         // re-spawn avoids it. Bounded by the shared restart budget.
         if (loopHit && restarts < MAX_LOOP_RESTARTS) {
             hint = formatLoopHint(loopHit)
+            restarts++
+            continue
+        }
+        // A hung COMMAND is restartable too, on the same budget, but checked
+        // before the whole-worker timeout because its hint is the specific one:
+        // bound the command. (The two can't be confused — a watchdog kill leaves
+        // timeout.timedOut() false, since that flag tracks only its own timer.)
+        if (commandKill && !loopHit && restarts < MAX_LOOP_RESTARTS) {
+            hint = commandTimeoutHint(
+                commandKill.toolName,
+                commandKill.timeoutMs,
+                commandKill.detail
+            )
             restarts++
             continue
         }
@@ -287,7 +447,15 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(loopHit ? {loopHit} : {}),
             ...(timedOut ? {timedOut: true} : {}),
-            ...(result.stalled ? {stalled: true} : {})
+            ...(result.stalled ? {stalled: true} : {}),
+            ...(commandKill ?
+                {
+                    commandTimedOut: {
+                        toolName: commandKill.toolName,
+                        timeoutMs: commandKill.timeoutMs
+                    }
+                }
+            :   {})
         }
     }
 }

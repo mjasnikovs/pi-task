@@ -165,6 +165,46 @@ export function loopResponse(
     }
 }
 
+/**
+ * A child that NEVER ends on its own — it emits its events and then goes quiet,
+ * exactly like a pi child blocked in an unbounded `bash` call. It ends only when
+ * killed: `kill()` emits `close` with 143 (SIGTERM), as a real child does when
+ * runChild aborts its signal.
+ *
+ * Needed because the other factories always emit `close`, which is the one thing
+ * a hung command does not do — and that pending-forever run IS the production
+ * symptom the command watchdog exists to end. Each spawn takes the next response
+ * in `responses` (last one repeats), and `onSpawn` receives the prompt so a test
+ * can assert on the hint carried into a restart.
+ */
+export function fakeSpawnKillable(
+    responses: ReadonlyArray<SpawnResponseJsonEvents>,
+    onSpawn?: (prompt: string) => void
+): SpawnFn {
+    let i = 0
+    return (() => {
+        const p = makeProc()
+        const r = responses[Math.min(i, responses.length - 1)]!
+        i++
+        p.kill = () => {
+            if (p.killed) return true
+            p.killed = true
+            p.emit('close', 143)
+            return true
+        }
+        const streams = p as EventEmitter & {stdout: EventEmitter; stderr: EventEmitter}
+        queueMicrotask(() => {
+            onSpawn?.(p.stdinData)
+            for (const evt of r.events) {
+                streams.stdout.emit('data', Buffer.from(JSON.stringify(evt) + '\n'))
+            }
+            if (r.stderr) streams.stderr.emit('data', Buffer.from(r.stderr))
+            // Deliberately no `close` — the child is now hung.
+        })
+        return p
+    }) as unknown as SpawnFn
+}
+
 /** Convenience: build a json-events response that delivers final assistant text via agent_end. */
 export function agentEndResponse(text: string, exitCode = 0): SpawnResponseJsonEvents {
     return {

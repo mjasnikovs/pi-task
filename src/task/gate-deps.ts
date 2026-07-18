@@ -341,6 +341,15 @@ export function buildGateDeps(params: {
                         signal: sig,
                         tools,
                         timeoutMs: 0,
+                        // The gate child runs to completion (timeoutMs 0), but a
+                        // single command inside it must still be bounded: pi's bash
+                        // tool has no default timeout, so a `bun run dev` / hung
+                        // check the model forgot to bound wedges the gate forever.
+                        // The stall guard cannot see it — a reachable model endpoint
+                        // reads as proof of life while the command blocks. Same
+                        // ceiling the main session uses, so one /task-config knob
+                        // covers implementation and gates alike.
+                        commandTimeoutMs: getConfig().requestTimeoutMs,
                         loop: {pathThreshold: Number.POSITIVE_INFINITY},
                         onLine: line => {
                             lastLine = line
@@ -502,6 +511,11 @@ export function buildGateDeps(params: {
                             signal: sig,
                             tools,
                             timeoutMs: 0, // no wall-clock timeout — run to completion
+                            // …but still bound any SINGLE command (see makeGateChild).
+                            // enforce is read,edit today, so nothing here can hang on
+                            // bash — wired anyway so a future tool grant can't quietly
+                            // re-open the hole.
+                            commandTimeoutMs: getConfig().requestTimeoutMs,
                             // Exact-match loop guard only: pathThreshold Infinity
                             // disables the path-revisit heuristic, so revisiting one
                             // file (which IS this pass's job) never trips — only a

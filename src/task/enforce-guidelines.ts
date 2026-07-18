@@ -246,6 +246,7 @@ export interface EnforceChildResult {
     loopHit?: unknown
     leakedToolCall?: unknown
     stalled?: boolean
+    commandTimedOut?: {toolName: string; timeoutMs: number}
 }
 
 /**
@@ -271,6 +272,17 @@ export function classifyEnforceChildFailure(r: EnforceChildResult): string | nul
     // (mx5 run 7: 64 minutes of silence).
     if (r.stalled) {
         return 'model server unreachable — the child produced no output and the model endpoint did not respond'
+    }
+    // Same rule, same reason: the command watchdog's kill sets `aborted` too, so
+    // a child killed for a command that never returned would otherwise report as
+    // a user cancel. Its text is truncated mid-run — the verdict in it is partial
+    // and must never be parsed as a real one.
+    if (r.commandTimedOut) {
+        const mins = Math.max(1, Math.round(r.commandTimedOut.timeoutMs / 60_000))
+        return (
+            `child ran a \`${r.commandTimedOut.toolName}\` command that had not returned after `
+            + `${mins} minute${mins === 1 ? '' : 's'} and was killed — it never bounded the command`
+        )
     }
     if (r.timedOut) return 'enforcement child timed out'
     if (r.loopHit) return null // looped past the nudges → warning, handled by caller
