@@ -366,7 +366,7 @@ describe('runChild process-group reaping', () => {
     itPosix('reaps the whole process group on close (negative-pid signal)', async () => {
         const {spawn} = recordingSpawn(4242)
         const killed: Array<{pid: number; sig: string | number}> = []
-        const realKill = process.kill
+        const realKill: typeof process.kill = process.kill.bind(process)
         // Intercept so the test never signals a real group; record the calls.
         process.kill = ((p: number, s: string | number) => {
             killed.push({pid: p, sig: s})
@@ -384,7 +384,7 @@ describe('runChild process-group reaping', () => {
     test('text child does not signal any process group on close', async () => {
         const {spawn} = recordingSpawn(4242)
         const killed: number[] = []
-        const realKill = process.kill
+        const realKill: typeof process.kill = process.kill.bind(process)
         process.kill = ((p: number) => {
             killed.push(p)
             return true
