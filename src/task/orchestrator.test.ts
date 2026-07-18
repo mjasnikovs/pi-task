@@ -4,13 +4,15 @@ import {
     runSingleTask,
     endedAtCompactionBoundary,
     resumeAcrossCompactions,
+    steerUntilDone,
     CONTINUE_AFTER_COMPACTION,
     MAX_COMPACTION_RESUMES,
     type SteerCtx
 } from './orchestrator.js'
+import {consumeWatchdogAbort, noteWatchdogAbort, reminderMessage} from './command-watchdog.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
 import {agentEndResponse, fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
-import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
+import {makeFakeCtx, assistantEntry, compactionEntry, userEntry} from '../test-utils/fake-ctx.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {_setSink, reset as resetSessionState} from '../remote/session-state.js'
@@ -886,5 +888,80 @@ ACCEPTANCE
             const warn = handle.captured.notifies.find(n => n.level === 'warning')
             expect(warn).toBeDefined()
         })
+    })
+})
+
+describe('steerUntilDone watchdog-abort guard', () => {
+    const REMINDER = reminderMessage('bash', 15 * 60_000)
+    // Fast knobs so the stale-flag case doesn't wait out the real 10s grace.
+    const FAST = {graceMs: 50, pollMs: 5}
+
+    test('watchdog abort with a delivered reminder never prompts the user', async () => {
+        const handle = makeFakeCtx('/tmp/steer-wd')
+        // Turn 1: aborted by the watchdog, its follow-up already queued.
+        // Turn 2 (after the follow-up runs): a clean stop.
+        handle.setIdleEntries([
+            [assistantEntry('aborted'), userEntry(REMINDER)],
+            [assistantEntry('aborted'), userEntry(REMINDER), assistantEntry('stop')]
+        ])
+        let prompted = 0
+        const paused = await steerUntilDone(
+            handle.ctx as SteerCtx,
+            async () => {
+                prompted++
+                return ''
+            },
+            {...FAST, consume: () => true}
+        )
+        expect(prompted).toBe(0)
+        expect(paused).toBe(false) // implementation completed, no pause
+    })
+
+    test('human ESC (no watchdog flag) still prompts to steer', async () => {
+        const handle = makeFakeCtx('/tmp/steer-esc')
+        handle.setIdleEntries([[assistantEntry('aborted')]])
+        let prompted = 0
+        const paused = await steerUntilDone(
+            handle.ctx as SteerCtx,
+            async () => {
+                prompted++
+                return '' // decline → pause
+            },
+            {...FAST, consume: () => false}
+        )
+        expect(prompted).toBe(1)
+        expect(paused).toBe(true)
+    })
+
+    test('stale watchdog flag falls back to the prompt after the grace expires', async () => {
+        const handle = makeFakeCtx('/tmp/steer-stale')
+        // Aborted, but no reminder ever lands — the flag was left over.
+        handle.setIdleEntries([[assistantEntry('aborted')]])
+        let prompted = 0
+        let consumed = 0
+        const paused = await steerUntilDone(
+            handle.ctx as SteerCtx,
+            async () => {
+                prompted++
+                return ''
+            },
+            {
+                ...FAST,
+                consume: () => {
+                    consumed++
+                    return consumed === 1 // one-shot, like the real flag
+                }
+            }
+        )
+        expect(prompted).toBe(1)
+        expect(paused).toBe(true)
+    })
+
+    test('watchdog abort flag is one-shot', () => {
+        consumeWatchdogAbort() // clear any residue from other tests
+        expect(consumeWatchdogAbort()).toBe(false)
+        noteWatchdogAbort()
+        expect(consumeWatchdogAbort()).toBe(true)
+        expect(consumeWatchdogAbort()).toBe(false)
     })
 })

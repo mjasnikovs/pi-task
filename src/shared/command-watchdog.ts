@@ -70,6 +70,15 @@ function correction(): string {
 }
 
 /**
+ * Stable substring of {@link reminderMessage}, used by the steer loop
+ * (orchestrator steerUntilDone) to recognise the watchdog's follow-up turn in
+ * the session entries — the artifact that distinguishes a watchdog abort from a
+ * human ESC. Interpolated into the message so the detector and the text cannot
+ * drift apart.
+ */
+export const WATCHDOG_CANCEL_MARKER = 'was automatically cancelled — it looked stuck.'
+
+/**
  * MAIN-SESSION reminder, delivered as a follow-up turn after ctx.abort() has
  * cancelled the offending tool call. The session is still alive and remembers
  * the call, so this addresses it in the second person, present tense.
@@ -77,7 +86,7 @@ function correction(): string {
 export function reminderMessage(toolName: string, timeoutMs: number): string {
     return (
         `[SYSTEM] Your \`${toolName}\` call ran longer than ${minutes(timeoutMs)} `
-        + `and was automatically cancelled — it looked stuck. `
+        + `and ${WATCHDOG_CANCEL_MARKER} `
         + correction()
     )
 }

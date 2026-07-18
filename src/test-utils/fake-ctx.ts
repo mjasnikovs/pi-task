@@ -68,6 +68,11 @@ export function assistantEntry(stopReason: string, errorMessage?: string): unkno
     return {type: 'message', message: {role: 'assistant', stopReason, errorMessage}}
 }
 
+/** Build a fake user message entry (e.g. the watchdog's reminder follow-up). */
+export function userEntry(content: string): unknown {
+    return {type: 'message', message: {role: 'user', content}}
+}
+
 /** Build a fake compaction-boundary entry (the runtime appends one at the branch
  *  tail after a context compaction). */
 export function compactionEntry(): unknown {

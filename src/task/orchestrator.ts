@@ -53,6 +53,7 @@ import {
 } from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
+import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
@@ -631,6 +632,82 @@ export async function resumeAcrossCompactions(ctx: SteerCtx): Promise<number> {
 }
 
 /**
+ * True when the watchdog's reminder follow-up has been DELIVERED into the session
+ * after the aborted assistant turn but its own turn has not finished yet — the
+ * artifact that confirms a pending watchdog recovery. Scoped after the LAST
+ * assistant entry so an earlier fire's reminder (already answered by its own
+ * turn) never matches.
+ */
+function watchdogReminderDelivered(ctx: ExtensionCommandContext): boolean {
+    const entries = ctx.sessionManager.getEntries()
+    let lastAssistant = -1
+    for (let i = 0; i < entries.length; i++) {
+        const e = entries[i]
+        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
+            lastAssistant = i
+        }
+    }
+    for (let i = lastAssistant + 1; i < entries.length; i++) {
+        const e = entries[i]
+        if (!('message' in e) || !('role' in e.message) || e.message.role !== 'user') continue
+        const content = (e.message as {content?: unknown}).content
+        const text =
+            typeof content === 'string' ? content
+            : Array.isArray(content) ?
+                content
+                    .map(b =>
+                        b !== null && typeof b === 'object' && 'text' in b ?
+                            String((b as {text: unknown}).text)
+                        :   ''
+                    )
+                    .join(' ')
+            :   ''
+        if (text.includes(WATCHDOG_CANCEL_MARKER)) return true
+    }
+    return false
+}
+
+/**
+ * Timing knobs for the watchdog-abort guard in {@link steerUntilDone}, injectable
+ * so tests exercise the grace expiry without a 10-second wait. `graceMs` bounds
+ * how long the loop waits for the watchdog's follow-up to be DELIVERED (not to
+ * finish — its turn may legitimately run for minutes afterwards); delivery is
+ * normally near-instant, so the grace only expires on a stale flag.
+ */
+export interface SteerWatchdogDeps {
+    consume: () => boolean
+    graceMs: number
+    pollMs: number
+}
+
+const STEER_WATCHDOG_DEFAULTS: SteerWatchdogDeps = {
+    consume: consumeWatchdogAbort,
+    graceMs: 10_000,
+    pollMs: 100
+}
+
+/**
+ * Wait for a watchdog abort's queued follow-up turn instead of prompting. The
+ * abort and the reminder follow-up are two separate steps in the watchdog's
+ * onFire, so the steer loop can observe the aborted turn before the reminder is
+ * delivered — poll (bounded) until it lands or the follow-up turn has already
+ * completed. True = recovery observed, re-check the loop; false = grace expired
+ * with no reminder (stale flag) — fall back to the human prompt.
+ */
+async function awaitWatchdogFollowUp(ctx: SteerCtx, wd: SteerWatchdogDeps): Promise<boolean> {
+    const deadline = Date.now() + wd.graceMs
+    for (;;) {
+        if (!wasInterrupted(ctx)) return true // follow-up turn already completed
+        if (watchdogReminderDelivered(ctx)) {
+            await ctx.waitForIdle() // let the follow-up turn run to completion
+            return true
+        }
+        if (Date.now() >= deadline) return false
+        await new Promise<void>(r => setTimeout(r, wd.pollMs))
+    }
+}
+
+/**
  * After the implementation turn settles, honour a user ESC by letting them steer.
  *
  * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
@@ -641,13 +718,23 @@ export async function resumeAcrossCompactions(ctx: SteerCtx): Promise<number> {
  * ourselves and feed it back as another turn via sendUserMessage — which runs to
  * completion when the session is idle. Repeat until a turn finishes uninterrupted.
  *
+ * A WATCHDOG abort also ends the turn with stopReason 'aborted' — indistinguishable
+ * from a human ESC by the session entries alone at that instant. The watchdog
+ * queues its own recovery follow-up, so prompting there would show a steering
+ * dialog to an empty room and wedge an unattended run on the race. The one-shot
+ * flag (set synchronously before the abort) routes that case to
+ * {@link awaitWatchdogFollowUp} instead; a stale flag degrades to a bounded wait
+ * followed by the ordinary prompt, never to a suppressed one.
+ *
  * Returns true when the user declined to steer (empty/cancelled) and the run
  * should pause; false when the implementation completed (steered or not).
  */
-async function steerUntilDone(
+export async function steerUntilDone(
     ctx: SteerCtx,
-    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
+    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>,
+    watchdog?: Partial<SteerWatchdogDeps>
 ): Promise<boolean> {
+    const wd: SteerWatchdogDeps = {...STEER_WATCHDOG_DEFAULTS, ...watchdog}
     // Fan the prompt out through the bridge (local TUI input + remote browser
     // card, first answer wins) instead of a raw ctx.ui.input: an interrupt can
     // come from the remote Stop button just as well as a terminal ESC, and a
@@ -664,6 +751,7 @@ async function steerUntilDone(
                 allowSkip: true
             }))
     while (wasInterrupted(ctx)) {
+        if (wd.consume() && (await awaitWatchdogFollowUp(ctx, wd))) continue
         const steer = await ask(ctx)
         if (steer === undefined || steer.trim().length === 0) return true // pause
         await ctx.sendUserMessage(steer)

@@ -35,9 +35,37 @@ export {
     commandTimeoutHint,
     realTimerDeps,
     reminderMessage,
+    WATCHDOG_CANCEL_MARKER,
     type TimerHandle,
     type WatchdogDeps
 } from '../shared/command-watchdog.js'
+
+/**
+ * One-shot marker: the most recent turn abort was issued BY THE WATCHDOG, not by
+ * a human ESC. Both end the assistant turn with stopReason 'aborted' — the only
+ * signal steerUntilDone's wasInterrupted() can read — so without this flag the
+ * steer loop can win the race against the watchdog's queued follow-up turn and
+ * show a steering prompt to an empty room (wedging an unattended run).
+ *
+ * Set synchronously in onFire BEFORE ctx.abort(), so it is observable by the
+ * time any waitForIdle resolves; consumed (cleared) by the first reader. A stale
+ * flag (the aborted turn wasn't one the steer loop was watching) only costs the
+ * consumer a bounded wait before it falls back to prompting — it can never
+ * permanently suppress a human's steer prompt.
+ */
+let watchdogAbortPending = false
+
+/** @internal Set by onFire when it aborts a turn. Exported for the adapter and tests. */
+export function noteWatchdogAbort(): void {
+    watchdogAbortPending = true
+}
+
+/** True exactly once per watchdog abort; clears the flag. */
+export function consumeWatchdogAbort(): boolean {
+    const was = watchdogAbortPending
+    watchdogAbortPending = false
+    return was
+}
 
 /**
  * Wire the watchdog into the main session. Only ever active in the host session
@@ -58,8 +86,12 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
             ctxByCall.delete(toolCallId)
             // Cancel the stuck command (kills the tool's whole process tree via
             // the turn's AbortSignal), then start a fresh turn telling the model
-            // to bound its next attempt.
-            ctx?.abort()
+            // to bound its next attempt. The flag must precede the abort so the
+            // steer loop can never observe the 'aborted' turn before the flag.
+            if (ctx) {
+                noteWatchdogAbort()
+                ctx.abort()
+            }
             pi.sendUserMessage(reminderMessage(toolName, timeoutMs), {deliverAs: 'followUp'})
         }
     })
