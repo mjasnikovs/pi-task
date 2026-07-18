@@ -75,6 +75,12 @@ import {
     siblingTitlesFromPlanContext
 } from './verify-reconcile.js'
 import {findFrozenPathConflicts, frozenConflictProbeText} from './frozen-conflict.js'
+import {findSynthesizedApis, synthesizedApiReaskHint} from './api-synthesis.js'
+import {
+    findGrepOnlyVerify,
+    grepOnlyVerifyDefectText,
+    GREP_THEATER_RETRY_HINT
+} from './verify-quality.js'
 import {existsSync} from 'node:fs'
 import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
 import {readRequirements, buildRequirementsBlock} from './requirements.js'
@@ -849,7 +855,52 @@ export async function phaseAutoAnswer(
                 prependHint(GRILL_AUTO_FORMAT_HINT, basePrompt)
             )
         }
-        const parsed = parseAutoAnswer(text)
+        let parsed = parseAutoAnswer(text)
+
+        // Anti-synthesis guard (mx5 run 13, Bug A): the auto-answer invented
+        // `Bun.mkdirSync` while research's APIS section carried the correct list,
+        // and the invention was promoted into requirements + VERIFY. Deterministic
+        // verbatim-substring check: an API-shaped identifier in the answer that is
+        // absent from the research AND the question, in a namespace the research
+        // claims to cover, triggers ONE re-ask with the verified research lines
+        // injected. Still synthesizing after the re-ask ⇒ surface to the user as a
+        // recommendation instead of silently promoting it (costs time, never work).
+        if (parsed.kind === 'answered') {
+            const synth = findSynthesizedApis(parsed.text, question, research)
+            if (synth.length > 0) {
+                deps.logDebug?.(
+                    'grill-auto: unverified API identifier(s) in answer — '
+                        + synth.map(f => f.identifier).join(', ')
+                        + ' — re-asking with the research API list injected'
+                )
+                let reasked: AutoAnswer | null = null
+                try {
+                    const text2 = await runPhaseChild(
+                        deps,
+                        'grill-auto',
+                        'read',
+                        prependHint(synthesizedApiReaskHint(synth, research), basePrompt)
+                    )
+                    if (autoAnswerHasTag(text2)) reasked = parseAutoAnswer(text2)
+                } catch {
+                    reasked = null
+                }
+                if (
+                    reasked === null
+                    || (reasked.kind === 'answered'
+                        && findSynthesizedApis(reasked.text, question, research).length > 0)
+                ) {
+                    const still = reasked ?? parsed
+                    const suggested = still.kind === 'answered' ? still.text : parsed.text
+                    deps.logDebug?.(
+                        'grill-auto: answer still carries an unverified API — surfacing to user'
+                    )
+                    parsed = {kind: 'unknown', suggested, raw: still.raw}
+                } else {
+                    parsed = reasked
+                }
+            }
+        }
 
         // Surviving-unknown routing: an integration / build-wiring unknown whose
         // wrong guess is a structural landmine must NOT be silently auto-answered.
@@ -1123,6 +1174,19 @@ export async function phaseCritique(
                 + frozenConflicts.map(c => c.path).join(' | ')
         )
     }
+    // DETERMINISTIC grep-theater probe (mx5 run 13, Bug B): a VERIFY block that
+    // grep-asserts the SOURCE of a runnable deliverable while every command in
+    // the block is static inspection — the build script "verified" by three
+    // greps that was never run, shipping broken for 14 tasks. Forced into the
+    // rewrite like the skip-escape finding: VERIFY must EXECUTE the artifact
+    // and assert an observable outcome of that run.
+    const grepOnly = findGrepOnlyVerify(spec)
+    const grepOnlyProbe = grepOnly.length > 0 ? grepOnlyVerifyDefectText(grepOnly) : null
+    if (grepOnlyProbe) {
+        deps.logDebug?.(
+            'grep-theater VERIFY flagged in spec: ' + grepOnly.map(f => f.target).join(' | ')
+        )
+    }
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -1144,7 +1208,7 @@ export async function phaseCritique(
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
             // A deterministic skip-escape, synthesized-wiring, plan-contradiction,
-            // or unsatisfiable-pair finding overrides a CLEAN triage: the draft must
+            // unsatisfiable-pair, or grep-theater finding overrides a CLEAN triage: the draft must
             // be rewritten to resolve it even if the model judged the rest clean
             // (the model does not self-discover any of them reliably).
             if (isCritiqueClean(verdict)) {
@@ -1153,6 +1217,7 @@ export async function phaseCritique(
                     && wiringProbe === null
                     && absenceProbe === null
                     && frozenProbe === null
+                    && grepOnlyProbe === null
                 ) {
                     return spec
                 }
@@ -1162,10 +1227,10 @@ export async function phaseCritique(
         }
     }
     // Merge the deterministic skip-escape + synthesized-wiring + plan-contradiction
-    // + unsatisfiable-pair defects with any triage defects for the rewrite (all are
-    // forced FOCUS items).
+    // + unsatisfiable-pair + grep-theater defects with any triage defects for the
+    // rewrite (all are forced FOCUS items).
     const rewriteDefects =
-        [skipDefects, wiringProbe, absenceProbe, frozenProbe, triageDefects]
+        [skipDefects, wiringProbe, absenceProbe, frozenProbe, grepOnlyProbe, triageDefects]
             .filter(Boolean)
             .join('\n\n') || null
 
@@ -1175,25 +1240,41 @@ export async function phaseCritique(
             deps,
             'critique',
             'read',
-            problem =>
-                CRITIQUE_PROMPT(
+            problem => {
+                const base = CRITIQUE_PROMPT(
                     spec,
                     refined,
                     qa,
-                    problem !== null,
+                    problem === 'no_verify_block',
                     rewriteDefects,
                     contractsBlock
-                ),
+                )
+                // Theater retry gets a targeted hint (the generic emphasis line
+                // says "previous attempt had no VERIFY block", which is wrong
+                // here — it had one, it just never ran the deliverable).
+                return problem === 'verify_grep_theater' ?
+                        prependHint(GREP_THEATER_RETRY_HINT, base)
+                    :   base
+            },
             text => {
                 // The rewrite (thinking on) sometimes prepends narration before
                 // GOAL; the prompt forbids it but this validator only checks for
                 // a VERIFY block. Strip it so the delivered spec starts at GOAL.
                 const stripped = stripSpecPreamble(text)
-                return parseVerifyBlock(stripped) ?
-                        {ok: true, value: stripped}
-                    :   {ok: false, problem: 'no_verify_block'}
+                if (parseVerifyBlock(stripped) === null) {
+                    return {ok: false, problem: 'no_verify_block'}
+                }
+                // Detector-backed closure on the grep-theater defect: when the
+                // draft was flagged, the rewrite must actually resolve it (live
+                // A/B: 1/5 rewrites ignored the injected defect and re-shipped
+                // the grep-only block). One emphasis retry with a targeted hint;
+                // a second miss falls back to the draft in critiqueWithFallback.
+                if (grepOnlyProbe !== null && findGrepOnlyVerify(stripped).length > 0) {
+                    return {ok: false, problem: 'verify_grep_theater'}
+                }
+                return {ok: true, value: stripped}
             },
-            () => new Error('no_verify_block')
+            problem => new Error(problem)
         )
     } finally {
         deps.recordSubStep?.('rewrite', Date.now() - tRewrite)
@@ -1207,7 +1288,7 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
         return await phaseCritique(d, p.spec, p.refined, p.qa, p.planContext, p.research)
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        if (msg !== 'no_verify_block') throw err
+        if (msg !== 'no_verify_block' && msg !== 'verify_grep_theater') throw err
         // Fall back to the compose draft — but only if it actually carries a
         // runnable VERIFY block. Critique reaches its rewrite path precisely
         // when the compose draft lacked one (triage is skipped in that case),
@@ -1215,9 +1296,14 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
         // handoff gate rejects and resume can't heal. Compose now enforces a
         // parseable VERIFY, so this should hold; keep the guard so a regression
         // fails the run cleanly instead of shipping a broken spec.
+        // (verify_grep_theater: both rewrite attempts kept a grep-only VERIFY;
+        // the draft carries the same defect but is the validated-shape fallback
+        // — deliver it rather than fail the run. The guard costs time, never work.)
         if (parseVerifyBlock(p.spec) === null) throw err
         p.ctx.ui.notify(
-            "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",
+            msg === 'verify_grep_theater' ?
+                'Critique rewrite kept a grep-only VERIFY — using compose draft. Consider adding a command that RUNS the deliverable.'
+            :   "Critique couldn't produce a VERIFY block — using compose draft. Edit the spec manually if needed.",
             'warning'
         )
         return p.spec

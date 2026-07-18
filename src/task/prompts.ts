@@ -271,6 +271,8 @@ LIVE-DATA RULE:
 - No npm block + question is about latest/current version → tag UNKNOWN (training data goes stale).
 - VERSION-PIN questions ("pin to X.y vs latest", "which major version") are costly-to-reverse build-shaping choices: unless the spec or an "### npm:" block already settles it (then ANSWER that value), tag UNKNOWN and surface it. NEVER auto-answer a downgrade to an OLDER major "to avoid breaking changes" from memory — that reasoning is exactly the stale-training-data trap. If an "### npm:" block shows a newer major than your instinct, that block is the live latest; do not silently pin an older major the live data and spec never asked for.
 
+API-GROUNDING RULE: never name a concrete API (\`Namespace.member\`, an imported function, a runtime builtin) that appears in neither the research notes nor the question. The research APIS list was verified against the installed types; an API you remember but the research does not list may simply not exist, and an invented one poisons the whole task downstream. If the behavior you recommend needs an API the research does not list, describe the behavior without naming an API, or tag UNKNOWN.
+
 TRIAGE — run these checks IN ORDER first. The REVERSIBILITY TEST below applies ONLY to a question that survives all checks as a genuine preference.
 
 1. ALREADY-DECIDED CHECK — scan the refined task and research for a value, shape, response body, schema, route, or requirement that ALREADY determines the answer. If one does, this is a fact, not a preference. Emit "ANSWER: <value taken from that source>". If your instinct or a "nicer" alternative contradicts that source, the SOURCE WINS — never override a stated contract with a preferred default. (E.g. a stated response shape { items, total, page, pageSize } already answers a pagination question — page/offset — you may NOT answer "cursor".)
@@ -375,6 +377,7 @@ VERIFY must exercise the surface area the task actually touches. Draw VERIFY com
 - TypeScript / JavaScript source changes → MUST include the project's typecheck, lint, and test commands when those scripts exist in TOOLING. Include build only if the change could affect the build output.
 - Python / Go / Rust / other source changes → MUST include the language's standard verification from TOOLING (e.g. \`pytest\`, \`go test ./...\`, \`cargo test\`) plus lint/typecheck if configured.
 - Config / infra-only changes with no executable verification → state that explicitly with a single command that re-reads or validates the config (e.g. \`docker compose config\`, \`nginx -t\`, \`yamllint file.yml\`). Never leave VERIFY with only \`true\` or \`echo ok\`.
+- Runnable deliverables (a build script, server, CLI, seed/migrate script) → VERIFY must EXECUTE the artifact and assert an observable outcome of that run (exit code, a file the run produces, a served response). A grep on the artifact's SOURCE proves nothing about behavior and is never sufficient on its own.
 
 When this task is one step of a larger plan: sibling steps' deliverables may already exist in the tree and more will land after this task. NEVER write a VERIFY check that fails because sibling work exists (e.g. "file X must not exist" when another step owns X). The plan context forbids you from BUILDING other steps' work — it does not make their work absent. Verify what THIS task adds or changes.
 
