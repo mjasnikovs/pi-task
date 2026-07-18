@@ -106,9 +106,10 @@ export interface RunWorkerInput {
      * treats a reachable model endpoint as proof of life, which it is, even while
      * a `bun run dev` the model forgot to bound blocks the child forever.
      *
-     * This is the ceiling for the FIRST attempt; each restart halves it (see
-     * commandCeilingForAttempt), so a model that ignores the hint cannot spend
-     * the full ceiling again on every retry.
+     * This is the ceiling for the FIRST attempt; each HANG-caused restart halves
+     * it (see commandCeilingForAttempt — loop-caused restarts don't count), so a
+     * model that ignores the hint cannot spend the full ceiling again on every
+     * retry.
      *
      * 0 / omitted = off, so every existing caller is unchanged.
      */
@@ -223,21 +224,27 @@ export interface RunWorkerResult {
  * The per-command ceiling for attempt N, halving each time a hang recurs.
  *
  * The first attempt gets the full configured ceiling — a genuinely slow build or
- * test suite deserves it. But every restart carries commandTimeoutHint, which
- * tells the model in as many words to bound its command; a SECOND hang means it
- * ignored an explicit instruction, and a third means it ignored it twice. Giving
- * a non-complying child the full ceiling again would put the worst case at
- * 3 × 15 min = 45 minutes of dead time, resting entirely on the model obeying
- * prose. Halving bounds it at ~26 min while costing a complying child nothing.
+ * test suite deserves it. But every hang-caused restart carries
+ * commandTimeoutHint, which tells the model in as many words to bound its
+ * command; a SECOND hang means it ignored an explicit instruction, and a third
+ * means it ignored it twice. Giving a non-complying child the full ceiling again
+ * would put the worst case at 3 × 15 min = 45 minutes of dead time, resting
+ * entirely on the model obeying prose. Halving bounds it at ~26 min while
+ * costing a complying child nothing.
+ *
+ * `priorHangs` counts watchdog kills specifically, NOT total restarts — the
+ * restart budget is shared with loop kills, and a child restarted for LOOPING
+ * never received the bound-your-command hint, so its first hang still deserves
+ * the full ceiling. Only a hang after a hang is defiance.
  *
  * Floored at 30s so repeated halving cannot shrink the ceiling to something no
  * real command could finish inside — but never ABOVE the configured ceiling
  * itself, or a caller asking for 10s would silently get 30.
  */
-export function commandCeilingForAttempt(baseMs: number, restarts: number): number {
+export function commandCeilingForAttempt(baseMs: number, priorHangs: number): number {
     if (!(baseMs > 0)) return 0
     const floor = Math.min(baseMs, 30_000)
-    return Math.max(floor, Math.round(baseMs / 2 ** restarts))
+    return Math.max(floor, Math.round(baseMs / 2 ** priorHangs))
 }
 
 /** What the command watchdog recorded when it killed an attempt. */
@@ -254,6 +261,12 @@ interface CommandKill {
  * machine (shared with the main session) whose `onFire` aborts `signal`, which
  * runChild turns into a process-GROUP kill — reaping the hung command itself,
  * not just the pi child holding it.
+ *
+ * LIMIT: the group kill only reaches processes still IN the group. A hung
+ * command that detached a daemon (setsid/nohup dev server) leaves it running —
+ * the fresh attempt can then hit a port the dead attempt's escapee still holds
+ * (the run-9 orphan-dev-server → false-EADDRINUSE shape). No cheap fix from
+ * here; the restart hint's "check current state" line is the mitigation.
  *
  * Returns null when the watchdog is off, so the caller keeps the plain timeout
  * signal and no per-call bookkeeping happens at all.
@@ -313,6 +326,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     // hint up to MAX_LOOP_RESTARTS times before we give up. Leaked tool calls
     // keep their own MAX_LEAK_RETRIES budget below — a different failure mode.
     let restarts = 0
+    // Watchdog kills specifically — drives the ceiling halving. Kept apart from
+    // `restarts` (the shared budget) so a loop-caused restart doesn't shorten
+    // the rope of a child that has never hung (see commandCeilingForAttempt).
+    let hangKills = 0
     let leakRetries = 0
     for (;;) {
         const prompt = hint === null ? input.prompt : `${hint}\n\n${input.prompt}`
@@ -343,7 +360,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // Per-tool-call watchdog for this attempt (null when off). Its abort is
         // OR'd with the worker timeout / external cancel into the child's signal.
         const cmdWatch = commandWatch(
-            commandCeilingForAttempt(input.commandTimeoutMs ?? 0, restarts)
+            commandCeilingForAttempt(input.commandTimeoutMs ?? 0, hangKills)
         )
         const childSignal =
             cmdWatch ? AbortSignal.any([timeout.signal, cmdWatch.signal]) : timeout.signal
@@ -412,12 +429,16 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // bound the command. (The two can't be confused — a watchdog kill leaves
         // timeout.timedOut() false, since that flag tracks only its own timer.)
         if (commandKill && !loopHit && restarts < MAX_LOOP_RESTARTS) {
-            hint = commandTimeoutHint(
-                commandKill.toolName,
-                commandKill.timeoutMs,
-                commandKill.detail
-            )
+            hint = commandTimeoutHint(commandKill.toolName, commandKill.timeoutMs, {
+                commandDetail: commandKill.detail,
+                // Nothing reverts the tree between attempts, so a child that can
+                // mutate it (edit/write, or bash side effects) must not be told
+                // its previous attempt left no trace. Same capability test the
+                // gate logger uses — decided by tools, not by phase.
+                editsMayPersist: /\b(?:edit|bash|write)\b/.test(tools)
+            })
             restarts++
+            hangKills++
             continue
         }
         // A wall-clock timeout (the backstop for varied thrash the exact-match

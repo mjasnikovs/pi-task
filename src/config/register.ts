@@ -124,7 +124,9 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             'Cancel a single command that runs longer than this and remind the model to set '
             + 'its own timeout. Catches a local model that runs a command which never returns '
             + '(hung build, dev server, no-timeout check) so the run stops itself instead of '
-            + 'waiting for a manual abort. off disables it',
+            + 'waiting for a manual abort. One knob for both surfaces: the main session AND '
+            + 'the verify/fix gate children. off disables it everywhere — gates can then hang '
+            + 'unbounded',
         // Display human labels; the stored config value stays the ms number.
         values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
     }

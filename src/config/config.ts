@@ -48,16 +48,20 @@ export interface PiTaskConfig {
      */
     extensionWhitelist: string[]
     /**
-     * Wall-clock ceiling (ms) on a SINGLE tool execution in the MAIN session
-     * before the command watchdog cancels it and reminds the model to set its
-     * own timeout. Local models routinely run a command that never returns
+     * Wall-clock ceiling (ms) on a SINGLE tool execution before the command
+     * watchdog steps in. Local models routinely run a command that never returns
      * (e.g. `godot --headless` with no timeout, a dev server, a hung test) and
      * the run wedges until the user manually aborts. pi's bash tool has an
      * OPTIONAL timeout with NO default (bash.js), so a command the model didn't
-     * bound runs forever; this is the missing default, enforced from the host
-     * side via ctx.abort() (which kills the tool's whole process tree) plus an
-     * auto-reminder turn. Tool-agnostic: it arms on any tool execution, though
-     * in practice only bash runs long enough to trip it. 0 = off.
+     * bound runs forever; this is the missing default.
+     *
+     * ONE knob, TWO surfaces (shared/command-watchdog.ts): in the MAIN session
+     * the overrun call is cancelled via ctx.abort() (kills the tool's whole
+     * process tree) plus an auto-reminder turn; in the verify/fix GATE children
+     * (gate-deps.ts) the child is killed and re-spawned with a hint, the ceiling
+     * halving on repeat hangs. 0 = off — which unguards BOTH surfaces, gates
+     * included. Tool-agnostic: it arms on any tool execution, though in practice
+     * only bash runs long enough to trip it.
      * DEFAULT 15 min: long enough for a real build/test suite, short enough that
      * a true hang doesn't cost half an hour of dead time.
      */

@@ -32,9 +32,12 @@ export type TimerHandle = unknown
 
 export interface WatchdogDeps {
     /**
-     * The ceiling in ms, read PER command-start so a /task-config change takes
-     * effect on the next command with no reload. 0 (or any non-positive value)
-     * means the watchdog is off and never arms.
+     * The ceiling in ms, read PER command-start. How live that read is depends
+     * on the adapter: the main session passes a config read, so a /task-config
+     * change takes effect on the next command with no reload; the child adapter
+     * passes a constant frozen per attempt (the halved ceiling), so there a
+     * config change lands at the next attempt/gate, not the next command.
+     * 0 (or any non-positive value) means the watchdog is off and never arms.
      */
     getTimeoutMs: () => number
     schedule: (fn: () => void, ms: number) => TimerHandle
@@ -85,6 +88,13 @@ export function reminderMessage(toolName: string, timeoutMs: number): string {
  * "your previous attempt" and names the command, which the fresh child would
  * otherwise have no way to know it must avoid repeating unbounded.
  *
+ * `editsMayPersist` — set for a write-capable child (edit/write tools, or bash,
+ * whose commands have side effects). Nothing reverts the working tree between
+ * attempts, so telling such a child its previous attempt was "discarded" is
+ * false: partial edits and command side effects survive the kill, and a fresh
+ * child that believes it starts clean may re-apply them or misread the tree.
+ * Only the CONVERSATION is gone; the hint must say so precisely.
+ *
  * Replaces the generic worker-timeout hint for this case: that one blames
  * "exploring too long", which is the wrong diagnosis for a hung command and
  * never mentions the timeout parameter.
@@ -92,13 +102,21 @@ export function reminderMessage(toolName: string, timeoutMs: number): string {
 export function commandTimeoutHint(
     toolName: string,
     timeoutMs: number,
-    commandDetail?: string
+    opts?: {commandDetail?: string; editsMayPersist?: boolean}
 ): string {
-    const what = commandDetail ? ` (${commandDetail})` : ''
+    const what = opts?.commandDetail ? ` (${opts.commandDetail})` : ''
+    const aftermath =
+        opts?.editsMayPersist ?
+            `killed and that attempt's conversation was discarded — you are starting over, `
+            + `BUT any file edits or command side effects it made before the kill are still `
+            + `in the working tree. Check the current state of files before assuming they `
+            + `are untouched or re-applying changes. `
+        :   `killed and that attempt was discarded — you are seeing this task again from `
+            + `the start. `
     return (
         `[SYSTEM NOTE: Your previous attempt ran a \`${toolName}\` command${what} that had not `
-        + `returned after ${minutes(timeoutMs)}, so it was killed and that attempt was `
-        + `discarded — you are seeing this task again from the start. `
+        + `returned after ${minutes(timeoutMs)}, so it was `
+        + aftermath
         + correction()
         + `]`
     )
