@@ -28,11 +28,23 @@ interface ChunkRow {
     rank: number
 }
 
+/**
+ * Split on any run of non-identifier characters — NOT on whitespace alone.
+ *
+ * Splitting on /\s+/ and then stripping punctuation INSIDE each token silently welds
+ * multi-part identifiers into one string that occurs nowhere in the corpus:
+ *   "src/server/routes/auth.ts"  ->  "srcserverroutesauthts"
+ *   "Bun.password.hash"          ->  "Bunpasswordhash"
+ * Because buildFtsQuery ORs the tokens, such a token contributes no MATCH at all, so the
+ * single most informative term in the query — the path, or the dotted API symbol — was
+ * dropped and ranking fell to the surrounding prose. Measured on the 141 real project
+ * queries of mx5 run 13, that cost 18% of them any chunk from the file they named
+ * (82% -> 99% retrieved once split on punctuation); on the 44 gradable npm queries,
+ * discriminative-symbol recall 89.5% -> 96.4%.
+ * See scripts/live-project-docs-retrieval-ab.ts and scripts/live-npm-tokenizer-regression.ts.
+ */
 function tokenize(query: string): string[] {
-    return query
-        .split(/\s+/)
-        .map(t => t.replace(/[^a-zA-Z0-9_]/g, ''))
-        .filter(t => t.length >= MIN_TOKEN_LEN)
+    return query.split(/[^a-zA-Z0-9_]+/).filter(t => t.length >= MIN_TOKEN_LEN)
 }
 
 function buildFtsQuery(tokens: string[]): string {

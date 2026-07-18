@@ -45,6 +45,49 @@ test('retrieveChunks OR-joins multi-token queries', () => {
     }
 })
 
+// REGRESSION. tokenize() used to split on /\s+/ and then strip punctuation INSIDE each
+// token, welding a multi-part identifier into one string that occurs nowhere in the
+// corpus: "UserService.list" -> "UserServicelist", "src/server/UserService.ts" ->
+// "srcserverUserServicets". buildFtsQuery ORs the tokens, so such a query produced NO
+// match and fell through to fallbackChunks() — which ignores the query entirely and
+// returns the first .d.ts + README slices. On mx5 run 13 that cost 18% of project queries
+// any chunk from the file they named.
+//
+// Asserting on content alone would NOT catch this: the fallback returns the fixture's only
+// .d.ts, which contains "UserService" regardless. The discriminator is `rank` —
+// fallbackChunks() emits rank 0 for every row, a real bm25() MATCH emits a negative rank.
+test('retrieveChunks matches dotted symbols instead of welding them into a dead token', () => {
+    const {cache, pkg} = seed()
+    try {
+        const chunks = retrieveChunks(cache, {
+            name: pkg.name,
+            version: pkg.version,
+            query: 'UserService.list()'
+        })
+        expect(chunks.length).toBeGreaterThan(0)
+        expect(chunks[0].rank).toBeLessThan(0) // a real MATCH, not the fallback
+        expect(chunks[0].content).toContain('UserService')
+    } finally {
+        cache.close()
+    }
+})
+
+test('retrieveChunks matches path-shaped queries by their segments', () => {
+    const {cache, pkg} = seed()
+    try {
+        const chunks = retrieveChunks(cache, {
+            name: pkg.name,
+            version: pkg.version,
+            query: 'src/server/UserService.ts'
+        })
+        expect(chunks.length).toBeGreaterThan(0)
+        expect(chunks[0].rank).toBeLessThan(0)
+        expect(chunks[0].content).toContain('UserService')
+    } finally {
+        cache.close()
+    }
+})
+
 test('retrieveChunks enforces limit', () => {
     const {cache, pkg} = seed()
     try {
