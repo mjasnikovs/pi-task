@@ -52,7 +52,14 @@ import {buildGateDeps, collectTreeChanges, type FinalGateFixFn} from './gate-dep
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate} from './final-gate.js'
-import {describeDebt, type AcceptDebt} from './accept-debt.js'
+import {describeDebt, recordFinalGateUnobservedDebt, type AcceptDebt} from './accept-debt.js'
+import {
+    applyDemotions,
+    isNonProgress,
+    normalizeFailureDetail,
+    rankedFirstFailure,
+    unobservedDebtReason
+} from './final-gate-progress.js'
 import {
     classifyFinalGateAnswer,
     MAX_FINAL_GATE_AUTOFIX,
@@ -1362,7 +1369,7 @@ export async function runAutoLoop(
                     let fixAttempts = 0
                     // Sub-fixes a non-converging autofix attempt left uncommitted.
                     // Refreshed after every attempt; drives the picker note and the
-                    // accept-time commit (mx5 run 13 PROMPT 4 item 3).
+                    // terminal commit (mx5 run 13 PROMPT 4 item 3, run 14 item 2b).
                     let stranded: string[] = []
                     const refreshStranded = async (): Promise<void> => {
                         if (!deps.pendingChanges) return
@@ -1371,6 +1378,48 @@ export async function runAutoLoop(
                         } catch {
                             // Inconclusive: say nothing rather than claim a clean tree.
                             stranded = []
+                        }
+                    }
+                    // NON-PROGRESS / UNFALSIFIABLE-CHECK state (mx5 run 14 item 2a).
+                    // `prevFailSig` is the previous attempt's normalized ranked-first
+                    // failure; `demoted` holds the signatures already carried as debt,
+                    // so a re-run that still reports them does not re-fail the gate.
+                    let prevFailSig: string | null = null
+                    const demoted = new Set<string>()
+                    // Set when a write-guard rejected an attempt whose edits could NOT
+                    // be discarded: REJECTED edits are then sitting in the tree and
+                    // must never be committed by the terminal paths below.
+                    let rejectedEditsInTree = false
+                    // Commit whatever guard-clean repairs the fix passes left, on ANY
+                    // terminal non-converged outcome. Run 14 ended on LEAVE with 13
+                    // real repairs dirty in the tree after an unattended run — the
+                    // next checkout would have destroyed them silently.
+                    const commitStranded = async (
+                        outcome: 'accepted' | 'left-failed'
+                    ): Promise<void> => {
+                        if (stranded.length === 0) return
+                        if (rejectedEditsInTree) {
+                            await recGate(
+                                `final-gate: NOT committing ${stranded.length} working-tree change(s) — a `
+                                    + `write-guard rejected an attempt and its edits could not be discarded, `
+                                    + `so the tree holds REJECTED edits: ${stranded.slice(0, 8).join(', ')}`
+                            )
+                            return
+                        }
+                        try {
+                            const sha = await deps.commit(cwd, STRANDED_FIX_COMMIT(id, outcome))
+                            await recGate(
+                                `final-gate: committed ${stranded.length} stranded fix-pass change(s)`
+                                    + `${sha ? ` as ${sha}` : ''} — ${stranded.slice(0, 8).join(', ')}`
+                            )
+                        } catch (err) {
+                            // Never break the terminal path over this — but say so, so
+                            // the changes are not silently lost.
+                            await recGate(
+                                `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
+                                    + `change(s) (${err instanceof Error ? err.message : String(err)}) — `
+                                    + `they remain UNCOMMITTED in the working tree: ${stranded.slice(0, 8).join(', ')}`
+                            )
                         }
                     }
                     while (!fin.ok) {
@@ -1439,23 +1488,7 @@ export async function runAutoLoop(
                             // it fixed. Commit it as its own, named commit — the
                             // ACCEPT is a decision about the FAILING gate, never an
                             // instruction to throw away work (mx5 run 13 item 3).
-                            if (stranded.length > 0) {
-                                try {
-                                    const sha = await deps.commit(cwd, STRANDED_FIX_COMMIT(id))
-                                    await recGate(
-                                        `final-gate: committed ${stranded.length} stranded fix-pass change(s)`
-                                            + `${sha ? ` as ${sha}` : ''} — ${stranded.slice(0, 8).join(', ')}`
-                                    )
-                                } catch (err) {
-                                    // Never break the completion path over this — but
-                                    // say so, so the changes are not silently lost.
-                                    await recGate(
-                                        `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
-                                            + `change(s) (${err instanceof Error ? err.message : String(err)}) — `
-                                            + `they remain UNCOMMITTED in the working tree: ${stranded.slice(0, 8).join(', ')}`
-                                    )
-                                }
-                            }
+                            await commitStranded('accepted')
                             active.ui.notify(
                                 `${id}: final integration gate FAIL accepted by user — completing.`
                                     + (stranded.length > 0 ?
@@ -1494,9 +1527,15 @@ export async function runAutoLoop(
                             await recGate(
                                 `final-gate: autofix attempt ${fixAttempts} failed — ${fix.reason.slice(0, 200)}`
                             )
+                            // A guard that rejected an attempt WITHOUT discarding leaves
+                            // rejected edits behind: the terminal paths must not commit
+                            // the tree after that (the cheat guard stays intact).
+                            if (fix.guardTripped === true && fix.editsDiscarded !== true) {
+                                rejectedEditsInTree = true
+                            }
                             // The attempt's edits survive a non-convergence (only a
                             // guard trip discards). Find out what they are NOW, so
-                            // the next picker shows them and an ACCEPT can commit them.
+                            // the next picker shows them and a terminal outcome commits them.
                             await refreshStranded()
                             if (stranded.length > 0) {
                                 await recGate(
@@ -1508,6 +1547,67 @@ export async function runAutoLoop(
                                 `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
                                 'warning'
                             )
+                            // NON-PROGRESS CLASSIFIER (mx5 run 14 item 2a). An attempt
+                            // that changed the tree, re-ran the gate, and got back the
+                            // SAME ranked-first failure as the previous such attempt is
+                            // evidence about the CHECK, not the fix: run 14 burned all
+                            // three attempts on a boot probe that could not observe a
+                            // listener in that sandbox at all. Demote that one check to
+                            // UNOBSERVED-with-debt and let the REMAINING checks decide.
+                            const detail = rankedFirstFailure({
+                                reason: fix.gateReason,
+                                failures: fix.gateFailures
+                            })
+                            const edited = fix.gateReason !== undefined && stranded.length > 0
+                            if (
+                                detail !== null
+                                && isNonProgress({
+                                    previousSignature: prevFailSig,
+                                    currentDetail: detail,
+                                    edited
+                                })
+                            ) {
+                                demoted.add(normalizeFailureDetail(detail))
+                                prevFailSig = null
+                                const debtReason = unobservedDebtReason(detail)
+                                await recordFinalGateUnobservedDebt(cwd, id, debtReason)
+                                await recGate(
+                                    `final-gate: check DEMOTED to UNOBSERVED after ${fixAttempts} tree-changing `
+                                        + `attempts returned an identical failure — carried as debt (origin final-gate) `
+                                        + `and re-checked by the next run's gate: ${detail.slice(0, 240)}`
+                                )
+                                active.ui.notify(
+                                    `${id}: final-gate check is unfalsifiable in this environment — carried as debt; `
+                                        + 'the remaining checks decide convergence.',
+                                    'warning'
+                                )
+                            } else {
+                                prevFailSig =
+                                    detail !== null ? normalizeFailureDetail(detail) : null
+                            }
+                            // Convergence on the REMAINING checks: a demoted signature no
+                            // longer counts against the gate. Nothing left ⇒ the run
+                            // converges carrying the demotion as debt, and the fix passes'
+                            // repairs are committed rather than stranded.
+                            if (demoted.size > 0 && fix.gateReason !== undefined) {
+                                const remaining = applyDemotions(
+                                    fix.gateFailures ?? [fix.gateReason],
+                                    demoted
+                                )
+                                if (remaining.length === 0) {
+                                    await deps.commit(cwd, `FINAL GATE AUTOFIX (${id})`)
+                                    const converged =
+                                        `converged on all remaining checks; ${demoted.size} check(s) `
+                                        + 'carried as UNOBSERVED debt (unfalsifiable in this environment)'
+                                    await recGate(`final-gate: ${converged}`)
+                                    active.ui.notify(
+                                        `${id}: final integration gate converged — ${converged}.`,
+                                        'warning'
+                                    )
+                                    fin = {ok: true, reason: converged}
+                                    break
+                                }
+                            }
                             // Work from the FRESH gate failure when the fix pass got
                             // as far as re-running the gate; otherwise keep the last.
                             // The full ranked list rides along (and is re-trailed
@@ -1515,11 +1615,27 @@ export async function runAutoLoop(
                             // still carry every entry, not just the first. The debt
                             // note is carried so the next picker still shows the
                             // open claims (the seed never includes it).
+                            // Demoted checks are stripped from what rides forward, so the
+                            // next picker and the next fix seed target only what is still
+                            // falsifiable — never re-aiming the child at the check the
+                            // classifier just proved it cannot move.
+                            const freshFailures =
+                                fix.gateReason !== undefined ? fix.gateFailures : fin.failures
+                            const carried =
+                                freshFailures !== undefined ?
+                                    applyDemotions(freshFailures, demoted)
+                                :   undefined
                             fin = {
                                 ok: false,
-                                reason: fix.gateReason ?? fin.reason,
-                                failures:
-                                    fix.gateReason !== undefined ? fix.gateFailures : fin.failures,
+                                reason:
+                                    (
+                                        demoted.size > 0
+                                        && carried !== undefined
+                                        && carried.length > 0
+                                    ) ?
+                                        carried[0]!
+                                    :   (fix.gateReason ?? fin.reason),
+                                failures: carried,
                                 debtNote: fin.debtNote
                             }
                             if (
@@ -1537,22 +1653,18 @@ export async function runAutoLoop(
                                 `final-gate: left failed — autofix budget spent, nobody to ask ${YOLO_STAMP}`
                             :   'final-gate: left failed (user)'
                         )
-                        // Leaving the run failed hands the working tree back to the
-                        // user, so uncommitted fix-pass edits are theirs to keep or
-                        // drop — but they must be VISIBLE, not discovered later by a
-                        // stray `git status` (mx5 run 13 item 3).
-                        if (stranded.length > 0) {
-                            await recGate(
-                                `final-gate: ${stranded.length} uncommitted fix-pass change(s) left in the `
-                                    + `working tree — ${stranded.slice(0, 8).join(', ')}`
-                            )
-                        }
+                        // Leaving the run failed is TERMINAL for an unattended run, so
+                        // the fix passes' guard-clean repairs are committed here too —
+                        // run 14 left 13 of them dirty for a `git checkout` to destroy
+                        // (mx5 run 13 item 3, run 14 item 2b). The user still owns the
+                        // outcome; they own it with the work in HEAD, named in the trail.
+                        await commitStranded('left-failed')
                         await updateTaskFrontMatter(cwd, id, {state: 'failed'})
                         announceDone(
                             active,
                             `${id} finished all tasks but FAILED the final integration gate — ${fin.reason.slice(0, 200)} — fix and /task-auto-resume (the gate re-runs).`
                                 + (stranded.length > 0 ?
-                                    ` NOTE: ${stranded.length} uncommitted fix-pass change(s) are in your working tree (${stranded.slice(0, 4).join(', ')}).`
+                                    ` NOTE: ${stranded.length} fix-pass change(s) were committed separately (${stranded.slice(0, 4).join(', ')}).`
                                 :   ''),
                             'error'
                         )

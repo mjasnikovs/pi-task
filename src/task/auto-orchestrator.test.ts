@@ -14,6 +14,7 @@ import {
 import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
+import {readAcceptDebts} from './accept-debt.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {spawnSync} from 'node:child_process'
@@ -2300,7 +2301,7 @@ test('runAutoLoop: ACCEPT commits the stranded fix pass changes instead of dropp
     })
 })
 
-test('runAutoLoop: LEAVE-failed keeps stranded changes in the tree but names them', async () => {
+test('runAutoLoop: LEAVE-failed COMMITS the stranded changes (mx5 run 14 item 2b)', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx, captured} = handle
@@ -2310,13 +2311,15 @@ test('runAutoLoop: LEAVE-failed keeps stranded changes in the tree but names the
         handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
         handle.queueSelect('Leave failed — I will fix and /task-auto-resume')
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits, ['bunfig.toml'], trail))
-        // The user keeps the working tree — nothing is committed for them...
-        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
-        // ...but the changes are announced, not left to a stray `git status`.
-        expect(
-            trail.some(l => /uncommitted fix-pass change\(s\) left in the working tree/.test(l))
-        ).toBe(true)
-        expect(captured.notifies.some(n => /uncommitted fix-pass change/.test(n.msg))).toBe(true)
+        // Run 14 ended exactly here and left 13 real repairs dirty in the tree; the
+        // terminal LEAVE now commits them under the partial-fix subject, named in
+        // the trail, with the run still recorded as failed.
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(true)
+        expect(commits.some(m => /run left failed, repairs preserved/.test(m))).toBe(true)
+        expect(commits.some(m => /FINAL GATE AUTOFIX/.test(m))).toBe(false)
+        expect(trail.some(l => /committed 1 stranded fix-pass change\(s\)/.test(l))).toBe(true)
+        expect(trail.some(l => l.includes('bunfig.toml'))).toBe(true)
+        expect(captured.notifies.some(n => /fix-pass change/.test(n.msg))).toBe(true)
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
     })
 })
@@ -2367,6 +2370,171 @@ test('runAutoLoop: a pendingChanges failure is inconclusive — nothing is claim
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
         expect(captured.selects.every(s => !/UNCOMMITTED/.test(s.title))).toBe(true)
+    })
+})
+
+// ── Non-progress / unfalsifiable check (mx5 run 14 item 2) ───────────────────
+// Run 14 burned all three attempts on a boot check that could not be observed in
+// that sandbox at ALL (no `ss`, no `lsof`), then left 13 real repairs uncommitted.
+// The A/B below is built on a SYNTHETIC always-failing check, deliberately not
+// coupled to the boot probe (whose own capability gap is fixed separately).
+
+/** Deps whose gate fails with `first` forever, plus optional extra failures that
+ *  clear after the first attempt. Every attempt edits the tree. */
+function nonProgressDeps(opts: {
+    first: string
+    extra?: string[]
+    commits: string[]
+    trail: string[]
+    attempts: {n: number}
+}): AutoDeps {
+    const firstOf = (n: number): string[] => [opts.first, ...(n === 0 ? (opts.extra ?? []) : [])]
+    return {
+        runChild: () => Promise.resolve(''),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        commit: (_cwd, message) => {
+            opts.commits.push(message)
+            return Promise.resolve({committed: true, sha: 'abc1234'})
+        },
+        record: (_c, _id, line) => {
+            opts.trail.push(line)
+            return Promise.resolve()
+        },
+        finalGate: () =>
+            Promise.resolve({ok: false, reason: firstOf(0).join(' | '), failures: firstOf(0)}),
+        finalGateFix: () => {
+            opts.attempts.n++
+            const failures = firstOf(opts.attempts.n)
+            return Promise.resolve({
+                ok: false,
+                reason: `did not converge: ${failures.join(' | ')}`,
+                gateReason: failures.join(' | '),
+                gateFailures: failures
+            })
+        },
+        pendingChanges: () => Promise.resolve(['package.json', 'src/db/teardown.ts'])
+    }
+}
+
+test('runAutoLoop: an identical failure across two tree-changing attempts is DEMOTED, not re-attempted', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        const attempts = {n: 0}
+        const autofixLabel = 'Autofix — run a bounded fix pass and re-run the gate'
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            nonProgressDeps({
+                // Volatile substrings differ every run — the classifier must still
+                // see "the same failure" after normalization, or it never fires.
+                first: 'boot check: the app never opened a listening socket on port 3000 after 12000ms',
+                commits,
+                trail,
+                attempts
+            })
+        )
+        // BEFORE: 3 attempts, run failed, edits uncommitted. AFTER: stop at 2.
+        expect(attempts.n).toBe(2)
+        expect(trail.some(l => /check DEMOTED to UNOBSERVED/.test(l))).toBe(true)
+        expect(trail.some(l => /converged on all remaining checks/.test(l))).toBe(true)
+        expect(commits.some(m => /FINAL GATE AUTOFIX/.test(m))).toBe(true)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        // The demotion is durable, with its own origin, so the NEXT run re-checks it.
+        const debts = await readAcceptDebts(dir)
+        expect(debts.length).toBe(1)
+        expect(debts[0].origin).toBe('final-gate')
+        expect(debts[0].reason).toMatch(/UNOBSERVED/)
+        expect(debts[0].reason).toMatch(/listening socket/)
+    })
+})
+
+test('runAutoLoop: demotion honors the REMAINING checks — they still have to pass', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        const attempts = {n: 0}
+        const autofixLabel = 'Autofix — run a bounded fix pass and re-run the gate'
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            nonProgressDeps({
+                first: 'boot check: never opened a listening socket',
+                // Cleared by attempt 1 — the run-14 shape (2 of 3 checks were fixable).
+                extra: ['`bun run test` exited 1 — 2 failing'],
+                commits,
+                trail,
+                attempts
+            })
+        )
+        expect(attempts.n).toBe(2)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        // The still-failing check never re-entered a picker after the demotion.
+        const pickers = captured.selects.filter(s => /Final integration gate FAILED/.test(s.title))
+        expect(pickers.length).toBe(2)
+    })
+})
+
+test('runAutoLoop: no demotion when the attempt changed nothing (no evidence about the check)', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        const attempts = {n: 0}
+        const d: AutoDeps = {
+            ...nonProgressDeps({first: 'boot check: no listener', commits, trail, attempts}),
+            pendingChanges: () => Promise.resolve([])
+        }
+        const autofixLabel = 'Autofix — run a bounded fix pass and re-run the gate'
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        handle.queueSelect(autofixLabel)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(attempts.n).toBe(3)
+        expect(trail.some(l => /DEMOTED/.test(l))).toBe(false)
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
+        expect(await readAcceptDebts(dir)).toEqual([])
+    })
+})
+
+test('runAutoLoop: a guard-REJECTED attempt whose edits survived is never committed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        const d: AutoDeps = {
+            ...strandedDeps(commits, ['src/client/pages/admin.tsx'], trail),
+            finalGateFix: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: 'fix pass DELETED tracked file(s) — edits REJECTED but left in the tree',
+                    guardTripped: true,
+                    editsDiscarded: false
+                })
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Accept — complete the run anyway')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(false)
+        expect(trail.some(l => /NOT committing 1 working-tree change\(s\)/.test(l))).toBe(true)
     })
 })
 

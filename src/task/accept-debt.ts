@@ -65,6 +65,13 @@ const FIELD_SEP = '\t'
  *     deletion ships in the next commit. Recorded so the final gate re-checks it:
  *     resolved iff the named file is back in the tree (a later task restored it),
  *     otherwise surfaced.
+ *   - 'final-gate' — the final integration gate DEMOTED one of its own checks to
+ *     UNOBSERVED (mx5 run 14): two fix attempts that both changed the tree and
+ *     re-ran the gate produced a byte-identical ranked-first failure, so the check
+ *     is unfalsifiable in this environment (run 14: the boot probe needed `ss` or
+ *     `lsof` and the sandbox had neither) and no further attempt can move it. The
+ *     run is allowed to converge on the REMAINING checks, carrying this one here
+ *     so the next run's gate re-checks and re-surfaces it rather than losing it.
  */
 export type DebtOrigin =
     | 'accepted'
@@ -72,6 +79,7 @@ export type DebtOrigin =
     | 'frozen-blocked'
     | 'cross-task-deletion'
     | 'yolo-accepted'
+    | 'final-gate'
 
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
@@ -129,6 +137,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
                 || origin === 'frozen-blocked'
                 || origin === 'cross-task-deletion'
                 || origin === 'yolo-accepted'
+                || origin === 'final-gate'
             ) ?
                 {origin: origin as DebtOrigin}
             :   {})
@@ -262,6 +271,26 @@ export async function recordYoloAcceptDebt(
         taskId: taskId.trim(),
         reason: normaliseReason(reason),
         origin: 'yolo-accepted'
+    })
+}
+
+/**
+ * Record a FINAL-GATE UNOBSERVED debt (mx5 run 14): the final gate demoted one of its
+ * OWN checks after two tree-changing fix attempts returned an identical ranked-first
+ * failure — unfalsifiable in this environment, so the gate stopped paying for it and
+ * converged on the remaining checks. Durable so the NEXT run's gate re-checks it: it
+ * is model-/environment-judged, so the re-check surfaces it (never auto-closes it).
+ * The taskId is the run's parent id — the demotion is a run-level decision.
+ */
+export async function recordFinalGateUnobservedDebt(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(reason),
+        origin: 'final-gate'
     })
 }
 
@@ -434,6 +463,9 @@ export function describeDebt(d: AcceptDebt): string {
     }
     if (d.origin === 'yolo-accepted') {
         return 'auto-ACCEPTED by YOLO mode despite verify-FAIL (unattended — no human weighed this)'
+    }
+    if (d.origin === 'final-gate') {
+        return 'final-gate check DEMOTED to UNOBSERVED (identical failure across two tree-changing fix attempts — unfalsifiable in that environment, never proven passing)'
     }
     return 'accepted despite verify-FAIL'
 }

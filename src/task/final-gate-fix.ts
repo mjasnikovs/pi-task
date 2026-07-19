@@ -188,11 +188,27 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
  *
  * The rule: a partial fix is either committed (its own commit, named in the trail) or
  * explicitly surfaced — never silently stranded.
+ *
+ * mx5 run 14 proved the committing half only ever ran on the ACCEPT path. The run
+ * ended on LEAVE (YOLO, budget spent) and 13 real repairs — the dev script, the
+ * teardown bug, test serialization, the migrate script: the changes that make that
+ * app work today — were left dirty in the tree, one `git checkout` from gone, after
+ * an UNATTENDED run nobody was watching. So EVERY terminal non-converged outcome
+ * commits them now, not just ACCEPT. Only guard-CLEAN edits qualify: an attempt a
+ * write-guard rejected without discarding leaves REJECTED edits in the tree, and
+ * those are never committed (the guard is not weakened to make committing easier).
  */
 
-/** Commit subject for partial fixes committed alongside an accepted gate FAIL. */
-export const STRANDED_FIX_COMMIT = (runId: string): string =>
-    `FINAL GATE PARTIAL FIX (${runId}) — accepted with gate still failing`
+/** Commit subject for partial fixes committed alongside a terminal gate FAIL. */
+export const STRANDED_FIX_COMMIT = (
+    runId: string,
+    outcome: 'accepted' | 'left-failed' = 'accepted'
+): string =>
+    `FINAL GATE PARTIAL FIX (${runId}) — ${
+        outcome === 'accepted' ?
+            'accepted with gate still failing'
+        :   'run left failed, repairs preserved'
+    }`
 
 /**
  * The picker/trail line describing what a non-converging fix pass left behind.
@@ -203,9 +219,9 @@ export function strandedFixNote(paths: string[]): string {
     const shown = paths.slice(0, 8).join(', ')
     return (
         `\n\nUNCOMMITTED: the fix pass left ${paths.length} change(s) in the working tree `
-        + `(${shown}${paths.length > 8 ? ', …' : ''}). These are NOT in HEAD. Accepting will `
-        + `commit them as their own commit so they are not lost; leaving the run failed keeps `
-        + `them in your working tree.`
+        + `(${shown}${paths.length > 8 ? ', …' : ''}). These are NOT in HEAD. Either terminal `
+        + `choice commits them as their own, named commit so they cannot be lost to a later `
+        + `checkout — the run's outcome is recorded in the gate trail either way.`
     )
 }
 
@@ -220,6 +236,13 @@ export interface FinalFixResult {
     /** The fresh gate's individual ranked failures (see FinalGateOutcome.failures),
      *  so the caller can trail each entry — never just the first. */
     gateFailures?: string[]
+    /** A write-guard rejected this attempt (deletion / shrink / probe-gaming). */
+    guardTripped?: boolean
+    /** …and its edits were discarded. When a guard tripped and this is false, the
+     *  working tree still holds REJECTED edits, so the caller must NOT commit what
+     *  it finds there (mx5 run 14 item 2b: commit surviving fix-pass edits — but
+     *  only guard-CLEAN ones; the cheat guard is never weakened to ease committing). */
+    editsDiscarded?: boolean
 }
 
 export interface FinalFixDeps {
@@ -287,7 +310,9 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
 
     const rejected = (what: string): FinalFixResult => ({
         ok: false,
-        reason: `${what} — edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`
+        reason: `${what} — edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`,
+        guardTripped: true,
+        editsDiscarded: deps.discard !== undefined
     })
 
     // (Diff capture — what the pass changed, durably — happens at the gate-deps
