@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-1637%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-1936%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -65,7 +65,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, orientation, verify work, and enforce guidelines. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, orientation, verify work, enforce guidelines, command timeout, and the extension whitelist for child sessions. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -179,6 +179,9 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | **parallel research** | off | Run the four research workers concurrently instead of one at a time. Leave off on a single-GPU local backend (concurrent streams split the GPU and slow each other down); turn on only for a parallel-capable model server. |
 | **research cache** | on | Cache docs/search/fetch worker results for the duration of one `/task-auto` run so sibling tasks re-asking the same package/URL + query reuse the first pipeline's digest instead of re-fetching. Per-run isolated, external-only (project-source `.` lookups excluded), success-only. |
 | **search provider** | Exa | Engine behind `pi-worker-search` and freshness/enrichment checks. **Exa** (default) and **DuckDuckGo** need no API key; **Brave** requires `BRAVE_SEARCH_API_KEY`. |
+| **command timeout** | 15 min | Wall-clock ceiling on a **single** tool execution. Local models routinely run a command that never returns (a hung build, a dev server, a check with no timeout) and the run wedges until you abort by hand — pi's bash tool has an optional timeout with no default, so this is the missing one. One knob, two surfaces: in the main session the overrun call is cancelled (killing the tool's whole process tree) plus a reminder turn; in the verify/fix gate children the child is killed and re-spawned with a hint, halving the ceiling on repeat hangs. Choices: 5/10/15/30 min or **off** — off unguards both surfaces, gates included. |
+| **yolo mode** | off | **Unattended runs.** Wherever pi-task would stop and ask, it takes the option already marked RECOMMENDED, stamps the artifact `(YOLO)` so an audit can tell a machine decided, and shows no prompt at all — clarify/grill answers, the verify-FAIL picker (auto-**Accept**, recorded as a yolo debt), and the final-gate picker (autofix while the budget lasts, then leave the run FAILED). A question with no recommendation is **skipped**, never invented. For throwaway/test projects nobody is watching; a real run should decide these itself. |
+| **extension whitelist** | empty | Host `pi` extensions to load into every child session by explicit path. Children otherwise run with extensions off, so a provider registered by an extension (e.g. `pi-lmstudio`) doesn't exist in them and they can't resolve the default model. `/task-config` enumerates the currently installed extensions as individual `ext: …` toggles; the list is strictly additive (discovery stays off), and an entry whose file is gone is skipped at spawn time, never fatal. |
 
 ## Configuration
 
@@ -197,7 +200,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun test src/      # 1637 tests across 107 files
+bun run test       # 1939 tests across 121 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
