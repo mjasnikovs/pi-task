@@ -14,6 +14,10 @@ import {
     discoverIntegrationCommands,
     discoverGateCommandLabels,
     discoverLockfileChecks,
+    parseLsofListeners,
+    parseNetstatListeners,
+    parseSsListeners,
+    pickFreePort,
     runBootCheck,
     runFinalIntegrationGate,
     taskThatIntroduced
@@ -447,10 +451,15 @@ describe('runBootCheck', () => {
 describe('runBootCheck — served-app listener requirement (run 10 item 1)', () => {
     const alive = nodeScript('setTimeout(()=>{},600000)')
 
+    // `enumerationCapable` is pinned in these cases: the FAIL is only legitimate on a
+    // box that CAN observe listeners, and leaving it to discovery would silently flip
+    // these tests to the survival rule on a toolless runner (mx5 run 14's sandbox).
+    const canSee = {enumerationCapable: () => true, pickPort: async () => null}
+
     itPosix('watcher: stays alive but never listens → FAIL naming the missing socket', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 800, {
             expectServer: true,
-            deps: {groupHasListener: () => false}
+            deps: {...canSee, groupHasListener: () => false}
         })
         expect(r.outcome).toBe('fail')
         expect((r as {detail: string}).detail).toContain('listening socket')
@@ -459,7 +468,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     itPosix('type-only entrypoint: exits 0 without listening → FAIL', async () => {
         const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'), 2000, {
             expectServer: true,
-            deps: {groupHasListener: () => false}
+            deps: {...canSee, groupHasListener: () => false}
         })
         expect(r.outcome).toBe('fail')
         expect((r as {detail: string}).detail).toContain('listening socket')
@@ -468,7 +477,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     itPosix('a listener owned by our group appears → PASS (early, before grace)', async () => {
         const r = await runBootCheck(os.tmpdir(), alive, 5000, {
             expectServer: true,
-            deps: {groupHasListener: () => true}
+            deps: {...canSee, groupHasListener: () => true}
         })
         expect(r.outcome).toBe('pass')
     })
@@ -483,6 +492,122 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
             expect(r.outcome).toBe('pass')
         }
     )
+})
+
+// mx5 run 14: the sandbox shipped no ss/netstat/lsof, so the listener requirement
+// was unfalsifiable — it failed a run whose app demonstrably served, three autofix
+// passes could not move it, and 13 real repairs were stranded uncommitted.
+describe('runBootCheck — unobservable listener degrades, never false-FAILs (run 14)', () => {
+    const alive = nodeScript('setTimeout(()=>{},600000)')
+    const blind = {enumerationCapable: () => false, groupHasListener: () => false}
+
+    itPosix('no enumeration tool + the assigned port answers → PASS on real evidence', async () => {
+        const probed: number[] = []
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...blind,
+                pickPort: async () => 45671,
+                httpProbe: p => {
+                    probed.push(p)
+                    return true
+                }
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        // The PRIVATE assigned port is what makes an HTTP answer ownership evidence.
+        expect(probed).toContain(45671)
+        expect((r as {renderNote?: string}).renderNote).toBeUndefined()
+    })
+
+    itPosix('no enumeration tool + port never answers → survival PASS, UNOBSERVED', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 800, {
+            expectServer: true,
+            deps: {...blind, pickPort: async () => 45672, httpProbe: () => false}
+        })
+        expect(r.outcome).toBe('pass')
+        const note = (r as {renderNote: string}).renderNote
+        expect(note).toContain('UNOBSERVED')
+        expect(note).toContain('ss/netstat/lsof')
+    })
+
+    itPosix('blindness never excuses a child that DIED — nonzero exit still FAILs', async () => {
+        const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(3)'), 5000, {
+            expectServer: true,
+            deps: {...blind, pickPort: async () => 45673, httpProbe: () => false}
+        })
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('exited 3')
+    })
+
+    itPosix('a listener seen via the assigned port still gets the render probe', async () => {
+        let url = ''
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...blind,
+                pickPort: async () => 45674,
+                httpProbe: () => true,
+                renderProbe: u => {
+                    url = u
+                    return {outcome: 'fail', detail: 'the rendered body is EMPTY'}
+                }
+            }
+        })
+        // Same port the listener was proven on — not a guess at :3000.
+        expect(url).toBe('http://127.0.0.1:45674/')
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('EMPTY')
+    })
+
+    itPosix('the boot child is told the reserved port via PORT', async () => {
+        const r = await runBootCheck(
+            os.tmpdir(),
+            nodeScript('console.log("PORT="+process.env.PORT);setTimeout(()=>{},600000)'),
+            800,
+            {
+                expectServer: true,
+                deps: {...blind, pickPort: async () => 45675, httpProbe: () => false}
+            }
+        )
+        expect(r.outcome).toBe('pass')
+    })
+})
+
+describe('listener enumeration parsers (run 14)', () => {
+    test('ss rows yield pid + port', () => {
+        const out = 'LISTEN 0 511 0.0.0.0:3000 0.0.0.0:* users:(("bun",pid=1234,fd=20))'
+        expect(parseSsListeners(out)).toEqual([{pid: 1234, port: 3000}])
+    })
+
+    // The tool the run-14 sandbox actually had.
+    test('netstat -tlnp rows yield pid + port, skipping unattributed rows', () => {
+        const out = [
+            'Active Internet connections (only servers)',
+            'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name',
+            'tcp        0      0 0.0.0.0:3000            0.0.0.0:*               LISTEN      1234/bun',
+            'tcp6       0      0 :::5432                 :::*                    LISTEN      -',
+            'tcp6       0      0 :::8080                 :::*                    LISTEN      77/node'
+        ].join('\n')
+        expect(parseNetstatListeners(out)).toEqual([
+            {pid: 1234, port: 3000},
+            {pid: 77, port: 8080}
+        ])
+    })
+
+    test('lsof rows yield pid + port', () => {
+        const out = [
+            'COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME',
+            'bun      1234 root   20u  IPv4  12345      0t0  TCP 127.0.0.1:3000 (LISTEN)'
+        ].join('\n')
+        expect(parseLsofListeners(out)).toEqual([{pid: 1234, port: 3000}])
+    })
+
+    test('pickFreePort reserves a port nothing is bound to', async () => {
+        const p = await pickFreePort()
+        expect(typeof p).toBe('number')
+        expect(p as number).toBeGreaterThan(1024)
+    })
 })
 
 // mx5 runs 8/11: a served listener is not enough — the page must RENDER. The

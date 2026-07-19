@@ -40,6 +40,7 @@
  */
 import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
+import * as net from 'node:net'
 import * as path from 'node:path'
 import {
     runRepoHealthCheck,
@@ -305,7 +306,28 @@ export interface BootDeps {
      * the gate wires runRenderCheck by default for served apps.
      */
     renderProbe?: (url: string) => RenderOutcome
+    /**
+     * Can this box enumerate listeners with pids AT ALL (ss/netstat/lsof)? False
+     * means the served-app requirement is UNOBSERVABLE here and must degrade to the
+     * survival rule rather than fail — see canEnumerateListeners.
+     */
+    enumerationCapable?: () => boolean
+    /**
+     * Reserve a free port to hand the boot child as PORT, so an HTTP answer on it is
+     * ownership evidence. null → no port could be reserved (the check then relies on
+     * pgid attribution alone). Injected for tests.
+     */
+    pickPort?: () => Promise<number | null>
+    /** Does anything answer HTTP on 127.0.0.1:`port`? Injected for tests. */
+    httpProbe?: (port: number) => boolean
 }
+
+/** Stamped on a PASS the boot check could not actually observe, so the trail says
+ *  so out loud instead of implying the listener requirement was met. */
+const UNOBSERVED_LISTENER_NOTE =
+    'listener check UNOBSERVED: no socket-enumeration tool (ss/netstat/lsof) in this '
+    + 'environment and the app never answered on the port it was given — passed on the '
+    + 'survival rule (the process stayed up), NOT on observed serving'
 
 /** Package deps that mean "this project stands up an HTTP server" — the deterministic
  *  proxy for "the plan/spec promised a served app". Bare framework names plus the
@@ -342,50 +364,164 @@ export function detectsServedApp(cwd: string, planText?: string): boolean {
     return planText !== undefined && SERVE_TEXT_RE.test(planText)
 }
 
-/** Listening TCP sockets as {pid, port} pairs (best-effort; ss first, then lsof).
- *  Empty on any failure — the caller then cannot attribute a listener to our group
- *  and the served-app check degrades to survival (never a false FAIL). */
-function listeningSockets(): Array<{pid: number; port: number}> {
+/** `ss -tlnpH` rows → {pid, port}. Column 4 (0-based 3) is the local address; the
+ *  port is its last `:`-suffixed number ("0.0.0.0:3000", "[::]:3000"). */
+export function parseSsListeners(stdout: string): Array<{pid: number; port: number}> {
     const out: Array<{pid: number; port: number}> = []
-    try {
-        const t = spawnSync('ss', ['-tlnpH'], {encoding: 'utf8', timeout: 4000})
-        if (!t.error && t.stdout) {
-            for (const line of t.stdout.split('\n')) {
-                const pm = /pid=(\d+)/.exec(line)
-                if (!pm) continue
-                // Column 4 (0-based 3) is the local address; the port is its last
-                // `:`-suffixed number ("0.0.0.0:3000", "[::]:3000").
-                const local = line.trim().split(/\s+/)[3] ?? ''
-                const portm = /:(\d+)$/.exec(local)
-                if (!portm) continue
-                out.push({pid: Number(pm[1]), port: Number(portm[1])})
-            }
-        }
-    } catch {
-        // ss missing — try lsof
+    for (const line of stdout.split('\n')) {
+        const pm = /pid=(\d+)/.exec(line)
+        if (!pm) continue
+        const local = line.trim().split(/\s+/)[3] ?? ''
+        const portm = /:(\d+)$/.exec(local)
+        if (!portm) continue
+        out.push({pid: Number(pm[1]), port: Number(portm[1])})
     }
-    if (out.length === 0) {
-        try {
-            const t = spawnSync('lsof', ['-iTCP', '-sTCP:LISTEN', '-n', '-P'], {
-                encoding: 'utf8',
-                timeout: 4000
-            })
-            if (!t.error && t.stdout) {
-                for (const line of t.stdout.split('\n').slice(1)) {
-                    const cols = line.trim().split(/\s+/)
-                    const pid = Number(cols[1])
-                    const name = cols.find(c => /:\d+$/.test(c)) ?? ''
-                    const portm = /:(\d+)$/.exec(name)
-                    if (Number.isInteger(pid) && pid > 0 && portm) {
-                        out.push({pid, port: Number(portm[1])})
-                    }
-                }
-            }
-        } catch {
-            // neither tool available
+    return out
+}
+
+/**
+ * `netstat -tlnp` rows → {pid, port} (mx5 run 14, validated: the agent-sandbox
+ * image ships NEITHER ss NOR lsof — only ps and netstat — so the served-app boot
+ * check could never observe a listener and failed unfalsifiably). The pid rides
+ * in the trailing "PID/Program name" column ("1234/bun"); rows the kernel will
+ * not attribute to us print "-" there and are skipped.
+ */
+export function parseNetstatListeners(stdout: string): Array<{pid: number; port: number}> {
+    const out: Array<{pid: number; port: number}> = []
+    for (const line of stdout.split('\n')) {
+        if (!/^\s*tcp/i.test(line)) continue
+        const cols = line.trim().split(/\s+/)
+        const local = cols[3] ?? ''
+        const portm = /:(\d+)$/.exec(local)
+        if (!portm) continue
+        const pidm = /^(\d+)\//.exec(cols[cols.length - 1] ?? '')
+        if (!pidm) continue
+        out.push({pid: Number(pidm[1]), port: Number(portm[1])})
+    }
+    return out
+}
+
+/** `lsof -iTCP -sTCP:LISTEN -n -P` rows → {pid, port}. */
+export function parseLsofListeners(stdout: string): Array<{pid: number; port: number}> {
+    const out: Array<{pid: number; port: number}> = []
+    for (const line of stdout.split('\n').slice(1)) {
+        const cols = line.trim().split(/\s+/)
+        const pid = Number(cols[1])
+        const name = cols.find(c => /:\d+$/.test(c)) ?? ''
+        const portm = /:(\d+)$/.exec(name)
+        if (Number.isInteger(pid) && pid > 0 && portm) {
+            out.push({pid, port: Number(portm[1])})
         }
     }
     return out
+}
+
+/** The socket-enumeration tools we can attribute listeners with, in preference
+ *  order: ss (richest), netstat (present where ss is not), lsof (BSD/macOS). */
+const LISTENER_TOOLS: Array<{
+    bin: string
+    args: string[]
+    parse: (stdout: string) => Array<{pid: number; port: number}>
+}> = [
+    {bin: 'ss', args: ['-tlnpH'], parse: parseSsListeners},
+    {bin: 'netstat', args: ['-tlnp'], parse: parseNetstatListeners},
+    {bin: 'lsof', args: ['-iTCP', '-sTCP:LISTEN', '-n', '-P'], parse: parseLsofListeners}
+]
+
+/** Listening TCP sockets as {pid, port} pairs (best-effort; ss, then netstat, then
+ *  lsof). Empty on any failure — the caller then cannot attribute a listener to our
+ *  group and the served-app check degrades to survival (never a false FAIL). */
+function listeningSockets(): Array<{pid: number; port: number}> {
+    for (const {bin, args, parse} of LISTENER_TOOLS) {
+        try {
+            const t = spawnSync(bin, args, {encoding: 'utf8', timeout: 4000})
+            if (t.error || !t.stdout) continue
+            const rows = parse(t.stdout)
+            if (rows.length > 0) return rows
+        } catch {
+            // tool missing/unusable — try the next one
+        }
+    }
+    return []
+}
+
+/**
+ * Can ANY socket-enumeration tool run here at all? (mx5 run 14: the sandbox had
+ * none, so `groupHasListener` returned false forever and the boot check emitted
+ * "never opened a listening socket" no matter what the app did — an unfalsifiable
+ * FAIL that failed a run whose app demonstrably served.) This is a CAPABILITY
+ * question, deliberately separate from "did we see a listener": a tool that ran
+ * and found nothing is an observation; no tool at all is blindness, and blindness
+ * must degrade to the survival rule exactly like win32 — never a false FAIL on a
+ * platform we cannot probe.
+ *
+ * "Ran" = spawned without ENOENT and either exited 0 or printed something (lsof
+ * exits 1 on an empty match set; a netstat that rejects `-p` prints nothing).
+ * Memoised: the answer is a property of the box, not of the run.
+ */
+let listenerToolCapability: boolean | null = null
+
+export function canEnumerateListeners(): boolean {
+    if (listenerToolCapability !== null) return listenerToolCapability
+    listenerToolCapability = LISTENER_TOOLS.some(({bin, args}) => {
+        try {
+            const r = spawnSync(bin, args, {encoding: 'utf8', timeout: 4000})
+            if (r.error) return false
+            return r.status === 0 || (r.stdout ?? '').trim().length > 0
+        } catch {
+            return false
+        }
+    })
+    return listenerToolCapability
+}
+
+/** Test seam: forget the memoised capability answer. */
+export function resetListenerToolCapability(): void {
+    listenerToolCapability = null
+}
+
+/**
+ * A free TCP port on the loopback interface, or null if one cannot be reserved.
+ * The boot check hands this to the child as PORT so that a successful HTTP
+ * request to it is OWNERSHIP evidence: nobody else knows the number (mx5 runs
+ * 8/10/11 — orphaned servers from earlier checks answered curl on the
+ * conventional :3000 and passed checks the app had not earned).
+ */
+export function pickFreePort(): Promise<number | null> {
+    return new Promise(resolve => {
+        try {
+            const srv = net.createServer()
+            srv.once('error', () => resolve(null))
+            srv.listen(0, '127.0.0.1', () => {
+                const a = srv.address()
+                const port = typeof a === 'object' && a !== null ? a.port : null
+                srv.close(() => resolve(port))
+            })
+        } catch {
+            resolve(null)
+        }
+    })
+}
+
+/**
+ * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all (404, 500 —
+ * a status is a listener) counts; only a connection error or timeout is a no.
+ * Runs in a throwaway child of our own runtime so it needs no curl on PATH and
+ * stays synchronous inside the boot poll.
+ */
+function defaultHttpProbe(port: number): boolean {
+    const script =
+        `fetch('http://127.0.0.1:${port}/').then(()=>process.exit(0),()=>process.exit(1));`
+        + `setTimeout(()=>process.exit(1),2000)`
+    try {
+        const r = spawnSync(process.execPath, ['-e', script], {
+            encoding: 'utf8',
+            timeout: 5000
+        })
+        return !r.error && r.status === 0
+    } catch {
+        return false
+    }
 }
 
 /** Process-group id of `pid`, or null if it cannot be read. */
@@ -484,13 +620,32 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
  * served nothing (mx5 run 10 — both were blessed by the survival rule). The boot then
  * PASSes only once a LISTENing socket owned by our process group is observed; if the
  * command exits, or the grace window closes, with no listener ever seen → FAIL naming
- * that a listening server was expected. (The listener requirement needs pgid probing,
- * absent on win32, where `expectServer` collapses to the survival rule — best-effort,
- * never a false FAIL on a platform we cannot probe.)
+ * that a listening server was expected.
+ *
+ * OBSERVABILITY is a precondition of that FAIL (mx5 run 14, validated). The listener
+ * requirement needs pgid-attributed socket enumeration; win32 has none, and neither
+ * does a Linux image shipping no ss/netstat/lsof — run 14's sandbox was exactly that,
+ * so the check emitted "never opened a listening socket" against an app that
+ * demonstrably served, three autofix passes could not falsify it, and the run was
+ * recorded failed. Two defences, in order:
+ *
+ *   - the child is spawned with a freshly reserved, otherwise-unused PORT, and an
+ *     HTTP answer on THAT port proves a listener regardless of tooling. The private
+ *     port is what makes the HTTP probe trustworthy: an orphaned server from an
+ *     earlier check answers on :3000, but nobody else knows this number.
+ *   - if nothing can enumerate listeners AND the assigned port never answered, the
+ *     served-app requirement is unobservable here, so `expectServer` collapses to
+ *     the survival rule and the PASS is stamped UNOBSERVED. An app that ignores PORT
+ *     is indistinguishable from one that never listened — an observer limitation,
+ *     not an app defect, and it may not be reported as one.
+ *
+ * A child that EXITS non-zero still FAILs in every environment: "the process died"
+ * needs no socket probe, so run 14's original true positive (a `--hot` runtime
+ * pinning a crashed app) stays reportable wherever the tooling exists.
  *
  * Env-gap contract as everywhere: spawn error (ENOENT) or exit 127 → skip.
  */
-export function runBootCheck(
+export async function runBootCheck(
     cwd: string,
     [bin, args]: HealthCommand,
     graceMs = 10_000,
@@ -498,12 +653,21 @@ export function runBootCheck(
 ): Promise<BootOutcome> {
     const expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'
     const groupHasListener = opts.deps?.groupHasListener ?? defaultGroupHasListener
+    const httpProbe = opts.deps?.httpProbe ?? defaultHttpProbe
+    const canEnumerate =
+        expectServer ? (opts.deps?.enumerationCapable ?? canEnumerateListeners)() : true
+    // Only served apps get an assigned port: a CLI project has nothing to bind, and
+    // an unexpected PORT in its env is noise.
+    const assignedPort = expectServer ? await (opts.deps?.pickPort ?? pickFreePort)() : null
     return new Promise(resolve => {
         const child = spawn(bin, args, {
             cwd,
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: {...process.env}
+            env: {
+                ...process.env,
+                ...(assignedPort !== null ? {PORT: String(assignedPort)} : {})
+            }
         })
         // Best-effort cleanup only: killGroup below can silently fail to reap the
         // process (platform/sandbox-specific — observed on a GH Actions Linux
@@ -560,13 +724,20 @@ export function runBootCheck(
             expectServer ?
                 setInterval(() => {
                     if (settled || !child.pid) return
-                    if (!groupHasListener(child.pid)) return
+                    // pgid attribution first (precise, cheap). If it saw nothing — or
+                    // cannot see anything here — fall back to the private assigned
+                    // port: an HTTP answer on a number only this child was told is
+                    // proof of OUR listener, not of some orphan on :3000.
+                    const byGroup = canEnumerate && groupHasListener(child.pid)
+                    const byPort = !byGroup && assignedPort !== null && httpProbe(assignedPort)
+                    if (!byGroup && !byPort) return
                     listenerSeen = true
                     const probe = opts.deps?.renderProbe
                     if (!probe) return passAndKill()
-                    const port = (opts.deps?.groupListeningPort ?? defaultGroupListeningPort)(
-                        child.pid
-                    )
+                    const port =
+                        byGroup ?
+                            (opts.deps?.groupListeningPort ?? defaultGroupListeningPort)(child.pid)
+                        :   assignedPort
                     if (port === null) {
                         return passAndKill(
                             'render check UNOBSERVED: a listener was seen but its port could not be determined'
@@ -583,6 +754,11 @@ export function runBootCheck(
             :   null
         const timer = setTimeout(() => {
             if (expectServer && !listenerSeen) {
+                // Blind here (no enumeration tool, and the assigned port never
+                // answered) ⇒ we cannot tell "never listened" from "ignores PORT".
+                // Survival rule, stamped UNOBSERVED — an observer limitation is not
+                // an app defect (mx5 run 14).
+                if (!canEnumerate) return passAndKill(UNOBSERVED_LISTENER_NOTE)
                 settle({
                     outcome: 'fail',
                     detail: `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
@@ -597,6 +773,9 @@ export function runBootCheck(
         child.on('exit', (status, signal) => {
             if (status === 0) {
                 if (expectServer && !listenerSeen) {
+                    if (!canEnumerate) {
+                        return settle({outcome: 'pass', renderNote: UNOBSERVED_LISTENER_NOTE})
+                    }
                     return settle({
                         outcome: 'fail',
                         detail:
