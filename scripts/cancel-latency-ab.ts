@@ -48,6 +48,7 @@ import {findResumableAuto, parseTaskList} from '../src/task/auto-io.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
 import {fakeSpawnByPrompt, agentEndResponse, type SpawnResponse} from '../src/test-utils/fake-spawn.js'
 import type {SpawnFn} from '../src/shared/child-process.js'
+import type {RunTaskFn} from '../src/task/gate-deps.js'
 import type {TaskFrontMatter} from '../src/task/task-types.js'
 
 const ARM = (process.argv[2] ?? 'treatment') as 'baseline' | 'treatment'
@@ -190,6 +191,38 @@ async function runTrial(seam: Seam): Promise<Trial> {
     armCancelListener(ctx, () => requestCancel())
     await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), autoBody(['A', 'B', 'C']))
 
+    // Typed separately from the `as unknown as AutoDeps` literal below: the cast
+    // strips contextual typing, which would leave these parameters implicitly any.
+    const runTask: RunTaskFn = async (c, cwd, title, opts) => {
+        tasksStarted.push(title)
+        const runner = new TaskRunner(
+            c,
+            cwd,
+            title,
+            opts?.resumeId,
+            () => {
+                if (seam === 'impl') fire()
+                return Promise.resolve()
+            },
+            spawn,
+            opts?.onStart
+        )
+        await runner.run()
+        // Control seam: the cancel lands in the quiet moment between tasks,
+        // the one case the pre-existing loop-top check already handled.
+        if (seam === 'between-tasks') fire()
+        const id = runner.taskId
+        // Mirror runSingleTask: the file's own state is the source of truth,
+        // and a phase-boundary cancel leaves it 'cancelled', i.e. not ok.
+        let ok: boolean
+        try {
+            ok = (await readTaskFile(cwd, id)).frontMatter.state === 'completed'
+        } catch {
+            ok = false
+        }
+        return {taskId: id, ok, sessionCancelled: false, ctx: c}
+    }
+
     const deps: AutoDeps = {
         runChild: () => Promise.resolve(''),
         // The gate's verify child: the 'gates' seam fires from here, standing in
@@ -199,34 +232,7 @@ async function runTrial(seam: Seam): Promise<Trial> {
             return Promise.resolve({ok: true, reason: 'ab'})
         },
         commit: () => Promise.resolve({committed: false}),
-        runTask: async (c, cwd, title, opts) => {
-            tasksStarted.push(title)
-            const runner = new TaskRunner(
-                c,
-                cwd,
-                title,
-                opts?.resumeId,
-                async () => {
-                    if (seam === 'impl') fire()
-                },
-                spawn,
-                opts?.onStart
-            )
-            await runner.run()
-            // Control seam: the cancel lands in the quiet moment between tasks,
-            // the one case the pre-existing loop-top check already handled.
-            if (seam === 'between-tasks') fire()
-            const id = runner.taskId
-            // Mirror runSingleTask: the file's own state is the source of truth,
-            // and a phase-boundary cancel leaves it 'cancelled', i.e. not ok.
-            let ok: boolean
-            try {
-                ok = (await readTaskFile(cwd, id)).frontMatter.state === 'completed'
-            } catch {
-                ok = false
-            }
-            return {taskId: id, ok, sessionCancelled: false, ctx: c}
-        },
+        runTask,
         finalGate: () => {
             gateRan = true
             return Promise.resolve({ok: true, reason: 'ab'})
