@@ -1969,13 +1969,18 @@ async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext)
     autoRunning = true
     armTerminalCancel(ctx)
     try {
-        // Reuse the interrupted run's research-cache id when the cache proves it still
-        // describes the same dependency surface (F10). mx5 run 13 resumed three times and
-        // each resume's fresh id discarded a working 201-entry cache; anything inconclusive
-        // still falls back to a fresh id and a re-fetch. See resumeResearchRun.
+        // Reuse the interrupted run's research-cache id, dropping only the entries whose
+        // own package moved version (F10). mx5 run 13 resumed three times and each
+        // resume's fresh id discarded a working 201-entry cache; run 14 then showed a
+        // whole-file freshness gate can never hold on a greenfield run that installs
+        // packages as it goes, so invalidation is per entry. See resumeResearchRun.
         const research = await resumeResearchRun(cwd, getConfig().researchCache)
         if (research.reused) {
-            logPlanDebug(cwd, `research cache: resume reused ${research.entries} entr(ies)`)
+            logPlanDebug(
+                cwd,
+                `research cache: resume reused ${research.entries} entr(ies), `
+                    + `dropped ${research.dropped} stale`
+            )
         }
         const abort = new AbortController()
         // Resume only runs the loop (runTask); no planning children, so the loader

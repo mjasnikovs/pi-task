@@ -5,7 +5,7 @@ import * as path from 'node:path'
 import {Type} from '@sinclair/typebox'
 import {Text} from '@earendil-works/pi-tui'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
-import {RESEARCH_RUN_ID_ENV} from './research-cache.js'
+import {RESEARCH_RUN_ID_ENV, researchCacheFile} from './research-cache.js'
 
 // ─── formatChildFailure ──────────────────────────────────────────────────────
 
@@ -127,6 +127,7 @@ function tmpCwd(): string {
 function cachingTool(opts?: {
     cacheKey?: (p: {q: string}) => string | null
     cacheable?: (d: {n: number}, t: string) => boolean
+    cachePkg?: (p: {q: string}) => string | undefined
 }): {registered: RegisteredTool[]; calls: () => number} {
     const {registered, api} = makePi()
     let calls = 0
@@ -143,6 +144,7 @@ function cachingTool(opts?: {
             },
             renderCall: args => new Text(args.q, 0, 0),
             cacheKey: opts?.cacheKey ?? (p => p.q),
+            cachePkg: opts?.cachePkg,
             cacheable: opts?.cacheable ?? (() => true)
         }
     )
@@ -197,6 +199,27 @@ test('a non-cacheable result (failure) is not stored — the next call retries',
     await exec('id1', {q: 'x'}, undefined, undefined, {cwd})
     await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
     expect(tool.calls()).toBe(2)
+})
+
+test('cachePkg records package provenance on the entry, so a resume can prune per package', async () => {
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-1'
+    const cwd = tmpCwd()
+    fs.writeFileSync(
+        path.join(cwd, 'package.json'),
+        JSON.stringify({name: 'x', dependencies: {hono: '^4.6.0'}}),
+        'utf8'
+    )
+    const tool = cachingTool({cachePkg: p => (p.q === 'hono-q' ? 'hono' : undefined)})
+    const exec = tool.registered[0].execute
+    await exec('id1', {q: 'hono-q'}, undefined, undefined, {cwd})
+    await exec('id2', {q: 'search-q'}, undefined, undefined, {cwd})
+
+    const file = JSON.parse(fs.readFileSync(researchCacheFile(cwd), 'utf8')) as {
+        entries: Record<string, {pkg?: string; pkgVersion?: string}>
+    }
+    expect(file.entries['demo\u0000hono-q']).toMatchObject({pkg: 'hono', pkgVersion: '^4.6.0'})
+    // A tool with no cachePkg stores no provenance ⇒ never pruned by a dependency move.
+    expect(file.entries['demo\u0000search-q'].pkg).toBeUndefined()
 })
 
 test('a different run id does not see the prior run cache (isolation through the wrapper)', async () => {

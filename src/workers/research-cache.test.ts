@@ -12,7 +12,7 @@ import {
     researchCacheFile,
     lookupResearch,
     storeResearch,
-    depsFingerprint,
+    depsMap,
     resumeResearchRun
 } from './research-cache.js'
 
@@ -123,74 +123,139 @@ test('store is best-effort — an unwritable tasks dir does not throw', async ()
 })
 
 // ─── resume reuse (mx5 run 13: three resumes discarded a 201-entry cache) ─────
+// ─── per-package invalidation (mx5 run 14: a greenfield run installs as it goes,
+//     so a whole-file freshness gate wiped the cache on all five of its resumes) ──
 
-async function seed(cwd: string, deps: Record<string, string> | null): Promise<void> {
-    if (deps !== null) {
-        await fsp.writeFile(
-            path.join(cwd, 'package.json'),
-            JSON.stringify({name: 'x', dependencies: deps}),
-            'utf8'
-        )
-    }
-    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
-    await storeResearch(cwd, 'run-orig', 'pi-worker-docs hono::hc client', 'answer', {})
+const DOCS_HONO = 'pi-worker-docs hono::hc client'
+const DOCS_ZOD = 'pi-worker-docs zod::parse'
+const SEARCH_KEY = 'pi-worker-search exa::hono deploy guide'
+
+async function writeManifest(cwd: string, deps: Record<string, string>): Promise<void> {
+    await fsp.writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify({name: 'x', dependencies: deps}),
+        'utf8'
+    )
 }
 
-test('depsFingerprint is stable under key order and formatting, and moves on a version bump', async () => {
-    const a = tmpCwd()
-    const b = tmpCwd()
-    await fsp.writeFile(
-        path.join(a, 'package.json'),
-        '{"name":"x","dependencies":{"hono":"^4.6.0","zod":"^3.23.0"}}',
-        'utf8'
-    )
-    await fsp.writeFile(
-        path.join(b, 'package.json'),
-        JSON.stringify({dependencies: {zod: '^3.23.0', hono: '^4.6.0'}, name: 'x'}, null, 4),
-        'utf8'
-    )
-    expect(await depsFingerprint(a)).toBe(await depsFingerprint(b))
+async function seed(cwd: string, deps: Record<string, string> | null): Promise<void> {
+    if (deps !== null) await writeManifest(cwd, deps)
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
+    await storeResearch(cwd, 'run-orig', DOCS_HONO, 'answer', {}, 'hono')
+}
 
+test('depsMap flattens every dependency block and is undefined without a manifest', async () => {
+    const cwd = tmpCwd()
     await fsp.writeFile(
-        path.join(b, 'package.json'),
-        '{"dependencies":{"hono":"^4.7.0","zod":"^3.23.0"}}',
+        path.join(cwd, 'package.json'),
+        JSON.stringify({
+            name: 'x',
+            dependencies: {hono: '^4.6.0'},
+            devDependencies: {'@playwright/test': '^1.48.0'}
+        }),
         'utf8'
     )
-    expect(await depsFingerprint(b)).not.toBe(await depsFingerprint(a))
-    // An unreadable manifest yields no fingerprint at all — no evidence of freshness.
-    expect(await depsFingerprint(tmpCwd())).toBeUndefined()
+    expect(await depsMap(cwd)).toEqual({hono: '^4.6.0', '@playwright/test': '^1.48.0'})
+    // A dependency-free repo is a real, stable state — an empty map, not "unknown".
+    const bare = tmpCwd()
+    await fsp.writeFile(path.join(bare, 'package.json'), '{"name":"x"}', 'utf8')
+    expect(await depsMap(bare)).toEqual({})
+    // An absent manifest is unknown — nothing about any package can be proved.
+    expect(await depsMap(tmpCwd())).toBeUndefined()
 })
 
 test('a resume REUSES the interrupted run id when the dependency surface is unchanged', async () => {
     const cwd = tmpCwd()
     await seed(cwd, {hono: '^4.6.0'})
     const res = await resumeResearchRun(cwd, true)
-    expect(res.reused).toBe(true)
-    expect(res.runId).toBe('run-orig')
-    expect(res.entries).toBe(1)
+    expect(res).toMatchObject({reused: true, runId: 'run-orig', entries: 1, dropped: 0})
     // The whole point: the digest survives the resume.
-    expect(await lookupResearch(cwd, res.runId!, 'pi-worker-docs hono::hc client')).toEqual({
-        text: 'answer',
-        details: {}
+    expect(await lookupResearch(cwd, res.runId!, DOCS_HONO)).toEqual({text: 'answer', details: {}})
+})
+
+test('a resume drops ONLY the docs entries whose own package moved, keeping the rest', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0', zod: '^3.23.0'})
+    await storeResearch(cwd, 'run-orig', DOCS_ZOD, 'zod answer', {}, 'zod')
+    await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
+
+    // zod bumps; hono untouched. Pre-fix (whole-file fingerprint) this wiped all three.
+    await writeManifest(cwd, {hono: '^4.6.0', zod: '^3.24.0'})
+    const res = await resumeResearchRun(cwd, true)
+    expect(res).toMatchObject({reused: true, runId: 'run-orig', entries: 2, dropped: 1})
+
+    expect(await lookupResearch(cwd, 'run-orig', DOCS_HONO)).toBeDefined()
+    expect(await lookupResearch(cwd, 'run-orig', SEARCH_KEY)).toBeDefined()
+    expect(await lookupResearch(cwd, 'run-orig', DOCS_ZOD)).toBeUndefined()
+    // The pruning is persisted, not just filtered in memory.
+    const file = JSON.parse(await fsp.readFile(researchCacheFile(cwd), 'utf8')) as {
+        entries: Record<string, unknown>
+    }
+    expect(Object.keys(file.entries).sort()).toEqual([DOCS_HONO, SEARCH_KEY].sort())
+})
+
+test('ADDING a package invalidates nothing — the run-14 failure mode', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
+    // A later task installs shadcn/playwright, as every greenfield run does.
+    await writeManifest(cwd, {hono: '^4.6.0', zod: '^3.23.0', '@playwright/test': '^1.48.0'})
+    expect(await resumeResearchRun(cwd, true)).toMatchObject({
+        reused: true,
+        runId: 'run-orig',
+        entries: 2,
+        dropped: 0
     })
 })
 
-test('a resume takes a FRESH id when a dependency version moved', async () => {
+test('a docs entry whose package LEFT the manifest is dropped', async () => {
     const cwd = tmpCwd()
     await seed(cwd, {hono: '^4.6.0'})
-    await fsp.writeFile(
-        path.join(cwd, 'package.json'),
-        JSON.stringify({name: 'x', dependencies: {hono: '^4.7.0'}}),
-        'utf8'
-    )
-    const res = await resumeResearchRun(cwd, true)
-    expect(res.reused).toBe(false)
-    expect(res.runId).not.toBe('run-orig')
-    expect(await lookupResearch(cwd, res.runId!, 'pi-worker-docs hono::hc client')).toBeUndefined()
+    await writeManifest(cwd, {zod: '^3.23.0'})
+    expect(await resumeResearchRun(cwd, true)).toMatchObject({entries: 0, dropped: 1})
 })
 
-test('a resume takes a FRESH id when the cache predates fingerprinting or has no manifest', async () => {
-    // Fingerprint-less file (written by an older version) ⇒ cannot prove freshness.
+test('an entry stored while its package was NOT declared survives (nothing can move under it)', async () => {
+    const cwd = tmpCwd()
+    await writeManifest(cwd, {hono: '^4.6.0'})
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-orig'
+    // A transitive/ambient package: pkg recorded, no declared version to compare.
+    await storeResearch(cwd, 'run-orig', 'pi-worker-docs undici::fetch', 'a', {}, 'undici')
+    await writeManifest(cwd, {hono: '^4.7.0'})
+    expect(await resumeResearchRun(cwd, true)).toMatchObject({entries: 1, dropped: 0})
+})
+
+test('an unreadable manifest drops package-scoped entries but keeps search/fetch', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
+    await fsp.rm(path.join(cwd, 'package.json'))
+    expect(await resumeResearchRun(cwd, true)).toMatchObject({
+        reused: true,
+        entries: 1,
+        dropped: 1
+    })
+    expect(await lookupResearch(cwd, 'run-orig', SEARCH_KEY)).toBeDefined()
+})
+
+test('a mid-run install is stamped at STORE time, so its own digest survives the next resume', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    // A task installs sharp mid-run and a digest is taken against the installed version.
+    await writeManifest(cwd, {hono: '^4.6.0', sharp: '^0.33.0'})
+    await storeResearch(cwd, 'run-orig', 'pi-worker-docs sharp::resize', 'a2', {}, 'sharp')
+    // Both entries describe the current manifest ⇒ both survive (the old frozen
+    // whole-file fingerprint denied reuse outright here).
+    expect(await resumeResearchRun(cwd, true)).toMatchObject({
+        reused: true,
+        entries: 2,
+        dropped: 0
+    })
+})
+
+test('a resume takes a FRESH id when the cache predates package provenance', async () => {
+    // No `pkgv` marker (written by an older version) ⇒ docs entries are indistinguishable
+    // from search entries, so nothing can be pruned selectively.
     const legacy = tmpCwd()
     await fsp.mkdir(path.dirname(researchCacheFile(legacy)), {recursive: true})
     await fsp.writeFile(
@@ -211,18 +276,4 @@ test('resume with caching disabled clears the token and reuses nothing', async (
     expect(res.runId).toBeUndefined()
     expect(res.reused).toBe(false)
     expect(process.env[RESEARCH_RUN_ID_ENV]).toBeUndefined()
-})
-
-test('the fingerprint is frozen at the run first write, so a mid-run install denies reuse', async () => {
-    const cwd = tmpCwd()
-    await seed(cwd, {hono: '^4.6.0'})
-    // A task installs something mid-run, then more digests are stored under the SAME id.
-    await fsp.writeFile(
-        path.join(cwd, 'package.json'),
-        JSON.stringify({name: 'x', dependencies: {hono: '^4.6.0', sharp: '^0.33.0'}}),
-        'utf8'
-    )
-    await storeResearch(cwd, 'run-orig', 'pi-worker-docs sharp::resize', 'a2', {})
-    // The stored fingerprint still describes the pre-install surface ⇒ no reuse.
-    expect((await resumeResearchRun(cwd, true)).reused).toBe(false)
 })

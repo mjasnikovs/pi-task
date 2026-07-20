@@ -58,6 +58,17 @@ interface DocsDetails {
     declaredRange?: string
 }
 
+/**
+ * The package NAME a module specifier belongs to — `hono/client` → `hono`,
+ * `@scope/name/sub` → `@scope/name`. The cache stores this (not the raw specifier) as an
+ * entry's package provenance, so a subpath lookup is matched against package.json's key
+ * and invalidated with its package rather than living forever unmatched.
+ */
+export function packageRootOf(module: string): string {
+    const parts = module.trim().split('/')
+    return parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+}
+
 function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | 'declaredRange'> {
     return pin ? {versionSource: pin.source, declaredRange: pin.range} : {}
 }
@@ -339,6 +350,12 @@ export function registerPiWorkerDocs(
             params.module === '.' ?
                 null
             :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`,
+        // Package provenance for per-entry resume invalidation: a docs digest describes
+        // one package at one declared version, so a resume drops it only when THAT
+        // package moves — an unrelated install no longer discards it. Package names are
+        // matched against package.json verbatim (npm names are case-sensitive), unlike
+        // the cache key, which normalises for phrasing collisions.
+        cachePkg: params => (params.module === '.' ? undefined : packageRootOf(params.module)),
         // Only a completed lookup (child exited 0) is a real answer; not-installed,
         // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
         // through to a live retry next time.

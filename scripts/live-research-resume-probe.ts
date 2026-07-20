@@ -7,9 +7,13 @@
  * storeResearch dropped every prior entry: 201 → 11 → 3 → 5 → 8. (Read from the file's
  * own git history — research-cache.json is committed with every task, so the run is
  * recoverable; the audit read the 8-entry tail and wrongly called the cache useless.)
- * resumeResearchRun() now reuses the interrupted run's id, gated on depsFingerprint()
- * over package.json's dependency blocks. It shipped with 6 unit tests and has NEVER run
- * a real resume.
+ * resumeResearchRun() now reuses the interrupted run's id and prunes PER PACKAGE: each
+ * docs entry records the package it describes and that package's declared version, and a
+ * resume drops only the entries whose own package moved. (mx5 run 14 showed why the
+ * original whole-file fingerprint gate could not work: a greenfield run installs packages
+ * as it goes, so every one of its five resumes saw a moved fingerprint and wiped the
+ * cache — it ended with ONE entry.) It shipped with unit tests and has NEVER run a real
+ * resume.
  *
  * WHAT THE UNIT TESTS CANNOT COVER, and this probe therefore targets: the cache is
  * written by makeWorkerTool INSIDE a spawned worker child, which learns the run id only
@@ -84,21 +88,29 @@ function check(label: string, ok: boolean, detail: string): void {
 }
 
 /** Read the cache file as ground truth: its own runId and its real entry count. */
-function readCache(cwd: string): {runId: string | null; count: number; deps: string | null} {
+function readCache(cwd: string): {
+    runId: string | null
+    count: number
+    pkgv: number | null
+    keys: string[]
+} {
     try {
         const raw = fs.readFileSync(researchCacheFile(cwd), 'utf8')
         const parsed = JSON.parse(raw) as {
             runId?: string
             entries?: Record<string, unknown>
-            deps?: string
+            pkgv?: number
         }
+        const keys = Object.keys(parsed.entries ?? {})
         return {
             runId: parsed.runId ?? null,
-            count: Object.keys(parsed.entries ?? {}).length,
-            deps: parsed.deps ?? null
+            count: keys.length,
+            pkgv: parsed.pkgv ?? null,
+            // Keys are namespaced `tool\0rawKey`; the raw part is what the driver asked.
+            keys: keys.map(k => k.split('\u0000').pop()!)
         }
     } catch {
-        return {runId: null, count: 0, deps: null}
+        return {runId: null, count: 0, pkgv: null, keys: []}
     }
 }
 
@@ -134,7 +146,11 @@ makeWorkerTool(pi, {
     return {text: 'answer for ' + params.query, details: {ok: true}}
   },
   renderCall: () => ({}),
+  // A query may carry the package it is ABOUT as a '#pkg' suffix: 'q-one#hono' is a
+  // docs-shaped call for hono, a bare 'q-one' is a search-shaped call about nothing
+  // installable. Both key on the full string; only the former gets provenance.
   cacheKey: (p) => p.query,
+  cachePkg: (p) => (p.query.includes('#') ? p.query.split('#')[1] : undefined),
   cacheable: (d) => d.ok === true
 })
 
@@ -195,7 +211,7 @@ async function scenarioA(): Promise<void> {
     const afterRun = readCache(dir)
     check('original run stores', afterRun.count === 3 && afterRun.runId === r1,
         `runId=${afterRun.runId === r1 ? 'R1' : afterRun.runId} entries=${afterRun.count} misses=${miss1.length}`)
-    check('fingerprint stamped', afterRun.deps !== null, `deps=${afterRun.deps?.slice(0, 12)}…`)
+    check('package provenance stamped', afterRun.pkgv === 2, `pkgv=${String(afterRun.pkgv)}`)
 
     // Interrupt: a resume typically happens in a NEW host process, so drop the env var.
     delete process.env[RESEARCH_RUN_ID_ENV]
@@ -226,34 +242,67 @@ async function scenarioA(): Promise<void> {
             + `phase's own stores and destroys the prior 3)`)
 }
 
-// ─── Scenario (b): a dependency version moved ⇒ FRESH runId, entries dropped ──
+// ─── Scenario (b): PER-PACKAGE invalidation (mx5 run 14) ─────────────────────
+//
+// The run-14 shape: a greenfield run installs packages as it goes, so on every resume
+// SOMETHING in package.json had moved. Under the old whole-file fingerprint that wiped
+// everything — run 14 ended with one entry. The requirement now: bumping pkgB drops
+// pkgB's docs digest and NOTHING else.
+//
+//   seeded: docs(hono)  docs(zod)  search(q)      → bump zod only
+//   after:  docs(hono) KEPT, search(q) KEPT, docs(zod) DROPPED, runId REUSED
+//
+// Under --baseline (pre-fix resume) the same fixture must show ZERO survivors — a probe
+// that passes with and without the fix measures nothing.
 async function scenarioB(): Promise<void> {
-    console.log('\n(b) resume after a dependency BUMP — expect fresh runId, entries dropped')
-    const dir = makeFixture('b-bumped', {hono: '^4.6.0', wouter: '^3.3.0'})
+    console.log('\n(b) resume after ONE dependency BUMP — expect per-package pruning')
+    const dir = makeFixture('b-bumped', {hono: '^4.6.0', zod: '^3.23.0'})
 
     const r1 = configureResearchRun(true)
-    await drive(dir, dir, ['q-one', 'q-two', 'q-three'])
-    check('original run stores', readCache(dir).count === 3, `entries=${readCache(dir).count}`)
+    // '#pkg' marks a docs-shaped call about that package; the bare one is search-shaped.
+    const seeded = ['q-hono#hono', 'q-zod#zod', 'q-search']
+    await drive(dir, dir, seeded)
+    const afterRun = readCache(dir)
+    check('original run stores all three', afterRun.count === 3, `entries=${afterRun.count}`)
 
-    // A dependency moves under the cached digests — the staleness the gate exists for.
+    // zod moves under its digest; hono does not. Also ADD a package, as a real run does.
     fs.writeFileSync(
         path.join(dir, 'package.json'),
-        JSON.stringify({name: 'probe-fixture', dependencies: {hono: '^4.7.0', wouter: '^3.3.0'}}, null, 2),
+        JSON.stringify(
+            {
+                name: 'probe-fixture',
+                dependencies: {hono: '^4.6.0', zod: '^3.24.0', '@playwright/test': '^1.48.0'}
+            },
+            null,
+            2
+        ),
         'utf8'
     )
     delete process.env[RESEARCH_RUN_ID_ENV]
 
-    const res = await resumeResearchRun(dir, true)
-    check('resume DENIED', !res.reused && res.runId !== r1,
-        `reused=${res.reused} freshId=${res.runId !== r1}`)
+    const res =
+        BASELINE ?
+            {runId: configureResearchRun(true), reused: false, entries: 0, dropped: 0}
+        :   await resumeResearchRun(dir, true)
+    check('resume reuses the id and prunes one entry', res.reused && res.entries === 2 && res.dropped === 1,
+        `reused=${res.reused} kept=${res.entries} dropped=${res.dropped}`)
 
-    const miss = await drive(dir, dir, ['q-one'])
-    const final = readCache(dir)
-    check('previously-cached question re-fetched', miss.includes('q-one'),
-        `run() ${miss.includes('q-one') ? 're-entered (correct: digests may be stale)' : 'NOT entered — stale digest served!'}`)
-    check('GROUND TRUTH fresh runId', final.runId !== r1 && final.runId === res.runId, `runId=${final.runId}`)
-    check('GROUND TRUTH entries dropped', final.count === 1,
-        `entries=${final.count} (expected 1 — prior run's digests correctly discarded)`)
+    const pruned = readCache(dir)
+    check('GROUND TRUTH unaffected package KEPT', pruned.keys.includes('q-hono#hono'),
+        `keys=[${pruned.keys.join(',')}]`)
+    check('GROUND TRUTH search entry KEPT across the bump', pruned.keys.includes('q-search'),
+        `search ${pruned.keys.includes('q-search') ? 'kept (discovery, version-insensitive)' : 'DROPPED'}`)
+    check('GROUND TRUTH bumped package DROPPED', !pruned.keys.includes('q-zod#zod'),
+        `zod digest ${pruned.keys.includes('q-zod#zod') ? 'SERVED STALE' : 'dropped'}`)
+
+    // Behavioural confirmation at the tool layer: the kept ones hit, the pruned one misses.
+    const miss = await drive(dir, dir, seeded)
+    check('kept entries served from cache', !miss.includes('q-hono#hono') && !miss.includes('q-search'),
+        `misses=[${miss.join(',')}]`)
+    check('pruned entry re-fetched', miss.includes('q-zod#zod'),
+        `run() ${miss.includes('q-zod#zod') ? 're-entered (correct: digest was stale)' : 'NOT entered — stale digest served!'}`)
+    check('GROUND TRUTH runId unchanged', readCache(dir).runId === r1,
+        `runId=${readCache(dir).runId === r1 ? 'R1 (reused)' : 'FRESH — reuse did not fire'}`)
 }
 
 // ─── Scenario (c): inconclusive inputs ⇒ fresh id, no crash ───────────────────
@@ -267,8 +316,8 @@ async function scenarioC(): Promise<void> {
     check('no cache file ⇒ fresh id', !r1.reused && typeof r1.runId === 'string',
         `reused=${r1.reused} id=${r1.runId ? 'issued' : 'none'}`)
 
-    // c2: cache file present but written before fingerprinting shipped (no `deps`).
-    const c2 = makeFixture('c2-no-deps-field', {hono: '^4.6.0'})
+    // c2: cache file present but written before per-entry provenance shipped (no `pkgv`).
+    const c2 = makeFixture('c2-no-pkgv-field', {hono: '^4.6.0'})
     fs.mkdirSync(path.dirname(researchCacheFile(c2)), {recursive: true})
     fs.writeFileSync(
         researchCacheFile(c2),
@@ -276,7 +325,7 @@ async function scenarioC(): Promise<void> {
         'utf8'
     )
     const r2 = await resumeResearchRun(c2, true)
-    check('no `deps` field ⇒ fresh id', !r2.reused && r2.runId !== 'run-legacy',
+    check('no `pkgv` field ⇒ fresh id', !r2.reused && r2.runId !== 'run-legacy',
         `reused=${r2.reused}`)
 
     // c3: corrupt JSON.
@@ -287,14 +336,18 @@ async function scenarioC(): Promise<void> {
     check('corrupt cache ⇒ fresh id, no throw', !r3.reused && typeof r3.runId === 'string',
         `reused=${r3.reused}`)
 
-    // c4: valid cache but the manifest is gone ⇒ no fingerprint ⇒ no evidence.
+    // c4: valid cache but the manifest is gone ⇒ no package's version can be proved, so
+    // package-scoped entries go and the version-insensitive ones stay.
     const c4 = makeFixture('c4-no-manifest', {hono: '^4.6.0'})
     const r4id = configureResearchRun(true)
-    await drive(c4, c4, ['q-one'])
+    await drive(c4, c4, ['q-docs#hono', 'q-search'])
     fs.rmSync(path.join(c4, 'package.json'))
     delete process.env[RESEARCH_RUN_ID_ENV]
     const r4 = await resumeResearchRun(c4, true)
-    check('unreadable manifest ⇒ fresh id', !r4.reused && r4.runId !== r4id, `reused=${r4.reused}`)
+    const c4file = readCache(c4)
+    check('unreadable manifest ⇒ package-scoped entries dropped, rest kept',
+        r4.reused && r4.runId === r4id && c4file.keys.length === 1 && c4file.keys[0] === 'q-search',
+        `reused=${r4.reused} keys=[${c4file.keys.join(',')}]`)
 
     // c5: caching disabled ⇒ no id at all, nothing reused.
     const c5 = makeFixture('c5-disabled', {hono: '^4.6.0'})
@@ -360,6 +413,7 @@ export default function (pi) {
     },
     renderCall: () => ({}),
     cacheKey: (p) => p.module === '.' ? null : p.module + '::' + p.query,
+    cachePkg: (p) => p.module === '.' ? undefined : p.module.split('/')[0],
     cacheable: (d) => d.childExitCode === 0
   })
 }

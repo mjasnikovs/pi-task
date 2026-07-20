@@ -1,7 +1,7 @@
 import {test, expect} from 'bun:test'
 import * as path from 'node:path'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
-import {registerPiWorkerDocs, type PiWorkerDocsInternals} from './pi-worker-docs.js'
+import {registerPiWorkerDocs, packageRootOf, type PiWorkerDocsInternals} from './pi-worker-docs.js'
 import {openCache} from './docs-cache.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 
@@ -226,4 +226,12 @@ test('pi-worker-docs falls back to no-cache mode when openCache throws', async (
     const details = result.details as {cacheError?: string; hitCache?: boolean}
     expect(details.cacheError).toMatch(/disk full/)
     expect(details.hitCache).toBe(false)
+})
+
+test('packageRootOf maps a subpath specifier to its package.json key', () => {
+    expect(packageRootOf('hono')).toBe('hono')
+    expect(packageRootOf('hono/client')).toBe('hono')
+    expect(packageRootOf('@scope/name')).toBe('@scope/name')
+    expect(packageRootOf('@scope/name/sub/deep')).toBe('@scope/name')
+    expect(packageRootOf('  react/jsx-runtime  ')).toBe('react')
 })
