@@ -9,10 +9,14 @@ jobs:
   build-and-test:
     name: build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Normal runtime is ~2-6 min. Backstop against a full hang (observed once:
-    # a leaked detached child process's piped stdio kept the runner alive
-    # indefinitely — see final-gate.ts runBootCheck's child.unref() fix) rather
-    # than silently burning Actions minutes for hours.
+    # Normal runtime is ~2-6 min. Outer backstop only — the Test step carries
+    # its own 10-min timeout so a hang there fails that step and still runs the
+    # diagnostic probes. This job-level one now catches a hang anywhere ELSE
+    # (install, build), and cancelling the job is an acceptable outcome there.
+    #
+    # A previously-diagnosed instance of the hang class: a leaked detached child
+    # process's piped stdio kept the runner alive indefinitely — see
+    # final-gate.ts runBootCheck's child.unref() fix.
     timeout-minutes: 15
     strategy:
       # Don't cancel the Linux job when Windows fails (or vice versa) — we want
@@ -40,6 +44,93 @@ jobs:
         # endpoint, which CI has no access to. `pi` is on PATH here (installed
         # as a dependency), so the tests' own `which pi` guard doesn't catch
         # this — PI_SKIP_SMOKE is the documented escape hatch.
+        #
+        # The step timeout is deliberately under the job's 15-min backstop. A
+        # JOB timeout *cancels* the job, which skips every remaining step — so
+        # the four hangs of 2026-07-17..20 (runs 29599476674, 29602387724,
+        # 29643488474, 29727590021) each produced a blank "cancelled" log and no
+        # diagnosis. A STEP timeout fails only this step, leaving the log intact
+        # and letting the probes below run. The suite takes ~30s locally and
+        # ~2-6 min on a cold runner, so 10 min is pure headroom.
+        timeout-minutes: 10
         run: bun run test
         env:
           PI_SKIP_SMOKE: "1"
+
+      # ---------------------------------------------------------------------
+      # Post-test diagnostics. These exist to characterise an intermittent hang
+      # that has never reproduced locally and hits whichever runner loses the
+      # race (it has struck both ubuntu and windows). Leading hypothesis: a test
+      # spawns a child that outlives it with stdio still piped, so the runner
+      # waits on the process group after bun itself reports done — the same
+      # class as the leaked detached child fixed in final-gate.ts runBootCheck
+      # via child.unref().
+      #
+      # `always()` so they run on the timeout path, which is the only path that
+      # matters here. They are diagnostic only and must never fail the job:
+      # every command is `|| true`, since a false red here would be worse than
+      # the flake it is chasing.
+      # ---------------------------------------------------------------------
+      - name: Diagnose survivors (unix)
+        if: always() && runner.os != 'Windows'
+        run: |
+          echo "::group::full process table"
+          ps -eo pid,ppid,pgid,etime,stat,cmd || true
+          echo "::endgroup::"
+
+          # Match on the basename of argv[0], not on the comm column and not on
+          # a substring of the whole command line. comm is a trap here: node
+          # renames its main thread, so /proc/<pid>/comm reads "MainThread" and
+          # a comm filter misses the very processes this probe exists to catch.
+          # A substring match over full argv is the opposite failure — a bare
+          # /pi/ also hits "irq/9-acpi" and "at-spi-bus-launcher", burying the
+          # two or three lines that matter.
+          filter='NR == 1 { print; next }
+                  { n = split($6, p, "/"); exe = p[n]; sub(/\.exe$/, "", exe)
+                    if (exe ~ /^(bun|bunx|node|pi|tsc)$/) print }'
+
+          echo "::group::bun / pi / node survivors"
+          ps -eo pid,ppid,pgid,etime,stat,args | awk "$filter" || true
+          echo "::endgroup::"
+
+          echo "::group::open handles held by survivors"
+          if command -v lsof >/dev/null 2>&1; then
+            pids="$(ps -eo pid,ppid,pgid,etime,stat,args \
+                      | awk "$filter" | awk 'NR > 1 { print $1 }')"
+            if [ -n "$pids" ]; then
+              for pid in $pids; do
+                echo "--- pid $pid ---"
+                # -a is load-bearing: lsof ORs its selection flags by default,
+                # so `-p PID -d ^mem` without it dumps every fd on the box
+                # (~300KB) instead of this pid's. -w drops overlayfs stat
+                # warnings. Excluding mem/txt/rtd/cwd leaves the actual file
+                # descriptors, which is where a still-piped stdio shows up.
+                lsof -w -a -p "$pid" -d '^mem,^txt,^rtd,^cwd' 2>/dev/null || true
+              done
+            else
+              echo "(no survivors)"
+            fi
+          else
+            echo "(lsof unavailable)"
+          fi
+          echo "::endgroup::"
+
+      - name: Diagnose survivors (windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "::group::bun / pi / node survivors"
+          try {
+            # Anchor on the whole image name. An unanchored 'pi' matches half
+            # the box (spoolsv, WmiPrvSE, ...) and drowns the real signal.
+            $procs = Get-CimInstance Win32_Process |
+              Where-Object { $_.Name -match '^(bun|bunx|node|pi|tsc)\.exe$' } |
+              Select-Object ProcessId, ParentProcessId, CreationDate, Name, CommandLine
+            if ($procs) { $procs | Format-List } else { Write-Host "(none)" }
+          } catch { Write-Host "(process query failed: $_)" }
+          Write-Host "::endgroup::"
+
+          Write-Host "::group::full process table"
+          try { Get-Process | Sort-Object CPU -Descending | Format-Table -AutoSize }
+          catch { Write-Host "(unavailable)" }
+          Write-Host "::endgroup::"
