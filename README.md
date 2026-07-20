@@ -63,7 +63,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-resume [id]` | Resume the most recent (or named) unfinished task. |
 | `/task-cancel` | Cancel the running task (soft-terminal — still resumable). |
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
-| `/task-auto-resume` | Resume the active `/task-auto` run at the next unfinished task. |
+| `/task-auto-resume [--unattended]` | Resume the active `/task-auto` run at the next unfinished task. `--unattended` is the boot-hook form: in-flight runs only. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
 | `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, orientation, verify work, enforce guidelines, command timeout, stream watchdog, and the extension whitelist for child sessions. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
@@ -100,6 +100,7 @@ A real feature is usually several tasks, not one. `/task-auto` is a thin planner
 - **Clarify first.** It asks the few clarifying questions whose answers change how the feature splits, then decomposes the answers into an ordered list of task titles written to `.pi-tasks/TASK_AUTO_NNNN.md`.
 - **Sequential, blocking.** Each title runs through `/task` to a spec, the spec is implemented, and the loop waits for that to finish before starting the next title. No overlap.
 - **Crash- and cancel-safe.** Progress is the markdown checkboxes in the AUTO file. `/task-auto-resume` (no id) automatically picks up the active run at the first unchecked title. If a title's `/task` run fails, the loop stops and leaves the run resumable.
+- **Restart-safe, unattended.** `/task-auto-resume --unattended` is the same resume with no human in the loop — for a boot hook or a container entrypoint. It continues **in-flight** runs only: a `failed` or `cancelled` run stopped for a reason a power cycle does not clear, so it is reported and left alone rather than re-entered against the same wall. Either way the resume banner states exactly what it measured — how long since the run last wrote, and that nothing was rolled back — and attributes no cause, because a stopped host, a hung child, and a slow task look identical from here. Pair it with `restart: unless-stopped` on long-running containers and an overnight outage costs minutes instead of the whole night.
 - **One commit per task.** When **auto-commit** is on (the default) and you're in a git repo, the working tree is snapshotted into a single commit after each title passes, so the run produces a clean per-task history. It's best-effort: outside a repo, with nothing to commit, or on any git error, the loop reports the reason and keeps going. Toggle it in `/task-config`.
 
 ## Remote — drive a task from your phone

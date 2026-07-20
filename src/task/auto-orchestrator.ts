@@ -29,8 +29,9 @@ import {
     checkOffTask,
     stampTaskInProgress,
     insertTaskAfter,
-    findResumableAuto
+    findResumableAutoDetailed
 } from './auto-io.js'
+import {decideResume} from './resume-gap.js'
 import {
     drainRepairQueue,
     mergeRepairCandidates,
@@ -2077,15 +2078,20 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
     }
 }
 
-async function handleTaskAutoResume(_args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext): Promise<void> {
     await ctx.waitForIdle()
     const cwd = ctx.cwd
-    const id = await findResumableAuto(cwd)
-    if (!id) {
-        ctx.ui.notify('No resumable /task-auto run.', 'info')
-        return
-    }
-    ctx.ui.notify(`Resuming ${id}…`, 'info')
+    // `--unattended` is the boot-hook path: no human decided to continue this
+    // run, so it resumes in-flight states only and refuses the rest by name.
+    const unattended = /(^|\s)--unattended(\s|$)/.test(args)
+    const candidate = await findResumableAutoDetailed(cwd)
+    const decision = decideResume(candidate, Date.now(), unattended)
+    ctx.ui.notify(decision.banner, decision.level)
+    // An unattended refusal happens with nobody watching the terminal — the
+    // remote view is the only surface that will still be there in the morning.
+    if (unattended) publishLifecycleNotice(decision.banner, decision.level)
+    if (!decision.resume || !candidate) return
+    const id = candidate.id
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
     armTerminalCancel(ctx)
@@ -2160,7 +2166,9 @@ export function registerTaskAuto(pi: ExtensionAPI): void {
         handler: handleTaskAuto
     })
     registerBridgeCommand(pi, 'task-auto-resume', {
-        description: 'Resume the active /task-auto run.',
+        description:
+            'Resume the active /task-auto run. Usage: /task-auto-resume [--unattended] '
+            + '(--unattended is for boot hooks: in-flight runs only, never a failed one).',
         handler: handleTaskAutoResume
     })
     registerBridgeCommand(pi, 'task-auto-cancel', {

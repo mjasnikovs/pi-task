@@ -11,6 +11,7 @@ import {tasksDir, ensureTasksDir, readTaskFile, setTaskSection} from './task-io.
 import {extractSection, parseFrontMatter} from './task-parsers.js'
 import {readTextFile} from '../shared/fs-text.js'
 import {RESUMABLE_STATES} from './task-types.js'
+import type {AutoResumeCandidate} from './resume-gap.js'
 
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
 
@@ -248,11 +249,15 @@ export async function insertTaskAfter(
     return true
 }
 
-/** Find the most-recently-updated resumable TASK_AUTO_* file, or null. */
-export async function findResumableAuto(cwd: string): Promise<string | null> {
+/**
+ * Find the most-recently-updated resumable TASK_AUTO_* file, with the state and
+ * last-write time the resume banner reports (see resume-gap.ts). Null when there
+ * is nothing resumable.
+ */
+export async function findResumableAutoDetailed(cwd: string): Promise<AutoResumeCandidate | null> {
     await ensureTasksDir(cwd)
     const entries = await fsp.readdir(tasksDir(cwd))
-    const candidates: Array<{id: string; mtime: number}> = []
+    const candidates: AutoResumeCandidate[] = []
     for (const f of entries) {
         const m = AUTO_FILE_RE.exec(f)
         if (!m) continue
@@ -262,11 +267,16 @@ export async function findResumableAuto(cwd: string): Promise<string | null> {
             if (!fm) continue
             if (!RESUMABLE_STATES.includes(fm.state)) continue
             const st = await fsp.stat(path.join(tasksDir(cwd), f))
-            candidates.push({id: m[1], mtime: st.mtimeMs})
+            candidates.push({id: m[1], state: fm.state, lastWriteMs: st.mtimeMs})
         } catch {
             /* skip unreadable */
         }
     }
-    candidates.sort((a, b) => b.mtime - a.mtime)
-    return candidates.length > 0 ? candidates[0].id : null
+    candidates.sort((a, b) => b.lastWriteMs - a.lastWriteMs)
+    return candidates.length > 0 ? candidates[0] : null
+}
+
+/** Id-only form of {@link findResumableAutoDetailed}. */
+export async function findResumableAuto(cwd: string): Promise<string | null> {
+    return (await findResumableAutoDetailed(cwd))?.id ?? null
 }
