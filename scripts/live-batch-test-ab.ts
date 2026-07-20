@@ -13,6 +13,12 @@
  * and whether treatment REDUCED grounded coverage (the run-12 guard — it must
  * never fire).
  *
+ * HOW MANY REPS. The baseline emits the batch shape INTERMITTENTLY, so a short run
+ * can ABSTAIN on a working lever. Measured on this fixture: 3/5 (v0.18.41), 0/3
+ * (2026-07-20), 3/8 of which 2 were true positives (2026-07-20, both arms live).
+ * That is roughly a 1-in-4 per-rep rate, so a 3-rep run misses it ~2 times in 5 —
+ * run at least 8. Each rep is ~5 min with both arms live, ~2.5 with BASELINE_ONLY.
+ *
  * Run: PI_BIN=$(command -v pi) bun run scripts/live-batch-test-ab.ts [REPS=3]
  */
 import {extractRequirementsNew, loadPlanningFixture, runPlanningChild} from './ab-planning.js'
@@ -39,8 +45,11 @@ const CLARIFICATIONS = [
 
 /**
  * Recorded decompose plans, for pinning the arms when the live model is
- * unavailable or (as measured on 2026-07-20) will not reliably emit the batch
- * shape. Titles are transcribed from run 14's own decompose output.
+ * unavailable. Titles are transcribed from run 14's own decompose output.
+ *
+ * Not a substitute for the live arm: the live 8-rep run found a false-positive
+ * class no recorded plan contained (an unmarked spec echo in a title's detail),
+ * and a pinned run cannot find what was never recorded.
  *
  *   PLAN_FIXTURE=with-batch   carries TASK_0037's batch-everything title
  *   PLAN_FIXTURE=no-batch     the same plan with that title already scoped
@@ -128,7 +137,7 @@ async function main(): Promise<void> {
         // BASELINE arm — also the input the host rewrite must repair, so the
         // treatment is measured on the SAME plan the baseline shipped.
         const base = await plan(false)
-        const baseBatch = findBatchTestTitles(base)
+        const baseBatch = findBatchTestTitles(base, fx.featureForModel)
         if (baseBatch.length > 0) baselineBatch++
 
         const fixed = rewriteBatchTestPlan(
@@ -153,7 +162,7 @@ async function main(): Promise<void> {
         // BASELINE_ONLY=1 halves the cost when the question is only how often the
         // baseline emits the batch shape at all (it is intermittent — see below).
         const withRule = process.env.BASELINE_ONLY === '1' ? base : await plan(true)
-        const ruleBatch = findBatchTestTitles(withRule)
+        const ruleBatch = findBatchTestTitles(withRule, fx.featureForModel)
         const ruleFixed = rewriteBatchTestPlan(
             withRule,
             CLARIFICATIONS,
@@ -161,7 +170,7 @@ async function main(): Promise<void> {
             quotes,
             isCrossCuttingRequirement
         )
-        if (findBatchTestTitles(ruleFixed.titles).length > 0) treatmentBatch++
+        if (findBatchTestTitles(ruleFixed.titles, fx.featureForModel).length > 0) treatmentBatch++
 
         console.log(
             `rep ${rep}/${reps}: baseline ${base.length} titles, batch=${baseBatch.length}`

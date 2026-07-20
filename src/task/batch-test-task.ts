@@ -95,9 +95,12 @@ function splitDecisions(title: string): {body: string; tail: string} {
     return {body, tail: decisions ? title.slice(decisions.index) : ''}
 }
 
+/** How decompose separates a title's head from its detail segments. */
+const SEGMENT_SPLIT_RE = /\s+[—–-]\s+|\s*\|\s*/
+
 /** The head of a title: everything before the " — <detail>" separator. */
 function head(body: string): string {
-    return body.split(/\s+[—–-]\s+|\s*\|\s*/)[0]
+    return body.split(SEGMENT_SPLIT_RE)[0]
 }
 
 /**
@@ -112,6 +115,61 @@ function head(body: string): string {
  */
 function stripQuotedSpans(s: string): string {
     return s.replace(/"[^"]*"/g, ' ').replace(/[“][^”]*[”]/g, ' ')
+}
+
+/**
+ * Normalize for echo comparison: case, markdown emphasis, backticks and all
+ * punctuation collapse away, so a title that reflows a spec line across a newline
+ * still matches the spec's own wording.
+ */
+function normalizeForEcho(s: string): string {
+    return s
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+}
+
+/**
+ * A detail segment shorter than this is not treated as a citation even when it
+ * appears in the spec — short phrases ("with screenshot baselines") are shared
+ * vocabulary, not provenance, and stripping them would blind the scope check.
+ */
+const MIN_ECHO_CHARS = 40
+
+/**
+ * Drop detail segments that are VERBATIM spec text.
+ *
+ * Third variant of the same failure, and the one the syntactic defenses miss:
+ * measured live (rep 4, Qwen3.6-27B on the mx5 fixture), the model appended its
+ * citation as BARE PROSE — no quotes, no `[source: …]` wrapper — and then
+ * repeated it inside a `[source: "…"]` clause:
+ *
+ *   "Implement Login page with phone/password form and tests — **Client/UI:**
+ *    Playwright `1.61.1` React component tests … — every component/page test
+ *    captures a screenshot committed as a baseline. [source: "…"]"
+ *
+ * `stripQuotedSpans` sees no quotes and `splitDecisions` cuts only at the clause,
+ * so the borrowed "every component/page" survived as if it were the task's own
+ * scope, and a correctly per-change-scoped Login task was DROPPED — the exact
+ * deletion this module exists to avoid.
+ *
+ * The general rule the two earlier guards were reaching for: text the title shares
+ * verbatim with the spec is provenance, whoever failed to mark it as such. So the
+ * check is semantic, against the spec, rather than one more citation dialect.
+ *
+ * The HEAD segment is never stripped: it is the task's own claim of what it
+ * delivers, and a batch title that happens to quote the spec must still be caught.
+ */
+function stripSpecEchoes(body: string, specNorm: string): string {
+    if (specNorm === '') return body
+    const segments = body.split(SEGMENT_SPLIT_RE)
+    if (segments.length < 2) return body
+    const kept = segments.filter((seg, i) => {
+        if (i === 0) return true
+        const norm = normalizeForEcho(seg)
+        return norm.length < MIN_ECHO_CHARS || !specNorm.includes(norm)
+    })
+    return kept.join(' — ')
 }
 
 /** A title whose DELIVERABLE is tests: an authoring verb whose object is tests,
@@ -148,12 +206,17 @@ const WHOLE_SCOPE_RE =
  * the whole project, and it is not test INFRASTRUCTURE. A per-feature task that
  * carries "+ tests" never matches (its head names the feature), which is the
  * point: those are the cadence the decision asks for.
+ *
+ * `spec` is optional only so the detector stays callable on a bare title list;
+ * pass it whenever it is available, or unmarked spec echoes read as scope (see
+ * `stripSpecEchoes`).
  */
-export function findBatchTestTitles(titles: string[]): number[] {
+export function findBatchTestTitles(titles: string[], spec = ''): number[] {
+    const specNorm = normalizeForEcho(spec)
     const out: number[] = []
     for (let i = 0; i < titles.length; i++) {
         const {body} = splitDecisions(titles[i])
-        const scope = stripQuotedSpans(body)
+        const scope = stripSpecEchoes(stripQuotedSpans(body), specNorm)
         const h = head(scope)
         if (!TEST_AUTHORING_RE.test(h)) continue
         if (TEST_INFRA_RE.test(h)) continue
@@ -330,7 +393,7 @@ export function rewriteBatchTestPlan(
     isCrossCutting: (quote: string) => boolean
 ): BatchTestRewrite {
     if (!mandatesTestsInSameChange(decisions, spec)) return {titles, actions: []}
-    const batch = findBatchTestTitles(titles)
+    const batch = findBatchTestTitles(titles, spec)
     if (batch.length === 0) return {titles, actions: []}
 
     const batchSet = new Set(batch)

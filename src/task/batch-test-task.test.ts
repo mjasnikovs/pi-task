@@ -213,6 +213,43 @@ describe('findBatchTestTitles', () => {
         ).toEqual([])
     })
 
+    // Rep 4 of the 8-rep live A/B (2026-07-20, Qwen3.6-27B on the mx5 fixture),
+    // verbatim. The citation arrives as BARE PROSE — no quotes, no `[source: …]`
+    // wrapper — and is then repeated inside one, so neither earlier guard sees it.
+    // Its borrowed "every component/page" was the title's only quantifier, and the
+    // rewrite DROPPED this correctly per-change-scoped Login task.
+    test('an unmarked spec echo in the detail is provenance, not scope', () => {
+        const spec =
+            '**Client/UI:** Playwright `1.61.1` React component tests'
+            + ' (`@playwright/experimental-ct-react`) with\n  **visual confirmation** — every'
+            + ' component/page test captures a screenshot committed as a baseline.'
+        const live =
+            'Implement Login page with phone/password form and tests — **Client/UI:**'
+            + ' Playwright `1.61.1` React component tests'
+            + ' (`@playwright/experimental-ct-react`) with **visual confirmation** — every'
+            + ' component/page test captures a screenshot committed as a baseline.'
+            + ' [source: "**Client/UI:** Playwright `1.61.1` React component tests'
+            + ' (`@playwright/experimental-ct-react`) with **visual confirmation** — every'
+            + ' component/page test captures a screenshot committed as a baseline."'
+            + ' [2. Tech stack (pinned to latest, 2026-07)]]'
+        expect(findBatchTestTitles([live], spec)).toEqual([])
+        // Without the spec the detector has nothing to compare against — this is
+        // why every caller must pass it.
+        expect(findBatchTestTitles([live])).toEqual([0])
+    })
+
+    // The head is never stripped, so a batch title that quotes the spec verbatim in
+    // its own deliverable is still caught.
+    test('a spec echo in the HEAD does not excuse a batch title', () => {
+        const spec = 'Write component tests for all components and pages before release.'
+        expect(
+            findBatchTestTitles(
+                ['Write component tests for all components and pages — screenshot baselines'],
+                spec
+            )
+        ).toEqual([0])
+    })
+
     test('scoped and additive test work is untouched', () => {
         expect(
             findBatchTestTitles([
