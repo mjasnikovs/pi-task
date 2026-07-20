@@ -28,8 +28,18 @@ import {
     parseTaskList,
     checkOffTask,
     stampTaskInProgress,
+    insertTaskAfter,
     findResumableAuto
 } from './auto-io.js'
+import {
+    drainRepairQueue,
+    mergeRepairCandidates,
+    planHasRepairFor,
+    parseRepairTitleFile,
+    buildRepairTitle,
+    buildRepairScopeFence,
+    extractFailingCommand
+} from './root-cause-repair.js'
 import {
     writeTaskFile,
     readTaskFile,
@@ -484,6 +494,73 @@ export function buildScopeFence(titles: string[], currentIndex: number): string 
         + `components, or flows owned by a later step.\n\n`
         + `The full plan (these run separately — do NOT implement them here):\n${listing}`
     )
+}
+
+/**
+ * The scope fence for step `currentIndex`, plus the REPAIR fence when that step is
+ * a queued root-cause repair. A repair title ("repair test/teardown.ts: …") reads
+ * to refine like any other feature step, and refine's job is to expand a title into
+ * a full spec — which is exactly how "repair the teardown" becomes "overhaul the
+ * test infrastructure" (the /task-auto drift lesson). The extra fence pins the one
+ * editable file and pins VERIFY to the command the defect was failing.
+ */
+function buildStepFence(titles: string[], currentIndex: number): string {
+    const base = buildScopeFence(titles, currentIndex)
+    const repairFile = parseRepairTitleFile(titles[currentIndex] ?? '')
+    if (!repairFile) return base
+    return `${base}\n\n${buildRepairScopeFence(repairFile, extractFailingCommand(titles[currentIndex] ?? ''))}`
+}
+
+/**
+ * Drain the gate's root-cause repair queue into the running plan: one scoped
+ * repair step per accused FILE, spliced in directly after the step that just
+ * finished.
+ *
+ * Three bounds, all mandatory (mx5 run 14 item 5 gray areas):
+ *   - DEDUP by file — run 14's two `test/teardown.ts` debts must yield ONE repair
+ *     step, not two. mergeRepairCandidates collapses the drained queue, and
+ *     planHasRepairFor rejects a file the plan already carries a repair for.
+ *   - CAP 1 per file per RUN — planHasRepairFor counts CHECKED-OFF entries too, so
+ *     a repair step that itself failed is never re-spawned; it lands in the
+ *     accept-debt ledger like any other task. That is what stops a repair loop.
+ *   - MONOTONIC — insertTaskAfter only splices; no existing entry is rewritten,
+ *     reordered or dropped (the run-12 replacement lesson).
+ *
+ * Best-effort throughout: a fault here must never fail the run that produced the
+ * finding — the debt is already durably recorded either way.
+ */
+async function schedulePendingRepairs(
+    cwd: string,
+    id: string,
+    afterIndex: number,
+    ctx: ExtensionCommandContext,
+    deps: AutoDeps
+): Promise<void> {
+    try {
+        const pending = await drainRepairQueue(cwd)
+        if (pending.length === 0) return
+        const {body} = await readTaskFile(cwd, id)
+        const titles = parseTaskList(body).map(e => e.title)
+        let at = afterIndex
+        for (const repair of mergeRepairCandidates(pending)) {
+            if (planHasRepairFor(titles, repair.file)) continue
+            const title = buildRepairTitle(repair)
+            if (!(await insertTaskAfter(cwd, id, at, title))) continue
+            titles.splice(at + 1, 0, title)
+            at += 1
+            await deps.record?.(
+                cwd,
+                id,
+                `plan: inserted scoped repair step after step ${afterIndex + 1} — ${title}`
+            )
+            ctx.ui.notify(
+                `${id}: queued a scoped repair for ${repair.file} (${repair.owner}'s file — root cause of ${repair.blamed.join(', ')}).`,
+                'warning'
+            )
+        }
+    } catch {
+        // the plan is best-effort here; the underlying debt is already recorded
+    }
 }
 
 /** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */
@@ -1750,7 +1827,7 @@ export async function runAutoLoop(
                 // matters when refine runs fresh (a resumed task past refine ignores
                 // it), but always supplied so a resume that restarts at refine is
                 // fenced too.
-                planContext: buildScopeFence(
+                planContext: buildStepFence(
                     entries.map(e => e.title),
                     next.index
                 ),
@@ -1827,7 +1904,7 @@ export async function runAutoLoop(
                 title: next.title,
                 tag: id,
                 // Fence an AUTOFIX re-run against re-expanding the whole spec.
-                planContext: buildScopeFence(
+                planContext: buildStepFence(
                     entries.map(e => e.title),
                     next.index
                 ),
@@ -1876,6 +1953,14 @@ export async function runAutoLoop(
                 )
                 return
             }
+            // ROOT-CAUSE REPAIR (mx5 run 14 item 5): the gate may have attributed a
+            // FAIL to a pre-existing defect in a file some OTHER task created. It can
+            // only QUEUE that finding — mutating the plan is this loop's job. Drain
+            // the queue and splice a scoped repair step in right after the step that
+            // just finished, so the defect is fixed BEFORE the next dependent task
+            // trips over it too (run 14 recorded the same `test/teardown.ts` cause
+            // twice, scheduled nothing, and the bug outlived ~24h of the run).
+            await schedulePendingRepairs(cwd, id, next.index, active, deps)
             // gate.kind === 'done' → fall through to the next task, after checking
             // no landmine stash was left behind by anything that ran in between.
             if (deps.stashRef && stashBefore !== undefined) {

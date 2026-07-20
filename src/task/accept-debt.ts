@@ -72,6 +72,14 @@ const FIELD_SEP = '\t'
  *     `lsof` and the sandbox had neither) and no further attempt can move it. The
  *     run is allowed to converge on the REMAINING checks, carrying this one here
  *     so the next run's gate re-checks and re-surfaces it rather than losing it.
+ *   - 'root-cause' — the task's verify FAILed because of a PRE-EXISTING defect in a
+ *     file a DIFFERENT task created, which this task's own work never touched (mx5
+ *     run 14: TASK_0007's `test/teardown.ts` TRUNCATE bug FAILed TASK_0013 and
+ *     TASK_0019). The current task is not at fault, so its work — and, at the
+ *     enforce site, the enforce pass's edits — are KEPT rather than reverted; the
+ *     defect is recorded here and a scoped repair task is queued into the plan
+ *     (root-cause-repair.ts). Before this class existed the ledger recorded the same
+ *     root cause twice and nothing ever scheduled a fix, so it survived ~24h.
  */
 export type DebtOrigin =
     | 'accepted'
@@ -80,6 +88,7 @@ export type DebtOrigin =
     | 'cross-task-deletion'
     | 'yolo-accepted'
     | 'final-gate'
+    | 'root-cause'
 
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
@@ -138,6 +147,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
                 || origin === 'cross-task-deletion'
                 || origin === 'yolo-accepted'
                 || origin === 'final-gate'
+                || origin === 'root-cause'
             ) ?
                 {origin: origin as DebtOrigin}
             :   {})
@@ -291,6 +301,26 @@ export async function recordFinalGateUnobservedDebt(
         taskId: taskId.trim(),
         reason: normaliseReason(reason),
         origin: 'final-gate'
+    })
+}
+
+/**
+ * Record a ROOT-CAUSE debt (mx5 run 14 / PROMPT item 5): this task's verify FAILed
+ * on a pre-existing defect in a file ANOTHER task created and this task never
+ * touched. The current task is not at fault — its work (and, at the enforce site,
+ * the enforce pass's edits) is KEPT — but the defect is real and still in the tree,
+ * so it is recorded here and a scoped repair task is queued (root-cause-repair.ts).
+ * Behavioral/model-judged, so the final gate surfaces it rather than auto-closing it.
+ */
+export async function recordRootCauseDebt(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(reason),
+        origin: 'root-cause'
     })
 }
 
@@ -463,6 +493,9 @@ export function describeDebt(d: AcceptDebt): string {
     }
     if (d.origin === 'yolo-accepted') {
         return 'auto-ACCEPTED by YOLO mode despite verify-FAIL (unattended — no human weighed this)'
+    }
+    if (d.origin === 'root-cause') {
+        return "verify FAILed on a PRE-EXISTING defect in another task's file that this task never touched (this task's work was kept; a scoped repair task was queued for the root cause)"
     }
     if (d.origin === 'final-gate') {
         return 'final-gate check DEMOTED to UNOBSERVED (identical failure across two tree-changing fix attempts — unfalsifiable in that environment, never proven passing)'

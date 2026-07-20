@@ -41,6 +41,7 @@ import {
 } from './verify-resolution.js'
 import {SessionUI} from '../remote/bridge.js'
 import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
+import {findRepairCandidate, type RepairCandidate} from './root-cause-repair.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -192,6 +193,36 @@ export interface GateDeps {
         deletion: {path: string; owner: string}
     ) => Promise<void>
     /**
+     * Record a durable ROOT-CAUSE debt (mx5 run 14 item 5): this task's verify
+     * FAILed on a pre-existing defect in a file ANOTHER task created and this task
+     * never touched. Its work is kept (it is not at fault) but the defect is real,
+     * so the final gate must re-check and surface it. Best-effort; absent in tests.
+     */
+    recordRootCauseDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
+     * Queue a scoped repair task for a root-caused defect. The gate DETECTS the
+     * cause; only the /task-auto loop may mutate the plan, so the two are decoupled
+     * through the durable `.pi-tasks/repair-queue.md` ledger this writes (see
+     * root-cause-repair.ts). Absent (bare `/task`, tests) → detection still records
+     * the debt, nothing is scheduled.
+     */
+    recordRepairCandidate?: (cwd: string, candidate: RepairCandidate) => Promise<void>
+    /**
+     * Paths the CURRENT task's own work touches — the AUTHORSHIP discriminator for
+     * the root-cause channel: a FAIL blamed on a file this task edited may well be
+     * this task's own fault, and only a file it never touched can be somebody
+     * else's pre-existing bug. `worktree` = uncommitted changes (the pre-commit
+     * verify site); `committed` = the files the task snapshot + the ENFORCE commit
+     * changed (the post-commit enforce site). `null` means UNKNOWN (git
+     * unavailable) and stands the whole channel down — inconclusive is never
+     * evidence, so an unreadable tree can only cost a repair task, never spawn a
+     * wrong one or wrongly keep a regression.
+     */
+    touchedFiles?: (cwd: string, scope: 'worktree' | 'committed') => Promise<string[] | null>
+    /** The task whose commit INTRODUCED a file (task-provenance.ts). Null for a
+     *  file predating the run or any git error → unknown provenance. */
+    introducedBy?: (cwd: string, rel: string) => Promise<string | null>
+    /**
      * The concrete paths this task's spec forbids modifying (its `Do NOT modify`
      * CONSTRAINTS — see frozen-path-guard.ts / prohibition-probe.ts). Used to
      * write-deny the enforce EDIT pass: a violating edit is reverted before it can
@@ -319,6 +350,46 @@ export async function runGatesForTask(
             await deps.record?.(p.cwd, p.taskId, line)
         } catch {
             // recording must never break the gate sequence
+        }
+    }
+    /**
+     * ROOT-CAUSE CHANNEL (mx5 run 14 item 5). Ask whether a FAIL was caused by a
+     * pre-existing defect in a file some OTHER task created and this task never
+     * touched. On a hit: record the durable debt (so the final gate surfaces it)
+     * and queue a scoped repair task (so something finally FIXES it — run 14
+     * recorded the same `test/teardown.ts` cause twice and scheduled nothing, and
+     * the bug survived ~24h). Returns the candidate so the caller can also decide
+     * NOT to punish the current task for it. Never throws: any fault degrades to
+     * null, i.e. exactly the pre-existing behavior.
+     */
+    const routeRootCause = async (
+        failReason: string,
+        rationale: string,
+        scope: 'worktree' | 'committed'
+    ): Promise<RepairCandidate | null> => {
+        if (!deps.touchedFiles || !deps.introducedBy) return null
+        try {
+            const candidate = await findRepairCandidate({
+                failReason,
+                rationale,
+                currentTaskId: p.taskId,
+                touched: await deps.touchedFiles(p.cwd, scope),
+                introducedBy: rel => deps.introducedBy!(p.cwd, rel)
+            })
+            if (!candidate) return null
+            await deps.recordRootCauseDebt?.(
+                p.cwd,
+                p.taskId,
+                `${failReason} — ROOT CAUSE: \`${candidate.file}\` (introduced by ${candidate.owner}, not touched by this task)`
+            )
+            await deps.recordRepairCandidate?.(p.cwd, candidate)
+            await rec(
+                `root-cause: FAIL attributed to \`${candidate.file}\` — a pre-existing defect in ${candidate.owner}'s file that this task never touched; `
+                    + 'recorded as durable debt and a scoped repair task queued'
+            )
+            return candidate
+        } catch {
+            return null
         }
     }
     const verdictLine = (v: VerifyOutcome): string =>
@@ -503,6 +574,11 @@ export async function runGatesForTask(
                         // recording must never break the gate sequence
                     }
                 }
+                // ROOT CAUSE: an accepted FAIL that some OTHER task's file caused is
+                // not fixed by accepting it — run 14 accepted this shape repeatedly
+                // and the causing bug outlived the whole run. Queue the scoped repair
+                // so the plan actually closes it.
+                await routeRootCause(failReason, recOutcome.rationale, 'worktree')
                 // Cross-task deletions the verify probe detected ship in the next
                 // commit with this ACCEPT — record each as its own durable debt so
                 // the final gate re-checks them (mx5 run 12 PROMPT 2). Best-effort.
@@ -717,7 +793,30 @@ export async function runGatesForTask(
                     deps.verify ?
                         await deps.verify(active, p.cwd, p.title, p.taskId)
                     :   ({ok: true} as VerifyOutcome)
-                if (!after.ok) {
+                const afterReason = after.reason ?? 'enforce re-verify failed'
+                // PRE-EXISTING-CAUSE KEEP PATH (mx5 run 14 item 5b). Both of run
+                // 14's enforce-reverts were this shape: the re-verify FAILed on
+                // TASK_0007's `test/teardown.ts` TRUNCATE bug — a file neither the
+                // task's work nor the enforce pass touched — and the differential
+                // reverted enforce's edits anyway, destroying good work over a fault
+                // it did not cause AND leaving the actual cause unscheduled. When the
+                // FAIL is attributed to another task's untouched file, KEEP the edits
+                // and route the real defect to a repair task instead. Everything
+                // unknown (git unavailable, no provenance, this task touched the file,
+                // an environment-blamed FAIL) falls through to the revert below —
+                // the conservative pre-existing behavior.
+                const rootCause =
+                    after.ok ? null : await routeRootCause(afterReason, '', 'committed')
+                if (!after.ok && rootCause) {
+                    await rec(
+                        `enforce: re-verify FAILED (${afterReason.slice(0, 200)}) but the failure is attributed to a PRE-EXISTING defect in \`${rootCause.file}\` `
+                            + `(${rootCause.owner}'s file, untouched by this task and by the enforce pass) — edits KEPT, not reverted; repair task queued`
+                    )
+                    active.ui.notify(
+                        `${p.tag}: guideline fixes on "${p.title}" re-verified red on a pre-existing defect in ${rootCause.file} (${rootCause.owner}'s file) — keeping the fixes, queued a repair task.`,
+                        'warning'
+                    )
+                } else if (!after.ok) {
                     if (deps.revert) await deps.revert(p.cwd)
                     await rec(
                         `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${deps.revert ? 'REVERTED' : 'left in place (no revert available)'}`

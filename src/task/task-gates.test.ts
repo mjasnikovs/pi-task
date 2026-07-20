@@ -580,6 +580,161 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
     })
 })
 
+// ─── Root-cause repair channel (mx5 run 14 item 5) ───────────────────────────
+//
+// Run 14's TWO enforce-reverts (TASK_0013, TASK_0019) were both this shape: the
+// re-verify FAILed on TASK_0007's `test/teardown.ts` TRUNCATE bug, a file neither
+// the task's work nor the enforce pass ever touched, and the differential reverted
+// enforce's edits anyway — destroying good work over a fault it did not cause while
+// the actual cause stayed unscheduled. Verbatim TASK_0019 text as the fixture.
+const RUN14_TEARDOWN_FAIL =
+    'work did not verify: The shipped `bun test test/photos.test.ts` exits with code 1 due to a '
+    + 'pre-existing teardown bug in `test/teardown.ts` (created by TASK_0007) that uses parameterized '
+    + 'queries for table names in TRUNCATE statements, causing PostgreSQL syntax errors — this task '
+    + 'did not modify the teardown'
+
+/** Deps whose enforce re-verify FAILs on a pre-existing foreign defect. */
+function rootCauseDeps(over: Partial<GateDeps> = {}): {
+    deps: GateDeps
+    reverted: string[]
+    revertDebts: string[]
+    rootDebts: string[]
+    queued: Array<{file: string; owner: string; blamedTask: string}>
+    trail: string[]
+} {
+    const reverted: string[] = []
+    const revertDebts: string[] = []
+    const rootDebts: string[] = []
+    const queued: Array<{file: string; owner: string; blamedTask: string}> = []
+    const trail: string[] = []
+    let verifyCalls = 0
+    const deps = makeDeps({
+        record: (_c, _id, line) => {
+            trail.push(line)
+            return Promise.resolve()
+        },
+        verify: () => {
+            verifyCalls += 1
+            // 1st = the pre-enforce PASS (so enforce runs in EDIT mode);
+            // 2nd = the post-enforce re-verify, red on the foreign defect.
+            return Promise.resolve(
+                verifyCalls === 1 ? {ok: true} : {ok: false, reason: RUN14_TEARDOWN_FAIL}
+            )
+        },
+        enforce: () => Promise.resolve({ok: true}),
+        revert: c => {
+            reverted.push(c)
+            return Promise.resolve()
+        },
+        recordEnforceRevertDebt: (_c, _id, reason) => {
+            revertDebts.push(reason)
+            return Promise.resolve()
+        },
+        recordRootCauseDebt: (_c, _id, reason) => {
+            rootDebts.push(reason)
+            return Promise.resolve()
+        },
+        recordRepairCandidate: (_c, candidate) => {
+            queued.push({
+                file: candidate.file,
+                owner: candidate.owner,
+                blamedTask: candidate.blamedTask
+            })
+            return Promise.resolve()
+        },
+        // The task + enforce commits touched the photos route and its test —
+        // never the teardown.
+        touchedFiles: () => Promise.resolve(['test/photos.test.ts', 'src/server/routes/photos.ts']),
+        introducedBy: (_c, rel) =>
+            Promise.resolve(rel === 'test/teardown.ts' ? 'TASK_0007' : 'TASK_0019'),
+        ...over
+    })
+    return {deps, reverted, revertDebts, rootDebts, queued, trail}
+}
+
+test("enforce: a re-verify FAIL caused by ANOTHER task's untouched file KEEPS the edits", async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const h = rootCauseDeps()
+        const r = await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0019'}))
+        expect(r.kind).toBe('done')
+        // The whole point: enforce's edits survive a fault enforce did not cause.
+        expect(h.reverted).toEqual([])
+        expect(h.revertDebts).toEqual([])
+        // …and the REAL defect is recorded and scheduled instead of being lost.
+        expect(h.rootDebts).toHaveLength(1)
+        expect(h.rootDebts[0]).toContain('test/teardown.ts')
+        expect(h.queued).toEqual([
+            {file: 'test/teardown.ts', owner: 'TASK_0007', blamedTask: 'TASK_0019'}
+        ])
+        expect(h.trail.some(l => l.includes('edits KEPT, not reverted'))).toBe(true)
+    })
+})
+
+test('enforce: a FAIL naming a file THIS task touched still REVERTS (no keep-path escape)', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const h = rootCauseDeps({
+            // This time the task's own commits touched the teardown.
+            touchedFiles: () => Promise.resolve(['test/teardown.ts'])
+        })
+        const r = await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0019'}))
+        expect(r.kind).toBe('done')
+        expect(h.reverted).toHaveLength(1)
+        expect(h.revertDebts).toHaveLength(1)
+        expect(h.queued).toEqual([])
+    })
+})
+
+test('enforce: unknown provenance / unreadable tree falls back to the REVERT path', async () => {
+    for (const over of [
+        {introducedBy: () => Promise.resolve(null)},
+        {touchedFiles: () => Promise.resolve(null)},
+        // deps absent entirely (bare /task, older wiring)
+        {touchedFiles: undefined, introducedBy: undefined}
+    ] as Partial<GateDeps>[]) {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const h = rootCauseDeps(over)
+            await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0019'}))
+            expect(h.reverted).toHaveLength(1)
+            expect(h.revertDebts).toHaveLength(1)
+            expect(h.queued).toEqual([])
+        })
+    }
+})
+
+test('verify ACCEPT: a root-caused FAIL queues the repair alongside the accept-debt', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        handle.queueSelect(ACCEPT_LABEL)
+        const queued: string[] = []
+        const accepted: string[] = []
+        const deps = makeDeps({
+            record: () => Promise.resolve(),
+            verify: () => Promise.resolve({ok: false, reason: RUN14_TEARDOWN_FAIL}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'pre-existing'}),
+            recordAcceptDebt: (_c, _id, reason) => {
+                accepted.push(reason)
+                return Promise.resolve()
+            },
+            recordRepairCandidate: (_c, candidate) => {
+                queued.push(candidate.file)
+                return Promise.resolve()
+            },
+            recordRootCauseDebt: () => Promise.resolve(),
+            touchedFiles: () => Promise.resolve(['test/photos.test.ts']),
+            introducedBy: (_c, rel) =>
+                Promise.resolve(rel === 'test/teardown.ts' ? 'TASK_0007' : null)
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir, taskId: 'TASK_0019'}))
+        expect(r.kind).toBe('done')
+        expect(accepted).toHaveLength(1)
+        expect(queued).toEqual(['test/teardown.ts'])
+    })
+})
+
 test('record: a throwing record dep never breaks the gate sequence', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

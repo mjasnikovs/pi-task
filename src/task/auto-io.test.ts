@@ -7,7 +7,8 @@ import {
     parseDecomposeList,
     parseCoverageVerdict,
     buildAutoBody,
-    checkOffTask
+    checkOffTask,
+    insertTaskAfter
 } from './auto-io.js'
 import {writeTaskFile, readTaskFile} from './task-io.js'
 import type {TaskFrontMatter} from './task-types.js'
@@ -113,6 +114,65 @@ test('checkOffTask: throws on out-of-range index', async () => {
         await expect(
             checkOffTask(dir, 'TASK_AUTO_0001', 5, 'TASK_0001', 'Only one')
         ).rejects.toThrow(/out of range/)
+    })
+})
+
+// insertTaskAfter — the mid-run plan mutation the root-cause repair channel needs
+// (mx5 run 14 item 5). MONOTONIC: splice only, never rewrite/reorder/drop.
+test('insertTaskAfter: splices a new entry directly after the given index', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A', 'Task B', 'Task C'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        await checkOffTask(dir, 'TASK_AUTO_0001', 0, 'TASK_0001', 'Task A')
+        expect(
+            await insertTaskAfter(dir, 'TASK_AUTO_0001', 0, 'repair test/teardown.ts: TRUNCATE bug')
+        ).toBe(true)
+        const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
+        // Inserted BEFORE the next dependent task, not appended at the end.
+        expect(entries.map(e => e.title)).toEqual([
+            'Task A',
+            'repair test/teardown.ts: TRUNCATE bug',
+            'Task B',
+            'Task C'
+        ])
+        // Existing state is untouched: the finished entry keeps its check + id.
+        expect(entries[0]).toEqual({
+            index: 0,
+            title: 'Task A',
+            done: true,
+            producedId: 'TASK_0001'
+        })
+        expect(entries[1].done).toBe(false)
+    })
+})
+
+test('insertTaskAfter: an already-present title is a no-op (no duplicate on retry)', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A', 'repair x/y.ts: bug'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        expect(await insertTaskAfter(dir, 'TASK_AUTO_0001', 0, 'repair x/y.ts: bug')).toBe(false)
+        expect(
+            parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body).map(e => e.title)
+        ).toEqual(['Task A', 'repair x/y.ts: bug'])
+    })
+})
+
+test('insertTaskAfter: an out-of-range index appends after the last entry, never throws', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        expect(await insertTaskAfter(dir, 'TASK_AUTO_0001', 9, 'repair a/b.ts: bug')).toBe(true)
+        expect(
+            parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body).map(e => e.title)
+        ).toEqual(['Task A', 'repair a/b.ts: bug'])
+    })
+})
+
+test('insertTaskAfter: an empty title is rejected', async () => {
+    await withTmpTaskDir(async dir => {
+        const body = buildAutoBody('feat', '(none)', ['Task A'])
+        await writeTaskFile(dir, fm('TASK_AUTO_0001', 'in_progress'), body)
+        expect(await insertTaskAfter(dir, 'TASK_AUTO_0001', 0, '   ')).toBe(false)
     })
 })
 

@@ -193,6 +193,61 @@ export async function stampTaskInProgress(
     )
 }
 
+/** The bare title of a checkbox line (id stamp stripped), or null if not one. */
+function entryTitle(line: string): string | null {
+    const m = CHECKBOX_RE.exec(line.trim())
+    if (!m) return null
+    const rest = m[2].trim()
+    const idm = PRODUCED_ID_RE.exec(rest)
+    return idm ? idm[2].trim() : rest
+}
+
+/**
+ * Insert a NEW unchecked entry directly after the `afterIndex`th checkbox — the
+ * mid-run plan mutation the root-cause repair channel needs (mx5 run 14 item 5:
+ * a repair task must land BEFORE the next dependent task, not at the end of the
+ * plan, or the defect keeps failing everything in between).
+ *
+ * MONOTONIC by construction (the run-12 replacement lesson): this only ever
+ * SPLICES a line in. No existing entry is rewritten, reordered, or dropped, and
+ * an already-present title is a no-op — so a plan can grow mid-run but never
+ * shrink, and a retried insert cannot duplicate. Returns whether a line was added.
+ *
+ * Later entries shift down by one, which is safe because the /task-auto loop
+ * re-reads and re-parses the plan at the top of every iteration and locates its
+ * next step by "first unchecked" rather than by a cached index.
+ */
+export async function insertTaskAfter(
+    cwd: string,
+    id: string,
+    afterIndex: number,
+    title: string
+): Promise<boolean> {
+    const clean = title.trim()
+    if (clean.length === 0) return false
+    const {body} = await readTaskFile(cwd, id)
+    const section = extractSection(body, 'tasks') ?? ''
+    const lines = section.split('\n')
+    // Duplicate check scans the WHOLE list first: an existing entry with this exact
+    // title (checked or not) means the plan already carries this step, wherever it
+    // sits relative to afterIndex — never add a second one.
+    if (lines.some(l => entryTitle(l) === clean)) return false
+    let seen = -1
+    let insertAt = -1
+    for (let i = 0; i < lines.length; i++) {
+        if (!CHECKBOX_RE.test(lines[i].trim())) continue
+        seen++
+        insertAt = i + 1
+        if (seen === afterIndex) break
+    }
+    // An out-of-range index appends after the LAST checkbox rather than throwing:
+    // a plan that grew underneath the caller must still receive the entry.
+    if (insertAt === -1) return false
+    lines.splice(insertAt, 0, `- [ ] ${clean}`)
+    await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
+    return true
+}
+
 /** Find the most-recently-updated resumable TASK_AUTO_* file, or null. */
 export async function findResumableAuto(cwd: string): Promise<string | null> {
     await ensureTasksDir(cwd)

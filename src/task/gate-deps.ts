@@ -29,8 +29,10 @@ import {
     recordEnforceRevertDebt,
     recordFrozenBlockedDebt,
     recordCrossTaskDeletionDebt,
-    recordYoloAcceptDebt
+    recordYoloAcceptDebt,
+    recordRootCauseDebt
 } from './accept-debt.js'
+import {recordRepairCandidate} from './root-cause-repair.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
 import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
@@ -582,6 +584,41 @@ export function buildGateDeps(params: {
         // the final gate re-checks it (resolved iff the file is back in the tree).
         recordCrossTaskDeletionDebt: (cwd2, taskId, deletion) =>
             recordCrossTaskDeletionDebt(cwd2, taskId, deletion),
+        // ROOT-CAUSE channel (mx5 run 14 item 5): a FAIL another task's untouched
+        // file caused is recorded as its own debt class and queued as a scoped
+        // repair task, instead of being blamed on — and reverted out of — the task
+        // that merely tripped over it.
+        recordRootCauseDebt: (cwd2, taskId, reason) => recordRootCauseDebt(cwd2, taskId, reason),
+        recordRepairCandidate: (cwd2, candidate) => recordRepairCandidate(cwd2, candidate),
+        // file → introducing task, the provenance half of the discriminator.
+        introducedBy: (cwd2, rel) => Promise.resolve(taskThatIntroduced(cwd2, rel)),
+        // The authorship half: which files THIS task's work touched. `worktree` is
+        // the pre-commit verify site (uncommitted changes); `committed` is the
+        // post-commit enforce site, where the task snapshot and the ENFORCE commit
+        // are the last two commits. Any git fault returns null, which stands the
+        // channel down entirely rather than guessing.
+        touchedFiles: async (cwd2, scope) => {
+            try {
+                if (scope === 'worktree') {
+                    const r = await git(cwd2, ['status', '--porcelain'], signal)
+                    if (r.exitCode !== 0) return null
+                    const c = parseTreeChanges(r.stdout)
+                    return [...c.modified, ...c.added, ...c.deleted]
+                }
+                const r = await git(
+                    cwd2,
+                    ['log', '-n', '2', '--name-only', '--format=', 'HEAD'],
+                    signal
+                )
+                if (r.exitCode !== 0) return null
+                return r.stdout
+                    .split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.length > 0)
+            } catch {
+                return null
+            }
+        },
         // Frozen-path write-deny (see frozen-path-guard.ts): the concrete paths this
         // task's spec forbids modifying, so the gate sequence can UNDO any edit the
         // enforce EDIT pass makes to them before those edits are committed. Reads the
