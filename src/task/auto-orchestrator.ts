@@ -92,6 +92,7 @@ import {
     appendContracts
 } from './contracts.js'
 import {reconcileTitleSources} from './decompose-fidelity.js'
+import {mandatesTestsInSameChange, rewriteBatchTestPlan} from './batch-test-task.js'
 import {
     REQUIREMENT_EXTRACT_PROMPT,
     COVERAGE_MAP_PROMPT,
@@ -814,11 +815,26 @@ export async function planAuto(
         // best-effort channel
     }
 
+    // Tests-in-the-same-change cadence (mx5 run 14, PROMPT item 6): when the
+    // decisions mandate it, a whole-project batch test task contradicts them —
+    // run 14 shipped one anyway (TASK_0037, 4.7h, yolo-accepted FAIL) because
+    // decompose mirrors the spec's milestone shape. The decisions channel
+    // OVERRIDES the spec doc, so this resolves toward the decision without asking.
+    const noBatchTests = mandatesTestsInSameChange(clarifications, featureForModel)
+    if (noBatchTests) {
+        logPlanDebug(
+            cwd,
+            'decisions mandate tests-in-the-same-change — batch test tasks are banned '
+                + 'from this plan (prompt rule + host rewrite)'
+        )
+    }
+
     // decompose
     const decomposePrompt = AUTO_DECOMPOSE_PROMPT(
         featureForModel,
         clarifications,
-        buildRequirementsLedger(reqEntries)
+        buildRequirementsLedger(reqEntries),
+        noBatchTests
     )
     // Parse + FIDELITY RECONCILIATION (mx5 run 11, goal B): ground each title's
     // [source: "…"] citation against the doc, strip the clause, and re-attach any
@@ -837,7 +853,27 @@ export async function planAuto(
                         .join('')
             )
         }
-        return plan.titles
+        // Batch-test ban (item 6): drop or scope a whole-project "write all the
+        // tests" task. Identity unless the cadence decision is present, and the
+        // sweep replacement re-grounds every requirement the drop would cost — so
+        // planned coverage cannot fall (run 12's lesson).
+        const debatched = rewriteBatchTestPlan(
+            plan.titles,
+            clarifications,
+            featureForModel,
+            reqEntries.map(e => e.quote),
+            isCrossCuttingRequirement
+        )
+        for (const a of debatched.actions) {
+            logPlanDebug(
+                cwd,
+                `batch test task ${a.kind} (tests-in-same-change decision): "${a.title}"`
+                    + (a.kind === 'scoped' ?
+                        ` → scoped sweep over ${a.orphaned.length} orphaned requirement(s)`
+                    :   ' — every requirement it touched is owned by another task')
+            )
+        }
+        return debatched.titles
     }
     const listRaw = await deps.runChild('auto-decompose', 'read', decomposePrompt)
     let planTitles = parsePlan(listRaw)

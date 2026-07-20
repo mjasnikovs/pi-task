@@ -3,6 +3,7 @@
  * LIST only; all research/spec depth is /task's job, run per-title later.
  */
 import {DECOMPOSE_SOURCE_RULE} from './decompose-fidelity.js'
+import {DECOMPOSE_NO_BATCH_TESTS_RULE} from './batch-test-task.js'
 
 /**
  * Clarify: asks ONE question at a time. Output MUST match parseClarifyList — a
@@ -74,11 +75,16 @@ NONE`
  * belt): the spec's obligations ride into decompose explicitly, so mirroring the
  * spec's own milestone/section structure cannot silently discharge them. '' ⇒
  * the prompt is unchanged.
+ *
+ * `noBatchTests` adds the anti-batch-test rule (batch-test-task.ts) — emitted ONLY
+ * when the decisions mandate tests-in-the-same-change, so every other run sees the
+ * prompt it always saw. It is the belt; the host-side rewrite is the lever.
  */
 export const AUTO_DECOMPOSE_PROMPT = (
     feature: string,
     clarifications: string,
-    requirementsLedger = ''
+    requirementsLedger = '',
+    noBatchTests = false
 ): string =>
     `Split this feature into an ordered list of implementation tasks. Each task
 will be handed, by its title, to a separate pipeline that does its own research
@@ -102,7 +108,7 @@ RULES:
   none. These are explicit user choices that may contradict the referenced spec
   doc; phrase them as imperative directives (e.g. "use Bun's built-in bundler, do
   not add vite"). Do NOT invent decisions — only restate ones from CLARIFICATIONS.
-${DECOMPOSE_SOURCE_RULE}
+${DECOMPOSE_SOURCE_RULE}${noBatchTests ? `\n${DECOMPOSE_NO_BATCH_TESTS_RULE}` : ''}
 - Output the checkbox list and NOTHING else (no preamble, no numbering).`
 
 /**
