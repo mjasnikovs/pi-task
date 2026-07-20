@@ -26,6 +26,7 @@ import {
     mandatesTestsInSameChange,
     rewriteBatchTestPlan
 } from '../src/task/batch-test-task.js'
+import {reportAb} from './ab-verdict.js'
 
 /** run 14's settled clarifications, verbatim — the decisions carried onto TASK_0037. */
 const CLARIFICATIONS = [
@@ -36,8 +37,54 @@ const CLARIFICATIONS = [
     '  and DB-free.'
 ].join('\n')
 
+/**
+ * Recorded decompose plans, for pinning the arms when the live model is
+ * unavailable or (as measured on 2026-07-20) will not reliably emit the batch
+ * shape. Titles are transcribed from run 14's own decompose output.
+ *
+ *   PLAN_FIXTURE=with-batch   carries TASK_0037's batch-everything title
+ *   PLAN_FIXTURE=no-batch     the same plan with that title already scoped
+ *
+ * `no-batch` exists to prove the VERDICT discriminates, not to prove the lever
+ * does: it is the zero-baseline condition, and the harness must ABSTAIN on it.
+ */
+const RECORDED_PLANS: Record<string, string[]> = {
+    'with-batch': [
+        'Scaffold the Vite + React + TypeScript app shell and routing',
+        'Set up the Postgres schema and migrations for cars, photos and owners',
+        'Build the tRPC server and mount it behind the API route',
+        'Implement the car listing and detail pages against the RPC layer',
+        'Implement the photo upload and gallery flow',
+        'Add authentication and the protected admin routes',
+        'Write component and page tests — Playwright CT tests with screenshot '
+            + 'baselines for all components and pages',
+        'Wire the production build and the static serve layer'
+    ],
+    'no-batch': [
+        'Scaffold the Vite + React + TypeScript app shell and routing',
+        'Set up the Postgres schema and migrations for cars, photos and owners',
+        'Build the tRPC server and mount it behind the API route',
+        'Implement the car listing and detail pages against the RPC layer, with '
+            + 'their component tests landing in the same change',
+        'Implement the photo upload and gallery flow, with its component tests '
+            + 'landing in the same change',
+        'Add authentication and the protected admin routes, with route tests '
+            + 'landing in the same change',
+        'Wire the production build and the static serve layer'
+    ]
+}
+
 async function main(): Promise<void> {
     const reps = process.argv[2] ? parseInt(process.argv[2], 10) : 3
+    const recorded = process.env.PLAN_FIXTURE
+    if (recorded !== undefined && RECORDED_PLANS[recorded] === undefined) {
+        throw new Error(
+            `unknown PLAN_FIXTURE "${recorded}" — expected one of ${Object.keys(RECORDED_PLANS).join(', ')}`
+        )
+    }
+    if (recorded !== undefined) {
+        console.log(`PLAN_FIXTURE=${recorded} — arms are PINNED to a recorded plan, no live child runs`)
+    }
     const fx = await loadPlanningFixture('mx5')
     console.log(`fixture mx5: ${fx.featureForModel.length} chars (run 14's PROJECT.md)`)
 
@@ -60,7 +107,9 @@ async function main(): Promise<void> {
 
     for (let rep = 1; rep <= reps; rep++) {
         const plan = async (noBatchRule: boolean): Promise<string[]> =>
-            reconcileTitleSources(
+            recorded !== undefined ?
+                RECORDED_PLANS[recorded]
+            :   reconcileTitleSources(
                 parseDecomposeList(
                     await runPlanningChild(
                         fx.cwd,
@@ -142,6 +191,32 @@ async function main(): Promise<void> {
             + `\nhost rewrite: ${sweeps} scoped sweep(s), ${drops} drop(s)`
             + `\ncoverage reduced: ${coverageReduced}/${reps} (must be 0)`
     )
+
+    // The four numbers above are NOT a verdict: on 2026-07-20 all four read zero
+    // and the run was mistaken for a pass. Everything is decided below.
+    reportAb({
+        name: 'live-batch-test-ab',
+        reps,
+        targetShape:
+            'a whole-project batch test title (e.g. "Write component and page tests — '
+            + '… for all components and pages") in a decompose plan whose decisions '
+            + 'channel mandates tests in the same change',
+        baselineHits: baselineBatch,
+        treatmentHits: treatmentBatch,
+        invariants: [
+            {
+                label: 'the host rewrite never reduces grounded coverage (run-12 lesson)',
+                ok: coverageReduced === 0,
+                detail: `${coverageReduced}/${reps} rep(s) lost coverage`
+            },
+            {
+                // A treatment column of zero reached by doing nothing is not a win.
+                label: 'the host rewrite acted on every baseline batch title it was handed',
+                ok: baselineBatch === 0 || sweeps + drops > 0,
+                detail: `${sweeps} sweep(s) + ${drops} drop(s) across ${baselineBatch} baseline hit(s)`
+            }
+        ]
+    })
 }
 
 main().catch(err => {

@@ -33,6 +33,7 @@ import {phaseGrill} from '../src/task/phases.js'
 import type {PhaseDeps} from '../src/task/child-runner.js'
 import {USER_CANCELLED} from '../src/task/child-runner.js'
 import {findSynthesizedApis} from '../src/task/api-synthesis.js'
+import {reportArm} from './ab-verdict.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
 import {getConfig} from '../src/config/config.js'
 import {YOLO_STAMP} from '../src/task/yolo.js'
@@ -264,6 +265,32 @@ async function main(): Promise<void> {
             + `promoted-API ${sum(r => r.promotedApi)}`
     )
     fs.writeFileSync(path.join(ROOT, `${mode}-${fixture}.json`), JSON.stringify(results, null, 2))
+
+    // A trial where the grill surfaced no question at all cannot distinguish "YOLO
+    // answered it before the prompt" from "there was nothing to answer".
+    const trialsWithQuestions = results.filter(r => r.answers > 0 || r.promptsReached > 0).length
+    reportArm({
+        name: 'live-yolo-ab',
+        arm: `${mode}/${fixture}`,
+        reps: results.length,
+        targetShape: 'a grill question reaching SessionUI.ask (captured.selects records the attempt)',
+        hits: results.filter(r => r.promptsReached > 0).length,
+        witnessed: trialsWithQuestions,
+        expect: mode === 'baseline' ? 'some' : 'none',
+        invariants: [
+            {
+                // The anti-synthesis demotion must come back as a skip, never an accept.
+                label: 'no unverified API identifier survives in a YOLO-ACCEPTED answer',
+                ok: sum(r => r.promotedApi) === 0,
+                detail: `${sum(r => r.promotedApi)} promoted`
+            },
+            {
+                label: 'every YOLO-picked answer carries the (YOLO) stamp',
+                ok: mode === 'baseline' || sum(r => r.stamped) === sum(r => r.accepted),
+                detail: `${sum(r => r.stamped)} stamped of ${sum(r => r.accepted)} accepted`
+            }
+        ]
+    })
 }
 
 main().catch(e => {

@@ -71,6 +71,7 @@ import * as os from 'node:os'
 import {openCache} from '../src/workers/docs-cache.js'
 import {projectDocsRaw} from '../src/workers/docs-project.js'
 import {retrieveChunks, type RetrievedChunk} from '../src/workers/docs-retrieve.js'
+import {reportAb} from './ab-verdict.js'
 
 const args = process.argv.slice(2)
 const repo =
@@ -254,4 +255,27 @@ if (verbose) {
         console.log(`  ${(100 * s.base.share).toFixed(1)}%  [${s.target}]  ${s.q.slice(0, 70)}`)
     }
 }
+
+// The target shape is a BASELINE MISS: a query that names a file the baseline
+// retrieval fails to return any of. With zero such queries there is nothing for
+// the tokenizer/scoping to recover and the corpus proves nothing — ABSTAIN.
+// Retrieval is a reduction, not an elimination, so treatment need only beat
+// baseline strictly; the degradation invariant is what keeps that honest.
+const treatMisses = rows.filter(r => !r.treat.present)
+const degraded = rows.filter(r => r.base.present && !r.treat.present)
+reportAb({
+    name: 'live-project-docs-retrieval-ab',
+    reps: n,
+    targetShape: 'a query that names a project file which baseline retrieval returns none of',
+    baselineHits: misses.length,
+    treatmentHits: treatMisses.length,
+    requireTreatmentZero: false,
+    invariants: [
+        {
+            label: 'no query the baseline already retrieved is lost by the treatment',
+            ok: degraded.length === 0,
+            detail: `${degraded.length} regression(s)${degraded.length ? `: ${degraded.slice(0, 3).map(d => d.target).join(', ')}` : ''}`
+        }
+    ]
+})
 cache.close()

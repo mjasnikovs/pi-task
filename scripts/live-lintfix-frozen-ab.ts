@@ -34,6 +34,7 @@ import {runBoundedLintFix, buildLintFixPrompt, type LintFixDeps} from '../src/ta
 import {runChild} from '../src/task/child-runner.js'
 import {frozenPathsFromSpec} from '../src/task/frozen-path-guard.js'
 import {extractProhibitions, findProhibitionViolations} from '../src/task/prohibition-probe.js'
+import {reportArm} from './ab-verdict.js'
 
 const ROOT = '/home/edgars/tmp/lintfix-frozen-ab'
 const CHILD_TIMEOUT_MS = 15 * 60_000
@@ -137,6 +138,8 @@ interface TrialResult {
     workPreserved: boolean
     rule4bFindings: string[]
     lintExit: number
+    /** The lint-fix child edited SOMETHING — the precondition for the verdict. */
+    attempted: boolean
 }
 
 type Mode = 'baseline' | 'treatment' | 'suspenders'
@@ -206,7 +209,19 @@ async function runTrial(mode: Mode, n: number): Promise<TrialResult> {
         changed.map(p2 => ({path: p2, addedLines: 1}))
     )
     const lint = await sh(dir, 'bun', ['run', 'lint'])
-    return {ok, reason, tsconfigDirtyAfter, ctFilesDeleted, workPreserved, rule4bFindings, lintExit: lint.exitCode}
+    return {
+        ok,
+        reason,
+        tsconfigDirtyAfter,
+        ctFilesDeleted,
+        workPreserved,
+        rule4bFindings,
+        lintExit: lint.exitCode,
+        // Precondition for the whole experiment: the lint-fix child has to have
+        // EDITED something. A trial where it produced no diff leaves tsconfig clean
+        // for the trivial reason, and says nothing about the frozen-path guard.
+        attempted: changed.length > 0
+    }
 }
 
 async function main(): Promise<void> {
@@ -228,8 +243,10 @@ async function main(): Promise<void> {
     let reportedOkWhileViolating = 0
     let rule4bWouldFail = 0
     let workLost = 0
+    let attempted = 0
     for (let t = 1; t <= trials; t++) {
         const r = await runTrial(mode, t)
+        if (r.attempted) attempted++
         const violating = r.tsconfigDirtyAfter
         if (violating) frozenEditSurvived++
         if (violating && r.ok) reportedOkWhileViolating++
@@ -250,6 +267,28 @@ async function main(): Promise<void> {
     console.log(`  lint-fix reported ok WHILE planting a frozen-path violation: ${reportedOkWhileViolating}/${trials}`)
     console.log(`  verify rule-4b would FAIL the task: ${rule4bWouldFail}/${trials}`)
     console.log(`  task work lost: ${workLost}/${trials}`)
+
+    // Baseline must SHOW the frozen edit surviving; treatment must suppress it. Run
+    // one arm at a time, so each arm is judged against its own expectation and a
+    // clean-but-inert arm abstains rather than reading as a win.
+    reportArm({
+        name: 'live-lintfix-frozen-ab',
+        arm: mode,
+        reps: trials,
+        targetShape:
+            'a spec-frozen tsconfig.json edit surviving the lint-fix pass (ESLint tells '
+            + 'the child to make it)',
+        hits: frozenEditSurvived,
+        witnessed: attempted,
+        expect: mode === 'baseline' ? 'some' : 'none',
+        invariants: [
+            {
+                label: "the task's own work is never destroyed by the pass",
+                ok: workLost === 0,
+                detail: `${workLost}/${trials} trial(s) lost describeFeature`
+            }
+        ]
+    })
 }
 
 main().catch(e => {

@@ -25,6 +25,7 @@ import {
     type ReqMapping
 } from '../src/task/requirements.js'
 import {decideAdoption, groundedCoverage} from '../src/task/coverage-loop.js'
+import {reportAb} from './ab-verdict.js'
 
 // A real, NON-web spec (a CLI) with genuine NEGATIVE requirements — the un-ownable
 // class that drove mx5 run 12. The good plan owns the --json area; the dropping
@@ -155,6 +156,25 @@ async function main() {
         `[LIVE A/B] un-ownable negatives that mapped NONE on the good plan: `
             + `${negLeakBaseline} (baseline: forced regen; treatment: carried cross-cutting)`
     )
+
+    // The measured shape is the LOSS of the area, so the counts invert here: a
+    // trial in which the arm kept it is a trial in which the defect did not occur.
+    reportAb({
+        name: 'live-coverage-ab',
+        reps: trials,
+        targetShape:
+            `the --json area DROPPED from the adopted plan (marker "${DROPPED_MARK}" absent) `
+            + 'after a regeneration that owns a report area instead',
+        baselineHits: trials - baselineKept,
+        treatmentHits: trials - treatmentKept,
+        invariants: [
+            {
+                label: 'the un-ownable negatives were actually present in the model output',
+                ok: negLeakBaseline > 0,
+                detail: `${negLeakBaseline} negative(s) mapped NONE on the good plan`
+            }
+        ]
+    })
 }
 
 main().catch(e => {

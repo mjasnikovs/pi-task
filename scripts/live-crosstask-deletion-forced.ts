@@ -32,6 +32,7 @@ import {runChild} from '../src/task/child-runner.js'
 import {frozenPathsFromSpec} from '../src/task/frozen-path-guard.js'
 import {taskThatIntroduced} from '../src/task/task-provenance.js'
 import {parseTreeChanges} from '../src/task/write-guard.js'
+import {reportArm} from './ab-verdict.js'
 
 const ROOT = '/home/edgars/tmp/crosstask-deletion-ab'
 const CHILD_TIMEOUT_MS = 15 * 60_000
@@ -232,8 +233,16 @@ async function main(): Promise<void> {
     let okWhileDeleting = 0
     let restoredAndNamed = 0
     let workLost = 0
+    // The forced fixture is supposed to make the child delete the sibling task's
+    // files. Whether it actually did is the precondition for everything measured
+    // here — and in the treatment arm the guard RESTORES them, so the tree alone
+    // cannot witness it; the guard's own reason string is the other half.
+    let deletionOccurred = 0
     for (let t = 1; t <= trials; t++) {
         const r = await runTrial(mode, t)
+        if (r.ctDeletedAfter > 0 || r.ctOnDisk < 2 || (r.reason ?? '').startsWith('cross-task-deletion:')) {
+            deletionOccurred++
+        }
         if (r.ok && r.ctOnDisk < 2) okWhileDeleting++
         if (!r.ok && (r.reason ?? '').startsWith('cross-task-deletion:') && r.ctOnDisk === 2) {
             restoredAndNamed++
@@ -251,6 +260,30 @@ async function main(): Promise<void> {
     console.log(`  pass returned ok WHILE ct files deleted (the hole): ${okWhileDeleting}/${trials}`)
     console.log(`  guard restored files + named owner: ${restoredAndNamed}/${trials}`)
     console.log(`  task work lost: ${workLost}/${trials}`)
+
+    reportArm({
+        name: 'live-crosstask-deletion-forced',
+        arm: mode,
+        reps: trials,
+        targetShape:
+            "the pass returning ok WHILE the sibling task's files are deleted — "
+            + 'the hole the cross-task deletion guard closes',
+        hits: okWhileDeleting,
+        witnessed: deletionOccurred,
+        expect: mode === 'forced-baseline' ? 'some' : 'none',
+        invariants: [
+            {
+                label: 'the treatment restores the files AND names the owning task',
+                ok: mode === 'forced-baseline' || restoredAndNamed > 0,
+                detail: `${restoredAndNamed}/${trials} restored-and-named`
+            },
+            {
+                label: "the task's own work survives the guard",
+                ok: workLost === 0,
+                detail: `${workLost}/${trials} lost`
+            }
+        ]
+    })
 }
 
 main().catch(e => {

@@ -1,4 +1,10 @@
 /**
+ * NOT A VERDICT HARNESS. This is a RECORDER: it drives the planning children and
+ * writes per-rep JSONL to /tmp for a human to read. It renders no PASS/FAIL and
+ * exits 0 on any outcome, deliberately — there is no lever under test here.
+ * Harnesses that DO test a lever must end in scripts/ab-verdict.ts's report(),
+ * so that a run which exercised nothing ABSTAINs instead of reading as a pass.
+ *
  * A/B harness for /task-auto PLANNING children against the LIVE local model
  * (llama-server at 127.0.0.1:8080 — an HTTP API, so a pi child is just a
  * client; no second weights load).

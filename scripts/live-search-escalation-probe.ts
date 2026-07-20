@@ -41,6 +41,7 @@ import * as path from 'node:path'
 import {runWorker} from '../src/workers/pi-worker-core.js'
 import {RESEARCH_SEARCH_HINT} from '../src/task/phases.js'
 import {appendNoThink} from '../src/task/prompts.js'
+import {reportArm} from './ab-verdict.js'
 
 if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
     console.error(
@@ -165,7 +166,7 @@ if (!(fixture in FIXTURES)) {
 }
 const PROMPT = appendNoThink(FIXTURES[fixture] + RESEARCH_SEARCH_HINT)
 
-async function trial(n: number): Promise<boolean> {
+async function trial(n: number): Promise<{searched: boolean; docs: number}> {
     const dir = path.join(ROOT, `${fixture}-${n}`)
     fs.rmSync(dir, {recursive: true, force: true})
     fs.mkdirSync(dir, {recursive: true})
@@ -190,13 +191,39 @@ async function trial(n: number): Promise<boolean> {
     const docs = lines.filter(l => l.startsWith('pi-worker-docs')).length
     const searched = lines.some(l => l.startsWith('pi-worker-search'))
     console.log(`  trial ${n}: docs=${docs} search=${searched ? 'YES' : 'no'}`)
-    return searched
+    return {searched, docs}
 }
 
 console.log(`live search-escalation probe — fixture=${fixture}, trials=${trials}`)
 let escalated = 0
+let researched = 0
 for (let i = 1; i <= trials; i++) {
     // One child at a time, deliberately serial.
-    escalated += (await trial(i)) ? 1 : 0
+    const r = await trial(i)
+    escalated += r.searched ? 1 : 0
+    // Precondition: the child has to CONSULT docs before it can escalate FROM docs.
+    // A trial where it never called docs at all measures nothing about escalation.
+    researched += r.docs > 0 ? 1 : 0
 }
 console.log(`\nescalated to search in ${escalated}/${trials} trial(s)`)
+
+reportArm({
+    name: 'live-search-escalation-probe',
+    arm: `probe/${fixture}`,
+    reps: trials,
+    targetShape:
+        'a research worker escalating to pi-worker-search after the stubbed docs tool '
+        + 'returns a real-shaped answer that lacks the requested fact',
+    hits: escalated,
+    witnessed: researched,
+    expect: 'some',
+    invariants: [
+        {
+            // Recorded at 5/5 on both fixtures; the seam is saturated, so anything
+            // short of that is the regression this probe exists to catch.
+            label: 'escalation is saturated (every trial escalates, as measured 2026-07-18)',
+            ok: escalated === trials,
+            detail: `${escalated}/${trials}`
+        }
+    ]
+})

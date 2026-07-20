@@ -43,6 +43,7 @@ import {
     checkpointsCrossed
 } from '../src/task/cancel-points.js'
 import {armCancelListener, disarmCancelListener} from '../src/task/cancel-input.js'
+import {reportArm} from './ab-verdict.js'
 import {writeTaskFile, readTaskFile} from '../src/task/task-io.js'
 import {findResumableAuto, parseTaskList} from '../src/task/auto-io.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
@@ -309,3 +310,25 @@ console.log(
         + `worst seam ${Math.round(Math.max(...rows.map(r => r.wastedS)) / 60)} min; `
         + `all-resumable=${rows.every(r => r.resumable)}`
 )
+
+// Target shape: a seam where the cancel request did NOT stop the run promptly and
+// further phase children ran anyway. A seam that never reached a checkpoint at all
+// ('(never polled)') witnessed nothing — the observation layer, not the cancel
+// latency, is what failed there.
+reportArm({
+    name: 'cancel-latency-ab',
+    arm: ARM,
+    reps: rows.length,
+    targetShape: 'a seam where phase children kept running after the cancel was requested',
+    hits: rows.filter(r => r.phasesAfter > 0).length,
+    witnessed: rows.filter(r => r.stopPoint !== '(never polled)').length,
+    expect: ARM === 'baseline' ? 'some' : 'none',
+    invariants: [
+        {
+            // Cancelling must never orphan the run: /task-auto-resume has to find it.
+            label: 'every cancelled run stays resumable',
+            ok: rows.every(r => r.resumable),
+            detail: `${rows.filter(r => r.resumable).length}/${rows.length} resumable`
+        }
+    ]
+})

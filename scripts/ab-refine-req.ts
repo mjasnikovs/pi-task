@@ -1,4 +1,7 @@
 /**
+ * NOT A VERDICT HARNESS — a RECORDER (see scripts/ab-planning.ts's header). It
+ * writes per-rep JSONL for a human to compare across arms and exits 0 regardless.
+ *
  * A/B: does the carried cross-cutting requirements block (goal C) actually land
  * the spec's mandated test methodology in a task's REFINED spec?
  *

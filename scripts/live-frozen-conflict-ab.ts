@@ -45,6 +45,7 @@ import * as path from 'node:path'
 import {existsSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {phaseCompose, phaseCritique} from '../src/task/phases.js'
+import {reportArm} from './ab-verdict.js'
 import {
     runPhaseChild,
     runWithEmphasisRetry,
@@ -425,6 +426,27 @@ async function main(): Promise<void> {
     console.log(`  DELIVERED spec still carries the pair:        ${finalHadPair}/${trials}`)
     console.log(`  pair present in draft AND resolved by critique: ${resolved}/${trials}`)
     console.log(`  resolutions: ${resolutions.join(', ')}`)
+
+    // The compose draft carrying the unsatisfiable pair IS the precondition: if the
+    // draft never contains it, a clean DELIVERED spec is not the critique working.
+    reportArm({
+        name: 'live-frozen-conflict-ab',
+        arm: mode,
+        reps: trials,
+        targetShape:
+            'a DELIVERED spec that still carries the unsatisfiable frozen/requires-edit '
+            + 'pair the compose draft introduced',
+        hits: finalHadPair,
+        witnessed: draftHadPair,
+        expect: mode.endsWith('baseline') ? 'some' : 'none',
+        invariants: [
+            {
+                label: 'no trial ended in a child error (errors are not evidence either way)',
+                ok: !resolutions.includes('error'),
+                detail: `${resolutions.filter(r => r === 'error').length}/${trials} errored`
+            }
+        ]
+    })
 }
 
 main().catch(e => {

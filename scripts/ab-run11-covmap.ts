@@ -1,4 +1,7 @@
 /**
+ * NOT A VERDICT HARNESS — a RECORDER (see scripts/ab-planning.ts's header). It
+ * writes per-rep JSONL for a human to read and exits 0 regardless.
+ *
  * Regression measurement (goal A): map extracted requirements against the
  * FROZEN run-11 plan — the 9 real titles, which carry no test tasks. The §10
  * testing requirements must come out CROSS-CUTTING or NONE (i.e. the host-side

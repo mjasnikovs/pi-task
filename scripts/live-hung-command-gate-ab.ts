@@ -44,6 +44,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {runWorker} from '../src/workers/pi-worker-core.js'
+import {reportAb} from './ab-verdict.js'
 
 const CAP_MS = Number(process.argv[2] ?? 240) * 1000
 /**
@@ -100,7 +101,7 @@ async function arm(
     timeoutMs: number,
     capMs: number,
     commandTimeoutMs = 0
-): Promise<void> {
+): Promise<{capped: boolean; toolCalls: number; commandKilled: boolean}> {
     console.log(
         `\n=== ARM ${label} — timeoutMs: ${timeoutMs}, `
             + `commandTimeoutMs: ${commandTimeoutMs}, cap ${capMs / 1000}s ===`
@@ -113,6 +114,7 @@ async function arm(
         outer.abort()
     }, capMs)
     let toolCalls = 0
+    let commandKilled = false
 
     try {
         const r = await runWorker({
@@ -138,6 +140,7 @@ async function arm(
                 + `timedOut=${r.timedOut ?? false} stalled=${r.stalled ?? false} `
                 + `commandTimedOut=${r.commandTimedOut ? JSON.stringify(r.commandTimedOut) : 'false'}`
         )
+        commandKilled = Boolean(r.commandTimedOut)
         console.log(`  text: ${JSON.stringify(r.text.slice(0, 160))}`)
     } catch (e) {
         console.log(`  THREW after ${elapsed(started)}: ${String(e).slice(0, 200)}`)
@@ -151,12 +154,39 @@ async function arm(
     console.log(`  hung verify.sh still alive: ${alive ? 'YES\n    ' + alive.replace(/\n/g, '\n    ') : 'no'}`)
     Bun.spawnSync(['bash', '-lc', `pkill -f 'verify\\.sh' || true`])
     await Bun.sleep(500)
+    return {capped, toolCalls, commandKilled}
 }
 
 buildFixture()
 console.log(`PI_BIN=${process.env.PI_BIN ?? '(unset)'}  fixture=${FIXTURE}`)
 // A — the pre-fix gate child: unbounded worker, no per-command ceiling.
-await arm('A: baseline (pre-fix gate child)', 0, CAP_MS)
+const a = await arm('A: baseline (pre-fix gate child)', 0, CAP_MS)
 // B — the fix: worker still unbounded (gates must run to completion), but each
 // single command is now bounded by the command watchdog.
-await arm('B: treatment (command watchdog on)', 0, CAP_MS, 30_000)
+const b = await arm('B: treatment (command watchdog on)', 0, CAP_MS, 30_000)
+
+// If arm A did NOT hang, the fixture failed to reproduce the condition the
+// watchdog exists for, and arm B surviving proves nothing about the watchdog.
+// That is an ABSTAIN, and before this verdict existed the script simply printed
+// its timings and exited 0 either way.
+reportAb({
+    name: 'live-hung-command-gate-ab',
+    reps: 1,
+    targetShape:
+        `a gate child that never returns — hung on the fixture's non-terminating `
+        + `verify.sh until this probe's own ${CAP_MS / 1000}s outer cap`,
+    baselineHits: a.capped ? 1 : 0,
+    treatmentHits: b.capped ? 1 : 0,
+    invariants: [
+        {
+            label: 'the treatment killed the command via the watchdog, not via the outer cap',
+            ok: b.commandKilled,
+            detail: `commandTimedOut=${b.commandKilled}`
+        },
+        {
+            label: 'the treatment child reached a real verdict (it kept calling tools after the kill)',
+            ok: b.toolCalls > a.toolCalls,
+            detail: `arm A ${a.toolCalls} tool result(s), arm B ${b.toolCalls}`
+        }
+    ]
+})

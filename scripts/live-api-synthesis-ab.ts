@@ -65,6 +65,7 @@ import {findSkipEscapes, skipEscapeDefectText} from '../src/task/skip-escape.js'
 import {findAbsenceConflicts, absenceProbeText} from '../src/task/verify-reconcile.js'
 import {findFrozenPathConflicts, frozenConflictProbeText} from '../src/task/frozen-conflict.js'
 import {findSynthesizedApis} from '../src/task/api-synthesis.js'
+import {reportArm} from './ab-verdict.js'
 import {findGrepOnlyVerify} from '../src/task/verify-quality.js'
 
 const ROOT = '/home/edgars/tmp/api-synthesis-ab'
@@ -376,7 +377,10 @@ function makeDeps(dir: string, abort: AbortController): PhaseDeps {
     }
 }
 
-async function runAnswerTrial(mode: Mode, n: number): Promise<void> {
+/** Per-fixture outcome: `completed` is the precondition, `hit` the target shape. */
+type TrialTally = {completed: number; hit: number}
+
+async function runAnswerTrial(mode: Mode, n: number, tally: TrialTally): Promise<void> {
     for (const fx of ANSWER_FIXTURES) {
         const dir = path.join(ROOT, `${mode}-${fx.name}-t${n}`)
         buildFixture(dir)
@@ -412,6 +416,8 @@ async function runAnswerTrial(mode: Mode, n: number): Promise<void> {
                     2
                 )
             )
+            tally.completed++
+            if (promoted && hallucinated) tally.hit++
             console.log(
                 `[${mode} ${fx.name} t${n}] kind=${parsed.kind}`
                     + ` promoted-hallucination=${promoted && hallucinated}`
@@ -426,7 +432,7 @@ async function runAnswerTrial(mode: Mode, n: number): Promise<void> {
     }
 }
 
-async function runVerifyTrial(mode: Mode, n: number): Promise<void> {
+async function runVerifyTrial(mode: Mode, n: number, tally: TrialTally): Promise<void> {
     const dir = path.join(ROOT, `${mode}-t${n}`)
     buildFixture(dir)
     const abort = new AbortController()
@@ -447,6 +453,10 @@ async function runVerifyTrial(mode: Mode, n: number): Promise<void> {
         const finalFindings = findGrepOnlyVerify(final)
         const cmds = parseVerifyBlock(final) ?? []
         const executesDeliverable = cmds.some(c => /\bbun\s+(run\s+)?build(\.ts)?\b/.test(c.raw))
+        // Precondition: a spec with a real VERIFY block actually came out the far
+        // end. Judging "no theater" on a spec that has no VERIFY block is vacuous.
+        if (cmds.length > 0) tally.completed++
+        if (finalFindings.length > 0) tally.hit++
         console.log(
             `[${mode} t${n}] draft-theater=${draftTheater}`
                 + ` | FINAL-theater=${finalFindings.length > 0}`
@@ -488,10 +498,29 @@ async function main(): Promise<void> {
         process.exit(1)
     }
     const trials = parseInt(process.argv[3] ?? '5', 10)
+    const answering = mode.startsWith('answer')
+    const tally: TrialTally = {completed: 0, hit: 0}
     for (let t = 1; t <= trials; t++) {
-        if (mode.startsWith('answer')) await runAnswerTrial(mode, t)
-        else await runVerifyTrial(mode, t)
+        if (answering) await runAnswerTrial(mode, t, tally)
+        else await runVerifyTrial(mode, t, tally)
     }
+
+    // The answer arm runs every fixture per trial, so its denominator is trials ×
+    // fixtures; the verify arm is one spec per trial.
+    const reps = answering ? trials * ANSWER_FIXTURES.length : trials
+    reportArm({
+        name: 'live-api-synthesis-ab',
+        arm: mode,
+        reps,
+        targetShape:
+            answering ?
+                'an ACCEPTED answer promoting an API identifier that appears nowhere in '
+                + 'the research (the Bun.mkdirSync class)'
+            :   'grep-only VERIFY theater surviving into the delivered spec',
+        hits: tally.hit,
+        witnessed: tally.completed,
+        expect: mode.endsWith('baseline') ? 'some' : 'none'
+    })
 }
 
 main().catch(e => {

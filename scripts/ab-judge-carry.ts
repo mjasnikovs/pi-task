@@ -35,6 +35,7 @@ import {
 } from '../src/task/requirements.js'
 import {DECOMPOSE_COVERAGE_PROMPT} from '../src/task/auto-prompts.js'
 import {parseCoverageVerdict} from '../src/task/auto-io.js'
+import {reportAb} from './ab-verdict.js'
 
 const MX5 = '/home/edgars/hub/mx5'
 const SPEC_FILE = path.join(MX5, 'DESIGN/PROJECT.md')
@@ -112,6 +113,7 @@ async function main() {
         /\btest\b/i.test(area) && /(infra|database|db|migration|truncate|test:ct|runner|harness|setup|fixture)/i.test(area)
 
     let baselineDropped = 0 // judge-only areas baseline loses, summed over trials
+    let trialsBaselineDropped = 0 // trials in which baseline lost at least one — the verdict denominator
     let treatmentDropped = 0 // treatment loses none by construction — sanity check
     let testInfraSurvivedTreatment = 0
     let testInfraDroppedBaseline = 0
@@ -127,6 +129,7 @@ async function main() {
         const groundedNorm = new Set(groundedCarried.map(normLine))
         const carried = judgeMissing.filter(a => !groundedNorm.has(normLine(a)))
         baselineDropped += carried.length
+        if (carried.length > 0) trialsBaselineDropped++
         // Treatment carries grounded ∪ judge, so it drops nothing the judge saw.
         treatmentDropped += 0
 
@@ -152,6 +155,27 @@ async function main() {
         `[LIVE A/B] test-infra area — baseline dropped it in ${testInfraDroppedBaseline}/${trials} trials, `
             + `treatment carried it in ${testInfraSurvivedTreatment}/${trials}`
     )
+
+    // Treatment carries grounded ∪ judge by construction, so its column is zero as a
+    // matter of arithmetic, not evidence. The ONLY thing this harness can establish
+    // live is that the baseline actually loses areas on real model output — so a
+    // trial set where the judge flagged nothing extra must ABSTAIN, not pass.
+    reportAb({
+        name: 'ab-judge-carry',
+        reps: trials,
+        targetShape:
+            'a judge-flagged feature area with no grounded requirement backing it — the '
+            + 'judge-only channel the pre-#1 carry drops on the floor',
+        baselineHits: trialsBaselineDropped,
+        treatmentHits: 0,
+        invariants: [
+            {
+                label: 'the §10 test-infra area specifically survives into requirements.md',
+                ok: testInfraDroppedBaseline === 0 || testInfraSurvivedTreatment === testInfraDroppedBaseline,
+                detail: `baseline dropped ${testInfraDroppedBaseline}, treatment carried ${testInfraSurvivedTreatment}`
+            }
+        ]
+    })
 }
 
 main().catch(e => {
