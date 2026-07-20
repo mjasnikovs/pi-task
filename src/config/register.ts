@@ -7,7 +7,13 @@ import {
     SEARCH_PROVIDER_LABELS,
     providerForLabel
 } from '../workers/search-types.js'
-import {COMMAND_TIMEOUT_OPTIONS, getConfig, saveConfig, type PiTaskConfig} from './config.js'
+import {
+    COMMAND_TIMEOUT_OPTIONS,
+    getConfig,
+    saveConfig,
+    STREAM_INACTIVITY_OPTIONS,
+    type PiTaskConfig
+} from './config.js'
 import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
@@ -131,6 +137,20 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
         values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
     },
     {
+        id: 'streamInactivityMs',
+        label: 'stream watchdog',
+        description:
+            'Abort and retry a model request whose stream goes SILENT for this long — a hung '
+            + 'or dropped stream reports no error at all, so nothing else catches it (mx5 run '
+            + '14 lost ~2.9h to three of them while the model server stayed healthy). Counts '
+            + 'time since the last stream event of any kind, so a slow model that keeps '
+            + 'emitting tokens is never touched, and it pauses while a tool runs. Keep it '
+            + 'generous on local backends: prompt processing on a large context legitimately '
+            + 'emits nothing for minutes. off disables it on both the main session and children',
+        // Display human labels; the stored config value stays the ms number.
+        values: STREAM_INACTIVITY_OPTIONS.map(o => o.label)
+    },
+    {
         id: 'yoloMode',
         label: 'yolo mode',
         description:
@@ -148,10 +168,16 @@ function timeoutLabel(ms: number): string {
     return COMMAND_TIMEOUT_OPTIONS.find(o => o.ms === ms)?.label ?? `${ms}ms`
 }
 
+/** Human label for the stored stream-inactivity ms (falls back to the raw ms). */
+function streamTimeoutLabel(ms: number): string {
+    return STREAM_INACTIVITY_OPTIONS.find(o => o.ms === ms)?.label ?? `${ms}ms`
+}
+
 /** What /task-config shows for a setting's current value. */
 function displayValue(cfg: PiTaskConfig, id: keyof PiTaskConfig, isEnum: boolean): string {
     if (id === 'searchProvider') return SEARCH_PROVIDER_LABELS[cfg.searchProvider]
     if (id === 'requestTimeoutMs') return timeoutLabel(cfg.requestTimeoutMs)
+    if (id === 'streamInactivityMs') return streamTimeoutLabel(cfg.streamInactivityMs)
     if (isEnum) return String(cfg[id])
     return cfg[id] ? 'on' : 'off'
 }
@@ -251,6 +277,9 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                     } else if (id === 'requestTimeoutMs') {
                         const opt = COMMAND_TIMEOUT_OPTIONS.find(o => o.label === newValue)
                         if (opt) cfg.requestTimeoutMs = opt.ms
+                    } else if (id === 'streamInactivityMs') {
+                        const opt = STREAM_INACTIVITY_OPTIONS.find(o => o.label === newValue)
+                        if (opt) cfg.streamInactivityMs = opt.ms
                     } else {
                         ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
                     }

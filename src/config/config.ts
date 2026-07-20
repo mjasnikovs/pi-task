@@ -3,6 +3,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import {isSearchProvider, type SearchProvider} from '../workers/search-types.js'
+import {DEFAULT_STREAM_INACTIVITY_MS} from '../shared/stream-watchdog.js'
 
 export interface PiTaskConfig {
     remote: boolean
@@ -67,6 +68,26 @@ export interface PiTaskConfig {
      */
     requestTimeoutMs: number
     /**
+     * Inactivity ceiling (ms) on the MODEL STREAM before the stream watchdog
+     * aborts the request (shared/stream-watchdog.ts). A hung or silently-dropped
+     * stream throws nothing, so neither the connection-error retry (needs a
+     * reported error) nor the command watchdog (covers tool calls only) nor the
+     * child stall guard (a reachable endpoint is proof of life) can see it — mx5
+     * run 14 lost ~2.9h to three such hangs while the model server stayed healthy.
+     *
+     * Measured as time since the LAST stream event of any kind, so a slow model
+     * emitting one token every 30s is never touched; only total silence counts.
+     * Suspended while a tool executes — that window is the command watchdog's.
+     *
+     * ONE knob, TWO surfaces: the MAIN session aborts the turn through the same
+     * plumbing the command watchdog uses and posts a resume reminder; a CHILD is
+     * killed and its result routed into the EXISTING connection-error retry.
+     * 0 = off, on both surfaces.
+     * DEFAULT 10 min: local prompt processing on a 32k context legitimately emits
+     * nothing for minutes, so a 60-120s ceiling would kill healthy long prompts.
+     */
+    streamInactivityMs: number
+    /**
      * UNATTENDED AUTO-PICK (see task/yolo.ts): wherever pi-task would stop and ask,
      * take the option it already marks RECOMMENDED, stamp the artifact `(YOLO)` so
      * an audit can tell a machine decided, and never notify. Lets a local model run
@@ -108,6 +129,27 @@ export function sanitizeRequestTimeoutMs(value: unknown): number {
         :   DEFAULT_REQUEST_TIMEOUT_MS
 }
 
+/**
+ * The stream-watchdog choices offered by /task-config, in cycle order. Every
+ * option is minutes, not seconds: the failure this guards costs hours, and the
+ * legitimate silence it must tolerate (local prompt processing) is minutes.
+ */
+export const STREAM_INACTIVITY_OPTIONS: ReadonlyArray<{label: string; ms: number}> = [
+    {label: '5 min', ms: 5 * 60_000},
+    {label: '10 min', ms: DEFAULT_STREAM_INACTIVITY_MS},
+    {label: '20 min', ms: 20 * 60_000},
+    {label: '30 min', ms: 30 * 60_000},
+    {label: 'off', ms: 0}
+] as const
+
+/** Same pinning as {@link sanitizeRequestTimeoutMs}: a hand-edited value that is
+ *  not one of the offered choices falls back to the default. */
+export function sanitizeStreamInactivityMs(value: unknown): number {
+    return STREAM_INACTIVITY_OPTIONS.some(o => o.ms === value) ?
+            (value as number)
+        :   DEFAULT_STREAM_INACTIVITY_MS
+}
+
 const DEFAULTS: PiTaskConfig = {
     remote: true,
     compressReasoning: true,
@@ -122,6 +164,7 @@ const DEFAULTS: PiTaskConfig = {
     searchProvider: 'exa',
     extensionWhitelist: [],
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    streamInactivityMs: DEFAULT_STREAM_INACTIVITY_MS,
     // OFF: auto-answering is for unattended throwaway runs only.
     yoloMode: false
 }
@@ -155,6 +198,7 @@ if (!G.loaded) {
         if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
         parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
         parsed.requestTimeoutMs = sanitizeRequestTimeoutMs(parsed.requestTimeoutMs)
+        parsed.streamInactivityMs = sanitizeStreamInactivityMs(parsed.streamInactivityMs)
         // A hand-edited `"yoloMode": "false"` is a truthy string — it must not
         // silently switch a watched run into unattended auto-pick. Only a real
         // boolean counts; anything else falls back to the OFF default.

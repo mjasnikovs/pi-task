@@ -20,6 +20,7 @@ import {
     MAX_LEAK_RETRIES
 } from '../shared/leaked-tool-call.js'
 import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+import {streamStallHint} from '../shared/stream-watchdog.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -129,6 +130,16 @@ export interface RunWorkerInput {
      * override the window/probe (tests, harnesses).
      */
     stall?: {afterMs?: number; probe?: () => Promise<boolean>} | false
+    /**
+     * Stream-inactivity ceiling in ms (shared/stream-watchdog.ts). The stall guard
+     * above cannot catch a HUNG stream on a HEALTHY backend — it reads a reachable
+     * endpoint as proof of life, which is exactly what run 14's three hangs looked
+     * like. This one asks nothing of the backend: no output for this long (with
+     * tool executions excluded) ⇒ kill and restart the attempt with
+     * {@link streamStallHint}, inside the same shared restart budget.
+     * 0 / omitted = off.
+     */
+    streamInactivityMs?: number
 }
 
 /**
@@ -218,6 +229,14 @@ export interface RunWorkerResult {
      * Check BEFORE `aborted`, same reasoning as `stalled`: the kill aborts too.
      */
     commandTimedOut?: {toolName: string; timeoutMs: number}
+    /**
+     * Set when the stream watchdog killed the worker's FINAL attempt: the model
+     * stream produced nothing for the configured window while no tool was running.
+     * Like loopHit/timedOut the text is partial — treat as a failure, and check it
+     * BEFORE `aborted` (the kill aborts too), or a hung backend is mislabeled a
+     * user cancel.
+     */
+    streamStalled?: {idleMs: number}
 }
 
 /**
@@ -382,6 +401,9 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                                     ?? (() => probeModelEndpoints(discoverModelEndpoints()))
                             }
                         }),
+                    ...(input.streamInactivityMs ?
+                        {streamInactivityMs: input.streamInactivityMs}
+                    :   {}),
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
                         cmdWatch?.onStart(call)
@@ -415,6 +437,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const text = result.text ?? ''
         const timedOut = timeout.timedOut()
         const commandKill = cmdWatch?.killed()
+        const streamStalled = result.streamStalled
 
         // A loop-kill gets the same restart-with-hint treatment every other phase
         // already gets (runPhaseWithLoopGuard) — name the offending call so the
@@ -439,6 +462,14 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             })
             restarts++
             hangKills++
+            continue
+        }
+        // A hung model stream is restartable on the same budget. Checked before
+        // the wall-clock timeout because it is the more specific diagnosis (and
+        // its hint does not blame the model: nothing it did caused the hang).
+        if (streamStalled && !loopHit && restarts < MAX_LOOP_RESTARTS) {
+            hint = streamStallHint(streamStalled.idleMs)
+            restarts++
             continue
         }
         // A wall-clock timeout (the backstop for varied thrash the exact-match
@@ -469,6 +500,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             ...(loopHit ? {loopHit} : {}),
             ...(timedOut ? {timedOut: true} : {}),
             ...(result.stalled ? {stalled: true} : {}),
+            ...(streamStalled ? {streamStalled} : {}),
             ...(commandKill ?
                 {
                     commandTimedOut: {

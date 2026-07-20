@@ -483,6 +483,11 @@ export function buildGateDeps(params: {
                         // ceiling the main session uses, so one /task-config knob
                         // covers implementation and gates alike.
                         commandTimeoutMs: getConfig().requestTimeoutMs,
+                        // Same reasoning one level up: a gate child with no
+                        // wall-clock cap also needs the HUNG-STREAM bound, which
+                        // the probe-based stall guard structurally cannot supply
+                        // (a healthy endpoint reads as proof of life).
+                        streamInactivityMs: getConfig().streamInactivityMs,
                         loop: {pathThreshold: Number.POSITIVE_INFINITY},
                         onLine: line => {
                             lastLine = line
@@ -650,6 +655,9 @@ export function buildGateDeps(params: {
                             // bash — wired anyway so a future tool grant can't quietly
                             // re-open the hole.
                             commandTimeoutMs: getConfig().requestTimeoutMs,
+                            // Unbounded wall clock here too — the hung-stream
+                            // bound is the only thing that ends a dead stream.
+                            streamInactivityMs: getConfig().streamInactivityMs,
                             // Exact-match loop guard only: pathThreshold Infinity
                             // disables the path-revisit heuristic, so revisiting one
                             // file (which IS this pass's job) never trips — only a

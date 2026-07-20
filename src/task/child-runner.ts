@@ -23,6 +23,8 @@ import {
     MAX_LEAK_RETRIES
 } from '../shared/leaked-tool-call.js'
 import {readSection, setTaskSection} from './task-io.js'
+import {streamStallCause} from '../shared/stream-watchdog.js'
+import {getConfig} from '../config/config.js'
 
 // ─── Loop detection constants ────────────────────────────────────────────────
 // Defined here (not in phases.ts) to avoid a circular dependency:
@@ -130,6 +132,11 @@ export async function runChild(
         signal,
         {
             mode: 'json-events',
+            // A hung model stream reports nothing at all, so without this the
+            // phase child waits forever (mx5 run 14: ~2.9h of dead air). The kill
+            // is reported below as a connection-class cause, which routes it into
+            // the retry/backoff path this file already has for a LOUD disconnect.
+            streamInactivityMs: getConfig().streamInactivityMs,
             onLine,
             onContextUsage,
             onToolCall: call => {
@@ -149,12 +156,22 @@ export async function runChild(
     // fails with the unhelpful "X child produced no output" — the raw
     // stdout/stderr that might contain the real error is discarded.
     const text = result.text || result.stdout.trim()
+    // The stream watchdog's kill leaves no provider error to report (that is the
+    // whole failure mode), so name it here rather than letting it surface as the
+    // meaningless "produced no output". Never overwrite a real reported cause.
+    const modelError =
+        result.modelError
+        ?? (result.streamStalled ? streamStallCause(result.streamStalled.idleMs) : undefined)
     return {
         text,
-        exitCode: result.exitCode,
+        // WE killed this child, so its exit status describes our own SIGTERM, not
+        // the child's verdict. Report 0 and let `modelError` carry the cause —
+        // otherwise the wrappers' `exitCode !== 0` guard throws a bare "child
+        // failed" before the connection-error retry ever gets to look.
+        exitCode: result.streamStalled ? 0 : result.exitCode,
         stderr: result.stderr.trim(),
         loopHit,
-        modelError: result.modelError,
+        modelError,
         // A tool call the model wrote as text (wrong dialect) never executed and
         // sailed past the structured-event guards above; flag it so the wrappers
         // can re-prompt instead of accepting the unexecuted call. Only meaningful

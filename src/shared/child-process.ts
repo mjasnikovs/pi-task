@@ -1,5 +1,6 @@
 import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
+import {realStreamTimerDeps, StreamWatchdog} from './stream-watchdog.js'
 
 /** Grace period between SIGTERM and SIGKILL (ms). */
 export const KILL_GRACE_MS = 5000
@@ -76,6 +77,15 @@ export interface ChildResult {
      * and without the flag it would mislabel as a user cancel.
      */
     stalled?: boolean
+    /**
+     * true when the STREAM watchdog killed the child: no output at all for the
+     * configured inactivity window, regardless of whether the backend answers a
+     * probe. Distinct from `stalled`, which requires an UNREACHABLE endpoint —
+     * the run-14 hangs had a perfectly healthy server and a dead stream, so the
+     * probe path could never fire. Callers must check this BEFORE `aborted`
+     * (the kill sets aborted too) and route it into the connection-error retry.
+     */
+    streamStalled?: {idleMs: number}
 }
 
 // ─── JSON event-stream types (for mode: 'json-events') ──────────────────────
@@ -152,6 +162,15 @@ export interface RunChildJsonEventsOptions {
      * report the real cause instead of hanging or mislabeling a user cancel.
      */
     stall?: {afterMs: number; probe: () => Promise<boolean>}
+    /**
+     * Stream-inactivity ceiling in ms (shared/stream-watchdog.ts). Unlike `stall`
+     * this asks NOTHING of the backend: a stream that has produced no bytes for
+     * this long is dead whether or not the server answers a health probe, which
+     * is exactly the run-14 shape (server Up(healthy), stream silent for hours).
+     * Any stdout/stderr chunk resets it, so a slow model emitting one token every
+     * 30s is never killed. 0 / omitted = off.
+     */
+    streamInactivityMs?: number
 }
 
 export type RunChildOptions = RunChildTextOptions | RunChildJsonEventsOptions
@@ -408,7 +427,46 @@ export function runChild(
             }, KILL_GRACE_MS)
         }
 
-        const sink = opts?.mode === 'json-events' ? new JsonEventSink(opts, killProc) : null
+        // Stream watchdog (json-events children only): a silent stream is killed
+        // even when the backend is healthy — the case the probe-based stall guard
+        // below structurally cannot catch. Suspended for the duration of a tool
+        // call: a 12-minute build legitimately emits nothing, and that window is
+        // the COMMAND watchdog's to police, not this one's.
+        let streamStalledIdleMs: number | undefined
+        const streamWatch =
+            opts?.mode === 'json-events' && (opts.streamInactivityMs ?? 0) > 0 ?
+                new StreamWatchdog({
+                    getTimeoutMs: () => opts.streamInactivityMs!,
+                    ...realStreamTimerDeps,
+                    onFire: idleMs => {
+                        streamStalledIdleMs = idleMs
+                        killProc()
+                    }
+                })
+            :   null
+        streamWatch?.start()
+
+        // The sink sees the child's parsed events; tool start/end are what tell
+        // the watchdog to pause and resume. Wrapping the caller's handlers keeps
+        // that wiring invisible to callers — and onToolResult must be present for
+        // the sink to emit tool_execution_end at all, so it is always supplied
+        // when the watchdog is on.
+        const sinkOpts: RunChildJsonEventsOptions | null =
+            opts?.mode !== 'json-events' ? null
+            : streamWatch ?
+                {
+                    ...opts,
+                    onToolCall: call => {
+                        streamWatch.suspend()
+                        return opts.onToolCall ? opts.onToolCall(call) : null
+                    },
+                    onToolResult: r => {
+                        streamWatch.resume()
+                        opts.onToolResult?.(r)
+                    }
+                }
+            :   opts
+        const sink = sinkOpts ? new JsonEventSink(sinkOpts, killProc) : null
 
         // Dead-backend stall guard (json-events children only; see the option
         // docs). Any output resets the window; a reachable probe also resets it
@@ -448,6 +506,7 @@ export function runChild(
         let firstByteFired = false
         proc.stdout?.on('data', (d: Buffer) => {
             lastActivity = Date.now()
+            streamWatch?.note()
             if (!firstByteFired) {
                 firstByteFired = true
                 opts?.onFirstByte?.()
@@ -459,10 +518,12 @@ export function runChild(
         })
         proc.stderr?.on('data', (d: Buffer) => {
             lastActivity = Date.now()
+            streamWatch?.note()
             stderr += d.toString()
         })
         proc.on('close', (code: number | null) => {
             if (stallTimer) clearInterval(stallTimer)
+            streamWatch?.stop()
             // The child has exited, but anything it backgrounded (a dev server) may
             // still hold its process group and a port — reap the group so the next
             // gate's boot check does not collide with our own orphan. Best-effort:
@@ -480,11 +541,15 @@ export function runChild(
                 aborted,
                 text,
                 modelError: sink?.modelError,
-                ...(stalled ? {stalled: true} : {})
+                ...(stalled ? {stalled: true} : {}),
+                ...(streamStalledIdleMs !== undefined ?
+                    {streamStalled: {idleMs: streamStalledIdleMs}}
+                :   {})
             })
         })
         proc.on('error', () => {
             if (stallTimer) clearInterval(stallTimer)
+            streamWatch?.stop()
             resolve({stdout, stderr, exitCode: 1, aborted})
         })
 
