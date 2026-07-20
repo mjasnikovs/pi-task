@@ -52,12 +52,32 @@ const VOLATILE: Array<[RegExp, string]> = [
     [/\bpids?\s*[:=]?\s*\d+/g, '<pid>'],
     [/(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]):\d+/g, '<addr>'],
     [/\bport\s*[:=]?\s*\d{2,5}\b/g, '<port>'],
-    [/:\d{2,5}\b/g, ':<port>'],
     // Long hex / uuid-ish ids (sha, container id, request id).
     [/\b0x[0-9a-f]+\b/g, '<hex>'],
     [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, '<uuid>'],
     [/\b[0-9a-f]{7,40}\b/g, '<hex>']
 ]
+
+/**
+ * A bare `:NNNN` port, which the localhost/`port N` rules above do not reach (a
+ * failure that just says "no listener on :3000").
+ *
+ * NOT applied when the colon follows a SOURCE LOCATION — `src/db.ts:41`,
+ * `Cart.tsx:88:12`. A failure detail embeds the failing command's output tail
+ * verbatim (final-gate.ts `r.tail`), and tsc/eslint/bun-test tails are mostly
+ * file:line. Collapsing those made two DIFFERENT defects in one file — the second
+ * uncovered by fixing the first — compare equal, which reads as non-progress and
+ * demotes a genuinely fixable check to UNOBSERVED debt. A moved error is progress.
+ */
+const BARE_PORT = /(\S*?):(\d{2,5})\b/g
+/** A path (has a separator) or a filename with an extension ⇒ a source location. */
+const SOURCE_LOCATION = /[/\\]|\.[a-z][a-z0-9]{0,4}$/
+
+function collapseBarePorts(s: string): string {
+    return s.replace(BARE_PORT, (whole, prefix: string) =>
+        SOURCE_LOCATION.test(prefix) ? whole : `${prefix}:<port>`
+    )
+}
 
 /**
  * Comparison key for a gate failure entry: lowercased, volatile substrings erased,
@@ -67,6 +87,7 @@ const VOLATILE: Array<[RegExp, string]> = [
 export function normalizeFailureDetail(detail: string): string {
     let s = detail.toLowerCase()
     for (const [re, repl] of VOLATILE) s = s.replace(re, repl)
+    s = collapseBarePorts(s)
     return s.replace(/\s+/g, ' ').trim()
 }
 

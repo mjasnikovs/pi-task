@@ -26,6 +26,28 @@ test('normalizeFailureDetail: real progress stays visible — counts are NOT col
     expect(sig('boot check: no listener')).not.toBe(sig('static checks: `make lint` exited 2'))
 })
 
+// A failure detail embeds the failing command's output tail verbatim, and those
+// tails are mostly file:line. Collapsing the line number made "fixed the error at
+// :41, uncovered a different one at :83" — real progress — compare equal, demoting
+// a fixable check to UNOBSERVED debt.
+test('normalizeFailureDetail: a moved source location is progress, not a repeat', () => {
+    expect(sig('`bun run typecheck` exited 2 — src/db.ts:41 error')).not.toBe(
+        sig('`bun run typecheck` exited 2 — src/db.ts:83 error')
+    )
+    expect(sig('TypeError at components/Cart.tsx:88')).not.toBe(
+        sig('TypeError at components/Cart.tsx:212')
+    )
+    expect(sig('error at lib/api.js:120:5')).not.toBe(sig('error at lib/api.js:120:9'))
+})
+
+test('normalizeFailureDetail: bare and host-attached ports still collapse', () => {
+    expect(sig('boot check: no listener on :3000')).toBe(sig('boot check: no listener on :5173'))
+    expect(sig('no socket on 127.0.0.1:3000')).toBe(sig('no socket on 127.0.0.1:5173'))
+    expect(sig('listening check failed on :8080 after 5000ms (pid 91)')).toBe(
+        sig('listening check failed on :4000 after 6100ms (pid 77)')
+    )
+})
+
 test('rankedFirstFailure: prefers the ranked list, degrades to the single reason', () => {
     expect(rankedFirstFailure({reason: 'a | b', failures: ['a', 'b']})).toBe('a')
     expect(rankedFirstFailure({reason: 'only'})).toBe('only')
