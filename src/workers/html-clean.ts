@@ -1,9 +1,7 @@
-import {readFileSync} from 'node:fs'
-import {fileURLToPath} from 'node:url'
-import {dirname, join} from 'node:path'
 import {parseHTML} from 'linkedom'
 import {Readability} from '@mozilla/readability'
 import TurndownService from 'turndown'
+import {readPkgVersion} from '../shared/pkg-version.js'
 
 export interface CleanResult {
     title: string
@@ -53,23 +51,9 @@ export function cleanHtml(html: string, baseUrl: string): CleanResult {
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 // 2 MB
 
+// Read at runtime so the User-Agent never drifts out of sync with releases.
 const PKG_VERSION = readPkgVersion()
 const USER_AGENT = `pi-worker/${PKG_VERSION} (+https://npmjs.com/package/@mjasnikovs/pi-worker)`
-
-// Read the version from package.json at runtime so the User-Agent never drifts
-// out of sync with releases. Two levels up holds for both src/workers (tests)
-// and dist/workers (build) since tsc preserves the layout under rootDir.
-function readPkgVersion(): string {
-    try {
-        const here = dirname(fileURLToPath(import.meta.url))
-        const pkg = JSON.parse(readFileSync(join(here, '..', '..', 'package.json'), 'utf8')) as {
-            version?: unknown
-        }
-        return typeof pkg.version === 'string' ? pkg.version : '0.0.0'
-    } catch {
-        return '0.0.0'
-    }
-}
 
 type ContentKind = 'html' | 'text' | 'reject'
 

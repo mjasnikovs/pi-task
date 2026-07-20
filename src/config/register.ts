@@ -1,7 +1,8 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {SettingsList, visibleWidth} from '@earendil-works/pi-tui'
+import {SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
 import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
 import {registerBridgeCommand} from '../remote/bridge.js'
+import {readPkgVersion} from '../shared/pkg-version.js'
 import {
     SEARCH_PROVIDERS,
     SEARCH_PROVIDER_LABELS,
@@ -18,7 +19,9 @@ import {listInstalledExtensions, type InstalledExtension} from './extension-list
 
 type Theme = ExtensionCommandContext['ui']['theme']
 
-const CONFIG_TITLE = 'pi-task settings'
+// Version in the title so a bug report or screenshot says which build it came
+// from without anyone having to go look it up.
+const CONFIG_TITLE = `pi-task ${readPkgVersion()} settings`
 
 /**
  * Frames a child component (the settings list) in a rounded border with a title
@@ -33,7 +36,14 @@ class BorderedBox implements Component {
         private readonly child: Component & {handleInput(data: string): void},
         private readonly title: string,
         private readonly border: (s: string) => string,
-        private readonly titleColor: (s: string) => string
+        private readonly titleColor: (s: string) => string,
+        /**
+         * Body lines to pad out to. The settings list grows and shrinks with the
+         * selected item's description, so without a floor the whole panel jumps
+         * a few rows every time the cursor moves. Padding to the tallest layout
+         * keeps the border still while the contents change.
+         */
+        private readonly minBodyLines = 0
     ) {}
 
     render(width: number): string[] {
@@ -49,7 +59,13 @@ class BorderedBox implements Component {
                 this.border(`╭${dash(lead)}`) + this.titleColor(tag) + this.border(`${dash(rest)}╮`)
             :   this.border(`╭${dash(width - 2)}╮`)
 
-        const body = this.child.render(innerWidth).map(line => {
+        // One blank row under the title so the first setting is not welded to
+        // the border, then the child, then padding up to the stable height.
+        const childLines = this.child.render(innerWidth)
+        const raw = ['', ...childLines]
+        while (raw.length < this.minBodyLines) raw.push('')
+
+        const body = raw.map(line => {
             const pad = innerWidth - visibleWidth(line)
             const padded = pad > 0 ? line + ' '.repeat(pad) : line
             return this.border('│ ') + padded + this.border(' │')
@@ -73,53 +89,73 @@ class BorderedBox implements Component {
  * toggle on/off; enum settings list their values and cycle through them.
  */
 const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values?: string[]}[] = [
-    {id: 'remote', label: 'remote', description: 'Remote UI server (QR code, phone access)'},
+    {
+        id: 'remote',
+        label: 'remote control',
+        description:
+            'Serve the task UI on your local network so you can follow and steer a run from '
+            + 'your phone. Prints a QR code to scan when it starts'
+    },
     {
         id: 'compressReasoning',
-        label: 'compress reasoning',
-        description: 'Compress <think> blocks after each message'
+        label: 'compress thinking',
+        description:
+            "Shrink the model's thinking blocks once it has moved on, so a long run keeps more "
+            + 'room for the work itself'
     },
     {
         id: 'autoCommit',
         label: 'auto-commit',
         description:
-            'git commit around each /task-auto sub-task (checkpoint before, snapshot after)'
-    },
-    {
-        id: 'orientation',
-        label: 'orientation',
-        description:
-            'Pre-supply the project core (manifest, types, schema…) to the read-heavy research workers'
+            'Make a git commit before and after every sub-task, so each step is a checkpoint '
+            + 'you can read back or roll back to'
     },
     {
         id: 'verifyWork',
         label: 'verify work',
         description:
-            "After each /task (and /task-auto task), RUN its spec's VERIFY block in the workspace and report a PASS/FAIL verdict (also the signal that lets 'enforce guidelines' fix safely). Enabling it makes /task wait for the implementation"
+            'When a task says it is done, actually run the checks its spec asks for and report '
+            + "PASS or FAIL instead of taking the model's word for it. This is also what lets "
+            + '"enforce guidelines" fix things safely. /task waits for the work to finish'
     },
     {
         id: 'enforceGuidelines',
         label: 'enforce guidelines',
         description:
-            "Check each /task and /task-auto commit against AGENTS.md/CLAUDE.md. Needs 'verify work' to FIX drift (fixes are reverted if they regress verification); without it, only reports violations. Enabling it makes /task wait for the implementation"
+            'Check what each task committed against your AGENTS.md / CLAUDE.md rules. With '
+            + '"verify work" on it also fixes what it finds, undoing any fix that breaks the '
+            + 'checks; on its own it only reports. /task waits for the work to finish'
+    },
+    {
+        id: 'orientation',
+        label: 'project tour',
+        description:
+            'Show the research workers the shape of the project first — package manifest, '
+            + 'types, schema — so they spend their steps on the question instead of on finding '
+            + 'their way around'
     },
     {
         id: 'parallelResearchWorkers',
         label: 'parallel research',
         description:
-            'Run the 4 research workers concurrently. Leave OFF on a single-GPU local server (serial is measurably faster there); turn on only for a parallel-capable model backend'
+            'Run the 4 research workers at once instead of one after another. Only faster if '
+            + 'your model backend can answer several requests at the same time — on a single '
+            + 'local GPU it is measurably slower, so leave it off there'
     },
     {
         id: 'researchCache',
         label: 'research cache',
         description:
-            'Cache docs/search/fetch results within one /task-auto run so sibling tasks reuse the first pipeline’s digest instead of re-fetching the same external docs. Per-run isolated, external-only, success-only'
+            'Remember docs and web pages for the length of one run, so later tasks reuse what '
+            + 'the first one already fetched instead of downloading it again. Only external '
+            + 'sources, only successful fetches, and it is dropped when the run ends'
     },
     {
         id: 'searchProvider',
-        label: 'search provider',
+        label: 'search engine',
         description:
-            'Engine behind web search (pi-worker-search + freshness checks). Exa and DuckDuckGo need no API key; Brave needs BRAVE_SEARCH_API_KEY',
+            'Which engine backs web search. Exa and DuckDuckGo work with no setup; Brave needs '
+            + 'a BRAVE_SEARCH_API_KEY in your environment',
         // Display full engine names; the stored config value stays the short id.
         values: SEARCH_PROVIDERS.map(p => SEARCH_PROVIDER_LABELS[p])
     },
@@ -127,26 +163,22 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
         id: 'requestTimeoutMs',
         label: 'command timeout',
         description:
-            'Cancel a single command that runs longer than this and remind the model to set '
-            + 'its own timeout. Catches a local model that runs a command which never returns '
-            + '(hung build, dev server, no-timeout check) so the run stops itself instead of '
-            + 'waiting for a manual abort. One knob for both surfaces: the main session AND '
-            + 'the verify/fix gate children. off disables it everywhere — gates can then hang '
-            + 'unbounded',
+            'Give up on any single command that runs this long, and tell the model to set its '
+            + 'own timeout next time. Stops a run from waiting forever on a dev server or a '
+            + 'hung build. Covers the main session and the checking steps; "off" lets a stuck '
+            + 'command hang the run until you notice',
         // Display human labels; the stored config value stays the ms number.
         values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
     },
     {
         id: 'streamInactivityMs',
-        label: 'stream watchdog',
+        label: 'stuck reply retry',
         description:
-            'Abort and retry a model request whose stream goes SILENT for this long — a hung '
-            + 'or dropped stream reports no error at all, so nothing else catches it (mx5 run '
-            + '14 lost ~2.9h to three of them while the model server stayed healthy). Counts '
-            + 'time since the last stream event of any kind, so a slow model that keeps '
-            + 'emitting tokens is never touched, and it pauses while a tool runs. Keep it '
-            + 'generous on local backends: prompt processing on a large context legitimately '
-            + 'emits nothing for minutes. off disables it on both the main session and children',
+            'Give up on a model reply that has sent nothing for this long and ask again. A '
+            + 'dropped connection looks exactly like a model thinking hard and reports no '
+            + 'error, so a run can sit dead for hours. Only total silence counts, and the clock '
+            + 'pauses while a command runs — local models go quiet for minutes on long prompts, '
+            + 'so leave room',
         // Display human labels; the stored config value stays the ms number.
         values: STREAM_INACTIVITY_OPTIONS.map(o => o.label)
     },
@@ -154,12 +186,10 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
         id: 'yoloMode',
         label: 'yolo mode',
         description:
-            'UNATTENDED: auto-answer every question with the option pi already recommends, '
-            + 'and show no prompts at all — clarify/grill answers, the verify-FAIL picker '
-            + '(auto-ACCEPT, recorded as a yolo debt), and the final-gate picker (autofix '
-            + 'while the budget lasts, then leave the run FAILED). Every auto-pick is stamped '
-            + '(YOLO) in the task file and debt ledger. For THROWAWAY/TEST projects you are '
-            + 'not watching — a real run should decide these itself'
+            'Stop asking you anything: every question takes the option pi recommends, a failed '
+            + 'check is accepted and written down as debt, and a failed final check is retried '
+            + 'until the budget runs out. Each auto-answer is marked (YOLO) in the task file. '
+            + 'For throwaway projects you are not watching'
     }
 ]
 
@@ -197,10 +227,10 @@ export function extensionItems(
         id: EXT_ID_PREFIX + e.path,
         label: `ext: ${e.label}`,
         description:
-            `Also load this extension (${e.origin}) in pi-task child sessions — needed when it `
-            + 'registers the model provider the children must use (e.g. pi-lmstudio). Children '
-            + 'otherwise run with extensions off; whitelist only provider-type extensions you '
-            + `trust, since children also get its tools and hooks. ${e.path}`,
+            `Load this ${e.origin} extension in the helper sessions pi-task spawns. They run `
+            + 'with extensions off by default, so turn this on when the extension provides the '
+            + 'model they need (pi-lmstudio, for example). They also inherit its tools and '
+            + `hooks, so only enable ones you trust. ${e.path}`,
         currentValue: whitelist.includes(e.path) ? 'on' : 'off',
         values: ['on', 'off']
     }))
@@ -216,14 +246,95 @@ export function applyExtensionToggle(
     return on ? [...rest, entryPath] : rest
 }
 
+/** Overlay width; the list gets `- 4` of it, the description `- 4` again. */
+const OVERLAY_WIDTH = 68
+/** Settings rows shown at once before the list scrolls. */
+const MAX_VISIBLE = 9
+
+/**
+ * Tallest body the settings list can render, so {@link BorderedBox} can pad
+ * every frame to it and hold the border still. Mirrors SettingsList's own
+ * layout: one pad row, the visible rows, the scroll counter, a blank, the
+ * selected item's wrapped description, a blank, the key hint.
+ */
+export function settingsBodyHeight(
+    descriptions: string[],
+    maxVisible: number,
+    wrapWidth: number
+): number {
+    const tallestDescription = Math.max(
+        0,
+        ...descriptions.map(d => wrapTextWithAnsi(d, wrapWidth).length)
+    )
+    return 1 + maxVisible + 1 + 1 + tallestDescription + 1 + 1
+}
+
 function makeTheme(theme: Theme): SettingsListTheme {
     return {
-        label: (text, selected) => (selected ? theme.fg('accent', text) : text),
-        value: text => (text === 'on' ? theme.fg('success', text) : theme.fg('muted', text)),
+        label: (text, selected) =>
+            selected ? theme.fg('accent', theme.bold(text)) : theme.fg('text', text),
+        // A filled/hollow dot makes the on/off column scannable at a glance
+        // without reading a word on every row. Enum values (an engine name, a
+        // duration) are real content, so they stay readable rather than muted.
+        value: (text, selected) => {
+            if (text === 'on') return theme.fg('success', '● on')
+            if (text === 'off') return theme.fg('dim', '○ off')
+            return theme.fg(selected ? 'accent' : 'muted', text)
+        },
         description: text => theme.fg('muted', text),
-        cursor: theme.fg('accent', '>'),
+        // Two cells wide to match the unselected row's "  " indent — a
+        // single-cell cursor shifts the selected label one column left.
+        cursor: theme.fg('accent', '❯') + ' ',
         hint: text => theme.fg('dim', text)
     }
+}
+
+/** A settings row as {@link SettingsList} wants it. */
+export type PanelItem = {
+    id: string
+    label: string
+    description: string
+    currentValue: string
+    values: string[]
+}
+
+/**
+ * Builds the framed settings panel. Split out of the command handler so the
+ * exact component the overlay shows can be rendered to a string in a test or a
+ * preview script, rather than only being inspectable by opening the TUI.
+ */
+export function createSettingsPanel(
+    items: PanelItem[],
+    theme: Theme,
+    onChange: (id: string, newValue: string) => void,
+    onCancel: () => void
+): BorderedBox {
+    const list = new SettingsList(items, MAX_VISIBLE, makeTheme(theme), onChange, onCancel)
+    return new BorderedBox(
+        list,
+        CONFIG_TITLE,
+        s => theme.fg('borderMuted', s),
+        s => theme.fg('accent', theme.bold(s)),
+        settingsBodyHeight(
+            items.map(i => i.description),
+            MAX_VISIBLE,
+            OVERLAY_WIDTH - 8
+        )
+    )
+}
+
+/** The full settings row list for the current config, in menu order. */
+export function panelItems(cfg: PiTaskConfig, installed: InstalledExtension[]): PanelItem[] {
+    return [
+        ...ITEMS.map(({id, label, description, values}) => ({
+            id: id as string,
+            label,
+            description,
+            currentValue: displayValue(cfg, id, Boolean(values)),
+            values: values ?? ['on', 'off']
+        })),
+        ...extensionItems(installed, cfg.extensionWhitelist)
+    ]
 }
 
 async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -247,23 +358,10 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
     }
 
     await ctx.ui.custom<void>(
-        (_tui, theme, _kb, done) => {
-            const listTheme = makeTheme(theme)
-            const items = [
-                ...ITEMS.map(({id, label, description, values}) => ({
-                    id: id as string,
-                    label,
-                    description,
-                    currentValue: displayValue(cfg, id, Boolean(values)),
-                    values: values ?? ['on', 'off']
-                })),
-                ...extensionItems(installed, cfg.extensionWhitelist)
-            ]
-
-            const list = new SettingsList(
-                items,
-                10,
-                listTheme,
+        (_tui, theme, _kb, done) =>
+            createSettingsPanel(
+                panelItems(cfg, installed),
+                theme,
                 (id, newValue) => {
                     if (id.startsWith(EXT_ID_PREFIX)) {
                         cfg.extensionWhitelist = applyExtensionToggle(
@@ -286,24 +384,16 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                     saveConfig(cfg).catch(() => {})
                 },
                 () => done(undefined)
-            )
-
-            return new BorderedBox(
-                list,
-                CONFIG_TITLE,
-                s => theme.fg('borderMuted', s),
-                s => theme.fg('accent', theme.bold(s))
-            )
-        },
-        {overlay: true, overlayOptions: {width: 58}}
+            ),
+        {overlay: true, overlayOptions: {width: OVERLAY_WIDTH}}
     )
 }
 
 export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
         description:
-            'Configure pi-task settings (remote, compress reasoning, auto-commit, orientation, '
-            + 'enforce guidelines, command timeout, extension whitelist for child sessions).',
+            'Configure pi-task settings (remote control, auto-commit, verify work, enforce '
+            + 'guidelines, research, timeouts, extensions for helper sessions).',
         handler: handleTaskConfig
     })
 }
