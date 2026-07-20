@@ -11,6 +11,7 @@ import {tasksDir, ensureTasksDir, readTaskFile, setTaskSection} from './task-io.
 import {extractSection, parseFrontMatter} from './task-parsers.js'
 import {readTextFile} from '../shared/fs-text.js'
 import {RESUMABLE_STATES} from './task-types.js'
+import type {TaskState} from './task-types.js'
 import type {AutoResumeCandidate} from './resume-gap.js'
 
 const AUTO_FILE_RE = /^(TASK_AUTO_\d{4,})\.md$/
@@ -253,8 +254,18 @@ export async function insertTaskAfter(
  * Find the most-recently-updated resumable TASK_AUTO_* file, with the state and
  * last-write time the resume banner reports (see resume-gap.ts). Null when there
  * is nothing resumable.
+ *
+ * `states` narrows which states count as resumable, and the UNATTENDED path passes
+ * UNATTENDED_STATES so the search answers the question that path actually asks —
+ * "is there an IN-FLIGHT run to pick up?". Selecting the newest human-resumable run
+ * and only then refusing it on state let one failed run shadow an in-flight one
+ * behind it: the boot hook refused every restart and the in-flight run stayed in
+ * exactly the dead air this feature exists to end.
  */
-export async function findResumableAutoDetailed(cwd: string): Promise<AutoResumeCandidate | null> {
+export async function findResumableAutoDetailed(
+    cwd: string,
+    states: readonly TaskState[] = RESUMABLE_STATES
+): Promise<AutoResumeCandidate | null> {
     await ensureTasksDir(cwd)
     const entries = await fsp.readdir(tasksDir(cwd))
     const candidates: AutoResumeCandidate[] = []
@@ -265,7 +276,7 @@ export async function findResumableAutoDetailed(cwd: string): Promise<AutoResume
             const raw = await readTextFile(path.join(tasksDir(cwd), f))
             const fm = parseFrontMatter(raw)
             if (!fm) continue
-            if (!RESUMABLE_STATES.includes(fm.state)) continue
+            if (!states.includes(fm.state)) continue
             const st = await fsp.stat(path.join(tasksDir(cwd), f))
             candidates.push({id: m[1], state: fm.state, lastWriteMs: st.mtimeMs})
         } catch {

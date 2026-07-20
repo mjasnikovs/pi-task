@@ -103,7 +103,38 @@ test('findResumableAutoDetailed: carries state and last-write time of the newest
         expect(found?.id).toBe('TASK_AUTO_0003')
         expect(found?.state).toBe('failed')
         expect(found?.lastWriteMs).toBeGreaterThanOrEqual(before)
-        // …and that is exactly the pair a boot hook must refuse.
-        expect(decideResume(found, Date.now(), true).resume).toBe(false)
+    })
+})
+
+// The newest run being unresumable says nothing about an in-flight run behind it.
+// Choosing the candidate by mtime across the HUMAN-resumable states and only then
+// refusing on state let one failed run shadow a genuinely in-flight one — the boot
+// hook refuses every restart and the in-flight run sits in the dead air this
+// feature exists to end.
+test('findResumableAutoDetailed: a failed newer run does not shadow an in-flight one', async () => {
+    await withTmpTaskDir(async dir => {
+        await writeTaskFile(dir, fm('TASK_AUTO_0002', 'in_progress'), '\n## tasks\n')
+        await new Promise(r => setTimeout(r, 10))
+        await writeTaskFile(dir, fm('TASK_AUTO_0003', 'failed'), '\n## tasks\n')
+
+        // Attended: the human asked for the newest resumable run, failed included.
+        expect((await findResumableAutoDetailed(dir))?.id).toBe('TASK_AUTO_0003')
+
+        // Unattended: the in-flight run is the one a restart should pick up.
+        const forHook = await findResumableAutoDetailed(dir, UNATTENDED_STATES)
+        expect(forHook?.id).toBe('TASK_AUTO_0002')
+        expect(decideResume(forHook, Date.now(), true).resume).toBe(true)
+    })
+})
+
+test('findResumableAutoDetailed: with no in-flight run the hook still refuses by name', async () => {
+    await withTmpTaskDir(async dir => {
+        await writeTaskFile(dir, fm('TASK_AUTO_0003', 'failed'), '\n## tasks\n')
+        expect(await findResumableAutoDetailed(dir, UNATTENDED_STATES)).toBeNull()
+        // …and the refusal still names the run, rather than "nothing resumable".
+        const newest = await findResumableAutoDetailed(dir)
+        const d = decideResume(newest, Date.now(), true)
+        expect(d.resume).toBe(false)
+        expect(d.banner).toContain('Not auto-resuming TASK_AUTO_0003')
     })
 })

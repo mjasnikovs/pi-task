@@ -31,7 +31,7 @@ import {
     insertTaskAfter,
     findResumableAutoDetailed
 } from './auto-io.js'
-import {decideResume} from './resume-gap.js'
+import {decideResume, UNATTENDED_STATES} from './resume-gap.js'
 import {
     drainRepairQueue,
     mergeRepairCandidates,
@@ -2084,7 +2084,16 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
     // `--unattended` is the boot-hook path: no human decided to continue this
     // run, so it resumes in-flight states only and refuses the rest by name.
     const unattended = /(^|\s)--unattended(\s|$)/.test(args)
-    const candidate = await findResumableAutoDetailed(cwd)
+    // Unattended asks a narrower question — "is there an IN-FLIGHT run?" — so it
+    // searches those states directly. Picking the newest human-resumable run and
+    // refusing it on state let a failed run shadow an in-flight one behind it.
+    // With nothing in flight, fall back to the newest resumable run so the refusal
+    // still names it instead of claiming there is nothing here.
+    const eligible =
+        unattended ?
+            await findResumableAutoDetailed(cwd, UNATTENDED_STATES)
+        :   await findResumableAutoDetailed(cwd)
+    const candidate = eligible ?? (unattended ? await findResumableAutoDetailed(cwd) : null)
     const decision = decideResume(candidate, Date.now(), unattended)
     ctx.ui.notify(decision.banner, decision.level)
     // An unattended refusal happens with nobody watching the terminal — the
