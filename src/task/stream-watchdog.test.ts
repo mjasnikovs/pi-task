@@ -20,7 +20,7 @@ function fakePi() {
     } as unknown as ExtensionAPI
     return {
         pi,
-        emit: (name: string) => handlers.get(name)?.({}, ctx),
+        emit: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
         has: (name: string) => handlers.has(name),
         messages,
         aborts: () => aborts
@@ -90,6 +90,61 @@ describe('registerStreamWatchdog', () => {
             await sleep(400)
             expect(f.aborts()).toBe(0)
             f.emit('tool_execution_end')
+            f.emit('agent_end')
+        })
+    })
+
+    // pi's executeToolCallsParallel emits EVERY tool_execution_start up front and
+    // then one tool_execution_end per call as each settles (agent-loop.js). So a
+    // fast tool ending first must NOT un-suspend the clock while a slow sibling —
+    // the 12-minute build this guard promised never to touch — is still running.
+    test('a fast tool ending does not expose a still-running parallel sibling', async () => {
+        await withWindow(80, async () => {
+            const f = fakePi()
+            registerStreamWatchdog(f.pi)
+            f.emit('turn_start')
+            f.emit('tool_execution_start', {toolCallId: 'slow', toolName: 'bash'})
+            f.emit('tool_execution_start', {toolCallId: 'fast', toolName: 'read'})
+            // The read returns immediately; the build keeps going.
+            f.emit('tool_execution_end', {toolCallId: 'fast', toolName: 'read'})
+            await sleep(400)
+            expect(f.aborts()).toBe(0)
+            expect(f.messages).toEqual([])
+            f.emit('tool_execution_end', {toolCallId: 'slow', toolName: 'bash'})
+            f.emit('agent_end')
+        })
+    })
+
+    // The same loop emits start+end inline for a tool it can answer immediately
+    // (a denied or cached call) while an earlier async call is still executing.
+    test('an immediate tool resolving mid-batch does not expose the running one', async () => {
+        await withWindow(80, async () => {
+            const f = fakePi()
+            registerStreamWatchdog(f.pi)
+            f.emit('turn_start')
+            f.emit('tool_execution_start', {toolCallId: 'build', toolName: 'bash'})
+            f.emit('tool_execution_start', {toolCallId: 'denied', toolName: 'write'})
+            f.emit('tool_execution_end', {toolCallId: 'denied', toolName: 'write'})
+            await sleep(400)
+            expect(f.aborts()).toBe(0)
+            f.emit('tool_execution_end', {toolCallId: 'build', toolName: 'bash'})
+            f.emit('agent_end')
+        })
+    })
+
+    // Once the LAST tool ends the stream is expected again, so the guard must
+    // re-arm — otherwise a hang right after a tool batch is invisible forever.
+    test('the clock resumes once the last parallel tool ends', async () => {
+        await withWindow(80, async () => {
+            const f = fakePi()
+            registerStreamWatchdog(f.pi)
+            f.emit('turn_start')
+            f.emit('tool_execution_start', {toolCallId: 'a', toolName: 'bash'})
+            f.emit('tool_execution_start', {toolCallId: 'b', toolName: 'bash'})
+            f.emit('tool_execution_end', {toolCallId: 'a', toolName: 'bash'})
+            f.emit('tool_execution_end', {toolCallId: 'b', toolName: 'bash'})
+            await sleep(400)
+            expect(f.aborts()).toBe(1)
             f.emit('agent_end')
         })
     })

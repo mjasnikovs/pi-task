@@ -103,6 +103,45 @@ describe('StreamWatchdog', () => {
         expect(h.fires).toEqual([])
     })
 
+    // pi runs a tool BATCH in parallel: every start is emitted up front and each
+    // call ends on its own. The clock must stay paused until the LAST one settles.
+    test('a keyed batch stays suspended until the last tool ends', () => {
+        const h = harness(600_000)
+        h.wd.start()
+        h.wd.suspend('slow')
+        h.wd.suspend('fast')
+        h.wd.resume('fast')
+        h.advance(3_600_000)
+        expect(h.fires).toEqual([])
+        h.wd.resume('slow')
+        h.advance(601_000)
+        expect(h.fires.length).toBe(1)
+    })
+
+    // An end whose start was never seen (the watchdog armed mid-batch) must not
+    // clear a sibling that IS being tracked.
+    test('an unmatched end does not un-pause a tracked tool', () => {
+        const h = harness(600_000)
+        h.wd.start()
+        h.wd.suspend('real')
+        h.wd.resume('never-started')
+        h.advance(3_600_000)
+        expect(h.fires).toEqual([])
+    })
+
+    test('unkeyed suspend/resume still nests', () => {
+        const h = harness(600_000)
+        h.wd.start()
+        h.wd.suspend()
+        h.wd.suspend()
+        h.wd.resume()
+        h.advance(3_600_000)
+        expect(h.fires).toEqual([])
+        h.wd.resume()
+        h.advance(601_000)
+        expect(h.fires.length).toBe(1)
+    })
+
     test('stop() after a suspend leaves nothing armed', () => {
         const h = harness(1_000)
         h.wd.start()

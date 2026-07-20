@@ -77,16 +77,23 @@ export function registerStreamWatchdog(pi: ExtensionAPI): void {
     pi.on('message_update', (_e, ctx) => arm(ctx))
     pi.on('message_end', (_e, ctx) => arm(ctx))
 
-    pi.on('tool_execution_start', (_e, ctx) => {
+    // Keyed by toolCallId: a tool BATCH runs in parallel, so the clock must stay
+    // paused until the last call settles, not the first (see StreamWatchdog.resume).
+    const callId = (e: unknown): string | undefined => {
+        const id = (e as {toolCallId?: unknown} | undefined)?.toolCallId
+        return typeof id === 'string' && id.length > 0 ? id : undefined
+    }
+
+    pi.on('tool_execution_start', (e, ctx) => {
         liveCtx = ctx
-        watchdog.suspend()
+        watchdog.suspend(callId(e))
     })
     pi.on('tool_execution_update', (_e, ctx) => {
         liveCtx = ctx
     })
-    pi.on('tool_execution_end', (_e, ctx) => {
+    pi.on('tool_execution_end', (e, ctx) => {
         liveCtx = ctx
-        watchdog.resume()
+        watchdog.resume(callId(e))
     })
 
     // Nothing is streaming between agent loops; stop so no timer can fire into an

@@ -457,11 +457,13 @@ export function runChild(
                 {
                     ...opts,
                     onToolCall: call => {
-                        streamWatch.suspend()
+                        // Keyed: a child's tool batch runs in parallel too, so the
+                        // first result must not un-pause a still-running sibling.
+                        streamWatch.suspend(call.toolCallId)
                         return opts.onToolCall ? opts.onToolCall(call) : null
                     },
                     onToolResult: r => {
-                        streamWatch.resume()
+                        streamWatch.resume(r.toolCallId)
                         opts.onToolResult?.(r)
                     }
                 }

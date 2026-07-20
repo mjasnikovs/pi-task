@@ -77,11 +77,27 @@ export class StreamWatchdog {
     private timer: TimerHandle | undefined
     private lastEvent = 0
     private armedMs = 0
-    /** True while a TOOL is executing: the model stream is legitimately idle then,
-     *  and that window belongs to the command watchdog, not to this one. Without
-     *  this, a 10-minute build would look identical to a hung stream. */
-    private suspended = false
+    /**
+     * The tool calls currently executing. While ANY is running the model stream is
+     * legitimately idle, and that window belongs to the command watchdog, not to
+     * this one — without it a 10-minute build looks identical to a hung stream.
+     *
+     * A SET, not a boolean: pi runs a tool batch in parallel (agent-loop.js
+     * `executeToolCallsParallel` emits every tool_execution_start up front, then one
+     * end per call as each settles, and answers an immediate call inline while an
+     * earlier one is still running). A boolean would be cleared by the FIRST end and
+     * leave the still-running sibling — the long build — exposed to a false fire.
+     * Same per-toolCallId idiom the command watchdog uses.
+     */
+    private readonly active = new Set<string>()
+    /** Nesting depth for callers that cannot supply an id, counted so an unkeyed
+     *  pair nests the same way a keyed one does. */
+    private keyless = 0
     private fired = false
+
+    private get suspended(): boolean {
+        return this.active.size > 0 || this.keyless > 0
+    }
 
     constructor(private readonly deps: StreamWatchdogDeps) {}
 
@@ -97,7 +113,8 @@ export class StreamWatchdog {
         if (!(ms > 0)) return
         this.armedMs = ms
         this.fired = false
-        this.suspended = false
+        this.active.clear()
+        this.keyless = 0
         this.lastEvent = this.deps.now()
         this.timer = this.deps.schedule(() => this.check(), pollIntervalMs(ms))
     }
@@ -107,22 +124,31 @@ export class StreamWatchdog {
         this.lastEvent = this.deps.now()
     }
 
-    /** A tool started executing — pause the idle clock until it ends. */
-    suspend(): void {
-        this.suspended = true
+    /** A tool started executing — pause the idle clock until it (and every sibling
+     *  still running) ends. `key` is the tool call id where the caller has one. */
+    suspend(key?: string): void {
+        if (key === undefined) this.keyless++
+        else this.active.add(key)
     }
 
-    /** A tool finished — the stream is expected to resume; restart the clock. */
-    resume(): void {
-        this.suspended = false
-        this.note()
+    /**
+     * A tool finished. The clock only restarts once the LAST one does — a fast tool
+     * settling first says nothing about a sibling that is still running. Unmatched
+     * ends (a watchdog armed mid-batch never saw the start) are ignored rather than
+     * clearing the whole set.
+     */
+    resume(key?: string): void {
+        if (key === undefined) this.keyless = Math.max(0, this.keyless - 1)
+        else this.active.delete(key)
+        if (!this.suspended) this.note()
     }
 
     /** Stop watching (turn/agent/session end, or child exit). Safe to call twice. */
     stop(): void {
         if (this.timer !== undefined) this.deps.cancel(this.timer)
         this.timer = undefined
-        this.suspended = false
+        this.active.clear()
+        this.keyless = 0
     }
 
     /** @internal Exposed for the poll callback and tests. */
