@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-1936%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-2077%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -65,7 +65,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume [--unattended]` | Resume the active `/task-auto` run at the next unfinished task. `--unattended` is the boot-hook form: in-flight runs only. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote server, compress reasoning, auto-commit, orientation, verify work, enforce guidelines, command timeout, stream watchdog, and the extension whitelist for child sessions. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote control, compress thinking, auto-commit, verify work, enforce guidelines, project tour, command timeout, stuck reply retry, and one `ext:` toggle per installed host extension. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -171,25 +171,25 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **remote** | on | The remote UI server (QR code, phone access). Turn off to never start it. |
-| **compress reasoning** | on | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
+| **remote control** | on | The remote UI server (QR code, phone access). Turn off to never start it. |
+| **compress thinking** | on | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
 | **auto-commit** | on | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
-| **orientation** | on | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
 | **verify work** | on | After each `/task` (and `/task-auto` task) implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). |
 | **enforce guidelines** | on | After each `/task` (and `/task-auto` task) is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
+| **project tour** | on | Pre-reads the project's core files (manifest, config, domain types, schema, entrypoints, API surface) once and hands the contents to the read-heavy research workers, so they skip re-discovering the same files cold. Bounded by a hard byte budget; applied only where it helps (FILES/APIS workers). |
 | **parallel research** | off | Run the four research workers concurrently instead of one at a time. Leave off on a single-GPU local backend (concurrent streams split the GPU and slow each other down); turn on only for a parallel-capable model server. |
 | **research cache** | on | Cache docs/search/fetch worker results for the duration of one `/task-auto` run so sibling tasks re-asking the same package/URL + query reuse the first pipeline's digest instead of re-fetching. Per-run isolated, external-only (project-source `.` lookups excluded), success-only. |
-| **search provider** | Exa | Engine behind `pi-worker-search` and freshness/enrichment checks. **Exa** (default) and **DuckDuckGo** need no API key; **Brave** requires `BRAVE_SEARCH_API_KEY`. |
+| **search engine** | Exa | Engine behind `pi-worker-search` and freshness/enrichment checks. **Exa** (default) and **DuckDuckGo** need no API key; **Brave** requires `BRAVE_SEARCH_API_KEY`. |
 | **command timeout** | 15 min | Wall-clock ceiling on a **single** tool execution. Local models routinely run a command that never returns (a hung build, a dev server, a check with no timeout) and the run wedges until you abort by hand — pi's bash tool has an optional timeout with no default, so this is the missing one. One knob, two surfaces: in the main session the overrun call is cancelled (killing the tool's whole process tree) plus a reminder turn; in the verify/fix gate children the child is killed and re-spawned with a hint, halving the ceiling on repeat hangs. Choices: 5/10/15/30 min or **off** — off unguards both surfaces, gates included. |
-| **stream watchdog** | 10 min | Inactivity ceiling on the **model stream**. A hung or silently-dropped stream throws nothing at all, so neither the connection-error retry (it needs a reported error) nor the **command timeout** (tool calls only) nor the dead-backend stall guard (a reachable endpoint reads as proof of life) can see it — an mx5 run lost ~2.9h to three of them while the model server stayed healthy. Measured as time since the **last stream event of any kind**, so a slow model emitting one token every 30s is never touched, and it pauses while a tool runs. On expiry the main session aborts the turn (through the same channel the command watchdog uses) and posts a resume reminder; a child is killed and routed into the existing connection-error retry. Choices: 5/10/20/30 min or **off**. Keep it generous on local backends — prompt processing on a large context legitimately emits nothing for minutes. |
+| **stuck reply retry** | 10 min | Inactivity ceiling on the **model stream**. A hung or silently-dropped stream throws nothing at all, so neither the connection-error retry (it needs a reported error) nor the **command timeout** (tool calls only) nor the dead-backend stall guard (a reachable endpoint reads as proof of life) can see it — an mx5 run lost ~2.9h to three of them while the model server stayed healthy. Measured as time since the **last stream event of any kind**, so a slow model emitting one token every 30s is never touched, and it pauses while a tool runs. On expiry the main session aborts the turn (through the same channel the command watchdog uses) and posts a resume reminder; a child is killed and routed into the existing connection-error retry. Choices: 5/10/20/30 min or **off**. Keep it generous on local backends — prompt processing on a large context legitimately emits nothing for minutes. |
 | **yolo mode** | off | **Unattended runs.** Wherever pi-task would stop and ask, it takes the option already marked RECOMMENDED, stamps the artifact `(YOLO)` so an audit can tell a machine decided, and shows no prompt at all — clarify/grill answers, the verify-FAIL picker (auto-**Accept**, recorded as a yolo debt), and the final-gate picker (autofix while the budget lasts, then leave the run FAILED). A question with no recommendation is **skipped**, never invented. For throwaway/test projects nobody is watching; a real run should decide these itself. |
-| **extension whitelist** | empty | Host `pi` extensions to load into every child session by explicit path. Children otherwise run with extensions off, so a provider registered by an extension (e.g. `pi-lmstudio`) doesn't exist in them and they can't resolve the default model. `/task-config` enumerates the currently installed extensions as individual `ext: …` toggles; the list is strictly additive (discovery stays off), and an entry whose file is gone is skipped at spawn time, never fatal. |
+| **ext: …** | all off | One toggle per installed host `pi` extension, loading it into every child session by explicit path. Children otherwise run with extensions off, so a provider registered by an extension (e.g. `pi-lmstudio`) doesn't exist in them and they can't resolve the default model. Children also inherit the extension's tools and hooks, so only enable ones you trust. The list is strictly additive (discovery stays off), and an entry whose file is gone is skipped at spawn time, never fatal. |
 
 ## Configuration
 
 | Variable | Used by | Notes |
 | --- | --- | --- |
-| `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required only when the **Brave** search provider is selected in `/task-config`. |
+| `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY` | `pi-worker-search`, research enrichment | Required only when the **Brave** search engine is selected in `/task-config`. |
 | `XDG_CACHE_HOME` | `pi-worker-docs` | Overrides the docs cache location (defaults to `~/.cache`). |
 | `XDG_DATA_HOME` | remote push | Where the VAPID keypair is stored (defaults to `~/.local/share`). |
 | `PI_REMOTE_PUSH_SUBJECT` | remote push | VAPID JWT `sub` contact. Defaults to the project URL; set your own `mailto:you@domain.com` or `https://…`. |
@@ -202,7 +202,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun run test       # 1939 tests across 121 files
+bun run test       # 2078 tests across 129 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
