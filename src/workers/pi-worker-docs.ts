@@ -21,6 +21,7 @@ import {childBaseArgs} from '../shared/child-extensions.js'
 import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
@@ -56,6 +57,31 @@ interface DocsDetails {
     npmPublishedAt?: string
     versionSource?: 'declared-range' | 'npm-latest'
     declaredRange?: string
+    /**
+     * The answer restated a declaration for a question that needed usage semantics, so it
+     * is UNANSWERED (F-2). Set by isTypeOnlyAnswer; read by `cacheable` so a non-answer is
+     * never memoised and re-served to a later sibling task.
+     */
+    typeOnly?: boolean
+}
+
+/**
+ * Pull `@see {@link https://…}` pointers out of retrieved .d.ts/README text.
+ *
+ * F-2(d): the answer to a type-only lookup usually is not in the package at all — it lives
+ * at the `@see` URL that the very excerpt being returned already carries. In run 15,
+ * hono.dev appeared in cache values ONLY inside these JSDoc links, and was never fetched.
+ * Surfacing the link is therefore free: the pointer is already in hand.
+ */
+export function extractSeeUrls(content: string): string[] {
+    const out: string[] = []
+    const re = /@see\s*\{?\s*@?link\s+(https?:\/\/[^}\s)]+)/gi
+    let m: RegExpExecArray | null
+    while ((m = re.exec(content)) !== null) {
+        const url = m[1].replace(/[.,;]+$/, '')
+        if (!out.includes(url)) out.push(url)
+    }
+    return out
 }
 
 /**
@@ -320,13 +346,48 @@ export function registerPiWorkerDocs(
             const parsed = parseChildOutput(child.stdout)
             const verified =
                 parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
-            const text = versionBanner + npmHeader + formatResultText(pkg, parsed, verified)
+            const body = formatResultText(pkg, parsed, verified)
+
+            // F-2: a TYPE-ONLY answer is the dangerous failure. "unclear from this package"
+            // is honest and already escalates; a signature is a well-formed, confident,
+            // on-topic answer that names the very parameter asked about, so the worker
+            // stops — and worker:context then fills the semantic gap from memory (F-1).
+            // Measured: 14 of 17 live reps terminated on exactly this shape.
+            //
+            // The retrieved type is KEPT (it is real and useful) and an UNANSWERED banner
+            // is prepended, naming the gap and — when the excerpt carries one — the `@see`
+            // URL that actually documents the semantics. That pointer is free: F-2(d) found
+            // hono.dev present in run-15 cache values ONLY inside these JSDoc links, never
+            // fetched. Prompting the escalation beats performing it here: this tool runs in
+            // parallel execution mode and cannot cleanly spawn a fetch of its own.
+            const typeOnly = isTypeOnlyAnswer(parsed.answer, params.query)
+            let text = versionBanner + npmHeader + body
+            if (typeOnly.typeOnly) {
+                const seeUrls = extractSeeUrls(concatenated)
+                text =
+                    versionBanner
+                    + npmHeader
+                    + 'UNANSWERED — TYPE-ONLY: the package gave a declaration, not the '
+                    + 'usage semantics this question needs. A signature says what the '
+                    + 'parameter IS, not what it MEANS. Do NOT answer from memory and do '
+                    + 'NOT treat the type below as the answer.\n'
+                    + (seeUrls.length > 0 ?
+                        `NEXT STEP: the retrieved excerpt itself cites documentation — `
+                        + `fetch ${seeUrls[0]} (pi-worker-fetch) and re-ask this same `
+                        + `question.\n`
+                    :   'NEXT STEP: use pi-worker-search / pi-worker-fetch for the official '
+                        + 'documentation of this API, then re-ask this same question.\n')
+                    + '\nThe declaration that WAS retrieved (context only, not the answer):\n'
+                    + body
+            }
+
             return {
                 text,
                 details: {
                     ...baseDetails,
                     childExitCode: 0,
-                    excerptVerified: verified
+                    excerptVerified: verified,
+                    ...(typeOnly.typeOnly ? {typeOnly: true} : {})
                 }
             }
         },
@@ -359,6 +420,20 @@ export function registerPiWorkerDocs(
         // Only a completed lookup (child exited 0) is a real answer; not-installed,
         // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
         // through to a live retry next time.
-        cacheable: d => d.childExitCode === 0
+        //
+        // F-2(e): process health is NOT answer quality. A child that ran fine and answered
+        // "unclear from this package" exits 0, so the NON-ANSWER was memoised and re-served
+        // as a cache hit to every later sibling task — 52 of run 15's cached entries were
+        // "unclear" with hitCache true. One dead end, paid for many times, and escalation
+        // could never re-fire because the miss never recurred. So a non-answer is now never
+        // stored: the next task that asks pays for a real lookup and can escalate.
+        //
+        // `text` is supplied by makeWorkerTool (shared.ts) alongside details, so the
+        // content check needs no new plumbing.
+        cacheable: (d, text) =>
+            d.childExitCode === 0
+            && d.typeOnly !== true
+            && d.excerptVerified !== false
+            && !/unclear from this package/i.test(text)
     })
 }

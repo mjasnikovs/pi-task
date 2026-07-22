@@ -24,6 +24,7 @@ import {
     preserveDirectivesBlock,
     enforceDirectives
 } from './user-directives.js'
+import {demoteUnsourcedAttributions} from './context-attribution.js'
 import {getFileInventory} from './file-inventory.js'
 import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
@@ -474,6 +475,25 @@ export function degradedSectionBody(name: string, reason: string, partial: strin
     return body.length > 0 ? `${marker}\n\n${body}` : marker
 }
 
+/**
+ * Dependency names declared by the project manifest, used by the CONTEXT post-check to
+ * tell "this bullet is about an external library" from "this bullet is about our source".
+ * A missing or malformed package.json yields none, which makes the post-check a no-op
+ * rather than an error — a non-node project must still be able to run research.
+ */
+async function manifestDependencyNames(cwd: string): Promise<string[]> {
+    try {
+        const raw = await readFile(resolve(cwd, 'package.json'), 'utf8')
+        const pkg = JSON.parse(raw) as {
+            dependencies?: Record<string, string>
+            devDependencies?: Record<string, string>
+        }
+        return [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})]
+    } catch {
+        return []
+    }
+}
+
 export async function phaseResearch(
     deps: PhaseDeps,
     refined: string,
@@ -524,6 +544,11 @@ export async function phaseResearch(
     }
 
     const promptHeader = externalContext + inventoryHeader
+
+    // Braces for the CONTEXT worker's LIVE-DATA RULE (the belt is the prompt itself).
+    // Judged against the EXTERNAL CONTEXT this run actually gathered — the same string
+    // the worker is handed below — and the manifest's dependency names.
+    const manifestPackages = await manifestDependencyNames(deps.cwd)
 
     let doneCount = 0
     const updateProgress = (): void => {
@@ -578,6 +603,9 @@ export async function phaseResearch(
         prompt: string | ((prior: ReadonlyArray<{name: string; text: string}>) => string)
         tools?: string
         extensions?: string[]
+        /** Deterministic gate over the worker's own output, run BEFORE the section is
+         *  persisted, so nothing it rejects survives into the cache or into compose. */
+        postProcess?: (text: string) => string
     }> = [
         {
             section: 'FILES',
@@ -620,7 +648,35 @@ export async function phaseResearch(
             // FILES handles that. Dropping `find`/`ls` keeps the worker from
             // spawning long enumeration loops whose output then inflates
             // prefill on every subsequent round.
-            tools: 'read,grep'
+            //
+            // RECORDED DECISION (mx5 run-15 F-1, PROMPT 1 item 4): this worker stays
+            // ISOLATED — it is NOT given the APIS worker's output. It keeps `read,grep`
+            // and is forbidden, by prompt and by the post-check below, from asserting
+            // external-API behaviour it cannot see. Handing it the APIS section would
+            // widen what it may assert without making any of it checkable here, and
+            // APIS' own answers are the ones F-2 shows are type-only and unverified.
+            tools: 'read,grep',
+            // BRACES for the LIVE-DATA RULE. In run 15 this worker wrote, verbatim, "The
+            // `hono` dependency is pinned at `^4.12.31` in package.json, and the external
+            // context confirms `hc<AppType>` pattern with base URL `/api` ... works
+            // correctly (per Hono RPC docs LIVE data)". It has read+grep only, so the
+            // base-URL half came from memory; fused with the true version half under one
+            // attribution it read as sourced, became a hard requirement in TASK_0027's
+            // CONSTRAINTS and ACCEPTANCE, and every request went to /api/api/... ⇒ 404.
+            // A flagged bullet is demoted to an OPEN QUESTION here — before the section is
+            // persisted — so it cannot reach compose as fact. Demotion, not deletion: the
+            // bullet count is preserved, because a silenced worker is a different
+            // regression.
+            postProcess: text => {
+                const r = demoteUnsourcedAttributions(text, externalContext, manifestPackages)
+                for (const f of r.demoted) {
+                    deps.logDebug?.(
+                        `worker:context: demoted unsourced attribution [${f.unsourced.join(',')}]`
+                            + ` cue="${f.cue}" — ${f.bullet.slice(0, 160)}`
+                    )
+                }
+                return r.text
+            }
         },
         {
             section: 'TOOLING',
@@ -693,13 +749,17 @@ export async function phaseResearch(
 
         const failure = classifyResearchWorker(spec.section, r)
         if (failure?.kind === 'fatal') throw failure.error
-        const sectionText =
+        const rawText =
             failure?.kind === 'runaway' ?
                 degradedSectionBody(spec.section, failure.reason, r.text)
             :   r.text.trim()
         if (failure?.kind === 'runaway') {
             deps.logDebug?.(`${spec.label}: degraded — ${failure.reason}`)
         }
+        // Post-check the worker's own output before it is persisted, so the cache a
+        // resume reads back is already gated. A degraded partial goes through it too —
+        // a truncated section can still carry a laundered claim.
+        const sectionText = spec.postProcess ? spec.postProcess(rawText) : rawText
         await persistSection(cacheHeading, sectionText)
         return {name: spec.section, text: sectionText}
     }

@@ -1,0 +1,1892 @@
+[
+  {
+    "pkg": "bun",
+    "query": "sql tagged template literal, sql class, bun.sql import from \"bun\", connection to postgres via database_url, query method, parameterized queries with $1 $2 placeholders",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class methods: query, all, values, get, transaction, begin, commit, rollback — full type signatures and return types",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class full type definition including all methods, properties, tagged template literal call signature, transactioncontext, contextcallbackresult",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.query type definition, sql.helper type, sql.options interface, transactionsql type, connect close end methods",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.transaction method signature, sql.begin method, transactionsql type definition, contextcallback type",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.sql global export — is it a default singleton sql instance or must construct new sql()? difference between `import { sql } from \"bun\"` and `new sql(url)`",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "export { sql } from \"bun\" — is sql exported as a named export from the \"bun\" package? what does `import { sql, sql } from \"bun\"` give access to?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class close end connect methods signatures, sql.options interface fields (idletimeout, max, url), postgresormysqloptions type",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.query<t> extends promise — what does the query resolve to? array of rows? how to get typed results from sql tagged template",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.transaction callback signature — what does the callback receive? transactionsql type and its methods. how to use transaction for atomic operations",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.helper — how to use sql(obj) helper inside tagged template for inserting objects, spreading columns and values automatically",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password — hash and verify method signatures, argon2id support, import path",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "what is the bun sql api? how does `import { sql } from \"bun\"` work? what types does it export? how do you connect to a database and run queries with tagged template literals? what does the result type look like?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql tagged template sql function bun.sql postgresql connection api",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.file bun.glob path fs readdir filesystem apis for reading files from directory",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class constructor connect execute transaction begin commit rollback tagged template types query",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.globs globsync filesystem glob file discovery api",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.begin sql.transaction execute method types interface for running raw sql strings",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.file readtext readfile file reading api",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "path module import path join resolve basename from node:path or built-in",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.execute method signature run raw sql string non-template query",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.query type sql.contextcallbackresult transactioncontextcallback types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.file class readtext method file type reading file contents as string",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql.unsafe method signature execute raw sql with parameters values array",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "import path from node:path or import fs from node:fs bun compatibility filesystem readdir readfilesync",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "node:fs/promises readdir readfile bun types compatibility",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "how do i use bun sql's begin() for transactions? how does the sql tagged template work for queries, and what methods does the sql class expose (begin, commit, rollback, etc.)?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password.hash argon2id — api signature and usage",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class tagged template parameterized queries — how to use sql tagged template with parameters",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "zod v4 api: z.object, z.string regex validations, z.number min/max, z.enum, z.array, z.nullable, z.optional, z.transform, refine, superrefine, pipe, safeparse, parse, z.infer, z.input, export types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.string() methods in v4: regex, minlength, maxlength, email, url, check, with — string validation methods available",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.number() methods in v4: min, max, positive, int — number validation methods available",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.enum, z.object, z.union, z.date, z.coerce — creating schemas for enums, objects, unions, dates, coercion in v4",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.partial, z.pick, z.omit — creating partial/pick/omit variants of object schemas in v4",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "zodobject methods: partial, pick, omit — instance methods on object schemas in v4",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "validator function signature, zodvalidator, how to use with hono route handlers — import and usage pattern",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function in version 0.8.0 — exact signature and usage for the version pinned by the task",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "validationtargets type — what target keys are available (json, form, param, query, header, cookie)",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "how to use transform, refine, and superrefine in zod v4? how to strip characters before validation? is z.preprocess available in v4 or what is the replacement?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password.hash and bun.password.verify type signatures, argon2id algorithm options",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password hash verify argon2id, sql class tagged template queries, crypto createhash sha256 randombytes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "context c.var middleware types, how to define custom variables on context, middlewarehandler, httpstatuscode, typedresponse",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class constructor tagged template literal method client query parameterized, new sql connection",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "context c.env type, variables interface, c.newresponse cookie setting c.header setcookie, middlewarehandler type signature next",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "c.get cookie getcookie, c.cookie or c.req.cookie to read incoming cookies, hono cookie helpers",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "env type generic parameters for context, how to extend variables with custom user property",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "setcookie helper function from hono/cookie, cookie options maxage httponly samesite secure path",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "crypto randombytes createhash sha256 digest bun crypto apis for generating random bytes and computing sha-256 hash",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to use c.var.get/set in middleware? how to define typed context variables with hono's typedcontext or helperstype? how to use getcookie and setcookie from hono/cookie?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router class constructor, .get .post route methods, cookie helper (getcookie setcookie deletecookie), typed router exports for rpc",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature, usage with json target, type inference",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password.verify argon2id, sql tagged template for postgres queries, crypto randombytes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "cookie helper setcookie options: httponly, samesite, path, secure, maxage — function signature",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router .basepath, .route for grouping routes rpc pattern, typed routes, hc client type inference",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "deletecookie function signature from hono/cookie helper",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "node:crypto",
+    "query": "randombytes function signature, createhash sha256",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "how to use zvalidator for validating json body in post requests. what are the imports and function signatures? show examples of zvalidator('json', schema).",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to create a router that can be chained with app.route() and produces apptype. how to export a hono router from a module for use with grouping-routes-rpc pattern. show the exact pattern for exporting a typed router and how hc<apptype> infers routes.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to properly type middleware with variables generics so that route schemas propagate correctly for hc<apptype> client inference. how does zvalidator affect the schema types? how to ensure the router's schema types flow through when mounted with app.route().",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to use the zvalidator from @hono/zod-validator with proper type inference so that hc<apptype> can infer request body types. what hono generics or schema types are needed?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "how does zvalidator contribute to hono schema types for hc client inference? does it add types to the router's schema automatically? what generic parameters are needed on the hono instance?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how does hono infer route schemas for hc client when using middleware like zvalidator? what causes hc to return unknown? how to ensure the router's route schema types propagate through middleware chains. look at the schema type and how routes contribute to it.",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "middleware types context next middlewarehandler getmiddlewaretype how to write custom middleware with c.env c.next c.req.ip()",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "middlewarehandler type signature context next types for custom middleware c.next c.json c.text",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "c.req.ip() method to get client ip address from hono request context",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "honorequest ip method c.req.ip getconninfo remote address",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "context c.json response status setter c.status method to set http status code like 429",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "context c.header method to set response headers like retry-after",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "env type for hono context generic parameters middleware handler environment",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono class constructor new hono() methods get post use router mounting",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "honorequest getheader method to access request headers like x-forwarded-for",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "honorequest class methods properties req raw headers body json valid",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to get client ip address using c.req.ip() in hono? what types/interfaces are needed for the request binding?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "app.request() testing api — how to make test requests, pass cookies, check responses",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class — new sql(), query tagged template, connection",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password — hash and verify apis",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun test — test runner api, describe, test, expect",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator — signature, usage with hono routes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "router class, creating router with new hono(), route methods get post put delete, c.req.valid(), c.req.param(), c.json(), c.cookie(), session middleware patterns",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.password.hash argon2id, sql tagged template literal for parameterized queries, crypto randombytes",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature, usage with json body validation, type inference with c.req.valid()",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql tagged template literal parameterized queries, bun.sql or sql import for database queries",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "crypto.webapi.getrandomvalues or crypto.randombytes for generating random bytes, webcrypto",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono class constructor, .route() method signature, and app.request() method type signature including options parameter",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature and how it validates request body",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun test runner globals - describe, test, beforeeach, expect, and test-globals types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun sql client - sql tagged template, sql class constructor, and query method for parameterized queries",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "z validator function signature, how to use with hono router",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router creation, h().get().post().patch().delete(), c.req.param(), c.req.query(), c.json(), c.notfound(), new httpexception",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router route chaining z validator middleware types apptype",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.object z.boolean z.infer safeparse schema definition",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "z validator function signature usage with hono routes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class tagged template literal query method connect",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono class constructor route chaining post get patch delete methods middlewarehandler type variables env",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono class constructor, .route() method, app.request() for testing — how to mount routers and make test requests",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class, sql tagged template literal, bun.sql import — how to import and use bun's sql client for postgresql",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class constructor, sql type declaration — new sql(url) or import {sql} from \"bun\"",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature — how to use it with hono route handlers for json body validation",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router chaining, c.req.query, c.req.param, c.req.valid, c.var, c.json, middleware types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature and usage",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class tagged template literal client method — bun.sql or new sql(url) and its query/unsafe methods",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql unsafe method signature — client.unsafe(sqlstring, values) parameterized query",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router methods, session middleware context types, c.var usage",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class tagged template literal, client() method, unsafe method",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zvalidator function signature, how to use with hono route handlers",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "z.object z.string z.number z.enum z.optional z.array schema definitions",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql query type, unsafe method return type, array result handling",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "core api: sharp() constructor, resize(), rotate(), withmetadata()/withoutmetadata(), tobuffer(), format detection (metadata), webp output options, quality setting, pipeline/chain methods, type signatures for input (buffer/uint8array), and error types for invalid images or unsupported formats",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp() input types - accept buffer, uint8array, arraybuffer. tobuffer() return type and options { format: 'webp', quality }. rotate() auto-rotate via exif. withmetadata() vs withoutmetadata() to strip metadata. metadata interface with orientation field. sharp constructor overloads and type signatures",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "tobuffer() method signature - options parameter with format, quality. returns promise<buffer> or uint8array. info object returned with dimensions. withoutmetadata() to strip all metadata. resize() with fit 'inside' option for bounding longest dimension",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp class constructor signature - accepts buffer, uint8array, arraybuffer. metadata() method to read image metadata including format, width, height, orientation. inputformat type or enum values for jpeg, png, webp",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "exported types and interfaces: sharp class, inputtype, outputinfo, metadata interface, resizeoptions, format enum values. what does sharp.metadata() return? what are the exported top-level functions like sharp.constructor or sharp.default?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "full type definitions for sharp@0.35.3 - all exported types, interfaces, and classes. the sharp constructor function signature. metadata() method. tobuffer() with format option. resizeoptions interface. all module exports",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "metadata interface fields - format (string), width, height, channels, orientation (number), size. resizeoptions interface with width, height, fit, position, withoutenlargement. tobuffer options with format and quality",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "formatenum values - list all supported input formats. fitenum values. the sharp() function default export signature - what does import sharp from 'sharp' give you? constructor accepts buffer/uint8array/arraybuffer",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "withoutmetadata() method - strip all metadata from output. also check if there is a withmetadata() method. how to control what metadata is preserved or stripped in the output image",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "tobuffer() options interface - format option (string like 'webp'), quality option (number 1-100). return type promise<buffer> with info object containing output width, height, size, format",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "tobuffer() full signature with all options - format, quality, resolvewithobject. overload that returns { data: buffer; info: outputinfo } when resolvewithobject is true",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "webp() method for output format - sets webp encoding with quality parameter. jpeg() png() heif() methods. how to set output format and quality via chained methods before tobuffer()",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "webp() method signature with options - quality parameter. jpeg() method. png() method. how to explicitly set output format via chained methods",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "outputinfo interface - fields: width, height, size, format, premultiply. sharp class main methods list: resize, rotate, tobuffer, metadata, webp, jpeg, png",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp class complete method list - all instance methods available on a sharp instance. webp() signature with quality option. constructor function that creates sharp instances from buffers",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "module exports - what does 'import sharp from \"sharp\"' give? is it a default export function? what are all the named exports? sharpinputoptions interface",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "resize() method - resizeoptions with width, height, fit: 'inside' to fit within bounds maintaining aspect ratio. how to use null for one dimension. example: resize({ width: 1600, height: 1600, fit: 'inside' })",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "webp() method full signature - options with quality (number 1-100), effort, smartsubsample. default quality for webp output",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "api for resizing images, auto-rotating via exif, stripping metadata, converting to webp, input format detection, and getting output as buffer/uint8array. key functions: sharp(), .resize(), .rotate(), .withmetadata(), .webp(), .tobuffer(), .metadata(). type signatures and options.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp() constructor — accept buffer/uint8array input, .resize() options (fit, width, height), .tobuffer() return type with info object, .webp() options (quality), input format detection via .metadata(), error handling for unsupported formats. also the top-level sharp.format() or supported formats list.",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp() pipeline api — chain .rotate().resize().webp().tobuffer() as async promises. the resize() method signature with {width, height, fit} options where fit='contain' fits within bounds. outputinfo interface returned by tobuffer(). how to detect input format from metadata().format property.",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "resizeoptions interface — width height fit fill contain cover entropy. webpoptions interface — quality effort. metadata interface — format width height channels. outputinfo interface — width height size format. sharp() function signature accepting buffer input.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "what are the key apis for: (1) creating a sharp instance from a buffer, (2) .rotate() method for exif auto-rotation, (3) .resize() with fit: 'inside' and withoutenlargement options, (4) .webp() encoding method, (5) getting the output as a buffer. what types does sharp export?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "how to embed custom exif data into a jpeg output? is there a .withmetadata() or similar method? how does the jpeg() method handle exif option?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router export pattern, typedapp, apptype inference, hc client type safety",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp constructor, .resize().webp() pipeline, compressimage-compatible api, input format detection, buffer input",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "multipart file upload handling, hono's built-in multipart parser, c.req.parsemultipart(), file type, router definition with .get/.post/.delete",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "z validator function usage, query validation, zvalidator import",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono router .route() mounting, new hono() constructor, typedroutes, variables generic, c.body() for multipart, c.blob(), streaming response with new response",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "c.req.parsebody() file type, multipart file array handling, bodydata type, parsebodyoptions including asarray",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "streaming binary response, c.body() with uint8array, c.stream(), sending bytea data as response with content-type headers",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class, sql tagged template literal, parameterized queries, .unsafe() method for dynamic sql",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to handle multipart form data file uploads? specifically c.req.formdata() and c.req.parsebody() — what types do they return, how to access file objects, and how to get the buffer from uploaded files (.arraybuffer(), .bytes(), etc.)",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "sharp",
+    "query": "sharp metadata format dimensions orientation api for checking image properties",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono request method for making http requests in tests — app.request signature and options",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono app routing, get/post methods, chaining routes, typedapp, hc client types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@hono/zod-validator",
+    "query": "zodvalidator function signature, how to use with hono routes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql tagged template, sql class, parameterized queries, bun.sql",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono route() method for mounting sub-routers, typed app with apptype, hc client generation",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono class constructor, route method, request method for testing — signatures and parameters",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "sql class constructor, connect method, tagged template call signature for parameterized queries",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to serve static files in hono 4.x — built-in file serving, servestatic middleware, or reading a file from disk and returning it as a response. also how to use app.all() or app.use() for spa fallback routing.",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono routerroute or route chaining — how to use .route() to mount sub-routers. also how to get the request method and path in a handler, and how to use c.env or built-in file reading.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono hono class constructor, env type, and the fetch() method signature. how to create a new hono instance and use its .get() .post() etc methods.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono c.body() — how to return a file content as a response body with custom content-type header. also c.text(), c.json(), and how to set response headers via c.header(). how to use app.get('*', handler) or app.all() for catch-all routes.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@types/bun",
+    "query": "bun.file() — how to read a file from disk synchronously. also bun.readablestream and fs.readfilesync equivalent in bun. how to read a file's content as text or bytes.",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@types/bun",
+    "query": "bun.file() function signature — how to call bun.file(path) to get a file reference, and the returned type (blob-like). also fs.existssync or checking if a file exists synchronously in bun.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono context type — c.req.method, c.req.path, c.header(), c.body(), c.notfound() signatures. how to return a not-found response.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@tailwindcss/cli",
+    "query": "cli usage, input output flags, watch mode, v4 installation",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.build api — entrypoints, outdir, minify, splitting, target, react fast refresh options for bundling react client",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "buildconfig type full signature — all fields including entrypoints outdir minify splitting target loaders jsx",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.$ or bun.spawn — running external commands like @tailwindcss/cli from build.ts",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": true,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "buildoutput type — success outputs logs fields returned from bun.build",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hono app get catch-all route c.html serve static file spa fallback",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.write or bun.file — writing files to disk, writefile function signature",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.$ template literal tagged function for running shell commands, spawn subprocess",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "buildartifact type — path, kind, loader fields from build output",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "bun.$ tagged template literal — run shell commands, await, exitcode, stdout",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "bun",
+    "query": "how to use bun.build for bundling? what is the correct import syntax? is it `import {bun} from 'bun'` or something else?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": true
+    }
+  },
+  {
+    "pkg": "tailwindcss",
+    "query": "how to define custom theme variables in @theme block? what is the correct syntax for @theme in tailwind v4? do i need to use `@theme inline` or `@theme` without prefixing with --color-* etc?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono/client",
+    "query": "hc<apptype> typed client factory, inferrequesttype, inferresponsetype, $get $post $patch $delete methods",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono/client",
+    "query": "inferrequesttype inferresponsetype types from hono/client how to extract request body type and response json type from hc endpoint",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono/client",
+    "query": "clientresponse type $get $post method signatures how to call endpoint with body params query and get json response",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono/client",
+    "query": "hc factory function signature base url parameter types exported from hono/client",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how to use hc<apptype> from hono/client for typed rpc client. how does the chaining work? what methods are available ($get, $post, $put, $patch, $delete)? how to pass json body, form data (multipart/form-data), query params, and how to handle binary responses (.arraybuffer(), .blob())?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "react",
+    "query": "createroot api, root type, render method",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "router component, route component, link component api — props, types, how to use router wrapper and route with path patterns",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "react-dom",
+    "query": "createroot function signature, root type, render method",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "useroute, uselocation, redirect — navigation hooks for programmatic redirects and route matching",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hc<apptype> client — $post method, response status checking, .json() return type, error response handling patterns",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "zod",
+    "query": "safeparse, parse, zoderror — validation methods for form input, error collection, field-level errors",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "react",
+    "query": "usestate, useref, useeffect hooks — signatures and usage patterns for form state management",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "link component — href prop, usage for navigation in react components",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "route router useroute userouter hooks api for defining routes and redirecting",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hc client typed rpc $post response $.json error handling",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "redirect component uselocation navigate function signature",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "how does the $post method from hc (hono client) return responses? what properties does the response object have (status, json(), etc)? how do i check for error status codes with the typed client?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "how to set up playwright component testing for react? what is the correct config structure? how does mount work? do i need a specific entry point or html template?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "uselocation hook, usesearch, useparams — api signatures and return types",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "tohavescreenshot api — snapshot directory, mask option, updatesnapshots flag, component testing mount fixture types",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "playwright",
+    "query": "tohavescreenshot api — options, mask, snapshotpathtemplate, fullpage, threshold. how to configure screenshot baseline directory and --update-snapshots cli flag",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "uselocation hook return type, navigate function signature. how to mock or provide custom router context for testing",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "defineconfig options for component testing — ctcachedir, ctport, screenshotdirectory, snapshotpathtemplate. how to configure testmatch glob pattern",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "playwright",
+    "query": "defineconfig testmatch pattern — how to match multiple test files with regex. snapshotdir and pathtemplate for screenshots",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "how to mock module imports in playwright component tests? does vi.mock work? how to set up module mocking with vite?",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "link component, uselocation hook, route, router api for navigation",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "useroute, uselocation, link - api signatures for wouter 3.x",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "hono",
+    "query": "hc client type inference with apptype — typed http client for hono routes",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "userouter useroute link navigation redirect",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "uselocation hook — returns tuple [location, navigate], usage for navigation",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "uselocation hook for navigation, route params access",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "router route useroute uselocation link navigate components api",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "react",
+    "query": "formevent type import react 19",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "mount fixture api, test/expect imports, react component testing setup, page fixture availability",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "tohavescreenshot api signature options threshold config",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "mountresult type mountoptions interface hooks config props",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "uselocation hook api return type navigate function signature",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "tohavescreenshot assertion api method signature on expect locator",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-core",
+    "query": "tohavescreenshot assertion api method signature options threshold",
+    "recorded": {
+      "unclear": true,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "playwright",
+    "query": "tohavescreenshot assertion api method signature on expect locator options threshold",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "@playwright/experimental-ct-react",
+    "query": "mount function signature, test/expect exports, component testing api",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "react",
+    "query": "errorboundary class component componentdidcatch getderivedstatefromerror react 19",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": true,
+      "caveated": false
+    }
+  },
+  {
+    "pkg": "wouter",
+    "query": "router route link api exports",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  }
+]

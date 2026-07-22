@@ -1,0 +1,593 @@
+NEXTTASKS — research-worker reliability (from mx5 run 15)
+=========================================================
+
+EVIDENCE BASE
+  run            mx5, 2026-07-21 04:39–14:38 UTC, 44 tasks + 1 final-gate autofix
+  runId          mru5zf21-5byo3731
+  artifacts      ~/hub/mx5/.pi-tasks/research-cache.json  (248 entries)
+                 ~/hub/mx5/.pi-tasks/TASK_*-debug.log     (04:46:26Z–14:14:32Z, this run only)
+                 ~/hub/mx5/.pi-tasks/TASK_0027.md         (the spec that shipped the fatal bug)
+  cache scope    all 248 entries timestamped 04:51:11Z–14:11:49Z — 0 entries predate the
+                 run, so no cross-run contamination. Verified, not assumed. (Re-verified
+                 2026-07-21: the timestamp is the ENTRY-level `at` field, not something in
+                 `details` — look in the right place before calling it absent.)
+  FIXTURE COMPLETENESS, added 2026-07-21: research-cache.ts caps the file at
+                 MAX_ENTRIES = 250 and evicts oldest-by-write-time past it. The run
+                 finished at 248. It came within TWO lookups of silently dropping its
+                 earliest entries, which would have biased this corpus with no warning
+                 anywhere. Nothing was lost this time; do not assume that holds next run.
+
+RULE FOR THIS FILE
+  Nothing here is acted on until it is REPRODUCED against the real local model
+  (llama-server @ 127.0.0.1:8080, Qwen3.6-27B-NVFP4-MTP.gguf, launched by
+  ~/hub/qwen/run-Q3.6-27B.sh). Static reading of artifacts produced the hypotheses;
+  only a live A/B may be used to claim an improvement. See STEP 0 — it is mandatory
+  and comes before any src/ change.
+
+
+SCORING METHOD (uses the system's OWN signals only — no human judgement)
+  invalid  = answer contains "unclear from this package" / "unclear from this page"
+           OR excerptVerified === false (emits the "cited excerpt not found verbatim"
+             warning; src/shared/child-output.ts:44)
+  caveated = answer carries the "[VERSION — verify] ... treat any API that differs across
+             majors as unverified" banner (a self-declared unverified answer)
+  valid    = none of the above
+
+MEASURED BASELINE — STATIC (this is the regression base for STEP 0 to reproduce live)
+  worker              results   valid    %valid   unclear   halluc-warn   ver-caveat
+  pi-worker-docs        210      123     58.6%      60          34            95
+  pi-worker-fetch        30       20     66.7%       7           4             0
+  pi-worker-search        8        8    100.0%       0           0             0
+  ALL                   248      151     60.9%      67          38            95
+
+  strict (version-caveated also excluded):
+    pi-worker-docs 70/210 = 33.3%   pi-worker-fetch 20/30 = 66.7%
+    pi-worker-search 8/8 = 100%     ALL 98/248 = 39.5%
+
+  SCOPE CAVEAT — READ BEFORE QUOTING THESE NUMBERS. They score CACHED results only, and
+  pi-worker-docs declines to cache project-source (`module: "."`) lookups by design
+  (src/workers/pi-worker-docs.ts:349–352 — `cacheKey` returns NULL for ".", which is what
+  opts the call out of caching; the tree mutates as tasks implement). [CORRECTED
+  2026-07-21: this previously cited :358 `cachePkg` returning undefined. That is a
+  different mechanism — `cachePkg` only supplies per-package provenance for resume
+  pruning, and returning undefined would still cache the entry. Conclusion unchanged.]
+  Of the 539
+  logged pi-worker-docs calls, 348 (64.6%) are `"."` and are therefore UNSCORED. The
+  58.6% describes the package-lookup half of the worker's job, not all of it. Project-
+  source retrieval quality is measured separately by scripts/live-project-docs-retrieval-ab.ts
+  and is NOT covered here.
+
+  CEILING WARNING: these are UPPER BOUNDS. Only self-declared failures are counted. A
+  confident, plausible, wrong answer scores as valid — and that is exactly what killed
+  this run (see F-1). True correctness is below 58.6% and is currently unmeasured. STEP 0
+  exists to put a real number under it.
+
+  per-package, pi-worker-docs (cached results / %valid):
+    bun 61/63.9   hono 55/54.5   sharp 26/42.3   @hono/zod-validator 16/87.5
+    wouter 15/93.3   zod 10/60.0   @playwright/experimental-ct-react 9/33.3
+    hono/client 4/50.0   react 4/50.0   playwright 3/66.7
+    @types/bun, node:crypto, @tailwindcss/cli, tailwindcss, react-dom,
+    @playwright/experimental-ct-core — 1–2 calls each, 0% valid
+  NOTE: all 61 `bun` answers carry the version banner ⇒ strict validity for bun is 0%.
+  BUT THAT IS STRUCTURAL, NOT A QUALITY SIGNAL [added 2026-07-21, validated]. The banner
+  text is `"bun-types" is not declared in this project's package.json, so this answer is
+  based on npm latest` — it fires on ABSENCE FROM THE MANIFEST (docs-core.ts:197–202), and
+  mx5 declares `@types/bun` but never `bun`/`bun-types`. So bun's 0% strict is a property
+  of the manifest, not of the answers. Two consequences: (1) do not read bun's strict rate
+  as an answer-quality defect; (2) any replay harness MUST run against a tree carrying
+  mx5's real package.json, or the caveat counter measures the fixture instead of the
+  worker. Confirmed live: a 4-question bun replay came back caveat 100%.
+
+CALL VOLUME  [RESOLVED 2026-07-21 — the cause IS now established; see below]
+  logged call lines, all under `worker:apis`, across TASK_*-debug.log:
+    pi-worker-docs 539  (348 to `"."`, 191 to named packages)
+    pi-worker-fetch 8     pi-worker-search 2
+  cached distinct results: docs 210, fetch 30, search 8.
+
+  The earlier text said cached results EXCEED logged calls "so some invocations produce
+  no task-log line", and left the cause open. The cause is now measured, not guessed.
+
+  METHOD. Every cache entry carries an entry-level `at` timestamp (research-cache.ts:88–100
+  — it is on the ENTRY, not inside `details`, which is why a first pass over `details`
+  found no timestamps). Each task's debug log gives a SPEC window (`run: start` → last
+  `phase:*: done`). The 44 task windows do not overlap at all, so attribution is
+  unambiguous.
+
+  RESULT — all 248 writes attributed, none left over:
+    199  written during a task's SPEC phases  (the logged channel)
+     49  written during a task's IMPLEMENTATION turn (19.8%)
+      0  attributable to neither
+  The implementation turn runs in the host session and writes NO TASK_*-debug.log, so its
+  research-worker calls are cached and never logged. That is the entire gap. Restricted to
+  the spec phases the two populations reconcile:
+    docs   191 logged / 190 stored      search  2 logged / 2 stored
+    fetch    8 logged /   7 stored
+  (the residuals are research-cache HITS, which log a tool call but store nothing, plus one
+  fetch — bun.com/docs/bundler — that was logged and never cached at all).
+
+  CONSEQUENCE FOR STEP 0 ITEM 5: no instrumentation is needed to lift the embargo. The rule
+  is "count SPEC-PHASE writes only, and the two populations describe the same thing". The
+  impl turn's 49 results remain invisible to any future audit — a real observability hole,
+  but it blocks nothing in PROMPT 1–3 and closing it is a src/ change.
+
+
+FINDINGS
+========
+
+F-1  pi-worker-context asserted an external-API fact it has no tool to check, and
+     attributed it to live docs.  [SEVERITY: caused total product failure]
+
+  WHAT IT WROTE (TASK_0027.md, CONTEXT block, verbatim):
+    "The `hono` dependency is pinned at `^4.12.31` in package.json, and the external
+     context confirms `hc<AppType>` pattern with base URL `/api` for same-origin relative
+     paths works correctly (per Hono RPC docs LIVE data)."
+
+  VALIDATED FACTS:
+    a) worker:context is given tools `read,grep` ONLY — src/task/phases.ts:623.
+       It cannot call pi-worker-docs, pi-worker-fetch or pi-worker-search. The claim
+       about hono's RPC client behaviour was therefore NECESSARILY from model memory.
+    b) No "Hono RPC docs LIVE data" exists anywhere in research-cache.json. The
+       attribution is fabricated. (grep over all 248 entry values.)
+    c) The one real hc lookup returned only a type signature with zero usage semantics:
+         key: pi-worker-docs hono/client::hc factory function signature base url parameter
+         body: "hc ... takes two parameters: baseUrl of type Prefix and an optional
+                options of type ClientRequestOptions."
+       and the direct usage question returned "unclear from this package":
+         key: pi-worker-docs hono::how to use hc<apptype> from hono/client for typed rpc
+              client. how does the chaining work? ...
+    d) RESEARCH_CONTEXT_PROMPT's LIVE-DATA RULE (src/task/prompts.ts:191–195) constrains
+       ONLY version numbers and service status ("### npm:", "### service:",
+       "### freshness-check skipped"). There is NO rule governing API *usage* claims, and
+       nothing verifies that a "per LIVE data" attribution corresponds to a real block.
+    e) MECHANISM: one citable fact (the pinned version, genuinely from EXTERNAL CONTEXT)
+       was fused in a single sentence with an uncitable claim (base URL semantics) under
+       one shared attribution. The true half laundered the false half.
+
+  DOWNSTREAM: TASK_0027's spec promoted it to a hard requirement in BOTH sections —
+    CONSTRAINTS: "The base URL must default to a relative path (`/api`)"
+    ACCEPTANCE:  "exports a default `api` object ... with base URL `/api`"
+  The same spec separately states RPC paths already contain `.api` (the photos note), so
+  the spec is internally self-contradictory. Implementation obeyed it exactly:
+    src/client/api.ts:4   hc<AppType>('/api')  +  api.api.auth.login.$post()
+    ⇒ every request goes to /api/api/... ⇒ 404 ⇒ 100% of the product's API surface dead.
+  REPRODUCED: browser load of HEAD emits 5× `404 /api/api/auth/me`; server is fine
+  (`curl -X POST /api/auth/login` returns 200 with a valid session).
+
+
+F-2  Escalation is NOT broken. A TYPE-ONLY answer satisfies the escalation trigger
+     without answering the question.  [SEVERITY: shared root cause of BOTH fatal defects]
+
+  THIS FINDING WAS CORRECTED DURING ANALYSIS — the earlier reading ("no escalation") is
+  WRONG and must not be re-adopted. scripts/live-search-escalation-probe.ts already
+  measured this seam at 5/5 and concluded there is no escalation deficit. The live data
+  from run 15 AGREES with that probe:
+
+    TASK_0024 (worker:apis, verbatim tool order from the debug log):
+      docs bun "Bun.build API — entrypoints, outdir, minify, splitting…"
+      docs bun "BuildConfig type full signature…"
+      search  "Bun.build output filename convention…"      <-- ESCALATED
+      fetch   https://bun.com/docs/bundler
+      fetch   https://bun.com/reference/bun/build
+      search  "Bun.build \"outdir\" field BuildConfig…"      <-- ESCALATED AGAIN
+    The docs→search→fetch chain works, on the real model, in this very run.
+
+  NOW THE FATAL TASK, same run, same config, search demonstrably available:
+    TASK_0027 (worker:apis): 17 pi-worker-docs calls — 4 to `hono/client`, 13 to `"."`.
+    ZERO search. ZERO fetch. Final call: "hc factory function signature base URL
+    parameter types exported from hono/client" → returned `baseUrl: Prefix`.
+
+  MECHANISM (the actual defect): escalation fires when the worker perceives the fact as
+  MISSING. A type signature is not missing — it is a well-formed, confident, on-topic
+  answer that names the very parameter asked about (`baseUrl`). So it terminates the
+  search without supplying the semantics (is it an origin, or a mount prefix?). The
+  worker stopped, and worker:context then filled the semantic gap from memory (F-1).
+  "unclear from this package" is the HONEST failure and does escalate; the DANGEROUS
+  failure is the type signature that looks like an answer.
+
+  SUPPORTING FACTS (validated):
+    a) 67 of 248 cached results (27.0%) are an explicit "unclear" non-answer.
+    b) The design doc names the answers explicitly. DESIGN/PROJECT.md §5 line 184:
+       "...per https://hono.dev/docs/guides/rpc", and §13 lists four hono.dev URLs
+       including the RPC guide and grouping-routes-rpc. pi-worker-fetch produced 30
+       results: 13 playwright.dev, 11 tailwindcss.com, 4 bun.com, 1 bun.sh, 1 github.com
+       — ZERO hono.dev.
+    c) Identical shape for the second fatal defect: §13 cites
+       https://bun.com/docs/runtime/sql; fetch retrieved bun.com/reference/bun/build,
+       /BuildConfig and bun.sh/docs/test/configuration.md — never runtime/sql. The docs
+       worker had answered "unclear from this package" to
+         "what is the bun sql api? how does `import { sql } from "bun"` work? ..."
+       Consequence: src/server/db/migrate.ts:62 executes DDL as `await tx`${content}``,
+       sending the whole .sql file as bind parameter $1.
+       REPRODUCED on a clean database: `syntax error at or near "$1"` — a fresh install
+       of this project cannot create its schema at all.
+    d) The pointer was IN the retrieved text and was not followed: the .d.ts excerpts
+       pi-worker-docs returns carry `@see {@link https://hono.dev/docs/...}` JSDoc links.
+       hono.dev appears in cache values ONLY inside those excerpts, never as a fetch.
+    e) Non-answers are cached and re-served as cache hits (details.hitCache === true on
+       "unclear" entries), so one dead end is paid for many times. CAUSE, exactly:
+       src/workers/pi-worker-docs.ts:362 `cacheable: d => d.childExitCode === 0`. A child
+       that ran fine and answered "unclear from this package" exits 0, so the non-answer
+       is cached. Cacheability is keyed on process health, not on answer content.
+
+  STRUCTURAL CAUSE: pi-worker-docs reads bundled .d.ts declarations. For a type-only
+  declaration (`hc: (baseUrl: Prefix, options?) => ...`) the semantic answer is not in
+  the package at all — it lives at the `@see` URL. The worker cannot distinguish "I
+  retrieved the type" from "I answered the question".
+
+
+F-3  pi-worker-fetch: 10 of 30 failures, four distinct mechanisms.
+     [SEVERITY: no shipped defect traced to it this run — see (e)]
+
+  (a) FALSE "unclear" — the answer was in the excerpt it had just retrieved. 4 cases.
+      Strongest: url playwright.dev/docs/test-components, query "show the exact api of
+      the router fixture ... what methods does it have?". Retrieved excerpt reads
+      "Call `router.route(url, handler)` ... Call `router.use(handlers)` ..." and the
+      answer returned was "unclear from this page". Same shape for Bun BuildOutput
+      (excerpt contains "returns a BuildOutput with {success: false}"), Tailwind @source,
+      Tailwind `static` theme option. Retrieval worked; the abstention threshold is
+      miscalibrated. These are recoverable losses.
+
+  (b) EXCERPT FIELD CONTAINS THE CHILD'S OWN PROSE, not a quote. 4 cases
+      (excerptVerified === false). Example, url bun.com/reference/bun/build:
+        excerpt: "The page does not list fields for outdir, outfile, splitting, external,
+                  or target as direct BuildConfig properties."
+      That is a conclusion presented as a quotation, and it is factually WRONG — `outdir`
+      is a real BuildConfig field. Another (playwright test-components) stitched a fake
+      quote from non-contiguous fragments joined by "....".
+
+  (c) PAGE CANNOT CONTAIN THE ANSWER. 2 cases. Queries "which playwright version
+      introduced the router fixture?" and "show the example from v1.46.0" were aimed at
+      /docs/release-notes, which covers only 1.61→1.7. The worker reported this itself.
+      URL is chosen before page coverage is known; there is no retry against another page.
+
+  (d) URL FRAGMENT DISCARDED. 1 case. Given
+      playwright.dev/docs/api/class-locator#locator-set-input-files it returned the page's
+      opening paragraph ("Locators are the central piece of Playwright's auto-waiting...")
+      and answered "unclear". VALIDATED AT CODE LEVEL: there is no hash/fragment handling
+      anywhere in the fetch path — `new URL()` appears in src/workers/html-clean.ts only at
+      lines 34, 45, 242 and is used for `.hostname` only. A deep link degrades to a
+      top-of-page grab.
+
+  (e) CONTAINMENT WAS LUCK, NOT A GATE. The wrong `outdir` claim in (b) did not cause a
+      defect only because build.ts uses `outdir`, `splitting` and `naming` anyway. No gate
+      caught the bad research.
+
+  (f) NOT PROVEN — do not act on this without evidence: one of the four
+      excerptVerified===false cases (bun.com/reference/bun/BuildConfig) has an excerpt that
+      LOOKS like genuine page markup with escaped markdown (`string\[\]`, `[field](/ref/…)`).
+      isExcerptInContent (src/shared/child-output.ts:26) is a whitespace-normalised
+      substring match with no markdown-escape normalisation, and it is called against the
+      full `cleaned.markdown` (src/workers/fetch-core.ts:95) while the child sees a clamped
+      copy (25k head + 5k tail, fetch-core.ts:13–15,110). Whether this is a verifier false
+      positive CANNOT be determined: the source content is not retained anywhere. This is
+      precisely why PROMPT 3 item 4 exists — make the failure diagnosable first, then judge.
+
+
+F-4  LATENT: pi-worker-docs cannot spawn anything under a Bun runtime.
+     [SEVERITY: dormant in production — found while building the STEP 0 harness]
+
+  pi-worker-docs.ts:128–132 selects the spawn primitive:
+      internals.spawn ?? (globalThis.Bun !== undefined ? globalThis.Bun.spawn : node spawn)
+  but runChild (child-process.ts:385) calls it node-style:
+      spawn(invocation.command, invocation.args, {cwd, shell: false, stdio: [...]})
+  whereas Bun.spawn's signature is (cmdArray, opts). Under Bun every spawn in that tool —
+  the npm auto-install AND the child summariser — throws
+      TypeError: cmd must be an array
+  REPRODUCED: calling the registered tool from a `bun run` harness fails 3/3 with that
+  error, stack through runAutoInstall → docsRaw → run → execute.
+
+  WHY IT IS DORMANT, not shipped-broken: pi runs the extension under node, so the Bun
+  branch is never taken in production. Run 15 proves it positively — 95 cache entries
+  carry `autoInstalled: true`, i.e. the npm spawn succeeded. Note also that docs-core.ts
+  has NO such branch (it uses node's spawn unconditionally), which is why a direct
+  docsFocused call works under Bun while the tool does not.
+
+  NOT FIXED HERE — STEP 0 is measurement-only. The baseline harness injects node's spawn
+  through the tool's own documented `internals.spawn` hook, substituting the process-spawn
+  primitive and nothing else. Decide separately whether the Bun branch should be repaired
+  or deleted; it is currently untested and unreachable.
+
+
+NON-FINDING (recorded so it is not re-litigated)
+  The missing `gen_random_uuid()` defaults on invites/sessions/listings/listing_photos are
+  NOT a worker or gate defect. DESIGN/PROJECT.md §4 literally specifies
+  "id uuid pk default gen_random_uuid()" for users and bare "id uuid pk" for the other four
+  tables. The pipeline transcribed the human design faithfully.
+
+
+=========================================================
+STEP 0 — REGRESSION BASELINES (MANDATORY, BEFORE ANY src/ CHANGE)
+=========================================================
+WHY FIRST. Every number above is static forensics on one run. A one-run number cannot
+tell a real defect from model variance, and cannot show that a change helped. Nothing in
+PROMPT 1–3 may be COMMITTED until its seam has a RECORDED live baseline to beat.
+
+ENVIRONMENT (fixed for every measurement — record it in each harness banner)
+  model    Qwen3.6-27B-NVFP4-MTP.gguf via llama-server @ 127.0.0.1:8080
+  launcher ~/hub/qwen/run-Q3.6-27B.sh   — use this script, NOT a hand-rolled invocation.
+           A sub-default batch (`-b 512 -ub 256`) corrupts large parallel tool calls;
+           that was bisected over 930 live reps and must not be reintroduced.
+  invoke   PI_BIN=$(command -v pi) bun run scripts/<harness>.ts <arm> [TRIALS]
+  the pi child is an ordinary HTTP API client against that server — no OOM risk.
+
+HOUSE RULES (already established by the existing harnesses — follow them exactly)
+  - Verdicts go through scripts/ab-verdict.ts: PASS=0, FAIL=1, ABSTAIN=2. ABSTAIN exits
+    NON-ZERO on purpose: "the baseline never produced the shape" must never be readable
+    as a pass. A zero-vs-zero result is ABSTAIN, not success.
+  - Metrics are MECHANICAL and recorded at the TOOL LAYER (a stub appending to calls.log,
+    a deterministic probe over the emitted text). NEVER the model's self-report.
+  - Baseline arm = the shipped flow with the new lever stripped by asserted string
+    surgery. Treatment arm = the real shipped code path. Both arms in one process so the
+    counts are directly comparable.
+  - TRIALS >= 8 per arm for any model-variable seam. The batch-test A/B fired 3/8 (~1 in
+    4); anything under 8 reps cannot distinguish a real effect from noise at that rate.
+  - Harnesses live in scripts/, not src/. lint+test cover scripts/ — keep them green.
+
+DELIVERABLES OF STEP 0 (no src/ behaviour change in this step)
+  1. scripts/live-worker-validity-baseline.ts                          [BUILT 2026-07-21]
+     Replays a fixed corpus of research questions against the real model and reports, per
+     worker, the same four counters used above (valid / unclear / halluc-warn / caveated).
+     Corpus = the 210 cached package questions from this run. Output is the LIVE regression
+     base for the table in this file. Expect it to differ from the static numbers —
+     record the difference, do not explain it away.
+     FIDELITY CORRECTION: the questions are NOT "recorded verbatim". The cache KEY is
+     `normalizeQuery`d — whitespace-collapsed AND LOWERCASED (research-cache.ts:156) — and
+     the original string is stored nowhere else (the debug logs clip the query at 60
+     chars). So the corpus carries `hc<apptype>`, not `hc<AppType>`: the same question
+     semantically, not byte-for-byte. Extracted by scripts/fixtures/build-run15-fixtures.ts
+     into scripts/fixtures/run15-docs-corpus.json.
+     SEAM: the pi-worker-docs TOOL via makeWorkerTool's execute — not docsFocused — because
+     the version banner, the hallucination warning and the details record are assembled at
+     the tool layer and those three ARE the metric. Cache is off mechanically (the tool
+     consults it only when PI_TASK_RUN_ID is set, shared.ts:98–105) and the harness asserts
+     that rather than assuming it.
+     MEASURED COST: 7.4s/question mean over a 3-question calibration (hono/client 4.2s,
+     hono 5.3s, bun 12.7s), so 210 x 8 = 1680 lookups is ~3.5h serial — NOT the ~7h a first
+     estimate suggested. That estimate wrongly divided the WHOLE research phase (four
+     workers, their own model turns, and 348 fast `"."` lookups) by docs calls alone.
+     llama-server runs PARALLEL=1, so there is no concurrency to spend without restarting
+     the server and halving per-slot context.
+     MEASURED REP 1 (210 lookups, 28.4 min, 0 errors) vs the static run-15 table:
+         valid       61.9%  vs 58.6%   COMPARABLE
+         unclear     46     vs 60      COMPARABLE
+         halluc-warn 43     vs 34      COMPARABLE — and it ROSE
+         strict      42.4%  vs 33.3%   *** NOT COMPARABLE ***
+         caveated    62     vs 95      *** NOT COMPARABLE ***
+     MANIFEST DRIFT, the reason for those two asterisks. The version banner fires on
+     ABSENCE from package.json, and mx5's manifest GREW across the run — sharp landed
+     ~07:45, @hono/zod-validator mid-run, etc. A question asked before its package was
+     installed got a banner; replayed against the FINAL manifest it does not. Per package
+     (live/static caveats): bun 61/61 and node:crypto 1/1 unchanged (never declared);
+     sharp 0/22, hono 0/6, @hono/zod-validator 0/4, @tailwindcss/cli 0/1 all collapsed to
+     zero. So live caveat 62 = bun 61 + node:crypto 1, exactly. `strict` is defined as
+     valid-and-not-caveated, so it inherits the artifact. Both counters are self-consistent
+     across reps and across a two-armed A/B on the same fixture — fine as a regression
+     base — but must never be quoted against the run-15 table.
+     THE RISE IN halluc-warn IS THE REAL SIGNAL: 43 vs 34, and equal-or-higher in every
+     package with volume (bun 15/13, hono 12/11, sharp 3/1, ct-react 3/0, wouter 2/1).
+     PROMPT 2's invariant 2 forbids this counter rising; the live floor is already above
+     what the static record implied, which strengthens the case for PROMPT 2 rather than
+     weakening it.
+  2. scripts/live-typeonly-answer-probe.ts
+     The F-2 seam, which no existing harness covers. Feed worker:apis the verbatim
+     TASK_0027 refined task; stub pi-worker-docs to return the REAL recorded
+     `baseUrl: Prefix` type-signature answer; record at the tool layer whether the worker
+     escalates to search/fetch. Baseline expectation from the live run: it does NOT.
+     This probe must ABSTAIN loudly if the baseline escalates, because then F-2's
+     mechanism is wrong and PROMPT 2 must be re-derived.
+  3. scripts/live-context-attribution-probe.ts                        [MEASURED 2026-07-22]
+     The F-1 seam. Run the real worker:context on the verbatim TASK_0027 refined task and
+     EXTERNAL CONTEXT, and count bullets that assert external-API behaviour carrying an
+     attribution cue with no corresponding EXTERNAL CONTEXT block. Baseline = how often
+     the `/api` claim (or an equivalent unsourced API-semantics claim) appears.
+
+     RESULT: 2/8 reps, PASS, all invariants held. 104 bullets total, 102 unflagged (the
+     detector discriminates; it is not blanket-flagging). Fixture = mx5@4b9827d, the run's
+     OWN `chore: checkpoint before "Client API module …"` commit, so the tree is exactly
+     the pre-TASK_0027 state. Mean 4.3 min/rep (range 1.8–7.6).
+     The rep-8 hit reproduces the F-1(e) laundering mechanism verbatim:
+       "`hono` version in package.json is `^4.12.31` which supports the `hc` RPC client
+        from `hono/client`; the LIVE external context confirms `hc<AppType>(ba…"
+     — a true, locally-verifiable half (the pinned version) fused with an unsourceable half
+     (hc base-URL semantics) under ONE attribution. Rep 5's hit has the same shape and even
+     invents a TypeError behaviour for `hc<AppType>('/')`.
+
+     *** PROMPT 1's A/B AS SPECIFIED IS UNDERPOWERED — READ BEFORE RUNNING IT ***
+     PROMPT 1 says PASS = "baseline emits the claim in >= 1 rep AND treatment drives it to
+     0", at >= 8 reps. With the MEASURED baseline rate p = 2/8 = 0.25, a treatment arm
+     scores 0/8 by chance alone with probability 0.75^8 = 0.10. So that criterion declares
+     victory on a do-nothing lever roughly ONE RUN IN TEN. Required reps per arm for a
+     false-pass probability of:
+         10%  ->  8 reps   (what the file currently specifies)
+          5%  -> 11 reps
+          1%  -> 17 reps
+     At 4.3 min/rep, 17 reps/arm is ~73 min/arm, ~2.4h for both — affordable. RECOMMEND
+     >= 16 reps per arm for PROMPT 1, not 8.
+     CAVEAT ON THAT NUMBER: 2/8 has a wide Wilson 95% CI (~3%–65%). If the true rate is
+     nearer 0.10, 5% false-pass needs ~28 reps. Re-estimate p from the baseline arm as it
+     runs rather than trusting 0.25 as settled.
+
+     ALSO OBSERVED: rep 2 emitted ZERO bullets — a silent worker:context. The "CONTEXT is
+     non-empty" invariant only checks the total across reps, so it did not catch a single
+     degraded rep. 1-in-8 silent is worth watching; if PROMPT 1's guard drops bullets, a
+     silent worker must not be scored as "no unsourced claim".
+  4. Fixture for PROMPT 3: extract the 10 failing (url, query) pairs from
+     research-cache.json into a checked-in fixture.            [DONE 2026-07-21]
+     scripts/fixtures/run15-fetch-failures.json (10 pairs, with the recorded excerpt and
+     answer) plus run15-fetch-regression.json (the 20 currently-VALID results PROMPT 3's
+     A/B needs as its regression set). Same lowercasing rider as item 1 applies.
+  5. Close the logging gap identified above so call counts and cached results describe the
+     same population.                                          [RESOLVED 2026-07-21]
+     No src/ change was needed: see CALL VOLUME above. The gap is that the IMPLEMENTATION
+     turn writes no debug log; 199 of 248 cache writes are spec-phase, 49 are impl-turn, 0
+     unattributable. Restricted to spec phases the populations reconcile (docs 191/190,
+     search 2/2, fetch 8/7), so the embargo on quoting a ratio is LIFTED for spec-phase
+     numbers. Adding impl-turn logging remains open as a separate observability item.
+
+EXIT CRITERION FOR STEP 0
+  Three recorded baseline numbers, each from >= 8 live reps, committed alongside the
+  harnesses. Only then does PROMPT 1 start.
+
+
+=========================================================
+PROMPT 1 — Make pi-worker-context unable to launder an unsourceable claim
+=========================================================
+REQUIRED BASELINE: scripts/live-context-attribution-probe.ts (STEP 0 item 3).
+
+GOAL
+  A CONTEXT bullet may assert external library/API BEHAVIOUR only when that behaviour is
+  traceable to a block actually present in EXTERNAL CONTEXT. Today the worker has tools
+  `read,grep` (phases.ts:623) — it cannot consult any documentation — yet nothing stops it
+  writing an API-semantics claim, and nothing checks a "per LIVE data" attribution.
+
+DO
+  1. Extend the LIVE-DATA RULE in RESEARCH_CONTEXT_PROMPT (src/task/prompts.ts:191–195)
+     from versions/service-status to a third class: API USAGE SEMANTICS (how a function is
+     called, what a parameter means, what a default is). Rule: state it only if quoting an
+     EXTERNAL CONTEXT block; otherwise write it as an open question, not a fact.
+  2. Forbid fusing a sourced fact and an unsourced claim in one sentence under one
+     attribution — that is the exact laundering mechanism in F-1(e). One claim per bullet.
+  3. Add a DETERMINISTIC post-check over the emitted CONTEXT section (new module, pure,
+     unit-tested like the other probes): flag any bullet that (i) contains an attribution
+     cue ("per ... LIVE data", "the external context confirms", "docs confirm", "per the
+     official docs") AND (ii) whose subject package has no corresponding block in the
+     EXTERNAL CONTEXT actually passed to that worker. Flagged bullets are dropped or
+     demoted to a grill question — they must not reach compose as fact.
+  4. Decide explicitly and record the decision: either give worker:context read access to
+     the APIS worker's output (it currently receives none — phases.ts:618 passes only
+     `promptHeader`, while worker:apis at :599–605 is handed the FILES section via `prior`),
+     or keep it isolated and forbid external-API claims outright. Do not leave it able to
+     assert what it cannot see.
+
+LIVE A/B (required before the fix commit lands)
+  harness  scripts/live-context-attribution-ab.ts (promote the STEP 0 probe to two arms)
+  arms     baseline  = shipped RESEARCH_CONTEXT_PROMPT with the new API-semantics rule
+                       stripped by asserted string surgery, no post-check.
+           treatment = the real shipped phase, belt (prompt rule) + braces (post-check).
+  fixture  verbatim TASK_0027 refined task + its EXTERNAL CONTEXT; plus one synthetic
+           fixture with the same trap shape against a different library, so the result is
+           not a single-case fit.
+  metric   MECHANICAL: the deterministic post-check run over the emitted CONTEXT text.
+           An unsourced attributed API-semantics bullet = a hit. Never model self-report.
+  trials   >= 8 per arm per fixture.
+  PASS     baseline emits the unsourced claim in >= 1 rep AND treatment drives it to 0.
+  ABSTAIN  baseline never emits it — the lever is unexercised; F-1 must be re-derived
+           before proceeding. Do not commit the change on an ABSTAIN.
+  invariant  CONTEXT bullet count and the count of legitimately-sourced bullets must not
+           collapse — a worker silenced into saying nothing is a regression, not a fix.
+           Assert this as an ab-verdict Invariant, not as a comment.
+
+
+=========================================================
+PROMPT 2 — Treat a type-only answer as an unanswered question
+=========================================================
+REQUIRED BASELINE: scripts/live-typeonly-answer-probe.ts (STEP 0 item 2).
+
+GOAL
+  Close F-2. Escalation already works (TASK_0024, and the 5/5 in
+  scripts/live-search-escalation-probe.ts). The hole is that a type signature terminates
+  the search while leaving the semantics unknown. Do NOT re-plumb escalation — it is not
+  broken. Change what counts as an answer.
+
+DO
+  1. TYPE-ONLY DETECTION. When a pi-worker-docs answer for a usage question consists only
+     of a declaration/signature restatement and no behavioural statement, mark it
+     UNANSWERED rather than returning it as the answer. This is the core lever; keep it
+     deterministic and unit-tested. Ground it on the recorded case: query "hc factory
+     function signature base url parameter types" → answer "hc ... takes two parameters:
+     baseUrl of type Prefix and an optional options of type ClientRequestOptions."
+  2. FOLLOW THE POINTER. When a docs answer is UNANSWERED (type-only, or the explicit
+     "unclear from this package") and the retrieved excerpt contains an
+     `@see {@link https://...}` URL, hand that URL to pi-worker-fetch and re-ask the same
+     question. This is free — the link is already in the text (F-2d).
+  3. SPEC-CITED URLS ARE RESEARCH INPUTS. Extract http(s) URLs from the design/spec text
+     (DESIGN/PROJECT.md §13 is a literal reference list) and make them candidate fetch
+     targets for worker:apis, ranked above model-chosen URLs when the question names the
+     same package. Validate on this run: hono.dev/docs/guides/rpc and
+     bun.com/docs/runtime/sql must both get fetched.
+  4. DO NOT CACHE NON-ANSWERS AS HITS. "unclear", type-only, and excerptVerified===false
+     results must not be served from research-cache as if they were answers (they
+     currently are — details.hitCache === true on unclear entries).
+
+LIVE A/B (required before the fix commit lands)
+  harness  scripts/live-typeonly-escalation-ab.ts
+  arms     baseline  = shipped worker:apis flow, type-only detection stripped (asserted).
+           treatment = the real shipped path with detection + pointer-follow.
+  fixture  verbatim TASK_0027 refined task, pi-worker-docs STUBBED to return the REAL
+           recorded `baseUrl: Prefix` answer for the hc query (deterministic, identical
+           on every ask). pi-worker-fetch and pi-worker-search STUBBED so no network is
+           touched AND so the metric is recorded by the tool layer.
+           Second fixture: the bun-SQL shape from F-2c, so this is not a single-case fit.
+  metric   MECHANICAL: each stub appends to calls.log on invocation. A trial ESCALATED
+           iff calls.log gains a fetch or search line after the type-only answer.
+  trials   >= 8 per arm per fixture.
+  PASS     baseline escalates in ~0 reps AND treatment escalates in all/most.
+  ABSTAIN  baseline already escalates — then F-2's mechanism is disproved and this whole
+           prompt is void. Stop and re-derive; do not "fix" a working seam.
+  invariant  1: total child spawns per task must not blow up — escalation on every
+           type-only answer is a cost. Record added wall-clock; research is already 63.7%
+           of spec-phase time (8777s of 13783s this run — recomputed 2026-07-21 by summing
+           every `phase:*: done ms=` across the 44 task logs; the earlier 8188s/12960s was
+           close but not reproducible. Per-phase means: research 199.5s, refine 46.8s,
+           grill 28.0s, critique 20.7s, compose 18.2s).
+  invariant  2: excerptVerified===false must NOT rise. Turning silence into confident
+           wrong answers is the failure this whole file is about.
+
+
+=========================================================
+PROMPT 3 — Stop pi-worker-fetch discarding answers it already retrieved
+=========================================================
+REQUIRED BASELINE: STEP 0 item 4 (the 10-pair fixture) replayed live, arms recorded.
+
+GOAL
+  Close F-3(a)(c)(d) and make F-3(f) decidable. 4 of fetch's 10 failures threw away an
+  answer that was on screen; 1 more was a deep link degraded to a page-top grab.
+
+DO
+  1. RECALIBRATE ABSTENTION. Rule 5 of buildPrompt (src/workers/fetch-core.ts:129) sends
+     the child to "unclear from this page" on any ambiguity. Require it to answer from the
+     retrieved content when the content supports an answer, and to state what IS present
+     when it does not. Anchor the wording on the router-fixture case in F-3(a) — an excerpt
+     that literally lists the two methods must never yield "unclear".
+  2. HONOUR THE URL FRAGMENT. When the URL carries a #fragment, use it to select/anchor the
+     section handed to the child instead of head-truncating the page. There is currently no
+     fragment handling at all in the fetch path (validated: F-3d).
+  3. HANDLE PAGE-COVERAGE MISS. When the child reports the page does not cover the asked-
+     about version/topic (F-3c), return that as a distinct outcome so the caller can pick a
+     different URL — not as "unclear", which is indistinguishable from "page has no answer".
+  4. MAKE VERIFICATION DIAGNOSABLE. Retain (or hash-index) the source content that
+     isExcerptInContent was checked against, so an excerptVerified===false can be
+     attributed to fabrication vs. a normaliser gap. Only after this exists, decide whether
+     isExcerptInContent (src/shared/child-output.ts:26) needs markdown-escape normalisation.
+     Do not "fix" the normaliser first — F-3(f) is explicitly unproven and loosening the
+     verifier blind would weaken the one working hallucination detector.
+
+LIVE A/B (required before the fix commit lands)
+  harness  scripts/live-fetch-abstention-ab.ts
+  arms     baseline  = shipped fetch-core buildPrompt (rule 5 as-is), no fragment handling.
+           treatment = recalibrated prompt + fragment anchoring.
+  fixture  the 10 recorded failing (url, query) pairs, plus the 20 currently-VALID fetch
+           results as a regression set. Page content must be SNAPSHOTTED to disk so the
+           A/B is deterministic and offline — a live re-fetch would let page drift
+           masquerade as a lever effect.
+  metric   MECHANICAL, two counters per arm: (i) answers that are "unclear from this page",
+           (ii) answers with excerptVerified === false.
+  trials   >= 8 per arm.
+  PASS     the 4 false-"unclear" cases and the 1 fragment case resolve to sourced answers
+           AND counter (ii) does not increase on the 20-result regression set.
+  FAIL     counter (ii) rises — the change bought answers with fabrication. Revert.
+  invariant  the genuinely-unanswerable cases (F-3c, page cannot contain the answer) must
+           STILL not produce an answer. Relaxing abstention must not manufacture content;
+           assert this explicitly or the harness is measuring the wrong thing.
+
+
+ORDER
+  STEP 0 always first — no exceptions, no partial starts on the prompts.
+  Then PROMPT 1 — the only one of the three that caused a shipped total failure, and the
+  smallest change. Then PROMPT 2 — shared root cause of both fatal defects, but it costs
+  wall-clock and needs the timing invariant. Then PROMPT 3 — highest measured failure
+  count, lowest proven blast radius this run.
+
+  A prompt is DONE when its live A/B is PASS on >= 8 reps per arm against the recorded
+  STEP 0 baseline, with every invariant green. An ABSTAIN is not a pass — it means the
+  experiment never ran, and the finding behind it has to be re-derived before anything lands.

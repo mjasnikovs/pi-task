@@ -430,6 +430,117 @@ describe('phaseResearch per-worker persistence', () => {
     })
 })
 
+describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
+    // Verbatim from TASK_0027.md — the bullet that killed the run. worker:context has
+    // read+grep only, so the base-URL half necessarily came from model memory; fused with
+    // the true pinned-version half under one attribution it read as sourced.
+    const FATAL =
+        '- The `hono` dependency is pinned at `^4.12.31` in package.json, and the external '
+        + 'context confirms `hc<AppType>` pattern with base URL `/api` for same-origin '
+        + 'relative paths works correctly (per Hono RPC docs LIVE data).'
+    const LEGIT =
+        '- `AppType` is exported from `src/index.ts` as `export type AppType = typeof app`.'
+
+    test('demotes the unsourced attributed bullet BEFORE the section is persisted, and keeps the bullet count', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // The post-check reads the dependency names from the project manifest.
+            nodeFs.writeFileSync(
+                nodePath.join(cwd, 'package.json'),
+                JSON.stringify({name: 'x', dependencies: {hono: '^4.12.31'}})
+            )
+
+            let toolingShouldFail = true
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of a CONTEXT section')) {
+                    return agentEndResponse(`${FATAL}\n${LEGIT}`)
+                }
+                if (prompt.includes('content of a TOOLING section') && toolingShouldFail) {
+                    return agentEndResponse('')
+                }
+                return agentEndResponse('- finding')
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+
+            // TOOLING fails so the phase throws with CONTEXT already persisted — which is
+            // exactly where the gate has to have run: the cache a resume reads back must
+            // never carry the laundered claim either.
+            await expect(
+                phaseResearch(deps, 'a refined goal with no mentions', {
+                    getFileInventory: async () => ''
+                })
+            ).rejects.toThrow(/TOOLING worker produced no output/i)
+
+            const cached = (await readSection(cwd, 'TASK_0001', 'research worker CONTEXT')) ?? ''
+            expect(cached).toContain('OPEN QUESTION')
+            expect(cached).not.toMatch(/LIVE data/i)
+            expect(cached).not.toMatch(/external context confirms/i)
+            // INVARIANT: two bullets in, two bullets out — demoted, not deleted.
+            expect(cached.split('\n').filter(l => /^\s*- /.test(l))).toHaveLength(2)
+            expect(cached).toContain('`AppType` is exported')
+            // The observation itself survives for the grill to ask about.
+            expect(cached).toContain('base URL')
+
+            // Resume: the gated section is served from cache unchanged and the assembled
+            // research text never carries the attribution.
+            toolingShouldFail = false
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+            expect(out).toContain('OPEN QUESTION')
+            expect(out).not.toMatch(/LIVE data/i)
+        })
+    })
+
+    test('a CONTEXT section with nothing to flag is passed through untouched', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            nodeFs.writeFileSync(
+                nodePath.join(cwd, 'package.json'),
+                JSON.stringify({name: 'x', dependencies: {hono: '^4.12.31'}})
+            )
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of a CONTEXT section')) {
+                    return agentEndResponse(
+                        `${LEGIT}\n- \`hono\` is pinned at \`^4.12.31\`; external context confirms latest is 4.12.31.`
+                    )
+                }
+                return agentEndResponse('- finding')
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+            expect(out).not.toContain('OPEN QUESTION')
+            expect(out).toContain('external context confirms latest is 4.12.31.')
+        })
+    })
+})
+
 describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
     test("serial: APIS prompt carries FILES' finished section + the no-re-derive rule; parallel: it does not", async () => {
         const run = async (): Promise<string> => {

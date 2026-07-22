@@ -1,0 +1,182 @@
+[
+  {
+    "url": "https://bun.com/reference/bun/build",
+    "query": "outdir field, outfile field, splitting field — are these part of buildconfig? what is the output filename when entrypoint is \"src/client/main.tsx\" and outdir is \"dist\"? does it produce main.js or app.js?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/installation/tailwind-cli",
+    "query": "tailwind css v4 cli usage — command line flags for input (-i), output (-o), watch mode, installation with npm",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/theme",
+    "query": "what is the exact syntax for defining custom color tokens and font families inside the @theme directive in tailwind css v4? do colors use --color-* prefix or just --*? do fonts use --font-* prefix? what about border radius values like --radius-sm, --radius-md?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/adding-custom-styles",
+    "query": "show exact examples of @theme directive syntax for defining custom colors (--color-*), font families (--font-*), and border radius values (--radius-*). include the full css syntax with quotes and commas for font stacks.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/theme",
+    "query": "how to define custom theme variables using @theme directive in tailwind css v4? what is the exact syntax? do i use --color-* prefix or just the property name like bg, surface etc? how do font families and border radii get defined?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/theme#referencing-theme-values-in-arbitrary-utilities",
+    "query": "how to make @theme variables always appear in the built css output even if no utilities reference them? is there a way to force all theme tokens to be emitted? what about @theme inline or other variants?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/detecting-classes-in-source-files",
+    "query": "how does tailwind v4 auto-detect content? what is the base directory for scanning? does @theme static force all theme variables into output css regardless of usage? how to make custom theme tokens appear in built css?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/theme",
+    "query": "what is the exact syntax for @theme static in tailwind v4? show example code. does it require a specific format or is it just @theme static { ... }?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/detecting-classes-in-source-files",
+    "query": "how does the source() function work with @import tailwindcss? can i use @import \"tailwindcss\" source(\".\") to set the base directory for content scanning? what about nested input files?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://tailwindcss.com/docs/detecting-classes-in-source-files",
+    "query": "what is the exact syntax for @source inline() in tailwind v4? show example code. how do i use it to force generation of utility classes like bg-bg, text-fg, font-display, radius-sm?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "what is the correct config structure for playwright component testing with react? how do i configure the html template, vite config, and mount function? what are the required settings?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://bun.sh/docs/test/configuration.md",
+    "query": "how to exclude files from test discovery in bun test? what are the available options for path patterns, ignore patterns, or exclude patterns in bunfig.toml [test] section?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "how to mock module imports in playwright component tests? does vi.mock work? how to set up module mocking with vite in playwright ct?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "how to use hooksconfig with beforemount to inject mock dependencies? how does the playwright/index.tsx setup work with hooksconfig? show examples of passing mocks via context or hooks.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "show the exact code example of hooksconfig with beforemount in playwright/index.tsx and how to call mount({hooksconfig: {...}}) from a test file. how does the config type flow between test and index.tsx?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "how to mock fetch or network requests in playwright component tests? can i use page.route or context.route? show examples of intercepting api calls in component tests.",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "does the router fixture require any special configuration in playwright-ct.config.ts? is it available by default? what base url does fetch use in component tests?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/api/class-route",
+    "query": "show the signature of page.route() — what are the callback parameter types? what methods does the route object have (fulfill, continue)? what properties does the request object have (url(), method(), postdata())?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://github.com/microsoft/playwright/releases/tag/v1.46.0",
+    "query": "show the exact code example of router.route() in playwright component tests. what is the callback signature and parameter types?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  },
+  {
+    "url": "https://playwright.dev/docs/test-components",
+    "query": "does the router fixture work with component tests? is it experimental? does it need special setup? what's the difference between page.route and router.route in component tests? are there known issues?",
+    "recorded": {
+      "unclear": false,
+      "hallucWarn": false,
+      "caveated": false
+    }
+  }
+]
