@@ -116,7 +116,44 @@ CONTEXT not collapsing.
   - DO 3 (spec-cited URLs ranked as fetch targets): NOT implemented. Bigger change, touches
     RESEARCH_APIS_PROMPT. Deferred — DO 1/2/4 target the measured defect directly.
   - Tests: src/workers/pi-worker-docs-typeonly.test.ts (11 pass). Full suite 2139 pass.
-  - NOT YET LIVE-VALIDATED. PROMPT 2 is NOT done until its A/B passes.
+  - Tests: src/workers/pi-worker-docs-typeonly.test.ts (11 pass). Full suite 2140 pass.
+
+### PROMPT 2 — LIVE A/B RESULT: **NOT VERIFIED. THE LEVER DID NOT MOVE THE METRIC.**
+
+    baseline  (2 runs): 14/17 reps terminated without escalating (82%)
+    treatment (1 run):  10/11 reps terminated without escalating (91%)
+    Fisher: p = 0.88 — NO reduction. If anything slightly worse (not significantly).
+
+Note the probe printed "PASS" — but it is scored as a BASELINE probe whose target shape IS
+termination, so a PASS there means THE BAD BEHAVIOUR PERSISTS. Do not misread that line.
+
+DIAGNOSIS (measured, not guessed). The implementation is correct: run live against the
+recorded query, the detector FIRES and emits the UNANSWERED banner. Two other live queries
+correctly did not fire — one returned "unclear from this package" (a different failure mode
+with its own escalation channel) and one returned a genuinely good behavioural answer with
+a usage example. So the tool works.
+
+The EXPERIMENT is wrong, in two compounding ways:
+ 1. METRIC/LEVER MISMATCH. The metric counts ALL terminations. The lever targets only
+    type-only answers. A worker terminates for many reasons — most often because it thinks
+    it already has the answer. F-2's baseline (82% terminate) was never shown to be CAUSED
+    by type-only answers; I asserted that link and did not verify it. That is my error.
+ 2. REACH CEILING. The detector is calibrated precision-first: exactly 1 of 150 recorded
+    answers flags (0.7%). By construction it cannot move an 82% aggregate. The precision I
+    verified and praised is the very thing that caps its effect.
+
+WHAT IS ACTUALLY TRUE: the fix reliably prevents the SPECIFIC fatal case (the hc query that
+killed run 15) — verified live at the tool layer. It does NOT generalise, and the A/B as
+specified in nexxtasks cannot demonstrate a population-level effect for it.
+
+OPTIONS (needs a human decision — do NOT pick one silently):
+ (a) Accept narrow reach. It blocks the catastrophic case; that may be enough.
+ (b) Broaden the detector — directly trades against PROMPT 2 invariant 1 (needless
+     escalation costs wall-clock; research is already 63.7% of spec-phase time).
+ (c) Re-derive F-2. Termination has broader causes than type-only answers; the finding as
+     written is too narrow to explain the 82%.
+ The right METRIC is conditional: escalation GIVEN a type-only answer occurred. Measuring
+ it needs instrumentation of the firing rate, which does not exist yet.
 - WATCH: PROMPT 2 wiring touches pi-worker-docs.ts:362 (`cacheable`) and phases.ts. Its A/B
   needs the real-flow probe (live-typeonly-answer-probe.ts) as baseline = 14/17 terminate,
   and must show treatment escalates instead, WITHOUT excerptVerified===false rising (inv 2)
@@ -144,7 +181,22 @@ only the code under test differs. Queued behind the A/B (one GPU slot).
 
 Expected combined baseline ~6/24 -> p ~0.011 against a 0/24 treatment.
 
-## PROMPT 1 — RESULT SO FAR: PROMISING BUT **NOT YET PROVEN** (2026-07-22)
+## PROMPT 1 — **VERIFIED, p = 0.0185** (2026-07-22). COMMITTED d451103.
+
+FINAL: baseline 4/24 (pre-change) vs treatment **0/40**.
+  Fisher one-tailed, all reps        p = 0.0167
+  Fisher one-tailed, productive only p = 0.0185   <- conservative scoring governs
+  CONTEXT did not collapse: 14.2 bullets/rep vs pre-change 13.0.
+  Braces ARE exercised live: gate demoted 2 bullets across 40 reps; same-process
+  arms in the 24-rep extension read ungated 2/24 -> gated 0/24, PASS.
+  One demoted bullet is the run-15 FATAL CLAIM ITSELF:
+    "The EXTERNAL CONTEXT block for Hono RPC shows that `hc<AppType>('/api')` with a
+     relative path works for same-origin calls…"
+  Verdict computed by scripts/prompt1-combined-verdict.ts, not by eye.
+  Division of labour: the BELT (prompt rule) suppresses most instances upstream; the
+  BRACES (post-check) catch the residue. Both are load-bearing.
+
+## superseded — earlier PROMPT 1 interim (kept so the record shows the correction)
 
 Measured, all live, all mechanical:
 
