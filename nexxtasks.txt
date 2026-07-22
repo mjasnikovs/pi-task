@@ -834,8 +834,76 @@ A/B SPECIFICATION (the metric is the part PROMPT 2 got wrong — do not repeat i
 
 
 =========================================================
-OPEN QUESTION — the 82% is UNEXPLAINED, and the tooling to explain it now exists
+OPEN QUESTION — the 82% — DIAGNOSED 2026-07-22. Termination is NOT answer-triggered.
 =========================================================
+*** RESULT FIRST. The diagnostic below was built and run: scripts/live-apis-termination-
+    diagnostic.ts, 12 live reps of the REAL phaseResearch on the pre-TASK_0027 tree, nothing
+    stubbed, Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080, 215 docs answers recorded, PASS,
+    every invariant green. Raw data ~/tmp/apis-termination-diagnostic/{diagnostic.json,
+    rep-N.jsonl}; re-scorable offline with DIAG_DIR=… and no model time.
+
+    THE 82% REPRODUCES, HIGHER: 11 of 12 reps terminated without ever calling search or
+    fetch = 91.7%. (0 reps made zero docs calls, so the other failure did not occur here and
+    nothing had to be excluded.)
+
+    THE LAST-ANSWER CLASS DOES NOT DISCRIMINATE. This is the answer to the question as posed,
+    and it is a null result, not a missing measurement:
+        last answer of the 11 terminated reps:  valid 7 (63.6%)  halluc-warn 2 (18.2%)
+                                                unclear 1 (9.1%)  type-only 1 (9.1%)
+        ALL 180 answers those same reps saw:    valid 63.9%  halluc-warn 28.3%
+                                                unclear 6.1%  type-only 1.7%
+    Exact two-sided binomial per class against the rep's own answer rate, Bonferroni over the
+    four classes: every adjusted p = 1.000 except type-only (0.338). Nothing is over- or
+    under-represented in the last position. The last answer is a draw from what that worker
+    happened to see.
+    (The first cut of this test used a "largest departure >= 10pp" threshold and duly declared
+    halluc-warn significant at 10.2pp — on 2 of 11 reps, where ONE rep moves a cell 9pp. At
+    this n a percentage-point threshold is a coin flip with a decimal point. The exact test
+    costs nothing and says the opposite.)
+
+    ONLY 1 OF 12 REPS ESCALATED, so the "split by whether the rep escalated" the question asks
+    for has a one-rep cell and CANNOT be read. Any terminated-vs-escalated difference from
+    this run would be one rep wearing a percentage. Not reported as if it were.
+
+    WHAT THE DATA POINTS AT INSTEAD — three measured facts, none of them about answer class:
+     1. THE WORKER STOPS ON AN ANSWER IT ACCEPTS. 63.9% of everything it saw scored valid, and
+        it is not sitting in front of a wall of non-answers: its OWN questions come back
+        "unclear" 6.1% of the time (11/180) against 25.3% for the replayed run-15 corpus. It
+        terminates because it judges the APIS section done, not because a lookup failed.
+     2. ITS RESEARCH IS MOSTLY LOCAL. 75.6% of docs calls in terminated reps are project
+        source (`module: "."`), where escalating to the web is not even applicable. But the
+        LAST answer is a package lookup in 9 of 11 terminated reps — it does end on an
+        external question and still does not escalate.
+     3. THE `valid` CLASS OVER-COUNTS BY ~10%. 14 of 134 valid answers carry an abstention
+        hedge the "unclear from this package/project" predicate does not match — e.g. the
+        rep-2 terminating answer opens "The `hc` function signature ... are not explicitly
+        defined in the provided package content". Correcting for it does not change the null;
+        it does mean every `valid` rate in this file is an upper bound by about that much.
+
+    CONSEQUENCE, and it is the general form of what PROMPT 2 learned the expensive way: a
+    lever CONDITIONED ON RECOGNISING SOMETHING ABOUT AN ANSWER is aimed at a variable that
+    does not move termination. Type-only was one such lever (0.54% reach); "escalate on
+    unclear" would be another (6.1%, and it already escalates). The variables that are not
+    flat are what the worker is TOLD TO DO NEXT and what it is pointed AT — which is exactly
+    PROMPT 4, whose lever conditions on no answer at all. That is now a measured reason to
+    run PROMPT 4 rather than an ordering preference.
+
+    STILL NOT ANSWERED, and not claimed to be: WHY the worker judges itself done. That is a
+    question about the APIS prompt and the model's stopping behaviour, not about the research
+    tools, and nothing in this run measures it. ***
+
+INSTRUMENTATION FIX THIS REQUIRED (behaviour-neutral, shipped in the same commit): the
+PI_TASK_TYPEONLY_LOG sink was wired only into pi-worker-docs' npm-package branch. The
+`module: "."` project-source branch returns ~150 lines earlier and recorded NOTHING — and
+project source is the MAJORITY of what worker:apis asks (13 of 17 docs calls in run 15's
+fatal task, 7 of 12 in the first diagnostic rep). "The last docs answer before the worker
+stopped" was therefore not readable off that sink at all: its last row was routinely not the
+worker's last answer. The project branch also words its abstention "unclear from this
+PROJECT", which the package-only predicate scored as a valid answer. Both fixed; the sink now
+observed 215 of 217 docs call lines (the residual is the tool's early-return failure paths,
+which produce no answer to record). Still off unless the env var is set, still side-effect
+only, still swallowing every write failure.
+
 FACT: 14 of 17 live probe reps ended worker:apis without ever calling search or fetch (82%).
 FACT: PROMPT 2 assumed type-only answers caused that. MEASURED 2026-07-22, they cannot —
 the detector fires on 0.54% of answers (9/1680) and on 2 of 210 questions. The 82% has some
@@ -847,7 +915,7 @@ pi-worker-docs answer — query, full answer text, type-only verdict, excerptVer
 JSONL, gated on PI_TASK_TYPEONLY_LOG, no-op when unset. So for any live worker:apis rep the
 COMPLETE research transcript is now on disk and re-scorable offline.
 
-THE DIAGNOSTIC TO RUN FIRST (mechanical, no lever, no behaviour change):
+THE DIAGNOSTIC — RUN 2026-07-22, see the result block at the top of this section:
   For each rep, take the LAST docs answer before the worker stopped and classify it by the
   predicates already defined in this file: valid / "unclear from this package" /
   excerptVerified===false / type-only. Report the distribution, split by whether the rep

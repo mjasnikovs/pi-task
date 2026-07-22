@@ -1,9 +1,12 @@
 import {test, expect} from 'bun:test'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import {registerPiWorkerDocs, packageRootOf, type PiWorkerDocsInternals} from './pi-worker-docs.js'
 import {openCache} from './docs-cache.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
+import {readTypeOnlyLog, TYPEONLY_LOG_ENV} from './typeonly-log.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
@@ -234,4 +237,55 @@ test('packageRootOf maps a subpath specifier to its package.json key', () => {
     expect(packageRootOf('@scope/name')).toBe('@scope/name')
     expect(packageRootOf('@scope/name/sub/deep')).toBe('@scope/name')
     expect(packageRootOf('  react/jsx-runtime  ')).toBe('react')
+})
+
+/**
+ * INSTRUMENTATION COVERAGE for the project-source branch.
+ *
+ * `module: "."` is the MAJORITY of what worker:apis asks — 13 of 17 docs calls in run 15's
+ * fatal task, 7 of 12 in the first live termination-diagnostic rep — and that branch returns
+ * long before the package path's logDocsAnswer call. With it uninstrumented, "the last docs
+ * answer before the worker stopped" was unanswerable: the sink's last row was routinely not
+ * the worker's last answer, and every project-source abstention scored as a valid answer.
+ *
+ * The record must also say that the type-only detector was NOT applied here, because it is
+ * not: inventing a verdict on this path would let a firing rate computed off this sink count
+ * answers the PROMPT 2 lever never reaches.
+ */
+test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-log-'))
+    fs.writeFileSync(
+        path.join(dir, 'svc.ts'),
+        'export class UserService {\n  list(): string[] {\n    return []\n  }\n}\n',
+        'utf8'
+    )
+    const sink = path.join(dir, 'answers.jsonl')
+    const saved = process.env[TYPEONLY_LOG_ENV]
+    process.env[TYPEONLY_LOG_ENV] = sink
+    const cache = openCache(':memory:')
+    try {
+        await runTool(
+            {
+                openCache: () => cache,
+                npmVersionLookup: async () => null,
+                spawn: fakeSpawnSimple(
+                    '<answer>unclear from this project</answer>\n<excerpt>class UserService</excerpt>'
+                )
+            },
+            {module: '.', query: 'what does UserService expose?'},
+            dir
+        )
+        const rows = readTypeOnlyLog(fs.readFileSync(sink, 'utf8'))
+        expect(rows.length).toBe(1)
+        expect(rows[0].module).toBe('.')
+        // The project wording of the honest non-answer must score as unclear, not as valid.
+        expect(rows[0].unclear).toBe(true)
+        expect(rows[0].typeOnly).toBe(false)
+        expect(rows[0].reason).toMatch(/detector is not applied/i)
+    } finally {
+        cache.close()
+        if (saved === undefined) delete process.env[TYPEONLY_LOG_ENV]
+        else process.env[TYPEONLY_LOG_ENV] = saved
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
 })

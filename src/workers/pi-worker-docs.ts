@@ -230,6 +230,26 @@ export function registerPiWorkerDocs(
                     parsed,
                     verified
                 )
+                // SAME instrumentation channel as the package path below, extended to the
+                // project-source branch because that branch is the MAJORITY of what
+                // worker:apis asks — 13 of 17 docs calls in run 15's fatal task, 7 of 12 in
+                // the first live diagnostic rep. With only the package path recorded, "the
+                // last docs answer before the worker stopped" was unanswerable: the sink's
+                // last row was routinely not the worker's last answer.
+                //
+                // `typeOnly` is recorded FALSE with an explicit reason rather than by running
+                // the detector: this path never applies it, and the record must say what the
+                // shipped tool decided, not what it would have decided. Inventing a verdict
+                // here would let a firing-rate computed off this sink count answers the lever
+                // does not reach.
+                logDocsAnswer({
+                    module: params.module,
+                    query: params.query,
+                    answer: parsed.answer,
+                    typeOnly: false,
+                    reason: 'project-source lookup — the type-only detector is not applied here',
+                    excerptVerified: verified
+                })
                 return {
                     text,
                     details: {
