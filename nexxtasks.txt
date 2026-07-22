@@ -1161,3 +1161,108 @@ A HARNESS DEFECT WORTH RECORDING, because it produced a complete and plausible r
   else would have. Absolute paths and `||` now make it unreachable. This is exactly the class
   the brief warns about: a zero from a broken harness is indistinguishable from a zero from
   the model unless something asserts the channel carried data.
+
+
+=========================================================
+STAGE 2 — THE OUTPUT-CONTRACT LEVER. BUILT, A/B'd, FAILED, UNWIRED. 2026-07-23.
+IT IS THE ONE LEVER OF THREE THAT MOVED THE BEHAVIOUR — AND IT MOVED IT BY FABRICATING.
+=========================================================
+STATUS: FAIL, not abstain. Lever built on the mechanism STAGE 1 named, A/B'd over 40 live reps
+both arms in one process, interleaved, two fixtures, real phaseResearch on each task's own
+checkpoint tree, nothing stubbed but the network. UNWIRED from src/task/prompts.ts, exactly as
+PROMPT 4 was. Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080. Raw data ~/tmp/apis-contract-ab/ab.json
+(every emitted APIS section + every package query retained; re-scorable offline with AB_DIR=…).
+
+THE LEVER. STAGE 1 named the mechanism as OUTPUT-FORMAT COMPLETION: worker:apis stops when every
+entry on its list has a SIGNATURE, because "<name> <one-line signature or use>" is the whole
+contract and a signature fills it. So the lever adds a FIELD A SIGNATURE CANNOT FILL — per
+third-party package entry, a SEMANTICS clause (what an argument means / defaults to / is relative
+to) with an ordered fallback: ask pi-worker-docs a BEHAVIOUR question; if the package text does
+not answer, escalate to search/fetch; only if both fail, write `SEMANTICS: UNVERIFIED: <question>`.
+Text in src/task/apis-contract.ts (KEPT, unit-tested). This is a change to the OUTPUT CONTRACT,
+not a third instruction to obey — the variable neither prior lever touched.
+
+TWO METRICS, DECLARED IN WRITING BEFORE THE RUN, scored at the tool layer from the shipped
+PI_TASK_TYPEONLY_LOG sink with the COMMITTED classifyQuery UNCHANGED (scripts/apis-semantics.ts,
+which imports it rather than redefining it, so "unchanged" is a git-diff check not a claim):
+  PRIMARY   per rep, >= 1 BEHAVIOUR-class PACKAGE docs query. Baseline MEASURED at STAGE 1 =
+            2/15 = 13.3%. NOT "did it stop" — that metric is what made PROMPT 2's p=0.88 unreadable.
+  SECONDARY per rep, any search/fetch call. Reported, never used to pass, no arm sized on it.
+
+MANDATORY ORDER FOLLOWED — measure before implement:
+  STEP A  FEASIBILITY PROBE, 4 reps, lever spliced into a patched dist, src untouched. NOT
+          REFUTED: primary 4/4 vs 13.3%; package-query behaviour share 15/42 = 35.7% vs 4.9%;
+          escalation 2/4 vs 0/15. "Not refuted" is not a pass — 4 reps can only refute; it
+          licensed the three hours, nothing more. (scripts/live-apis-contract-probe.ts,
+          ~/tmp/apis-contract-probe.) Two warning signs it already showed: entries/rep 7.5 vs
+          STAGE 1's 18.5, and 5.5 min/rep vs 3.5 — both carried into the A/B invariants.
+  STEP B  IMPLEMENTED in src/task/prompts.ts, unit-tested (prompt builder + the pure scorer +
+          the contract text). lint + full suite green (2230 pass) before anything live.
+  STEP C  DELIVERY CHECK, two real reps: treatment worker:apis prompt 20,095 chars WITH the
+          block verbatim, baseline 16,843 WITHOUT, arms differ by the block alone. So the A/B's
+          result is a fact about the model, not the plumbing — the check PROMPT 4 taught is
+          non-optional. (scripts/apis-contract-delivery-check.ts.)
+  STEP D  THE A/B, 40 reps. Surgery verified three ways (exactly-once anchor; loaded-module
+          assembled prompt at startup; re-checked in EVERY rep from a dump patch). Positive
+          control asserted a real child reaches pi-worker-fetch before spending the hours.
+
+THE RESULT — the primary metric moved as hard as any lever in this file ever has:
+    PRIMARY   task27-hono  baseline 1/10  treatment 10/10   Fisher p = 0.0001
+              task28-wouter baseline 1/10 treatment 10/10   Fisher p = 0.0001
+              POOLED       baseline 2/20  treatment 20/20   Fisher p = 0.0000
+              package-query behaviour share  3/81 = 3.7%  ->  79/193 = 40.9%  (STAGE 1 4.9%)
+    SECONDARY escalation   baseline 1/20  treatment 10/20   Fisher p = 0.0017 (STAGE 1 0/15)
+  This is the OPPOSITE of PROMPT 2 (reach 0.54%, could not move its metric) and PROMPT 4 (model
+  read the instruction and ignored it). Here the model OBEYS: told to produce a semantics field,
+  it asks a behaviour question to produce one, and it escalates to do it. STAGE 1's mechanism is
+  now confirmed BY MANIPULATION — the output contract is the variable that governs the behaviour.
+
+WHY IT IS A FAIL ANYWAY — invariant 2, the fabrication guard, and it is the whole point of the file:
+    invariant 1  entry count did NOT collapse — 11.6 -> 11.9 entries/rep. HELD. (The probe's
+                 scary 7.5 was small-n; over 40 reps the count is flat. The early 44->18 pair
+                 was one verbose baseline rep, not a trend.)
+    invariant 2a ungrounded-symbol rate ROSE 4/406 = 1.0% -> 20/428 = 4.7%, one-tailed Fisher
+                 p(rise) = 0.0010. BROKEN. Threshold (p >= 0.05) fixed before the data existed.
+    invariant 2b excerptVerified===false did NOT rise — 47/170 -> 55/290, p(rise) = 0.99. HELD.
+    invariant 3  docs+search+fetch <= 2x — 171 -> 312 calls; wall clock 3.1 -> 4.3 min/rep. HELD.
+  AND THE TREATMENT DIAGNOSTIC THAT EXPLAINS 2a — the semantics clause the lever ADDS (scored by
+  a counter separate from STAGE 1's, because STAGE 1's scores entry NAMES and the clause lives in
+  the remainder of the line, so without it the lever's own output sat outside the guard):
+    semantics-clause symbols 2775, ungrounded 415 = 15.0% (baseline emits no such clause: 0).
+    `SEMANTICS: UNVERIFIED:` abstentions used: 0, in 40 reps, across every clause emitted.
+  THE MECHANISM OF THE FAILURE, one sentence: the model obeys "ask a behaviour question" and
+  ignores "abstain when you cannot verify", so it fills every semantics field — 15% of it from
+  memory. That is F-1's laundering (a plausible wrong semantics clause presented as fact), the
+  exact failure the file exists to prevent, reproduced by the lever meant to prevent it. A lever
+  that buys behaviour questions with fabrication is a FAIL, not a win. Invariant 2 was written to
+  catch precisely this and it did.
+
+WHAT THIS AND THE TWO PRIOR FAILURES SAY TOGETHER, and it is a sharper statement than STAGE 1's:
+  PROMPT 2 (answer side) and PROMPT 4 (target side) did not move the behaviour at all. The output
+  contract (this lever) moves it decisively — STAGE 1 was right about the variable. But moving the
+  question the worker ASKS does not move whether it ABSTAINS when the answer is not there. The
+  worker's willingness to write down what it could not verify is a SECOND variable, upstream of
+  F-1, that none of these three levers touches — the mandatory-abstention instruction is itself
+  an instruction the model ignores, the same way PROMPT 4's was. The next thing built against this
+  must move the ABSTENTION behaviour, not the questioning behaviour, and it cannot be another line
+  of prompt telling the model to abstain — that has now been measured, at 0/40, to not work. A
+  deterministic gate that REJECTS an unverifiable semantics clause (as PROMPT 1's braces demoted
+  the unsourced CONTEXT bullet) is the shape that has worked before; an instruction is not.
+
+KEPT (the durable asset, ~3h of model time to regenerate and no new code):
+  src/task/apis-contract.ts + src/task/apis-contract.test.ts        the lever text, unit-tested
+  scripts/apis-semantics.ts + scripts/apis-semantics.test.ts        the pure scorer (imports the
+                                                                     committed classifyQuery unchanged)
+  scripts/apis-contract-surgery.ts                                  splice/strip + assembled-prompt check
+  scripts/live-apis-contract-probe.ts                               STEP A (re-score PROBE_DIR=…)
+  scripts/apis-contract-delivery-check.ts                           STEP C
+  scripts/live-apis-contract-ab.ts                                  STEP D (re-score AB_DIR=…)
+NOT KEPT: the ${APIS_SEMANTICS_CONTRACT} interpolation in RESEARCH_APIS_PROMPT — reverted, with a
+  comment at the site recording why. ~1000 chars of prefill in every APIS prompt that buys
+  behaviour questions with a measured 15% fabrication rate is exactly what this file exists to stop.
+  Re-running the A/B requires re-wiring that interpolation first (STRIP_CONTRACT's anchor is absent
+  while unwired) — same standing caveat PROMPT 4's harness carries.
+
+STILL OPEN, unchanged by STAGE 2: PROMPT 3's live baseline (harness now BUILT and lint-green,
+  scripts/live-fetch-abstention-baseline.ts, NOT YET RUN); worker:apis writing from memory
+  (1/16 here); the abstention variable named above.

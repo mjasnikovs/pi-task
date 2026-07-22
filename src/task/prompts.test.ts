@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {APIS_SEMANTICS_CONTRACT} from './apis-contract.js'
 import {
     REFINE_PROMPT,
     RESEARCH_CONTEXT_PROMPT,
@@ -147,6 +148,21 @@ describe('research prompts enforce relevance / size discipline', () => {
         expect(p).toContain('bun:sql')
         expect(p).toContain('import { sql } from "bun"')
         expect(p.toLowerCase()).toContain('do not echo')
+    })
+
+    /**
+     * STAGE 2 — the APIS OUTPUT CONTRACT lever is UNWIRED. Its A/B (scripts/
+     * live-apis-contract-ab.ts) drove behaviour-class package queries 20/20 vs 2/20 — the one
+     * lever of three that moved worker:apis at all — but FAILED invariant 2a: the ungrounded-
+     * symbol rate rose 1.0% -> 4.7% (p = 0.0010) because the model filled every semantics field
+     * and used the mandatory `UNVERIFIED:` abstention zero times. So the shipped APIS prompt
+     * must NOT carry it. This test is a regression guard against an accidental re-wire; the
+     * contract's own text is tested on the module in src/task/apis-contract.test.ts.
+     */
+    test('APIS prompt does NOT carry the (failed, unwired) semantics contract', () => {
+        const p = RESEARCH_APIS_PROMPT('task')
+        expect(p).not.toContain(APIS_SEMANTICS_CONTRACT)
+        expect(p).not.toContain('A TYPE SIGNATURE IS NOT A SEMANTICS CLAUSE')
     })
 
     test('CONTEXT prompt caps bullets and demands actionable facts', () => {

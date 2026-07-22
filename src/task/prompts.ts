@@ -178,6 +178,18 @@ No section header. No other sections. No preamble.
 Task:
 ${refined}`
 
+// STAGE 2 (2026-07-23): APIS_SEMANTICS_CONTRACT was wired in above and UNWIRED after its A/B
+// FAILED. It is the ONE lever of three that moved worker:apis's behaviour — behaviour-class
+// package queries 20/20 vs 2/20, Fisher p ≈ 0 — confirming Stage 1's mechanism (completion is
+// set by the output CONTRACT, not the answer or the target). But it failed invariant 2a: the
+// ungrounded-symbol rate rose 1.0% -> 4.7% (p(rise) = 0.0010) and the semantics clause it adds
+// carried 15% ungrounded symbols with the mandatory `UNVERIFIED:` abstention used 0 times in 40
+// reps. The model obeys "ask a behaviour question" and ignores "abstain when you cannot verify",
+// so it manufactures semantics — the exact F-1 laundering the file exists to prevent. The module
+// and its tests are KEPT as the durable asset (like spec-urls.ts after PROMPT 4); only this
+// interpolation is reverted. Full write-up: nexxtasks.txt "STAGE 2". Re-run: scripts/
+// live-apis-contract-ab.ts. Do NOT re-wire without a lever that closes the abstention gap.
+
 const RESEARCH_CONTEXT_PROMPT = (
     refined: string
 ) => `You are doing targeted research for an AI coding agent. Use the read, grep, find, and ls tools to gather background knowledge and architectural context the agent will need for the following task.
