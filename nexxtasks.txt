@@ -731,6 +731,15 @@ PROMPT 2 — CLOSED as a TARGETED GUARD. Blast radius MEASURED at 1 deterministi
      worth running. If anyone revisits F-2's 82%, that 82% remains UNEXPLAINED — this lever
      demonstrably does not account for it.
 
+PROMPT 4 — FAIL. Lever built, A/B'd over 40 live reps, NOT WIRED. p = 0.50.
+  baseline 2/20 vs treatment 3/20 (task27-hono 2/10 vs 3/10; task28-wouter 0/10 vs 0/10).
+  Metric was WHICH URL WAS FETCHED at the tool layer — the error PROMPT 2 made was not
+  repeated. Surgery verified per rep, positive control on the fetch tool, and delivery of the
+  block into the APIS prompt proven separately. The model reads the instruction and does not
+  act on it. Full detail, including the premise that did not survive (the only URL any worker
+  ever fetched in 40 reps was the cited one — the worker does not pick the wrong page, it
+  almost never fetches), is in the PROMPT 4 section.
+
 PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint).
   *** ITS REQUIRED BASELINE WAS NEVER RUN. *** This file says PROMPT 3's baseline is "the
   10-pair fixture REPLAYED LIVE, arms recorded". Item 4 (extract the fixture) was done; the
@@ -757,9 +766,12 @@ STILL OPEN, NOT ADDRESSED
 
 
 =========================================================
-PROMPT 4 — Spec-cited URLs as ranked fetch candidates (PROMPT 2 DO item 3, never built)
+PROMPT 4 — Spec-cited URLs as ranked fetch candidates (PROMPT 2 DO item 3)
 =========================================================
-STATUS 2026-07-22: NOT IMPLEMENTED. This is the one PROMPT 2 item with a plausible
+STATUS 2026-07-22: BUILT, A/B'd, FAILED, UNWIRED — see the DONE block below. The text from
+here to STEP 1 is the ORIGINAL plan, kept because its facts (a)-(e) are still the evidence
+base and because fact (b) is the one the measurement corrected. It is no longer a to-do.
+ORIGINAL STATUS: NOT IMPLEMENTED. This is the one PROMPT 2 item with a plausible
 POPULATION effect, because it depends on detecting nothing about an answer — it only needs
 URLs that are already sitting in the spec text. Everything below is FACT, measured or
 extracted from run 15; nothing here is an inference about why the model behaves as it does.
@@ -788,6 +800,63 @@ WHY THIS ONE IS A/B-ABLE WHERE THE TYPE-ONLY LEVER WAS NOT
   URL for a package the worker asks about — in run 15 that is at minimum hono and bun, i.e.
   the two packages behind both fatal defects. The population must still be MEASURED before
   the A/B is sized; do not inherit that claim from this paragraph.
+
+*** PROMPT 4 IS DONE AND IT FAILED. 2026-07-22. Steps 1, 2 and 3 all ran; the A/B is a
+    FAIL, not an abstain, and the lever is NOT WIRED. Read this whole block before touching
+    spec-cited URLs again. ***
+
+  STEP 3 — THE A/B. scripts/live-spec-url-fetch-ab.ts, 40 reps, both arms in ONE process over
+  two privately patched dist copies, real phaseResearch on each task's own checkpoint tree,
+  network replaced by an offline fixture web. Metric = WHICH URL WAS FETCHED, recorded at the
+  tool layer before the lookup is attempted. NOT termination rate.
+      task27-hono     baseline 2/10   treatment 3/10    Fisher one-tailed p = 0.50
+      task28-wouter   baseline 0/10   treatment 0/10    p = 1.00
+      POOLED          baseline 2/20   treatment 3/20    p = 0.50
+      per-rep means   docs 9.6/10.1   fetch 0.3/0.3   halluc 2.6/2.5   minutes 3.1/3.9
+  raw data ~/tmp/spec-url-fetch-ab/ab.json.
+
+  THE OTHER INVARIANTS ALL HELD, which is why the verdict rests on the Fisher test alone:
+   1. fetch+search calls did not blow up — 6 vs 6 across the whole run.
+   2. excerptVerified===false did not rise — 53 baseline vs 49 treatment.
+   3. non-cited fetching was not suppressed — but VACUOUSLY: neither arm fetched a non-cited
+      URL even once, so this invariant was never actually exercised. Recorded as held-not-
+      tested, not as validated.
+
+  EVERY WAY THIS COULD HAVE BEEN A FALSE NEGATIVE WAS RULED OUT, NOT ASSUMED:
+   - the string surgery held in EVERY rep, not just at startup: baseline block 0 chars 20/20,
+     treatment non-empty 20/20, read back per rep from the length phaseResearch logs;
+   - a POSITIVE CONTROL at startup proved a real child can reach the stubbed pi-worker-fetch
+     (told outright to fetch, it did, excerptVerified true). Without it, "0 fetches" and "the
+     tool was never registered" are the same output — a failed extension load leaves no error;
+   - the block was proven to REACH THE PROMPT, not merely to be built. The A/B only verified
+     that phaseResearch computed a non-empty block; that is a different claim.
+     scripts/spec-url-prompt-delivery-check.ts dumps the assembled worker prompts from a
+     patched dist and confirms the APIS prompt is 19,473 chars and ENDS with the block, the
+     six ranked URLs, and hono.dev/docs/guides/rpc among them.
+  So the model reads the instruction and does not act on it. That is the finding.
+
+  AND PROMPT 4'S PREMISE DID NOT SURVIVE CONTACT WITH THE MEASUREMENT. The prompt rests on
+  run 15 fetching the WRONG pages, so that ranking the right ones would help. Across all 40
+  reps the ONLY url any worker fetched, in either arm, was https://hono.dev/docs/guides/rpc —
+  the cited one. The worker does not choose badly between pages. It almost never fetches at
+  all: 5 of 40 reps. Ranking is a lever on a decision this worker rarely makes.
+
+  WHAT THIS AND JOB 1 SAY TOGETHER, and it is the same sentence twice. JOB 1: termination is
+  not triggered by the class of the last answer; the worker stops because it judges itself
+  done. HERE: telling it, in its own prompt, exactly which page to fetch and when, does not
+  make it fetch. Two levers, two different mechanisms — one conditioned on recognising an
+  answer, one conditioned on nothing at all — and neither moves the behaviour. The remaining
+  candidate is not another instruction: it is that worker:apis decides it is finished before
+  the question of external documentation arises. Nothing here measures WHY, and the next
+  thing built against this should measure that, not add a third instruction.
+
+  KEPT: src/task/spec-urls.ts (deterministic, unit-tested against the real design text) and
+  every harness and fixture — scripts/{spec-url-reach,live-spec-url-baseline,
+  live-spec-url-fetch-ab,spec-url-prompt-delivery-check,snapshot-spec-url-pages}.ts plus the
+  20 snapshotted pages. The measurement rig is the durable asset; re-running costs ~2.5h of
+  model time and no new code. NOT KEPT: the wiring in phases.ts, reverted — ~1000 characters
+  of prefill in every APIS prompt for no measured benefit is exactly what this file exists to
+  stop.
 
 *** STEPS 1 AND 2 ARE DONE, 2026-07-22. Read this block before acting on the order below. ***
 

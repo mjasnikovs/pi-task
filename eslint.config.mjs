@@ -3,7 +3,11 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-    {ignores: ['dist', 'node_modules', 'src/**/__fixtures__/**']},
+    // `.ab-dist` holds the patched copies of dist/ that the A/B harnesses build
+    // (scripts/spec-url-dist.ts) — compiled output, several copies of it, and linting it
+    // took `bun run lint` from seconds to over five minutes. It is gitignored; eslint needs
+    // telling separately.
+    {ignores: ['dist', '.ab-dist', 'node_modules', 'src/**/__fixtures__/**']},
     {
         extends: [js.configs.recommended, ...tseslint.configs.recommended],
         files: ['**/*.ts'],

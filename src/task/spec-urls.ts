@@ -22,6 +22,33 @@
  * itself, and says in terms that they are not the only pages it may fetch. A worker that can
  * no longer follow a question off the design's reference list has been narrowed, not
  * improved; PROMPT 4 invariant 3 asserts that explicitly in the A/B.
+ *
+ * ── *** NOT WIRED. THE LIVE A/B FAILED. READ THIS BEFORE RE-ENABLING IT. *** ─────────────
+ *
+ * scripts/live-spec-url-fetch-ab.ts, 2026-07-22, 40 reps, both arms in one process, real
+ * phaseResearch, offline fixture web, metric = WHICH URL WAS FETCHED at the tool layer:
+ *
+ *     task27-hono     baseline 2/10   treatment 3/10    Fisher one-tailed p = 0.50
+ *     task28-wouter   baseline 0/10   treatment 0/10    p = 1.00
+ *     POOLED          baseline 2/20   treatment 3/20    p = 0.50
+ *
+ * Everything that could have made that a false negative was ruled out, not assumed:
+ *   - the surgery held in every rep (baseline block 0 chars 20/20, treatment non-empty 20/20);
+ *   - a positive control proved a real child can reach the stubbed pi-worker-fetch;
+ *   - the block was proven to REACH the APIS prompt, not merely to be built — the prompt is
+ *     19,473 chars and ends with the six ranked URLs
+ *     (scripts/spec-url-prompt-delivery-check.ts).
+ * So the model reads the instruction and does not act on it.
+ *
+ * AND THE PREMISE ITSELF DID NOT SURVIVE. PROMPT 4 rests on run 15 having fetched the WRONG
+ * pages. Across all 40 reps the only URL any worker ever fetched, in either arm, was
+ * https://hono.dev/docs/guides/rpc — the cited one. The worker does not choose badly between
+ * pages; it almost never fetches at all (5 of 40 reps). A lever that improves URL RANKING is
+ * aimed at a decision this worker rarely makes.
+ *
+ * The module is kept — deterministic, unit-tested against the real run-15 design text, and
+ * the A/B harness's string surgery targets it — so the experiment can be re-run cheaply if
+ * the fetch rate itself is ever moved. It is NOT called from phases.ts, deliberately.
  */
 
 /** Never candidates: a local dev URL is not documentation. */
