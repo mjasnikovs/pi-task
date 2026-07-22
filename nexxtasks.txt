@@ -1266,3 +1266,41 @@ NOT KEPT: the ${APIS_SEMANTICS_CONTRACT} interpolation in RESEARCH_APIS_PROMPT �
 STILL OPEN, unchanged by STAGE 2: PROMPT 3's live baseline (harness now BUILT and lint-green,
   scripts/live-fetch-abstention-baseline.ts, NOT YET RUN); worker:apis writing from memory
   (1/16 here); the abstention variable named above.
+
+
+=========================================================
+PROMPT 3 — THE MISSING BASELINE, NOW RUN. 2026-07-23. (baseline only; PROMPT 3 NOT implemented.)
+=========================================================
+The one item nexxtasks flagged as "ITS REQUIRED BASELINE WAS NEVER RUN" is now run.
+scripts/live-fetch-abstention-baseline.ts, 8 reps x (10 failing + 20 regression) pairs = 240
+lookups, shipped fetch-core (arm of one, no lever), offline snapshots from
+scripts/fixtures/run15-fetch-pages/ injected through fetchAndClean, network untouched. 0 errors,
+~27 min. Raw ~/tmp/fetch-abstention-baseline/baseline.json (every answer verbatim, re-scorable
+with FETCHBASE_DIR=… and no model time).
+
+THE STATIC 10/30 WAS NOT A BASELINE — the caveat is now a measurement, not a warning:
+  of the 10 recorded FAILURES, reproduce in EVERY rep 5/10 = [2,4,7,8,9]; never 0/10;
+  INTERMITTENT 5/10 = [0,1,3,5,6].
+  AND THE SPLIT IS CLEAN: all 5 deterministic failures are the "unclear from this page" cases
+  (#2,4,7,8,9 fire unclear 8/8). All 5 intermittent ones are the excerptVerified===false cases
+  (#0 2/8, #1 6/8, #3 2/8, #5 3/8, #6 3/8). So the F-3(a) "false unclear" half of PROMPT 3 has
+  SOLID regression targets; the F-3(b) unverified-excerpt half is CHURN and must not be pinned —
+  exactly the 43%-flip caveat, confirmed on this fixture.
+  FAILURES set aggregate: unclear 45/80 = 56.3%, excerptVerified===false 12/80 = 15.0%.
+
+THE FRAGMENT CASE (F-3d) IS A DETERMINISTIC TARGET: #9
+  playwright.dev/docs/api/class-locator#locator-set-input-files fires "unclear" 8/8. The shipped
+  fetch path has no #fragment handling (validated at code level, F-3d), so the deep link degrades
+  to a page-top grab and the answer is not on the grabbed section. A clean before/after target.
+
+REGRESSION set (the 20 currently-VALID, what PROMPT 3 must not break): unclear 5/160 = 3.1%,
+  excerptVerified===false 11/160 = 6.9% — mostly stable. One fragile "valid": #18
+  (github.com/…/releases/tag/v1.46.0) churns unclear 5/8, so a recalibrated abstention prompt
+  could tip it either way; watch it specifically, do not read a single observation of it as signal.
+
+WHAT THIS SETS UP, and the ordering it enforces: PROMPT 3's A/B, when built, scores the 5
+  deterministic "unclear" failures resolving to sourced answers AND excerptVerified===false NOT
+  rising on the 20-pair regression set — against THIS recorded arm, not the static 10/30. The
+  excerptVerified counter is too noisy (churns rep-to-rep here too, 12 vs 11 across arms of the
+  same fixture) for a strict treatment<=baseline; size it as a one-tailed rise test like STAGE 2's
+  invariant 2, at a threshold fixed before the data. PROMPT 3 itself remains NOT implemented.
