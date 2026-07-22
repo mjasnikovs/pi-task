@@ -22,6 +22,7 @@ import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
 import {getPiInvocation} from '../shared/pi-invocation.js'
 import {formatChildFailure, makeWorkerTool} from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
+import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 
@@ -361,6 +362,19 @@ export function registerPiWorkerDocs(
             // fetched. Prompting the escalation beats performing it here: this tool runs in
             // parallel execution mode and cannot cleanly spawn a fetch of its own.
             const typeOnly = isTypeOnlyAnswer(parsed.answer, params.query)
+            // STAGE 1 INSTRUMENTATION — off unless PI_TASK_TYPEONLY_LOG names a sink, and
+            // side-effect only: nothing below reads it, and every failure inside is
+            // swallowed. It records EVERY answer, flagged or not, because the open question
+            // is a RATE — how often this fires — and a log of firings alone has no
+            // denominator. See typeonly-log.ts.
+            logDocsAnswer({
+                module: params.module,
+                query: params.query,
+                answer: parsed.answer,
+                typeOnly: typeOnly.typeOnly,
+                reason: typeOnly.reason,
+                excerptVerified: verified
+            })
             let text = versionBanner + npmHeader + body
             if (typeOnly.typeOnly) {
                 const seeUrls = extractSeeUrls(concatenated)

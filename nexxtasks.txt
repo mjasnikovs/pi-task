@@ -375,6 +375,21 @@ DELIVERABLES OF STEP 0 (no src/ behaviour change in this step)
      escalates to search/fetch. Baseline expectation from the live run: it does NOT.
      This probe must ABSTAIN loudly if the baseline escalates, because then F-2's
      mechanism is wrong and PROMPT 2 must be re-derived.
+  2b. scripts/live-typeonly-baserate.ts                                [MEASURED 2026-07-22]
+     The FIRING-RATE census item 2 lacks. Item 2's probe measures whether the worker
+     terminates; it cannot tell you how often the lever it is scoring can fire at all, and
+     that omission is what made PROMPT 2's A/B unreadable. This harness replays the same
+     210-question corpus through the shipped docs TOOL and counts `details.typeOnly`,
+     cross-checked against the PI_TASK_TYPEONLY_LOG sink written from inside the tool (an
+     asserted invariant: a rate whose denominator quietly lost rows is worse than none).
+     RESULT: 9/1680 = 0.54%, Wilson 95% [0.28%, 1.02%], per-rep 1 1 1 1 1 1 1 2, 0 errors,
+     3.40h. Two of 210 questions ever fire (hono/client hc 8/8, bun sql types 1/8). See the
+     PROMPT 2 entry in RESULTS for what follows from that.
+     INSTRUMENTATION: src/workers/typeonly-log.ts — every docs answer, flagged or not, is
+     appended as JSONL when PI_TASK_TYPEONLY_LOG names a sink; a no-op otherwise, and every
+     write failure is swallowed so a measurement side-channel can never fail a lookup. The
+     full answer text is retained, which is what makes the stability question answerable at
+     all (and is the hole F-3(f) still has).
   3. scripts/live-context-attribution-probe.ts                        [MEASURED 2026-07-22]
      The F-1 seam. Run the real worker:context on the verbatim TASK_0027 refined task and
      EXTERNAL CONTEXT, and count bullets that assert external-API behaviour carrying an
@@ -481,6 +496,13 @@ LIVE A/B (required before the fix commit lands)
 =========================================================
 PROMPT 2 — Treat a type-only answer as an unanswered question
 =========================================================
+*** STATUS 2026-07-22: DO items 1, 2 and 4 are SHIPPED and CLOSED as a targeted guard —
+    read the PROMPT 2 entry in RESULTS before acting on anything below. The "LIVE A/B"
+    section here is SUPERSEDED: the lever's firing rate was measured at 9/1680 = 0.54%
+    (one deterministic question in 210), which makes an escalation A/B — conditional or
+    not — an instrument that cannot return a signal. Do not run it. DO item 3
+    (spec-cited URLs) is the one part still open and is the only one with a plausible
+    population effect. ***
 REQUIRED BASELINE: scripts/live-typeonly-answer-probe.ts (STEP 0 item 2).
 
 GOAL
@@ -638,24 +660,76 @@ PROMPT 1 — DONE, VERIFIED. p = 0.0185
   harness ABSTAINED with zero demotions and would have looked like a pass. Size arms from
   the MEASURED rate; scripts/prompt1-combined-verdict.ts computes the verdict. ***
 
-PROMPT 2 — IMPLEMENTED BUT **NOT VERIFIED**. The lever did not move the metric.
-  baseline 14/17 reps terminate without escalating (82%); treatment 10/11 (91%).
-  Fisher p = 0.88 — no reduction, if anything slightly worse (not significantly).
-  The implementation is CORRECT: run live, the detector fires on the recorded hc query and
-  emits the UNANSWERED banner. Two failures of the EXPERIMENT, not the code:
-   1. METRIC/LEVER MISMATCH. The metric counts ALL terminations; the lever targets only
-      type-only answers. F-2's 82% was never shown to be CAUSED by type-only answers — that
-      link was ASSERTED, not measured. A worker mostly stops because it believes it is done.
-   2. REACH CEILING. The detector is precision-first: exactly 1 of 150 recorded answers
-      flags (0.7%). By construction it cannot move an 82% aggregate.
-  WHAT IS TRUE: it reliably blocks the SPECIFIC fatal hc case. It does not generalise.
-  The right metric is CONDITIONAL — escalation GIVEN a type-only answer occurred — and
-  measuring it needs firing-rate instrumentation that does not exist.
-  BEWARE: the probe prints "PASS" because it is scored as a BASELINE probe whose target
-  shape IS termination. A PASS there means the bad behaviour PERSISTS. Easy to misread.
+PROMPT 2 — CLOSED as a TARGETED GUARD. Blast radius MEASURED at 1 deterministic case +
+  1 intermittent. NOT a population fix, and no longer claimed as one.
+  [rewritten 2026-07-22 after stage-1 measurement; supersedes the "NOT VERIFIED" entry]
+
+  THE FIRING RATE, which nothing had ever measured (scripts/live-typeonly-baserate.ts,
+  8 reps x the 210 run-15 package questions = 1680 live lookups, cache OFF, 0 errors,
+  3.40h, Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080):
+      type-only  9/1680 = 0.54%    Wilson 95% [0.28%, 1.02%]
+      per-rep    1 1 1 1 1 1 1 2   (the entire population is 1-2 answers per rep)
+      the static 1/150 = 0.7% record is CONFIRMED, not refuted.
+  THE POPULATION IS TWO QUESTIONS OUT OF 210:
+      8/8 reps  hono/client  "hc factory function signature base url parameter types…"
+      1/8 reps  bun          "sql.query type definition, sql.helper type, sql.options…"
+  Per package that is hono/client 8/32 = 25% and bun 1/488 = 0.2%: this is ONE question
+  that always fires, not a rate spread thinly over the corpus.
+  raw data: /home/edgars/tmp/typeonly-baserate/baserate.json (per question x per rep) and
+  answers.jsonl (all 1680 answers verbatim + verdict + reason — retained so every counter
+  above can be re-scored offline without spending another 3.4h of model time).
+  STABILITY: the hc case is fully deterministic (8/8, zero churn), so it IS a valid pinned
+  fixture — unlike excerptVerified, which churns on 43% of this same corpus. The bun case
+  churns 1/8 and is pinned as intermittent, not as a regression target.
+
+  WHY THE A/B WAS THE WRONG INSTRUMENT — and why re-running it is forbidden, not merely
+  discouraged. The previous run measured baseline 14/17 terminations (82%) vs treatment
+  10/11 (91%), Fisher p = 0.88. Both defects of that experiment are now quantified:
+   1. METRIC/LEVER MISMATCH. The metric counted ALL terminations; the lever touches only
+      type-only answers. "Workers stop BECAUSE of type-only answers" was ASSERTED, never
+      measured. A worker mostly stops because it believes it is done.
+   2. REACH CEILING, now a number instead of an inference. At 0.54% of answers, and with
+      the reachable population being ONE reliably-firing question, no arm size makes an
+      aggregate-escalation A/B informative. Sizing arms cannot fix a lever that is
+      arithmetically incapable of moving the metric it is scored against.
+  So a conditional A/B (escalation GIVEN a type-only answer) was NOT built. It would be
+  measuring the model's obedience to a banner on a population of one, at ~7 min/rep.
+
+  WHAT IS PROVEN, and by what: src/workers/pi-worker-docs-f2-regression.test.ts.
+   - All EIGHT distinct live phrasings the model produced for the hc query across the 8
+     reps are caught, plus the original run-15 cache entry — the answer that shipped the
+     bug. Eight phrasings, not one frozen string, so the claim is robustness to re-wording.
+   - The bun-SQL type-listing answer is caught; the recorded "unclear from this package"
+     non-answer is NOT (distinct channel, distinct handling) — conflating them would let
+     the type-only counter absorb the unclear population and fake a rate far above 0.54%.
+   - At the tool seam, against a fixture package shaped like hono/client: the type-only
+     answer yields the UNANSWERED banner, keeps the declaration as context, and hands back
+     https://hono.dev/docs/guides/rpc — pulled from the retrieved text, not injected (F-2d).
+   - NEGATIVE CONTROLS, without which the suite would pass on an unconditional banner: a
+     behavioural answer to the SAME query gets no banner, and the answer that would have
+     PREVENTED the bug is not flagged.
+   - Verified non-vacuous by mutation: disarming `if (typeOnly.typeOnly)` fails the suite.
+
+  WHAT IS NOT PROVEN, and must not be claimed: that the worker then ACTUALLY escalates.
+  That is model behaviour, measured at ~18% spontaneous pre-change, and the 0.54% base rate
+  means no affordable experiment can attribute a change in it to this lever. The banner is
+  an instruction; obedience is unmeasured.
+
+  BEWARE when reading scripts/live-typeonly-answer-probe.ts: it prints "PASS" because it is
+  scored as a BASELINE probe whose target shape IS termination. A PASS there means the bad
+  behaviour PERSISTS. Easy to misread.
   F-2 ITSELF CORRECTED: not absolute. 3 of 17 reps DID escalate, and one fetched exactly
   hono.dev/docs/guides/rpc — the spec-cited page that would have prevented the bug. The
   correct behaviour occurs ~18% of the time spontaneously.
+
+  STILL OPEN under PROMPT 2, NOT delivered by this guard:
+   - DO item 3 (spec-cited URLs from DESIGN §13 ranked as fetch candidates) is NOT
+     implemented. It is the one PROMPT 2 item with a plausible POPULATION effect, since it
+     does not depend on detecting anything about an answer.
+   - The causal 2x2 ({type-only present/absent} x {escalated/not}) was NOT measured. It was
+     scoped out once the base rate showed the conditional A/B it would have sized is not
+     worth running. If anyone revisits F-2's 82%, that 82% remains UNEXPLAINED — this lever
+     demonstrably does not account for it.
 
 PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint).
   *** ITS REQUIRED BASELINE WAS NEVER RUN. *** This file says PROMPT 3's baseline is "the
