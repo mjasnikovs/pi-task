@@ -248,7 +248,8 @@ export function registerPiWorkerDocs(
                     answer: parsed.answer,
                     typeOnly: false,
                     reason: 'project-source lookup — the type-only detector is not applied here',
-                    excerptVerified: verified
+                    excerptVerified: verified,
+                    toolText: text
                 })
                 return {
                     text,
@@ -382,19 +383,6 @@ export function registerPiWorkerDocs(
             // fetched. Prompting the escalation beats performing it here: this tool runs in
             // parallel execution mode and cannot cleanly spawn a fetch of its own.
             const typeOnly = isTypeOnlyAnswer(parsed.answer, params.query)
-            // STAGE 1 INSTRUMENTATION — off unless PI_TASK_TYPEONLY_LOG names a sink, and
-            // side-effect only: nothing below reads it, and every failure inside is
-            // swallowed. It records EVERY answer, flagged or not, because the open question
-            // is a RATE — how often this fires — and a log of firings alone has no
-            // denominator. See typeonly-log.ts.
-            logDocsAnswer({
-                module: params.module,
-                query: params.query,
-                answer: parsed.answer,
-                typeOnly: typeOnly.typeOnly,
-                reason: typeOnly.reason,
-                excerptVerified: verified
-            })
             let text = versionBanner + npmHeader + body
             if (typeOnly.typeOnly) {
                 const seeUrls = extractSeeUrls(concatenated)
@@ -414,6 +402,27 @@ export function registerPiWorkerDocs(
                     + '\nThe declaration that WAS retrieved (context only, not the answer):\n'
                     + body
             }
+
+            // STAGE 1 INSTRUMENTATION — off unless PI_TASK_TYPEONLY_LOG names a sink, and
+            // side-effect only: nothing below reads it, and every failure inside is
+            // swallowed. It records EVERY answer, flagged or not, because the open question
+            // is a RATE — how often this fires — and a log of firings alone has no
+            // denominator. See typeonly-log.ts.
+            //
+            // It sits AFTER `text` is final (it used to sit above `text`'s first assignment)
+            // so the record carries what the worker was actually handed, banner and cited
+            // excerpt included, not just the child's prose. Purely a move: logDocsAnswer
+            // returns nothing and nothing between the two positions reads it, so the tool's
+            // behaviour and its return value are unchanged.
+            logDocsAnswer({
+                module: params.module,
+                query: params.query,
+                answer: parsed.answer,
+                typeOnly: typeOnly.typeOnly,
+                reason: typeOnly.reason,
+                excerptVerified: verified,
+                toolText: text
+            })
 
             return {
                 text,

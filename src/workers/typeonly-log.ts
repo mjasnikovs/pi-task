@@ -59,6 +59,21 @@ export interface TypeOnlyLogRecord {
     unclear: boolean
     /** child-output's excerpt check; undefined when the child cited no excerpt. */
     excerptVerified?: boolean
+    /**
+     * The tool's ENTIRE return text — version banner, npm header, the answer prose, the cited
+     * excerpt, and (when it fires) the type-only banner. Optional so logs written before this
+     * field existed still parse.
+     *
+     * WHY IT IS NOT REDUNDANT WITH `answer`. `answer` is the child's prose only. The worker
+     * receives strictly more than that, and the extra part is where the SYMBOL NAMES live: the
+     * cited `.d.ts` excerpt. Asking "did the worker write an APIS entry it had actually looked
+     * up, or one it produced from memory" is a substring question against what the worker was
+     * GIVEN, and answering it off `answer` alone would score a symbol that appeared verbatim in
+     * the retrieved declaration as ungrounded. That would inflate the very counter it is meant
+     * to measure. Recording the full text makes the grounding test conservative in the
+     * direction that cannot manufacture a finding.
+     */
+    toolText?: string
 }
 
 /**

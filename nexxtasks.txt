@@ -1010,6 +1010,9 @@ OPEN QUESTION — the 82% — DIAGNOSED 2026-07-22. Termination is NOT answer-tr
     STILL NOT ANSWERED, and not claimed to be: WHY the worker judges itself done. That is a
     question about the APIS prompt and the model's stopping behaviour, not about the research
     tools, and nothing in this run measures it. ***
+    [ANSWERED 2026-07-22 by STAGE 1 — see "STAGE 1" at the end of this file. The mechanism is
+     OUTPUT-FORMAT COMPLETION: the worker stops when every entry on its APIS list has a
+     signature. It was right that the question is about the APIS PROMPT and not the tools.]
 
 INSTRUMENTATION FIX THIS REQUIRED (behaviour-neutral, shipped in the same commit): the
 PI_TASK_TYPEONLY_LOG sink was wired only into pi-worker-docs' npm-package branch. The
@@ -1043,3 +1046,118 @@ THE DIAGNOSTIC — RUN 2026-07-22, see the result block at the top of this secti
   378/1680 = 22.5%, type-only 0.54%.
   A rep that made ZERO docs calls is a DIFFERENT failure (already recorded: 3 of ~18 reps
   wrote the APIS section from memory) and must be counted separately, not folded in.
+
+
+=========================================================
+STAGE 1 — THE STOPPING POINT, MEASURED. 2026-07-22.
+A NAMED MECHANISM: OUTPUT-FORMAT COMPLETION.
+=========================================================
+scripts/live-apis-stopping-point.ts + scripts/apis-trajectory.ts (pure, 26 unit tests).
+16 live reps — 8 per fixture, task27-hono and task28-wouter INTERLEAVED — of the REAL
+phaseResearch on each task's own checkpoint tree. Nothing stubbed: shipped model, shipped
+tools, live network. Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080 via ~/hub/qwen/run-Q3.6-27B.sh.
+PASS, every invariant green. Raw data ~/tmp/apis-stopping-point/stopping-point.json, re-scorable
+offline with STOP_DIR=… and no model time.
+
+THE POPULATION REPRODUCES, AT THE CEILING
+    terminated without ever calling search or fetch   15/15 reps that researched = 100%
+    (the earlier figures were 11/12 = 91.7% and, on these same two fixtures, 20/20)
+    zero-docs reps (section written from memory)      1/16 — a DIFFERENT failure, counted
+      separately, never folded in. The already-recorded "3 of ~18 reps" holds.
+    docs answers 127, sink observed 127/127 call lines, 0 errors.
+
+THE THREE MECHANISMS THE BRIEF NAMED ARE ALL REFUTED, each by its own number
+  1. NOT A FIXED BUDGET. docs calls/rep mean 8.5, sd 3.8, cv 0.45, range 3-14; the modal
+     count (11) carries 4 of 15 reps. A ceiling piles reps on one value. This is a spread.
+  2. NOT A PLATEAU OF REPEATS. Near-repeat docs calls (same module, query-token Jaccard
+     >= 0.6) are 13/127 = 10.2% over the whole trajectory and 2/45 = 4.4% over the LAST THREE
+     calls of each rep. A worker stopping because it is going in circles repeats itself at
+     the end. This one repeats itself LESS at the end.
+  3. NOT SATURATION. New symbols per answer by trajectory third: 57 → 41 → 30, and the FINAL
+     answer still returns 39 symbols no earlier answer in that rep carried. Information is
+     still arriving when it stops.
+
+AND IT IS NOT STOPPING WITH HOLES IN ITS OWN OUTPUT — the coverage hypothesis, refuted too
+    ungrounded symbols                    2/588  = 0.3%
+    entries with >= 1 ungrounded symbol   2/277  = 0.7%
+    entries grounded ONLY by the text it was handed, never looked up      0/277 = 0.0%
+    OPEN-GAP STRICT (subject asked, tool answered "unclear"/type-only, no
+      answered lookup covers it either, emitted regardless)               2/277 = 0.7%
+  GROUNDED = the symbol appears in the worker's assembled prompt (orientation file dump,
+  inventory, FILES map, refined task), in a docs answer, or in a file it read. Case-sensitive
+  substring over the UNION of every channel, no stop-list, so prose always scores grounded and
+  every ambiguity resolves toward GROUNDED. The 0.3% is a FLOOR, not an estimate.
+  READ THE LOOSE VARIANT AS A WARNING, NOT A FINDING: "entries whose subject was ever asked in
+  a question that came back unanswered" is 43/277 = 15.5%. Almost all of those subjects were
+  answered by some OTHER lookup. Reporting the loose number as the gap rate would have claimed
+  a defect 20x the real one; both are printed, and only the strict one is evidence.
+
+*** WHAT IT IS DOING INSTEAD, and this is the mechanism ***
+    LOOKUP YIELD   docs answers whose subject reaches the emitted section   121/127 = 95.3%
+    ENTRY REACHED  APIS entries whose own symbol was asked about in a query 200/277 = 72.2%
+  The trajectory and the output are the same list. It looks up what it writes and writes what
+  it looks up. Research here is an ENUMERATION OF THE OUTPUT FORMAT, not an inquiry.
+
+  AND THE FORMAT IS A SIGNATURE LIST. RESEARCH_APIS_PROMPT's output contract is literally
+  "<name>  <one-line signature or use>" (src/task/prompts.ts). What the worker asks:
+    all docs queries    signature-only 95 (74.8%)   behaviour 3 (2.4%)   neither 29 (22.8%)
+    PACKAGE queries     signature-only 52 (85.2%)   behaviour 3 (4.9%)   neither 6 (9.8%)
+    last 3 of each rep  signature-only 33 (73.3%)   behaviour 1 (2.2%)   neither 11 (24.4%)
+  Package queries are the ONLY ones the web could ever serve — 61 of 127; the other 66 are
+  project source, where escalating is not applicable. Across 15 reps the worker asked a
+  BEHAVIOUR question about an external package THREE TIMES.
+  PREDICATE HONESTY: the cue sets were fixed against a 2-rep smoke run and NOT re-tuned after
+  seeing this data. Reading the 29 "neither" queries by hand, they are overwhelmingly
+  enumeration ("route handlers … endpoint shapes", "all exported zod schemas", "current
+  contents — imports"); two are arguably behavioural ("how route chaining works with hc",
+  "how response looks after $fetch"). So the behaviour rate is 3-5 of 127, i.e. 2.4%-3.9%,
+  not exactly 2.4%. The conclusion does not turn on which end of that you take.
+
+THE MECHANISM, NAMED
+  worker:apis terminates when every entry on its output list has a SIGNATURE. It is not
+  stopped by a budget, by circling, by running dry, or by holes in its output. It stops
+  because the artifact it was asked to produce is complete by the standard the format sets —
+  and a signature satisfies that standard. The semantic question ("what does this parameter
+  MEAN, is this base URL an origin or a mount prefix") is not a field of the thing it is
+  building, so nothing in its output is ever left unfilled by not asking it. That is why it
+  never escalates: escalation answers a question it has no reason to ask.
+
+WHY BOTH FAILED LEVERS MISSED THIS, and it is the same sentence for both
+  PROMPT 2 conditioned on RECOGNISING an answer as inadequate. But a type signature is not an
+  inadequate answer to the question actually being asked — it is exactly the requested field.
+  PROMPT 4 conditioned on nothing, and pointed the worker at the right page. But a pointer
+  only helps a worker that has an unmet slot to fill; this one does not.
+  Both acted on the ANSWER side or the TARGET side. The variable that is not flat is the
+  OUTPUT CONTRACT, and neither lever touched it.
+
+MANIPULABLE? YES — and the metric is not "did it stop"
+  variable  RESEARCH_APIS_PROMPT's output contract. A field a signature cannot satisfy (per
+            external-package entry: what the parameter means / what the default is / what it
+            is relative to, with its source) makes completion unreachable by signature
+            enumeration. That is a prompt change to a format, not another instruction to obey.
+  metric    BEHAVIOUR-CLASS PACKAGE QUERIES, counted at the tool layer from the shipped
+            PI_TASK_TYPEONLY_LOG sink. Baseline MEASURED here: 3/61 package queries = 4.9%,
+            0.2 per rep. The lever mechanically changes which questions get asked, so this is
+            a metric it can move — unlike PROMPT 2's, which scored all terminations against a
+            lever reaching 0.54% of answers.
+  CAUTION, unmeasured and not to be assumed: whether more behaviour questions produce more
+            ESCALATION. Behaviour questions can still be answered from the package text. The
+            escalation link is a SECOND claim and needs its own number; do not size an arm on
+            escalation from this run's 0/15.
+
+WHAT STAGE 1 DOES NOT SHOW
+  - Escalation is 0/15 here, so terminated-vs-escalated cannot be compared at all. Nothing in
+    this file reports such a comparison from this run.
+  - Two fixtures, one task each. The mechanism is measured on hono/client and wouter, not on
+    the whole run-15 population.
+  - `grep` results are not captured; the grepped file's whole contents are substituted, which
+    is a superset and again biases toward GROUNDED.
+
+A HARNESS DEFECT WORTH RECORDING, because it produced a complete and plausible report
+  The first smoke run printed a full analysis off ZERO recorded answers against 16 docs calls.
+  Cause: `STOP_DIR=` (set but empty) is not nullish, so `??` left the root path empty; the
+  sink path handed to the pi child was then relative, and the child's cwd is the trial tree,
+  so the shipped instrumentation wrote one level deeper. The invariants caught it — nothing
+  else would have. Absolute paths and `||` now make it unreachable. This is exactly the class
+  the brief warns about: a zero from a broken harness is indistinguishable from a zero from
+  the model unless something asserts the channel carried data.
