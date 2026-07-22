@@ -754,3 +754,105 @@ STILL OPEN, NOT ADDRESSED
   - F-3(f) still undiagnosable (source content not retained).
   - NOTHING here is validated end-to-end. Every measurement is ONE task's research phase
     (TASK_0027) in a fixture tree. The real test is whether run 16 ships a working app.
+
+
+=========================================================
+PROMPT 4 — Spec-cited URLs as ranked fetch candidates (PROMPT 2 DO item 3, never built)
+=========================================================
+STATUS 2026-07-22: NOT IMPLEMENTED. This is the one PROMPT 2 item with a plausible
+POPULATION effect, because it depends on detecting nothing about an answer — it only needs
+URLs that are already sitting in the spec text. Everything below is FACT, measured or
+extracted from run 15; nothing here is an inference about why the model behaves as it does.
+
+FACTS THIS RESTS ON (all previously recorded above; collected here so the prompt is
+self-contained)
+  a) The design file is a literal reference list. DESIGN/PROJECT.md §5 line 184 cites
+     https://hono.dev/docs/guides/rpc, and §13 lists four hono.dev URLs including the RPC
+     guide and grouping-routes-rpc. §13 also cites https://bun.com/docs/runtime/sql.
+  b) Neither was ever fetched. run 15's pi-worker-fetch produced 30 results: 13
+     playwright.dev, 11 tailwindcss.com, 4 bun.com, 1 bun.sh, 1 github.com — ZERO hono.dev,
+     and bun.com/docs/runtime/sql never appears (the bun.com fetches were /reference/bun/build,
+     /BuildConfig and bun.sh/docs/test/configuration.md).
+  c) Both uncited pages are the pages that would have prevented the two fatal defects:
+     the hc base-URL semantics (F-1/F-2) and the bun SQL tagged-template semantics (F-2c).
+  d) The behaviour is not absent, just rare: 3 of 17 live probe reps escalated at all, and
+     exactly ONE fetched hono.dev/docs/guides/rpc spontaneously (~6% of reps).
+  e) The URL is also inside the retrieved package text as a JSDoc `@see {@link …}` (F-2d),
+     which is a SECOND independent channel to the same page. PROMPT 2 shipped the banner
+     that surfaces it, but only for the 0.54% of answers flagged type-only — so it does not
+     cover this.
+
+WHY THIS ONE IS A/B-ABLE WHERE THE TYPE-ONLY LEVER WAS NOT
+  The type-only lever reached 0.54% of answers (measured, 9/1680), so no arm size could
+  make an aggregate metric move. THIS lever's population is every task whose design cites a
+  URL for a package the worker asks about — in run 15 that is at minimum hono and bun, i.e.
+  the two packages behind both fatal defects. The population must still be MEASURED before
+  the A/B is sized; do not inherit that claim from this paragraph.
+
+MANDATORY ORDER — the failure this file exists to prevent is implementing before measuring
+  STEP 1  MEASURE THE POPULATION. Over the run-15 design text, count: how many distinct
+          http(s) URLs does the spec cite, and for how many of them does worker:apis ask
+          pi-worker-docs about the same package in the same task? That count is the lever's
+          reach. Record it. If it is ~1 case, this is another targeted guard and an A/B is
+          again the wrong instrument — say so and stop, exactly as PROMPT 2 did.
+  STEP 2  MEASURE THE BASELINE RATE, live, >= 8 reps: how often does the SHIPPED worker:apis
+          fetch a spec-cited URL at all? The one figure available is 1 of 17 reps (~6%) for
+          hono.dev, from an earlier probe — treat it as an estimate to re-measure, not a
+          baseline. SIZE THE ARMS FROM THE MEASURED RATE for a 5% false-pass probability.
+          Do NOT inherit ">= 8 reps": at a 25% baseline that criterion passes a do-nothing
+          lever ~10% of the time (demonstrated in the PROMPT 1 entry).
+  STEP 3  IMPLEMENT, then A/B. The A/B is MANDATORY and its metric must MATCH THE LEVER.
+
+A/B SPECIFICATION (the metric is the part PROMPT 2 got wrong — do not repeat it)
+  harness  scripts/live-spec-url-fetch-ab.ts, both arms in one process.
+  arms     baseline  = shipped worker:apis, spec-URL extraction stripped by ASSERTED string
+                       surgery, verified absent at runtime, not assumed.
+           treatment = the real shipped path.
+  metric   MECHANICAL, tool layer: did this rep fetch a URL that appears in the spec text?
+           Recorded from the tool-call channel (onChildOutput writes
+           `worker:apis: pi-worker-fetch: <url>`), matched against the URL set extracted
+           from the fixture spec. NOT "did the worker terminate". NOT model self-report.
+  *** THE METRIC MUST NOT BE TERMINATION RATE. PROMPT 2's A/B scored ALL terminations while
+      its lever touched 0.54% of answers, and returned p = 0.88 — an unreadable result that
+      cost hours. A metric that the lever cannot mechanically move is not a weak experiment,
+      it is not an experiment. ***
+  fixture  the verbatim TASK_0027 refined task + the run-15 design text (§5/§13 URLs
+           present). SECOND fixture with a different library and different cited URLs, so a
+           PASS is not a single-case fit. Network STUBBED — pi-worker-fetch records the URL
+           it was asked for and returns canned content, so the metric is "which URL was
+           requested", which is exactly the lever's effect and needs no live page.
+  PASS     baseline fetches a spec-cited URL in ~0 reps AND treatment does in all/most,
+           at the arm size STEP 2 computed.
+  ABSTAIN  baseline already fetches them — then fact (b) no longer holds and this prompt is
+           void. Stop and re-derive.
+  invariant 1: total fetch/search calls per rep must not blow up. Research was already 63.7%
+           of spec-phase wall clock in run 15 (8777s of 13783s).
+  invariant 2: excerptVerified===false must NOT rise. Turning silence into confident wrong
+           answers is the failure this whole file is about.
+  invariant 3: the worker must still fetch NON-cited URLs when the question needs them —
+           ranking spec URLs above model-chosen ones must not become "only spec URLs".
+
+
+=========================================================
+OPEN QUESTION — the 82% is UNEXPLAINED, and the tooling to explain it now exists
+=========================================================
+FACT: 14 of 17 live probe reps ended worker:apis without ever calling search or fetch (82%).
+FACT: PROMPT 2 assumed type-only answers caused that. MEASURED 2026-07-22, they cannot —
+the detector fires on 0.54% of answers (9/1680) and on 2 of 210 questions. The 82% has some
+other cause, and NOTHING in this file currently names it. Do not put another lever against
+it until the cause is measured.
+
+WHAT MAKES IT MEASURABLE NOW (it was not before): src/workers/typeonly-log.ts records EVERY
+pi-worker-docs answer — query, full answer text, type-only verdict, excerptVerified — as
+JSONL, gated on PI_TASK_TYPEONLY_LOG, no-op when unset. So for any live worker:apis rep the
+COMPLETE research transcript is now on disk and re-scorable offline.
+
+THE DIAGNOSTIC TO RUN FIRST (mechanical, no lever, no behaviour change):
+  For each rep, take the LAST docs answer before the worker stopped and classify it by the
+  predicates already defined in this file: valid / "unclear from this package" /
+  excerptVerified===false / type-only. Report the distribution, split by whether the rep
+  escalated. That says WHAT the worker was looking at when it decided it was done. Known
+  live rates over the corpus, for comparison: unclear 425/1680 = 25.3%, halluc-warn
+  378/1680 = 22.5%, type-only 0.54%.
+  A rep that made ZERO docs calls is a DIFFERENT failure (already recorded: 3 of ~18 reps
+  wrote the APIS section from memory) and must be counted separately, not folded in.
