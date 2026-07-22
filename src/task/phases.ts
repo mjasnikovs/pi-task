@@ -71,6 +71,7 @@ import {
 import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
 import {findScriptEscapesInText, scriptEscapeDefectText} from './script-escape.js'
 import {findSynthesizedWiring, wiringProbeText, readReferencedDocs} from './wiring-claims.js'
+import {buildSpecUrlBlock, extractSpecUrls, mentionedPackages} from './spec-urls.js'
 import {
     findAbsenceConflicts,
     absenceProbeText,
@@ -550,6 +551,42 @@ export async function phaseResearch(
     // the worker is handed below — and the manifest's dependency names.
     const manifestPackages = await manifestDependencyNames(deps.cwd)
 
+    // SPEC-CITED DOCUMENTATION URLS for the APIS worker (PROMPT 4 / F-2b). The design
+    // document is a literal reference list — mx5's §5 and §13 cite 21 pages — and run 15
+    // fetched neither of the two that document the semantics behind its two fatal defects.
+    // Measured before this was written (scripts/spec-url-reach.ts over the run-15 artifacts):
+    // 31 of 44 tasks asked pi-worker-docs about a package the design cites a page for, and 15
+    // of the 17 reachable cited URLs were never fetched by anyone. So this is a population
+    // lever, not a targeted guard — the distinction PROMPT 2 established the expensive way.
+    //
+    // The design's PATH lives only in the task's `## raw prompt` (`… | spec: @DESIGN/PROJECT.md
+    // …`); the refined text carries no @-mention, so readReferencedDocs must be given both or
+    // it resolves nothing. A missing section yields '' and the whole thing no-ops.
+    //
+    // Relevance comes from the MANIFEST, not from extractEnrichTargets: that parser run over
+    // TASK_0027's refined text returns ["any", "api", "hc", "package.json", …] and NOT "hono",
+    // so ranking off it would drop the one package the task is about.
+    //
+    // Gated on searchConfigured() because naming fetch targets to a worker that has no fetch
+    // tool is pure prefill.
+    const rawPromptSection = await readSection(deps.cwd, deps.taskId, 'raw prompt').catch(
+        () => null
+    )
+    const specUrlBlock =
+        searchConfigured() ?
+            buildSpecUrlBlock(
+                extractSpecUrls(
+                    `${refined}\n${readReferencedDocs(deps.cwd, refined, rawPromptSection ?? '')}`
+                ),
+                mentionedPackages(refined, manifestPackages)
+            )
+        :   ''
+    // Logged unconditionally, including the zero: scripts/live-spec-url-fetch-ab.ts strips
+    // this lever for its baseline arm and reads this line back to verify, per rep, that the
+    // surgery held. A silent lever is one whose absence cannot be distinguished from its
+    // presence having no effect.
+    deps.logDebug?.(`spec-urls: block ${specUrlBlock.length} chars`)
+
     let doneCount = 0
     const updateProgress = (): void => {
         doneCount++
@@ -631,6 +668,11 @@ export async function phaseResearch(
                             prior.find(s => s.name === 'FILES')?.text || undefined
                         )
                         + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+                        // Last, not folded into promptHeader: this block tells the worker
+                        // which page to reach for the moment a docs answer falls short, so it
+                        // belongs next to the search hint it qualifies, at the end of the
+                        // prompt where a small local model's attention actually lands.
+                        + specUrlBlock
                 ),
             tools:
                 'read,grep,find,ls,pi-worker-docs'

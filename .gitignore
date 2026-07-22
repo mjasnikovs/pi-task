@@ -8,3 +8,6 @@ docs/
 # These negations must come after the ignore rules above to take effect.
 !src/workers/__fixtures__/node_modules/
 !src/workers/__fixtures__/node_modules/**
+
+# Patched dist copies built by the A/B harnesses (scripts/spec-url-dist.ts).
+.ab-dist/

@@ -1,0 +1,6 @@
+{
+ "url": "https://hono.dev/examples/grouping-routes-rpc",
+ "finalUrl": "https://hono.dev/examples/grouping-routes-rpc",
+ "title": "Grouping routes for RPC - Hono",
+ "markdown": "If you want to enable type inference for multiple `app`s correctly, you can use `app.route()` as follows.\n\nPass the value returned from methods like `app.get()` or `app.post()` to the second argument of `app.route()`.\n\nts\n\n```\nimport { Hono } from 'hono'\nimport { hc } from 'hono/client'\n\nconst authorsApp = new Hono()\n  .get('/', (c) => c.json({ result: 'list authors' }))\n  .post('/', (c) => c.json({ result: 'create an author' }, 201))\n  .get('/:id', (c) => c.json({ result: `get ${c.req.param('id')}` }))\n\nconst booksApp = new Hono()\n  .get('/', (c) => c.json({ result: 'list books' }))\n  .post('/', (c) => c.json({ result: 'create a book' }, 201))\n  .get('/:id', (c) => c.json({ result: `get ${c.req.param('id')}` }))\n\nconst app = new Hono()\n  .route('/authors', authorsApp)\n  .route('/books', booksApp)\n\ntype AppType = typeof app\n```\n\n## See also [​](#see-also)\n\n-   [Guides - RPC - Client](/docs/guides/rpc#client)"
+}

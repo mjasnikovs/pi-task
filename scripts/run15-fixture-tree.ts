@@ -56,11 +56,47 @@ EXTERNAL-DEPENDENCIES
  * rep before the model is reached. Omitting it cost a full 8-rep run.
  */
 export function buildPreTask27Tree(root: string, trial: number): string {
+    return buildCheckpointTree(root, trial, {
+        commit: PRE_TASK_0027,
+        taskId: 'TASK_0027',
+        title: 'Client API module — typed hono/client hc<AppType> with fetch hooks'
+    })
+}
+
+/** One run-15 task's pre-implementation state: its checkpoint commit and its task file. */
+export interface CheckpointFixture {
+    /** mx5 `chore: checkpoint before "<title>"` commit — the tree as that task's research saw it. */
+    commit: string
+    taskId: string
+    title: string
+    /**
+     * The task's `## raw prompt`, seeded only when a fixture needs it. Run 15's real task
+     * files carry `… | spec: @DESIGN/PROJECT.md — otherwise authoritative`, which is the ONLY
+     * place the design document's path appears anywhere in the task; anything that resolves
+     * @-mentions (readReferencedDocs) needs it. Omitted by default so the fixtures that
+     * recorded their baselines without it are byte-identical to what they measured.
+     */
+    rawPrompt?: string
+}
+
+/**
+ * Extract a run-15 checkpoint tree into `<root>/trial-<n>` and seed the task file
+ * phaseResearch persists into.
+ *
+ * `created_at` in the front matter is REQUIRED: parseFrontMatter (task-parsers.ts) returns
+ * null without it and readTaskFile then throws "malformed front matter", aborting every
+ * rep before the model is reached. Omitting it cost a full 8-rep run.
+ */
+export function buildCheckpointTree(
+    root: string,
+    trial: number,
+    fixture: CheckpointFixture
+): string {
     const dir = path.join(root, `trial-${trial}`)
     fs.rmSync(dir, {recursive: true, force: true})
     fs.mkdirSync(path.join(dir, '.pi-tasks'), {recursive: true})
 
-    const tar = execFileSync('git', ['archive', '--format=tar', PRE_TASK_0027], {
+    const tar = execFileSync('git', ['archive', '--format=tar', fixture.commit], {
         cwd: MX5,
         maxBuffer: 512 * 1024 * 1024,
         encoding: 'buffer'
@@ -73,11 +109,13 @@ export function buildPreTask27Tree(root: string, trial: number): string {
 
     const now = new Date().toISOString()
     fs.writeFileSync(
-        path.join(dir, '.pi-tasks', 'TASK_0027.md'),
-        `---\nid: TASK_0027\nstate: in_progress\nphase: research\n`
+        path.join(dir, '.pi-tasks', `${fixture.taskId}.md`),
+        `---\nid: ${fixture.taskId}\nstate: in_progress\nphase: research\n`
             + `created_at: ${now}\nupdated_at: ${now}\n`
-            + `title: Client API module — typed hono/client hc<AppType> with fetch hooks\n`
-            + `---\n\n## research\n\n`,
+            + `title: ${fixture.title}\n`
+            + `---\n\n`
+            + (fixture.rawPrompt ? `## raw prompt\n\n${fixture.rawPrompt}\n\n` : '')
+            + `## research\n\n`,
         'utf8'
     )
     return dir

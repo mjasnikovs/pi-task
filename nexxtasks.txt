@@ -789,6 +789,56 @@ WHY THIS ONE IS A/B-ABLE WHERE THE TYPE-ONLY LEVER WAS NOT
   the two packages behind both fatal defects. The population must still be MEASURED before
   the A/B is sized; do not inherit that claim from this paragraph.
 
+*** STEPS 1 AND 2 ARE DONE, 2026-07-22. Read this block before acting on the order below. ***
+
+  STEP 1 — REACH, mechanical, zero model time. scripts/spec-url-reach.ts over the run-15
+  artifacts (DESIGN/PROJECT.md + the 44 TASK_*-debug.log). PASS.
+      design cites                     21 distinct http(s) URLs
+      (task, cited-URL) pairs          215 strict (host match) / 238 loose (host or path)
+      tasks reached                    31/44 strict, 37/44 loose
+      reachable cited URLs unfetched   15/17
+  NOT a targeted guard: this is a population, so an A/B is the right instrument. Both
+  strictness rules are reported because a reach figure that survives only the generous rule
+  is not a reach figure — 215 vs 238 says it survives.
+  ONE CORRECTION TO FACT (b): worker:apis DID fetch 2 spec-cited URLs in run 15 —
+  bun.com/docs/bundler and tailwindcss.com/docs/installation/tailwind-cli, 2 of the 6 distinct
+  URLs it fetched. Fact (b) as PROMPT 4 states it still holds exactly: neither of the two
+  FATAL-DEFECT pages (hono.dev/docs/guides/rpc, bun.com/docs/runtime/sql) was ever fetched.
+  But "the baseline rate is zero" was NOT safe to assume, which is why STEP 2 measured it.
+  (Scope note: 6 distinct URLs is the worker:apis channel, the one the A/B scores. It is not
+  the 30 cached fetch RESULTS quoted earlier in this file — those also include the enrichment
+  pass and the unlogged implementation turn.)
+
+  STEP 2 — BASELINE RATE, live, 20 reps, PASS. scripts/live-spec-url-baseline.ts, real
+  phaseResearch on each task's own checkpoint tree, nothing about the worker stubbed, only
+  the network replaced by an offline fixture web.
+      task27-hono      0/10    Wilson 95% [0.0%, 27.8%]
+      task28-wouter    0/10    Wilson 95% [0.0%, 27.8%]
+      POOLED           0/20    Wilson 95% [0.0%, 16.1%]
+      reps that fetched ANY url 0/20      reps that searched 0/20      0 errors
+  So the prior "1 of 17 reps (~6%)" is replaced by a measured zero on these two fixtures. The
+  worker does not pick the wrong page — it does not leave pi-worker-docs at all. Same
+  phenomenon JOB 1 measured as 11/12 non-escalation, here 20/20.
+  RAW DATA ~/tmp/spec-url-baseline/baseline.json, re-scorable with BASELINE_DIR=… and no
+  model time.
+
+  A ZERO LIKE THAT HAS TWO READINGS AND THE RUN OUTPUT CANNOT TELL THEM APART: "the worker
+  declined to fetch" and "the fetch tool was never registered in the child, so it could not".
+  An extension that fails to load leaves NO error in the trial log. Settled by positive
+  control: a throwaway worker told outright to fetch hono.dev/docs/guides/rpc reached the stub
+  and came back with excerptVerified true. That control is now asserted at A/B startup
+  (assertFetchToolReachable) rather than remembered — both arms reading zero would otherwise
+  look like a clean null result.
+
+  ARM SIZING FOR STEP 3, computed from the measured p0 = 0, not inherited. The direction is
+  opposite to PROMPT 1's and its 8/11/17 table must NOT be copied across: that lever REMOVED
+  a shape, so a low baseline made a false pass EASIER; this lever ADDS one, so a low baseline
+  makes a spurious PASS harder and the binding constraint is POWER. Smallest reps/arm at which
+  Fisher one-tailed reaches p < 0.05 against p0 = 0:
+      treatment 40% -> 9    50% -> 7    60% -> 6    80% -> 5    100% -> 3
+  Best case by construction (each arm landing exactly on its rate), so STEP 3 runs 10 per arm
+  per fixture = 20 per arm pooled.
+
 MANDATORY ORDER — the failure this file exists to prevent is implementing before measuring
   STEP 1  MEASURE THE POPULATION. Over the run-15 design text, count: how many distinct
           http(s) URLs does the spec cite, and for how many of them does worker:apis ask
