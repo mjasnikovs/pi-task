@@ -225,6 +225,32 @@ IN FLIGHT: 24 more treatment reps (pid 508102) to reach 0/40 -> p = 0.017 if sti
   treatment 0/24 -> p=0.055 | 0/32 -> p=0.029 | 0/40 -> p=0.017 | 0/48 -> p=0.010
 If ANY hit appears in the extension, recompute honestly — do not drop it.
 
+## PROMPT 3 — IN PROGRESS (2026-07-22)
+
+- Fixture pages SNAPSHOTTED: `scripts/fixtures/run15-fetch-pages/`, 14 distinct URLs, 0
+  failures, via `scripts/snapshot-run15-fetch-pages.ts`. Captures the CLEANED markdown the
+  child actually sees (not raw HTML), keyed by URL INCLUDING #fragment — the fragment is the
+  point of one of the ten failures and must not be normalised away. Required by nexxtasks:
+  a live re-fetch would let page drift masquerade as a lever effect.
+- Implementation (DO 1 abstention recalibration, DO 2 fragment anchoring, DO 3 page-coverage
+  miss as a distinct outcome) delegated to a subagent, deterministic only. DO 4 (retain
+  source for excerpt diagnosis) held back for me.
+- A/B still TO BUILD: `scripts/live-fetch-abstention-ab.ts`. Metric = two mechanical counters
+  per arm: (i) "unclear from this page", (ii) excerptVerified===false. PASS = the 4
+  false-unclear + 1 fragment case resolve to sourced answers AND counter (ii) does NOT rise
+  on the 20-result regression set. INVARIANT: the 2 genuinely-unanswerable page-coverage
+  cases must STILL not produce an answer — relaxing abstention must not manufacture content.
+- POWER: learn from PROMPT 1. Decide reps from the MEASURED baseline rate, not the spec'd 8.
+  Here the baseline is deterministic per (url,query) given a snapshot, so the variance is the
+  model's; still run >=8 and compute Fisher before claiming anything.
+
+## ENVIRONMENT
+
+- 2026-07-22: llama-server container RESTARTED at user request via ~/hub/qwen/run-Q3.6-27B.sh
+  (never hand-rolled — the script carries -b 2048 -ub 512; sub-default batch corrupts large
+  parallel tool calls). Verified after restart: healthy, Qwen3.6-27B-NVFP4-MTP.gguf,
+  n_ctx 120064, answered a live smoke request. No live harness was running at restart time.
+
 ## LOG
 
 - 2026-07-22 — STEP 0 complete. Baselines recorded above.

@@ -591,3 +591,92 @@ ORDER
   A prompt is DONE when its live A/B is PASS on >= 8 reps per arm against the recorded
   STEP 0 baseline, with every invariant green. An ABSTAIN is not a pass — it means the
   experiment never ran, and the finding behind it has to be re-derived before anything lands.
+
+
+=========================================================
+RESULTS — live measurement + PROMPT 1/2/3 status (2026-07-22)
+=========================================================
+Everything below is MEASURED live against Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080,
+mechanical at the tool layer, never model self-report. Commits: d451103, 32596f5.
+
+WORKER FAILURE RATES — LIVE
+  pi-worker-docs   38.9% invalid   (654/1680 = 8 reps x 210 questions, 0 errors)
+                   382 "unclear from this package", 318 excerptVerified===false
+                   valid 61.1% (static run-15 said 58.6%); per-rep 59.0-62.4%, spread 3.3pp
+                   worst packages (live %valid): @playwright/experimental-ct-core 0%,
+                     @tailwindcss/cli 0%, tailwindcss 0%, node:crypto 0%,
+                     @playwright/experimental-ct-react 11.1% (n=72), @types/bun 12.5%,
+                     sharp 36.1% (n=208), react 43.8%
+                   best: @hono/zod-validator 88.3%, hono/client 87.5%, wouter 85.0%
+  pi-worker-fetch  33% failing (10/30) — STATIC ONLY, NEVER REPLAYED LIVE
+  pi-worker-search 0% failing (8/8)   — STATIC ONLY, n=8
+  worker:apis      3 of ~18 live reps made ZERO docs/search/fetch calls and wrote the APIS
+                   section from memory. NOT a tracked finding. Arguably worse than F-2.
+  worker:context   silent (zero bullets) in 2/24 pre-change, 4/30 post-change reps.
+  raw data: /home/edgars/tmp/worker-validity-baseline/results.json (per question x per rep)
+
+  TWO CAVEATS THAT CUT AGAINST THESE NUMBERS:
+   - 61.1% valid is an UPPER BOUND. Only self-declared failures count; a confident,
+     plausible, WRONG answer scores as valid — which is what killed run 15.
+   - excerptVerified flips on 43% of questions (90/210) between IDENTICAL reps. The 318
+     hallucination-warnings are NOT a stable per-question signal. `unclear` by contrast is
+     near-deterministic (8/210 churn). Only ~48 questions fail deterministically enough to
+     serve as fixtures.
+
+PROMPT 1 — DONE, VERIFIED. p = 0.0185
+  baseline 4/24 (pre-change, incl. 16 reps from a git worktree pinned at 84b85b7 and
+  asserted at runtime to contain neither belt nor braces) vs treatment 0/40.
+  Fisher one-tailed 0.0167 all reps / 0.0185 productive-only (a rep emitting zero bullets
+  cannot exhibit the shape, so counting it as a treatment success would flatter the lever;
+  the conservative scoring governs).
+  CONTEXT did not collapse: 14.2 bullets/rep vs pre-change 13.0.
+  Braces exercised live: gate demoted 2 bullets; the 24-rep extension read ungated 2/24 ->
+  gated 0/24. One demoted bullet is the run-15 FATAL CLAIM ITSELF.
+  Belt (prompt rule) suppresses most instances upstream; braces catch the residue.
+  *** THIS FILE'S OWN PASS CRITERION IS TOO WEAK: "baseline >=1 hit AND treatment 0" at 8
+  reps is satisfied by a DO-NOTHING lever ~10% of the time at these rates. At 0/16 the
+  harness ABSTAINED with zero demotions and would have looked like a pass. Size arms from
+  the MEASURED rate; scripts/prompt1-combined-verdict.ts computes the verdict. ***
+
+PROMPT 2 — IMPLEMENTED BUT **NOT VERIFIED**. The lever did not move the metric.
+  baseline 14/17 reps terminate without escalating (82%); treatment 10/11 (91%).
+  Fisher p = 0.88 — no reduction, if anything slightly worse (not significantly).
+  The implementation is CORRECT: run live, the detector fires on the recorded hc query and
+  emits the UNANSWERED banner. Two failures of the EXPERIMENT, not the code:
+   1. METRIC/LEVER MISMATCH. The metric counts ALL terminations; the lever targets only
+      type-only answers. F-2's 82% was never shown to be CAUSED by type-only answers — that
+      link was ASSERTED, not measured. A worker mostly stops because it believes it is done.
+   2. REACH CEILING. The detector is precision-first: exactly 1 of 150 recorded answers
+      flags (0.7%). By construction it cannot move an 82% aggregate.
+  WHAT IS TRUE: it reliably blocks the SPECIFIC fatal hc case. It does not generalise.
+  The right metric is CONDITIONAL — escalation GIVEN a type-only answer occurred — and
+  measuring it needs firing-rate instrumentation that does not exist.
+  BEWARE: the probe prints "PASS" because it is scored as a BASELINE probe whose target
+  shape IS termination. A PASS there means the bad behaviour PERSISTS. Easy to misread.
+  F-2 ITSELF CORRECTED: not absolute. 3 of 17 reps DID escalate, and one fetched exactly
+  hono.dev/docs/guides/rpc — the spec-cited page that would have prevented the bug. The
+  correct behaviour occurs ~18% of the time spontaneously.
+
+PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint).
+  *** ITS REQUIRED BASELINE WAS NEVER RUN. *** This file says PROMPT 3's baseline is "the
+  10-pair fixture REPLAYED LIVE, arms recorded". Item 4 (extract the fixture) was done; the
+  live replay never happened. Implementation was started before the baseline existed —
+  the exact inversion STEP 0 exists to prevent.
+  READY: scripts/fixtures/run15-fetch-{failures,regression}.json (10 + 20 pairs) and
+  scripts/fixtures/run15-fetch-pages/ — 14 URLs snapshotted as CLEANED markdown, keyed by
+  URL INCLUDING #fragment. So the replay is offline and deterministic; page drift cannot
+  masquerade as a lever effect.
+  DO NOT trust the static 10/30 as a baseline: one observation per pair, and
+  excerptVerified churns 43% between identical reps, so the 4 unverified-excerpt cases may
+  be noise. Replay >=8 reps against pre-change fetch-core FIRST.
+
+STILL OPEN, NOT ADDRESSED
+  - worker:apis writing its section with zero tool calls (3/~18 reps).
+  - worker:context emitting zero bullets (8-13% of reps).
+  - F-4: pi-worker-docs.ts:130 picks globalThis.Bun.spawn under a Bun runtime, but runChild
+    calls it node-style => "cmd must be an array" on every spawn. DORMANT in production (pi
+    runs under node; 95 autoInstalled:true entries prove it). Untested, unreachable code —
+    repair or delete deliberately.
+  - F-3(f) still undiagnosable (source content not retained).
+  - NOTHING here is validated end-to-end. Every measurement is ONE task's research phase
+    (TASK_0027) in a fixture tree. The real test is whether run 16 ships a working app.
