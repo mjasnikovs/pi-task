@@ -34,11 +34,11 @@ const dist = buildPatchedDist('spec-url-delivery', [
     stubSearchExtension(stub),
     {
         file: 'task/phases.js',
-        find: "            prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,",
+        find: "        const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt;",
         replace:
-            "            prompt: (p => { try { (globalThis.__fsdump ??= require('node:fs'))"
+            "        const basePrompt = (p => { try { (globalThis.__fsdump ??= require('node:fs'))"
             + `.appendFileSync(${JSON.stringify(DUMP)}, '\\n===== ' + spec.label + ' =====\\n' + p) } catch {} return p })`
-            + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt),",
+            + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt);",
         label: 'dump every worker prompt to disk'
     }
 ])

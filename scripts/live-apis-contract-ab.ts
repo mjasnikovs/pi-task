@@ -254,13 +254,16 @@ async function runRep(mod: PhasesModule, fixture: SpecUrlFixture, arm: Arm, rep:
 /** Dump every assembled worker prompt — observation only, applied identically to BOTH arms. */
 const PROMPT_DUMP: Surgery = {
     file: 'task/phases.js',
-    find: "            prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,",
+    // Anchored on the `basePrompt` binding — runSpec assembles worker:apis's prompt once there,
+    // then reuses it for the zero-retrieval gate retry (was: the inline `prompt:` property,
+    // removed when that retry was introduced).
+    find: "        const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt;",
     replace:
-        '            prompt: (p => { try { const s = process.env['
+        '        const basePrompt = (p => { try { const s = process.env['
         + JSON.stringify(PROMPT_DUMP_ENV)
         + "]; if (s) require('node:fs').appendFileSync(s, '\\n===== ' + spec.label"
         + " + ' =====\\n' + p) } catch {} return p })"
-        + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt),",
+        + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt);",
     label: 'dump every assembled worker prompt (observation only, both arms)'
 }
 

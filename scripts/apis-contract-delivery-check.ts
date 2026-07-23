@@ -37,13 +37,13 @@ const DUMP_ENV = 'PI_TASK_PROMPT_DUMP'
 
 const dumpPatch: Surgery = {
     file: 'task/phases.js',
-    find: "            prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,",
+    find: "        const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt;",
     replace:
-        '            prompt: (p => { try { const s = process.env['
+        '        const basePrompt = (p => { try { const s = process.env['
         + JSON.stringify(DUMP_ENV)
         + "]; if (s) require('node:fs').appendFileSync(s, '\\n===== ' + spec.label"
         + " + ' =====\\n' + p) } catch {} return p })"
-        + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt),",
+        + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt);",
     label: 'dump every assembled worker prompt to disk'
 }
 

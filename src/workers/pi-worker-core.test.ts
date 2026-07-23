@@ -1,5 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {runWorker} from './pi-worker-core.js'
+import {isGroundingRetrieval, runWorker} from './pi-worker-core.js'
+import type {SpawnResponseJsonEvents} from '../test-utils/fake-spawn.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {
     agentEndResponse,
@@ -85,6 +86,73 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
         expect(r.leakedToolCall).toBeTruthy()
+    })
+
+    // ── groundingRetrievalCount — the zero-retrieval gate's handle ──────────────
+    const withToolCalls = (
+        toolNames: ReadonlyArray<string>,
+        text = 'done'
+    ): SpawnResponseJsonEvents => ({
+        events: [
+            ...toolNames.map(toolName => ({
+                type: 'tool_execution_start',
+                toolName,
+                args: {}
+            })),
+            {type: 'agent_end', messages: [{role: 'assistant', content: [{type: 'text', text}]}]}
+        ],
+        exitCode: 0
+    })
+
+    test('groundingRetrievalCount counts docs/read/grep/search/fetch, not ls/find', async () => {
+        const spawn = fakeSpawnByPrompt(() =>
+            withToolCalls([
+                'pi-worker-docs',
+                'read',
+                'grep',
+                'pi-worker-search',
+                'pi-worker-fetch',
+                'ls',
+                'find'
+            ])
+        )
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.groundingRetrievalCount).toBe(5)
+    })
+
+    test('groundingRetrievalCount is 0 for a section written with no tool calls (the failure)', async () => {
+        const spawn = fakeSpawnByPrompt(() => agentEndResponse('an APIS section from memory'))
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.groundingRetrievalCount).toBe(0)
+    })
+
+    test('groundingRetrievalCount stays 0 for the one-trivial-ls dodge', async () => {
+        // The anti-gaming property: a worker that lists a directory once and then
+        // fabricates the rest has retrieved nothing an APIS signature can cite.
+        const spawn = fakeSpawnByPrompt(() => withToolCalls(['ls']))
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.groundingRetrievalCount).toBe(0)
+    })
+
+    test('groundingRetrievalCount reflects the FINAL attempt, not the sum across restarts', async () => {
+        // First attempt leaks a tool call (retried); the clean retry made one docs
+        // call. The count must be the retry's 1, not 1+0 accumulated.
+        const spawn = fakeSpawnQueue([
+            agentEndResponse(LEAKED),
+            withToolCalls(['pi-worker-docs'], 'clean output')
+        ])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.text).toBe('clean output')
+        expect(r.groundingRetrievalCount).toBe(1)
+    })
+
+    test('isGroundingRetrieval: content-returning tools yes, bare enumeration no', () => {
+        for (const t of ['pi-worker-docs', 'read', 'grep', 'pi-worker-search', 'pi-worker-fetch']) {
+            expect(isGroundingRetrieval(t)).toBe(true)
+        }
+        for (const t of ['ls', 'find', 'bash', 'edit', 'write']) {
+            expect(isGroundingRetrieval(t)).toBe(false)
+        }
     })
 
     test('restarts a loop-killed worker with a hint and returns the clean retry', async () => {

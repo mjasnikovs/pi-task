@@ -26,7 +26,8 @@ import {
     fakeSpawnByPrompt,
     fakeSpawnQueue,
     loopResponse,
-    makeProc
+    makeProc,
+    type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
 import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
 import type {SpawnFn} from '../shared/child-process.js'
@@ -37,6 +38,22 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {WidgetState} from './widget.js'
 import {getBridge, answerPrompt} from '../remote/bridge.js'
 import {getState, _setSink, reset} from '../remote/session-state.js'
+
+/**
+ * A worker response carrying one retrieval call, so the APIS zero-retrieval gate in
+ * phaseResearch treats the section as grounded and does not retry it. Tests that count worker
+ * spawns/prompts and are NOT exercising the gate use this for the APIS worker — a healthy APIS
+ * worker retrieves, so this is the realistic model, not a workaround.
+ */
+const groundedResponse = (text: string): SpawnResponseJsonEvents => ({
+    events: [
+        {type: 'tool_execution_start', toolName: 'pi-worker-docs', args: {}},
+        {type: 'agent_end', messages: [{role: 'assistant', content: [{type: 'text', text}]}]}
+    ],
+    exitCode: 0
+})
+const isApisPrompt = (args: ReadonlyArray<string>): boolean =>
+    (args[args.length - 1] ?? '').includes('content of an APIS section')
 
 describe('refineExistingFilesBlock', () => {
     const deps = (cwd: string) => ({cwd, taskId: 'TASK_0001', signal: new AbortController().signal})
@@ -430,6 +447,134 @@ describe('phaseResearch per-worker persistence', () => {
     })
 })
 
+describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', () => {
+    // A plausible APIS section a real rep emitted having made ZERO tool calls — every
+    // signature recalled from memory. See scripts/live-apis-stopping-point.ts.
+    const FROM_MEMORY =
+        'hono/client  hc<AppType> creates a typed client; $get/$post methods per route\n'
+        + 'AppType  export type AppType = typeof app from src/index.ts'
+    const GROUNDED = '- verified finding for apis'
+
+    // agent_end preceded by the given tool calls, so groundingRetrievalCount reflects them.
+    const respWithCalls = (
+        tools: ReadonlyArray<string>,
+        text: string
+    ): SpawnResponseJsonEvents => ({
+        events: [
+            ...tools.map(toolName => ({type: 'tool_execution_start', toolName, args: {}})),
+            {type: 'agent_end', messages: [{role: 'assistant', content: [{type: 'text', text}]}]}
+        ],
+        exitCode: 0
+    })
+
+    const RETRY_MARK = 'STOP. Your previous attempt'
+
+    test('re-runs worker:apis once and keeps the grounded retry when the first pass retrieved nothing', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawns = {apis: 0, files: 0}
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of an APIS section')) {
+                    spawns.apis++
+                    // First pass: a section from memory, no tool calls. Retry (preamble
+                    // present): a section grounded by a real docs call.
+                    return prompt.includes(RETRY_MARK) ?
+                            respWithCalls(['pi-worker-docs'], GROUNDED)
+                        :   agentEndResponse(FROM_MEMORY)
+                }
+                // Control: the FILES worker also answers with no tool calls but has no
+                // gate, so it must run exactly once.
+                if (prompt.includes('content of a FILES section')) spawns.files++
+                return agentEndResponse('- finding')
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+
+            expect(spawns.apis).toBe(2) // retried once
+            expect(spawns.files).toBe(1) // control: not retried
+            expect(out).toContain(GROUNDED)
+            expect(out).not.toContain('$get/$post methods') // memory section replaced
+        })
+    })
+
+    test('keeps the original section (no regression) when the retry also retrieves nothing', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            let apis = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of an APIS section')) {
+                    apis++
+                    return agentEndResponse(FROM_MEMORY) // both passes: still zero retrieval
+                }
+                return agentEndResponse('- finding')
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+            expect(apis).toBe(2) // retried once, then gave up
+            expect(out).toContain('$get/$post methods') // original kept — entry count preserved
+        })
+    })
+
+    test('a worker:apis section built WITH retrieval is never retried', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            let apis = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1] ?? ''
+                if (prompt.includes('content of an APIS section')) {
+                    apis++
+                    return respWithCalls(['pi-worker-docs'], GROUNDED)
+                }
+                return agentEndResponse('- finding')
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            await phaseResearch(deps, 'a refined goal with no mentions', {
+                getFileInventory: async () => ''
+            })
+            expect(apis).toBe(1)
+        })
+    })
+})
+
 describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
     // Verbatim from TASK_0027.md — the bullet that killed the run. worker:context has
     // read+grep only, so the base-URL half necessarily came from model memory; fused with
@@ -728,6 +873,10 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     // APIS fails fatally on run 1 while the others succeed
                     // slower — allSettled must still persist all three.
                     if (which === 'apis' && apisShouldFail) return agentEndResponse('')
+                    // A healthy APIS worker retrieves, so the zero-retrieval gate leaves it
+                    // alone — otherwise it would re-run and inflate the resume spawn count.
+                    if (which === 'apis')
+                        return {...groundedResponse('- finding for apis'), closeDelayMs: 40}
                     return {...agentEndResponse(`- finding for ${which}`), closeDelayMs: 40}
                 })
                 const deps = {
@@ -837,6 +986,7 @@ describe('phaseResearch enrichment DI', () => {
             const promptsSeen: string[] = []
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
+                if (isApisPrompt(args)) return groundedResponse('worker-output')
                 return {
                     events: [
                         {
@@ -958,6 +1108,7 @@ describe('phaseResearch enrichment DI', () => {
             const promptsSeen: string[] = []
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
+                if (isApisPrompt(args)) return groundedResponse('worker-output')
                 return {
                     events: [
                         {
@@ -1130,6 +1281,7 @@ describe('phaseResearch enrichment DI', () => {
             const promptsSeen: string[] = []
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
+                if (isApisPrompt(args)) return groundedResponse('worker-output')
                 return agentEndResponse('worker-output')
             })
             await phaseResearch(
@@ -1161,6 +1313,7 @@ describe('phaseResearch enrichment DI', () => {
             const promptsSeen: string[] = []
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
+                if (isApisPrompt(args)) return groundedResponse('worker-output')
                 return agentEndResponse('worker-output')
             })
             await phaseResearch(

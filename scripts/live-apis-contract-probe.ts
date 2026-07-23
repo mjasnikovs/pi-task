@@ -123,13 +123,13 @@ async function runReps(): Promise<Rep[]> {
             // the prompt" is checked per rep against the real assembled text rather than
             // inferred from the fact that a string replacement ran at startup.
             file: 'task/phases.js',
-            find: "            prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,",
+            find: "        const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt;",
             replace:
-                '            prompt: (p => { try { const s = process.env['
+                '        const basePrompt = (p => { try { const s = process.env['
                 + JSON.stringify(PROMPT_DUMP_ENV)
                 + "]; if (s) require('node:fs').appendFileSync(s, '\\n===== ' + spec.label"
                 + " + ' =====\\n' + p) } catch {} return p })"
-                + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt),",
+                + "(typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt);",
             label: 'dump every assembled worker prompt (observation only)'
         }
     ])

@@ -494,6 +494,21 @@ async function manifestDependencyNames(cwd: string): Promise<string[]> {
     }
 }
 
+/**
+ * Prepended to worker:apis's prompt on the ONE retry the zero-retrieval gate triggers. It
+ * names the exact failure (a section written with no retrieval) so the correction is concrete,
+ * and bounds the retrieval to the symbols about to be listed — a broad "read everything" here
+ * would trade the memory-written section for the 37-read near-runaway at phases.ts's read tail.
+ */
+const APIS_ZERO_RETRIEVAL_PREAMBLE =
+    'STOP. Your previous attempt at this task wrote a complete APIS section without calling a '
+    + 'single retrieval tool — so every signature, type, and command in it was recalled from '
+    + 'memory, unverified, and must not be trusted. This time you MUST verify before you write: '
+    + 'call `pi-worker-docs` for each third-party package and each project symbol you are about '
+    + 'to list (or `read`/`grep` the project source for project symbols), and write each entry '
+    + 'from what the tool actually returned, not from memory. Look up only the symbols you will '
+    + 'list — no more, no less; do not read the whole tree.'
+
 export async function phaseResearch(
     deps: PhaseDeps,
     refined: string,
@@ -615,6 +630,14 @@ export async function phaseResearch(
         /** Deterministic gate over the worker's own output, run BEFORE the section is
          *  persisted, so nothing it rejects survives into the cache or into compose. */
         postProcess?: (text: string) => string
+        /** When set, a non-empty section produced with ZERO grounding-retrieval calls
+         *  (groundingRetrievalCount === 0 — see isGroundingRetrieval) is re-run ONCE
+         *  with this preamble prepended, forcing a retrieval-first pass. The retry
+         *  replaces the original only if it actually retrieved; otherwise the original
+         *  is kept (no regression, entry count preserved). Deterministic handle: a
+         *  section built on zero retrieval is ungrounded by construction, no semantic
+         *  judgement needed. */
+        zeroRetrievalRetry?: string
     }> = [
         {
             section: 'FILES',
@@ -647,7 +670,30 @@ export async function phaseResearch(
             extensions: [
                 DOCS_EXTENSION_PATH,
                 ...(searchConfigured() ? [SEARCH_EXTENSION_PATH] : [])
-            ]
+            ],
+            // ZERO-RETRIEVAL GATE (mx5 run-15 F-1, distinct from the STAGE 1-3 stopping-point
+            // thread). In a MINORITY of reps worker:apis emits a complete, plausible APIS section
+            // having made ZERO retrieval tool calls — the whole thing recalled from memory.
+            // The output contract at RESEARCH_APIS_PROMPT already INSTRUCTS tool use and the
+            // worker skips it anyway (STAGE 2 proved a prompt line does not move grounding), so
+            // this is a deterministic gate, not another instruction: groundingRetrievalCount === 0
+            // on a non-empty section is ungrounded BY CONSTRUCTION — no semantic judgement, the
+            // exact checkable handle STAGE 3's prose-clause gate lacked. The forced-retrieval
+            // retry recovers a grounded section rather than silencing the worker (entry count
+            // preserved). It bounds itself ("look up the symbols you will list — no more") away
+            // from the near-runaway 37-read tail.
+            //
+            // EFFICACY NOT DEMONSTRATED — read before trusting this to matter. The live A/B
+            // (scripts/live-apis-zero-retrieval-ab.ts) ABSTAINED, underpowered: the failure is
+            // RARE and intermittent (base rate 0/40 one session, pooled ~5%), so the primary
+            // reduction (baseline 1/40 zero-retrieval ships -> treatment 0/40) did NOT reach
+            // significance (Fisher p = 0.50 — needs ~5 baseline ships, ~85 reps at ~6%). What IS
+            // established: the gate is correct BY CONSTRUCTION; on the 3 firings observed it
+            // recovered a grounded section every time; and it did NO harm (ungrounded-symbol rate
+            // went DOWN not up, no entry collapse, no runaway, cost +4-6%). It is wired as a
+            // harmless safety net, NOT a proven-effective lever — do not cite it as a measured win
+            // (nexxtasks.txt "ZERO-RETRIEVAL GATE ... ABSTAIN"). A powered A/B is STILL OPEN.
+            zeroRetrievalRetry: APIS_ZERO_RETRIEVAL_PREAMBLE
         },
         {
             section: 'CONTEXT',
@@ -734,21 +780,53 @@ export async function phaseResearch(
         }
 
         deps.logDebug?.(`${spec.label}: start`)
-        const r = await recordWorker(
-            spec.label,
-            runWorker({
-                prompt: typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt,
-                cwd: deps.cwd,
-                signal: deps.signal,
-                spawn: deps.spawn,
-                ...(spec.tools ? {tools: spec.tools} : {}),
-                ...(spec.extensions ? {extensions: spec.extensions} : {}),
-                onLine: line => {
-                    deps.logDebug?.(`${spec.label}: ${line}`)
-                    deps.onChildOutput?.(`${spec.label}: ${line}`)
-                }
-            })
-        )
+        const basePrompt = typeof spec.prompt === 'function' ? spec.prompt(prior) : spec.prompt
+        const runOnce = (extraPreamble?: string): Promise<RunWorkerResult> =>
+            recordWorker(
+                spec.label,
+                runWorker({
+                    prompt: extraPreamble ? `${extraPreamble}\n\n${basePrompt}` : basePrompt,
+                    cwd: deps.cwd,
+                    signal: deps.signal,
+                    spawn: deps.spawn,
+                    ...(spec.tools ? {tools: spec.tools} : {}),
+                    ...(spec.extensions ? {extensions: spec.extensions} : {}),
+                    onLine: line => {
+                        deps.logDebug?.(`${spec.label}: ${line}`)
+                        deps.onChildOutput?.(`${spec.label}: ${line}`)
+                    }
+                })
+            )
+        let r = await runOnce()
+        // ZERO-RETRIEVAL GATE — a deterministic handle, not another instruction. A non-empty
+        // section produced with no grounding-retrieval call was written from memory; retry ONCE
+        // with a forced retrieval-first pass and keep the retry only if it actually retrieved.
+        if (
+            spec.zeroRetrievalRetry
+            && r.groundingRetrievalCount === 0
+            && r.text.trim().length > 0
+        ) {
+            deps.logDebug?.(
+                `${spec.label}: ZERO grounding-retrieval on a non-empty section`
+                    + ' — every symbol is unverified memory; re-running once with a forced'
+                    + ' retrieval-first pass'
+            )
+            deps.onChildOutput?.(`${spec.label}: zero-retrieval — retrying with forced retrieval`)
+            const retry = await runOnce(spec.zeroRetrievalRetry)
+            if (retry.groundingRetrievalCount > 0 && retry.text.trim().length > 0) {
+                deps.logDebug?.(
+                    `${spec.label}: retry grounded (${retry.groundingRetrievalCount} retrieval`
+                        + ' calls) — replacing the memory-written section'
+                )
+                r = retry
+            } else {
+                deps.logDebug?.(
+                    `${spec.label}: retry STILL zero-retrieval`
+                        + ` (calls=${retry.groundingRetrievalCount}, len=${retry.text.trim().length})`
+                        + ' — keeping the original (no regression, entry count preserved)'
+                )
+            }
+        }
         deps.logDebug?.(
             `${spec.label}: done exit=${r.exitCode} wait=${r.waitMs}ms work=${r.workMs}ms`
                 + (r.stderr ? ` stderr=${r.stderr.slice(0, 300)}` : '')

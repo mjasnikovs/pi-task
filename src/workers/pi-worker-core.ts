@@ -32,6 +32,31 @@ import {streamStallHint} from '../shared/stream-watchdog.js'
 const DEFAULT_TOOLS = 'read,grep,find,ls'
 
 /**
+ * Tool calls that can GROUND an APIS claim — i.e. return content a signature or
+ * command could be cited from. `pi-worker-docs` (the primary), `read` and `grep`
+ * (project source), and the web escalations `pi-worker-search`/`pi-worker-fetch`.
+ *
+ * `ls` and `find` are deliberately EXCLUDED: they return file/directory NAMES,
+ * and APIS owns symbols by name only, never paths (RESEARCH_APIS_PROMPT). Bare
+ * enumeration cannot verify a signature, so a worker that fabricates its section
+ * from memory does not launder itself grounded by calling `ls` once. That
+ * exclusion is the anti-gaming property of any gate built on this count: "one
+ * trivial `ls` then fabricate the rest" leaves groundingRetrievalCount at 0.
+ */
+const GROUNDING_RETRIEVAL_TOOLS = new Set([
+    'pi-worker-docs',
+    'read',
+    'grep',
+    'pi-worker-search',
+    'pi-worker-fetch'
+])
+
+/** True when a tool call retrieves content an APIS entry could be grounded in. */
+export function isGroundingRetrieval(toolName: string): boolean {
+    return GROUNDING_RETRIEVAL_TOOLS.has(toolName)
+}
+
+/**
  * Hard wall-clock bound on a single research worker run (one spawn). The
  * exact-match LoopDetector only catches *identical* repeated tool calls; a model
  * that thrashes with slightly-varied calls (different grep patterns each time)
@@ -195,6 +220,15 @@ export interface RunWorkerResult {
      * elapsed when the child never produced output.
      */
     workMs: number
+    /**
+     * How many GROUNDING retrieval tool calls the FINAL attempt made — the calls
+     * that returned content an APIS entry could be cited from (see
+     * isGroundingRetrieval; `ls`/`find` excluded on purpose). Counted over the
+     * attempt that produced `text`, not summed across restarts (a restarted
+     * attempt discards its predecessor's calls along with its text). Zero here on
+     * a non-empty section means every symbol in it came from parametric memory.
+     */
+    groundingRetrievalCount: number
     /**
      * Set when the worker exhausted its re-prompts still leaking a tool call as
      * text (wrong dialect, never executed). The caller must treat this as a
@@ -375,6 +409,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // SIGTERM that kill produces would surface as a bare non-zero exit the
         // caller couldn't distinguish from a crash.
         let loopHit: LoopHit | undefined
+        // Reset EACH attempt: on a restart the previous attempt's calls are
+        // discarded with its text, so the count must describe only the attempt
+        // whose text this call returns.
+        let groundingRetrievalCount = 0
         const timeout = workerTimeout(input.signal, timeoutMs)
         // Per-tool-call watchdog for this attempt (null when off). Its abort is
         // OR'd with the worker timeout / external cancel into the child's signal.
@@ -407,6 +445,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
                         cmdWatch?.onStart(call)
+                        if (isGroundingRetrieval(call.name)) groundingRetrievalCount++
                         if (!loopDetector) return null
                         const hit = loopDetector.record(call)
                         if (hit && !loopHit) loopHit = hit
@@ -496,6 +535,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             aborted: result.aborted,
             waitMs,
             workMs,
+            groundingRetrievalCount,
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(loopHit ? {loopHit} : {}),
             ...(timedOut ? {timedOut: true} : {}),

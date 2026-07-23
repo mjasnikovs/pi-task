@@ -1487,3 +1487,90 @@ THE HONEST SPLIT, stated because the headline "resolve to SOURCED answers" over-
 STILL OPEN, NOT addressed by PROMPT 3: F-3(f) markdown-escape normaliser gap (now DIAGNOSABLE via
   verifyExcerpt's retained evidence, but not itself fixed — deliberately, per DO item 4); the
   excerptVerified churn on the FAILURES set's 5 intermittent pairs [0,1,3,5,6] (never pinned).
+
+
+=========================================================
+ZERO-RETRIEVAL GATE — worker:apis WRITING ITS SECTION FROM MEMORY.
+BUILT, A/B'd, ABSTAIN (UNDERPOWERED). NOT WIRED. 2026-07-23.
+A DISTINCT FAILURE from the STAGE 1-3 stopping-point thread — never folded in (see :1058, :1076).
+=========================================================
+src: src/task/phases.ts (the gate + APIS_ZERO_RETRIEVAL_PREAMBLE + the runOnce refactor of runSpec),
+src/workers/pi-worker-core.ts (isGroundingRetrieval + RunWorkerResult.groundingRetrievalCount).
+harness: scripts/live-apis-zero-retrieval-ab.ts; STEP-0 scorer scripts/apis-zero-retrieval-baserate.ts.
+9 new unit/integration tests, full suite 2249 green. Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080.
+
+THE FAILURE. In a minority of reps worker:apis emits a COMPLETE, PLAUSIBLE APIS section having
+made ZERO retrieval tool calls — no pi-worker-docs, no read/grep/find/ls, no search/fetch. The
+whole section is parametric memory. It is the MAXIMAL F-1 case: not "a signature is unverified"
+(STAGE 2/3's problem) but "NOTHING was verified". The output contract (RESEARCH_APIS_PROMPT)
+ALREADY instructs tool use and the worker skips it anyway — so, per the STAGE 2/3 lesson, the
+lever is a DETERMINISTIC gate on a checkable handle (groundingRetrievalCount === 0), not another
+instruction. The handle STAGE 3 lacked: a section built on zero retrieval is ungrounded BY
+CONSTRUCTION, no semantic judgement. Anti-gaming: the grounding set is docs/read/grep/search/fetch;
+ls/find are EXCLUDED (they return names, and APIS owns symbols not paths), so "one trivial ls then
+fabricate the rest" leaves the count at 0 and still fires.
+
+STEP 0 — THE BASE RATE, NAILED, AND IT IS LOW + INTERMITTENT.
+  Re-scored the STAGE-1 stopping-point raw data (which EXCLUDES these reps by construction —
+  live-apis-stopping-point.ts filters docsSteps>0) with scripts/apis-zero-retrieval-baserate.ts.
+    preserved clean run   1/16  (task27-hono rep2: NON-EMPTY, 10 entries, 0 tool calls, 1.9m;
+                                 100% of entry-name symbols already in the prompt — so a NAME
+                                 substring test scores it "grounded" while every SIGNATURE was
+                                 from memory. That is why the gate keys on the CALL COUNT.)
+    historical            3/18  (the "3 of ~18" the brief carried)
+    FRESH 40-rep batch    0/40  Wilson95 [0.0%, 8.8%] — the phenomenon did NOT reproduce this
+                                 session, on EITHER fixture. Raw: ~/tmp/apis-stopping-point/.
+    pooled                4/74 = 5.4%.
+  So STEP 0's own discipline ("do NOT build a gate against a rate you have not nailed") was
+  satisfied by nailing it at ~0-5%: real but rare and session-to-session intermittent. This was
+  flagged as a near-certain A/B ABSTAIN risk BEFORE the A/B (user chose to run the moderate A/B).
+
+STEP 3 — THE A/B. 20 reps/arm/fixture, both fixtures, arms INTERLEAVED in one process, offline
+web (stubbed), real phaseResearch, nothing else stubbed. baseline = the shipped dist with the
+gate condition surgically hard-disabled to `false`; verified three ways (unique anchor; the two
+dist copies differ by the strip ALONE at startup; every baseline rep checked to have NOT retried).
+80 reps, 0 errored. Raw ~/tmp/apis-zero-retrieval-ab/ab.json, re-scorable AB_DIR= no model time.
+
+  PRIMARY — PRODUCTIVE reps shipping a ZERO-grounding-retrieval section (baseline first: fewer is
+  better). Threshold Fisher one-tailed p < 0.05, fixed before the data.
+    task27-hono   baseline 0/20   treatment 0/20
+    task28-wouter baseline 1/20   treatment 0/20
+    POOLED        baseline 1/40 = 2.5%   treatment 0/40 = 0.0%   Fisher p = 0.5000  -> NOT significant.
+  GATE FIRED 3/40 treatment reps (first pass retrieved nothing). ALL THREE RECOVERED a grounded
+  section (task27 r5: 0->19 grounding calls, 31 entries; task27 r6: 0->14, 9 entries; task28 r15:
+  0->6, 6 entries). The ONE baseline ship is the phenomenon in the wild: task28-wouter baseline
+  r13 — 0 tool calls, 1.4m, 5 entries, first line "Router  wouter component providing client-side
+  routing context" — a section the gate would have caught.
+
+  INVARIANTS — ALL HOLD (STAGE 2 moved its metric 10x and FAILED on fabrication; this did not):
+    surgery held         baseline retried 0/40 (gate hard-disabled)
+    inv1 no fab-rise      ungrounded-symbol rate baseline 88/1657 = 5.3% vs treatment 57/1332 = 4.3%,
+                          p(rise) = 0.9183 — treatment is BETTER grounded, not worse.
+    inv2 no collapse      entries/rep 15.5 baseline vs 15.6 treatment
+    inv3a no runaway      max treatment tool calls/rep = 40 (< 45 ceiling; a fired rep ~doubles)
+    inv3b cost            grounding calls 461 vs 479 (+3.9%, << 2x)
+    inv3c wall clock      3.4 vs 3.6 min/rep (+6%)
+    both fixtures, 0 errors.
+  MECHANISM EVIDENCE (the STAGE 2 lesson — "it moved the metric" is not enough): share of entries
+  grounded by a RETRIEVAL channel (docs/read), not prompt-only: baseline 91.6% vs treatment 98.9%.
+  The retry grounds in RETRIEVED content, not re-emitted memory.
+
+VERDICT — ABSTAIN (UNDERPOWERED). The gate fired 3x and recovered a grounded section each time,
+with NO harm invariant broken and NO backfire. But baseline shipped only 1 zero-retrieval section
+— too few for the 1->0 reduction to clear p<0.05 (got 0.5000). The gate WORKS on the firings
+observed and does no harm; this run lacked the baseline EVENTS to prove population-level
+significance. This is a MEASUREMENT limit, exactly the STEP 0 low-rate regime — NOT a PASS (do not
+read it as one) and NOT a FAIL (nothing regressed). A powered primary needs ~5 baseline ships, i.e.
+~85 baseline reps at the ~6% rate (~11h GPU), OR a session where the phenomenon reproduces.
+
+NOT WIRED. Per STEP 4 ("wire ONLY on PASS"), the gate is NOT committed/shipped. It is NOT unwired
+either (unwire is for FAIL; nothing regressed) — the whole changeset (gate + runOnce refactor +
+the 5 prompt-dump anchor repairs my refactor forced) sits UNCOMMITTED in the tree, pending either a
+powered A/B when the phenomenon returns, or a user decision to wire it as a correct-by-construction,
+demonstrably-harmless safety net (it caught the one live baseline failure). RE-SCORE RECIPES:
+  A/B:    AB_DIR=~/tmp/apis-zero-retrieval-ab bun run scripts/live-apis-zero-retrieval-ab.ts
+  STEP 0: STOP_DIR=~/tmp/apis-stopping-point bun run scripts/apis-zero-retrieval-baserate.ts
+
+STILL OPEN: the powered A/B (blocked on the phenomenon reproducing — 0/40 this session); whether
+the ~5% first-pass-zero rate correlates with a COMPLETE FILES map handed to APIS (output-format
+completion, the STAGE 1 mechanism) vs pure sampling variance — untested.
