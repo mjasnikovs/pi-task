@@ -1,3 +1,4 @@
+import {spawn as defaultSpawn} from 'node:child_process'
 import {Type} from '@sinclair/typebox'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
@@ -152,11 +153,13 @@ export function registerPiWorkerDocs(
         parameters: Params,
 
         async run(params, signal, ctx) {
-            const spawn =
-                internals.spawn
-                ?? (globalThis.Bun !== undefined ?
-                    (globalThis.Bun.spawn as unknown as SpawnFn)
-                :   ((await import('node:child_process')).spawn as unknown as SpawnFn))
+            // Always node:child_process spawn (matching fetch-core and every other
+            // worker). The former globalThis.Bun branch called Bun.spawn — whose signature
+            // is Bun.spawn([cmd, ...args], opts), NOT the node (cmd, args, opts) that
+            // runChild/SpawnFn require — so it threw "cmd must be an array" whenever it ran.
+            // It was DEAD in production (pi runs under node) and BYPASSED under bun test
+            // (internals.spawn is always injected), i.e. untested, unreachable, and wrong.
+            const spawn = internals.spawn ?? (defaultSpawn as unknown as SpawnFn)
 
             // ── Project source lookup ───────────────────────────────────────
             if (params.module === '.') {

@@ -762,11 +762,16 @@ PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint
 STILL OPEN, NOT ADDRESSED
   - worker:apis writing its section with zero tool calls (3/~18 reps).
   - worker:context emitting zero bullets (8-13% of reps).
-  - F-4: pi-worker-docs.ts:130 picks globalThis.Bun.spawn under a Bun runtime, but runChild
-    calls it node-style => "cmd must be an array" on every spawn. DORMANT in production (pi
-    runs under node; 95 autoInstalled:true entries prove it). Untested, unreachable code —
-    repair or delete deliberately.
-  - F-3(f) still undiagnosable (source content not retained).
+  - F-4: CLOSED 2026-07-23 — DELETED the globalThis.Bun.spawn branch; pi-worker-docs now
+    always uses node:child_process spawn, matching fetch-core and every sibling. Reachability
+    PROVEN before deleting: DEAD in production (pi runs under node; 95 autoInstalled:true
+    entries are all the node path; extension ships as dist/index.js loaded by pi), and BYPASSED
+    under bun test (internals.spawn is injected at every call site). REPAIR rejected: no
+    Bun-runtime launch path exists, so a Bun→SpawnFn adapter would be new untested dead code.
+    Removed the signature-hiding `as unknown as SpawnFn` on the Bun cast. lint + full suite green.
+  - F-3(f) is now DIAGNOSABLE — PROMPT 3 item 4 (verifyExcerpt / excerptCheck retained) makes
+    the source content available without re-fetch; the markdown-escape normaliser gap can be
+    inspected from the retained evidence. (Was: "still undiagnosable, source content not retained.")
   - NOTHING here is validated end-to-end. Every measurement is ONE task's research phase
     (TASK_0027) in a fixture tree. The real test is whether run 16 ships a working app.
 
