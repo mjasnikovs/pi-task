@@ -1574,3 +1574,31 @@ demonstrably-harmless safety net (it caught the one live baseline failure). RE-S
 STILL OPEN: the powered A/B (blocked on the phenomenon reproducing — 0/40 this session); whether
 the ~5% first-pass-zero rate correlates with a COMPLETE FILES map handed to APIS (output-format
 completion, the STAGE 1 mechanism) vs pure sampling variance — untested.
+
+CLOSED 2026-07-23 evening. BOTH open clauses resolved; the zero-retrieval thread is DONE.
+  (1) MAP-COMPLETENESS — NO SIGNAL, offline, commit 1a37cd2 (scripts/apis-map-completeness.ts).
+      POS (zero-retrieval first pass, n=4) vs NEG (retrieved, n=40): the FILES-map block does NOT
+      separate the classes and the direction RUNS OPPOSITE to the hypothesis — the two cleanest
+      zero-retrieval reps had among the SMALLEST maps (0-15th pct). map bytes/lines/entries/fraction
+      Mann-Whitney(POS>NEG) p=0.77/0.83/0.94/0.85; exact floor at n=4,m=40 = 7.4e-6 so a CLEAN
+      separation COULD have shown — none did. Rivals ruled out (fixture medians 1207 vs 1321;
+      rep-index r=-0.22). So the intermittency is NOT map-driven; it is sampling variance. This
+      REFUTES the standing hypothesis, does not merely fail to support it. Re-score by DEFAULT:
+      STOP_DIR=~/tmp/apis-stopping-point bun run scripts/apis-map-completeness.ts
+  (2) SECOND POWERED A/B — ATTEMPTED, KILLED, ABSTAIN STANDS. Ran live REPS=43 (~172 reps target,
+      ~13h). A pilot (REPS=15) first showed 1 baseline ship in 5 reps (phenomenon DID reproduce this
+      session, unlike 0/40 last), which greenlit scaling. But the full run KILLED at 53 reps once it
+      was clear the outcome could not change the action: the gate is ALREADY WIRED (35e40de, below)
+      and demonstrably harmless, so PASS vs ABSTAIN both lead to the same decision. At kill: baseline
+      shipped 0/27 zero-retrieval sections (primary has nothing to beat), gate fired 1× (need >=3) —
+      again too rare to power. Harm invariant CLEAN + reassuring across 53 fresh reps: ungrounded
+      baseline 7.3% vs treatment 7.7% (an early treatment 21% blip was sampling noise — with ~0
+      firings both arms run the identical path). Salvaged raw: scratchpad ab-full-53reps.json.
+  RECORD CORRECTION: the gate was WIRED as a safety net at 35e40de (a user JUDGMENT CALL on a
+  correct-by-construction, harmless gate — NOT a live PASS; the primary never cleared p<0.05). The
+  apis-zero-retrieval-gate-abstain memory had gone STALE saying "NOT WIRED", which misled this
+  session into re-running the A/B — now corrected. DATA: the map-completeness finding's raw positives
+  are back at the DEFAULT ~/tmp/apis-zero-retrieval-ab (restored after this run, so the script's
+  default recipe re-scores it — verified U=62, p=0.7675); the killed 2nd-A/B's 53 reps are preserved
+  at ~/tmp/apis-zero-retrieval-ab-2ndAB-53reps (+ scratchpad ab-full-53reps.json).
+  DO NOT attempt a third powered A/B — two sessions now show the failure is too rare at practical n.
