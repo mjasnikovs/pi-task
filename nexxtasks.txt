@@ -1484,9 +1484,27 @@ THE HONEST SPLIT, stated because the headline "resolve to SOURCED answers" over-
   and with truncation on #7/#8 it is correct. The one thing PROMPT 3 set out to prevent —
   buying answers with fabrication — did not happen (R3, I1).
 
-STILL OPEN, NOT addressed by PROMPT 3: F-3(f) markdown-escape normaliser gap (now DIAGNOSABLE via
-  verifyExcerpt's retained evidence, but not itself fixed — deliberately, per DO item 4); the
-  excerptVerified churn on the FAILURES set's 5 intermittent pairs [0,1,3,5,6] (never pinned).
+F-3(f) markdown-escape normaliser gap — CLOSED (Jul 23), REFUTED, NO SIGNAL, offline only, no GPU.
+  scripts/f3f-escape-gap.ts (re-scorable) scores every retained recorded excerpt against its frozen
+  snapshot page. The 4 offline-reproducible excerptVerified===false FAILURES cases are ALL genuine
+  non-verbatim, NONE a markdown-escape/entity variant:
+    #0, #7 = META-STATEMENTS ("the page does not list…", "covers versions 1.61 through 1.7…") — the
+             model described the page instead of quoting it; 4/7-char prefix match only.
+    #1, #5 = STITCHES — #1 concatenates BuildConfig field bullets but drops the description paragraph
+             between each (page has "…string\[\] \n Control whether dynamic import()…" between the
+             allowUnresolved and bytecode bullets); #5 joins non-contiguous fragments with injected
+             "…" ellipses. Each sub-fragment is on-page; the contiguous concatenation is not.
+  The ONE markdown escape that appears in real data (#1 "string\[\]") is present IDENTICALLY on both
+  sides — it matches fine, produces no false negative. A well-formed widener (strip \-escapes + decode
+  entities/smart-quotes, applied symmetrically) recovers 5/5 SYNTHETIC escaped variants and admits 0/3
+  synthetic absences, but flips 0 real cases and admits 0 real fabrications: it is correct and simply
+  never exercised. RIVAL resolved: the live [0,1,3,5,6] churn is NEITHER normaliser gap (deterministic
+  on fixed input) NOR page nondeterminism (frozen offline snapshots ⇒ constant contentSha256) — it is
+  EXCERPT nondeterminism: the child emits a clean quote some reps, a stitch/meta-statement others.
+  NOTE the retained live A/B (ab.json/baseline.json) saved only the excerptVerified BOOLEAN, never the
+  excerpt text, so those reps are not re-scorable; the reconstructable evidence is the FAILURES fixture.
+  VERDICT: NO SIGNAL → Phase 1 gate STOPS Phase 2, zero GPU spent, isExcerptInContent left untouched
+  (the one working hallucination detector was not weakened without a real FN to justify it).
 
 
 =========================================================
