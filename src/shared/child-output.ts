@@ -5,6 +5,7 @@
  * docs extraction). The child pi outputs <answer> and <excerpt> XML tags;
  * these functions parse, verify, and format the result.
  */
+import {createHash} from 'node:crypto'
 
 export function parseChildOutput(stdout: string): {answer: string; excerpt?: string} {
     const trimmed = stdout.trim()
@@ -26,6 +27,38 @@ export function normaliseWhitespace(s: string): string {
 export function isExcerptInContent(excerpt: string, content: string): boolean {
     if (!excerpt) return false
     return normaliseWhitespace(content).includes(normaliseWhitespace(excerpt))
+}
+
+/**
+ * The same verdict as {@link isExcerptInContent}, PLUS a retained record of what was
+ * actually checked — the whitespace-normalised excerpt and a hash+length of the normalised
+ * content it was searched in. This is PROMPT-3 item 4: make an `excerptVerified === false`
+ * DIAGNOSABLE after the fact, so it can be attributed to fabrication (the excerpt is nowhere
+ * near the content) versus a normaliser gap (it is a markdown-escape or entity variant of
+ * text that IS present) WITHOUT re-fetching. It deliberately does NOT loosen the verifier:
+ * `.verified` is identical to `isExcerptInContent`. F-3(f) — whether the normaliser needs
+ * markdown-escape handling — is left unproven on purpose; you decide that from the retained
+ * evidence, not by weakening the one working hallucination detector first.
+ */
+export interface ExcerptVerification {
+    verified: boolean
+    /** sha256 of the whitespace-normalised content the excerpt was checked against. */
+    contentSha256: string
+    /** Length of that normalised content, so a short/empty page is visible at a glance. */
+    contentLength: number
+    /** The whitespace-normalised excerpt that was searched for. */
+    normalisedExcerpt: string
+}
+
+export function verifyExcerpt(excerpt: string, content: string): ExcerptVerification {
+    const nc = normaliseWhitespace(content)
+    const ne = normaliseWhitespace(excerpt)
+    return {
+        verified: ne.length > 0 && nc.includes(ne),
+        contentSha256: createHash('sha256').update(nc).digest('hex'),
+        contentLength: nc.length,
+        normalisedExcerpt: ne
+    }
 }
 
 /** Format the child's parsed output with a header and optional excerpt block.

@@ -1,5 +1,12 @@
 import {describe, expect, test} from 'bun:test'
-import {fetchRaw, fetchFocused} from './fetch-core.js'
+import {
+    fetchRaw,
+    fetchFocused,
+    selectContent,
+    shippedStrategy,
+    NOT_COVERED_ANSWER,
+    UNCLEAR_ANSWER
+} from './fetch-core.js'
 import {FetchAndCleanError} from './html-clean.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 
@@ -65,6 +72,120 @@ describe('fetchFocused', () => {
             }))
         })
         expect(r.excerptVerified).toBe(false)
+    })
+
+    test('sets coverageMiss when the child reports the page does not cover the topic', async () => {
+        const r = await fetchFocused({
+            url: 'https://example.com/',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: 'This page is about version 2.0 only.',
+                finalUrl: 'https://example.com/',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: `<answer>${NOT_COVERED_ANSWER}</answer>\n<excerpt>This page is about version 2.0 only.</excerpt>`
+            }))
+        })
+        expect(r.coverageMiss).toBe(true)
+        // A coverage miss is a distinct outcome, NOT the ambiguity fallback.
+        expect(r.answer.includes(UNCLEAR_ANSWER)).toBe(false)
+    })
+
+    test('coverageMiss is false for an ordinary sourced answer', async () => {
+        const r = await fetchFocused({
+            url: 'https://example.com/',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: 'The key fact.',
+                finalUrl: 'https://example.com/',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>The key fact.</answer>\n<excerpt>The key fact.</excerpt>'
+            }))
+        })
+        expect(r.coverageMiss).toBe(false)
+    })
+
+    test('retains excerptCheck diagnostics so a false verification is attributable', async () => {
+        const r = await fetchFocused({
+            url: 'https://example.com/',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: 'real content here',
+                finalUrl: 'https://example.com/',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>x</answer>\n<excerpt>fabricated</excerpt>'
+            }))
+        })
+        expect(r.excerptVerified).toBe(false)
+        expect(r.excerptCheck?.verified).toBe(false)
+        expect(r.excerptCheck?.normalisedExcerpt).toBe('fabricated')
+        expect(r.excerptCheck?.contentLength).toBe('real content here'.length)
+        expect(r.excerptCheck?.contentSha256).toMatch(/^[0-9a-f]{64}$/)
+    })
+
+    test('anchors a #fragment section past the head window, and reports which section', async () => {
+        // A page whose relevant section sits far past HEAD_CHARS (25k). Without fragment
+        // anchoring the head-truncation drops it; with it, the child sees the section.
+        const filler = 'x'.repeat(40_000)
+        const md =
+            `# Intro\n\nintro text\n${filler}\n`
+            + `## setInputFiles[](#the-target "Direct link")\n\nUpload files: pass {buffer, name, mimeType}.\n\n`
+            + `## next[](#next)\n\nunrelated`
+        let sawPrompt = ''
+        const r = await fetchFocused({
+            url: 'https://example.com/page#the-target',
+            query: 'how to pass files',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: md,
+                finalUrl: 'https://example.com/page',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(args => {
+                sawPrompt = args[args.length - 1]
+                return {
+                    stdout: '<answer>pass {buffer, name, mimeType}</answer>\n<excerpt>Upload files: pass {buffer, name, mimeType}.</excerpt>'
+                }
+            })
+        })
+        expect(r.anchoredSection).toBe('the-target')
+        expect(sawPrompt).toContain('Upload files: pass {buffer, name, mimeType}')
+        expect(sawPrompt).toContain('#the-target')
+        // The unrelated following section is NOT dragged in.
+        expect(sawPrompt).not.toContain('unrelated')
+        // Excerpt still verifies against the FULL page.
+        expect(r.excerptVerified).toBe(true)
+    })
+
+    test('selectContent falls back to truncation when the fragment names no heading', () => {
+        const md = '# Only Heading[​](#only)\n\nbody'
+        const sel = selectContent(md, 'https://example.com/#does-not-exist')
+        expect(sel.section).toBeUndefined()
+        expect(sel.content).toContain('body')
+    })
+
+    test('selectContent does not match a prefix fragment (#foo != #foobar)', () => {
+        const md = '# A[](#foobar)\n\nbar section\n\n# B[](#other)\n\nother'
+        expect(selectContent(md, 'https://x/#foo').section).toBeUndefined()
+        expect(selectContent(md, 'https://x/#foobar').section).toBe('foobar')
+    })
+
+    test('recalibrated prompt tells the child to answer partial content and use a distinct coverage miss', () => {
+        const prompt = shippedStrategy.buildPrompt({query: 'q', url: 'u', title: 't', content: 'c'})
+        expect(prompt).toContain('INCLUDING a partial')
+        expect(prompt).toContain(NOT_COVERED_ANSWER)
+        expect(prompt).toContain(UNCLEAR_ANSWER)
+        // The pre-change rule 5 ("unclear ... or absent") must be gone — absence now routes to
+        // the coverage-miss channel, not to the ambiguity fallback.
+        expect(prompt).not.toContain('unclear, ambiguous, or absent')
     })
 
     test('surfaces non-zero exitCode when child fails', async () => {

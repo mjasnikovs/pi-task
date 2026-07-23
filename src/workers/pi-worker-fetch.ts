@@ -104,7 +104,9 @@ export function registerPiWorkerFetch(
                         childExitCode: 0,
                         answer: result.answer,
                         excerpt: result.excerpt,
-                        excerptVerified: result.excerptVerified
+                        excerptVerified: result.excerptVerified,
+                        coverageMiss: result.coverageMiss,
+                        anchoredSection: result.anchoredSection
                     }
                 }
             } catch (err) {

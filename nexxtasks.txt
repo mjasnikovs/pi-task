@@ -740,6 +740,12 @@ PROMPT 4 — FAIL. Lever built, A/B'd over 40 live reps, NOT WIRED. p = 0.50.
   ever fetched in 40 reps was the cited one — the worker does not pick the wrong page, it
   almost never fetches), is in the PROMPT 4 section.
 
+PROMPT 3 — DONE, PASS, WIRED (SHIPPED). p(fabrication-rise) = 0.2251. See the STEP-3 write-up
+  at the bottom of this file ("PROMPT 3 — THE LEVER, IMPLEMENTED AND A/B'd"). Baseline was RUN
+  first (see "PROMPT 3 — THE MISSING BASELINE"), then the lever built and A/B'd 8 reps/arm.
+  [rewritten 2026-07-23 after the A/B; supersedes the "NOT STARTED" entry below]
+
+--- superseded, kept for the record ---
 PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint).
   *** ITS REQUIRED BASELINE WAS NEVER RUN. *** This file says PROMPT 3's baseline is "the
   10-pair fixture REPLAYED LIVE, arms recorded". Item 4 (extract the fixture) was done; the
@@ -1401,3 +1407,78 @@ NOT BUILT (STEP 0 refuted, so the order forbids it): apis-contract-gate.ts, its 
 STILL OPEN, unchanged by STAGE 3: PROMPT 3's A/B (baseline RUN, lever NOT implemented); worker:apis
   writing from memory (1/16); the abstention variable — now shown unreachable by the two lever
   families tried, needing a semantic grader or a format that omits the uncheckable field.
+
+
+=========================================================
+PROMPT 3 — THE LEVER, IMPLEMENTED AND A/B'd. PASS, WIRED. 2026-07-23.
+=========================================================
+STATUS: PASS on 8 reps/arm, every requirement + invariant green, thresholds fixed BEFORE the
+data. The lever is the SHIPPED default (src/workers/fetch-core.ts shippedStrategy) — PASS ships
+it wired, nothing to unwire. Commits with this write-up. Re-scorable offline, no model time:
+  FETCHAB_DIR=~/tmp/fetch-abstention-ab bun run scripts/live-fetch-abstention-ab.ts
+
+WHAT WAS BUILT (src/, all four DO items; lint + full suite green, 2183 tests):
+  1. RECALIBRATED ABSTENTION. fetch-core buildPrompt rule 5 (the old "unclear on ANY ambiguity")
+     is now three rules: (5) answer from content whenever it supports one, INCLUDING partially —
+     "unclear" is wrong when the page plainly lists the asked-for thing; (6) if the page is about
+     a different version/topic, emit the DISTINCT <answer>not covered by this page</answer>;
+     (7) reserve "unclear from this page" for genuinely present-but-ambiguous content. Rules 1-2
+     (verbatim excerpt) untouched — the fabrication detector is not relaxed.
+  2. FRAGMENT ANCHORING. selectContent() reads the #fragment from the ORIGINAL requested url
+     (the server never sees it) and slices the page to that heading's section (Docusaurus and
+     GitHub anchor shapes; #foo != #foobar). Falls back to head+tail truncation when there is no
+     fragment or it names no heading in THIS content — so a stale fragment never degrades a page
+     we could read (validated: regression #5's fragment isn't in the current snapshot → fallback,
+     behaviour unchanged).
+  3. COVERAGE-MISS as a distinct outcome: FetchFocusedResult.coverageMiss, surfaced in the fetch
+     tool's details so the caller can pick a different URL instead of conflating "no answer here"
+     with "ambiguous".
+  4. VERIFICATION DIAGNOSABLE: verifyExcerpt() returns the same verdict as isExcerptInContent
+     (NOT loosened) PLUS a retained record — normalised excerpt + sha256/length of the normalised
+     content checked — so a false excerptVerified is attributable to fabrication vs normaliser gap
+     without a re-fetch. F-3(f) left unproven on purpose; the verifier was not touched.
+
+THE A/B (scripts/live-fetch-abstention-ab.ts): two arms interleaved in ONE process, both offline
+snapshots injected through fetchAndClean. treatment = shippedStrategy; baseline = LEGACY_STRATEGY,
+a frozen byte-for-byte copy of pre-change fetch-core (old rule 5, no fragment handling), so the
+baseline arm is auditable against the recorded baseline.json. Surgery re-checked in EVERY rep from
+the returned assembled prompt (240/240 both arms). STEP-2 DELIVERY CHECK + POSITIVE CONTROL ran
+before any model time (a real child answered #9 end-to-end, fragment anchored).
+
+METRIC, mechanical, three counters/arm: (i) "unclear from this page", (ii) excerptVerified===false,
+(iii) "not covered by this page". Per-target expectation was pre-registered OFFLINE from the
+snapshots (not after seeing answers): #9's answer is on the page past the 25k head window (fragment
+→ SOURCED); #7/#8's asked-about version sits at offset ~60k, TRUNCATED AWAY, so they CANNOT be
+sourced and must go to coverage-miss (the INVARIANT cases); #2/#4 borderline (partial/absent).
+
+RESULTS — 8 reps/arm, 480 lookups, 0 errors, ~55 min:
+  DET target   base uncl   treat uncl   treat notCov   treat sourced   role
+    #2              8/8          0/8            8/8             0/8      false-uncl -> coverage
+    #4              8/8          0/8            8/8             0/8      false-uncl -> coverage
+    #7              8/8          0/8            8/8             0/8      INVARIANT (truncated away)
+    #8              8/8          0/8            8/8             0/8      INVARIANT (truncated away)
+    #9              8/8          0/8            0/8             8/8      FRAGMENT -> sourced
+  R1 all 5 DET targets left "unclear" in 0/8 reps (was 8/8).                              PASS
+  R2 #9 (fragment) SOURCED 8/8 — answers correctly describe setInputFiles accepting file
+     paths OR {name, mimeType, buffer}, the exact content the anchoring surfaced.          PASS
+  R3 excerptVerified===false on the 20-pair regression set: baseline 13/160 vs treatment
+     18/160, one-tailed Fisher p(rise) = 0.2251 >= 0.05 — no significant rise.             PASS
+  I1 #7/#8 produced NO substantive answer in any rep (coverage-miss only) — relaxed
+     abstention did NOT fabricate a v1.46/router answer from the truncated page.           HOLDS
+  Regression "unclear" fell 5/160 -> 0/160 (recalibration did not silence valid answers);
+  coverage-miss on the regression set only 2/160. Surgery 240/240. No errors.
+
+THE HONEST SPLIT, stated because the headline "resolve to SOURCED answers" over-simplifies it:
+  the lever's value is TWO distinct mechanisms, not one. FRAGMENT ANCHORING genuinely RECOVERED
+  the on-page answer for #9 (the deep link that head-truncation was throwing away) — that is the
+  sole SOURCED win. The ABSTENTION RECALIBRATION did NOT turn #2/#4/#7/#8 into sourced answers;
+  it RECLASSIFIED four "unclear" non-answers into the actionable "not covered by this page"
+  channel WITHOUT fabricating. Both are wins (a caller can now retry a coverage-miss with another
+  URL, and can no longer mistake absence for ambiguity), but do not read this as "recovered four
+  on-screen answers" — the model judged those four pages genuinely do not cover the specific ask,
+  and with truncation on #7/#8 it is correct. The one thing PROMPT 3 set out to prevent —
+  buying answers with fabrication — did not happen (R3, I1).
+
+STILL OPEN, NOT addressed by PROMPT 3: F-3(f) markdown-escape normaliser gap (now DIAGNOSABLE via
+  verifyExcerpt's retained evidence, but not itself fixed — deliberately, per DO item 4); the
+  excerptVerified churn on the FAILURES set's 5 intermittent pairs [0,1,3,5,6] (never pinned).
