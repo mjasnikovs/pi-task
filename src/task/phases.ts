@@ -25,6 +25,7 @@ import {
     enforceDirectives
 } from './user-directives.js'
 import {demoteUnsourcedAttributions} from './context-attribution.js'
+import {classifyContextSilence, countBullets} from './context-silence.js'
 import {getFileInventory} from './file-inventory.js'
 import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
@@ -509,6 +510,27 @@ const APIS_ZERO_RETRIEVAL_PREAMBLE =
     + 'from what the tool actually returned, not from memory. Look up only the symbols you will '
     + 'list — no more, no less; do not read the whole tree.'
 
+/**
+ * Prepended to worker:context's prompt on the ONE retry the silent-retry gate triggers. The
+ * previous attempt produced ZERO bullets — STEP 0 (context-silence.ts) showed every such rep
+ * across 48 live reps was a genuine loss (a loop-degrade or a hallucinated non-bullet
+ * fragment), never a legitimate empty answer, because the same tree reliably yields 11–21
+ * bullets. So this names that failure and steers away from the two shapes that caused it:
+ * the repeated-grep thrash that trips the loop-killer, and emitting anything that is not a
+ * bullet. It does NOT loosen the sourced-bullet invariant — it explicitly repeats that
+ * external-API semantics stay open questions unless quoted.
+ */
+const CONTEXT_SILENT_RETRY_PREAMBLE =
+    'STOP. Your previous attempt at this task produced ZERO usable bullets — either it thrashed '
+    + 'the same search until it was killed, or it emitted text that was not a bullet list. That is '
+    + 'a dropped section, not an empty one: this repository has architecture worth surfacing. This '
+    + 'time, read a few key files (package.json, the entry point, the directory the task names), do '
+    + 'NOT repeat an identical grep — if a search returns nothing, move on rather than retrying it, '
+    + 'and once you have read enough, WRITE the bullet list and stop. Output ONLY `- <bullet>` lines, '
+    + 'nothing else. Keep the same rules as before: state an external library/API behaviour as fact '
+    + 'ONLY when quoting an EXTERNAL CONTEXT block; otherwise write it as an "unverified:" open '
+    + 'question. One claim per bullet. Better to emit three sharp sourced bullets than to say nothing.'
+
 export async function phaseResearch(
     deps: PhaseDeps,
     refined: string,
@@ -638,6 +660,14 @@ export async function phaseResearch(
          *  section built on zero retrieval is ungrounded by construction, no semantic
          *  judgement needed. */
         zeroRetrievalRetry?: string
+        /** When set, a section that comes out SILENT — zero parseable bullets from a
+         *  loop-degrade banner or a hallucinated non-bullet fragment (classifyContextSilence
+         *  → genuineLoss) — is re-run ONCE with this preamble prepended. The retry replaces
+         *  the original only if it produces bullets; otherwise the original is kept. A
+         *  legitimately-empty section (honest "nothing to surface") is NOT retried. STEP 0
+         *  established every silent worker:context rep was a genuine loss, not an empty
+         *  answer (context-silence.ts). */
+        retryIfSilent?: string
     }> = [
         {
             section: 'FILES',
@@ -711,6 +741,13 @@ export async function phaseResearch(
             // widen what it may assert without making any of it checkable here, and
             // APIS' own answers are the ones F-2 shows are type-only and unverified.
             tools: 'read,grep',
+            // SILENT-RETRY GATE. STEP 0 measured this worker silent (zero bullets) in ~10%
+            // of live reps (5/48, Wilson95 [4.5%, 22.2%]) and classified EVERY silent rep as
+            // a genuine loss — a loop-degrade banner (60%) or a hallucinated non-bullet
+            // fragment (40%) — never a legitimate empty answer, because the identical fixture
+            // reliably yields 11–21 bullets. A silent section is therefore a dropped section;
+            // retry once, keep the retry only if it emits bullets. See context-silence.ts.
+            retryIfSilent: CONTEXT_SILENT_RETRY_PREAMBLE,
             // BRACES for the LIVE-DATA RULE. In run 15 this worker wrote, verbatim, "The
             // `hono` dependency is pinned at `^4.12.31` in package.json, and the external
             // context confirms `hc<AppType>` pattern with base URL `/api` ... works
@@ -825,6 +862,46 @@ export async function phaseResearch(
                         + ` (calls=${retry.groundingRetrievalCount}, len=${retry.text.trim().length})`
                         + ' — keeping the original (no regression, entry count preserved)'
                 )
+            }
+        }
+        // SILENT-RETRY GATE — a deterministic handle over the section body, not another
+        // instruction. A section that parses to ZERO bullets from a loop-degrade banner or a
+        // hallucinated non-bullet fragment (classifyContextSilence → genuineLoss) dropped
+        // context that was there to surface; retry ONCE with a forced-emit preamble and keep
+        // the retry only if it produces bullets. A legitimately-empty section (an honest
+        // "nothing to surface") and a fatal failure are BOTH left alone — the former is not a
+        // loss, the latter throws below and must stay a loud failure, not a silent retry.
+        const silentBodyOf = (res: RunWorkerResult): string | null => {
+            const f = classifyResearchWorker(spec.section, res)
+            if (f?.kind === 'fatal') return null
+            return f?.kind === 'runaway' ?
+                    degradedSectionBody(spec.section, f.reason, res.text)
+                :   res.text.trim()
+        }
+        if (spec.retryIfSilent) {
+            const body = silentBodyOf(r)
+            const verdict = body === null ? null : classifyContextSilence(body)
+            if (verdict?.silent && verdict.genuineLoss) {
+                deps.logDebug?.(
+                    `${spec.label}: silent-retry first-silent cause=${verdict.cause}`
+                        + ` — zero bullets, re-running once with a forced-emit preamble`
+                )
+                deps.onChildOutput?.(`${spec.label}: silent — retrying`)
+                const retry = await runOnce(spec.retryIfSilent)
+                const retryBody = silentBodyOf(retry)
+                const retryBullets = retryBody === null ? 0 : countBullets(retryBody)
+                if (retryBullets > 0) {
+                    deps.logDebug?.(
+                        `${spec.label}: silent-retry recovered bullets=${retryBullets}`
+                            + ' — replacing the silent section'
+                    )
+                    r = retry
+                } else {
+                    deps.logDebug?.(
+                        `${spec.label}: silent-retry still-silent`
+                            + ` (bullets=${retryBullets}) — keeping the original`
+                    )
+                }
             }
         }
         deps.logDebug?.(

@@ -296,6 +296,88 @@ describe('phaseResearch loop guard', () => {
     })
 })
 
+describe('phaseResearch silent-retry gate (worker:context)', () => {
+    const CONTEXT_MARKER = 'content of a CONTEXT section'
+    // A substring unique to CONTEXT_SILENT_RETRY_PREAMBLE, so a fake can tell the ONE
+    // forced-emit retry apart from the first attempt.
+    const RETRY_MARKER = 'produced ZERO usable bullets'
+    const isContext = (args: ReadonlyArray<string>): boolean =>
+        (args[args.length - 1] ?? '').includes(CONTEXT_MARKER)
+    const isRetry = (args: ReadonlyArray<string>): boolean =>
+        (args[args.length - 1] ?? '').includes(RETRY_MARKER)
+
+    const runWith = async (
+        onContext: (attempt: number) => SpawnResponseJsonEvents
+    ): Promise<{out: string; contextAttempts: number}> => {
+        let contextAttempts = 0
+        return withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnByPrompt(args => {
+                if (isApisPrompt(args)) return groundedResponse('- a real finding')
+                if (isContext(args)) {
+                    contextAttempts++
+                    return onContext(isRetry(args) ? 2 : 1)
+                }
+                return agentEndResponse('- a real finding')
+            })
+            const out = await phaseResearch(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                'a refined goal with no mentions',
+                {getFileInventory: async () => ''}
+            )
+            return {out, contextAttempts}
+        })
+    }
+
+    test('a garbage (zero-bullet) first attempt is retried and the recovery replaces it', async () => {
+        const {out, contextAttempts} = await runWith(attempt =>
+            attempt === 1 ?
+                agentEndResponse('Users deleted') // hallucinated non-bullet fragment
+            :   agentEndResponse('- src/index.ts exports AppType\n- hono pinned ^4.12.31')
+        )
+        expect(contextAttempts).toBe(2) // fired exactly once
+        expect(out).toContain('- src/index.ts exports AppType')
+        expect(out).not.toContain('Users deleted')
+    })
+
+    test('a loop-degrade first attempt (no partial bullet) is retried and recovered', async () => {
+        const {out, contextAttempts} = await runWith(attempt =>
+            attempt === 1 ?
+                loopResponse('grep', {pattern: 'glorptube'}, 6) // degrades to a banner, 0 bullets
+            :   agentEndResponse('- recovered architectural bullet')
+        )
+        // The loop path re-spawns internally (initial + restarts) before degrading, so the
+        // count is >2; what matters is the retry fired and, since loopResponse always loops,
+        // the only source of bullets is the forced-emit retry.
+        expect(contextAttempts).toBeGreaterThan(2)
+        expect(out).toContain('- recovered architectural bullet')
+        expect(out).not.toMatch(/degraded: research CONTEXT/i)
+    })
+
+    test('a legitimately-empty section (NONE) is NOT retried', async () => {
+        const {out, contextAttempts} = await runWith(() => agentEndResponse('NONE'))
+        expect(contextAttempts).toBe(1) // gate did not fire
+        expect(out).toContain('CONTEXT\nNONE')
+    })
+
+    test('if the retry is also silent, the original is kept (no regression)', async () => {
+        const {out, contextAttempts} = await runWith(() => agentEndResponse('Users deleted'))
+        expect(contextAttempts).toBe(2) // fired once, retry also garbage
+        expect(out).toContain('CONTEXT\nUsers deleted') // original preserved, not blanked
+    })
+})
+
 describe('phaseResearch per-worker persistence', () => {
     // Marker strings each worker's prompt carries, used to route fake spawns and
     // to keep this suite honest if a prompt is renamed.
@@ -994,7 +1076,7 @@ describe('phaseResearch enrichment DI', () => {
                             messages: [
                                 {
                                     role: 'assistant',
-                                    content: [{type: 'text', text: 'worker-output'}]
+                                    content: [{type: 'text', text: '- worker-output'}]
                                 }
                             ]
                         }
@@ -1116,7 +1198,7 @@ describe('phaseResearch enrichment DI', () => {
                             messages: [
                                 {
                                     role: 'assistant',
-                                    content: [{type: 'text', text: 'worker-output'}]
+                                    content: [{type: 'text', text: '- worker-output'}]
                                 }
                             ]
                         }
@@ -1282,7 +1364,7 @@ describe('phaseResearch enrichment DI', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
                 if (isApisPrompt(args)) return groundedResponse('worker-output')
-                return agentEndResponse('worker-output')
+                return agentEndResponse('- worker-output')
             })
             await phaseResearch(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
@@ -1314,7 +1396,7 @@ describe('phaseResearch enrichment DI', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
                 if (isApisPrompt(args)) return groundedResponse('worker-output')
-                return agentEndResponse('worker-output')
+                return agentEndResponse('- worker-output')
             })
             await phaseResearch(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
@@ -1350,7 +1432,7 @@ describe('phaseResearch enrichment DI', () => {
             const promptsSeen: string[] = []
             const spawn = fakeSpawnByPrompt(args => {
                 promptsSeen.push(args[args.length - 1] as string)
-                return agentEndResponse('worker-output')
+                return agentEndResponse('- worker-output')
             })
             await phaseResearch(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
