@@ -74,21 +74,57 @@ export function formatAddresses(ips: LocalIPs, port: number, tsHost?: string): A
     return out
 }
 
-async function tryBind(port: number): Promise<boolean> {
-    return new Promise(resolve => {
-        const s = createServer()
-        s.listen(port, '0.0.0.0', () => {
-            s.close(() => resolve(true))
-        })
-        s.on('error', () => resolve(false))
+/** Bind the REAL `server` to the first free port at or above `start`, trying up
+ *  to `max` consecutive ports. On EADDRINUSE we bump the port and re-listen; any
+ *  other error (e.g. EACCES), or exhausting the range, REJECTS the promise —
+ *  never throws uncaught.
+ *
+ *  Binding the real server directly (rather than probing a throwaway socket with
+ *  createServer()/listen()/close() first, then binding the real one) removes a
+ *  TOCTOU race: between "probe says port free" and "real listen", the port can be
+ *  taken by someone else, and on Windows/Bun the PROBE socket's own port isn't
+ *  fully released before the real listen runs — so the real bind hits EADDRINUSE
+ *  on the very port that just tested free, and (with no 'error' listener on the
+ *  real server) escapes as an uncaughtException that crashes pi (issue #7).
+ *  Retrying the real bind has no probe and no window. */
+export function listenWithRetry(
+    server: import('node:http').Server,
+    start: number,
+    max: number
+): Promise<number> {
+    return new Promise((resolve, reject) => {
+        let port = start
+        // Persistent 'listening'/'error' listeners (not one-shot listen(cb)):
+        // under Bun, a listen(port, host, cb) callback from a FAILED first bind
+        // is NOT carried over to a later listen() retry, so it never fires — the
+        // retry silently hangs. Registering both via .on() and re-calling
+        // listen(port) with no callback routes each attempt's outcome correctly
+        // on both Bun and Node.
+        const cleanup = () => {
+            server.removeListener('error', onError)
+            server.removeListener('listening', onListening)
+        }
+        const onListening = () => {
+            cleanup()
+            resolve(port)
+        }
+        const onError = (err: NodeJS.ErrnoException) => {
+            if (err.code === 'EADDRINUSE' && port < start + max - 1) {
+                port++
+                server.listen(port, '0.0.0.0')
+                return
+            }
+            cleanup()
+            reject(
+                err.code === 'EADDRINUSE' ?
+                    new Error(`No free port found in range ${start}–${start + max - 1}`)
+                :   err
+            )
+        }
+        server.on('error', onError)
+        server.on('listening', onListening)
+        server.listen(port, '0.0.0.0')
     })
-}
-
-async function findPort(start: number, max: number): Promise<number> {
-    for (let p = start; p < start + max; p++) {
-        if (await tryBind(p)) return p
-    }
-    throw new Error(`No free port found in range ${start}–${start + max - 1}`)
 }
 
 export async function startServer(
@@ -96,10 +132,13 @@ export async function startServer(
     getHtml: (wsUrl: string) => string,
     onInterrupt?: () => void
 ): Promise<ServerHandle> {
-    const port = await findPort(8800, 100)
     const ips = getLocalIPs()
     const ip = ips.primary
-    const wsUrl = `ws://${ip}:${port}/ws`
+    // The bound port isn't known until listenWithRetry succeeds, and wsUrl
+    // depends on it. The request handler only ever runs once the server is
+    // listening (real client I/O, long after we set wsUrl below), so reading it
+    // lazily from this closure variable is safe.
+    let wsUrl = ''
 
     const httpServer = createServer((req, res) => {
         if (req.method === 'GET' && (req.url === '/' || req.url === '')) {
@@ -137,8 +176,6 @@ export async function startServer(
         }
     })
 
-    const wss = new WebSocketServer({server: httpServer, path: '/ws'})
-
     // Track every accepted TCP socket so stop() can forcibly destroy lingering
     // keep-alive / WebSocket connections. Without this, httpServer.close() only
     // stops accepting new connections and waits for existing ones to drain — an
@@ -154,6 +191,20 @@ export async function startServer(
         sockets.add(s)
         s.on('close', () => sockets.delete(s))
     })
+
+    // Bind the real server now, retrying past any in-use ports. A bind failure
+    // REJECTS (see listenWithRetry) — register.ts's callers catch it and let pi
+    // continue without the remote UI; the remote server is optional.
+    const port = await listenWithRetry(httpServer, 8800, 100)
+    wsUrl = `ws://${ip}:${port}/ws`
+
+    // Attach the WebSocket server only AFTER the http server is bound. ws adds an
+    // 'error' listener to the http server that re-emits on the WebSocketServer
+    // (which has no error listener) — so if it were attached during the bind, an
+    // EADDRINUSE on the first port would be forwarded to wss and thrown as an
+    // uncaughtException, crashing pi even though listenWithRetry handled it. ws
+    // works fine on an already-listening server.
+    const wss = new WebSocketServer({server: httpServer, path: '/ws'})
 
     const handle: ServerHandle = {
         port,
@@ -206,8 +257,6 @@ export async function startServer(
             removeClient(ws)
         })
     })
-
-    await new Promise<void>(resolve => httpServer.listen(port, '0.0.0.0', resolve))
 
     return handle
 }

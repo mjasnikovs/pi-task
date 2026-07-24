@@ -2,8 +2,10 @@ import {describe, it, expect, beforeEach, afterEach, test} from 'bun:test'
 import {mkdtempSync, rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
-import {startServer, getLocalIPs, formatAddresses} from './server.js'
+import {startServer, getLocalIPs, formatAddresses, listenWithRetry} from './server.js'
 import type {ServerHandle} from './server.js'
+import {createServer} from 'node:http'
+import type {Server} from 'node:http'
 import WebSocket from 'ws'
 import {getBridge} from './bridge.js'
 import {reset, setPrompt, setContext, addUserTurn} from './session-state.js'
@@ -122,6 +124,33 @@ describe('startServer', () => {
         )
         expect(handle.port).toBeGreaterThanOrEqual(8800)
         expect(handle.port).toBeLessThan(8900)
+    })
+
+    // Regression (issue #7): the old path probed each port with a throwaway
+    // socket then bound the REAL server separately — a TOCTOU window that, on
+    // Windows/Bun, hit EADDRINUSE on a just-tested-free port and escaped as an
+    // uncaughtException. startServer must now bind the real server directly and
+    // retry past an in-use port, resolving on the next free one.
+    it('skips an occupied first port and binds a later free port', async () => {
+        // Hold 8800 (startServer's first port). Tolerate it already being taken
+        // externally — either way the first port is occupied, which is the case
+        // under test: the real server must retry past it, not crash (issue #7).
+        const blocker = createServer()
+        const held = await new Promise<boolean>(resolve => {
+            blocker.once('error', () => resolve(false))
+            blocker.listen(8800, '0.0.0.0', () => resolve(true))
+        })
+        try {
+            handle = await startServer(
+                () => {},
+                () => '<html></html>'
+            )
+            // 8800 is occupied, so startServer must land above it.
+            expect(handle.port).toBeGreaterThan(8800)
+            expect(handle.port).toBeLessThan(8900)
+        } finally {
+            if (held) blocker.close()
+        }
     })
 
     it('HTTP GET / serves the HTML with WS url embedded', async () => {
@@ -269,6 +298,55 @@ describe('startServer', () => {
             body: 'not json{'
         })
         expect(res.status).toBe(400)
+    })
+})
+
+describe('listenWithRetry', () => {
+    // Bind a throwaway server to a specific port so the port is genuinely in use
+    // for the duration of the test; returns a closer.
+    async function occupy(port: number): Promise<() => void> {
+        const s = createServer()
+        await new Promise<void>((resolve, reject) => {
+            s.once('error', reject)
+            s.listen(port, '0.0.0.0', resolve)
+        })
+        return () => s.close()
+    }
+
+    it('retries past an in-use port and resolves on the next free one', async () => {
+        const base = 8850
+        const free = await occupy(base) // hold `base`, forcing a bump to base+1
+        const server: Server = createServer()
+        try {
+            const port = await listenWithRetry(server, base, 10)
+            expect(port).toBe(base + 1)
+        } finally {
+            server.close()
+            free()
+        }
+    })
+
+    it('REJECTS (never throws uncaught) when the whole range is in use', async () => {
+        const base = 8870
+        const closers = await Promise.all([occupy(base), occupy(base + 1)])
+        // Capture any uncaughtException so we can prove the failure came back as a
+        // rejection, not out-of-band (the exact issue-#7 crash mode).
+        const uncaught: unknown[] = []
+        const onUncaught = (e: unknown) => uncaught.push(e)
+        process.on('uncaughtException', onUncaught)
+        const server: Server = createServer()
+        try {
+            await expect(listenWithRetry(server, base, 2)).rejects.toThrow(
+                /No free port found in range/
+            )
+            // Let any stray async error surface before asserting none did.
+            await new Promise(r => setTimeout(r, 20))
+            expect(uncaught).toEqual([])
+        } finally {
+            process.removeListener('uncaughtException', onUncaught)
+            server.close()
+            for (const c of closers) c()
+        }
     })
 })
 

@@ -98,8 +98,10 @@ export function registerRemote(pi: ExtensionAPI): void {
             bridge.currentCtx = makeShimmedCtx(ctx)
         }
         if (getConfig().remote) {
+            // Optional feature: a bind failure must never take pi down. Degrade
+            // to a one-line warning and keep the agent running without remote.
             void ensureServer().catch(err =>
-                ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')
+                ctx.ui.notify(`Remote UI unavailable: ${(err as Error).message}`, 'warning')
             )
         }
     })
@@ -202,7 +204,7 @@ export function registerRemote(pi: ExtensionAPI): void {
 
                 ctx.ui.notify(`Remote running at ${primaryUrl}`, 'info')
             } catch (err) {
-                ctx.ui.notify(`Failed to start remote: ${(err as Error).message}`, 'error')
+                ctx.ui.notify(`Remote UI unavailable: ${(err as Error).message}`, 'error')
             }
         }
     })
