@@ -350,6 +350,48 @@ describe('listenWithRetry', () => {
     })
 })
 
+describe('startServer stress (issue #7 regression)', () => {
+    // The issue-#7 crash was rate-dependent: a probe->real-bind TOCTOU race and a
+    // listener-less bind that only misfire when a port hasn't fully released yet.
+    // A single start/stop can't surface a nonzero-rate regression — the port
+    // reuses cleanly every time on a fast host. Hammering the WHOLE real path
+    // (bind via listenWithRetry -> WebSocketServer attach -> stop() teardown)
+    // many times back-to-back re-creates the "bind a port that was just freed"
+    // pressure this bug lived in, and asserts it stays quiet: every cycle
+    // resolves to a port in range and NOTHING ever escapes as an uncaught.
+    it('survives many rapid start/stop cycles with zero uncaught errors', async () => {
+        const CYCLES = 100
+        // Any uncaughtException/unhandledRejection here is the exact issue-#7
+        // failure mode (an error escaping ensureServer's catch). Record, don't
+        // let it fail the process, then assert none happened.
+        const escaped: unknown[] = []
+        const onUncaught = (e: unknown) => escaped.push(e)
+        process.on('uncaughtException', onUncaught)
+        process.on('unhandledRejection', onUncaught)
+        try {
+            for (let i = 0; i < CYCLES; i++) {
+                const h = await startServer(
+                    () => {},
+                    () => '<html></html>'
+                )
+                expect(h.port).toBeGreaterThanOrEqual(8800)
+                expect(h.port).toBeLessThan(8900)
+                h.stop()
+                // Yield a tick so httpServer.close() can progress and the port is
+                // released before the next bind — mirrors real restart timing and
+                // keeps the loop from drifting up the range on a slow releaser.
+                await new Promise(r => setImmediate(r))
+            }
+            // Drain any late async error before asserting the run was clean.
+            await new Promise(r => setTimeout(r, 20))
+            expect(escaped).toEqual([])
+        } finally {
+            process.removeListener('uncaughtException', onUncaught)
+            process.removeListener('unhandledRejection', onUncaught)
+        }
+    })
+})
+
 function once(ws: WebSocket, type: string): Promise<Record<string, unknown>> {
     return new Promise(resolve => {
         ws.on('message', d => {
