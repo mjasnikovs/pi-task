@@ -761,7 +761,23 @@ PROMPT 3 — NOT STARTED. Implementation attempt REVERTED (partial, did not lint
 
 STILL OPEN, NOT ADDRESSED
   - worker:apis writing its section with zero tool calls (3/~18 reps).
-  - worker:context emitting zero bullets (8-13% of reps).
+  - worker:context emitting zero bullets: CLOSED 2026-07-24 — silent-retry gate PASS + WIRED
+    (b721165). STEP 0 (187e2e6): re-scored all 48 recorded live reps — 5/48 silent (10.4%,
+    Wilson95 [4.5%, 22.2%]), ALL genuine loss, 0 legitimately-empty; two shapes, loop-degrade
+    (3/5 — thrashes one grep x5, loop-killer fires, only a banner survives) and generation-
+    garbage (2/5 — exit 0, ~3.6s, a hallucinated non-bullet fragment: "Users deleted",
+    "[SYSTEM NOTE ...reward/+20...]"; passes classifyResearchWorker as trustworthy). Rival
+    (input-empty) refuted: one fixture, productive reps emit 11-21 bullets. LEVER: retryIfSilent
+    on the CONTEXT spec (mirrors zeroRetrievalRetry) re-runs a silent+genuineLoss section ONCE
+    with a forced-emit preamble that REPEATS the sourced-bullet rule; keeps the retry only if it
+    emits bullets. Paired live A/B (scripts/context-silent-retry-ab.ts, 48 reps): baseline
+    silent 6/48 -> treatment 0/48, Fisher one-tailed p~0.013; 6 flips (loop x4, garbage x2);
+    HARM flat — 0 fabricated attributions across 6 recoveries, 16.0 bullets/rep no collapse.
+    Deterministic classifier + re-scorable harness: src/task/context-silence.ts (+ .test.ts),
+    scripts/context-silence-classify.ts. GENERALISATION checked offline (NO GPU): the silent/
+    garbage/loop shape is worker:context-SPECIFIC — 0 occurrences on files/apis/tooling across
+    96 trials; the classifyResearchWorker trust-hole is real in code but does not bite them in
+    practice (bounded targets + find,ls toolset keep them grounded). NO lever for other workers.
   - F-4: CLOSED 2026-07-23 — DELETED the globalThis.Bun.spawn branch; pi-worker-docs now
     always uses node:child_process spawn, matching fetch-core and every sibling. Reachability
     PROVEN before deleting: DEAD in production (pi runs under node; 95 autoInstalled:true
