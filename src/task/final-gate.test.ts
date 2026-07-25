@@ -26,6 +26,7 @@ import {
 import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
 import {appendDeclaredScripts} from './launch-contract.js'
 import {appendEnvNotes} from './env-notes.js'
+import {clearRunnerCache} from './runner-resolve.js'
 
 // Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
 // Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
@@ -44,7 +45,14 @@ function makeDir(pkg?: object): string {
     return dir
 }
 
-/** Shadow a real binary with a stub script for the duration of `fn`. */
+/** Shadow a real binary with a stub script for the duration of `fn`.
+ *
+ *  The stub must answer `--version` with exit 0: runner-resolve probes the bare
+ *  name that way and rejects a present-but-broken binary, so a stub that failed
+ *  every invocation gets stepped over in favour of a real one in a well-known
+ *  location (/usr/local/bin/npm on CI) — the shadowing the case depends on then
+ *  silently does not happen. Resolution is also cached for the process lifetime,
+ *  so it is reset around each stub. */
 async function withFakeBin(
     name: string,
     script: string,
@@ -52,14 +60,19 @@ async function withFakeBin(
 ): Promise<void> {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-fake-bin-'))
     const file = path.join(bin, name)
-    fs.writeFileSync(file, `#!/bin/sh\n${script}\n`)
+    fs.writeFileSync(
+        file,
+        `#!/bin/sh\ncase "$1" in --version) echo 0.0.0-fake; exit 0;; esac\n${script}\n`
+    )
     fs.chmodSync(file, 0o755)
     const old = process.env.PATH
     process.env.PATH = `${bin}${path.delimiter}${old ?? ''}`
+    clearRunnerCache()
     try {
         await fn()
     } finally {
         process.env.PATH = old
+        clearRunnerCache()
     }
 }
 
