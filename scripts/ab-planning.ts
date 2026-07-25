@@ -73,7 +73,7 @@ export async function extractRequirementsNew(fx: LoadedFixture): Promise<Require
             fx.featureForModel
         )
     }
-    return capRequirements(entries, passages)
+    return capRequirements(entries, passages, fx.featureForModel)
 }
 import {
     LAUNCH_EXTRACT_PROMPT,

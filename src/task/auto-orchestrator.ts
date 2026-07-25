@@ -100,6 +100,7 @@ import {
     parseRequirementLines,
     keepGroundedRequirements,
     capRequirements,
+    writeOwnedRequirements,
     enumerateObligationPassages,
     uncoveredPassages,
     extractionRetryHint,
@@ -783,7 +784,7 @@ export async function planAuto(
         }
         // Bound with marked-passage priority — a plain first-N cap truncates the
         // doc's tail sections (measured live: an eager model fills 40 top-down).
-        reqEntries = capRequirements(reqEntries, passages)
+        reqEntries = capRequirements(reqEntries, passages, featureForModel)
         logPlanDebug(
             cwd,
             `requirement extraction: ${reqEntries.length} grounded requirement(s) kept`
@@ -1234,6 +1235,21 @@ export async function planAuto(
     if (titles.length === 0) {
         announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
         return null
+    }
+
+    // Persist the TASK-MAPPED requirements keyed by the (spec-ref-attached) title
+    // each task will carry (mx5 run 16: only cross-cutting entries travelled;
+    // the 33 mapped ones shaped the title list and vanished — TASK_0008 narrowed
+    // §9's "serves `/api` + static `dist/`" out of its spec with nothing to stop
+    // it). Inert until the owned-requirements injection is wired into the phase
+    // prompts; recorded regardless so the plan's mapping is auditable per run.
+    if (accounting && accounting.mapped.length > 0) {
+        await writeOwnedRequirements(
+            cwd,
+            accounting.mapped
+                .filter(m => m.task >= 1 && m.task <= titles.length)
+                .map(m => ({quote: m.req.quote, anchor: m.req.anchor, title: titles[m.task - 1]}))
+        )
     }
 
     // persist

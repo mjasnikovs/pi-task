@@ -91,15 +91,28 @@ export function keepGroundedRequirements(
 }
 
 /**
- * Bound the list WITHOUT doc-order truncation: measured live, an eager model
- * extracts 40+ items top-down (every §1 decision row), so a plain first-N cap
- * systematically drops the TAIL sections — exactly where mx5 keeps its testing
- * obligations. Rule (deterministic priority, not a knob): entries quoting an
- * obligation-marked passage survive first; the remainder fills in given order.
+ * Bound the list WITHOUT doc-order truncation. Two measured failure shapes drive
+ * the rule:
+ *  - an eager model extracts 40+ items top-down (every §1 decision row), so a
+ *    plain first-N cap systematically drops the TAIL sections — exactly where
+ *    mx5 keeps its testing obligations;
+ *  - "given order" as the tie-break re-creates the same tail bias one level up
+ *    (mx5 run 16, measured live: the model emitted 185 requirements, 178
+ *    grounded — INCLUDING §9's "serves `/api` + static `dist/`", the clause
+ *    whose loss shipped a permanently blank app — and the cap's doc-order fill
+ *    cut all 138 past the cap, every one from the design's tail).
+ * Rule (deterministic priority, not a knob): entries quoting an obligation-
+ * marked passage survive first; the remaining budget is filled ROUND-ROBIN
+ * across the source doc's sections (each section's entries in doc order), so
+ * every section keeps its head obligations and no section is wholesale dropped.
+ * Bucketing is by the quote's POSITION in the source doc — grounded substring,
+ * never the model-authored anchor text. Without `sourceDoc` (or for quotes that
+ * cannot be located) the fill degrades to the old given-order behavior.
  */
 export function capRequirements(
     entries: RequirementEntry[],
-    passages: string[]
+    passages: string[],
+    sourceDoc?: string
 ): RequirementEntry[] {
     if (entries.length <= MAX_REQUIREMENTS) return entries
     const norms = passages.map(normalise)
@@ -109,7 +122,70 @@ export function capRequirements(
     }
     const marked = entries.filter(covers)
     const rest = entries.filter(e => !covers(e))
-    return [...marked, ...rest].slice(0, MAX_REQUIREMENTS)
+    const budget = MAX_REQUIREMENTS - Math.min(marked.length, MAX_REQUIREMENTS)
+    return [...marked.slice(0, MAX_REQUIREMENTS), ...sectionFairFill(rest, budget, sourceDoc)]
+}
+
+/** The doc split into heading-delimited sections, each pre-normalised for
+ *  containment tests. Text before the first heading is its own section. */
+function normalisedSections(doc: string): string[] {
+    const out: string[] = []
+    let current: string[] = []
+    for (const line of doc.replace(/\r\n?/g, '\n').split('\n')) {
+        if (/^#{1,6}\s+\S/.test(line)) {
+            if (current.length > 0) out.push(normalise(current.join('\n')))
+            current = [line]
+            continue
+        }
+        current.push(line)
+    }
+    if (current.length > 0) out.push(normalise(current.join('\n')))
+    return out.filter(s => s.length > 0)
+}
+
+/** Round-robin fill across doc sections: bucket each entry by the FIRST section
+ *  whose normalised text contains its quote (the same containment rule that
+ *  grounded it), take each bucket's entries in in-section order, one per bucket
+ *  per round. Entries that cannot be located (or no doc) go to a trailing
+ *  bucket in given order — the pre-run-16 behavior, never worse. */
+function sectionFairFill(
+    entries: RequirementEntry[],
+    budget: number,
+    sourceDoc?: string
+): RequirementEntry[] {
+    if (budget <= 0) return []
+    if (!sourceDoc) return entries.slice(0, budget)
+    const sections = normalisedSections(sourceDoc)
+    const buckets = new Map<number, Array<{e: RequirementEntry; at: number}>>()
+    entries.forEach((e, given) => {
+        const q = normalise(e.quote)
+        let b = sections.findIndex(s => s.includes(q))
+        let at: number
+        if (b < 0) {
+            b = sections.length // unlocatable → trailing bucket, given order
+            at = given
+        } else {
+            at = sections[b].indexOf(q)
+        }
+        const list = buckets.get(b) ?? []
+        list.push({e, at})
+        buckets.set(b, list)
+    })
+    const ordered = [...buckets.keys()].sort((a, b) => a - b)
+    for (const k of ordered) buckets.get(k)!.sort((a, b) => a.at - b.at)
+    const out: RequirementEntry[] = []
+    for (let round = 0; out.length < budget; round++) {
+        let took = false
+        for (const k of ordered) {
+            const list = buckets.get(k)!
+            if (round >= list.length) continue
+            out.push(list[round].e)
+            took = true
+            if (out.length >= budget) break
+        }
+        if (!took) break
+    }
+    return out
 }
 
 /**
@@ -438,6 +514,103 @@ export function buildRequirementsBlock(requirements: string): string {
         'and make ACCEPTANCE/VERIFY exercise it with runnable commands. These are never',
         '"a later task\'s job" unless the plan names a task that owns them. Entries that do',
         "not touch this task's slice are ignored, not restated.",
+        ''
+    ].join('\n')
+}
+
+// ─── Owned (task-mapped) requirements — the run-16 channel gap ──────────────
+//
+// Of run 16's 40 kept requirements only the 6 CROSS-CUTTING ones were persisted
+// and injected; the 33 TASK-MAPPED ones rode the decompose ledger (shaping the
+// title list) and then vanished — nothing ever showed a task its OWN mapped
+// obligations. TASK_0008's refine read §9's "serves `/api` + static `dist/`",
+// quoted it in a grill question, and still narrowed the composed spec to
+// "SPA fallback serves index.html"; the shipped server never served the client
+// bundle and the app was permanently blank. An obligation the coverage map
+// assigned to a task must travel INTO that task as verbatim authoritative text,
+// exactly like the cross-cutting channel that measurably works.
+
+const OWNED_REQUIREMENTS_FILE = 'requirements-owned.md'
+
+export interface OwnedRequirement {
+    /** The verbatim design quote (the obligation). */
+    quote: string
+    anchor: string
+    /** The plan title of the task the coverage map assigned it to — matched
+     *  against the executing task's title at phase time (ids don't exist yet at
+     *  plan time, and spliced repair tasks shift them). */
+    title: string
+}
+
+export function ownedRequirementsFile(cwd: string): string {
+    return path.join(tasksDir(cwd), OWNED_REQUIREMENTS_FILE)
+}
+
+/** Persist the task-mapped requirements (host-side, plan time). Overwrites —
+ *  the mapping is recomputed whole per plan round. Best-effort like the carried
+ *  artifact. */
+export async function writeOwnedRequirements(
+    cwd: string,
+    owned: OwnedRequirement[]
+): Promise<void> {
+    try {
+        await fsp.mkdir(tasksDir(cwd), {recursive: true})
+        const lines = owned.map(
+            o =>
+                `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''} [title: ${o.title.replace(/\n/g, ' ')}]`
+        )
+        await fsp.writeFile(ownedRequirementsFile(cwd), lines.join('\n') + '\n', 'utf8')
+    } catch {
+        // best-effort artifact
+    }
+}
+
+export async function readOwnedRequirements(cwd: string): Promise<OwnedRequirement[]> {
+    try {
+        return parseOwnedRequirements(await fsp.readFile(ownedRequirementsFile(cwd), 'utf8'))
+    } catch {
+        return []
+    }
+}
+
+export function parseOwnedRequirements(text: string): OwnedRequirement[] {
+    const out: OwnedRequirement[] = []
+    for (const m of text.matchAll(
+        /^OWNED:\s*"([^"\n]+)"(?:\s*\[anchor:\s*([^\]]*)\])?\s*\[title:\s*([^\n]+)\]\s*$/gim
+    )) {
+        out.push({
+            quote: m[1].trim(),
+            anchor: (m[2] ?? '').trim(),
+            title: m[3].replace(/\]\s*$/, '').trim()
+        })
+    }
+    return out
+}
+
+/** The owned entries whose plan title matches THIS task's title (normalised
+ *  equality — titles travel verbatim from the plan list into task creation;
+ *  spliced repair tasks simply match nothing). */
+export function ownedForTitle(owned: OwnedRequirement[], title: string): OwnedRequirement[] {
+    const t = normalise(title)
+    if (t.length === 0) return []
+    return owned.filter(o => normalise(o.title) === t)
+}
+
+/** The injection block for a task's OWN mapped obligations. Mirrors
+ *  buildRequirementsBlock (the directive pattern that measurably works) but is
+ *  singular in address: these are not "wherever they touch", they ARE this
+ *  task's obligations and must survive into the spec. */
+export function buildOwnedRequirementsBlock(owned: OwnedRequirement[]): string {
+    if (owned.length === 0) return ''
+    return [
+        "THIS TASK'S OWN REQUIREMENTS — obligations the SOURCE design states for exactly this",
+        "task's slice (verbatim quotes; AUTHORITATIVE — the design outranks any narrower",
+        'restatement, including the refined prompt above):',
+        ...owned.map(o => `- "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''}`),
+        'Every entry must be SATISFIED BY THIS TASK and must appear in the spec: state it (or',
+        'its concrete consequence) under CONSTRAINTS or ACCEPTANCE, and make VERIFY exercise',
+        'it where runnable. Never weaken an entry to a narrower behavior — if the quote says',
+        'more than the refined prompt, the quote wins.',
         ''
     ].join('\n')
 }

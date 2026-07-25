@@ -22,6 +22,10 @@ import {
     requirementsFile,
     buildRequirementsBlock,
     buildRequirementsLedger,
+    writeOwnedRequirements,
+    readOwnedRequirements,
+    ownedForTitle,
+    buildOwnedRequirementsBlock,
     type RequirementEntry
 } from './requirements.js'
 import {AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
@@ -133,6 +137,95 @@ describe('obligation-passage recall floor', () => {
         const capped = capRequirements([...filler, marked], passages)
         expect(capped).toHaveLength(40)
         expect(capped[0]).toEqual(marked) // survives although it arrived last
+    })
+
+    test('capRequirements with a source doc fills ROUND-ROBIN across sections — a tail section is never wholesale dropped (mx5 run 16)', () => {
+        // Three sections, 20 groundable quotes each. The shipped given-order fill
+        // would keep §A's 20 + §B's 20 and drop §C entirely; the section-fair
+        // fill must keep every section's head quotes — including §C's first,
+        // the run-16 "serves static dist/" shape (tail section, early bullet).
+        const mk = (s: string, n: number) =>
+            Array.from({length: n}, (_, i) => `${s} obligation ${i} with enough length to ground`)
+        const doc = [
+            '# A',
+            ...mk('alpha', 20).map(q => `- ${q}`),
+            '# B',
+            ...mk('beta', 20).map(q => `- ${q}`),
+            '# C',
+            ...mk('gamma', 20).map(q => `- ${q}`)
+        ].join('\n')
+        const entries = [...mk('alpha', 20), ...mk('beta', 20), ...mk('gamma', 20)].map(q => ({
+            quote: q,
+            anchor: ''
+        }))
+        const capped = capRequirements(entries, [], doc)
+        expect(capped).toHaveLength(40)
+        const bySection = (s: string) => capped.filter(e => e.quote.startsWith(s)).length
+        // 40 / 3 sections → 13-14 each; every section represented, none dropped.
+        expect(bySection('alpha')).toBeGreaterThanOrEqual(13)
+        expect(bySection('beta')).toBeGreaterThanOrEqual(13)
+        expect(bySection('gamma')).toBeGreaterThanOrEqual(13)
+        // Within a section, the HEAD entries survive (doc order inside buckets).
+        expect(
+            capped.some(e => e.quote === 'gamma obligation 0 with enough length to ground')
+        ).toBe(true)
+    })
+
+    test('capRequirements without a source doc keeps the old given-order fill', () => {
+        const filler = Array.from({length: 45}, (_, i) => ({
+            quote: `filler requirement number ${i}`,
+            anchor: ''
+        }))
+        const capped = capRequirements(filler, [])
+        expect(capped).toHaveLength(40)
+        expect(capped[0].quote).toBe('filler requirement number 0')
+        expect(capped[39].quote).toBe('filler requirement number 39')
+    })
+
+    test('capRequirements: marked-passage priority still outranks section fairness', () => {
+        const doc = [
+            '# A',
+            ...Array.from({length: 45}, (_, i) => `- section A item ${i} long enough to ground`),
+            '# B',
+            '- the system MUST flush queues on shutdown'
+        ].join('\n')
+        const passages = ['the system MUST flush queues on shutdown']
+        const entries = [
+            ...Array.from({length: 45}, (_, i) => ({
+                quote: `section A item ${i} long enough to ground`,
+                anchor: ''
+            })),
+            {quote: 'the system MUST flush queues on shutdown', anchor: ''}
+        ]
+        const capped = capRequirements(entries, passages, doc)
+        expect(capped[0].quote).toBe('the system MUST flush queues on shutdown')
+        expect(capped).toHaveLength(40)
+    })
+
+    test('owned requirements: write → read → title match → injection block (run 16 channel gap)', async () => {
+        const cwd = makeCwd()
+        const title =
+            'Implement Hono app entry (server/index.ts) with SPA fallback for non-/api routes | spec: @DESIGN/PROJECT.md'
+        await writeOwnedRequirements(cwd, [
+            {quote: 'serves `/api` + static `dist/`', anchor: '9. Build & run', title},
+            {
+                quote: 'photos stored as bytea',
+                anchor: '1. Decisions',
+                title: 'Some other task title'
+            }
+        ])
+        const owned = await readOwnedRequirements(cwd)
+        expect(owned).toHaveLength(2)
+        const mine = ownedForTitle(owned, title)
+        expect(mine).toHaveLength(1)
+        expect(mine[0].quote).toBe('serves `/api` + static `dist/`')
+        // A spliced repair task (title not in the plan) gets nothing.
+        expect(ownedForTitle(owned, 'repair src/server/migrate.ts: …')).toHaveLength(0)
+        const block = buildOwnedRequirementsBlock(mine)
+        expect(block).toContain("THIS TASK'S OWN REQUIREMENTS")
+        expect(block).toContain('serves `/api` + static `dist/`')
+        expect(block).toContain('the quote wins')
+        expect(buildOwnedRequirementsBlock([])).toBe('')
     })
 
     test('extractionRetryHint names the uncovered passage heads', () => {
