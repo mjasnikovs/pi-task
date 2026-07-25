@@ -86,7 +86,15 @@ import {
 } from './verify-quality.js'
 import {existsSync} from 'node:fs'
 import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
-import {readRequirements, buildRequirementsBlock} from './requirements.js'
+import {
+    readRequirements,
+    buildRequirementsBlock,
+    buildOwnedRequirementsBlock,
+    readOwnedRequirements,
+    ownedForTitle,
+    appendOwnedConstraints,
+    type OwnedRequirement
+} from './requirements.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -246,7 +254,26 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
 export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
     const contracts = await phaseContractsBlock(deps)
     const requirements = buildRequirementsBlock(await readRequirements(deps.cwd).catch(() => ''))
-    return [contracts, requirements].filter(b => b.length > 0).join('\n')
+    const owned = buildOwnedRequirementsBlock(await ownedForThisTask(deps))
+    return [contracts, requirements, owned].filter(b => b.length > 0).join('\n')
+}
+
+/**
+ * The owned (task-mapped) requirements for THIS task (mx5 run 16): matched by
+ * the plan title the coverage map keyed them to, which is the task's stored
+ * `raw prompt` section verbatim. Empty outside /task-auto runs, for spliced
+ * repair tasks, and when the plan recorded no mapping — all of which degrade to
+ * the pre-run-16 behavior. This is the BELT (prompt block, into refine +
+ * compose); appendOwnedConstraints on the final spec is the BRACES — the belt
+ * alone folded the clause in only 2/8 live reps per fixture.
+ */
+async function ownedForThisTask(deps: PhaseDeps): Promise<OwnedRequirement[]> {
+    try {
+        const title = (await readSection(deps.cwd, deps.taskId, 'raw prompt')) ?? ''
+        return ownedForTitle(await readOwnedRequirements(deps.cwd), title.trim())
+    } catch {
+        return []
+    }
 }
 
 export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
@@ -1643,7 +1670,28 @@ export const PHASES: PhaseConfig[] = [
         field: 'spec',
         run: (d, p) => phaseCompose(d, p.refined, p.research, p.qa)
     },
-    {name: 'critique', section: 'spec', field: 'spec', run: critiqueWithFallback}
+    {
+        name: 'critique',
+        section: 'spec',
+        field: 'spec',
+        run: async (d, p) => {
+            const spec = await critiqueWithFallback(d, p)
+            // BRACES (mx5 run 16): after the LAST spec-producing step, append any
+            // owned design obligation the spec still omits as a CONSTRAINTS
+            // bullet. The belt block upstream is obeyed ~25% (measured); a
+            // host-side append is obeyed by construction. Idempotent: quotes the
+            // spec already carries (belt-obeying reps) are skipped.
+            const owned = await ownedForThisTask(d)
+            if (owned.length === 0) return spec
+            const out = appendOwnedConstraints(spec, owned)
+            if (out !== spec) {
+                d.logDebug?.(
+                    'owned-requirements braces: appended omitted design obligation(s) to CONSTRAINTS'
+                )
+            }
+            return out
+        }
+    }
 ]
 
 export async function postCommitPhase(

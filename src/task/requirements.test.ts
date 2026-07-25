@@ -26,6 +26,7 @@ import {
     readOwnedRequirements,
     ownedForTitle,
     buildOwnedRequirementsBlock,
+    appendOwnedConstraints,
     type RequirementEntry
 } from './requirements.js'
 import {AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
@@ -226,6 +227,41 @@ describe('obligation-passage recall floor', () => {
         expect(block).toContain('serves `/api` + static `dist/`')
         expect(block).toContain('the quote wins')
         expect(buildOwnedRequirementsBlock([])).toBe('')
+    })
+
+    test('appendOwnedConstraints (braces): omitted quote appended under CONSTRAINTS, present quote skipped', () => {
+        const spec = [
+            'GOAL',
+            '  Build the server entry.',
+            '',
+            'CONSTRAINTS',
+            '  - SPA fallback serves `dist/index.html`.',
+            '',
+            'ACCEPTANCE',
+            '  - server boots',
+            '',
+            'VERIFY:',
+            '```sh',
+            'bun test',
+            '```'
+        ].join('\n')
+        const owned = [
+            {quote: 'serves `/api` + static `dist/`', anchor: '9. Build & run', title: 't'},
+            // Already present (normalised) — must NOT be double-stated.
+            {quote: 'SPA fallback serves `dist/index.html`', anchor: '5. API', title: 't'}
+        ]
+        const out = appendOwnedConstraints(spec, owned)
+        expect(out).toContain(
+            '- "serves `/api` + static `dist/`" [9. Build & run] — owned requirement'
+        )
+        expect(out.split('SPA fallback serves')).toHaveLength(2) // not duplicated
+        // Appended directly under the CONSTRAINTS header, before existing bullets.
+        expect(out.indexOf('serves `/api`')).toBeLessThan(out.indexOf('SPA fallback'))
+        // Idempotent: a second pass appends nothing.
+        expect(appendOwnedConstraints(out, owned)).toBe(out)
+        // No CONSTRAINTS section → unchanged; no owned → unchanged.
+        expect(appendOwnedConstraints('GOAL\nonly', owned)).toBe('GOAL\nonly')
+        expect(appendOwnedConstraints(spec, [])).toBe(spec)
     })
 
     test('extractionRetryHint names the uncovered passage heads', () => {

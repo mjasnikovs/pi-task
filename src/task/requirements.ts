@@ -615,6 +615,35 @@ export function buildOwnedRequirementsBlock(owned: OwnedRequirement[]): string {
     ].join('\n')
 }
 
+/**
+ * BRACES for the owned channel (the PROMPT-1 pattern): deterministically append
+ * each owned obligation the composed spec does not already carry as a
+ * CONSTRAINTS bullet. Measured need (scripts/live-owned-requirement-compose-ab
+ * .ts, 8 reps/arm on two real run-16 losses): with the belt block alone compose
+ * folded the clause into CONSTRAINTS/ACCEPTANCE in only 2/8 reps per fixture
+ * (baseline 0/8) — an instruction the model mostly ignores, the PROMPT-4 shape.
+ * A host-side append cannot be ignored. "Already carries" = the normalised
+ * quote appears anywhere in the spec — belt-obeying reps aren't double-stated.
+ * No CONSTRAINTS section (shape-invalid spec) → returned unchanged; this runs
+ * only on specs the shape gate already accepted.
+ */
+export function appendOwnedConstraints(spec: string, owned: OwnedRequirement[]): string {
+    if (owned.length === 0) return spec
+    const m = /^CONSTRAINTS[ \t]*$/m.exec(spec)
+    if (!m) return spec
+    const already = normalise(spec)
+    const missing = owned.filter(o => !already.includes(normalise(o.quote)))
+    if (missing.length === 0) return spec
+    const insertAt = m.index + m[0].length
+    const bullets = missing
+        .map(
+            o =>
+                `  - "${o.quote}"${o.anchor ? ` [${o.anchor}]` : ''} — owned requirement from the source design (AUTHORITATIVE; satisfy it in this task, do not narrow it)`
+        )
+        .join('\n')
+    return `${spec.slice(0, insertAt)}\n${bullets}${spec.slice(insertAt)}`
+}
+
 /** The decompose-prompt ledger block (goal E's belt): the grounded requirement
  *  list rides into decompose so structure-mirroring can't discharge it. */
 export function buildRequirementsLedger(requirements: RequirementEntry[]): string {
