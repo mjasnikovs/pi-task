@@ -14,6 +14,7 @@ import {
     discoverIntegrationCommands,
     discoverGateCommandLabels,
     discoverLockfileChecks,
+    observabilityGapFailure,
     parseLsofListeners,
     parseNetstatListeners,
     parseSsListeners,
@@ -1195,5 +1196,73 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
         expect(fs.readFileSync(path.join(dir, 'order.txt'), 'utf8')).toBe('test;seed;migrate;')
         expect(out.reason).toContain('`bun run seed`')
         expect(out.reason).toContain('`bun run migrate`')
+    })
+})
+
+describe('observabilityGapFailure — full-skip is never a PASS (mx5 run 16)', () => {
+    const resolvable = () => true
+    const unresolvable = () => false
+
+    test('nothing discovered → no gap (a repo with nothing to run is legitimately static-only)', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 0,
+                observed: 0,
+                spawnFailures: 0,
+                runnerBins: [],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+    })
+
+    test('at least one command observed (pass or fail) → no gap', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 5,
+                observed: 1,
+                spawnFailures: 4,
+                runnerBins: ['bun'],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+    })
+
+    test('tool-level gaps only (runner spawned; browser/127 skips) → NO gap — the classic env-gap contract holds', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 3,
+                observed: 0,
+                spawnFailures: 0,
+                runnerBins: ['bun'],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+    })
+
+    test('every attempt failed to even SPAWN → rank-0 failure text naming the count', () => {
+        const t = observabilityGapFailure({
+            attempted: 7,
+            observed: 0,
+            spawnFailures: 7,
+            runnerBins: ['bun'],
+            runnerResolvable: resolvable
+        })
+        expect(t).toContain('observability gap')
+        expect(t).toContain('7 integration/boot command(s)')
+        expect(t).toContain('cannot vouch')
+        // Runner IS resolvable here, so the text must not blame it.
+        expect(t).not.toContain('not spawnable')
+    })
+
+    test('the run-16 shape: all skipped AND the runner is unspawnable → the runner is named', () => {
+        const t = observabilityGapFailure({
+            attempted: 4,
+            observed: 0,
+            spawnFailures: 4,
+            runnerBins: ['bun'],
+            runnerResolvable: unresolvable
+        })
+        expect(t).toContain('`bun`')
+        expect(t).toContain('not spawnable')
     })
 })

@@ -34,8 +34,6 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-// The PRE-CHANGE build, from the pinned worktree. Not this repo's dist/.
-import {phaseResearch} from '/tmp/pre-change/dist/task/phases.js'
 import type {PhaseDeps} from '../dist/task/child-runner.js'
 // Scoring comes from the CURRENT tree so both arms are scored by identical code.
 import {findUnsourcedAttributions} from '../dist/task/context-attribution.js'
@@ -78,6 +76,13 @@ async function main(): Promise<void> {
     } catch {
         console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
         process.exit(1)
+    }
+    // The PRE-CHANGE build, from the pinned worktree — not this repo's dist/.
+    // Dynamic import: the worktree exists only while this harness is in use, and a
+    // static import of a /tmp path breaks `tsc --noEmit` on every other box.
+    const preChangeModule = '/tmp/pre-change/dist/task/phases.js'
+    const {phaseResearch} = (await import(preChangeModule)) as {
+        phaseResearch: (deps: PhaseDeps, refined: string) => Promise<string>
     }
     // Guard: if the worktree ever drifts forward, this harness silently stops being a
     // baseline. Assert the code under test really lacks the lever.

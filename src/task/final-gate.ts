@@ -62,6 +62,7 @@ import {
 } from './launch-contract.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {runRenderCheck, type RenderOutcome} from './render-check.js'
+import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
 
@@ -248,6 +249,9 @@ type BootOutcome =
           /** Set when the render check could not OBSERVE the served page (no browser,
            *  undeterminable port) — surfaced by the gate as an UNOBSERVED warning. */
           renderNote?: string
+          /** skip only: the boot command never spawned (ENOENT) — feeds the
+           *  full-blindness guard (mx5 run 16), unlike a 127 where the runner ran. */
+          spawnFailed?: boolean
       }
     | {outcome: 'fail'; detail: string}
     // An address-already-in-use bind failure: the app code is fine, a process is
@@ -659,13 +663,17 @@ export async function runBootCheck(
     // Only served apps get an assigned port: a CLI project has nothing to bind, and
     // an unexpected PORT in its env is noise.
     const assignedPort = expectServer ? await (opts.deps?.pickPort ?? pickFreePort)() : null
+    // Runner resolution (mx5 run 16): same contract as runGateCommand — resolve
+    // the runner and carry its directory on PATH so the boot script's own chain
+    // can re-invoke it.
+    const runner = resolveRunner(bin)
     return new Promise(resolve => {
-        const child = spawn(bin, args, {
+        const child = spawn(runner.bin, args, {
             cwd,
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
             env: {
-                ...process.env,
+                ...runnerEnv(runner),
                 ...(assignedPort !== null ? {PORT: String(assignedPort)} : {})
             }
         })
@@ -769,7 +777,7 @@ export async function runBootCheck(
             }
             passAndKill()
         }, graceMs)
-        child.on('error', () => settle({outcome: 'skip'}))
+        child.on('error', () => settle({outcome: 'skip', spawnFailed: true}))
         child.on('exit', (status, signal) => {
             if (status === 0) {
                 if (expectServer && !listenerSeen) {
@@ -865,23 +873,82 @@ function runGateCommand(
     [bin, args]: HealthCommand,
     timeoutMs: number,
     extraGapRe?: RegExp
-): {outcome: 'skip' | 'pass'} | {outcome: 'fail'; status: number; tail: string} {
+):
+    | {
+          outcome: 'skip'
+          /** true → the runner binary never spawned (ENOENT). Distinct from a
+           *  tool-level gap (127 inside the chain, missing browser, timeout),
+           *  where the runner demonstrably RAN: only spawn failures feed the
+           *  full-blindness guard (mx5 run 16 — see observabilityGapFailure). */
+          spawnFailed: boolean
+      }
+    | {outcome: 'pass'}
+    | {outcome: 'fail'; status: number; tail: string} {
+    // Runner resolution (mx5 run 16): a login-shell-stripped PATH left `bun`
+    // unspawnable, so every dynamic check skipped and the gate went blind. The
+    // resolved binary is spawned, and its directory rides on the child's PATH so
+    // the SCRIPT CHAIN can re-invoke the runner (`bun run test` runs `bun test`
+    // inside — a bare 127 there is the same blindness one level down).
     // env passed explicitly: bun's spawnSync resolves the binary against a
     // startup snapshot of the environment, not the live process.env.
-    const r = spawnSync(bin, args, {
+    const runner = resolveRunner(bin)
+    const r = spawnSync(runner.bin, args, {
         cwd,
         encoding: 'utf8',
         timeout: timeoutMs,
-        env: {...process.env}
+        env: runnerEnv(runner)
     })
-    if (r.error || r.status === null || r.status === 127) return {outcome: 'skip'}
+    if (r.error) return {outcome: 'skip', spawnFailed: true}
+    if (r.status === null || r.status === 127) return {outcome: 'skip', spawnFailed: false}
     if (r.status !== 0) {
         const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
-        if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'skip'}
-        if (extraGapRe?.test(output)) return {outcome: 'skip'}
+        if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'skip', spawnFailed: false}
+        if (extraGapRe?.test(output)) return {outcome: 'skip', spawnFailed: false}
         return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
     }
     return {outcome: 'pass'}
+}
+
+/**
+ * The full-skip blindness guard (mx5 run 16, validated): dynamic commands were
+ * DISCOVERED but every single one skipped as an environment gap, so the gate
+ * decided on statics alone and stamped a permanently blank app green. Per-command
+ * env-gap skips stay legitimate (a missing browser must not fail a suite); what
+ * may never happen again is ALL of them skipping while the gate still reports
+ * PASS — a gate that observed nothing dynamic has no basis to vouch for the
+ * assembled app. Pure so the semantics are unit-tested; the caller feeds it the
+ * attempt/observation counters and runner resolvability.
+ */
+export function observabilityGapFailure(args: {
+    /** Dynamic commands the gate discovered and tried to run. */
+    attempted: number
+    /** Of those, how many it actually OBSERVED (a real pass OR a real fail —
+     *  either proves the command ran; only skips observe nothing). */
+    observed: number
+    /** Of the skips, how many were SPAWN failures (runner never ran, ENOENT).
+     *  Tool-level gaps (missing browser, 127 inside the chain, timeout) prove
+     *  the runner itself works and keep the classic env-gap contract — the
+     *  blindness class fires only when EVERY attempt failed to even spawn. */
+    spawnFailures: number
+    /** Distinct runner bins across the attempted commands. */
+    runnerBins: string[]
+    /** Is this runner spawnable (bare or via a known install location)? */
+    runnerResolvable: (bin: string) => boolean
+}): string | null {
+    if (args.attempted === 0 || args.observed > 0) return null
+    if (args.spawnFailures < args.attempted) return null
+    const unresolvable = args.runnerBins.filter(b => !args.runnerResolvable(b))
+    const runnerNote =
+        unresolvable.length > 0 ?
+            ` — the project's own runner ${unresolvable
+                .map(b => `\`${b}\``)
+                .join(', ')} is not spawnable here (not on PATH nor any known install location)`
+        :   ''
+    return (
+        `observability gap: ${args.attempted} integration/boot command(s) exist but NONE `
+        + `could even spawn in this environment${runnerNote}; `
+        + `the gate observed nothing dynamic and cannot vouch for the assembled app`
+    )
 }
 
 /**
@@ -996,14 +1063,28 @@ export async function runFinalIntegrationGate(
         return withDebts({ok: true, reason: 'no integration command found (statics passed)'})
     }
     const ran: string[] = []
+    // Full-skip blindness counters (mx5 run 16): every dynamic spawn counts an
+    // attempt; a real pass OR a real fail counts an observation; skips observe
+    // nothing. If everything discovered ends up skipped, observabilityGapFailure
+    // turns the silence into a rank-0 failure instead of a static-only PASS.
+    let dynAttempted = 0
+    let dynObserved = 0
+    let dynSpawnFailures = 0
+    const dynBins = new Set<string>()
     for (const {prefix, list} of [
         {prefix: 'lockfile check: ', list: lockCmds},
         {prefix: '', list: cmds}
     ]) {
         for (const cmd of list) {
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
+            dynAttempted += 1
+            dynBins.add(cmd[0])
             const r = runGateCommand(cwd, cmd, timeoutMs)
-            if (r.outcome === 'skip') continue
+            if (r.outcome === 'skip') {
+                if (r.spawnFailed) dynSpawnFailures += 1
+                continue
+            }
+            dynObserved += 1
             if (r.outcome === 'fail') {
                 fail(`${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`)
                 continue
@@ -1035,11 +1116,15 @@ export async function runFinalIntegrationGate(
             if (!present.has(name.toLowerCase())) continue
             const cmd: HealthCommand = ['bun', ['run', name]]
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
+            dynAttempted += 1
+            dynBins.add(cmd[0])
             const r = runGateCommand(cwd, cmd, Math.min(timeoutMs, 180_000), INFRA_GAP_OUTPUT_RE)
             if (r.outcome === 'skip') {
+                if (r.spawnFailed) dynSpawnFailures += 1
                 skippedLaunch.push(name)
                 continue
             }
+            dynObserved += 1
             if (r.outcome === 'fail') {
                 fail(
                     `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
@@ -1068,6 +1153,8 @@ export async function runFinalIntegrationGate(
     // failures no longer shadow it. Its failures rank FIRST in the aggregate.
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
+        dynAttempted += 1
+        dynBins.add(boot[0])
         const expectServer = detectsServedApp(cwd, planText)
         // Render check (mx5 runs 8/11): for a served app, load the live page in a
         // headless browser and judge the RENDERED DOM — curl can't run JS, so a
@@ -1085,6 +1172,8 @@ export async function runFinalIntegrationGate(
         if (b.outcome === 'orphan-port') {
             b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDepsWithRender, expectServer)
         }
+        if (b.outcome !== 'skip') dynObserved += 1
+        else if (b.spawnFailed) dynSpawnFailures += 1
         if (b.outcome === 'fail') {
             fail(`boot check: \`${label}\` ${b.detail}`, 0)
         } else if (b.outcome === 'orphan-port') {
@@ -1107,6 +1196,18 @@ export async function runFinalIntegrationGate(
             if (b.renderNote) warnings.push(b.renderNote)
         }
     }
+    // Full-skip blindness guard (mx5 run 16): commands were discovered but every
+    // one skipped → rank-0 failure, never a static-only PASS. Runner resolvability
+    // is checked through resolveRunner so the failure text can name the missing
+    // runner when that is the cause (the run-16 shape: login-shell PATH lost bun).
+    const gap = observabilityGapFailure({
+        attempted: dynAttempted,
+        observed: dynObserved,
+        spawnFailures: dynSpawnFailures,
+        runnerBins: [...dynBins],
+        runnerResolvable: b => resolveRunner(b).ok
+    })
+    if (gap) fail(gap, 0)
     // Artifact-production closure (mx5 run 13, PROMPT 2): a runtime file
     // reference with NO producer anywhere ships silently — the server read
     // `Bun.file('dist/index.html')` while the build emitted only app.css +

@@ -32,6 +32,7 @@
 import {spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
+import {resolveRunner, runnerEnv} from './runner-resolve.js'
 
 export interface HealthOutcome {
     /** true → every discovered static check passed, or there was nothing to run.
@@ -156,7 +157,16 @@ export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutc
         }
     }
     for (const [bin, args] of cmds) {
-        const r = spawnSync(bin, args, {cwd, encoding: 'utf8', timeout: timeoutMs})
+        // Runner resolution (mx5 run 16): a PATH-stripped environment must not
+        // silently skip the statics when the runner sits at a known install
+        // location; the resolved dir also rides on PATH for the script chain.
+        const runner = resolveRunner(bin)
+        const r = spawnSync(runner.bin, args, {
+            cwd,
+            encoding: 'utf8',
+            timeout: timeoutMs,
+            env: runnerEnv(runner)
+        })
         // Tool missing (ENOENT) or killed by timeout → cannot conclude; skip it.
         if (r.error || r.status === null) continue
         // Exit 127 = "command not found" INSIDE the script chain (e.g. `bun run lint`
