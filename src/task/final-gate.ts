@@ -129,6 +129,24 @@ function makeHasTarget(cwd: string, target: string): boolean {
  * first because it is the richer signal and the more common script). First
  * manifest that exists wins, mirroring discoverHealthCommands. Empty means
  * "nothing to run" — the static half may still gate.
+ *
+ * THE MANIFEST ALLOWLIST BELOW IS NARROW, AND THAT IS A KNOWN, MEASURED GAP: a
+ * C++/CMake project (no package.json) and a package.json whose only script is
+ * `verify` both discover NOTHING here and fall through to the static-only PASS
+ * at the `no integration command found` return below.
+ *
+ * The obvious fix — harvest each task's own `## verified tooling` section, which
+ * DOES record the missing commands — was measured on 2026-07-27 and REFUTED. That
+ * section is model-authored and, despite its name, unverified: on godot-engine it
+ * yields 3 commands that exit 0 and 8 that exit non-zero, six of those for purely
+ * fabricated reasons (recorded without a required argument, pointing at files that
+ * do not exist, naming a test runner the project does not use) — so harvesting it
+ * turns that project's PASS into a FAIL citing "No scene path provided", plus ~15
+ * minutes of hang. Full numbers, the reproduction rig, and why no pre-execution
+ * filter can separate a fabricated command from a real one:
+ * scripts/harvest-verified-tooling-step0.ts. DO NOT re-propose the harvest without
+ * first fixing the PROVENANCE of `## verified tooling` (record cwd + exit code at
+ * authoring time); widening this allowlist tool-by-tool is not the fix either.
  */
 export function discoverIntegrationCommands(cwd: string): {
     ecosystem: string | null
@@ -1059,6 +1077,13 @@ export async function runFinalIntegrationGate(
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
+    // ZERO-DISCOVERY STILL READS AS A PASS HERE, AND THAT IS THE OPEN DEFECT. Nothing was
+    // discovered, so nothing ran, so observabilityGapFailure (attempted === 0 → null) never
+    // fires: "we never checked" is reported identically to "we checked and it was fine". IAR1
+    // shipped this verdict TWICE while carrying open verify-FAIL debt (its .pi-tasks/
+    // TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37). The fix is to make this outcome
+    // UNOBSERVED rather than PASS — it needs no new command source and so cannot inject a
+    // fabricated failure, unlike the harvest lever refuted at discoverIntegrationCommands above.
     if (lockCmds.length === 0 && cmds.length === 0 && !boot && failures.length === 0) {
         return withDebts({ok: true, reason: 'no integration command found (statics passed)'})
     }
