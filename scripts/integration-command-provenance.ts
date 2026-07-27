@@ -44,7 +44,7 @@ const TIMEOUT_MS = 60_000
 
 function onPath(bin: string): boolean {
     const dirs = (process.env.PATH ?? '').split(path.delimiter)
-    return dirs.some(d => d && existsSync(path.join(d, bin)))
+    return dirs.some(d => d && (existsSync(path.join(d, bin)) || existsSync(path.join(d, bin + '.exe'))))
 }
 
 export function candidates(projectDir: string): Candidate[] {
@@ -106,7 +106,9 @@ export async function probe(
             if (done) return
             done = true
             try {
-                process.kill(-child.pid!, 'SIGKILL')
+                // Unix: kill the process group; Windows: kill the individual process.
+                // Both are attempted — whichever is unsupported throws and is caught.
+                child.kill('SIGKILL')
             } catch {
                 /* already gone */
             }
