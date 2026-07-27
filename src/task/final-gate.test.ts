@@ -698,6 +698,196 @@ describe('runBootCheck — render check on the served page (runs 8/11)', () => {
     })
 })
 
+// mx5 run 17: the page above renders and the app is still unusable — the server
+// authenticates the login and the client never uses the session. The deep probe is
+// injected here so the flow is deterministic without a browser or an app.
+describe('runBootCheck — authenticated deep-render check (run 17)', () => {
+    const alive = nodeScript('setTimeout(()=>{},600000)')
+    const served = {groupHasListener: () => true, groupListeningPort: () => 3000}
+    const rendered = () => ({outcome: 'pass', detail: 'rendered visible text'}) as const
+
+    itPosix('a session the server authenticated but the client cannot use → FAIL', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...served,
+                renderProbe: rendered,
+                deepRenderProbe: url => {
+                    expect(url).toBe('http://127.0.0.1:3000/')
+                    return Promise.resolve({
+                        outcome: 'fail',
+                        detail: 'signed in (`POST /api/auth/login` → 200) but the client NEVER LEFT THE SIGN-IN WALL'
+                    })
+                }
+            }
+        })
+        expect(r.outcome).toBe('fail')
+        expect((r as {detail: string}).detail).toContain('NEVER LEFT THE SIGN-IN WALL')
+        expect((r as {detail: string}).detail).toContain(':3000')
+    })
+
+    itPosix('a working authenticated session → PASS with no warning', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...served,
+                renderProbe: rendered,
+                deepRenderProbe: () =>
+                    Promise.resolve({outcome: 'pass', detail: 'signed in, 6/6 data requests 2xx'})
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect((r as {renderNote?: string}).renderNote).toBeUndefined()
+    })
+
+    itPosix('no credentials / no browser (deep SKIP) → PASS but UNOBSERVED', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...served,
+                renderProbe: rendered,
+                deepRenderProbe: () =>
+                    Promise.resolve({
+                        outcome: 'skip',
+                        note: 'the project declares no account credentials'
+                    })
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect((r as {renderNote: string}).renderNote).toContain('UNOBSERVED')
+        expect((r as {renderNote: string}).renderNote).toContain('no account credentials')
+    })
+
+    itPosix(
+        'the shallow render FAILs → the deep probe never runs (its verdict leads)',
+        async () => {
+            let deepRan = false
+            const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+                expectServer: true,
+                deps: {
+                    ...served,
+                    renderProbe: () => ({outcome: 'fail', detail: 'the rendered body is EMPTY'}),
+                    deepRenderProbe: () => {
+                        deepRan = true
+                        return Promise.resolve({outcome: 'pass', detail: 'x'})
+                    }
+                }
+            })
+            expect(r.outcome).toBe('fail')
+            expect(deepRan).toBe(false)
+        }
+    )
+
+    itPosix('a NON-served project never reaches the deep probe (I1)', async () => {
+        let deepRan = false
+        const r = await runBootCheck(os.tmpdir(), nodeScript('process.exit(0)'), 3000, {
+            expectServer: false,
+            deps: {
+                ...served,
+                renderProbe: rendered,
+                deepRenderProbe: () => {
+                    deepRan = true
+                    return Promise.resolve({outcome: 'fail', detail: 'must never be reached'})
+                }
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect(deepRan).toBe(false)
+    })
+
+    // The browser session signs in and waits for the app's data calls, so it routinely
+    // outlives the boot grace window. Settling on the timer would kill the server under
+    // it and silently discard the verdict.
+    itPosix(
+        'a deep session slower than the grace window still decides the boot',
+        async () => {
+            const r = await runBootCheck(os.tmpdir(), alive, 1200, {
+                expectServer: true,
+                deps: {
+                    ...served,
+                    renderProbe: rendered,
+                    deepRenderProbe: () =>
+                        new Promise(resolve =>
+                            setTimeout(
+                                () =>
+                                    resolve({
+                                        outcome: 'fail',
+                                        detail: 'never left the sign-in wall'
+                                    }),
+                                2500
+                            )
+                        )
+                }
+            })
+            expect(r.outcome).toBe('fail')
+            expect((r as {detail: string}).detail).toContain('never left the sign-in wall')
+        },
+        20_000
+    )
+
+    // The port the app is served on decides whether the authenticated half is
+    // observable at all: a client with its base URL baked in at build time calls
+    // that origin and no other.
+    itPosix('a declared local port is served instead of a reserved one', async () => {
+        let reservedUsed = false
+        // The child dies unless it was handed the declared port, so a PASS is proof
+        // the boot really served on 4321 and not on the reserved number.
+        const wantsPort = nodeScript(
+            "if(process.env.PORT!=='4321')process.exit(3); setTimeout(()=>{},600000)"
+        )
+        const r = await runBootCheck(os.tmpdir(), wantsPort, 3000, {
+            expectServer: true,
+            deps: {
+                preferredPort: () => Promise.resolve(4321),
+                pickPort: () => {
+                    reservedUsed = true
+                    return Promise.resolve(59999)
+                },
+                groupHasListener: () => true,
+                groupListeningPort: () => 4321,
+                renderProbe: url => {
+                    expect(url).toBe('http://127.0.0.1:4321/')
+                    return {outcome: 'pass', detail: 'rendered'}
+                }
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect(reservedUsed).toBe(false)
+    })
+
+    itPosix('no declared port (or one already held) → the reserved port, unchanged', async () => {
+        let reservedUsed = false
+        const r = await runBootCheck(os.tmpdir(), alive, 3000, {
+            expectServer: true,
+            deps: {
+                preferredPort: () => Promise.resolve(null),
+                pickPort: () => {
+                    reservedUsed = true
+                    return Promise.resolve(59999)
+                },
+                groupHasListener: () => true,
+                groupListeningPort: () => 59999,
+                renderProbe: () => ({outcome: 'pass', detail: 'rendered'}),
+                deepRenderProbe: () => Promise.resolve({outcome: 'pass', detail: 'no wall'})
+            }
+        })
+        expect(r.outcome).toBe('pass')
+        expect(reservedUsed).toBe(true)
+    })
+
+    itPosix('a deep probe that THROWS can never fail the gate on its own fault', async () => {
+        const r = await runBootCheck(os.tmpdir(), alive, 5000, {
+            expectServer: true,
+            deps: {
+                ...served,
+                renderProbe: rendered,
+                deepRenderProbe: () => Promise.reject(new Error('protocol error'))
+            }
+        })
+        expect(r.outcome).toBe('pass')
+    })
+})
+
 describe('detectsServedApp (run 10 item 1)', () => {
     test('a server-framework dependency ⇒ served app', () => {
         const dir = makeDir({dependencies: {hono: '^4', react: '^18'}})
@@ -854,7 +1044,11 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
         const out = await runFinalIntegrationGate(dir, 900_000, 5000, {
             groupHasListener: () => true,
             groupListeningPort: () => 3000,
-            renderProbe: () => ({outcome: 'pass', detail: 'rendered visible text'})
+            renderProbe: () => ({outcome: 'pass', detail: 'rendered visible text'}),
+            // The listener here is FAKED, so the real deep probe would drive a browser
+            // against whatever happens to answer on :3000 on the test box. Injected to
+            // keep this hermetic; the deep probe's own behaviour is covered above.
+            deepRenderProbe: () => Promise.resolve({outcome: 'pass', detail: 'no sign-in wall'})
         })
         expect(out.ok).toBe(true)
         expect(out.reason).not.toContain('WARNING')

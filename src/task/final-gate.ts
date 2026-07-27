@@ -62,6 +62,12 @@ import {
 } from './launch-contract.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {runRenderCheck, type RenderOutcome} from './render-check.js'
+import {
+    collectProjectEnv,
+    pinnedLocalPort,
+    runDeepRenderCheck,
+    type DeepRenderOutcome
+} from './deep-render-check.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
@@ -275,7 +281,9 @@ type BootOutcome =
     | {
           outcome: 'skip' | 'pass'
           /** Set when the render check could not OBSERVE the served page (no browser,
-           *  undeterminable port) — surfaced by the gate as an UNOBSERVED warning. */
+           *  undeterminable port) or its AUTHENTICATED half (no declared credentials,
+           *  an undrivable sign-in form, credentials the server rejected) — surfaced
+           *  by the gate as an UNOBSERVED warning. */
           renderNote?: string
           /** skip only: the boot command never spawned (ENOENT) — feeds the
            *  full-blindness guard (mx5 run 16), unlike a 127 where the runner ran. */
@@ -339,6 +347,17 @@ export interface BootDeps {
      */
     renderProbe?: (url: string) => RenderOutcome
     /**
+     * SIGN IN on the served page and judge the AUTHENTICATED half of the app (mx5
+     * run 17). Runs only after `renderProbe` PASSED — the shallow blank-page rule
+     * keeps its own RED/GREEN-proven verdict and is never shadowed by this one.
+     * Absent → the boot check behaves exactly as before; the gate wires
+     * runDeepRenderCheck by default for served apps. May only FAIL when the SERVER
+     * itself authenticated the session (see deep-render-check.judgeDeepSession);
+     * anything else — no browser, no declared credentials, an undrivable form,
+     * rejected credentials — is an env gap and skips with an UNOBSERVED note.
+     */
+    deepRenderProbe?: (url: string) => DeepRenderOutcome | Promise<DeepRenderOutcome>
+    /**
      * Can this box enumerate listeners with pids AT ALL (ss/netstat/lsof)? False
      * means the served-app requirement is UNOBSERVABLE here and must degrade to the
      * survival rule rather than fail — see canEnumerateListeners.
@@ -350,6 +369,13 @@ export interface BootDeps {
      * pgid attribution alone). Injected for tests.
      */
     pickPort?: () => Promise<number | null>
+    /**
+     * The port the project's own client was BUILT to call, when it declares one and
+     * nothing is holding it — preferred over a freshly reserved port so the served
+     * origin and the origin the client calls are the same one (see pinnedLocalPort).
+     * null → use the reserved private port exactly as before.
+     */
+    preferredPort?: () => Promise<number | null>
     /** Does anything answer HTTP on 127.0.0.1:`port`? Injected for tests. */
     httpProbe?: (port: number) => boolean
 }
@@ -535,6 +561,31 @@ export function pickFreePort(): Promise<number | null> {
     })
 }
 
+/** Can we bind 127.0.0.1:`port` right now? (Free ⇒ the boot child can have it.) */
+export function isPortFree(port: number): Promise<boolean> {
+    return new Promise(resolve => {
+        try {
+            const srv = net.createServer()
+            srv.once('error', () => resolve(false))
+            srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)))
+        } catch {
+            resolve(false)
+        }
+    })
+}
+
+/**
+ * The project's own declared local port, but only if nothing is holding it — the
+ * default `preferredPort` for the gate. A declared port that is BUSY falls back to
+ * a reserved one rather than colliding: a stranger's server on :3000 must never be
+ * mistaken for the app we just booted.
+ */
+export async function preferredDeclaredPort(cwd: string): Promise<number | null> {
+    const port = pinnedLocalPort(collectProjectEnv(cwd))
+    if (port === null) return null
+    return (await isPortFree(port)) ? port : null
+}
+
 /**
  * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all (404, 500 —
  * a status is a listener) counts; only a connection error or timeout is a no.
@@ -690,7 +741,15 @@ export async function runBootCheck(
         expectServer ? (opts.deps?.enumerationCapable ?? canEnumerateListeners)() : true
     // Only served apps get an assigned port: a CLI project has nothing to bind, and
     // an unexpected PORT in its env is noise.
-    const assignedPort = expectServer ? await (opts.deps?.pickPort ?? pickFreePort)() : null
+    // The app's OWN declared local port wins when it is free (see pinnedLocalPort):
+    // a client whose base URL was baked in at build time calls that origin and no
+    // other, so serving it anywhere else makes the whole authenticated half
+    // unobservable. Anything else — no declaration, a port already held — falls back
+    // to the freshly reserved private port that run 14's ownership evidence needs.
+    const noPreference = (): Promise<number | null> => Promise.resolve(null)
+    const preferred = expectServer ? await (opts.deps?.preferredPort ?? noPreference)() : null
+    const assignedPort =
+        preferred ?? (expectServer ? await (opts.deps?.pickPort ?? pickFreePort)() : null)
     // Runner resolution (mx5 run 16): same contract as runGateCommand — resolve
     // the runner and carry its directory on PATH so the boot script's own chain
     // can re-invoke it.
@@ -756,10 +815,14 @@ export async function runBootCheck(
         // check against the LIVE listener (mx5 runs 8/11: a listener that serves a
         // permanently blank page passed every curl-shaped check), then PASS/FAIL.
         // The probe is spawnSync, so the interval cannot re-enter mid-check.
+        // The deep probe is asynchronous (it drives a browser session), so the
+        // interval body must not re-enter while one is in flight — a second session
+        // would race the first for the same still-booting child.
+        let probing = false
         const poll =
             expectServer ?
                 setInterval(() => {
-                    if (settled || !child.pid) return
+                    if (settled || probing || !child.pid) return
                     // pgid attribution first (precise, cheap). If it saw nothing — or
                     // cannot see anything here — fall back to the private assigned
                     // port: an HTTP answer on a number only this child was told is
@@ -779,16 +842,53 @@ export async function runBootCheck(
                             'render check UNOBSERVED: a listener was seen but its port could not be determined'
                         )
                     }
-                    const rr = probe(`http://127.0.0.1:${port}/`)
+                    const url = `http://127.0.0.1:${port}/`
+                    const rr = probe(url)
                     if (rr.outcome === 'fail') {
                         return failAndKill(`listens on :${port} but ${rr.detail}`)
                     }
-                    passAndKill(
-                        rr.outcome === 'skip' ? `render check UNOBSERVED: ${rr.note}` : undefined
+                    const deep = opts.deps?.deepRenderProbe
+                    if (rr.outcome !== 'pass' || !deep) {
+                        return passAndKill(
+                            rr.outcome === 'skip' ?
+                                `render check UNOBSERVED: ${rr.note}`
+                            :   undefined
+                        )
+                    }
+                    // The page renders. Now sign in and prove the AUTHENTICATED half
+                    // is alive (mx5 run 17): the server accepted the login and the
+                    // client never used it. Async, so the interval is held off by
+                    // `probing` until this settles.
+                    probing = true
+                    void Promise.resolve(deep(url)).then(
+                        dr => {
+                            if (settled) return
+                            if (dr.outcome === 'fail') {
+                                return failAndKill(`listens on :${port} but ${dr.detail}`)
+                            }
+                            passAndKill(
+                                dr.outcome === 'skip' ?
+                                    `authenticated render check UNOBSERVED: ${dr.note}`
+                                :   undefined
+                            )
+                        },
+                        () => {
+                            // The deep probe may never fail the gate on its own fault.
+                            if (!settled) passAndKill()
+                        }
                     )
                 }, 500)
             :   null
-        const timer = setTimeout(() => {
+        const onGrace = (): void => {
+            // A browser session in flight outlives the grace window by design (it
+            // signs in and waits for the app's data calls). Settling here would kill
+            // the server under it and discard its verdict, so the window re-arms
+            // until the probe resolves — which it always does, on its own hard
+            // timeout (DEEP_RENDER_TIMEOUT_MS).
+            if (probing) {
+                timer = setTimeout(onGrace, 500)
+                return
+            }
             if (expectServer && !listenerSeen) {
                 // Blind here (no enumeration tool, and the assigned port never
                 // answered) ⇒ we cannot tell "never listened" from "ignores PORT".
@@ -804,7 +904,8 @@ export async function runBootCheck(
                 return
             }
             passAndKill()
-        }, graceMs)
+        }
+        let timer = setTimeout(onGrace, graceMs)
         child.on('error', () => settle({outcome: 'skip', spawnFailed: true}))
         child.on('exit', (status, signal) => {
             if (status === 0) {
@@ -1257,9 +1358,19 @@ export async function runFinalIntegrationGate(
         // blank-mount app passed every prior "renders" check. Default to the real
         // probe; tests inject their own. runRenderCheck env-gap-SKIPs when no
         // browser exists, so a box without one never gets a false FAIL.
+        // Authenticated deep-render check (mx5 run 17): the page above renders, so
+        // now sign in with the account the project's own dotenv declares (the same
+        // ADMIN_PHONE/ADMIN_PASSWORD the launch contract's seed step consumes) and
+        // require the session to actually work. WEB-ONLY by construction — it hangs
+        // off the served-app branch and never runs for C++, Godot, CLI or library
+        // projects. It may only FAIL when the SERVER authenticated us; no browser,
+        // no credentials, an undrivable form or rejected credentials all skip as
+        // env gaps (judgeDeepSession).
         const bootDepsWithRender: BootDeps = {
             ...bootDeps,
-            renderProbe: bootDeps.renderProbe ?? runRenderCheck
+            renderProbe: bootDeps.renderProbe ?? runRenderCheck,
+            deepRenderProbe: bootDeps.deepRenderProbe ?? (url => runDeepRenderCheck(url, cwd)),
+            preferredPort: bootDeps.preferredPort ?? (() => preferredDeclaredPort(cwd))
         }
         let b = await runBootCheck(cwd, boot, bootGraceMs, {
             expectServer,
