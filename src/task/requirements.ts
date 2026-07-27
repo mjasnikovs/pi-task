@@ -626,6 +626,38 @@ export function buildOwnedRequirementsBlock(owned: OwnedRequirement[]): string {
  * quote appears anywhere in the spec — belt-obeying reps aren't double-stated.
  * No CONSTRAINTS section (shape-invalid spec) → returned unchanged; this runs
  * only on specs the shape gate already accepted.
+ *
+ * NOT EXTENDED TO CONSUMER TASKS — REFUTED AT STEP 0, 2026-07-27. The proposal
+ * was to classify owned requirements INVARIANT (prohibition-shaped) vs
+ * DELIVERABLE and propagate the INVARIANTs from here to every task whose spec
+ * names the same symbol/file, because mx5 run 17 gave all three Hono-RPC
+ * obligations to TASK_0021 (which complied perfectly) while the four CONSUMER
+ * tasks that never saw them — 0027/0031/0033/0034 — hand-wrote casts and shipped
+ * 7 dead client call sites. It was not built, for two measured reasons
+ * (scripts/owned-consumer-generality-step0.ts, re-runnable):
+ *
+ *  1. IT DOES NOT GENERALIZE. The task's own kill condition was <20% of a second
+ *     stack's OWNED requirements being prohibition-shaped. IAR1, 8 live
+ *     regenerations of the real plan-time pipeline over its real 10-task list:
+ *     2/42 pooled = 4.8% (narrow four-phrase reading 1/42 = 2.4%). mx5 itself is
+ *     7/33 = 21.2% only under the BROAD rule above; under "never/don't/must
+ *     not/do not" it is 2/33 = 6.1%. The structural reason is in accountCoverage
+ *     right here: a prohibition the map leaves NONE is already carried
+ *     cross-cutting to every task, so in the five reps that logged the split 18
+ *     of IAR1's 19 prohibition-shaped requirements were never owner-only in the
+ *     first place. mx5's 7 leaked because the model mapped them to a TASK.
+ *  2. THE TARGETING RULE MISSES ITS OWN MOTIVATING CASE. Symbol/file relevance
+ *     would not have reached the four violators for the clause they actually
+ *     broke ("If a call isn't fully typed end-to-end via `hc`, fix the route
+ *     chaining/export, don't paper over it…"): its only extractable symbol is
+ *     `chaining/export`, which no consumer spec contains — 0 consumers. Its
+ *     siblings would have reached all four, attaching to 13/41 tasks each; across
+ *     mx5's 33 owned requirements the mean attach rate is 21% of all tasks and
+ *     5/33 would attach to more than half of them (the task's own I1 trigger).
+ *
+ * Do not re-open on mx5 evidence alone. A future attempt needs a second stack
+ * where prohibition-shaped requirements actually land OWNED, and a targeting rule
+ * that survives a clause whose symbols are prose.
  */
 export function appendOwnedConstraints(spec: string, owned: OwnedRequirement[]): string {
     if (owned.length === 0) return spec
