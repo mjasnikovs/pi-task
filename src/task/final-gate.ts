@@ -102,6 +102,15 @@ export interface FinalGateOutcome {
      * run never completes silently carrying an accepted defect. Empty/absent = none.
      */
     openDebts?: AcceptDebt[]
+    /**
+     * Set (with the UNOBSERVED note) when the gate observed NOTHING dynamic — either
+     * no command was discoverable at all, or every discovered one was skipped as an
+     * environment gap. `ok` is still true (the statics did pass and there is nothing
+     * to fix), but this is NOT a PASS: the caller must record it as UNOBSERVED, never
+     * as "checked and fine". Absent ⇒ at least one dynamic command actually ran.
+     * See unobservedVerdict for the three-way verdict and the blocking decision.
+     */
+    unobserved?: string
 }
 
 function packageScripts(cwd: string): Record<string, string> {
@@ -132,8 +141,9 @@ function makeHasTarget(cwd: string, target: string): boolean {
  *
  * THE MANIFEST ALLOWLIST BELOW IS NARROW, AND THAT IS A KNOWN, MEASURED GAP: a
  * C++/CMake project (no package.json) and a package.json whose only script is
- * `verify` both discover NOTHING here and fall through to the static-only PASS
- * at the `no integration command found` return below.
+ * `verify` both discover NOTHING here. That outcome is now reported as UNOBSERVED
+ * rather than as a PASS (see unobservedVerdict), which makes the blindness loud and
+ * durable — it does not remove it. The gap itself stands.
  *
  * The obvious fix — harvest each task's own `## verified tooling` section, which
  * DOES record the missing commands — was measured on 2026-07-27 and REFUTED. That
@@ -970,6 +980,63 @@ export function observabilityGapFailure(args: {
 }
 
 /**
+ * The THIRD verdict. observabilityGapFailure above covers "commands were DISCOVERED
+ * but every one failed to spawn" — a rank-0 FAIL. It deliberately returns null for
+ * `attempted === 0`, and until now that silence fell straight through to
+ * `PASS — no integration command found (statics passed)`: the run-16 blindness class
+ * entering through a different door, where "we never checked" reads exactly like "we
+ * checked and it was fine". Measured 2026-07-27: IAR1 (C++/CMake, no package.json)
+ * shipped that verdict TWICE while carrying 2 and 3 open verify-FAIL debts, and
+ * godot-engine (package.json whose only script is `verify`) reproduces it live today.
+ *
+ * So: observed anything dynamic ⇒ PASS; discovered-but-all-spawn-failed ⇒ the
+ * existing FAIL; observed NOTHING ⇒ this note, carried on an `ok: true` outcome.
+ *
+ * WHY NON-BLOCKING (decided, not deferred — the evidence cuts both ways and this is
+ * the resolution):
+ *  - Blocking's case: both real occurrences also carried open verify-FAIL debt, so
+ *    the runs with no dynamic evidence were exactly the runs already known to be
+ *    carrying defects.
+ *  - Against, and decisive: (1) that debt is ALREADY surfaced unconditionally at the
+ *    gate moment, on PASS as on FAIL — the IAR1 records literally read "PASS — no
+ *    integration command found … UNRESOLVED VERIFY-FAIL DEBT still open (2)". The
+ *    missing signal was never the debt, it was the word PASS endorsing the run, and
+ *    that is what this fixes. (2) `ok: false` routes into the autofix picker, whose
+ *    seed is `reason`; "no integration command is discoverable" is not fixable by
+ *    editing code, so the highest-probability child response is to FABRICATE a
+ *    runnable command to satisfy the gate — the same fabrication class that refuted
+ *    the `## verified tooling` harvest (see discoverIntegrationCommands) and that had
+ *    run 11's fix child `rm` a sibling's deliverable. (3) That harvest being refuted
+ *    means IAR1 and godot-engine can NEVER discover a command, so blocking would end
+ *    every non-npm run in `failed` permanently, with no remedy — the task's own I3
+ *    ("show blocking does not block IAR1/godot post-Task-1") is unsatisfiable, and
+ *    its stated consequence is to downgrade to a warning and say so. This is that.
+ * The teeth are elsewhere and are real: the verdict word changes, the gate trail says
+ * UNOBSERVED, and the caller records a durable final-gate debt that the NEXT run's
+ * gate re-surfaces (it can never auto-close — it is not static-class).
+ */
+export function unobservedVerdict(args: {
+    /** Dynamic commands the gate discovered and tried to run (0 ⇒ nothing existed). */
+    discovered: number
+    /** Of those, how many actually RAN (a real pass or a real fail). */
+    observed: number
+}): string | null {
+    if (args.observed > 0) return null
+    // Kept short ON PURPOSE: the run-level trail line slices the reason at 300 chars,
+    // and the whole point of this verdict is that the durable record carries it.
+    const why =
+        args.discovered === 0 ?
+            'no integration, lockfile or boot command was discoverable here, so the gate ran '
+            + 'nothing at all'
+        :   `all ${args.discovered} discovered command(s) skipped as environment gaps, so the `
+            + 'gate ran nothing observable'
+    return (
+        `UNOBSERVED — NOT a pass: ${why}; statics passed, but this run produced NO evidence `
+        + 'that the assembled product builds, boots or works.'
+    )
+}
+
+/**
  * Boot check hit an address-in-use bind failure. If the port is held by one of OUR
  * own orphaned gate children (a `dev`/`start` run), reap it and retry the boot once
  * so the app gets a fair launch; otherwise leave the (foreign) holder alone and let
@@ -1077,15 +1144,19 @@ export async function runFinalIntegrationGate(
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
-    // ZERO-DISCOVERY STILL READS AS A PASS HERE, AND THAT IS THE OPEN DEFECT. Nothing was
-    // discovered, so nothing ran, so observabilityGapFailure (attempted === 0 → null) never
-    // fires: "we never checked" is reported identically to "we checked and it was fine". IAR1
-    // shipped this verdict TWICE while carrying open verify-FAIL debt (its .pi-tasks/
-    // TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37). The fix is to make this outcome
-    // UNOBSERVED rather than PASS — it needs no new command source and so cannot inject a
-    // fabricated failure, unlike the harvest lever refuted at discoverIntegrationCommands above.
+    // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict). Nothing was
+    // discovered, so nothing ran, so observabilityGapFailure (attempted === 0 → null) does
+    // not fire — and this outcome used to be reported as `PASS — no integration command
+    // found (statics passed)`, i.e. "we never checked" reading identically to "we checked
+    // and it was fine". IAR1 shipped that verdict TWICE while carrying open verify-FAIL
+    // debt (its .pi-tasks/TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37). The outcome stays
+    // `ok: true` (non-blocking, justified at unobservedVerdict) but is now labelled, trailed
+    // and carried as debt by the caller. It needs no new command source, so unlike the
+    // harvest lever refuted at discoverIntegrationCommands it cannot inject a fabricated
+    // failure.
     if (lockCmds.length === 0 && cmds.length === 0 && !boot && failures.length === 0) {
-        return withDebts({ok: true, reason: 'no integration command found (statics passed)'})
+        const note = unobservedVerdict({discovered: 0, observed: 0}) ?? ''
+        return withDebts({ok: true, unobserved: note, reason: note})
     }
     const ran: string[] = []
     // Full-skip blindness counters (mx5 run 16): every dynamic spawn counts an
@@ -1264,11 +1335,21 @@ export async function runFinalIntegrationGate(
         })
     }
     const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''
+    // The same three-way verdict at the other zero-observation door: commands WERE
+    // discovered, none spawn-failed (so the run-16 guard correctly stayed silent — every
+    // skip was a tool-level env gap), and yet nothing ran. That was `statics passed
+    // (integration commands not runnable here)`, which is the identical "we never checked"
+    // silence wearing different words. Unchanged when anything at all was observed, so a
+    // project with runnable commands is byte-for-byte unaffected.
+    const unobserved = unobservedVerdict({discovered: dynAttempted, observed: dynObserved})
     return withDebts({
         ok: true,
+        ...(unobserved ? {unobserved} : {}),
         reason:
-            (ran.length > 0 ?
+            (unobserved ? `${unobserved} — ` : '')
+            + (ran.length > 0 ?
                 `statics + ${ran.map(c => `\`${c}\``).join(', ')} passed`
-            :   'statics passed (integration commands not runnable here)') + warningNote
+            :   'statics passed (integration commands not runnable here)')
+            + warningNote
     })
 }

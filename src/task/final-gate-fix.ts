@@ -236,6 +236,11 @@ export interface FinalFixResult {
     /** The fresh gate's individual ranked failures (see FinalGateOutcome.failures),
      *  so the caller can trail each entry — never just the first. */
     gateFailures?: string[]
+    /** On a converged outcome: the re-run gate's UNOBSERVED note, if it observed
+     *  nothing dynamic (see FinalGateOutcome.unobserved). Carried so the caller
+     *  labels a converge-on-statics-alone the same way it labels a first-pass one —
+     *  "converged" must never quietly mean "we stopped being able to check". */
+    unobserved?: string
     /** A write-guard rejected this attempt (deletion / shrink / probe-gaming). */
     guardTripped?: boolean
     /** …and its edits were discarded. When a guard tripped and this is false, the
@@ -256,7 +261,12 @@ export interface FinalFixDeps {
     /** Re-run the final integration gate — the only arbiter of convergence.
      *  Converges only when the gate's FULL aggregated failure list is empty
      *  (ok=true); `failures` rides through so the caller sees every entry. */
-    gate: (cwd: string) => Promise<{ok: boolean; reason: string; failures?: string[]}>
+    gate: (cwd: string) => Promise<{
+        ok: boolean
+        reason: string
+        failures?: string[]
+        unobserved?: string
+    }>
     /** Labels of every currently-discoverable gate command (static + integration),
      *  for the shrink guard. Pure discovery — nothing is executed. */
     discoverLabels: (cwd: string) => string[]
@@ -390,5 +400,5 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
             gateFailures: fin.failures
         }
     }
-    return {ok: true, reason: fin.reason}
+    return {ok: true, reason: fin.reason, ...(fin.unobserved ? {unobserved: fin.unobserved} : {})}
 }

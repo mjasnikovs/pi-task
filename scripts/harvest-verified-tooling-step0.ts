@@ -7,10 +7,13 @@
  * The lever's target is real and is NOT in dispute: final-gate.ts `discoverIntegrationCommands`
  * resolves integration commands from a fixed manifest allowlist (package.json `test`/`test:*`/
  * `build`, Makefile, Cargo.toml, go.mod, pyproject.toml) and nothing else, so a project it does
- * not recognise falls through `no integration command found (statics passed)` — IAR1 (C++/CMake,
- * no package.json) shipped exactly that verdict TWICE while carrying open verify-FAIL debt
- * (.pi-tasks/TASK_AUTO_0001.md:31, TASK_AUTO_0002.md:37), and godot-engine's only package.json
- * script is `verify`, which matches neither `test*` nor `build`. Both confirmed here.
+ * not recognise discovers nothing — IAR1 (C++/CMake, no package.json) shipped the resulting
+ * static-only verdict TWICE while carrying open verify-FAIL debt (.pi-tasks/TASK_AUTO_0001.md:31,
+ * TASK_AUTO_0002.md:37), and godot-engine's only package.json script is `verify`, which matches
+ * neither `test*` nor `build`. Both confirmed here. (Since 2026-07-27 that outcome is reported as
+ * UNOBSERVED rather than `PASS — no integration command found (statics passed)` — see
+ * final-gate.ts unobservedVerdict. That labels the blindness; it does not remove it, and this
+ * gap stands.)
  *
  * What is refuted is the proposed SOURCE for the fix. `## verified tooling` is written by a
  * model and, despite its name, is not verified: it records commands that were never run, that

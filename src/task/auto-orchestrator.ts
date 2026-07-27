@@ -233,6 +233,8 @@ export interface AutoDeps extends GateDeps {
         failures?: string[]
         debtNote?: string
         openDebts?: AcceptDebt[]
+        /** Set ⇒ the gate observed nothing dynamic: UNOBSERVED, not PASS. */
+        unobserved?: string
     }>
     /**
      * Bounded model-driven fix pass for a final-gate FAIL (see final-gate-fix.ts),
@@ -1430,6 +1432,11 @@ export async function runAutoLoop(
                     )
                     return
                 }
+                // Set when the gate finished having observed NOTHING dynamic. Declared
+                // out here so the run-completion announcement below can say so: a run
+                // that completes on statics alone must not be announced the same way as
+                // one whose product was actually exercised.
+                let unobservedNote: string | null = null
                 if (deps.finalGate) {
                     active.ui.notify(`${id}: running final integration gate…`, 'info')
                     // Run-level gate trail on the parent task file — same durable
@@ -1469,7 +1476,23 @@ export async function runAutoLoop(
                     // Record the outcome symmetrically (mx5 run 10 item 7): only FAIL was
                     // ever trailed, so a PASSing gate was indistinguishable from a gate
                     // that never ran. The PASS reason names the commands that were run.
-                    if (fin.ok) {
+                    // THREE verdicts, not two (final-gate.ts unobservedVerdict): a gate
+                    // that observed nothing dynamic is UNOBSERVED, never PASS — IAR1
+                    // shipped `PASS — no integration command found` twice while carrying
+                    // open verify-FAIL debt. It does not block (justified there), but it
+                    // is labelled here, warned about, and recorded as durable debt so the
+                    // next run's gate re-surfaces it.
+                    if (fin.ok && fin.unobserved) {
+                        unobservedNote = fin.unobserved
+                        await recGate(`final-gate: UNOBSERVED — ${fin.reason.slice(0, 300)}`)
+                        await recordFinalGateUnobservedDebt(cwd, id, fin.unobserved)
+                        active.ui.notify(
+                            `${id}: the final integration gate observed NOTHING dynamic — `
+                                + 'the run completed on static checks alone. Nothing verified '
+                                + 'that the assembled product builds, boots or works.',
+                            'warning'
+                        )
+                    } else if (fin.ok) {
                         await recGate(`final-gate: PASS — ${fin.reason.slice(0, 300)}`)
                     } else {
                         await trailGateFail(fin)
@@ -1646,12 +1669,19 @@ export async function runAutoLoop(
                             const fix = await deps.finalGateFix!(active, cwd, seed)
                             if (fix.ok) {
                                 await deps.commit(cwd, `FINAL GATE AUTOFIX (${id})`)
+                                // A converged re-run that observed nothing dynamic is
+                                // UNOBSERVED on this door too — never announce it as a
+                                // PASS just because it arrived via autofix.
+                                if (fix.unobserved) {
+                                    unobservedNote = fix.unobserved
+                                    await recordFinalGateUnobservedDebt(cwd, id, fix.unobserved)
+                                }
                                 await recGate(
-                                    `final-gate: autofix converged — ${fix.reason.slice(0, 200)}`
+                                    `final-gate: autofix ${fix.unobserved ? 'ended UNOBSERVED' : 'converged'} — ${fix.reason.slice(0, 200)}`
                                 )
                                 active.ui.notify(
-                                    `${id}: final integration gate PASSES after autofix — ${fix.reason.slice(0, 140)}`,
-                                    'info'
+                                    `${id}: final integration gate ${fix.unobserved ? 'is UNOBSERVED' : 'PASSES'} after autofix — ${fix.reason.slice(0, 140)}`,
+                                    fix.unobserved ? 'warning' : 'info'
                                 )
                                 fin = {ok: true, reason: fix.reason}
                                 break
@@ -1804,7 +1834,16 @@ export async function runAutoLoop(
                     }
                 }
                 await updateTaskFrontMatter(cwd, id, {state: 'completed'})
-                announceDone(active, `${id} complete — all ${entries.length} tasks done.`, 'info')
+                announceDone(
+                    active,
+                    `${id} complete — all ${entries.length} tasks done.`
+                        + (unobservedNote ?
+                            ' WARNING: the final integration gate was UNOBSERVED — it ran no '
+                            + 'dynamic check at all, so "complete" here means the statics '
+                            + 'passed and nothing more. Carried as debt for the next run.'
+                        :   ''),
+                    unobservedNote ? 'warning' : 'info'
+                )
                 return
             }
             // REFUSE to start on a conflicted tree: an unmerged index dooms every

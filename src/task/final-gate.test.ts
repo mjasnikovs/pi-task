@@ -15,6 +15,7 @@ import {
     discoverGateCommandLabels,
     discoverLockfileChecks,
     observabilityGapFailure,
+    unobservedVerdict,
     parseLsofListeners,
     parseNetstatListeners,
     parseSsListeners,
@@ -1277,5 +1278,118 @@ describe('observabilityGapFailure — full-skip is never a PASS (mx5 run 16)', (
         })
         expect(t).toContain('`bun`')
         expect(t).toContain('not spawnable')
+    })
+})
+
+/**
+ * The THIRD verdict (IAR1, validated 2026-07-27): zero discovery used to return
+ * `PASS — no integration command found (statics passed)`, so "we never checked" read
+ * exactly like "we checked and it was fine" — the same blindness class as run 16,
+ * entering through the door observabilityGapFailure deliberately leaves open
+ * (attempted === 0 → null). The two guards are complementary and BOTH are asserted
+ * here on the same inputs, because the run-16 guard must not be softened to make room
+ * for this one.
+ */
+describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IAR1)', () => {
+    const resolvable = () => true
+
+    test('truth table: attempted=0/observed=0 → gap guard silent, UNOBSERVED note raised', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 0,
+                observed: 0,
+                spawnFailures: 0,
+                runnerBins: [],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+        const t = unobservedVerdict({discovered: 0, observed: 0})
+        expect(t).toContain('UNOBSERVED')
+        expect(t).toContain('NOT a pass')
+        expect(t).toContain('no integration, lockfile or boot command was discoverable')
+        // Short enough to survive the run-level trail's 300-char slice intact —
+        // the durable record IS the point of this verdict.
+        expect(t!.length).toBeLessThanOrEqual(300)
+    })
+
+    test('truth table: attempted>0/observed=0/allSpawnFail → gap guard FAILS, and the note also fires', () => {
+        // The rank-0 failure owns this case; the note is redundant-but-consistent
+        // (the gate returns on the failure list before ever reading it).
+        expect(
+            observabilityGapFailure({
+                attempted: 3,
+                observed: 0,
+                spawnFailures: 3,
+                runnerBins: ['bun'],
+                runnerResolvable: resolvable
+            })
+        ).toContain('observability gap')
+        expect(unobservedVerdict({discovered: 3, observed: 0})).toContain('UNOBSERVED')
+    })
+
+    test('truth table: attempted>0/observed=0/toolGap → gap guard silent (env-gap contract), UNOBSERVED note names the count', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 3,
+                observed: 0,
+                spawnFailures: 0,
+                runnerBins: ['bun'],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+        const t = unobservedVerdict({discovered: 3, observed: 0})
+        expect(t).toContain('all 3 discovered command(s) skipped as environment gaps')
+        expect(t).toContain('NOT a pass')
+    })
+
+    test('truth table: attempted>0/observed>0 → both guards silent (a real PASS is untouched)', () => {
+        expect(
+            observabilityGapFailure({
+                attempted: 3,
+                observed: 1,
+                spawnFailures: 0,
+                runnerBins: ['bun'],
+                runnerResolvable: resolvable
+            })
+        ).toBeNull()
+        expect(unobservedVerdict({discovered: 3, observed: 1})).toBeNull()
+        // One observation out of many is still an observation: the verdict turns on
+        // whether ANYTHING dynamic ran, never on how much of it did.
+        expect(unobservedVerdict({discovered: 99, observed: 1})).toBeNull()
+    })
+
+    test('a tree with nothing discoverable (the IAR1 shape) carries the UNOBSERVED note, not a bare PASS', async () => {
+        const out = await runFinalIntegrationGate(makeDir())
+        // NON-BLOCKING by decision (see unobservedVerdict): ok stays true — there is
+        // nothing here a fix child could legitimately repair, and the harvest lever
+        // that would give such projects a command source was refuted.
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('UNOBSERVED')
+        expect(out.reason).toContain('UNOBSERVED')
+        expect(out.reason).not.toContain('no integration command found (statics passed)')
+    })
+
+    test('a tree whose only discovered command env-gap-skips is UNOBSERVED too — and is still not a FAIL (I2)', async () => {
+        const dir = makeDir({scripts: {test: "node -e 'process.exit(127)'"}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('all 1 discovered command(s) skipped')
+    })
+
+    test('I1: a project whose commands actually RUN is unaffected — no note, verbatim reason', async () => {
+        const dir = makeDir({scripts: {test: 'exit 0', build: 'exit 0'}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.reason).toBe('statics + `bun run test`, `bun run build` passed')
+    })
+
+    test('I1: a FAILing project is unaffected — the failure text is the whole reason', async () => {
+        const dir = makeDir({scripts: {test: 'echo "boom" && exit 1'}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.reason).toContain('`bun run test` exited 1')
+        expect(out.reason).not.toContain('UNOBSERVED')
     })
 })

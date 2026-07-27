@@ -2119,6 +2119,58 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
     })
 })
 
+// IAR1 (validated 2026-07-27): a gate that discovered nothing shipped `PASS — no
+// integration command found (statics passed)` TWICE while the run carried 2 and 3
+// open verify-FAIL debts. The gate itself now labels that outcome UNOBSERVED; here
+// the RUN must stop presenting it as a pass — different trail word, a warning, a
+// durable debt for the next run's gate, and a completion notice that says the
+// statics were all that was checked.
+test('runAutoLoop: an UNOBSERVED final gate completes the run but is never recorded as a PASS', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const note =
+            'UNOBSERVED — NOT a pass: no integration, lockfile or boot command was '
+            + 'discoverable here, so the gate ran nothing at all; statics passed, but this '
+            + 'run produced NO evidence that the assembled product builds, boots or works.'
+        const trail: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            finalGate: () => Promise.resolve({ok: true, reason: note, unobserved: note})
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        // Non-blocking: the run still completes and no picker is raised.
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        expect(captured.selects.some(s => /Final integration gate FAILED/.test(s.title))).toBe(
+            false
+        )
+        // …but the durable record says UNOBSERVED, never PASS.
+        expect(trail.some(l => l.startsWith('final-gate: UNOBSERVED — '))).toBe(true)
+        expect(trail.some(l => l.startsWith('final-gate: PASS'))).toBe(false)
+        // Carried forward: the next run's gate re-surfaces it (never auto-closes).
+        const debts = await readAcceptDebts(dir)
+        expect(debts).toHaveLength(1)
+        expect(debts[0]!.origin).toBe('final-gate')
+        expect(debts[0]!.reason).toContain('UNOBSERVED')
+        // Loud at both moments: the gate result and the completion announcement.
+        expect(
+            captured.notifies.some(
+                n => n.level === 'warning' && /observed NOTHING dynamic/.test(n.msg)
+            )
+        ).toBe(true)
+        const done = captured.notifies.find(n => /complete — all 1 tasks done/.test(n.msg))
+        expect(done!.level).toBe('warning')
+        expect(done!.msg).toContain('UNOBSERVED')
+    })
+})
+
 // mx5 run 13: the gate aggregates every section failure, ranked boot/render first.
 // The trail must carry EVERY entry and the picker question the full ranked list —
 // the user accepted run 13's FAIL having seen only the 1 failing CT test while the

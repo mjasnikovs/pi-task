@@ -72,6 +72,11 @@ const FIELD_SEP = '\t'
  *     `lsof` and the sandbox had neither) and no further attempt can move it. The
  *     run is allowed to converge on the REMAINING checks, carrying this one here
  *     so the next run's gate re-checks and re-surfaces it rather than losing it.
+ *     Also recorded for the ZERO-OBSERVATION verdict (final-gate.ts
+ *     unobservedVerdict): the whole gate observed nothing dynamic — usually because
+ *     the project's ecosystem exposes no discoverable command at all — so the run
+ *     completed on statics alone. Same treatment for the same reason: unprovable
+ *     here, so carry it forward rather than let a silent PASS bury it.
  *   - 'root-cause' — the task's verify FAILed because of a PRE-EXISTING defect in a
  *     file a DIFFERENT task created, which this task's own work never touched (mx5
  *     run 14: TASK_0007's `test/teardown.ts` TRUNCATE bug FAILed TASK_0013 and
