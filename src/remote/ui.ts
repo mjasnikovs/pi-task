@@ -63,12 +63,12 @@ ${STYLES}
     <button id="scroll-bottom" aria-label="Scroll to latest" title="Scroll to latest">&#x2193;</button>
   </div>
   <div id="status-panel"></div>
+  <div id="held-bar" style="display:none">
+    <span id="held-label"></span>
+    <span id="held-text"></span>
+    <button id="held-clear" type="button" title="Discard">&#x2715;</button>
+  </div>
   <div id="input-bar">
-    <div id="held-bar" style="display:none">
-      <span id="held-label"></span>
-      <span id="held-text"></span>
-      <button id="held-clear" type="button" title="Discard">&#x2715;</button>
-    </div>
     <div id="cmd-suggestions"></div>
     <textarea id="input" placeholder="type a message… (/ for commands)" rows="1" disabled></textarea>
     <button id="send" disabled>Send</button>

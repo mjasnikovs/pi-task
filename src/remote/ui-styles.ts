@@ -260,13 +260,14 @@ export const STYLES = `    :root {
       border-top: 1px solid var(--surface0);
       position: relative;
     }
-    /* Held mid-run input: what you typed is waiting for the next task turn. */
+    /* Held mid-run input: what you typed is waiting for the next task turn.
+       In normal flow, NOT absolutely positioned over the composer — as an
+       overlay it covered the task widget's progress row (caught in a real
+       browser against a live /task-auto run). */
     #held-bar {
-      position: absolute; bottom: 100%; left: 16px; right: 16px;
-      display: flex; align-items: center; gap: 8px;
-      background: var(--mantle); border: 1px solid var(--surface1);
-      border-bottom: none; border-radius: 8px 8px 0 0;
-      padding: 6px 10px; font-size: 12px; z-index: 9;
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+      background: var(--mantle); border-top: 1px solid var(--surface1);
+      padding: 6px 16px; font-size: 12px;
     }
     #held-label { color: var(--yellow); white-space: nowrap; }
     #held-text {
@@ -428,4 +429,5 @@ export const STYLES = `    :root {
       #status-panel { padding-left: calc((100% - 920px) / 2 + 12px); padding-right: calc((100% - 920px) / 2 + 12px); }
       #input-bar { padding-left: calc((100% - 920px) / 2); padding-right: calc((100% - 920px) / 2); }
       #cmd-suggestions { left: calc((100% - 920px) / 2 + 16px); right: calc((100% - 920px) / 2 + 16px); }
+      #held-bar { padding-left: calc((100% - 920px) / 2 + 16px); padding-right: calc((100% - 920px) / 2 + 16px); }
     }`

@@ -462,6 +462,44 @@ test('interrupt frame invokes the onInterrupt callback', async () => {
     srv.stop()
 })
 
+test('clear_held frame invokes the onClearHeld callback', async () => {
+    let cleared = 0
+    const srv = await startServer(
+        () => {},
+        () => '<html></html>',
+        undefined,
+        () => cleared++
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'clear_held'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(cleared).toBe(1)
+    ws.close()
+    srv.stop()
+})
+
+// Discarding held text is not a chat message: it must work while a prompt card
+// has the composer disabled, exactly like the Stop button does.
+test('clear_held is honored even while a prompt is pending', async () => {
+    setPrompt({type: 'prompt', id: '7', question: 'q', allowSkip: false})
+    let cleared = 0
+    const srv = await startServer(
+        () => {},
+        () => '<html></html>',
+        undefined,
+        () => cleared++
+    )
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`)
+    await new Promise(r => ws.on('open', r))
+    ws.send(JSON.stringify({type: 'clear_held'}))
+    await new Promise(r => setTimeout(r, 50))
+    expect(cleared).toBe(1)
+    ws.close()
+    srv.stop()
+    reset()
+})
+
 test('interrupt is honored even while a prompt is pending', async () => {
     setPrompt({type: 'prompt', id: '5', question: 'q', allowSkip: false})
     let interrupts = 0
