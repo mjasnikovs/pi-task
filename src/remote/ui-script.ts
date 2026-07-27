@@ -337,10 +337,12 @@ export function clientScript(wsUrl: string): string {
       updateStatusDot();
       const promptOpen = activePromptId !== null;
       inputEl.disabled = !connected || promptOpen;
+      // Keep these SHORT: the 1-row textarea clips a long placeholder at phone
+      // width (seen at 390px in a real browser).
       inputEl.placeholder = agentRunning
-        ? 'message the agent \\u2014 steers the live turn'
+        ? 'steers the live turn'
         : (runHolding
-            ? 'task running \\u2014 held for the next task turn'
+            ? 'held for the next task turn'
             : 'type a message\\u2026 (/ for commands)');
       if (agentRunning && !promptOpen) {
         // Send morphs into a red Stop that interrupts the running turn.
