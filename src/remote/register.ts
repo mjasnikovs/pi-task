@@ -6,7 +6,9 @@ import {
     dispatchRemoteNewSession,
     makeShimmedCtx,
     interruptAgent,
-    registerBridgeCommand
+    registerBridgeCommand,
+    registerRemoteOnlyCommand,
+    publishNotify
 } from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn} from './session-state.js'
@@ -118,6 +120,19 @@ export function registerRemote(pi: ExtensionAPI): void {
             }
             S.send = null
         }
+    })
+
+    // The browser advertises /compact, and pi's TUI intercepts `/compact` before any
+    // extension command dispatch — so it can only reach the session through the
+    // bridge, via the ctx.compact() action every ExtensionContext carries.
+    registerRemoteOnlyCommand('compact', (args, ctx) => {
+        const customInstructions = args.trim() || undefined
+        ctx.compact({
+            ...(customInstructions ? {customInstructions} : {}),
+            onComplete: () => publishNotify('Context compacted', 'info'),
+            onError: err => publishNotify(`Compaction failed: ${err.message}`, 'error')
+        })
+        publishNotify('Compacting context…', 'info')
     })
 
     // Bridge-registered (not pi.registerCommand) so `/remote stop` also works when

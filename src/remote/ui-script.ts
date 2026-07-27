@@ -147,12 +147,13 @@ export function clientScript(wsUrl: string): string {
       { name: '/task-auto-resume', desc: 'Resume the active /task-auto run' },
       { name: '/task-auto-cancel', desc: 'Stop the running /task-auto loop after the current task' },
       { name: '/new',              desc: 'Start a new session' },
-      { name: '/clear',            desc: 'Clear the conversation' },
       { name: '/compact',          desc: 'Compact context to save tokens' },
-      { name: '/help',             desc: 'Show available commands' },
-      { name: '/fast',             desc: 'Toggle fast mode' },
       { name: '/remote stop',      desc: 'Stop the remote server' },
     ];
+    // Every entry above must be dispatchable from the browser — /clear, /help and
+    // /fast used to sit here and were not (they are not pi commands at all), so
+    // picking one only ever produced "Unknown command". register.test.ts asserts
+    // this list stays a subset of what the bridge can actually run.
     let cmdActive = [];
     let cmdIndex = -1;
 

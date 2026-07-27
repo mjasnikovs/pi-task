@@ -261,6 +261,18 @@ export function registerBridgeCommand(pi: ExtensionAPI, name: string, def: Bridg
     pi.registerCommand(name, wrapped as never)
 }
 
+/** Record a command that exists ONLY on the remote bridge — no pi.registerCommand.
+ *  For browser-side equivalents of things the terminal already handles natively
+ *  (e.g. /compact, which pi's TUI intercepts before extension dispatch, so a real
+ *  pi command of that name could never fire and would only duplicate the entry in
+ *  the terminal's autocomplete). */
+export function registerRemoteOnlyCommand(
+    name: string,
+    handler: (args: string, ctx: ExtensionCommandContext) => unknown
+): void {
+    getBridge().commands.set(name, handler)
+}
+
 /** Start a new session in response to a remote `/new`. Reads the freshest
  *  command-capable ctx (currentCtx) at call time. If only a shimmed ctx is
  *  available, the newSession shim throws a clear error. */
