@@ -5,7 +5,8 @@ import {
     dispatchRemoteLine,
     dispatchRemoteNewSession,
     makeShimmedCtx,
-    interruptAgent
+    interruptAgent,
+    registerBridgeCommand
 } from './bridge.js'
 import {setupEvents} from './events.js'
 import {reset, addUserTurn} from './session-state.js'
@@ -119,7 +120,10 @@ export function registerRemote(pi: ExtensionAPI): void {
         }
     })
 
-    pi.registerCommand('remote', {
+    // Bridge-registered (not pi.registerCommand) so `/remote stop` also works when
+    // typed in the browser — the web UI advertises it, and while a /task-auto run
+    // holds the host command loop the browser is the only live input surface.
+    registerBridgeCommand(pi, 'remote', {
         description: 'Show the remote QR code & URLs.',
         handler: async (args, ctx) => {
             if (!getConfig().remote) {
