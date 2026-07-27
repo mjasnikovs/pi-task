@@ -1694,6 +1694,51 @@ export const PHASES: PhaseConfig[] = [
     }
 ]
 
+// INTEGRATION-DEPTH APPEND (2026-07-27): the lever proposed for this exact site —
+// deterministically append a known-runnable integration command to the VERIFY block
+// whenever a task's ACCEPTANCE claims runtime behaviour — is REFUTED at STEP 0 and was
+// NOT built. Nothing below is wired; this is the record.
+//
+// The defect is real and reproduces on four unrelated stacks. Measured with
+// scripts/verify-integration-depth-step0.ts (published metric regex in that file;
+// re-runnable, no model time): VERIFY blocks that boot or hit the real integrated
+// product — mx5 7/41, IAR1 3/10, godot-engine 2/20, runner 0/2, total 12/73 (16.4%).
+// That total OVERSTATES the truth: godot's two hits only match because the block greps
+// a URL out of CLAUDE.md, and IAR1's TASK_0006 curls a GitHub tarball to check a hash,
+// so genuine product integration is ~9/73 (~12%). The addressable class — runtime claim
+// in ACCEPTANCE, a boot command available with provenance, static-only VERIFY anyway —
+// is 29/73 (39.7%), clearing the task's 25% kill condition, but 27 of those 29 are mx5.
+//
+// What kills the lever is its input, not its premise. It needs a command that is
+// (1) provenance-bearing, (2) proven runnable, (3) terminating, and (4) integration-
+// shaped. Measured on scratch clones with scripts/integration-command-provenance.ts,
+// that intersection is EMPTY on every stack available here:
+//   mx5    `bun run dev` is the only command matching the metric and it does not
+//          terminate (probe killed it at 60s) — appending it hangs the verify child
+//          until the 15-minute command watchdog and then FAILs. Every command that DOES
+//          terminate (`bun run build` exit 0) fails the metric.
+//   godot  `godot --headless --quit` (0.8s, exit 0) and the real GUT runner (1.7s,
+//          exit 0) are both appendable — and neither matches the metric, which is
+//          web-shaped (curl/localhost/PORT=/run dev/http://). Nothing appendable can
+//          move the registered metric on a non-web stack, so the two-stack A/B the
+//          task requires is unsatisfiable by construction, not by sample size.
+//   IAR1   no candidate at all: cmake is absent from this box (the N5 finding).
+// R4 forbids swapping the metric after seeing results, so a broadened "boots the real
+// product" metric is a separate pre-registered experiment, not a rescue of this one.
+//
+// The deeper finding: on the stack holding 93% of the addressable mass, integration is
+// not a COMMAND. mx5's 7 integrated blocks are whole task-specific procedures — pick a
+// free port (3911/41234/42421/3001), export DATABASE_URL, boot, seed, log in, assert N
+// endpoints, tear down. A host-side append cannot synthesize that from provenance
+// (launch-contract.md records script NAMES only — no port, no health URL), and
+// synthesizing it from the task's own `## verified tooling` is the N5 fabrication road.
+// That machinery already exists in ONE place that owns ports, seeding and teardown: the
+// final gate's render check. The mx5-class defect belongs there (nexttask TASK 6), not
+// in per-task VERIFY blocks.
+//
+// Durable assets kept: both rigs above and their unit tests. Do NOT wire an append here
+// without a command source that satisfies all four properties at once.
+
 export async function postCommitPhase(
     phase: PhaseConfig,
     deps: PhaseDeps,
