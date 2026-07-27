@@ -13,6 +13,10 @@ export function clientScript(wsUrl: string): string {
     const inputEl = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const contextFill = document.getElementById('context-bar-fill');
+    const heldBar = document.getElementById('held-bar');
+    const heldLabel = document.getElementById('held-label');
+    const heldText = document.getElementById('held-text');
+    const heldClear = document.getElementById('held-clear');
     function setContextBar(usage) {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
       setStatusChip(usage);
@@ -308,6 +312,24 @@ export function clientScript(wsUrl: string): string {
       s.appendChild(e);
     }
 
+    // Lines typed while a task run owns the session. They are NOT sent yet: the
+    // run's phases are child processes, so sending would open a second turn
+    // beside the run. Held here and steered into the next task turn.
+    let held = [];
+    let runHolding = false;
+    function renderHeld() {
+      if (!held.length) { heldBar.style.display = 'none'; return; }
+      heldBar.style.display = 'flex';
+      heldLabel.textContent = held.length === 1
+        ? 'waiting for the task turn:'
+        : held.length + ' waiting for the task turn:';
+      heldText.textContent = held.join(' · ');
+    }
+    heldClear.addEventListener('click', () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'clear_held' }));
+    });
+
     // Reconcile the composer (input + Send/Stop button) with the current state.
     // The input is disabled ONLY while disconnected or a prompt card is open — a
     // running agent no longer locks it, so messages can steer the live turn.
@@ -316,8 +338,10 @@ export function clientScript(wsUrl: string): string {
       const promptOpen = activePromptId !== null;
       inputEl.disabled = !connected || promptOpen;
       inputEl.placeholder = agentRunning
-        ? 'message the agent — delivered mid-run'
-        : 'type a message\\u2026 (/ for commands)';
+        ? 'message the agent \\u2014 steers the live turn'
+        : (runHolding
+            ? 'task running \\u2014 held for the next task turn'
+            : 'type a message\\u2026 (/ for commands)');
       if (agentRunning && !promptOpen) {
         // Send morphs into a red Stop that interrupts the running turn.
         sendBtn.classList.add('stop');
@@ -858,6 +882,12 @@ export function clientScript(wsUrl: string): string {
 
     function handleMsg(msg) {
       switch (msg.type) {
+        case 'held':
+          held = msg.texts || [];
+          runHolding = !!msg.runActive;
+          renderHeld();
+          refreshComposer();
+          break;
         case 'snapshot': {
           // Authoritative full state on every (re)connect: replace the WHOLE view.
           // This is what kills duplicated transcript / stale-orphaned widgets —
@@ -878,6 +908,9 @@ export function clientScript(wsUrl: string): string {
           setModelName(msg.model);
           if (msg.context) setContextBar(msg.context); else contextFill.style.width = '0%';
           agentRunning = !!msg.agentRunning;
+          held = msg.held || [];
+          runHolding = !!msg.heldRunActive;
+          renderHeld();
           turnHadContent = !!(msg.live && msg.live.parts && msg.live.parts.length);
           if (msg.prompt) showPrompt(msg.prompt);
           refreshComposer();
@@ -1066,8 +1099,10 @@ export function clientScript(wsUrl: string): string {
       // user_message back to every client (us included), which renders the
       // bubble. Don't render it here too, or the sender sees it twice.
       // Mid-run the message steers the live turn (no state change here); when
-      // idle, optimistically show the spinner until agent_start lands.
-      if (!agentRunning) showThinking();
+      // idle, optimistically show the spinner until agent_start lands. While a
+      // task run holds the session nothing starts now — the line is held for the
+      // next task turn, so a spinner would be a lie.
+      if (!agentRunning && !runHolding) showThinking();
     }
 
     sendBtn.addEventListener('click', onSendClick);

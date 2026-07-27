@@ -70,7 +70,21 @@ export interface FakeCtxHandle {
      * genuine completion). Takes precedence over setStopReason while set.
      */
     setIdleEntries: (snapshots: unknown[][]) => void
+    /**
+     * Model a FOREIGN turn already streaming on the session (a chat message sent
+     * from the browser mid-run, a watchdog follow-up, …). pi's agent-session
+     * throws out of prompt() when a message arrives with no streamingBehavior
+     * while it is streaming, so any delivery that does not queue itself takes
+     * the whole run down — reproduced live on pi 0.82.1 (issue #8): a browser
+     * message during a child phase ended the run with "TASK_0001 failed: Agent
+     * is already processing."
+     */
+    setForeignTurnStreaming: (streaming: boolean) => void
 }
+
+/** Verbatim from pi's agent-session.prompt() — assert on it, don't paraphrase. */
+export const ALREADY_PROCESSING_MSG =
+    "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."
 
 /** Build a fake assistant message entry with the given stopReason. */
 export function assistantEntry(stopReason: string, errorMessage?: string): unknown {
@@ -113,6 +127,7 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     // returns the snapshot for the most recently settled turn.
     let idleEntries: unknown[][] | null = null
     let idleCount = 0
+    let foreignTurnStreaming = false
     const captured: FakeCtxHandle['captured'] = {
         notifies: [],
         inputs: [],
@@ -258,6 +273,15 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
                 }
             ),
             sendUserMessage: guard(async (spec: string, opts?: unknown) => {
+                // pi consults streamingBehavior ONLY while streaming; when idle it
+                // is ignored and a normal turn runs. So a delivery that always
+                // names one is safe, and one that never does is a live grenade.
+                if (
+                    foreignTurnStreaming
+                    && (opts as {deliverAs?: string} | undefined)?.deliverAs === undefined
+                ) {
+                    throw new Error(ALREADY_PROCESSING_MSG)
+                }
                 captured.sentMessages.push({spec, opts})
                 captured.calls.push('send')
             })
@@ -293,6 +317,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
         setIdleEntries: (snapshots: unknown[][]) => {
             idleEntries = snapshots
             idleCount = 0
+        },
+        setForeignTurnStreaming: (streaming: boolean) => {
+            foreignTurnStreaming = streaming
         }
     }
 }

@@ -1,6 +1,10 @@
 import {test, expect, describe, afterEach} from 'bun:test'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import {beginRun, heldInput, resetMidRunInput} from './mid-run-input.js'
+import {getBridge} from '../remote/bridge.js'
+import {setPrompt, reset as resetSessionState, _setSink} from '../remote/session-state.js'
 import {
+    forceDisarmCancelListener,
     isCancelSubmission,
     installCancelListener,
     armCancelListener,
@@ -19,10 +23,13 @@ function fakeUiCtx(initialText = ''): {
     setText: (t: string) => void
     text: () => string
     listenerCount: () => number
+    setIdle: (v: boolean) => void
 } {
     let text = initialText
+    let idle = true
     const handlers = new Set<Handler>()
     const ctx = {
+        isIdle: () => idle,
         ui: {
             onTerminalInput: (h: Handler) => {
                 handlers.add(h)
@@ -48,9 +55,14 @@ function fakeUiCtx(initialText = ''): {
             text = t
         },
         text: () => text,
-        listenerCount: () => handlers.size
+        listenerCount: () => handlers.size,
+        setIdle: (v: boolean) => {
+            idle = v
+        }
     }
 }
+
+_setSink(() => {}) // these tests never need the real broadcast
 
 afterEach(() => disarmCancelListener())
 
@@ -161,5 +173,121 @@ describe('armCancelListener across session replacement', () => {
         expect(isCancelListenerArmed()).toBe(false)
         f.send('\r')
         expect(fired).toBe(0)
+    })
+})
+
+// ─── Mid-run parity with the browser (issue #8) ───────────────────────────────
+//
+// Before this, everything below fed pi's pendingUserInputs queue: silent at the
+// time, then replayed all at once against a finished run.
+describe('mid-run terminal input', () => {
+    afterEach(() => {
+        forceDisarmCancelListener()
+        resetMidRunInput()
+        resetSessionState()
+        getBridge().commands.clear()
+    })
+
+    // Runs nest: /task-auto arms for the loop and each task inside arms again.
+    // A plain replace/disarm pair would leave the rest of the loop unarmed.
+    test('arming is refcounted so an inner run end does not unarm the loop', () => {
+        const f = fakeUiCtx('x')
+        armCancelListener(f.ctx, () => {})
+        armCancelListener(f.ctx) // inner task
+        disarmCancelListener()
+        expect(isCancelListenerArmed()).toBe(true)
+        disarmCancelListener()
+        expect(isCancelListenerArmed()).toBe(false)
+    })
+
+    test('a run that arms without a cancel callback still holds plain lines', () => {
+        const f = fakeUiCtx('also add retries')
+        armCancelListener(f.ctx) // a plain /task: no /task-auto ack to post
+        beginRun()
+        expect(f.send('\r')?.consume).toBe(true)
+        expect(heldInput()).toEqual(['also add retries'])
+    })
+
+    // Without an ack callback the literal command is not special-cased; it is a
+    // bridge command, so the generic dispatch runs it exactly like the browser.
+    test('/task-auto-cancel falls through to bridge dispatch when no ack is wired', () => {
+        const f = fakeUiCtx('/task-auto-cancel')
+        let ran = false
+        getBridge().commands.set('task-auto-cancel', () => {
+            ran = true
+        })
+        armCancelListener(f.ctx)
+        beginRun()
+        expect(f.send('\r')?.consume).toBe(true)
+        expect(ran).toBe(true)
+    })
+
+    test('a plain line is held for the next task turn, not queued by pi', () => {
+        const f = fakeUiCtx('also add retries')
+        armCancelListener(f.ctx, () => {})
+        beginRun()
+        expect(f.send('\r')?.consume).toBe(true)
+        expect(heldInput()).toEqual(['also add retries'])
+        expect(f.text()).toBe('') // editor cleared: nothing left to replay
+    })
+
+    test('a bridge slash command runs immediately, like it does from the browser', () => {
+        const f = fakeUiCtx('/task-list')
+        let ran = ''
+        getBridge().commands.set('task-list', args => {
+            ran = `list:${args}`
+        })
+        armCancelListener(f.ctx, () => {})
+        beginRun()
+        expect(f.send('\r')?.consume).toBe(true)
+        expect(ran).toBe('list:')
+        expect(heldInput()).toEqual([])
+    })
+
+    test('a pi builtin is left alone so /model still works', () => {
+        const f = fakeUiCtx('/model')
+        armCancelListener(f.ctx, () => {})
+        beginRun()
+        expect(f.send('\r')).toBeUndefined()
+        expect(heldInput()).toEqual([])
+        expect(f.text()).toBe('/model')
+    })
+
+    // The raw listener sees keys BEFORE the focused component, so an open dialog
+    // means this Enter is the user's ANSWER — swallowing it would break clarify
+    // questions and the ESC-steer prompt.
+    test('nothing is intercepted while a prompt dialog is open', () => {
+        const f = fakeUiCtx('some answer')
+        armCancelListener(f.ctx, () => {})
+        beginRun()
+        setPrompt({type: 'prompt', id: '1', question: 'which db?', allowSkip: true})
+        expect(f.send('\r')).toBeUndefined()
+        expect(heldInput()).toEqual([])
+    })
+
+    test('outside a run, pi handles input normally', () => {
+        const f = fakeUiCtx('just chatting')
+        armCancelListener(f.ctx, () => {})
+        expect(f.send('\r')).toBeUndefined()
+        expect(heldInput()).toEqual([])
+    })
+
+    test('while the agent streams, pi steers it — we stay out of the way', () => {
+        const f = fakeUiCtx('use the other API')
+        armCancelListener(f.ctx, () => {})
+        beginRun()
+        f.setIdle(false)
+        expect(f.send('\r')).toBeUndefined()
+        expect(heldInput()).toEqual([])
+    })
+
+    test('/task-auto-cancel still wins over every other rule', () => {
+        const f = fakeUiCtx('/task-auto-cancel')
+        let fired = 0
+        armCancelListener(f.ctx, () => fired++)
+        beginRun()
+        setPrompt({type: 'prompt', id: '1', question: 'which db?', allowSkip: true})
+        expect(f.send('\r')?.consume).toBe(true)
+        expect(fired).toBe(1)
     })
 })

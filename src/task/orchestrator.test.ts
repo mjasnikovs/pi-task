@@ -447,6 +447,27 @@ describe('runSingleTask', () => {
         })
     })
 
+    // Live repro (pi 0.82.1, local model, issue #8): a chat message sent from the
+    // browser during a child phase starts a host turn, and if it is still
+    // streaming when the pipeline delivers its spec, the delivery throws and the
+    // run dies — "TASK_0001 failed: Agent is already processing." Delivery must
+    // queue itself instead, whatever else happens to be on the session.
+    test('runSingleTask: a foreign streaming turn does not kill spec delivery', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx, captured, setForeignTurnStreaming} = makeFakeCtx(cwd)
+            setForeignTurnStreaming(true)
+            const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
+                spawnFn: scriptedSpawn(happyScripts())
+            })
+            expect(ok).toBe(true)
+            expect(taskId).toBe('TASK_0001')
+            expect(captured.sentMessages).toHaveLength(1)
+            expect((captured.sentMessages[0]?.opts as {deliverAs?: string}).deliverAs).toBe(
+                'followUp'
+            )
+        })
+    })
+
     test('runSingleTask: ESC then steering text continues the same task, not interrupted', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, setStopReason, captured} = makeFakeCtx(cwd)

@@ -61,7 +61,9 @@ import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-
 import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
-import {rearmCancelListener} from './cancel-input.js'
+import {armCancelListener, disarmCancelListener, rearmCancelListener} from './cancel-input.js'
+import {beginRun, endRun, takeHeldInput} from './mid-run-input.js'
+import {reportDroppedInput} from './dropped-input.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
@@ -210,6 +212,10 @@ export class TaskRunner {
     async run(): Promise<void> {
         const cwd = this._cwd
         const ctx = this._ctx
+        // Mid-run input holds instead of starting a competing turn from here on,
+        // and the terminal interception is armed for the same window.
+        beginRun()
+        armCancelListener(ctx)
 
         // Initialise or resume the TASK file.
         let id: string
@@ -344,6 +350,8 @@ export class TaskRunner {
         } finally {
             this._disposeWidget()
             clearActiveTask(this)
+            disarmCancelListener()
+            reportDroppedInput(endRun(), ctx)
         }
     }
 
@@ -356,7 +364,7 @@ export class TaskRunner {
         this._stopWidget = null
     }
 
-    private async _deliverSpec(ctx: ExtensionCommandContext): Promise<void> {
+    private async _deliverSpec(_ctx: ExtensionCommandContext): Promise<void> {
         const spec = this._specForDelivery()
         // Keep the rich status block alive across the implementation turn (the phase
         // widget was disposed at handoff). Awaited (/task-auto) stays armed across all
@@ -380,11 +388,11 @@ export class TaskRunner {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
         armImplWidget(meta, {oneShot: true})
-        if (ctx.isIdle()) {
-            piApi.sendUserMessage(spec)
-        } else {
-            piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
-        }
+        // Always name a delivery mode. pi ignores it when the session is idle and
+        // uses it when something else is streaming — so this one call is correct
+        // in both cases, where an isIdle() check is a check-then-act race that
+        // loses to any turn starting in between (issue #8).
+        piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
     }
 
     /**
@@ -638,7 +646,7 @@ export async function resumeAcrossCompactions(ctx: SteerCtx): Promise<number> {
         && !wasInterrupted(ctx)
         && endedAtCompactionBoundary(ctx)
     ) {
-        await ctx.sendUserMessage(CONTINUE_AFTER_COMPACTION)
+        await ctx.sendUserMessage(CONTINUE_AFTER_COMPACTION, {deliverAs: 'followUp'})
         await ctx.waitForIdle()
         resumes++
     }
@@ -768,7 +776,7 @@ export async function steerUntilDone(
         if (wd.consume() && (await awaitWatchdogFollowUp(ctx, wd))) continue
         const steer = await ask(ctx)
         if (steer === undefined || steer.trim().length === 0) return true // pause
-        await ctx.sendUserMessage(steer)
+        await ctx.sendUserMessage(steer, {deliverAs: 'followUp'})
         await ctx.waitForIdle()
     }
     return false
@@ -812,7 +820,8 @@ export async function runSingleTask(
                 rawPrompt,
                 opts.resumeId,
                 async spec => {
-                    await newCtx.sendUserMessage(spec)
+                    // Queue-or-run: never throws, whatever else is on the session (issue #8).
+                    await newCtx.sendUserMessage(spec, {deliverAs: 'followUp'})
                     if (opts.waitForImplementation) {
                         await newCtx.waitForIdle()
                         // A threshold auto-compaction parks the turn at idle WITHOUT
@@ -920,6 +929,31 @@ export async function markResumable(cwd: string, taskId: string): Promise<void> 
  * paused/failed) leaves the task resumable and tells the user to /task-resume.
  */
 export async function runGatedTask(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    raw: string,
+    opts: {resumeId?: string; deps?: GateDeps} = {}
+): Promise<void> {
+    // The GATES are part of the run, and they are child processes with the host
+    // session idle — the same hold window as the spec phases. Bracketing only
+    // TaskRunner would leave verify/enforce looking like "no run", which a live
+    // run on pi 0.82.1 showed as runActive=false while the widget still read
+    // "verifying work" (issue #8). The body has many early returns, so the
+    // bracket lives in this wrapper rather than in a dozen places.
+    beginRun()
+    // Arm the raw-stdin interception for the WHOLE run. Without this a plain
+    // /task had no terminal path at all — only /task-auto armed one — so a line
+    // typed during it went into pi's queue and fired after the run (seen live).
+    armCancelListener(ctx)
+    try {
+        await runGatedTaskInner(ctx, cwd, raw, opts)
+    } finally {
+        disarmCancelListener()
+        reportDroppedInput(endRun(), ctx)
+    }
+}
+
+async function runGatedTaskInner(
     ctx: ExtensionCommandContext,
     cwd: string,
     raw: string,
@@ -1140,6 +1174,20 @@ async function handleTaskCancel(_args: string, ctx: ExtensionCommandContext): Pr
 export function registerTask(pi: ExtensionAPI): void {
     piApi = pi
     setupImplWidget(pi)
+    // Deliver whatever the user typed while the run held the session, at the
+    // first moment there is a live turn to steer. agent_start fires as streaming
+    // begins, so `steer` is accepted here; when nothing is held this is a no-op,
+    // which is every turn outside a run.
+    pi.on('agent_start', () => {
+        const held = takeHeldInput()
+        if (held === null) return
+        try {
+            pi.sendUserMessage(held, {deliverAs: 'steer'})
+            publishNotify('Delivered your message to the running task.', 'info')
+        } catch (err) {
+            publishNotify(`Could not deliver your message: ${(err as Error).message}`, 'warning')
+        }
+    })
     registerBridgeCommand(pi, 'task', {
         description: 'Start a new task. Usage: /task <prompt>',
         handler: handleTask

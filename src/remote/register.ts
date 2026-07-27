@@ -11,7 +11,7 @@ import {
     publishNotify
 } from './bridge.js'
 import {setupEvents} from './events.js'
-import {reset, addUserTurn} from './session-state.js'
+import {reset, addUserTurn, setHeld} from './session-state.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
@@ -23,6 +23,13 @@ import {
 } from './tailscale.js'
 import type {ServeResult} from './tailscale.js'
 import {isAgentIdle} from './state.js'
+import {
+    holdInput,
+    isRunActive,
+    clearHeldInput,
+    heldInput,
+    setHeldInputListener
+} from '../task/mid-run-input.js'
 import type {ServerHandle} from './server.js'
 
 // Shared state that persists across jiti re-evaluations on session switches.
@@ -37,6 +44,31 @@ const _g = globalThis as unknown as Record<string, Shared | undefined>
 if (!_g.__piRemote) _g.__piRemote = {server: null, send: null, serveResult: null}
 
 const S = _g.__piRemote!
+
+/**
+ * Where a plain (non-slash) browser line goes. Exported so the decision is
+ * tested as SHIPPED rather than as a copy — the three branches are the whole of
+ * issue #8, and the middle one is the regression.
+ */
+export function routePlainLine(
+    plain: string,
+    send: (text: string, opts?: {deliverAs: 'steer' | 'followUp'}) => void
+): void {
+    addUserTurn(plain)
+    if (!isAgentIdle()) {
+        // A live turn: steer it (inject into the current generation) so the
+        // nudge lands immediately.
+        send(plain, {deliverAs: 'steer'})
+    } else if (isRunActive()) {
+        // Idle, but a task run owns the session — which is most of a run, since
+        // the spec phases and every gate are child processes. Sending here opens
+        // a SECOND turn beside the run; that is what killed a live run on pi
+        // 0.82.1. Hold it for the next task turn instead.
+        holdInput(plain)
+    } else {
+        send(plain)
+    }
+}
 
 export function registerRemote(pi: ExtensionAPI): void {
     async function ensureServer(): Promise<ServerHandle> {
@@ -54,22 +86,12 @@ export function registerRemote(pi: ExtensionAPI): void {
                     return
                 }
                 dispatchRemoteLine(text, {
-                    onPlain: plain => {
-                        addUserTurn(plain)
-                        if (isAgentIdle()) {
-                            S.send?.(plain)
-                        } else {
-                            // Mid-run: steer the live turn (inject the message into the
-                            // current generation) rather than queueing it for after, so a
-                            // remote nudge lands immediately — matching the composer's
-                            // "delivered mid-run" affordance.
-                            S.send?.(plain, {deliverAs: 'steer'})
-                        }
-                    }
+                    onPlain: plain => routePlainLine(plain, (t, opts) => S.send?.(t, opts))
                 })
             },
             wsUrl => html(wsUrl),
-            interruptAgent
+            interruptAgent,
+            clearHeldInput
         )
         // Hands-off HTTPS: point Tailscale serve at our port so phones get a
         // secure context. Best-effort — any failure degrades to the http URL.
@@ -87,6 +109,8 @@ export function registerRemote(pi: ExtensionAPI): void {
         const bridge = getBridge()
         reset()
         setupEvents(pi)
+        // Mirror held mid-run input into the browser composer.
+        setHeldInputListener(() => setHeld(heldInput(), isRunActive()))
         // Seed a shimmed ctx so commands that don't need newSession (/task-list,
         // /task-cancel, /task-auto-cancel) work immediately from the remote without
         // any terminal interaction. Only overwrite if null or already shimmed —

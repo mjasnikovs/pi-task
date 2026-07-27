@@ -130,7 +130,8 @@ export function listenWithRetry(
 export async function startServer(
     onMessage: MessageCallback,
     getHtml: (wsUrl: string) => string,
-    onInterrupt?: () => void
+    onInterrupt?: () => void,
+    onClearHeld?: () => void
 ): Promise<ServerHandle> {
     const ips = getLocalIPs()
     const ip = ips.primary
@@ -245,6 +246,10 @@ export async function startServer(
             }
             if (msg.type === 'prompt_answer') {
                 answerPrompt(msg.id, msg.value)
+                return
+            }
+            if (msg.type === 'clear_held') {
+                onClearHeld?.()
                 return
             }
             // type === 'message': ignore while a prompt is pending (composer is

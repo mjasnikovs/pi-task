@@ -33,6 +33,8 @@ export interface SnapshotMessage {
     prompt: PromptMessage | null
     context: ContextUsage | null
     model: string | null
+    held: string[]
+    heldRunActive: boolean
 }
 
 interface SessionState {
@@ -45,6 +47,13 @@ interface SessionState {
     context: ContextUsage | null
     /** Human-readable active model name (e.g. "Qwen3.6 27B"), for the header chip. */
     model: string | null
+    /** Lines typed while a task run owned the session, waiting for the next task
+     *  turn to steer. Mirrors src/task/mid-run-input.ts so the browser can show
+     *  what is pending instead of leaving the user guessing. */
+    held: string[]
+    /** True while a task run owns the session, so the composer can say what a
+     *  typed line will do BEFORE the user types it. */
+    heldRunActive: boolean
     /** tool start timestamps (ms), keyed by toolCallId — kept off the serialized
      *  parts so it never reaches the client; used only to compute elapsedMs. */
     toolStarts: Record<string, number>
@@ -64,6 +73,8 @@ function fresh(): SessionState {
         prompt: null,
         context: null,
         model: null,
+        held: [],
+        heldRunActive: false,
         toolStarts: {},
         sink: wsBroadcast
     }
@@ -210,6 +221,14 @@ export function addUserTurn(text: string): void {
     s.sink({type: 'user_message', text})
 }
 
+/** Mirror the held-input list to every browser. */
+export function setHeld(texts: string[], runActive: boolean): void {
+    const s = getState()
+    s.held = [...texts]
+    s.heldRunActive = runActive
+    s.sink({type: 'held', texts: s.held, runActive})
+}
+
 export function addError(message: string): void {
     const s = getState()
     s.history.addError(message)
@@ -256,6 +275,8 @@ export function setContext(context: ContextUsage): void {
 /** Wipe everything (new session) and tell connected clients to clear. */
 export function reset(): void {
     const s = getState()
+    s.held = []
+    s.heldRunActive = false
     s.history = new HistoryBuffer(20)
     s.live = null
     s.agentRunning = false
@@ -280,6 +301,8 @@ export function snapshot(): SnapshotMessage {
         taskWidgetData: s.taskWidgetData,
         prompt: s.prompt,
         context: s.context,
-        model: s.model
+        model: s.model,
+        held: [...s.held],
+        heldRunActive: s.heldRunActive
     }
 }

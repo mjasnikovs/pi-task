@@ -54,6 +54,8 @@ import type {TaskFrontMatter} from './task-types.js'
 import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
 import {armCancelListener, disarmCancelListener} from './cancel-input.js'
+import {beginRun, endRun} from './mid-run-input.js'
+import {reportDroppedInput} from './dropped-input.js'
 import {refineExistingFilesBlock} from './phases.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
@@ -2056,6 +2058,7 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         return
     }
     autoRunning = true
+    beginRun() // the whole loop owns the session, not just the task inside it
     // Take delivery of a typed /task-auto-cancel for the WHOLE run, planning
     // included — planning is children too, so the host is not streaming and the
     // ordinary command path cannot reach us.
@@ -2090,6 +2093,7 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         await runAutoLoop(ctx, cwd, id, deps)
     } finally {
         autoRunning = false
+        reportDroppedInput(endRun(), ctx)
         disarmCancelListener()
     }
 }
@@ -2119,6 +2123,7 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
     const id = candidate.id
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
+    beginRun() // the whole loop owns the session, not just the task inside it
     armTerminalCancel(ctx)
     try {
         // Reuse the interrupted run's research-cache id, dropping only the entries whose
@@ -2140,6 +2145,7 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
         await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
     } finally {
         autoRunning = false
+        reportDroppedInput(endRun(), ctx)
         disarmCancelListener()
     }
 }

@@ -48,6 +48,15 @@ export interface NotifyMessage {
     level: 'info' | 'warning' | 'error'
 }
 
+/** Lines the user typed while a task run owned the session, waiting for the next
+ *  task turn. Shown in the composer so a held message is never a silent one. */
+export interface HeldMessage {
+    type: 'held'
+    texts: string[]
+    /** True while a task run owns the session (drives the composer placeholder). */
+    runActive: boolean
+}
+
 export interface ViewerMessage {
     type: 'viewer'
     title: string
@@ -86,6 +95,7 @@ export type ServerMessage =
     | WidgetMessage
     | NotifyMessage
     | ViewerMessage
+    | HeldMessage
     | ContextMessage
     | ResetMessage
     | import('./session-state.js').SnapshotMessage
@@ -104,13 +114,22 @@ export interface ClientPromptAnswer {
 export interface ClientInterrupt {
     type: 'interrupt'
 }
-export type ClientMessage = ClientChatMessage | ClientPromptAnswer | ClientInterrupt
+/** Drop everything held for the next task turn (the composer's ✕). */
+export interface ClientClearHeld {
+    type: 'clear_held'
+}
+export type ClientMessage =
+    | ClientChatMessage
+    | ClientPromptAnswer
+    | ClientInterrupt
+    | ClientClearHeld
 
 export function isClientMessage(x: unknown): x is ClientMessage {
     if (typeof x !== 'object' || x === null) return false
     const m = x as Record<string, unknown>
     if (m.type === 'message') return typeof m.text === 'string'
     if (m.type === 'interrupt') return true
+    if (m.type === 'clear_held') return true
     if (m.type === 'prompt_answer') {
         return typeof m.id === 'string' && (m.value === undefined || typeof m.value === 'string')
     }

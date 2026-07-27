@@ -260,6 +260,24 @@ export const STYLES = `    :root {
       border-top: 1px solid var(--surface0);
       position: relative;
     }
+    /* Held mid-run input: what you typed is waiting for the next task turn. */
+    #held-bar {
+      position: absolute; bottom: 100%; left: 16px; right: 16px;
+      display: flex; align-items: center; gap: 8px;
+      background: var(--mantle); border: 1px solid var(--surface1);
+      border-bottom: none; border-radius: 8px 8px 0 0;
+      padding: 6px 10px; font-size: 12px; z-index: 9;
+    }
+    #held-label { color: var(--yellow); white-space: nowrap; }
+    #held-text {
+      color: var(--subtext0); overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; flex: 1;
+    }
+    #held-clear {
+      background: none; border: none; color: var(--subtext0);
+      cursor: pointer; font-size: 13px; padding: 0 2px;
+    }
+    #held-clear:hover { color: var(--red); }
     #cmd-suggestions {
       display: none; position: absolute; bottom: 100%; left: 16px; right: 16px;
       background: var(--mantle); border: 1px solid var(--surface1);
