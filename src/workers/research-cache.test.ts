@@ -277,3 +277,110 @@ test('resume with caching disabled clears the token and reuses nothing', async (
     expect(res.reused).toBe(false)
     expect(process.env[RESEARCH_RUN_ID_ENV]).toBeUndefined()
 })
+
+// ─── concurrent writers (nexttask TASK 4) ────────────────────────────────────
+//
+// storeResearch is a read-modify-write over one file, and its writers are
+// concurrent on two axes: the research tools are registered executionMode
+// 'parallel' (one child issues 4-6 docs calls in the same millisecond) and the
+// research phase runs four worker children as separate PROCESSES. Both axes are
+// covered below; an in-process-only fix passes the first test and fails the
+// second, which is the one that matches production.
+
+const CONCURRENT = 40
+
+function entryCount(cwd: string): number {
+    const raw = JSON.parse(fs.readFileSync(researchCacheFile(cwd), 'utf8')) as {
+        entries: Record<string, unknown>
+    }
+    return Object.keys(raw.entries).length
+}
+
+test('40 concurrent stores in ONE process all survive (was: 1 survivor)', async () => {
+    const cwd = tmpCwd()
+    await Promise.all(
+        Array.from({length: CONCURRENT}, (_, i) => storeResearch(cwd, 'r', `k${i}`, `v${i}`, {}))
+    )
+    expect(entryCount(cwd)).toBe(CONCURRENT)
+    expect(await lookupResearch(cwd, 'r', 'k7')).toEqual({text: 'v7', details: {}})
+})
+
+test('concurrent stores from separate PROCESSES all survive (was: 11 of 40)', async () => {
+    const cwd = tmpCwd()
+    const child = path.join(cwd, 'child.ts')
+    const mod = path.join(import.meta.dir, 'research-cache.ts')
+    await fsp.writeFile(
+        child,
+        `import {storeResearch} from ${JSON.stringify(mod)}\n`
+            + 'const [cwd, tag] = process.argv.slice(2)\n'
+            + 'for (let i = 0; i < 10; i++) await storeResearch(cwd, "r", `${tag}-${i}`, "v", {})\n',
+        'utf8'
+    )
+    const codes = await Promise.all(
+        ['a', 'b', 'c', 'd'].map(
+            tag =>
+                Bun.spawn(['bun', 'run', child, cwd, tag], {stdout: 'pipe', stderr: 'pipe'}).exited
+        )
+    )
+    expect(codes).toEqual([0, 0, 0, 0])
+    expect(entryCount(cwd)).toBe(CONCURRENT)
+})
+
+// ─── I1: bounded wait, never a deadlock and never a stall ────────────────────
+
+test('a store whose lock is HELD skips the write and returns, it does not hang', async () => {
+    const cwd = tmpCwd()
+    await fsp.mkdir(path.join(cwd, '.pi-tasks'), {recursive: true})
+    await fsp.mkdir(`${researchCacheFile(cwd)}.lock`)
+    const started = Date.now()
+    await storeResearch(cwd, 'r', 'k', 'v', {})
+    const waited = Date.now() - started
+    // Skipped, not written — and it gave up inside the acquisition timeout.
+    expect(await lookupResearch(cwd, 'r', 'k')).toBeUndefined()
+    expect(waited).toBeLessThan(10_000)
+})
+
+test('an ABANDONED lock is reclaimed, so a crashed writer cannot wedge the run', async () => {
+    const cwd = tmpCwd()
+    await fsp.mkdir(path.join(cwd, '.pi-tasks'), {recursive: true})
+    const lock = `${researchCacheFile(cwd)}.lock`
+    await fsp.mkdir(lock)
+    const ancient = new Date(Date.now() - 10 * 60_000)
+    await fsp.utimes(lock, ancient, ancient)
+    await storeResearch(cwd, 'r', 'k', 'v', {})
+    expect(await lookupResearch(cwd, 'r', 'k')).toEqual({text: 'v', details: {}})
+})
+
+test('the lock is released after a store, leaving nothing behind', async () => {
+    const cwd = tmpCwd()
+    await storeResearch(cwd, 'r', 'k', 'v', {})
+    expect(fs.existsSync(`${researchCacheFile(cwd)}.lock`)).toBe(false)
+})
+
+// ─── I3: eviction, invalidation and resume unchanged by the locking ──────────
+
+test('eviction still keeps the newest MAX_ENTRIES by write time', async () => {
+    const cwd = tmpCwd()
+    // 260 sequential stores: the cap is 250, so the ten oldest must be gone and
+    // the newest must all be present.
+    for (let i = 0; i < 260; i++) await storeResearch(cwd, 'r', `k${i}`, `v${i}`, {})
+    expect(entryCount(cwd)).toBe(250)
+    expect(await lookupResearch(cwd, 'r', 'k0')).toBeUndefined()
+    expect(await lookupResearch(cwd, 'r', 'k9')).toBeUndefined()
+    expect(await lookupResearch(cwd, 'r', 'k259')).toEqual({text: 'v259', details: {}})
+})
+
+test('a resume prunes and reuses correctly while holding the same lock a store takes', async () => {
+    const cwd = tmpCwd()
+    await seed(cwd, {hono: '^4.6.0'})
+    await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
+    await writeManifest(cwd, {hono: '^4.7.0'})
+    const res = await resumeResearchRun(cwd, true)
+    expect(res.reused).toBe(true)
+    expect(res.runId).toBe('run-orig')
+    expect(res.dropped).toBe(1)
+    expect(res.entries).toBe(1)
+    expect(await lookupResearch(cwd, 'run-orig', DOCS_HONO)).toBeUndefined()
+    expect(await lookupResearch(cwd, 'run-orig', SEARCH_KEY)).toBeDefined()
+    expect(fs.existsSync(`${researchCacheFile(cwd)}.lock`)).toBe(false)
+})

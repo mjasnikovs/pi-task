@@ -62,6 +62,34 @@
  * to tell its docs entries apart, so it still falls back to a fresh id: every
  * inconclusive path costs time, never correctness.
  *
+ * CONCURRENT WRITERS (nexttask TASK 4). Storing is a read-modify-write over ONE file,
+ * and its writers are concurrent on two axes at once: makeWorkerTool registers the
+ * research tools with executionMode 'parallel', so a single child can issue 4-6 docs
+ * calls in the same millisecond, and the research phase runs four worker children as
+ * separate PROCESSES. Unsynchronised, that is a classic lost update — last writer wins,
+ * and everything read before it is discarded. Measured on this box: 40 concurrent stores
+ * left 1 entry in-process and 11 of 40 across four child processes.
+ *
+ * So the read-modify-write is serialised twice over: an in-process queue per cache file
+ * (siblings inside one child never touch the filesystem lock at all) wrapped in an
+ * advisory lock directory beside the file, which is what makes it hold across processes.
+ * An atomic `mkdir` is the lock — it is the one primitive that both POSIX and Windows
+ * give us with create-or-fail semantics and no fd bookkeeping.
+ *
+ * The lock is BEST-EFFORT LIKE EVERYTHING ELSE HERE: acquisition is bounded, and a
+ * writer that cannot get in within the timeout SKIPS its store rather than waiting. A
+ * skipped store costs one re-lookup later; a blocked store would stall a worker, which
+ * this cache is never allowed to do.
+ *
+ * WHAT THE FIX IS WORTH, measured before it was built (scripts/research-cache-
+ * write-loss-step0.ts, re-runnable): the lost updates are real but nearly free. mx5 lost
+ * ~70 of 204 attempted keys, all in the docs channel — and asked ZERO of them twice, so
+ * nothing lost was ever wanted again. IAR1 and godot-engine retained more distinct keys
+ * than the logs show attempted, i.e. lost nothing at all. Estimated recovery on all three
+ * projects: 0s per run. This is a correctness fix, not a performance one; it stops the
+ * cache silently discarding work, and it will matter to a run whose research phase does
+ * repeat itself. Do not oversell it.
+ *
  * Stored under `.pi-tasks/` (sibling of env-notes.md / contracts.md), which the
  * git-state guard and discardEdits both exclude. Best-effort throughout: any I/O or
  * parse failure falls back to a live fetch — the cache only ever saves time, it can
@@ -80,6 +108,24 @@ export const RESEARCH_RUN_ID_ENV = 'PI_TASK_RUN_ID'
  * lookups (dozens), so a real run never evicts a still-useful digest.
  */
 const MAX_ENTRIES = 250
+
+/** Lock directory guarding the cache file's read-modify-write, created beside it. */
+const LOCK_SUFFIX = '.lock'
+/**
+ * How long a writer waits for the lock before giving up and skipping its store. Sized
+ * well above a real critical section (one small read + one small write, sub-millisecond
+ * at these file sizes) and well below anything a worker would notice.
+ */
+const LOCK_TIMEOUT_MS = 2_000
+/** Poll interval while the lock is held by someone else. */
+const LOCK_POLL_MS = 10
+/**
+ * A lock older than this is treated as abandoned and removed. Two writers can both
+ * decide that and both proceed, which degrades exactly to the pre-lock behaviour (one
+ * lost update) — strictly better than a crashed child wedging the cache for the rest of
+ * the run. Sized far above the critical section, so a live holder is never stolen from.
+ */
+const LOCK_STALE_MS = 30_000
 
 /**
  * One cached worker result: the focused answer text plus its structured details, and —
@@ -232,10 +278,27 @@ export async function resumeResearchRun(
         delete process.env[RESEARCH_RUN_ID_ENV]
         return {runId: undefined, reused: false, entries: 0, dropped: 0}
     }
+    // Prune under the same lock a store takes. In practice a resume runs before this
+    // run's first worker child exists, so there is nothing to race — but the prune is a
+    // read-modify-write over the same file, and it costs nothing to make that true by
+    // construction rather than by scheduling. Falls back to an unlocked prune if the
+    // lock is unavailable, which is exactly the pre-lock behaviour.
+    const pruned = (await withCacheLock(cwd, () => pruneCache(cwd))) ?? (await pruneCache(cwd))
+    if (!pruned) return {runId: configureResearchRun(true), reused: false, entries: 0, dropped: 0}
+    process.env[RESEARCH_RUN_ID_ENV] = pruned.runId
+    return {runId: pruned.runId, reused: true, entries: pruned.entries, dropped: pruned.dropped}
+}
+
+/**
+ * Drop the entries the manifest has invalidated and persist the result, returning the
+ * reusable run id — or null when there is nothing to reason with (no cache file, or one
+ * predating per-entry package provenance).
+ */
+async function pruneCache(
+    cwd: string
+): Promise<{runId: string; entries: number; dropped: number} | null> {
     const file = await readCacheFile(cwd)
-    if (!file || file.pkgv !== PKG_PROVENANCE_VERSION) {
-        return {runId: configureResearchRun(true), reused: false, entries: 0, dropped: 0}
-    }
+    if (!file || file.pkgv !== PKG_PROVENANCE_VERSION) return null
     const deps = await depsMap(cwd)
     const kept: Record<string, CacheEntry> = {}
     let dropped = 0
@@ -246,8 +309,7 @@ export async function resumeResearchRun(
     // Persist the pruning now, so a crash between here and the first store cannot leave
     // stale digests behind under a reused id.
     if (dropped > 0) await writeCacheFile(cwd, {runId: file.runId, entries: kept, pkgv: file.pkgv})
-    process.env[RESEARCH_RUN_ID_ENV] = file.runId
-    return {runId: file.runId, reused: true, entries: Object.keys(kept).length, dropped}
+    return {runId: file.runId, entries: Object.keys(kept).length, dropped}
 }
 
 async function readCacheFile(cwd: string): Promise<CacheFile | null> {
@@ -297,6 +359,84 @@ async function writeCacheFile(cwd: string, out: CacheFile): Promise<void> {
 }
 
 /**
+ * Serialises this process's own writers per cache file, so the 4-6 parallel tool calls
+ * a single research child issues in one turn queue in memory instead of contending for
+ * the lock directory. Purely an optimisation: the cross-process lock below is what makes
+ * the store correct.
+ */
+const inProcessQueues = new Map<string, Promise<void>>()
+
+/**
+ * Take the advisory lock, or return false once `deadline` passes. Never throws: an
+ * unexpected filesystem error is reported as "not acquired", which the caller turns
+ * into a skipped store.
+ */
+async function acquireLock(lockPath: string, deadline: number): Promise<boolean> {
+    for (;;) {
+        try {
+            // mkdir is create-or-fail: exactly one caller can win it.
+            await fsp.mkdir(lockPath)
+            return true
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false
+            try {
+                const st = await fsp.stat(lockPath)
+                if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+                    await fsp.rmdir(lockPath).catch(() => {})
+                    if (Date.now() >= deadline) return false
+                    continue
+                }
+            } catch {
+                // vanished between mkdir and stat ⇒ the holder just released it
+                if (Date.now() >= deadline) return false
+                continue
+            }
+            if (Date.now() >= deadline) return false
+            await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
+        }
+    }
+}
+
+/**
+ * Run `fn` as the sole writer of this project's cache file, across both the calling
+ * process's own parallel tool calls and every other pi child sharing the tree. Returns
+ * `fn`'s result, or undefined when the lock could not be taken in time — the caller then
+ * SKIPS the write (invariant I1: bounded wait, never a deadlock and never a stall).
+ */
+async function withCacheLock<T>(cwd: string, fn: () => Promise<T>): Promise<T | undefined> {
+    const file = researchCacheFile(cwd)
+    const prior = inProcessQueues.get(file) ?? Promise.resolve()
+    let release!: () => void
+    const mine = new Promise<void>(resolve => (release = resolve))
+    // The chain is rejection-free by construction: `mine` only ever resolves, and the
+    // root is Promise.resolve(), so no waiter can inherit a rejection.
+    const tail = prior.then(() => mine)
+    inProcessQueues.set(file, tail)
+    await prior.catch(() => {})
+
+    try {
+        const lockPath = `${file}${LOCK_SUFFIX}`
+        let held = false
+        try {
+            await fsp.mkdir(tasksDir(cwd), {recursive: true})
+            held = await acquireLock(lockPath, Date.now() + LOCK_TIMEOUT_MS)
+        } catch {
+            held = false
+        }
+        if (!held) return undefined
+        try {
+            return await fn()
+        } finally {
+            await fsp.rmdir(lockPath).catch(() => {})
+        }
+    } finally {
+        release()
+        // Keep the map from growing one entry per project for the process's lifetime.
+        if (inProcessQueues.get(file) === tail) inProcessQueues.delete(file)
+    }
+}
+
+/**
  * Store a successful result under `key` for the current run. A file written for a
  * different run id is discarded and started fresh (first write of a new run drops the
  * prior run's contents — self-healing per-run isolation without an explicit clear).
@@ -318,23 +458,28 @@ export async function storeResearch(
     pkg?: string
 ): Promise<void> {
     try {
-        const existing = await readCacheFile(cwd)
-        const entries = existing && existing.runId === runId ? existing.entries : {}
+        // Resolved OUTSIDE the critical section: it reads package.json, which no other
+        // writer can be mutating, and keeping it out holds the lock for the file
+        // read/write alone. The version is still the one current at store time.
         const pkgVersion = pkg === undefined ? undefined : await declaredVersion(cwd, pkg)
-        entries[key] = {
-            text,
-            details,
-            at: Date.now(),
-            ...(pkg === undefined ? {} : {pkg}),
-            ...(pkgVersion === undefined ? {} : {pkgVersion})
-        }
-        // Evict oldest by write time if over the cap.
-        const keys = Object.keys(entries)
-        if (keys.length > MAX_ENTRIES) {
-            const ordered = keys.sort((a, b) => entries[a].at - entries[b].at)
-            for (const k of ordered.slice(0, keys.length - MAX_ENTRIES)) delete entries[k]
-        }
-        await writeCacheFile(cwd, {runId, entries, pkgv: PKG_PROVENANCE_VERSION})
+        await withCacheLock(cwd, async () => {
+            const existing = await readCacheFile(cwd)
+            const entries = existing && existing.runId === runId ? existing.entries : {}
+            entries[key] = {
+                text,
+                details,
+                at: Date.now(),
+                ...(pkg === undefined ? {} : {pkg}),
+                ...(pkgVersion === undefined ? {} : {pkgVersion})
+            }
+            // Evict oldest by write time if over the cap.
+            const keys = Object.keys(entries)
+            if (keys.length > MAX_ENTRIES) {
+                const ordered = keys.sort((a, b) => entries[a].at - entries[b].at)
+                for (const k of ordered.slice(0, keys.length - MAX_ENTRIES)) delete entries[k]
+            }
+            await writeCacheFile(cwd, {runId, entries, pkgv: PKG_PROVENANCE_VERSION})
+        })
     } catch {
         // best-effort cache
     }
