@@ -1,0 +1,229 @@
+NEXTTASK — validation debt from v0.23.1 (written 2026-07-28)
+============================================================
+
+WHAT SHIPPED IN v0.23.1 (commit 24e7721, published to npm)
+  1. decideAdoption rejects zero-gain growth (coverage-loop.ts)
+  2. empty decompose is suspect at any spec size + separate retry budgets
+     (auto-orchestrator.ts)
+  3. granularityFloor off below MIN_REQUIREMENTS_FOR_PLAN_SHAPE
+     (decompose-granularity.ts)
+  Full suite green: 2493 pass / 1 skip / 0 fail. Lint clean.
+
+READ FIRST
+  Memory: ~/.claude/projects/-home-edgars--pi-agent-extensions-pi-task/memory/
+          coverage-loop-zero-gain-inflation.md
+  It carries the full diagnosis, the A/B history, and the killed alternatives.
+  Do NOT re-derive them; do NOT re-test candidates A or B (both are dead, see
+  the header comment of scripts/live-coverage-adoption-ab.ts for why).
+
+ENVIRONMENT REQUIRED FOR EVERY LIVE TASK BELOW
+  llama-server must be up at 127.0.0.1:8080 (check: curl -s 127.0.0.1:8080/health
+  -> {"status":"ok"}). Start it with run-Q3.6-27B.sh. Do NOT use `-b 512 -ub 256`
+  — it corrupts parallel tool calls (see memory parallel2-kv-tool-call-corruption).
+  Every harness needs PI_BIN set:
+      PI_BIN=$(command -v pi) bun run scripts/<harness>.ts <args>
+  Run harnesses ONE AT A TIME. They share the single llama-server; concurrent
+  runs contend and skew timings.
+  Measured rates on this box: ~74s per single extraction call (20KB spec),
+  ~1.6 min/rep for the replay harness, ~3.3 min/rep for divergent arms.
+
+------------------------------------------------------------------------------
+TASK 1 — C GENERALITY (the one real gap in what shipped)
+------------------------------------------------------------------------------
+STATUS: OPEN. The shipped tiebreak is validated on mx5 ONLY (p=0.0094, 24 reps).
+Two generality attempts both ABSTAINed, for two DIFFERENT reasons — neither is a
+failure of the rule, both are fixture problems:
+
+  - scripts/live-coverage-adoption-ab.ts with the old CLI fixture (8 ownable):
+    round 0 came back COMPLETE 16/16, the loop never retried at all. Too small
+    to enter the loop.
+  - same harness with fixtures/etl-spec.md (28 ownable): the loop DOES retry
+    (11/16 rounds INCOMPLETE) but BASELINE NEVER PRODUCED THE PATHOLOGY. Round 0
+    lands at 25-27 of 28 covered and every retry gains 1-3 points, so growth
+    always pays. Verified by scanning every baseline trail in the log.
+
+ROOT CAUSE OF BOTH: the pathology requires EARLY COVERAGE SATURATION — round 0
+must already cover ~all ownable requirements, leaving retries nothing to buy.
+mx5 saturates; the ETL fixture does not.
+
+WHAT TO DO
+  Write a THIRD fixture: non-web, mx5-comparable breadth, but engineered so a
+  first-pass plan covers nearly all ownable requirements. Practical recipe:
+  make the deliverables few and broad (so a small plan covers them) while the
+  obligations are many and phrased with distinctive nouns that a short title
+  list still touches. Aim for round 0 to reach >=90% of ownable coverage.
+  Label it in the file header as ENGINEERED to exhibit the precondition — that
+  is legitimate for testing a guard, but it must not be presented as found.
+
+  Then: PI_BIN=$(command -v pi) bun run scripts/live-coverage-adoption-ab.ts 16 <name>
+  (add the fixture to the USE_CLI switch at the top of that file; it currently
+  toggles 'etl' vs mx5 — generalise it to a named fixture argument.)
+
+PASS CONDITION
+  Baseline produces the target shape in >=3/16 reps (otherwise it ABSTAINs again
+  and proves nothing), treatment ships it 0 times, and the coverage invariant
+  holds. If baseline hits 0 again, the fixture still is not saturating — fix the
+  fixture, do NOT relax the metric.
+
+KNOWN TRAP
+  decideAdoption NOW CONTAINS the tiebreak. The harness's baseline arm therefore
+  CANNOT call it — that would compare the shipped rule against itself and pass
+  trivially. decideAdoptionBaseline in that file is the transcribed pre-C rule
+  and must stay in sync with the collapse-floor / drop-check logic if those change.
+
+TIME: ~55 min for 16 reps, plus fixture authoring. Budget 90 min if the first
+fixture does not saturate.
+
+------------------------------------------------------------------------------
+TASK 2 — FILTER SIGNIFICANCE (cheap, decides whether to ship the filter)
+------------------------------------------------------------------------------
+STATUS: OPEN, measured but underpowered.
+A deterministic precision filter (4 rules: truncated mid-expression, dependency
+pin <=80 chars, schema/DDL row, fragment <25 chars or <4 words) was scored
+offline against a real 10-run extraction pool:
+  - ADMISSIBLE: all 16 critical obligations survive (FP suite in
+    scripts/extraction-filter-score.ts)
+  - drops 56/208 pool quotes (27%)
+  - end to end (scripts/extraction-filter-endtoend.ts): critical obligations
+    reaching the shipped 40 go 7.90 -> 8.40 per run, +0.50
+  - 3 gains / 0 losses / 7 ties across 10 runs => sign test p=0.125. UNDERPOWERED.
+
+WHAT TO DO
+  PI_BIN=$(command -v pi) bun run scripts/extraction-precision-step0.ts 30
+  then: bun run scripts/extraction-filter-endtoend.ts   (instant, no model calls)
+
+PASS CONDITION
+  Losses stay at 0 AND gains >= 6 with 0 losses (sign test p<=0.016). If losses
+  appear at all, the filter is INADMISSIBLE — inspect which critical obligation
+  was removed and add it to the CRITICAL list before touching the rules.
+
+IF IT PASSES
+  Ship the filter in keepGroundedRequirements (src/task/requirements.ts), which
+  today checks ONLY that the quote is a verbatim substring — there is no
+  obligation test anywhere in the pipeline. Add the FP suite as a unit test; it
+  needs no model calls. Frame it honestly as PRECISION HYGIENE — it does NOT fix
+  TASK 3.
+
+TIME: ~25 min (20 extra extraction runs at ~74s), sim instant.
+
+------------------------------------------------------------------------------
+TASK 3 — THE REQUIREMENT-EXTRACTION LOTTERY (the big one, unfixed)
+------------------------------------------------------------------------------
+STATUS: STEP 0 COMPLETE, no fix designed. This is the highest-leverage open item
+in the planner and it is bigger than everything shipped in v0.23.1.
+
+MEASURED (all on the same byte-identical 20402-char mx5 spec):
+  - single-pass extraction yield: 23..146, sd ~36. A 5-6x swing.
+  - 208 distinct "requirements" produced across 10 runs; only 5 appear in ALL 10.
+  - pre-cap mean pairwise Jaccard 0.485; post-cap 0.423. So the cap makes it
+    slightly worse but the lottery is in EXTRACTION, not in capRequirements.
+    (I initially suspected the cap and was wrong — do not redo that.)
+  - ownable count swings 21..30 => granularityFloor swings 11..15 for identical
+    input.
+  - THE JUNK IS MORE STABLE THAN THE SIGNAL: 37 schema/DDL rows recur in 6/10
+    runs, while the test-cadence obligation appears in 4/10 and "photo upload
+    limit" in 1/10.
+  - Only 7.9 of 16 critical obligations reach the shipped 40 in a typical run.
+    Half the requirements that have historically broken builds are ABSENT.
+  - HIGH-YIELD RUNS ARE WORSE: yield 132/143/130 -> 6/5/7 critical obligations;
+    yield 24/35/43 -> 11/11/9. Padding crowds out signal before the cap.
+
+RULED OUT — DO NOT RE-PROPOSE
+  k-of-n VOTING across passes. Any threshold >=5 keeps all 37 schema rows and
+  DELETES the test-cadence line and the "non-/api GETs serve the built
+  index.html" clause — the two whose loss has already cost a run each (run 11
+  and run 16 respectively). Voting stabilises junk and deletes signal here.
+
+THE ACTUAL FIX SHAPE
+  The 40-slot budget must be allocated by OBLIGATION-BEARING-NESS, not by
+  recurrence and not by section round-robin alone. capRequirements currently
+  does marked-passage priority then sectionFairFill. Section fairness exists for
+  a real reason (run 16: a plain first-N cap cut all 138 entries past the cap,
+  every one from the design's tail, including the clause whose loss shipped a
+  blank app) — so any new ranking MUST preserve tail coverage. That tension is
+  the design problem.
+
+  Union-across-passes raises recall but makes selection binding harder (union of
+  10 passes = 208 quotes for 40 slots), so it only helps if selection improves
+  first. Sequence: selection, then consider union.
+
+MEASUREMENT ALREADY BUILT (reuse, do not rewrite)
+  scripts/extraction-stability-step0.ts   count + set churn, pre/post cap
+  scripts/extraction-precision-step0.ts   per-run pools -> extraction-pool.json
+  scripts/extraction-filter-score.ts      offline filter scoring + FP suite
+  scripts/extraction-filter-endtoend.ts   filter -> cap -> critical-obligation count
+  The end-to-end script is the right metric for ANY selection change: it replays
+  recorded runs offline (instant) and counts critical obligations reaching the
+  shipped 40. Design against that, then confirm live.
+
+PASS CONDITION FOR ANY SELECTION FIX
+  Critical obligations reaching the shipped 40 must rise materially above the
+  7.90 baseline with ZERO losses, AND tail-section coverage must not regress
+  (check that quotes from the doc's last sections still appear — that is what
+  sectionFairFill protects).
+
+TIME: design cycle, not a patch. Offline iteration is instant; live confirmation
+~30 min per candidate.
+
+------------------------------------------------------------------------------
+TASK 4 — THE COVERAGE LOOP'S SPLIT-BRAIN GATE (design, blocked on TASK 3)
+------------------------------------------------------------------------------
+STATUS: OPEN, deliberately deferred. This is the ROOT CAUSE of the warning that
+started all of this ("/task-auto: no task fully owns — ...").
+
+THE DEFECT
+  The loop's CONTINUE condition and its ADOPT condition read DIFFERENT signals:
+    continue: best.plan.missing.length === 0
+              missing = holistic judge free-text + unmapped requirement quotes
+              + dangling artifacts  (auto-orchestrator.ts ~1067-1081)
+    adopt:    droppedCoverage over the deterministic groundedCoverage set
+  Nothing forces a retry to address what the judge flagged, and the judge
+  regenerates its list from scratch each round — the original mx5 run produced
+  three DISJOINT missing-lists across three rounds. So `missing` can never be
+  driven to zero, the loop always burns its full budget, and the run always ends
+  with the "no task fully owns" warning. v0.23.1 stopped the plan INFLATING while
+  that happens; it did not fix this.
+
+WHY IT IS BLOCKED
+  Redesigning what the gate reads is premature while the requirement channel it
+  would read is only 38-42% reproducible (TASK 3). Fix extraction first.
+
+WHEN UNBLOCKED, THE QUESTION IS
+  Should the loop continue on the stochastic judge channel at all, or only on the
+  deterministic unmapped-requirement channel? Note the judge channel is what
+  catches areas the requirement extractor MISSED, so deleting it outright trades
+  one blindness for another. Measure before choosing.
+
+------------------------------------------------------------------------------
+KNOWN GRAY AREAS IN WHAT SHIPPED — stated so nobody has to rediscover them
+------------------------------------------------------------------------------
+  a) EMPTY_PLAN_RETRIES = 2 is a JUDGEMENT CALL, not a measurement. Chosen after
+     observing two back-to-back empty draws once. The run-length distribution of
+     empty generations was never measured. The empty-retry path is unit-tested
+     only — it was never exercised live, because empties cannot be forced.
+  b) MIN_REQUIREMENTS_FOR_PLAN_SHAPE (=5) was validated for the plan-shape fork,
+     NOT for the granularity floor. Reusing it for the floor is an argument from
+     the same rationale, not evidence. The S fixture sits exactly at ownable=5,
+     the boundary; one extraction draw lower and it loses its floor, and that
+     side is untested.
+  c) The plan-size benefit of the tiebreak is NOT significant (41.8 -> 38.8,
+     sign 15/8, p=0.21). Only the inflation removal is significant (p=0.0094).
+     Do not quote plan-size shrinkage as a proven win.
+  d) Two pre-existing bonus-round tests were EDITED, not the code, when the floor
+     gate changed their decompose counts 5 -> 4. Their fixture comment had
+     documented the floor firing at 3 ownable as incidental scaffolding. If that
+     fixture turns out to have been load-bearing, revisit.
+  e) Per-rep comparison of ANY model-sampled quantity between DIVERGENT arms
+     measures the sampler, not the rule. This burned two harness runs (invariants
+     "never ships a larger plan" and "never ships less coverage" both broke on
+     reps where the tiebreak never fired). Only distributional comparisons and
+     rule-fired subsets are valid there. Paired REPLAY is exact for arms that only
+     TRUNCATE a trace, and INVALID for arms that reject and continue.
+  f) The 47..153 pre-cap yield range quoted in extraction-stability-step0.ts is
+     OVERSTATED: it includes the forced re-extraction, which unions two passes,
+     and the harness does not record whether it fired. The clean single-pass
+     figure is 23..146 (extraction-precision-step0.ts). Fix the instrumentation
+     before quoting either number.
+  g) The mx5 run in ~/hub/mx5 that started this investigation ran under the OLD
+     planner. Its 60-task plan is unaffected by v0.23.1 and should not be used as
+     evidence for or against these fixes.
