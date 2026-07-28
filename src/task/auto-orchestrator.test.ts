@@ -1836,13 +1836,15 @@ const GRAN_FEATURE = [
     '- the parser reads yaml manifests',
     '- the exporter writes csv reports',
     '- the scheduler triggers cron jobs',
-    '- the uploader pushes archives to s3'
+    '- the uploader pushes archives to s3',
+    '- the notifier posts alerts to slack'
 ].join('\n')
 const GRAN_REQS = [
     'REQUIREMENT: "the parser reads yaml manifests"',
     'REQUIREMENT: "the exporter writes csv reports"',
     'REQUIREMENT: "the scheduler triggers cron jobs"',
-    'REQUIREMENT: "the uploader pushes archives to s3"'
+    'REQUIREMENT: "the uploader pushes archives to s3"',
+    'REQUIREMENT: "the notifier posts alerts to slack"'
 ].join('\n')
 
 function granularityDeps(
@@ -1863,7 +1865,7 @@ function granularityDeps(
             // accounting complete, so the only reprompt under test is the floor's.
             if (name === 'coverage-map')
                 return Promise.resolve(
-                    'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1'
+                    'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1\nMAP: 5 -> TASK 1'
                 )
             return Promise.resolve('')
         },
@@ -1880,10 +1882,10 @@ test('granularity floor: the floor is derived and logged, never put in the promp
         expect(d.calls.decompose).toBe(1) // at the floor ⇒ no split reprompt
         // A target count in the prompt made the model chase it (live: 66/81/85
         // titles, one context blowup) — the floor stays host-side.
-        expect(d.calls.hints[0]).not.toContain('at least 2 tasks')
+        expect(d.calls.hints[0]).not.toContain('at least 3 tasks')
         expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
-        expect(log).toContain('granularity floor: 4 ownable requirement(s) ⇒ at least 2 task(s)')
+        expect(log).toContain('granularity floor: 5 ownable requirement(s) ⇒ at least 3 task(s)')
     })
 })
 
@@ -1915,7 +1917,7 @@ test('plan-shape: the host answers the breakdown fork, the triage never sees it'
                 if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
                 if (name === 'coverage-map')
                     return Promise.resolve(
-                        'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1'
+                        'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1\nMAP: 5 -> TASK 1'
                     )
                 return Promise.resolve('')
             },
@@ -1953,7 +1955,7 @@ test('granularity floor: a plan under the floor is split once and the longer pla
         expect(d.calls.hints[1]).toContain('SPLIT')
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
-        expect(log).toContain('plan under the granularity floor (1 < 2)')
+        expect(log).toContain('plan under the granularity floor (1 < 3)')
         expect(log).toContain('granularity split-retry produced 3 title(s)')
     })
 })
@@ -1982,6 +1984,49 @@ test('granularity floor: no requirement signal ⇒ the old prompt, no floor, no 
         expect(d.calls.hints[0]).not.toContain('GRANULARITY')
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).not.toContain('granularity floor')
+    })
+})
+
+test('plan-shape: a chore keeps the old triage path — the host never seizes it', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const asked: string[] = []
+        const hints: string[] = []
+        let clarifyCalls = 0
+        const d: AutoDeps = {
+            runChild: (name, _tools, prompt) => {
+                asked.push(name)
+                if (name === 'auto-clarify') {
+                    clarifyCalls++
+                    return Promise.resolve(
+                        clarifyCalls === 1 ?
+                            '1. **Should the rename be one task, or split per call site?**\n'
+                                + 'SUGGESTED: one task'
+                        :   'NONE'
+                    )
+                }
+                // One requirement — below MIN_REQUIREMENTS_FOR_PLAN_SHAPE.
+                if (name === 'requirement-extract')
+                    return Promise.resolve('REQUIREMENT: "rename the foo() helper"')
+                if (name === 'clarify-triage') return Promise.resolve('ANSWER: one task')
+                if (name === 'auto-decompose') {
+                    hints.push(prompt)
+                    return Promise.resolve('- [ ] Rename foo() to normalizePath()')
+                }
+                if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+                if (name === 'coverage-map') return Promise.resolve('MAP: 1 -> TASK 1')
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'rename the foo() helper', d)
+        // The triage still owns this fork, and no host directive reaches decompose —
+        // live smoke: seizing it turned a 1-requirement rename into a 6-task plan.
+        expect(asked).toContain('clarify-triage')
+        expect(hints[0]).not.toContain('per-deliverable')
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(1)
     })
 })
 

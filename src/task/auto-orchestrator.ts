@@ -100,6 +100,7 @@ import {
     granularitySplitHint,
     isPlanShapeQuestion,
     isTooCoarse,
+    planShapeIsHostsToAnswer,
     PLAN_SHAPE_ANSWER
 } from './decompose-granularity.js'
 import {mandatesTestsInSameChange, rewriteBatchTestPlan} from './batch-test-task.js'
@@ -628,6 +629,74 @@ export async function planAuto(
         taskId: '',
         signal: new AbortController().signal
     }).catch(() => '')
+    // Requirement extraction (mx5 run 11, goal A): grounded requirement units,
+    // extracted from whatever structure the spec has, BEFORE decompose — they ride
+    // into the decompose prompt as a ledger (structure-mirroring can't discharge
+    // them) and drive the per-requirement coverage accounting below.
+    //
+    // Runs BEFORE clarify (it depends only on the inlined feature, never on the
+    // answers) so the plan-shape gate below has a real count to judge with: the
+    // host must not seize the granularity fork on a spec that has no breakdown to
+    // speak of. Best-effort:
+    // a fault leaves reqEntries empty and the whole channel degrades to the old
+    // behavior (one-liners / doc-less features naturally yield few or none).
+    let reqEntries: RequirementEntry[] = []
+    try {
+        // Recall floor: the obligation-marked passages ride into the prompt as a
+        // checklist, and a marked passage that produced NO quote is hard evidence
+        // for one forced re-extraction (measured live: 1/5 extractions missed the
+        // entire marked testing section without this).
+        const passages = enumerateObligationPassages(featureForModel)
+        const extractOnce = async (hint: string | null): Promise<RequirementEntry[]> =>
+            keepGroundedRequirements(
+                parseRequirementLines(
+                    await deps.runChild(
+                        'requirement-extract',
+                        '',
+                        prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(featureForModel, passages))
+                    )
+                ),
+                featureForModel
+            )
+        reqEntries = await extractOnce(null)
+        const uncovered = uncoveredPassages(passages, reqEntries)
+        if (uncovered.length > 0) {
+            logPlanDebug(
+                cwd,
+                `requirement extraction: ${uncovered.length} obligation-marked passage(s) `
+                    + 'uncovered — forcing one re-extraction'
+            )
+            const retry = await extractOnce(extractionRetryHint(uncovered))
+            // Union of both grounded passes (keepGrounded dedupes).
+            reqEntries = keepGroundedRequirements([...reqEntries, ...retry], featureForModel)
+        }
+        // Bound with marked-passage priority — a plain first-N cap truncates the
+        // doc's tail sections (measured live: an eager model fills 40 top-down).
+        reqEntries = capRequirements(reqEntries, passages, featureForModel)
+        logPlanDebug(
+            cwd,
+            `requirement extraction: ${reqEntries.length} grounded requirement(s) kept`
+        )
+    } catch {
+        // best-effort channel
+    }
+
+    // Granularity floor (mx5 Jul 25 vs Jul 27): the plan's task COUNT was being set
+    // by an auto-resolved clarify line the user never saw — the same spec planned
+    // into 41 tasks one day and 11 the next, with identical code. Derive the floor
+    // from the requirements a task can own, so an unreviewable "one task per
+    // milestone" decision cannot collapse the plan; it also gates whether the
+    // plan-shape fork below is the host's to answer at all. 0 ownable ⇒ no channel.
+    const ownableRequirements = reqEntries.filter(e => !isCrossCuttingRequirement(e.quote)).length
+    const coarseFloor = granularityFloor(ownableRequirements)
+    if (coarseFloor > 0) {
+        logPlanDebug(
+            cwd,
+            `granularity floor: ${ownableRequirements} ownable requirement(s) ⇒ at least `
+                + `${coarseFloor} task(s)`
+        )
+    }
+
     const answers: string[] = []
     // Plain text of every question already shown, for the duplicate backstop.
     const askedQuestions: string[] = []
@@ -671,7 +740,7 @@ export async function planAuto(
         // single most load-bearing decision in a run was an invisible coin flip.
         // Answer it deterministically instead: same channel, same transcript, but a
         // fixed value the user can read in the AUTO file and override next run.
-        if (isPlanShapeQuestion(plainQ)) {
+        if (planShapeIsHostsToAnswer(ownableRequirements) && isPlanShapeQuestion(plainQ)) {
             logPlanDebug(
                 cwd,
                 `plan-shape question answered host-side (not the triage): ${plainQ.replace(/\s+/g, ' ').slice(0, 120)}`
@@ -775,53 +844,6 @@ export async function planAuto(
     }
     const clarifications = answers.join('\n')
 
-    // Requirement extraction (mx5 run 11, goal A): grounded requirement units,
-    // extracted from whatever structure the spec has, BEFORE decompose — they ride
-    // into the decompose prompt as a ledger (structure-mirroring can't discharge
-    // them) and drive the per-requirement coverage accounting below. Best-effort:
-    // a fault leaves reqEntries empty and the whole channel degrades to the old
-    // behavior (one-liners / doc-less features naturally yield few or none).
-    let reqEntries: RequirementEntry[] = []
-    try {
-        // Recall floor: the obligation-marked passages ride into the prompt as a
-        // checklist, and a marked passage that produced NO quote is hard evidence
-        // for one forced re-extraction (measured live: 1/5 extractions missed the
-        // entire marked testing section without this).
-        const passages = enumerateObligationPassages(featureForModel)
-        const extractOnce = async (hint: string | null): Promise<RequirementEntry[]> =>
-            keepGroundedRequirements(
-                parseRequirementLines(
-                    await deps.runChild(
-                        'requirement-extract',
-                        '',
-                        prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(featureForModel, passages))
-                    )
-                ),
-                featureForModel
-            )
-        reqEntries = await extractOnce(null)
-        const uncovered = uncoveredPassages(passages, reqEntries)
-        if (uncovered.length > 0) {
-            logPlanDebug(
-                cwd,
-                `requirement extraction: ${uncovered.length} obligation-marked passage(s) `
-                    + 'uncovered — forcing one re-extraction'
-            )
-            const retry = await extractOnce(extractionRetryHint(uncovered))
-            // Union of both grounded passes (keepGrounded dedupes).
-            reqEntries = keepGroundedRequirements([...reqEntries, ...retry], featureForModel)
-        }
-        // Bound with marked-passage priority — a plain first-N cap truncates the
-        // doc's tail sections (measured live: an eager model fills 40 top-down).
-        reqEntries = capRequirements(reqEntries, passages, featureForModel)
-        logPlanDebug(
-            cwd,
-            `requirement extraction: ${reqEntries.length} grounded requirement(s) kept`
-        )
-    } catch {
-        // best-effort channel
-    }
-
     // Artifact-production closure, plan side (mx5 run 13, PROMPT 2): runtime
     // files the spec REFERENCES (server snippets, prose "serve the built
     // index.html") that neither its file tree, its parsed build outputs, nor the
@@ -857,21 +879,6 @@ export async function planAuto(
             cwd,
             'decisions mandate tests-in-the-same-change — batch test tasks are banned '
                 + 'from this plan (prompt rule + host rewrite)'
-        )
-    }
-
-    // Granularity floor (mx5 Jul 25 vs Jul 27): the plan's task COUNT was being set
-    // by an auto-resolved clarify line the user never saw — the same spec planned
-    // into 41 tasks one day and 11 the next, with identical code. Derive the floor
-    // from the requirements a task can own, so an unreviewable "one task per
-    // milestone" decision cannot collapse the plan. 0 ownable ⇒ '' ⇒ no change.
-    const ownableRequirements = reqEntries.filter(e => !isCrossCuttingRequirement(e.quote)).length
-    const coarseFloor = granularityFloor(ownableRequirements)
-    if (coarseFloor > 0) {
-        logPlanDebug(
-            cwd,
-            `granularity floor: ${ownableRequirements} ownable requirement(s) ⇒ at least `
-                + `${coarseFloor} task(s)`
         )
     }
 

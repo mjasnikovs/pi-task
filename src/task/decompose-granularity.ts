@@ -56,6 +56,24 @@ export function isTooCoarse(titles: number, floor: number): boolean {
 }
 
 /**
+ * Fewest ownable requirements a feature needs before the host takes the
+ * plan-shape fork away from the triage.
+ *
+ * Below this the fork is not load-bearing — the whole plan is one or two tasks
+ * either way — and seizing it does harm: live smoke over 24 prompts, the host
+ * directive turned "rename the `foo()` helper across the repo" (1 requirement)
+ * into a 6-task plan and "add a .editorconfig" (4) into 4. Every case at or above
+ * this cut planned inside its expected range. So: a feature with real breadth
+ * gets the deterministic answer, a chore keeps the old triage path untouched.
+ */
+export const MIN_REQUIREMENTS_FOR_PLAN_SHAPE = 5
+
+/** Does this feature have enough distinct deliverables for granularity to matter? */
+export function planShapeIsHostsToAnswer(ownable: number): boolean {
+    return ownable >= MIN_REQUIREMENTS_FOR_PLAN_SHAPE
+}
+
+/**
  * Does this clarify question decide how finely the feature is CUT into tasks?
  *
  * Deterministic and narrow on purpose. It must fire on the fork the triage keeps
