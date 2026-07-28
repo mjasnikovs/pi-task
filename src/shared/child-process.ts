@@ -518,6 +518,40 @@ export function runChild(
             if (sink) sink.feed(chunk)
             else stdout += chunk
         })
+        // This accumulation is deliberately unbounded, unlike `discardStdout`
+        // above. The asymmetry was investigated on 2026-07-28 and the "stderr can
+        // overflow V8's max string length" hypothesis is REFUTED at ~5 orders of
+        // magnitude — do not re-open it without new volume evidence.
+        //
+        // Measured ceiling (binary search on `'a'.repeat`, not cited from memory):
+        // node v26.2.0 536,870,888 chars (512 MiB, 2^29-24), bun 1.3.14
+        // 2,147,483,647 (2 GiB). Both throw RangeError, not OOM — node's default
+        // heap is 4192 MiB, well clear of its own string ceiling. If it were ever
+        // reached the severity would be high: a throw in this handler escapes as
+        // an uncaughtException and the enclosing promise never settles (measured),
+        // so it would kill the host, not fail the child.
+        //
+        // Measured volume, real runs not synthetic: the largest single tool output
+        // in a full mx5 run is 5,043 bytes and that whole run's verify-debug.log is
+        // 112,216 bytes. The heaviest commands in the system are far under —
+        // pi-task's own 2,452-test suite emits 162 bytes of stderr, mx5's
+        // prettier+eslint+tsc lint 90, a cached `bun install` 0. Observed max is
+        // ~106,000x below the node ceiling; reaching it inside the 15-min command
+        // bound would need ~596 KB/s sustained on stderr for the full window.
+        //
+        // The structural reason is the population of children that reach here:
+        // `pi` model children (stderr near-empty), `git`, and one
+        // `npm install --loglevel=error`. Genuinely verbose work — test runners,
+        // builds, boot probes — does not use runChild; final-gate.ts spawns its own
+        // and already caps at 8000 chars. So `discardStdout`'s single caller
+        // (docs-core.ts) is not an oversight to mirror: it discards the verbose
+        // stream and KEEPS stderr precisely because stderr is that call's payload.
+        //
+        // A symmetric `discardStderr` would therefore have no caller, and a naive
+        // cap here would be actively unsafe: consumers disagree about which end
+        // carries the cause — phases.ts:474 takes the tail (-500), phases.ts:936
+        // takes the head (0, 300), and child-runner.ts:172 feeds the whole string
+        // into failure classification.
         proc.stderr?.on('data', (d: Buffer) => {
             lastActivity = Date.now()
             streamWatch?.note()
