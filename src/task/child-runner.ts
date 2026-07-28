@@ -25,6 +25,7 @@ import {
 import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 import {getConfig} from '../config/config.js'
+import type {DebugLine} from './debug-log.js'
 
 // ─── Loop detection constants ────────────────────────────────────────────────
 // Defined here (not in phases.ts) to avoid a circular dependency:
@@ -195,8 +196,16 @@ interface PhaseDeps {
      */
     recordSubStep?: (label: string, ms: number) => void
     spawn?: SpawnFn
-    /** Write a timestamped line to the per-task debug log. Fire-and-forget. */
-    logDebug?: (msg: string) => void
+    /**
+     * Write a timestamped line to the per-task debug log. Fire-and-forget, and
+     * UNSET entirely when the trail is off — so a caller must keep the `?.` and
+     * must not do work to build a message outside the call.
+     *
+     * `kind` defaults to `'event'` (a decision or guard action, kept at the
+     * default level). Pass `'stream'` for raw child output and tool results,
+     * which only the `full` level keeps. See debug-log.ts.
+     */
+    logDebug?: (msg: string, kind?: DebugLine) => void
     /** Injectable delay for connection-error backoff; defaults to a real timer.
      *  Tests override it with a no-op so retries don't actually sleep. */
     sleepFor?: (ms: number) => Promise<void>

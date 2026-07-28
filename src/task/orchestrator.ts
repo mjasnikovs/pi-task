@@ -53,6 +53,7 @@ import {
 } from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
+import {gateDebugWriter} from './debug-log.js'
 import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
@@ -255,13 +256,15 @@ export class TaskRunner {
 
         // Wire up per-task debug log (<cwd>/.pi-tasks/TASK_XXXX-debug.log).
         const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
-        this._deps.logDebug = (msg: string) => {
+        // Left UNSET at level `off`, so the ~39 `logDebug?.(…)` sites downstream
+        // short-circuit before they format a string and the file is never created.
+        this._deps.logDebug = gateDebugWriter((msg: string) => {
             const line = `${new Date().toISOString()} ${msg}\n`
             fsp.appendFile(debugLogPath, line).catch(() => {
                 /* ignore */
             })
-        }
-        this._deps.logDebug(`run: start phase=${resumePhase}`)
+        })
+        this._deps.logDebug?.(`run: start phase=${resumePhase}`)
 
         // Register as active.
         this._widgetState.taskId = id

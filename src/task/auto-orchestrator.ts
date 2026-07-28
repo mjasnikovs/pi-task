@@ -86,6 +86,7 @@ import {
     strandedFixNote
 } from './final-gate-fix.js'
 import {getConfig} from '../config/config.js'
+import {debugLogLevel, shouldLogDebug} from './debug-log.js'
 import {isYoloMode, yoloPickAnswer, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
 import {configureResearchRun, resumeResearchRun} from '../workers/research-cache.js'
 import {
@@ -285,8 +286,15 @@ function mentionPath(token: string): string {
  * before any task file — hence any per-task `TASK_XXXX-debug.log` — exists. Writes
  * to `.pi-tasks/plan-debug.log`; the `*-debug.log` suffix keeps it grep-compatible
  * with the per-task logs. Never throws (mkdir + append are best-effort).
+ *
+ * Every call site here records a plan DECISION (how many titles a round produced,
+ * whether a retry was adopted, which clarify answer was auto-resolved), so all of
+ * them are `'event'` — this file carries no model chatter and survives at the
+ * default level. It is also the only channel the plan phase has: it runs before
+ * any task file, hence any `TASK_NNNN-debug.log`, exists.
  */
 function logPlanDebug(cwd: string, msg: string): void {
+    if (!shouldLogDebug('event', debugLogLevel())) return
     const line = `${new Date().toISOString()} ${msg}\n`
     const dir = tasksDir(cwd)
     fsp.mkdir(dir, {recursive: true})

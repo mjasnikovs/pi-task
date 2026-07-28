@@ -102,6 +102,52 @@ export interface PiTaskConfig {
      * DEFAULT OFF — this is never the behaviour of a normal, watched run.
      */
     yoloMode: boolean
+    /**
+     * How much the run writes to its `.pi-tasks/*-debug.log` forensic trail
+     * (task/debug-log.ts). NOTHING in pi-task ever reads these files back —
+     * `task-io.ts` only globs `TASK_NNNN.md`, and auto-commit's trail snapshot
+     * copies bytes without parsing them — so this knob is behaviour-neutral by
+     * construction. It trades disk and repo noise against the ability to explain
+     * a run after it has finished.
+     *
+     * `full` is every line the child model emitted plus every tool result;
+     * `events` keeps only decisions and guard actions; `off` writes nothing.
+     *
+     * DEFAULT `events`, not `off`, because the two levels are not the same kind
+     * of record. Measured on a real 247 KB `verify-debug.log` (IAR1, 1315 lines):
+     * the child's own output and the `↳` tool dumps are 85% of the bytes, while
+     * the `=== … ===` markers are 15% — and that 15% is the ONLY record of what
+     * the guards did (`GIT-STATE GUARD — child mutated graded state`, the
+     * write-capable child's `tree changes`, the FAIL reason). mx5 run 11's
+     * final-fix child deleted a source file; the tree-changes line is why that
+     * was findable at all. Silencing the chatter costs nothing; silencing the
+     * guard record makes the next incident unreconstructible, and a debug log
+     * cannot be recovered after the fact.
+     */
+    debugLogs: DebugLogLevel
+}
+
+/** How verbose the `.pi-tasks/*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
+export type DebugLogLevel = 'off' | 'events' | 'full'
+
+/**
+ * The debug-log choices offered by /task-config, in cycle order (quietest →
+ * loudest, so the cycle reads as a volume dial). Unlike the timeout options the
+ * stored value IS the label — the level is already a word.
+ */
+export const DEBUG_LOG_OPTIONS: readonly DebugLogLevel[] = ['off', 'events', 'full'] as const
+
+const DEFAULT_DEBUG_LOGS: DebugLogLevel = 'events'
+
+/**
+ * Same pinning as the timeout sanitizers: a hand-edited `"debugLogs": true` or a
+ * level from a future version must not reach the writer as an unknown string —
+ * it falls back to the default rather than silently disabling the trail.
+ */
+export function sanitizeDebugLogs(value: unknown): DebugLogLevel {
+    return DEBUG_LOG_OPTIONS.includes(value as DebugLogLevel) ?
+            (value as DebugLogLevel)
+        :   DEFAULT_DEBUG_LOGS
 }
 
 /**
@@ -166,7 +212,10 @@ const DEFAULTS: PiTaskConfig = {
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
     streamInactivityMs: DEFAULT_STREAM_INACTIVITY_MS,
     // OFF: auto-answering is for unattended throwaway runs only.
-    yoloMode: false
+    yoloMode: false,
+    // EVENTS: the model chatter is 85% of the bytes and nobody reads it; the
+    // guard/verdict markers are the 15% that explains a failed run.
+    debugLogs: DEFAULT_DEBUG_LOGS
 }
 
 /**
@@ -203,6 +252,7 @@ if (!G.loaded) {
         // silently switch a watched run into unattended auto-pick. Only a real
         // boolean counts; anything else falls back to the OFF default.
         if (typeof parsed.yoloMode !== 'boolean') delete parsed.yoloMode
+        parsed.debugLogs = sanitizeDebugLogs(parsed.debugLogs)
         G.config = {...DEFAULTS, ...parsed}
     } catch {
         G.config = {...DEFAULTS}

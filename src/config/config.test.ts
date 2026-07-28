@@ -1,6 +1,8 @@
 import {describe, expect, test} from 'bun:test'
 import {
     COMMAND_TIMEOUT_OPTIONS,
+    DEBUG_LOG_OPTIONS,
+    sanitizeDebugLogs,
     sanitizeRequestTimeoutMs,
     sanitizeStreamInactivityMs,
     STREAM_INACTIVITY_OPTIONS
@@ -64,6 +66,32 @@ describe('sanitizeStreamInactivityMs', () => {
     test('falls back to the 10 min default for anything off-menu', () => {
         for (const bad of [undefined, null, 'off', 90_000, -1, NaN, {}]) {
             expect(sanitizeStreamInactivityMs(bad)).toBe(600_000)
+        }
+    })
+})
+
+describe('DEBUG_LOG_OPTIONS', () => {
+    test('offers off/events/full, quietest first', () => {
+        expect([...DEBUG_LOG_OPTIONS]).toEqual(['off', 'events', 'full'])
+    })
+})
+
+describe('sanitizeDebugLogs', () => {
+    test('passes through an offered level', () => {
+        for (const level of DEBUG_LOG_OPTIONS) expect(sanitizeDebugLogs(level)).toBe(level)
+    })
+
+    /**
+     * The load-bearing assertion, and the reason this knob is not a boolean: the
+     * guard/verdict markers are the only record that a git-state restore or a
+     * write-capable child's deletion happened, and a debug log cannot be recovered
+     * after the run. A nonsense stored value must degrade to KEEPING them.
+     * Asserted through the sanitizer rather than getConfig so a developer's own
+     * ~/.config/pi-task/config.json cannot flip the test.
+     */
+    test('falls back to events — never off — for anything off-menu', () => {
+        for (const bad of [undefined, null, true, false, 'on', 'verbose', 1, 0, {}, []]) {
+            expect(sanitizeDebugLogs(bad)).toBe('events')
         }
     })
 })

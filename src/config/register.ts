@@ -10,7 +10,9 @@ import {
 } from '../workers/search-types.js'
 import {
     COMMAND_TIMEOUT_OPTIONS,
+    DEBUG_LOG_OPTIONS,
     getConfig,
+    sanitizeDebugLogs,
     saveConfig,
     STREAM_INACTIVITY_OPTIONS,
     type PiTaskConfig
@@ -190,6 +192,17 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             + 'check is accepted and written down as debt, and a failed final check is retried '
             + 'until the budget runs out. Each auto-answer is marked (YOLO) in the task file. '
             + 'For throwaway projects you are not watching'
+    },
+    {
+        id: 'debugLogs',
+        label: 'debug logs',
+        description:
+            'How much of a run gets written to .pi-tasks/*-debug.log. "events" keeps the '
+            + 'decisions and the guard actions — what a checking step changed, why something '
+            + 'failed — a few lines per task. "full" adds everything the model said and every '
+            + 'command it ran, which is most of the size and only useful while you are digging '
+            + 'into a problem. "off" writes nothing, and nothing can be reconstructed later',
+        values: [...DEBUG_LOG_OPTIONS]
     }
 ]
 
@@ -378,6 +391,11 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
                     } else if (id === 'streamInactivityMs') {
                         const opt = STREAM_INACTIVITY_OPTIONS.find(o => o.label === newValue)
                         if (opt) cfg.streamInactivityMs = opt.ms
+                    } else if (id === 'debugLogs') {
+                        // The stored value IS the label here, but it must still go
+                        // through the sanitizer — the generic `else` below would
+                        // write the boolean `newValue === 'on'` into an enum field.
+                        cfg.debugLogs = sanitizeDebugLogs(newValue)
                     } else {
                         ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
                     }

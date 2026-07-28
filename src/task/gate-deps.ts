@@ -65,6 +65,7 @@ import {captureGitState, reconcileGitState, type ReconcileResult} from './git-st
 import {runWorker} from '../workers/pi-worker-core.js'
 import {formatLoopHint} from './child-runner.js'
 import {getConfig} from '../config/config.js'
+import {makeDebugAppender} from './debug-log.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {resolveContextUsage} from './context-usage.js'
 
@@ -444,10 +445,11 @@ export function buildGateDeps(params: {
             contextUsage = undefined
             lastGuardReconcile = null
             const startedAt = Date.now()
-            const logPath = path.join(tasksDir(cwd2), logFile)
-            const log = (msg: string): void => {
-                void fsp.appendFile(logPath, `${new Date().toISOString()} ${msg}\n`).catch(() => {})
-            }
+            // `kind` defaults to 'event': every marker below (start/end, the
+            // git-state guard's restore, the loop warning, a write-capable child's
+            // tree changes) is a guard record that survives at the default level.
+            // Only the child's own stdout and its tool results pass 'stream'.
+            const log = makeDebugAppender(path.join(tasksDir(cwd2), logFile))
             log(`=== ${kind} start: ${taskTitle} ===`)
             // GIT-STATE GUARD: these children are read-only BY CONTRACT, but the
             // contract is prompt-level and the live model breaks it (mx5 run 6: the
@@ -492,8 +494,11 @@ export function buildGateDeps(params: {
                         streamInactivityMs: getConfig().streamInactivityMs,
                         loop: {pathThreshold: Number.POSITIVE_INFINITY},
                         onLine: line => {
+                            // `lastLine` feeds the LIVE status widget and is not
+                            // logging — it stays outside the gate, or a quiet
+                            // trail would also blank the progress display.
                             lastLine = line
-                            log(line)
+                            log(line, 'stream')
                         },
                         // Log tool OUTPUTS, not just the command (mx5 run 10 item 6):
                         // without the result "verify claimed curl PASS on a server that
@@ -501,7 +506,8 @@ export function buildGateDeps(params: {
                         // (a bind failure / status usually lands at the end), error-flagged.
                         onToolResult: ({name, isError, text}) =>
                             log(
-                                `↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`
+                                `↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`,
+                                'stream'
                             ),
                         onContextUsage: snapshot => {
                             contextUsage = resolveContextUsage(
@@ -663,12 +669,9 @@ export function buildGateDeps(params: {
                     contextUsage = undefined
                     const startedAt = Date.now()
                     // Per-pass debug log; the enforce child is otherwise unobservable.
-                    const enforceLogPath = path.join(tasksDir(cwd2), 'enforce-debug.log')
-                    const logEnforce = (msg: string): void => {
-                        void fsp
-                            .appendFile(enforceLogPath, `${new Date().toISOString()} ${msg}\n`)
-                            .catch(() => {})
-                    }
+                    const logEnforce = makeDebugAppender(
+                        path.join(tasksDir(cwd2), 'enforce-debug.log')
+                    )
                     logEnforce(`=== enforce start: ${taskTitle} ===`)
                     const stopLoader = startAutoLoader(enforceCtx, () => ({
                         title: taskTitle,
@@ -701,8 +704,9 @@ export function buildGateDeps(params: {
                             // literally-identical call repeated past threshold does.
                             loop: {pathThreshold: Number.POSITIVE_INFINITY},
                             onLine: line => {
+                                // `lastLine` drives the live widget, not the trail.
                                 lastLine = line
-                                logEnforce(line)
+                                logEnforce(line, 'stream')
                             },
                             onContextUsage: snapshot => {
                                 contextUsage = resolveContextUsage(
@@ -800,13 +804,7 @@ export function buildGateDeps(params: {
                     collectForeignPathFindings(
                         cwd2,
                         signal,
-                        msg =>
-                            void fsp
-                                .appendFile(
-                                    path.join(tasksDir(cwd2), 'verify-debug.log'),
-                                    `${new Date().toISOString()} ${msg}\n`
-                                )
-                                .catch(() => {})
+                        makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
                     ),
                 // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
                 // item 4): a check script this task authored that cannot fail
@@ -936,14 +934,7 @@ export function buildGateDeps(params: {
                 // preserve registry), never a per-task union.
                 treeChanges: () => collectTreeChanges(cwd2, signal),
                 probeScan: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
-                log: msg => {
-                    void fsp
-                        .appendFile(
-                            path.join(tasksDir(cwd2), 'final-gate-debug.log'),
-                            `${new Date().toISOString()} ${msg}\n`
-                        )
-                        .catch(() => {})
-                }
+                log: makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
             }),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the

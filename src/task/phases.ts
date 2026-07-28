@@ -856,7 +856,10 @@ export async function phaseResearch(
                     ...(spec.tools ? {tools: spec.tools} : {}),
                     ...(spec.extensions ? {extensions: spec.extensions} : {}),
                     onLine: line => {
-                        deps.logDebug?.(`${spec.label}: ${line}`)
+                        // The one 'stream' site in this file: raw research-worker
+                        // output. Every other logDebug here records a decision.
+                        // onChildOutput drives the widget and is not gated.
+                        deps.logDebug?.(`${spec.label}: ${line}`, 'stream')
                         deps.onChildOutput?.(`${spec.label}: ${line}`)
                     }
                 })
