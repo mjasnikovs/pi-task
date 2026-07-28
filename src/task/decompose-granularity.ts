@@ -45,9 +45,22 @@ export const MAX_REQUIREMENTS_PER_TASK = 2
 /**
  * Fewest task titles a plan may have for `ownable` requirements. Zero when the
  * requirement channel produced nothing, which disables every check below.
+ *
+ * Also zero below MIN_REQUIREMENTS_FOR_PLAN_SHAPE, for the reason that constant
+ * already documents: under a handful of requirements the plan is one or two tasks
+ * either way, and the requirement COUNT at that scale is an artifact of extraction
+ * granularity rather than real breadth. Measured (2026-07-28 size smoke): the
+ * 78-char feature "Add a `--version` flag to the CLI that prints the package
+ * version and exits 0" extracted THREE ownable requirements — the flag, the
+ * print, the exit code — yielding a floor of 2 for what is unambiguously one
+ * task. Both arms correctly shipped 1 title, so the floor bought nothing and cost
+ * a split-retry child; had anything ever made it binding it would have forced a
+ * bad split. The same cut governs both because it is the same judgement: the
+ * requirement channel is not load-bearing for shape until a feature has real breadth.
  */
 export function granularityFloor(ownable: number): number {
-    return ownable <= 0 ? 0 : Math.ceil(ownable / MAX_REQUIREMENTS_PER_TASK)
+    if (ownable < MIN_REQUIREMENTS_FOR_PLAN_SHAPE) return 0
+    return Math.ceil(ownable / MAX_REQUIREMENTS_PER_TASK)
 }
 
 /** Is this plan too coarse for the requirements it has to carry? */

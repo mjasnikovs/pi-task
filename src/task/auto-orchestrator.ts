@@ -185,10 +185,27 @@ function coverageRepromptHint(missing: string[]): string {
 const SUSPECT_PLAN_MAX_TITLES = 2
 const SUSPECT_PLAN_MIN_SPEC_CHARS = 4000
 
+/**
+ * Extra retries granted when the plan is EMPTY rather than merely small. One
+ * hinted retry heals a small-but-nonempty plan reliably; an empty generation is a
+ * harder fault and was measured recurring back-to-back (2026-07-28 smoke: 13 empty
+ * draws across 24 reps of a 20KB spec, including two in a row in one rep).
+ */
+const EMPTY_PLAN_RETRIES = 2
+
+/**
+ * An empty list is NEVER a valid decomposition of any feature request, at any spec
+ * size. It used to escape this guard entirely — the old predicate opened with
+ * `titles.length > 0`, so zero titles was not "suspect", the suspect-retry never
+ * fired, the coverage loop broke immediately on `titles.length === 0`, and the run
+ * aborted with "no tasks produced from the feature". A single degenerate
+ * generation killed the whole run with no retry, which is the opposite of how the
+ * same fault is treated one title higher.
+ */
 function isSuspectPlan(titles: string[], featureForModel: string): boolean {
+    if (titles.length === 0) return true
     return (
-        titles.length > 0
-        && titles.length <= SUSPECT_PLAN_MAX_TITLES
+        titles.length <= SUSPECT_PLAN_MAX_TITLES
         && featureForModel.length >= SUSPECT_PLAN_MIN_SPEC_CHARS
     )
 }
@@ -967,10 +984,31 @@ export async function planAuto(
     // catch it (3/10 live false-pass) and a hinted retry heals it reliably
     // (5/5 live). Longer list wins; a still-suspect plan falls through to the
     // judge loop as before, so this never blocks planning.
-    if (isSuspectPlan(planTitles, featureForModel)) {
+    // An EMPTY plan gets extra attempts (see EMPTY_PLAN_RETRIES): falling through
+    // with zero titles aborts the whole run, so one roll of the dice is not enough.
+    // A merely-small plan keeps its single retry — it still ships if the retry does
+    // not help, so spending more children on it buys nothing.
+    //
+    // The two budgets are tracked SEPARATELY on purpose. A single counter bounded by
+    // `plan.length === 0 ? EMPTY_PLAN_RETRIES : 0` re-reads the bound against the
+    // CURRENT plan, so an empty draw that healed to a still-suspect 1-title plan saw
+    // the bound collapse to 0 and skipped the small-plan retry that an identical
+    // 1-title FIRST draw would have received. Same end state, different treatment,
+    // purely because of how it got there.
+    let emptyAttempts = 0
+    let smallRetryUsed = false
+    while (isSuspectPlan(planTitles, featureForModel)) {
+        if (planTitles.length === 0) {
+            if (emptyAttempts > EMPTY_PLAN_RETRIES) break
+            emptyAttempts++
+        } else {
+            if (smallRetryUsed) break
+            smallRetryUsed = true
+        }
         logPlanDebug(
             cwd,
             `decompose suspect (${planTitles.length} title(s) for a ${featureForModel.length}-char spec)`
+                + `${emptyAttempts > 1 ? ` — empty retry ${emptyAttempts}` : ''}`
                 + ` — raw output: ${listRaw.trim().slice(0, 300)}`
         )
         const retryRaw = await deps.runChild(

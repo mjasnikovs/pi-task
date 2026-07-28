@@ -77,8 +77,51 @@ describe('decideAdoption', () => {
         expect(d.dropped).toEqual([])
     })
 
-    test('adopts an equal owned-set (side-grade allowed)', () => {
+    test('adopts an equal owned-set at equal size (side-grade allowed)', () => {
         expect(decideAdoption(plan(3, [0, 1]), plan(3, [0, 1]), true).adopt).toBe(true)
+    })
+
+    test('adopts an equal owned-set in FEWER titles (the smaller plan wins)', () => {
+        // Bounded by the collapse floor above: a retry under HALF the current
+        // title count is still the degenerate flake and is rejected on that rule,
+        // so "smallest among equals" only ranges down to half.
+        expect(decideAdoption(plan(9, [0, 1]), plan(5, [0, 1]), true).adopt).toBe(true)
+        expect(decideAdoption(plan(9, [0, 1]), plan(4, [0, 1]), true).reason).toContain(
+            'collapse floor'
+        )
+    })
+
+    // ── the zero-gain growth tiebreak ────────────────────────────────────────
+    // mx5 2026-07-28 went 26 → 32 → 60 titles with the owned-set pinned at 27 in
+    // all three rounds, both retries adopted as "preserves owned coverage". The
+    // old rule could not object: past the drop check the retry's owned-set is a
+    // superset, and groundedCoverage is monotone in the title set while the
+    // reprompt explicitly asks for a superset of the previous titles.
+    test('rejects growth that buys no new coverage', () => {
+        const d = decideAdoption(plan(26, [0, 1, 2]), plan(60, [0, 1, 2]), true)
+        expect(d.adopt).toBe(false)
+        expect(d.reason).toContain('no coverage gain')
+        expect(d.reason).toContain('+34 titles')
+        expect(d.dropped).toEqual([])
+    })
+
+    test('growth that DOES buy coverage is still adopted', () => {
+        expect(decideAdoption(plan(26, [0, 1]), plan(60, [0, 1, 2]), true).adopt).toBe(true)
+    })
+
+    test('the tiebreak can never decline a strictly better plan', () => {
+        // Structural, not statistical: the clause is reachable only when the retry
+        // covers NO MORE than the current plan. Any strict gain adopts at any size
+        // the collapse floor allows (>= half the current count).
+        for (const size of [2, 5, 40, 400]) {
+            expect(decideAdoption(plan(4, [0]), plan(size, [0, 1]), true).adopt).toBe(true)
+        }
+    })
+
+    test('the tiebreak is off without a requirement signal', () => {
+        // No owned-set to compare, so size alone must never reject — the
+        // no-requirements path keeps its count-floor + missing-area rule.
+        expect(decideAdoption(plan(3, [], ['a']), plan(30, [], ['a']), false).adopt).toBe(true)
     })
 
     test('collapse floor still rejects the one-task degenerate retry', () => {

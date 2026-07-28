@@ -1,6 +1,7 @@
 import {describe, test, expect} from 'bun:test'
 import {
     MAX_REQUIREMENTS_PER_TASK,
+    MIN_REQUIREMENTS_FOR_PLAN_SHAPE,
     PLAN_SHAPE_ANSWER,
     granularityFloor,
     granularitySplitHint,
@@ -16,9 +17,29 @@ describe('granularityFloor', () => {
     })
 
     test('rounds UP — a leftover requirement still needs a task to own it', () => {
-        expect(granularityFloor(1)).toBe(1)
-        expect(granularityFloor(3)).toBe(2)
-        expect(granularityFloor(4)).toBe(2)
+        expect(granularityFloor(5)).toBe(3)
+        expect(granularityFloor(7)).toBe(4)
+        expect(granularityFloor(9)).toBe(5)
+    })
+
+    test('no floor below MIN_REQUIREMENTS_FOR_PLAN_SHAPE — the count is extraction noise there', () => {
+        // Same cut, same reason, as the plan-shape fork: under a handful of
+        // requirements the plan is one or two tasks either way, so the count
+        // reflects how finely the extractor sliced the prose, not real breadth.
+        for (let ownable = 1; ownable < MIN_REQUIREMENTS_FOR_PLAN_SHAPE; ownable++) {
+            expect(granularityFloor(ownable)).toBe(0)
+        }
+        expect(granularityFloor(MIN_REQUIREMENTS_FOR_PLAN_SHAPE)).toBeGreaterThan(0)
+    })
+
+    test('the XS regression: a one-line feature is never called too coarse', () => {
+        // Live (2026-07-28 size smoke): "Add a `--version` flag to the CLI that
+        // prints the package version and exits 0" — 78 chars — extracted THREE
+        // ownable requirements (flag, print, exit code), giving a floor of 2 for
+        // what is unambiguously ONE task. Both arms shipped 1 title, so the floor
+        // bought nothing and cost a split-retry child.
+        expect(granularityFloor(3)).toBe(0)
+        expect(isTooCoarse(1, granularityFloor(3))).toBe(false)
     })
 
     test("mx5's real numbers: 31 ownable requirements demand at least 16 tasks", () => {

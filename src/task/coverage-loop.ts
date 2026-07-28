@@ -246,6 +246,10 @@ export interface AdoptionDecision {
  *      current plan already owns (non-superset owned-set). This is the monotone
  *      guarantee; it holds regardless of how the un-ownable requirements were
  *      classified, so it backstops the cross-cutting classifier completely.
+ *   2b. WITH requirement signal: reject a retry that grows the plan while covering
+ *      NOTHING new — the tiebreak that makes "ship the best" also mean "ship the
+ *      smallest among equals". Without it the guard is inert against the superset
+ *      the reprompt asks for; see the long note at the branch.
  *   3. WITHOUT requirement signal: fall back to the count floor, and additionally
  *      refuse a retry that leaves MORE areas uncovered than the current plan — so
  *      the no-requirements path also ships the best, not the last.
@@ -270,6 +274,46 @@ export function decideAdoption(
                 adopt: false,
                 reason: `would drop ${dropped.length} owned requirement(s)`,
                 dropped
+            }
+        }
+        // Growth must PAY FOR ITSELF. Past this point the retry's owned-set is a
+        // superset, so an equal size means the sets are IDENTICAL — the retry
+        // covers nothing new. Adopting it anyway is how mx5 (2026-07-28) went
+        // 26 → 32 → 60 titles with the owned-set pinned at 27 in all three rounds,
+        // both retries logged as "preserves owned coverage".
+        //
+        // The old rule could not object, by construction: groundedCoverage is
+        // monotone in the title set (titleTokens is a union over titles; df/maxDF
+        // depend only on the quotes), and coverageRepromptHint asks the model for
+        // "every task your previous list already had ... PLUS" — a superset. So
+        // `dropped` is structurally empty whenever the model obeys the hint and the
+        // guard adopted unconditionally (measured: 2000/2000 superset retries
+        // adopted; 563/2000 independently-sampled ones rejected — the guard has
+        // power, just not against the shape the prompt requests).
+        //
+        // REJECT, never break. Rejection keeps the smaller plan and lets the loop
+        // reprompt again; breaking here forfeits a later round that would have
+        // gained (live: 19t/24c → 38t/24c → 40t/25c, where stopping at the tie
+        // loses the 25th requirement). "No gain this round" is not "no gain ever".
+        //
+        // Safety is structural, not statistical: this branch is reachable only when
+        // the retry covers NO MORE than the current plan, so it can never decline a
+        // strictly better one. Live A/B (Qwen3.6-27B, mx5 20KB spec, 24 reps,
+        // precondition 24/24): inflated plans 7/24 → 0/24, Fisher two-sided
+        // p=0.0094; coverage mean 24.58 → 24.79 (higher in 6 reps, lower in 1, and
+        // that one rep never fired this clause); plan size 41.8 → 38.8, which is
+        // NOT significant (sign 15/8, p=0.21) — the win is removing pathological
+        // inflation, not shrinking plans generally.
+        if (
+            retry.covered.size <= current.covered.size
+            && retry.titles.length > current.titles.length
+        ) {
+            return {
+                adopt: false,
+                reason:
+                    `no coverage gain for +${retry.titles.length - current.titles.length} titles `
+                    + `(${current.covered.size} owned, unchanged)`,
+                dropped: []
             }
         }
         return {adopt: true, reason: 'preserves owned coverage', dropped: []}

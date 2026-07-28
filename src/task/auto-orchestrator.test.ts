@@ -1745,11 +1745,11 @@ function pipelineDeps(
 ): AutoDeps & {calls: {decompose: number; coverage: number}} {
     const calls = {decompose: 0, coverage: 0}
     const plans = [
-        // The 1-title opener is under the granularity floor (3 ownable requirements
-        // ⇒ ≥2 tasks), so the host spends one split-reprompt before the coverage
-        // loop starts. This "model" answers it with the same plan — no split — so
-        // the rounds under test below begin from the same 1-title plan as before.
-        '- [ ] Build the yaml parser',
+        // No granularity split-reprompt here: these 3 ownable requirements sit
+        // below MIN_REQUIREMENTS_FOR_PLAN_SHAPE, where the floor is deliberately
+        // off (the count is extraction granularity, not breadth — see
+        // granularityFloor). The rounds under test start straight from the 1-title
+        // opener. Coverage grows by one requirement per round.
         '- [ ] Build the yaml parser',
         '- [ ] Build the yaml parser\n- [ ] Add the csv exporter',
         '- [ ] Build the yaml parser\n- [ ] Add the csv exporter\n- [ ] Wire the cron scheduler',
@@ -1788,8 +1788,9 @@ test('#2: an adoption at the round cap that exposes a new area buys one bonus ro
         // (breaking the instant the 3rd requirement was covered) would have missed.
         const d = pipelineDeps('COVERAGE: COMPLETE')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
-        // initial + 1 granularity split + 2 base retries + 1 bonus retry.
-        expect(d.calls.decompose).toBe(5)
+        // initial + 2 base retries + 1 bonus retry (no granularity split — the
+        // floor is off below MIN_REQUIREMENTS_FOR_PLAN_SHAPE).
+        expect(d.calls.decompose).toBe(4)
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('bonus round granted')
         // Resolved on the bonus round ⇒ no exhaustion warning.
@@ -1804,7 +1805,7 @@ test('#2: the bonus round is granted at most once (a persistent judge cannot loo
         // is spent, and no second one is granted, so the loop still terminates.
         const d = pipelineDeps('COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
-        expect(d.calls.decompose).toBe(5) // never a 6th — bounded to exactly one bonus
+        expect(d.calls.decompose).toBe(4) // never a 5th — bounded to exactly one bonus
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
     })
@@ -2054,6 +2055,75 @@ test('distrust floor: a 1-title plan for a big spec is regenerated BEFORE the ju
         expect(log).toContain('decompose suspect (1 title(s)')
         expect(log).toContain('raw output: - [ ] Lone scaffold task')
         expect(log).toContain('decompose suspect-retry produced 4 title(s)')
+    })
+})
+
+// An EMPTY decompose used to escape the floor entirely: the predicate opened with
+// `titles.length > 0`, so zero titles was not "suspect", no retry fired, the
+// coverage loop broke on `titles.length === 0`, and the run aborted with "no tasks
+// produced from the feature". One degenerate generation killed the whole run —
+// while one title higher got a retry. Measured recurring: 13 empty draws across 24
+// reps of a 20KB spec (2026-07-28 smoke), including two back-to-back in one rep,
+// which is why an empty plan gets more than one attempt.
+test('distrust floor: an EMPTY plan is retried, not silently fatal', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = coverageDeps(
+            ['', '- [ ] Scaffold\n- [ ] Auth\n- [ ] Listings'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(id).not.toBeNull()
+        expect(d.calls.decompose).toBe(2)
+        expect(d.calls.hints[1]).toContain('incomplete generation')
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+    })
+})
+
+test('distrust floor: an empty plan gets more than one retry', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Two consecutive empty generations — the shape seen live — then a real one.
+        // The third draw is deliberately ABOVE the suspect ceiling so this test
+        // measures only the empty budget; a 2-title heal would additionally claim
+        // the separate small-plan retry (covered by its own test above).
+        const d = coverageDeps(
+            ['', '', '- [ ] Scaffold\n- [ ] Auth\n- [ ] Listings'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(id).not.toBeNull()
+        expect(d.calls.decompose).toBe(3)
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+    })
+})
+
+test('distrust floor: an empty plan that heals to a SUSPECT plan still gets the small retry', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Empty → 1 title (still suspect for a big spec) → healthy. The empty and
+        // small-plan budgets are separate, so arriving at a 1-title plan via an
+        // empty draw is treated exactly like drawing 1 title first.
+        const d = coverageDeps(
+            ['', '- [ ] Lone scaffold task', '- [ ] Scaffold\n- [ ] Auth\n- [ ] Listings'],
+            ['COVERAGE: COMPLETE']
+        )
+        const id = await planAuto(ctx, dir, BIG_FEATURE, d)
+        expect(d.calls.decompose).toBe(3)
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+    })
+})
+
+test('distrust floor: an empty plan on a SMALL spec is retried too', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // Zero titles is never a valid decomposition at ANY spec size, so the
+        // ≥4000-char condition must not gate this branch.
+        const d = coverageDeps(['', '- [ ] Add the --version flag'], ['COVERAGE: COMPLETE'])
+        const id = await planAuto(ctx, dir, 'Add a --version flag to the CLI.', d)
+        expect(id).not.toBeNull()
+        expect(d.calls.decompose).toBe(2)
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(1)
     })
 })
 
