@@ -1745,6 +1745,11 @@ function pipelineDeps(
 ): AutoDeps & {calls: {decompose: number; coverage: number}} {
     const calls = {decompose: 0, coverage: 0}
     const plans = [
+        // The 1-title opener is under the granularity floor (3 ownable requirements
+        // ⇒ ≥2 tasks), so the host spends one split-reprompt before the coverage
+        // loop starts. This "model" answers it with the same plan — no split — so
+        // the rounds under test below begin from the same 1-title plan as before.
+        '- [ ] Build the yaml parser',
         '- [ ] Build the yaml parser',
         '- [ ] Build the yaml parser\n- [ ] Add the csv exporter',
         '- [ ] Build the yaml parser\n- [ ] Add the csv exporter\n- [ ] Wire the cron scheduler',
@@ -1783,8 +1788,8 @@ test('#2: an adoption at the round cap that exposes a new area buys one bonus ro
         // (breaking the instant the 3rd requirement was covered) would have missed.
         const d = pipelineDeps('COVERAGE: COMPLETE')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
-        // initial + 2 base retries + 1 bonus retry.
-        expect(d.calls.decompose).toBe(4)
+        // initial + 1 granularity split + 2 base retries + 1 bonus retry.
+        expect(d.calls.decompose).toBe(5)
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('bonus round granted')
         // Resolved on the bonus round ⇒ no exhaustion warning.
@@ -1799,7 +1804,7 @@ test('#2: the bonus round is granted at most once (a persistent judge cannot loo
         // is spent, and no second one is granted, so the loop still terminates.
         const d = pipelineDeps('COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
-        expect(d.calls.decompose).toBe(4) // never a 5th — bounded to exactly one bonus
+        expect(d.calls.decompose).toBe(5) // never a 6th — bounded to exactly one bonus
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
     })
@@ -1819,6 +1824,164 @@ test('#1: a judge-flagged area with no owning task is carried into requirements.
         expect(
             captured.notifies.some(n => /judge-flagged/.test(n.msg) && /requirement/.test(n.msg))
         ).toBe(true)
+    })
+})
+
+// ─── Granularity floor (mx5 41→11) ──────────────────────────────────────────
+
+// Four ownable requirements ⇒ floor 2. Verbatim-grounded in GRAN_FEATURE so
+// keepGroundedRequirements keeps them.
+const GRAN_FEATURE = [
+    'Build the exporter service.',
+    '- the parser reads yaml manifests',
+    '- the exporter writes csv reports',
+    '- the scheduler triggers cron jobs',
+    '- the uploader pushes archives to s3'
+].join('\n')
+const GRAN_REQS = [
+    'REQUIREMENT: "the parser reads yaml manifests"',
+    'REQUIREMENT: "the exporter writes csv reports"',
+    'REQUIREMENT: "the scheduler triggers cron jobs"',
+    'REQUIREMENT: "the uploader pushes archives to s3"'
+].join('\n')
+
+function granularityDeps(
+    decomposeResponses: string[]
+): AutoDeps & {calls: {decompose: number; hints: string[]}} {
+    const calls = {decompose: 0, hints: [] as string[]}
+    return {
+        calls,
+        runChild: (name, _tools, prompt) => {
+            if (name === 'auto-clarify') return Promise.resolve('NONE')
+            if (name === 'requirement-extract') return Promise.resolve(GRAN_REQS)
+            if (name === 'auto-decompose') {
+                calls.hints.push(prompt)
+                return Promise.resolve(decomposeResponses[calls.decompose++] ?? '')
+            }
+            if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+            // Every requirement owned by task 1 — keeps the host-side coverage
+            // accounting complete, so the only reprompt under test is the floor's.
+            if (name === 'coverage-map')
+                return Promise.resolve(
+                    'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1'
+                )
+            return Promise.resolve('')
+        },
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        commit: () => Promise.resolve({committed: true})
+    }
+}
+
+test('granularity floor: the floor is derived and logged, never put in the prompt', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = granularityDeps(['- [ ] Parser\n- [ ] Exporter\n- [ ] Scheduler\n- [ ] Uploader'])
+        await planAuto(ctx, dir, GRAN_FEATURE, d)
+        expect(d.calls.decompose).toBe(1) // at the floor ⇒ no split reprompt
+        // A target count in the prompt made the model chase it (live: 66/81/85
+        // titles, one context blowup) — the floor stays host-side.
+        expect(d.calls.hints[0]).not.toContain('at least 2 tasks')
+        expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('granularity floor: 4 ownable requirement(s) ⇒ at least 2 task(s)')
+    })
+})
+
+test('plan-shape: the host answers the breakdown fork, the triage never sees it', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const asked: string[] = []
+        let clarifyCalls = 0
+        const d: AutoDeps & {calls: {decompose: number; hints: string[]}} = {
+            calls: {decompose: 0, hints: []},
+            runChild: (name, _tools, prompt) => {
+                asked.push(name)
+                if (name === 'auto-clarify') {
+                    clarifyCalls++
+                    return Promise.resolve(
+                        clarifyCalls === 1 ?
+                            '1. **Should each of the 4 milestones become a single task, or should'
+                                + ' they be subdivided into smaller per-module tasks?**\n'
+                                + 'SUGGESTED: one task per milestone'
+                        :   'NONE'
+                    )
+                }
+                if (name === 'requirement-extract') return Promise.resolve(GRAN_REQS)
+                if (name === 'auto-decompose') {
+                    d.calls.hints.push(prompt)
+                    d.calls.decompose++
+                    return Promise.resolve('- [ ] Parser\n- [ ] Exporter\n- [ ] Scheduler')
+                }
+                if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+                if (name === 'coverage-map')
+                    return Promise.resolve(
+                        'MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1\nMAP: 4 -> TASK 1'
+                    )
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, GRAN_FEATURE, d)
+        // The stochastic triage is never consulted for this fork…
+        expect(asked).not.toContain('clarify-triage')
+        // …the user is never asked either (it is not a real open fork)…
+        expect(captured.inputs.length).toBe(0)
+        expect(captured.selects.length).toBe(0)
+        // …and the host's directive reaches decompose through CLARIFICATIONS.
+        expect(d.calls.hints[0]).toContain('subdivide into smaller per-deliverable tasks')
+        expect(d.calls.hints[0]).toContain('host-set')
+        // It is written into the AUTO file, so the decision is readable and overridable.
+        const body = (await readTaskFile(dir, id!)).body
+        expect(body).toContain('per-deliverable')
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('plan-shape question answered host-side')
+    })
+})
+
+test('granularity floor: a plan under the floor is split once and the longer plan ships', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = granularityDeps([
+            '- [ ] Build the whole exporter service',
+            '- [ ] Parser\n- [ ] Exporter\n- [ ] Scheduler'
+        ])
+        const id = await planAuto(ctx, dir, GRAN_FEATURE, d)
+        expect(d.calls.decompose).toBe(2)
+        expect(d.calls.hints[1]).toContain('plan of 1 task(s) is too coarse')
+        expect(d.calls.hints[1]).toContain('SPLIT')
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).toContain('plan under the granularity floor (1 < 2)')
+        expect(log).toContain('granularity split-retry produced 3 title(s)')
+    })
+})
+
+test('granularity floor: a split that comes back no longer keeps the original plan', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const d = granularityDeps([
+            '- [ ] Build the whole exporter service',
+            '- [ ] Build the whole exporter service'
+        ])
+        const id = await planAuto(ctx, dir, GRAN_FEATURE, d)
+        expect(d.calls.decompose).toBe(2) // exactly one reprompt — never a loop
+        expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(1)
+    })
+})
+
+test('granularity floor: no requirement signal ⇒ the old prompt, no floor, no reprompt', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        // requirement-extract returns '' here (coverageDeps), so the channel is off.
+        const d = coverageDeps(['- [ ] Build the whole exporter service'], ['COVERAGE: COMPLETE'])
+        await planAuto(ctx, dir, GRAN_FEATURE, d)
+        expect(d.calls.decompose).toBe(1)
+        expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
+        expect(d.calls.hints[0]).not.toContain('GRANULARITY')
+        const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
+        expect(log).not.toContain('granularity floor')
     })
 })
 

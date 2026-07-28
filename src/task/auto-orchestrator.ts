@@ -95,6 +95,13 @@ import {
     appendContracts
 } from './contracts.js'
 import {reconcileTitleSources} from './decompose-fidelity.js'
+import {
+    granularityFloor,
+    granularitySplitHint,
+    isPlanShapeQuestion,
+    isTooCoarse,
+    PLAN_SHAPE_ANSWER
+} from './decompose-granularity.js'
 import {mandatesTestsInSameChange, rewriteBatchTestPlan} from './batch-test-task.js'
 import {
     REQUIREMENT_EXTRACT_PROMPT,
@@ -657,6 +664,24 @@ export async function planAuto(
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = stripInlineMarkdown(question)
         askedQuestions.push(plainQ)
+        // PLAN SHAPE is the host's call, not the triage's (mx5 41→11 tasks on the
+        // same spec, same base commit, same code — see decompose-granularity.ts).
+        // The triage answers this fork for itself in 8/8 live reps and stamps it
+        // "already settled by the spec" while the spec settles no such thing, so the
+        // single most load-bearing decision in a run was an invisible coin flip.
+        // Answer it deterministically instead: same channel, same transcript, but a
+        // fixed value the user can read in the AUTO file and override next run.
+        if (isPlanShapeQuestion(plainQ)) {
+            logPlanDebug(
+                cwd,
+                `plan-shape question answered host-side (not the triage): ${plainQ.replace(/\s+/g, ' ').slice(0, 120)}`
+            )
+            answers.push(
+                `Q${answers.length + 1}: ${plainQ}\n`
+                    + `A${answers.length + 1}: ${PLAN_SHAPE_ANSWER} (host-set — plan granularity is not left to chance)`
+            )
+            continue
+        }
         // Answer-side triage (grill parity): if the inlined spec already settles
         // this question, auto-resolve it and never show it. The resolved value is
         // recorded so decompose sees the decision and the next gen call's priorQA
@@ -835,6 +860,21 @@ export async function planAuto(
         )
     }
 
+    // Granularity floor (mx5 Jul 25 vs Jul 27): the plan's task COUNT was being set
+    // by an auto-resolved clarify line the user never saw — the same spec planned
+    // into 41 tasks one day and 11 the next, with identical code. Derive the floor
+    // from the requirements a task can own, so an unreviewable "one task per
+    // milestone" decision cannot collapse the plan. 0 ownable ⇒ '' ⇒ no change.
+    const ownableRequirements = reqEntries.filter(e => !isCrossCuttingRequirement(e.quote)).length
+    const coarseFloor = granularityFloor(ownableRequirements)
+    if (coarseFloor > 0) {
+        logPlanDebug(
+            cwd,
+            `granularity floor: ${ownableRequirements} ownable requirement(s) ⇒ at least `
+                + `${coarseFloor} task(s)`
+        )
+    }
+
     // decompose
     const decomposePrompt = AUTO_DECOMPOSE_PROMPT(
         featureForModel,
@@ -884,6 +924,29 @@ export async function planAuto(
     const listRaw = await deps.runChild('auto-decompose', 'read', decomposePrompt)
     let planTitles = parsePlan(listRaw)
     logPlanDebug(cwd, `decompose produced ${planTitles.length} title(s)`)
+    // BRACES for the floor: the prompt clause alone is a preference the model can
+    // ignore, so a plan under the floor is sent back ONCE to be split (never
+    // regenerated — a fresh roll can drop a covered area, mx5 run 12). Longer plan
+    // wins; a still-coarse plan falls through to the coverage judge as before, so
+    // this can never block planning.
+    if (isTooCoarse(planTitles.length, coarseFloor)) {
+        logPlanDebug(
+            cwd,
+            `plan under the granularity floor (${planTitles.length} < ${coarseFloor}) — `
+                + 'reprompting once to split'
+        )
+        const splitRaw = await deps.runChild(
+            'auto-decompose',
+            'read',
+            prependHint(
+                granularitySplitHint(planTitles.length, ownableRequirements),
+                decomposePrompt
+            )
+        )
+        const splitTitles = parsePlan(splitRaw)
+        logPlanDebug(cwd, `granularity split-retry produced ${splitTitles.length} title(s)`)
+        if (splitTitles.length > planTitles.length) planTitles = splitTitles
+    }
     // Distrust floor (see isSuspectPlan): a ≤2-title plan for a multi-KB spec is
     // regenerated once BEFORE the judge runs — the judge cannot be trusted to
     // catch it (3/10 live false-pass) and a hinted retry heals it reliably

@@ -79,6 +79,12 @@ NONE`
  * `noBatchTests` adds the anti-batch-test rule (batch-test-task.ts) — emitted ONLY
  * when the decisions mandate tests-in-the-same-change, so every other run sees the
  * prompt it always saw. It is the belt; the host-side rewrite is the lever.
+ *
+ * Plan GRANULARITY is deliberately NOT a rule here — it rides in CLARIFICATIONS
+ * (decompose-granularity.ts). Live A/B: as a RULES line replacing "prefer a
+ * handful", it made plan size explode (81 and 85 titles for a spec whose healthy
+ * plan is ~30, one 120k-context blowup); as a clarification, with the counterweight
+ * below left intact, the same directive holds 20–39 across 16 reps.
  */
 export const AUTO_DECOMPOSE_PROMPT = (
     feature: string,
