@@ -523,9 +523,28 @@ export function runChild(
             streamWatch?.note()
             stderr += d.toString()
         })
-        proc.on('close', (code: number | null) => {
+        // One idempotent settle path for close/error/abort. Detaching the abort
+        // listener here is the point: `{once: true}` only fires-and-removes on an
+        // ACTUAL abort, so a child that finishes normally used to leave its
+        // listener on the signal forever. A TaskRunner shares ONE AbortController
+        // across every child of a run, so those listeners accumulated linearly and
+        // each one retained, via `killProc`'s closure, the finished child process,
+        // this invocation (including its full prompt), and `opts` — together with
+        // everything the caller's callbacks close over. See GitHub issue #9.
+        let settled = false
+        const cleanup = (): void => {
             if (stallTimer) clearInterval(stallTimer)
             streamWatch?.stop()
+            signal?.removeEventListener('abort', killProc)
+        }
+        const settle = (result: ChildResult): void => {
+            cleanup()
+            if (settled) return
+            settled = true
+            resolve(result)
+        }
+
+        proc.once('close', (code: number | null) => {
             // The child has exited, but anything it backgrounded (a dev server) may
             // still hold its process group and a port — reap the group so the next
             // gate's boot check does not collide with our own orphan. Best-effort:
@@ -536,7 +555,7 @@ export function runChild(
             }
             if (sink) sink.flush()
             const text = sink ? sink.text : undefined
-            resolve({
+            settle({
                 stdout,
                 stderr,
                 exitCode: code ?? 0,
@@ -549,10 +568,8 @@ export function runChild(
                 :   {})
             })
         })
-        proc.on('error', () => {
-            if (stallTimer) clearInterval(stallTimer)
-            streamWatch?.stop()
-            resolve({stdout, stderr, exitCode: 1, aborted})
+        proc.once('error', () => {
+            settle({stdout, stderr, exitCode: 1, aborted})
         })
 
         if (signal) {

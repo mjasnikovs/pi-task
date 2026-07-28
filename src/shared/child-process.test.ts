@@ -1,4 +1,5 @@
 import {describe, expect, test} from 'bun:test'
+import {getEventListeners} from 'node:events'
 import {runChild, summarizeToolArgs} from './child-process.js'
 import {fakeSpawnSimple, agentEndResponse, makeProc} from '../test-utils/fake-spawn.js'
 import type {LoopHit, SpawnFn} from './child-process.js'
@@ -395,5 +396,148 @@ describe('runChild process-group reaping', () => {
             process.kill = realKill
         }
         expect(killed).toEqual([])
+    })
+})
+
+// ─── Abort-listener lifecycle (GitHub issue #9) ──────────────────────────────
+
+/**
+ * A TaskRunner shares ONE AbortController across every child of a run, so any
+ * listener a finished child leaves behind lives until the whole run ends — and
+ * `killProc`'s closure retains that child, its invocation (prompt included) and
+ * `opts` with it. `{once: true}` does not help: it removes the listener only
+ * when an abort actually fires, which is exactly the path a healthy run never
+ * takes. These tests pin the detach on every terminal path.
+ */
+describe('runChild abort-listener lifecycle', () => {
+    const listeners = (s: AbortSignal): number => getEventListeners(s, 'abort').length
+
+    /** Spawn fake whose child ends via the given event instead of a normal close. */
+    function fakeSpawnEnding(event: 'close' | 'error'): SpawnFn {
+        return (() => {
+            const p = makeProc()
+            queueMicrotask(() => p.emit(event, event === 'close' ? 0 : new Error('spawn failed')))
+            return p
+        }) as unknown as SpawnFn
+    }
+
+    test('leaves no listener after 20 children close normally on a shared signal', async () => {
+        const controller = new AbortController()
+        for (let i = 0; i < 20; i++) {
+            await runChild(fakeSpawnEnding('close'), noopInvocation, '/tmp', controller.signal, {
+                mode: 'text'
+            })
+        }
+        expect(controller.signal.aborted).toBe(false)
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('leaves no listener after 20 children fail via error on a shared signal', async () => {
+        const controller = new AbortController()
+        for (let i = 0; i < 20; i++) {
+            const r = await runChild(
+                fakeSpawnEnding('error'),
+                noopInvocation,
+                '/tmp',
+                controller.signal,
+                {mode: 'text'}
+            )
+            expect(r.exitCode).toBe(1)
+        }
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('detaches on the json-events path too (own process group, sink attached)', async () => {
+        const controller = new AbortController()
+        for (let i = 0; i < 10; i++) {
+            await runChild(
+                fakeSpawnSimple(JSON.stringify(agentEndResponse('hi').events[0]) + '\n'),
+                noopInvocation,
+                '/tmp',
+                controller.signal,
+                {mode: 'json-events'}
+            )
+        }
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('aborting an active child cleans up once and resolves once', async () => {
+        const controller = new AbortController()
+        let closes = 0
+        const spawn = (() => {
+            const p = makeProc()
+            p.kill = () => {
+                if (p.killed) return true
+                p.killed = true
+                // A real child answers SIGTERM with a close; count them so a
+                // double-settle would show up as more than one resolution.
+                queueMicrotask(() => {
+                    closes++
+                    p.emit('close', 143)
+                })
+                return true
+            }
+            return p
+        }) as unknown as SpawnFn
+
+        const run = runChild(spawn, noopInvocation, '/tmp', controller.signal, {mode: 'text'})
+        controller.abort()
+        const result = await run
+        expect(result.aborted).toBe(true)
+        expect(closes).toBe(1)
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('racing error and close resolves once and leaves no listener', async () => {
+        const controller = new AbortController()
+        const spawn = (() => {
+            const p = makeProc()
+            queueMicrotask(() => {
+                p.emit('error', new Error('boom'))
+                p.emit('close', 0)
+                p.emit('close', 0)
+            })
+            return p
+        }) as unknown as SpawnFn
+
+        // The first terminal event wins; the later ones must not re-resolve.
+        const result = await runChild(spawn, noopInvocation, '/tmp', controller.signal, {
+            mode: 'text'
+        })
+        expect(result.exitCode).toBe(1)
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('an already-aborted signal gains no listener', async () => {
+        const controller = new AbortController()
+        controller.abort()
+        await runChild(fakeSpawnEnding('close'), noopInvocation, '/tmp', controller.signal, {
+            mode: 'text'
+        })
+        expect(listeners(controller.signal)).toBe(0)
+    })
+
+    test('completed children are not retained by the shared signal', async () => {
+        const controller = new AbortController()
+        const refs: Array<WeakRef<object>> = []
+        const spawn = (() => {
+            const p = makeProc()
+            refs.push(new WeakRef(p))
+            queueMicrotask(() => p.emit('close', 0))
+            return p
+        }) as unknown as SpawnFn
+
+        for (let i = 0; i < 8; i++) {
+            await runChild(spawn, {command: 'pi', args: []}, '/tmp', controller.signal, {
+                mode: 'text'
+            })
+        }
+        // Let the close-path group-reap timer expire, then force collection.
+        await new Promise(r => setTimeout(r, 1_200))
+        Bun.gc(true)
+        // The most recent child may still be reachable from the stack; every
+        // earlier one must be collectable now that its listener is detached.
+        const alive = refs.filter(r => r.deref() !== undefined).length
+        expect(alive).toBeLessThanOrEqual(1)
     })
 })

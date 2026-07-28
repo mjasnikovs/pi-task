@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test'
 import {capInventory, getFileInventory, stripTasksDir} from './file-inventory.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {spawnSync} from 'node:child_process'
+import {getEventListeners} from 'node:events'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -87,5 +88,36 @@ describe('getFileInventory', () => {
             const out = await getFileInventory(cwd)
             expect(out.split('\n').sort()).toEqual(['a.ts'])
         })
+    })
+})
+
+/**
+ * `getFileInventory` receives the run-long orchestrator signal, so — exactly as
+ * in runChild (GitHub issue #9) — a listener left behind by a normally finished
+ * `git ls-files` would retain that child for the rest of the run.
+ */
+describe('getFileInventory abort-listener lifecycle', () => {
+    test('detaches its abort listener once git finishes', async () => {
+        if (spawnSync('which', ['git']).status !== 0) return
+        const controller = new AbortController()
+        await withTmpTaskDir(async cwd => {
+            spawnSync('git', ['init', '-q'], {cwd})
+            for (let i = 0; i < 5; i++) {
+                await getFileInventory(cwd, controller.signal)
+            }
+        })
+        expect(controller.signal.aborted).toBe(false)
+        expect(getEventListeners(controller.signal, 'abort').length).toBe(0)
+    })
+
+    test('returns empty and adds no listener when the signal is already aborted', async () => {
+        if (spawnSync('which', ['git']).status !== 0) return
+        const controller = new AbortController()
+        controller.abort()
+        await withTmpTaskDir(async cwd => {
+            spawnSync('git', ['init', '-q'], {cwd})
+            await getFileInventory(cwd, controller.signal)
+        })
+        expect(getEventListeners(controller.signal, 'abort').length).toBe(0)
     })
 })

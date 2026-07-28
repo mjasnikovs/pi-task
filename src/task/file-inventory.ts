@@ -40,11 +40,27 @@ function runGitLsFiles(cwd: string, signal?: AbortSignal): Promise<string> {
         proc.stdout?.on('data', (d: Buffer) => {
             stdout += d.toString()
         })
-        proc.on('error', () => resolve(''))
-        proc.on('close', code => resolve(code === 0 ? stdout : ''))
-        signal?.addEventListener('abort', () => {
+        // Same detach discipline as runChild (GitHub issue #9): `signal` is the
+        // run-long orchestrator signal, so a listener left behind by a normally
+        // finished `git ls-files` would retain that child for the whole run.
+        const onAbort = (): void => {
             if (!proc.killed) proc.kill('SIGTERM')
-        })
+        }
+        let settled = false
+        const settle = (value: string): void => {
+            signal?.removeEventListener('abort', onAbort)
+            if (settled) return
+            settled = true
+            resolve(value)
+        }
+        proc.once('error', () => settle(''))
+        proc.once('close', code => settle(code === 0 ? stdout : ''))
+        if (signal) {
+            // An already-aborted signal never emits 'abort', so without this check
+            // a run cancelled before this point would let the child run to term.
+            if (signal.aborted) onAbort()
+            else signal.addEventListener('abort', onAbort, {once: true})
+        }
     })
 }
 
