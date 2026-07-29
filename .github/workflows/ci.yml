@@ -39,6 +39,22 @@ jobs:
       - name: Build (tsc)
         run: bun run build
 
+      # TEMPORARY: mechanism probe for the windows hang. The stall guard polls
+      # on an UNREF'd setInterval (stream-watchdog.ts realStreamTimerDeps). If an
+      # unref'd timer never fires on windows once nothing ref'd is pending, every
+      # test that waits for the guard hangs forever — which is what the per-test
+      # probe shows. This isolates that one behaviour from everything else.
+      - name: Probe unref'd timer
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          echo "=== unref'd interval, nothing else pending"
+          timeout 20 bun -e 'const t0=Date.now(); const r=await new Promise(res=>{const h=setInterval(()=>res("fired"),100); h.unref?.()}); console.log(r, Date.now()-t0, "ms")' \
+            || echo "=== EXIT $? (no output above means it never fired)"
+          echo "=== ref'd interval, same shape"
+          timeout 20 bun -e 'const t0=Date.now(); const r=await new Promise(res=>{setInterval(()=>res("fired"),100)}); console.log(r, Date.now()-t0, "ms"); process.exit(0)' \
+            || echo "=== EXIT $?"
+
       # TEMPORARY (this branch only): run 30476786365 named the hung file —
       # src/task/stream-stall.test.ts, loaded at 17:47:42, silent until the
       # step timeout 9 min later. Run its tests ONE AT A TIME under a hard
