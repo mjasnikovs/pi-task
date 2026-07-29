@@ -15,7 +15,19 @@ import {candidates, isAppendable, probe} from './integration-command-provenance.
 
 const dirs: string[] = []
 afterEach(() => {
-    for (const d of dirs.splice(0)) rmSync(d, {recursive: true, force: true})
+    for (const d of dirs.splice(0)) {
+        // The probe spawns `sh -c <cmd>` with this dir as its CWD and kills the
+        // non-terminating ones. On windows a killed process's cwd handle is not
+        // released synchronously, so the immediate rm races it and throws
+        // `EBUSY: resource busy or locked` — observed failing the suite on CI run
+        // 30481658242 while the assertions themselves passed. Retries cover the
+        // release; a temp dir that still will not go is not worth a red suite.
+        try {
+            rmSync(d, {recursive: true, force: true, maxRetries: 10, retryDelay: 100})
+        } catch {
+            /* leaked temp dir — the OS reaps it, and failing here would be noise */
+        }
+    }
 })
 
 function project(files: Record<string, string>): string {
