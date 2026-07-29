@@ -1,5 +1,6 @@
 import {describe, expect, test} from 'bun:test'
 import {CommandWatchdog, reminderMessage, type WatchdogDeps} from './command-watchdog.js'
+import {realTimerDeps} from '../shared/command-watchdog.js'
 
 /**
  * A synchronous fake scheduler: records armed timers and lets the test fire one
@@ -136,5 +137,20 @@ describe('reminderMessage', () => {
 
     test('sub-minute ceilings round up to at least 1 minute (never "0 minutes")', () => {
         expect(reminderMessage('bash', 30_000)).toContain('1 minute')
+    })
+})
+
+describe('realTimerDeps', () => {
+    // Same measured windows failure as the stream watchdog's poll: under Bun an
+    // unref'd timer never fires once nothing ref'd is pending, and a child sitting
+    // in a hung command IS that state — so an unref'd ceiling silently disabled the
+    // guard on windows. Asserted on the handle, so it fails on any platform.
+    test('schedules a REF’d timer — an unref’d one is dead on windows', () => {
+        const h = realTimerDeps.schedule(() => {}, 60_000) as {hasRef?: () => boolean}
+        try {
+            expect(h.hasRef?.()).toBe(true)
+        } finally {
+            realTimerDeps.cancel(h as never)
+        }
     })
 })

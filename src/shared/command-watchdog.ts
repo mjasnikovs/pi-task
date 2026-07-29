@@ -179,17 +179,17 @@ export class CommandWatchdog {
 }
 
 /**
- * Real-clock schedule/cancel, unref'd so a pending watchdog timer can never
- * itself keep the process alive on exit. Shared by both adapters; tests
- * substitute a fake scheduler instead.
+ * Real-clock schedule/cancel. Shared by both adapters; tests substitute a fake
+ * scheduler instead.
+ *
+ * REF'd, for the same measured reason as the stream watchdog's poll (see
+ * realStreamTimerDeps): under Bun on windows an unref'd timer never fires once
+ * nothing ref'd is pending, and a child sitting in a hung command is exactly
+ * that state — so the unref disabled the guard in the one case it exists for.
+ * The timer is cleared when the tool ends and in runWorker's `finally`, so it
+ * cannot outlive the call it watches.
  */
 export const realTimerDeps: Pick<WatchdogDeps, 'schedule' | 'cancel'> = {
-    schedule: (fn, ms) => {
-        const handle = setTimeout(fn, ms)
-        if (typeof (handle as {unref?: () => void}).unref === 'function') {
-            ;(handle as {unref: () => void}).unref()
-        }
-        return handle
-    },
+    schedule: (fn, ms) => setTimeout(fn, ms),
     cancel: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
 }

@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test'
 import {
     DEFAULT_STREAM_INACTIVITY_MS,
     pollIntervalMs,
+    realStreamTimerDeps,
     StreamWatchdog,
     streamStallCause,
     streamStallHint,
@@ -149,6 +150,24 @@ describe('StreamWatchdog', () => {
         h.wd.stop()
         h.advance(10_000)
         expect(h.fires).toEqual([])
+    })
+})
+
+describe('realStreamTimerDeps', () => {
+    // The poll must stay REF'd. Under Bun on windows an unref'd timer never fires
+    // once nothing ref'd is pending — and a child whose stream has gone silent is
+    // exactly that state, so an unref'd poll disabled the guard in the one case it
+    // exists for and hung every stream-stall test on windows for nine days
+    // (measured on a windows-latest runner: unref'd never fired in 20s, ref'd
+    // fired at 101ms; linux fires either way, which is why only CI caught it).
+    // Asserted on the handle rather than by waiting, so this fails on ANY platform.
+    test('schedules a REF’d poll — an unref’d one is dead on windows', () => {
+        const h = realStreamTimerDeps.schedule(() => {}, 60_000) as {hasRef?: () => boolean}
+        try {
+            expect(h.hasRef?.()).toBe(true)
+        } finally {
+            realStreamTimerDeps.cancel(h as TimerHandle)
+        }
     })
 })
 
