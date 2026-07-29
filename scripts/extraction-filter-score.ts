@@ -23,8 +23,8 @@
  */
 import {readFileSync} from 'node:fs'
 
-const POOL =
-    '/tmp/claude-1000/-home-edgars--pi-agent-extensions-pi-task/d98b4c23-de00-43f3-8c79-a6f4b3d7af57/scratchpad/extraction-pool.json'
+/** Defaults to the design pool; pass a path to score a CONFIRMATION pool. */
+const POOL = process.argv[2] ?? '.measure/extraction-pool.json'
 
 interface Entry {
     freq: number
@@ -127,6 +127,7 @@ function main() {
         reps: number
         yields: number[]
         quotes: Entry[]
+        runs?: string[][]
     }
     const all = pool.quotes
     console.log(`\n=== FILTER SCORING over ${all.length} distinct quotes (${pool.reps} runs) ===`)
@@ -177,7 +178,39 @@ function main() {
         }
     }
 
-    console.log(`\n  ${broken === 0 ? 'ADMISSIBLE — no critical obligation removed' : `INADMISSIBLE — ${broken} critical obligation(s) removed`}`)
+    console.log(`\n  POOLED verdict: ${broken === 0 ? 'ADMISSIBLE — no critical obligation removed' : `INADMISSIBLE — ${broken} critical obligation(s) removed`}`)
+
+    // ── PER-RUN FP suite ──────────────────────────────────────────────────────
+    // The pooled check above is NOT sufficient and once said ADMISSIBLE while the
+    // filter was losing an obligation end to end. It asks whether SOME quote
+    // carrying an obligation survives anywhere in the pool; the cap runs per run,
+    // over that run's quotes alone. Argon2id has three carriers in the pool — two
+    // prose sentences and one DDL row — so the pooled check passes on the prose,
+    // but the run that extracted only the DDL row lost the obligation outright.
+    // A per-run FP is what actually costs a build.
+    if (pool.runs) {
+        console.log(`\n  PER-RUN FP SUITE — obligation present in a run, gone after filtering:`)
+        let perRunFps = 0
+        for (const needle of CRITICAL) {
+            const hadIt: number[] = []
+            const lostIt: number[] = []
+            pool.runs.forEach((run, i) => {
+                const carriers = run.filter(q => q.toLowerCase().includes(needle.toLowerCase()))
+                if (carriers.length === 0) return
+                hadIt.push(i + 1)
+                if (!carriers.some(survives)) lostIt.push(i + 1)
+            })
+            if (lostIt.length > 0) {
+                perRunFps++
+                console.log(
+                    `    FP  "${needle}" — present in ${hadIt.length} run(s), LOST in ${lostIt.length}: run ${lostIt.join(', ')}`
+                )
+            }
+        }
+        console.log(
+            `\n  PER-RUN verdict: ${perRunFps === 0 ? 'ADMISSIBLE' : `INADMISSIBLE — ${perRunFps} obligation(s) lost in at least one run`}`
+        )
+    }
 
     console.log(`\n  SAMPLE OF DROPPED (adjudicate for false positives):`)
     for (const e of dropped.slice(0, 20)) {

@@ -24,7 +24,14 @@
  * This extends the existing "ship the best, not the last" rule with a tiebreak:
  * among plans of equal coverage, the smallest one wins.
  *
- * Run: PI_BIN=$(command -v pi) bun run scripts/live-coverage-adoption-ab.ts [REPS]
+ * Run: PI_BIN=$(command -v pi) bun run scripts/live-coverage-adoption-ab.ts [REPS] [FIXTURE] [probe]
+ *   FIXTURE  'mx5' (default, the real 20KB spec) or the stem of a file in
+ *            scripts/fixtures/<stem>-spec.md.
+ *   probe    run the BASELINE ARM ONLY. The lever's precondition is a property of
+ *            the baseline, so a new fixture must be shown to produce the target
+ *            shape BEFORE paying for divergent arms; a fixture that never
+ *            produces it makes the full run ABSTAIN and proves nothing. Probing
+ *            costs roughly half a full rep.
  */
 import {readFileSync, existsSync} from 'node:fs'
 import path from 'node:path'
@@ -60,19 +67,26 @@ import {
 import {reportAb} from './ab-verdict.js'
 
 const MAX_COVERAGE_ROUNDS = 2
-// Generality fixture: a NON-web daemon spec (Rust/ETL, no UI, no HTTP surface
-// beyond /health) with mx5-comparable breadth. The first CLI fixture was too
-// SMALL to exercise the lever at all — 8 ownable requirements, and round 0 came
-// back COMPLETE in 16/16 reps, so the coverage loop never retried and the run
-// ABSTAINed. The pathology is scale-dependent: it needs a spec broad enough that
-// the first plan leaves the judge INCOMPLETE.
-const ETL_SPEC = readFileSync(
-    new URL('./fixtures/etl-spec.md', import.meta.url).pathname,
-    'utf8'
-)
-
-const USE_CLI = (process.argv[3] ?? 'mx5').toLowerCase() === 'etl'
-const SPEC = USE_CLI ? ETL_SPEC : readFileSync('/home/edgars/hub/mx5/DESIGN/PROJECT.md', 'utf8')
+/**
+ * Generality fixtures, in the order they were tried and what each one taught:
+ *   'cli'       (8 ownable)  — too SMALL. Round 0 came back COMPLETE 16/16, the
+ *                loop never retried, the run ABSTAINed. Deleted.
+ *   'etl'       (28 ownable) — a non-web Rust daemon with mx5-comparable breadth.
+ *                The loop DOES retry (11/16 rounds INCOMPLETE) but round 0 lands
+ *                at 25-27/28 and every retry picks up a straggler, so growth
+ *                always pays and the BASELINE never produces the pathology.
+ *   'toolchain' (engineered) — round 0 is meant to reach the coverage CEILING
+ *                while the free-text judge keeps returning INCOMPLETE, which is
+ *                the actual precondition. See that file's header.
+ * The pathology is not merely scale-dependent: it needs EARLY SATURATION.
+ */
+const FIXTURE = (process.argv[3] ?? 'mx5').toLowerCase()
+const PROBE_ONLY = (process.argv[4] ?? '') === 'probe'
+const IS_MX5 = FIXTURE === 'mx5'
+const SPEC =
+    IS_MX5 ?
+        readFileSync('/home/edgars/hub/mx5/DESIGN/PROJECT.md', 'utf8')
+    :   readFileSync(new URL(`./fixtures/${FIXTURE}-spec.md`, import.meta.url).pathname, 'utf8')
 const SPEC_ROOT = '/home/edgars/hub/mx5'
 
 const deps: PhaseDeps = {cwd: process.cwd(), taskId: '', signal: new AbortController().signal}
@@ -218,6 +232,91 @@ async function runArm(
     return best
 }
 
+/**
+ * Both arms, ROUND BY ROUND, sharing a candidate draw while their states are
+ * identical.
+ *
+ * This is not the replay that the header rejects. A replay reuses a recorded
+ * round 2 after an arm rejected round 1 — invalid, because rejection changes the
+ * `missing` list that seeds the next reprompt. Here a draw is shared only while
+ * both arms hold the SAME plan, so both would issue a byte-identical prompt; the
+ * instant their decisions differ, each arm draws its own candidate. That keeps
+ * the comparison exact and removes the sampler noise that made an independently
+ * drawn round 1 differ between arms for no reason other than temperature.
+ *
+ * It also cuts roughly a fifth of the model calls per rep, which is what makes a
+ * 12-rep run affordable on this fixture (~18 min per baseline-only rep measured).
+ */
+async function runBothArms(
+    round0: Scored,
+    score: (t: string[]) => Promise<Scored>,
+    hasReqs: boolean,
+    baseTrail: string[],
+    cTrail: string[]
+): Promise<{base: Scored; c: Scored; shared: number}> {
+    const decomposePrompt = AUTO_DECOMPOSE_PROMPT(SPEC, '')
+    const draw = async (best: Scored): Promise<Scored> =>
+        score(await decomposeNonEmpty(`${coverageRepromptHint(best.missing)}\n\n${decomposePrompt}`))
+    const note = (trail: string[], cand: Scored, d: {adopt: boolean; reason: string}): void => {
+        trail.push(
+            `${cand.titles.length}t/${cand.covered.size}c ${d.adopt ? 'ADOPT' : `REJECT(${d.reason})`}`
+        )
+    }
+    let base = round0
+    let c = round0
+    let shared = 0
+    for (let round = 1; round <= MAX_COVERAGE_ROUNDS; round++) {
+        const baseLive = base.missing.length > 0
+        const cLive = c.missing.length > 0
+        if (!baseLive && !cLive) break
+        if (base === c && baseLive && cLive) {
+            const cand = await draw(base)
+            shared++
+            const db = decideAdoptionBaseline(base, cand, hasReqs)
+            const dc = decideAdoption(c, cand, hasReqs)
+            note(baseTrail, cand, db)
+            note(cTrail, cand, dc)
+            if (db.adopt) base = cand
+            if (dc.adopt) c = cand
+            continue
+        }
+        if (baseLive) {
+            const cand = await draw(base)
+            const d = decideAdoptionBaseline(base, cand, hasReqs)
+            note(baseTrail, cand, d)
+            if (d.adopt) base = cand
+        }
+        if (cLive) {
+            const cand = await draw(c)
+            const d = decideAdoption(c, cand, hasReqs)
+            note(cTrail, cand, d)
+            if (d.adopt) c = cand
+        }
+    }
+    return {base, c, shared}
+}
+
+/** Two-sided Fisher exact for the 2x2 hit table, the run's decision statistic. */
+function fisherTwoSided(a: number, b: number, cc: number, d: number): number {
+    const lf: number[] = [0]
+    for (let i = 1; i <= a + b + cc + d; i++) lf.push(lf[i - 1] + Math.log(i))
+    const n = a + b + cc + d
+    const p = (x: number): number =>
+        Math.exp(
+            lf[a + b] + lf[cc + d] + lf[a + cc] + lf[b + d]
+                - lf[n] - lf[x] - lf[a + b - x] - lf[a + cc - x] - lf[d - a + x]
+        )
+    const obs = p(a)
+    let total = 0
+    const lo = Math.max(0, a - d)
+    const hi = Math.min(a + b, a + cc)
+    for (let x = lo; x <= hi; x++) {
+        const px = p(x)
+        if (px <= obs * (1 + 1e-9)) total += px
+    }
+    return Math.min(1, total)
+}
+
 async function main() {
     const reps = parseInt(process.argv[2] ?? '10', 10)
 
@@ -245,15 +344,16 @@ async function main() {
         )
     }
     reqs = capRequirements(reqs, passages, SPEC)
+    // Dangling-artifact refs are resolved against a real checkout; only mx5 has one.
     const dangling =
-        USE_CLI ? [] : (
+        IS_MX5 ?
             findSpecDanglingArtifacts(SPEC, rel => existsSync(path.join(SPEC_ROOT, rel)))
-        )
+        :   []
     const score = makeScorer(reqs, dangling)
     const ownable = reqs.filter(r => !isCrossCuttingRequirement(r.quote)).length
     console.log(
-        `\n=== ${USE_CLI ? 'etl' : 'mx5'}: ${reqs.length} grounded requirement(s), ${ownable} ownable, `
-            + `${dangling.length} dangling ===\n`
+        `\n=== ${FIXTURE}${PROBE_ONLY ? ' (PROBE — baseline arm only)' : ''}: ${reqs.length} grounded `
+            + `requirement(s), ${ownable} ownable, ${dangling.length} dangling ===\n`
     )
 
     let baselineHits = 0
@@ -261,6 +361,7 @@ async function main() {
     let witnessed = 0
     let lostCoverage = 0
     let degenerateSurvived = 0
+    let sharedDraws = 0
     const saved: number[] = []
     const titlesBase: number[] = []
     const titlesC: number[] = []
@@ -272,8 +373,21 @@ async function main() {
         const round0 = await score(await decomposeNonEmpty(AUTO_DECOMPOSE_PROMPT(SPEC, '')))
         const baseTrail: string[] = []
         const cTrail: string[] = []
-        const base = await runArm(round0, score, decideAdoptionBaseline, reqs.length > 0, baseTrail)
-        const c = await runArm(round0, score, decideAdoption, reqs.length > 0, cTrail)
+        // In probe mode the treatment arm is not run at all: the question is only
+        // whether the BASELINE exhibits the target shape on this fixture. `c` is
+        // aliased to `base` so the per-rep bookkeeping below stays one code path;
+        // every C-derived number is suppressed in the report.
+        let base: Scored
+        let c: Scored
+        if (PROBE_ONLY) {
+            base = await runArm(round0, score, decideAdoptionBaseline, reqs.length > 0, baseTrail)
+            c = base
+        } else {
+            const both = await runBothArms(round0, score, reqs.length > 0, baseTrail, cTrail)
+            base = both.base
+            c = both.c
+            sharedDraws += both.shared
+        }
 
         if (round0.missing.length > 0) witnessed++
         if (base.titles.length === 0 || c.titles.length === 0 || round0.titles.length === 0)
@@ -292,10 +406,29 @@ async function main() {
         if (bInf) saved.push(base.titles.length - c.titles.length)
 
         console.log(
-            `rep ${rep}: r0=${round0.titles.length}t/${round0.covered.size}c\n`
-                + `        BASE [${baseTrail.join(' → ')}] ships ${base.titles.length}t/${base.covered.size}c (inf=${bInf})\n`
-                + `        C    [${cTrail.join(' → ')}] ships ${c.titles.length}t/${c.covered.size}c (inf=${cInf})`
+            `rep ${rep}: r0=${round0.titles.length}t/${round0.covered.size}c`
+                + ` missing=${round0.missing.length}\n`
+                + `        BASE [${baseTrail.join(' → ')}] ships ${base.titles.length}t/${base.covered.size}c (inf=${bInf})`
+                + (PROBE_ONLY ? '' : (
+                    `\n        C    [${cTrail.join(' → ')}] ships ${c.titles.length}t/${c.covered.size}c (inf=${cInf})`
+                ))
         )
+    }
+
+    if (PROBE_ONLY) {
+        // Precondition report only. The pass bar is the one the full A/B needs:
+        // fewer than 3 baseline hits and the A/B would ABSTAIN on this fixture.
+        const MIN_PRECONDITION = 3
+        console.log(
+            `\n=== PRECONDITION PROBE — ${FIXTURE}, ${reps} rep(s) ===\n`
+                + `  round 0 INCOMPLETE (loop entered): ${witnessed}/${reps}\n`
+                + `  BASELINE produced the target shape: ${baselineHits}/${reps}\n`
+                + `    (target = shipped plan grew past round 0 while buying no grounded coverage)\n`
+                + `  ${baselineHits >= MIN_PRECONDITION ?
+                    `USABLE — run the full A/B on this fixture` :
+                    `NOT USABLE — the full A/B would ABSTAIN. Fix the fixture, not the metric.`}\n`
+        )
+        return
     }
 
     const mean = (xs: number[]): string =>
@@ -340,6 +473,11 @@ async function main() {
     }
     const smaller = titlesC.filter((t, i) => t < titlesBase[i]).length
     const larger = titlesC.filter((t, i) => t > titlesBase[i]).length
+    console.log(
+        `\n  TARGET SHAPE  baseline ${baselineHits}/${reps}  C ${treatHits}/${reps}  `
+            + `Fisher two-sided p=${fisherTwoSided(baselineHits, reps - baselineHits, treatHits, reps - treatHits).toFixed(4)}`
+            + `\n  shared draws (both arms in the same state): ${sharedDraws}`
+    )
     console.log(
         `\n  PLAN SIZE (effect, not invariant)\n`
             + `    baseline: mean ${(sum(titlesBase) / reps).toFixed(1)}  median ${med(titlesBase)}\n`

@@ -11,3 +11,6 @@ docs/
 
 # Patched dist copies built by the A/B harnesses (scripts/spec-url-dist.ts).
 .ab-dist/
+
+# Measurement pools produced by scripts/extraction-*-step0.ts (large, regenerable).
+.measure/

@@ -27,7 +27,9 @@
  * If the CORE (present in every run) is obligation-dense and the TAIL (present
  * once) is not, the defect is precision. If both look alike, it is sampling.
  *
- * Run: PI_BIN=$(command -v pi) bun run scripts/extraction-precision-step0.ts [REPS]
+ * Run: PI_BIN=$(command -v pi) bun run scripts/extraction-precision-step0.ts [REPS] [TAG]
+ *   TAG suffixes the output files, so a confirmation pool can sit beside the pool
+ *   a rule was designed against instead of replacing it.
  */
 import {readFileSync, writeFileSync} from 'node:fs'
 import {runPhaseChild, type PhaseDeps} from '../src/task/child-runner.js'
@@ -40,12 +42,16 @@ import {
 } from '../src/task/requirements.js'
 
 const SPEC = readFileSync('/home/edgars/hub/mx5/DESIGN/PROJECT.md', 'utf8')
-const SCRATCH =
-    '/tmp/claude-1000/-home-edgars--pi-agent-extensions-pi-task/d98b4c23-de00-43f3-8c79-a6f4b3d7af57/scratchpad'
-const OUT = `${SCRATCH}/extraction-buckets.txt`
+/** Repo-local and gitignored: a session scratchpad is deleted when the session
+ *  ends, and the pool is the input to every offline scoring script here.
+ *  TAG names the pool so a CONFIRMATION pool never overwrites the pool a rule was
+ *  designed against — an out-of-sample check needs both on disk at once. */
+const SCRATCH = '.measure'
+const TAG = process.argv[3] ?? ''
+const OUT = `${SCRATCH}/extraction-buckets${TAG ? `-${TAG}` : ''}.txt`
 /** Full pool as data, so filter candidates can be designed and scored offline
  *  (no model calls) against the exact quotes the extractor really produced. */
-const POOL = `${SCRATCH}/extraction-pool.json`
+const POOL = `${SCRATCH}/extraction-pool${TAG ? `-${TAG}` : ''}.json`
 const deps: PhaseDeps = {cwd: process.cwd(), taskId: '', signal: new AbortController().signal}
 
 /** Mechanical "does this sentence obligate anything" proxy. Deliberately GENEROUS —

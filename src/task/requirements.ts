@@ -112,7 +112,11 @@ export function keepGroundedRequirements(
 export function capRequirements(
     entries: RequirementEntry[],
     passages: string[],
-    sourceDoc?: string
+    sourceDoc?: string,
+    /** A/B seam: `false` reproduces the pre-budget rule, so an offline harness can
+     *  score the shipped rule against the one it replaced without transcribing
+     *  sectionFairFill and letting the copy drift. Production never passes it. */
+    deprioritiseLowValue = true
 ): RequirementEntry[] {
     if (entries.length <= MAX_REQUIREMENTS) return entries
     const norms = passages.map(normalise)
@@ -123,7 +127,124 @@ export function capRequirements(
     const marked = entries.filter(covers)
     const rest = entries.filter(e => !covers(e))
     const budget = MAX_REQUIREMENTS - Math.min(marked.length, MAX_REQUIREMENTS)
-    return [...marked.slice(0, MAX_REQUIREMENTS), ...sectionFairFill(rest, budget, sourceDoc)]
+    // The low-value filter applies to the UNMARKED remainder only. Quoting an
+    // obligation-marked passage is the pipeline's existing, validated evidence
+    // that a quote states an obligation, and it outranks any lexical heuristic:
+    // "MUST log every request" is 22 characters and every length-based rule reads
+    // it as a fragment. Filtering ahead of the marked/rest split deleted it.
+    //
+    // INSURANCE, not a measured win on mx5: across both 30-run pools exactly one
+    // distinct quote per pool is low-value AND marked, and it is a genuinely
+    // truncated one. The layering matters for specs whose obligations are SHORT,
+    // which mx5's are not. Do not cite it as the reason tail coverage holds —
+    // tail coverage is identical with the filter applied before the split.
+    const pool = deprioritiseLowValue ? budgetedByObligation(rest, budget, sourceDoc) : rest
+    return [...marked.slice(0, MAX_REQUIREMENTS), ...sectionFairFill(pool, budget, sourceDoc)]
+}
+
+/** Longest a dependency-pin row can be before it is presumed to carry an
+ *  obligation after the pin. Real pins in the measured corpus run 32..48 chars;
+ *  the pin-prefixed lines that DO obligate ("TypeScript `6.0.3` — one strict
+ *  `tsconfig.json`: `strict`, `noUncheckedIndexedAccess`, …") run 130..260. */
+const MAX_PIN_LENGTH = 80
+
+/** Cut mid-expression: an unbalanced fence or bracket, or a trailing separator.
+ *  NOT `;` — a complete clause legitimately ends with one, and dropping on `;`
+ *  discarded a runnable `lint` = `prettier … && eslint … && tsc --noEmit` line. */
+function isTruncatedQuote(q: string): boolean {
+    if ((q.match(/`/g) ?? []).length % 2 === 1) return true
+    for (const [open, close] of [
+        ['(', ')'],
+        ['[', ']'],
+        ['{', '}']
+    ]) {
+        const o = (q.match(new RegExp(`\\${open}`, 'g')) ?? []).length
+        const c = (q.match(new RegExp(`\\${close}`, 'g')) ?? []).length
+        if (o > c) return true
+    }
+    return /[,:([{]\s*$/.test(q.trim())
+}
+
+/** A bare version row — data, not an obligation. Length-gated, see MAX_PIN_LENGTH. */
+function isDependencyPin(q: string): boolean {
+    const t = q.trim().replace(/^\*\*|\*\*$/g, '')
+    if (t.length > MAX_PIN_LENGTH) return false
+    return /^\**[`*]?[\w@/-]+[`*]?\**\s*[`']?\d+\.\d+/.test(t)
+}
+
+/** A DDL/schema row: `col type …`. */
+function isSchemaRow(q: string): boolean {
+    return /^\s*[\w_]+\s+(?:uuid|text|int|integer|bigint|boolean|timestamptz|bytea|jsonb|numeric|smallint)\b/i.test(
+        q
+    )
+}
+
+/** Too short to state an obligation. MIN_QUOTE_LENGTH (6) admits "Contact
+ *  seller"; a clause needs a subject and a predicate. */
+function isQuoteFragment(q: string): boolean {
+    const t = q.trim()
+    return t.length < 25 || t.split(/\s+/).length < 4
+}
+
+/**
+ * Quotes that pass the grounding guard (verbatim substring of the doc) but state
+ * no obligation. There is no obligation test anywhere else in the pipeline —
+ * `keepGroundedRequirements` only checks the quote really appears in the source,
+ * so any sentence at all survives it and precision rests entirely on the model.
+ */
+export function isLowValueQuote(quote: string): boolean {
+    return (
+        isTruncatedQuote(quote)
+        || isDependencyPin(quote)
+        || isSchemaRow(quote)
+        || isQuoteFragment(quote)
+    )
+}
+
+/**
+ * Deprioritise obligation-free quotes, but only as far as the BUDGET requires.
+ *
+ * Measured (mx5, 20402-char spec, two independent 30-run extraction pools): the
+ * extractor's single-pass yield swings 20..160 for byte-identical input, and the
+ * padding crowds real obligations out of the 40 that ship — high-yield runs land
+ * FEWER critical obligations than low-yield ones. Critical obligations reaching
+ * the shipped list go 8.50 → 9.37 of 16 on the design pool (10 runs better, 0
+ * worse, p=0.0020) and 7.70 → 8.43 on the confirmation pool (12 / 0, p=0.0005).
+ *
+ * BUDGETED, not absolute. Below the cap no slot is contested, so dropping there
+ * destroys information and buys nothing; a run that filtered 55 quotes down to 20
+ * lost its only carrier of the Argon2id obligation — a DDL row that was correctly
+ * classified as one — while 20 slots sat empty. So the low-value entries come back
+ * in source-doc order until the list reaches the cap.
+ *
+ * Absolute filtering scored marginally higher on raw count (24 gains vs 22 across
+ * both pools) and was rejected anyway: its extra gains are one more obligation in
+ * an already-populated list, while its one loss is an obligation vanishing from a
+ * run outright. Those are not the same size of mistake.
+ *
+ * Doc order for the restore is the neutral choice: which entries return only
+ * matters when more were dropped than there are free slots, and ordering by
+ * anything fitted to an observed loss would be tuning the rule to one pool.
+ */
+function budgetedByObligation(
+    entries: RequirementEntry[],
+    budget: number,
+    sourceDoc?: string
+): RequirementEntry[] {
+    const keep = entries.filter(e => !isLowValueQuote(e.quote))
+    if (keep.length >= budget) return keep
+    const at = (e: RequirementEntry): number => {
+        if (!sourceDoc) return Number.MAX_SAFE_INTEGER
+        const i = sourceDoc.indexOf(e.quote.trim())
+        return i < 0 ? Number.MAX_SAFE_INTEGER : i
+    }
+    const restored = entries
+        .filter(e => isLowValueQuote(e.quote))
+        .map((e, given) => ({e, at: at(e), given}))
+        .sort((x, y) => x.at - y.at || x.given - y.given)
+        .slice(0, budget - keep.length)
+        .map(x => x.e)
+    return [...keep, ...restored]
 }
 
 /** The doc split into heading-delimited sections, each pre-normalised for

@@ -11,6 +11,7 @@ import {
     parseRequirementLines,
     keepGroundedRequirements,
     capRequirements,
+    isLowValueQuote,
     enumerateObligationPassages,
     uncoveredPassages,
     extractionRetryHint,
@@ -201,6 +202,165 @@ describe('obligation-passage recall floor', () => {
         const capped = capRequirements(entries, passages, doc)
         expect(capped[0].quote).toBe('the system MUST flush queues on shutdown')
         expect(capped).toHaveLength(40)
+    })
+
+    // ── low-value deprioritisation (the 40-slot budget) ──────────────────────
+    // The extractor's single-pass yield swings 20..160 on the byte-identical mx5
+    // spec, and the padding crowds real obligations out of the 40 that ship —
+    // high-yield runs land FEWER critical obligations than low-yield ones.
+    //
+    // Measured end to end (filter → cap → count critical obligations in the
+    // shipped 40) on two INDEPENDENT 30-run extraction pools:
+    //   design pool       8.50 → 9.37 of 16   10 better, 0 worse, p=0.0020
+    //   confirmation pool 7.70 → 8.43 of 16   12 better, 0 worse, p=0.0005
+    // The second pool was drawn AFTER the rule was fixed, because the budget
+    // clause was written while looking at a loss in the first one.
+    //
+    // Tail-section coverage — what sectionFairFill protects, and the thing a
+    // ranking change is most likely to break — is unchanged on both pools, with
+    // zero regressions in 60 runs.
+
+    /**
+     * FP SUITE. Each entry traces to a real failure or an obligation of record —
+     * the index.html clause whose loss shipped a permanently blank app (run 16),
+     * the §10 cadence line run 11 lost, the ownership/ban/photo contract.
+     *
+     * These are VERBATIM quotes the extractor really produced, lifted from the
+     * measured pools, not paraphrases. That distinction has teeth: a hand-shortened
+     * stand-in for the ESLint line ("ESLint `10.6.0` with `no-explicit-any: error`
+     * …", 65 chars) trips the length-gated dependency-pin rule, while the 226-char
+     * line the extractor actually emits does not. Paraphrasing the suite would test
+     * the paraphrase.
+     */
+    const CRITICAL_OBLIGATIONS = [
+        'TypeScript `6.0.3` — one strict `tsconfig.json`: `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals/Parameters`, `noFallthroughCasesInSwitch`, `verbatimModuleSyntax`, `forceConsistentCasingInFileNames`.',
+        'Prettier `3.9.4` — `printWidth 120`, no semicolons, single quotes, no bracket spacing, `arrowParens: avoid`, LF. Config: `.prettierrc.cjs` (aiz-server variant).',
+        'ESLint `10.6.0` flat config (`eslint.config.js`) — `typescript-eslint` `8.62.1` `recommendedTypeChecked`; `no-explicit-any: error`, `no-shadow: error`, unused-vars ignore `^_`; client packages add `react-hooks` + `react-refresh`.',
+        "`lint` = `prettier --write 'src/**/*.{ts,tsx}' && eslint --fix . && tsc --noEmit`;",
+        'non-`/api` GETs serve the built `index.html`.',
+        "a test lands *as fast as possible* — in the same change — as each new route or React component/page. No route or component is considered done until its test exists and passes. Don't batch testing to the end of a milestone.",
+        'Each new component/page gets its `*.spec.tsx` alongside it immediately (see cadence above). Mock RPC calls at the network boundary so component tests stay deterministic and DB-free.',
+        'auth (login/guards), invite redeem (one-time, expiry), listing CRUD + ownership, photo upload limit (≤5), admin ban/delete.',
+        "Consume is atomic (`UPDATE … SET used_at = now() WHERE used_at IS NULL RETURNING …`) so concurrent redeems can't both win.",
+        'Zod-validate every input; parameterized queries via Bun SQL tagged templates (no string interpolation).',
+        'Phone reveal only to authenticated members; never ship phone in list/detail payloads.',
+        'Ownership/role checks server-side on every mutation; banned-user gate (session rejected + their listings filtered from all listing queries).',
+        'Basic rate-limit on login, invite create, and invite redeem (simple in-memory counter is fine — single Bun process).',
+        'Argon2id passwords; hashed session tokens; `HttpOnly`/`Secure`/`SameSite` cookies.'
+    ]
+
+    test('isLowValueQuote: no critical obligation is classified low-value (FP suite)', () => {
+        const misclassified = CRITICAL_OBLIGATIONS.filter(q => isLowValueQuote(q))
+        expect(misclassified).toEqual([])
+    })
+
+    test('isLowValueQuote: catches the four measured junk shapes', () => {
+        // Bare dependency pins — data, not obligations. 27% of a 237-quote pool.
+        expect(isLowValueQuote('`hono` `4.12.27` — HTTP framework, RPC (`hono/client`)')).toBe(true)
+        expect(isLowValueQuote('`zod` `4.4.3` — schemas (shared client/server)')).toBe(true)
+        // DDL rows — the most STABLE thing the extractor produces, and obligation-free.
+        expect(isLowValueQuote('display_name text not null')).toBe(true)
+        expect(isLowValueQuote('created_at timestamptz not null default now()')).toBe(true)
+        // Cut mid-expression.
+        expect(isLowValueQuote('the handler calls `db.query(')).toBe(true)
+        // Fragments.
+        expect(isLowValueQuote('Contact seller')).toBe(true)
+    })
+
+    test('capRequirements: an obligation-MARKED quote is never dropped as low-value', () => {
+        // "MUST log every request" is 22 chars — every length-based rule reads it
+        // as a fragment. Quoting a marked passage outranks the lexical heuristic;
+        // filtering ahead of the marked/rest split deleted it outright.
+        const passages = ['The system MUST log every request.']
+        const filler = Array.from({length: 45}, (_, i) => ({
+            quote: `filler requirement number ${i}`,
+            anchor: ''
+        }))
+        const capped = capRequirements(
+            [...filler, {quote: 'MUST log every request', anchor: ''}],
+            passages
+        )
+        expect(capped.some(e => e.quote === 'MUST log every request')).toBe(true)
+    })
+
+    test('capRequirements: low-value quotes lose their slots when the list overflows', () => {
+        const doc = [
+            '# Deps',
+            '- `hono` `4.12.27` — HTTP framework',
+            '- `zod` `4.4.3` — schemas',
+            '# Rules',
+            ...Array.from({length: 45}, (_, i) => `- rule ${i} states a real obligation here`)
+        ].join('\n')
+        const entries = [
+            {quote: '`hono` `4.12.27` — HTTP framework', anchor: ''},
+            {quote: '`zod` `4.4.3` — schemas', anchor: ''},
+            ...Array.from({length: 45}, (_, i) => ({
+                quote: `rule ${i} states a real obligation here`,
+                anchor: ''
+            }))
+        ]
+        const capped = capRequirements(entries, [], doc).map(e => e.quote)
+        expect(capped).toHaveLength(40)
+        expect(capped).not.toContain('`hono` `4.12.27` — HTTP framework')
+        expect(capped).not.toContain('`zod` `4.4.3` — schemas')
+    })
+
+    test('capRequirements: BUDGETED — low-value quotes come back rather than undershoot the cap', () => {
+        // The filter exists to free contested slots. Below the cap nothing is
+        // contested, so dropping there destroys information and buys nothing: one
+        // measured run filtered 55 quotes to 20 and lost its only carrier of the
+        // Argon2id obligation while 20 slots sat empty.
+        const pins = Array.from({length: 30}, (_, i) => `\`pkg${i}\` \`1.${i}.0\` — a dependency`)
+        const rules = Array.from({length: 15}, (_, i) => `rule ${i} states a real obligation here`)
+        const doc = [
+            '# Deps',
+            ...pins.map(p => `- ${p}`),
+            '# Rules',
+            ...rules.map(r => `- ${r}`)
+        ].join('\n')
+        const entries = [...pins, ...rules].map(q => ({quote: q, anchor: ''}))
+        const capped = capRequirements(entries, [], doc).map(e => e.quote)
+        expect(capped).toHaveLength(40)
+        // every real obligation kept …
+        for (const r of rules) expect(capped).toContain(r)
+        // … and the free slots refilled from the deprioritised pool, not left empty.
+        expect(capped.filter(q => pins.includes(q))).toHaveLength(25)
+    })
+
+    test('capRequirements: under the cap nothing is deprioritised at all', () => {
+        // The common case for a small spec. No slot is contested, so a pin that
+        // would lose its place in a 100-quote list keeps it in a 10-quote one —
+        // the rule must not become a general-purpose deleter.
+        const entries = [
+            {quote: '`hono` `4.12.27` — HTTP framework', anchor: ''},
+            {quote: 'display_name text not null', anchor: ''},
+            ...Array.from({length: 8}, (_, i) => ({
+                quote: `rule ${i} states a real obligation here`,
+                anchor: ''
+            }))
+        ]
+        expect(capRequirements(entries, [], 'doc')).toEqual(entries)
+    })
+
+    test('capRequirements: the A/B seam reproduces the pre-budget rule', () => {
+        // 45 pins and 45 obligations, two sections. With the rule OFF the
+        // section-fair fill splits the budget evenly and pins take half of it;
+        // with it ON the obligations alone already fill the cap, so no pin ships.
+        const pins = Array.from({length: 45}, (_, i) => `\`pkg${i}\` \`1.${i}.0\` — a dependency`)
+        const rules = Array.from({length: 45}, (_, i) => `rule ${i} states a real obligation here`)
+        const doc = [
+            '# Deps',
+            ...pins.map(p => `- ${p}`),
+            '# Rules',
+            ...rules.map(r => `- ${r}`)
+        ].join('\n')
+        const entries = [...pins, ...rules].map(q => ({quote: q, anchor: ''}))
+        const off = capRequirements(entries, [], doc, false).map(e => e.quote)
+        const on = capRequirements(entries, [], doc).map(e => e.quote)
+        expect(off).toHaveLength(40)
+        expect(on).toHaveLength(40)
+        expect(off.filter(q => pins.includes(q)).length).toBeGreaterThan(0)
+        expect(on.filter(q => pins.includes(q))).toHaveLength(0)
     })
 
     test('owned requirements: write → read → title match → injection block (run 16 channel gap)', async () => {
