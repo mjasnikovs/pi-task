@@ -1,0 +1,42 @@
+{
+  "_authored": "2026-07-29, BEFORE any toolchain extraction pool existed. Written by reading scripts/fixtures/toolchain-spec.md only. If this file's mtime is later than .measure/extraction-pool-toolchain.json the pre-registration is void.",
+  "_selection_rule": "Obligations whose LOSS would ship a broken toolchain, sampled across the whole document rather than the tail, and phrased as a distinctive substring of the spec's own wording. Deliberately mixes MODAL-phrased obligations (the four in 17, the required cadence in 16) with DECLARATIVE ones (the crate bullets), because the whole question is whether a modal-keyed ranking finds obligations that carry no modal.",
+  "_variants_preregistered": {
+    "full": "OBLIGATION_RE verbatim from scripts/extraction-precision-step0.ts",
+    "modal": "the same regex with the non-modal alternatives removed (no, not, only, always, every, each, at least, at most, max, min) — the subset that survives the mx5 diagnosis, where 6 of 16 criticals fired ONLY on those bare words"
+  },
+  "_pass_condition": "Unchanged from nexttask: critical obligations reaching the shipped 40 must RISE with ZERO per-run losses, and tail-section coverage must not regress. On this fixture the result is confirmatory only if the cap actually engages (yield > 40) in a majority of runs; otherwise ABSTAIN.",
+  "critical": [
+    "no procedural macros",
+    "LLVM is explicitly out of scope",
+    "UTF-8 source only",
+    "preserves trivia",
+    "byte span into an interned source map",
+    "lossless concrete syntax tree",
+    "detects import cycles",
+    "binds every identifier to a definition id",
+    "strongly connected component",
+    "static single assignment",
+    "iteration cap",
+    "individually switchable",
+    "line table",
+    "ELF, Mach-O and COFF",
+    "platform system linker",
+    "preserving comments and key order",
+    "one version per package",
+    "verifies a package checksum",
+    "minimal-version",
+    "content hash and compiler version",
+    "stable numeric code",
+    "machine-readable JSON output",
+    "append-only",
+    "idempotent on a second run",
+    "shares the precedence table",
+    "a test lands",
+    "Golden object tests",
+    "never write outside the target directory",
+    "byte-identical objects",
+    "must not read environment variables",
+    "exit non-zero on any emitted error diagnostic"
+  ]
+}

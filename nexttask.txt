@@ -89,24 +89,82 @@ NEW FINDINGS FROM THIS SESSION — use these, they cost 2 hours of model time
     obligation vanishing from a run entirely. Not the same size of mistake.
 
 STILL RULED OUT — DO NOT RE-PROPOSE
+  LEXICAL OBLIGATION RANKING (OBLIGATION_RE or any stricter modal subset of it) —
+  refuted 2026-07-29, see "what was tried" below; harmful on a second spec.
   k-of-n VOTING across passes. Any threshold >=5 keeps all 37 schema rows and
   DELETES the test-cadence line and the "non-/api GETs serve the built
   index.html" clause — the two whose loss has already cost a run each.
 
-WHAT TO TRY NEXT
-  The 40-slot budget is now allocated by (1) marked-passage priority, which
-  covers ~1 entry, (2) NOT-low-value, which is a negative test, and (3) section
-  round-robin. There is still no POSITIVE ranking by obligation-bearing-ness.
-  The obvious candidate is the modal/prohibition marker already used as a proxy
-  in extraction-precision-step0.ts (OBLIGATION_RE), promoted from a measurement
-  proxy to a ranking key inside sectionFairFill's in-bucket order — that keeps
-  section fairness intact while preferring obligating sentences within a section.
-  Score it offline on BOTH pools first; it costs no model calls.
+WHAT WAS TRIED — OBLIGATION_RE AS A RANKING KEY: REFUTED 2026-07-29. DO NOT
+RE-PROPOSE. It PASSES the pass condition below and is still WRONG; that is the
+point of this entry.
+  The candidate was the one named here last session: promote OBLIGATION_RE from a
+  measurement proxy to a ranking key inside sectionFairFill's IN-BUCKET order
+  (section fairness untouched, obligating sentences preferred within a section).
+  Scored offline, no model calls, on both 30-run mx5 pools —
+  scripts/obligation-rank-endtoend.ts (transcribes the cap so an unshipped
+  variant needs no production seam, and PROVES the transcription against the real
+  capRequirements on every run before printing a number).
 
-PASS CONDITION FOR ANY SELECTION FIX (unchanged, and now instrumented)
-  Critical obligations reaching the shipped 40 must rise on BOTH pools with ZERO
-  per-run losses, AND tail-section coverage must not regress. All three numbers
-  are printed by scripts/extraction-filter-endtoend.ts <pool.json>.
+    mx5 pool A  9.37 -> 10.77 of 16  (15 better / 0 worse / 15 tied, p=0.0001)
+    mx5 pool B  8.43 -> 10.27 of 16  (19 better / 0 worse / 11 tied, p<0.0001)
+    tail-section coverage unchanged on both, 0 regressions.
+
+  That is a bigger win than the shipped low-value filter, on both pools, with
+  zero losses. It is an ARTIFACT. Two independent checks killed it:
+
+  1. MECHANISM (scripts/obligation-rank-diagnose.ts). OBLIGATION_RE contains bare
+     `no|not|only|always|every|each|min|max`. Of mx5's 16 critical obligations only
+     ONE is modal-grounded; SIX fire ACCIDENTAL-ONLY — `no-explicit-any` matches
+     \bno\b inside the LINT RULE'S OWN NAME, `password_hash text not null` matches
+     `not`, `printWidth 120` rides "no semicolons". The key was promoting the right
+     quotes for a reason that has nothing to do with obligation.
+  2. GENERALITY (30-run pool on scripts/fixtures/toolchain-spec.md, criticals
+     PRE-REGISTERED in scripts/fixtures/toolchain-critical.json before the pool was
+     drawn). THE SIGN REVERSES:
+       toolchain  23.77 -> 21.70 of 31  (0 better / 30 WORSE / 0 tied, p<0.0001)
+     It loses "LLVM is explicitly out of scope", "preserves trivia", "ELF, Mach-O
+     and COFF", "one version per package", "machine-readable JSON output". 17 of
+     that fixture's 31 criticals NEVER fire the key and 10 more fire
+     accidental-only. Real obligations are frequently DECLARATIVE ("The parser
+     produces a lossless concrete syntax tree") and carry no modal at all, so a
+     modal-keyed ranking demotes them beneath prose containing "every"/"only".
+
+  A MODAL-ONLY variant (bare non-modals struck out) was also pre-registered and is
+  INERT, for a structural reason worth keeping: quotes lying inside a
+  "must"/"required" paragraph are ALREADY protected by capRequirements' marked
+  bypass (pooled, only 61/2206 and 78/2520 entries), so the fill only ever ranks
+  the ~98% that carry no such marker — and MODAL_ONLY fires on just 8% of those.
+    mx5 A +0.37 (9/0/21, p=0.0039)   mx5 B +0.30 (6/0/24, p=0.0313)
+    toolchain +0.00 (0 better / 0 worse / 30 TIED — literally no effect)
+  Not worth shipping: it buys ~0.3 of an obligation on one spec and nothing on
+  another, for a permanent ranking rule.
+
+  THE REAL LESSON, and it outranks the result: LEXICAL OBLIGATION-DETECTION IS THE
+  DEAD END, not this particular regex. Both variants are the same idea at two
+  strictnesses; one is harmful and one is inert. Anything shaped like "rank quotes
+  by whether they contain obligation words" should be considered answered. If the
+  positive-ranking slot is attacked again it needs a signal that is not the
+  sentence's own vocabulary — e.g. structural position within its section, or an
+  actual model judgement per quote (which costs calls and re-opens the stochastic
+  channel this whole line of work is trying to escape).
+
+PASS CONDITION FOR ANY SELECTION FIX — NOW REQUIRES GENERALITY. The old condition
+was mx5-only and this candidate PASSED IT AT p=0.0001 WHILE BEING HARMFUL. Both
+pools are the same 20KB web spec; two pools give you sampling robustness and tell
+you NOTHING about a second document.
+  Critical obligations reaching the shipped 40 must rise with ZERO per-run losses
+  AND tail-section coverage must not regress, ON BOTH mx5 POOLS **AND** ON A
+  SECOND, DIFFERENTLY-PHRASED SPEC. mx5 numbers come from
+  scripts/extraction-filter-endtoend.ts <pool.json>; the second-spec pool is drawn
+  with SPEC_PATH=<spec> ...extraction-precision-step0.ts 30 <tag> (the toolchain
+  pool already exists at .measure/extraction-pool-toolchain.json, ~35 min to
+  redraw) and scored via the --spec/--critical/--pools flags on
+  scripts/obligation-rank-endtoend.ts. Its critical list must be written BEFORE
+  the pool is drawn and must deliberately include DECLARATIVE obligations, which
+  is exactly what mx5's list under-represents.
+  The harness ABSTAINS when the cap engages in under half the runs — below 40
+  entries nothing is contested and a selection rule cannot be measured at all.
 
 ------------------------------------------------------------------------------
 TASK 2 (was TASK 4) — THE COVERAGE LOOP'S SPLIT-BRAIN GATE

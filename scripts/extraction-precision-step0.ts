@@ -30,6 +30,9 @@
  * Run: PI_BIN=$(command -v pi) bun run scripts/extraction-precision-step0.ts [REPS] [TAG]
  *   TAG suffixes the output files, so a confirmation pool can sit beside the pool
  *   a rule was designed against instead of replacing it.
+ *   SPEC_PATH=<file> draws the pool against a DIFFERENT spec (defaults to mx5) —
+ *   a selection rule measured on one document is not thereby general, so the
+ *   generality check needs a pool from a second, differently-phrased spec.
  */
 import {readFileSync, writeFileSync} from 'node:fs'
 import {runPhaseChild, type PhaseDeps} from '../src/task/child-runner.js'
@@ -41,7 +44,10 @@ import {
     isCrossCuttingRequirement
 } from '../src/task/requirements.js'
 
-const SPEC = readFileSync('/home/edgars/hub/mx5/DESIGN/PROJECT.md', 'utf8')
+const SPEC = readFileSync(
+    process.env.SPEC_PATH ?? '/home/edgars/hub/mx5/DESIGN/PROJECT.md',
+    'utf8'
+)
 /** Repo-local and gitignored: a session scratchpad is deleted when the session
  *  ends, and the pool is the input to every offline scoring script here.
  *  TAG names the pool so a CONFIRMATION pool never overwrites the pool a rule was
