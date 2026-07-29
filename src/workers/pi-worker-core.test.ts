@@ -4,6 +4,7 @@ import type {SpawnResponseJsonEvents} from '../test-utils/fake-spawn.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {
     agentEndResponse,
+    agentErrorResponse,
     fakeSpawnByPrompt,
     fakeSpawnQueue,
     loopResponse,
@@ -216,6 +217,86 @@ describe('runWorker', () => {
         const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
         expect(r.text).toBe('clean output')
         expect(r.timedOut).toBeUndefined()
+    })
+
+    test('restarts on a connection-class model error and returns the retry', async () => {
+        // Measured live: pi already retries a connection failure 4× over ~15s, so a
+        // surfaced "Connection error." means an outage that outlasted pi's own
+        // budget. A phase child re-spawns there (runPhaseWithLoopGuard); a research
+        // worker used to fail the whole task instead.
+        const slept: number[] = []
+        const spawn = fakeSpawnQueue([
+            agentErrorResponse('Connection error.'),
+            agentEndResponse('clean output')
+        ])
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            sleepFor: async ms => void slept.push(ms)
+        })
+        expect(r.text).toBe('clean output')
+        expect(r.modelError).toBeUndefined()
+        // Same backoff schedule as the phase child: 500ms, then 1s.
+        expect(slept).toEqual([500])
+    })
+
+    test('surfaces the connection error after the restart budget is spent', async () => {
+        const slept: number[] = []
+        const spawn = fakeSpawnQueue([
+            agentErrorResponse('Connection error.'),
+            agentErrorResponse('Connection error.'),
+            agentErrorResponse('Connection error.')
+        ])
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            sleepFor: async ms => void slept.push(ms)
+        })
+        expect(r.modelError).toBe('Connection error.')
+        expect(r.text).toBe('')
+        expect(slept).toEqual([500, 1000])
+    })
+
+    test('connectionRetries: 0 turns the retry off (the A/B harness baseline arm)', async () => {
+        const spawn = fakeSpawnQueue([
+            agentErrorResponse('Connection error.'),
+            agentEndResponse('would have been the retry')
+        ])
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            connectionRetries: 0,
+            sleepFor: async () => {
+                throw new Error('must not back off when the budget is 0')
+            }
+        })
+        expect(r.text).toBe('')
+        expect(r.modelError).toBe('Connection error.')
+    })
+
+    test('a NON-connection model error fails fast — no restart, no backoff', async () => {
+        // Auth/bad-request/context-overflow are repeatable: re-issuing the same
+        // request cannot fix them, so burning the budget only delays the report.
+        let spawns = 0
+        const spawn = ((cmd: string, args: ReadonlyArray<string>, opts: unknown) => {
+            spawns++
+            return (
+                fakeSpawnQueue([agentErrorResponse('401 invalid api key')]) as unknown as SpawnFn
+            )(cmd, args, opts as never)
+        }) as unknown as SpawnFn
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            sleepFor: async () => {
+                throw new Error('must not back off on a non-connection error')
+            }
+        })
+        expect(r.modelError).toBe('401 invalid api key')
+        expect(spawns).toBe(1)
     })
 
     test('surfaces timedOut when the worker times out through every restart', async () => {

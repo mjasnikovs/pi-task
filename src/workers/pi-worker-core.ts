@@ -12,7 +12,9 @@ import {
     LOOP_WINDOW,
     LOOP_THRESHOLD,
     MAX_LOOP_RESTARTS,
-    formatLoopHint
+    formatLoopHint,
+    isConnectionError,
+    connectionRetryBackoffMs
 } from '../task/child-runner.js'
 import {
     detectLeakedToolCall,
@@ -165,7 +167,20 @@ export interface RunWorkerInput {
      * 0 / omitted = off.
      */
     streamInactivityMs?: number
+    /** Backoff sleep, injectable so tests don't wait out the real delays. */
+    sleepFor?: (ms: number) => Promise<void>
+    /**
+     * Connection-error restart budget. Defaults to MAX_LOOP_RESTARTS, and even
+     * then the SHARED `restarts` counter is what actually binds — a worker that
+     * already spent the budget looping does not get extra lives here. 0 turns the
+     * retry off, which is how scripts/connection-retry-ab.ts gets a baseline arm
+     * out of a build that already ships the retry.
+     */
+    connectionRetries?: number
 }
+
+const defaultSleep = (ms: number): Promise<void> =>
+    new Promise<void>(resolve => setTimeout(resolve, ms))
 
 /**
  * Combine an external abort signal with an internal wall-clock timeout into one
@@ -407,6 +422,9 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     // `restarts` (the shared budget) so a loop-caused restart doesn't shorten
     // the rope of a child that has never hung (see commandCeilingForAttempt).
     let hangKills = 0
+    // Connection-error restarts specifically — drives the backoff schedule (and
+    // lets a harness set the budget to 0 without touching the shared counter).
+    let connRetries = 0
     let leakRetries = 0
     for (;;) {
         const prompt = hint === null ? input.prompt : `${hint}\n\n${input.prompt}`
@@ -541,6 +559,38 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         if (timedOut && !loopHit && restarts < MAX_LOOP_RESTARTS) {
             hint = WORKER_TIMEOUT_HINT
             restarts++
+            continue
+        }
+        // A connection-class model error is restartable on the same budget, exactly
+        // as runPhaseWithLoopGuard already treats it — a research worker had no such
+        // retry, so one dropped fetch failed the whole task at research while the
+        // identical blip in refine/compose was absorbed.
+        //
+        // What this can and cannot buy, measured (flaky proxy in front of the local
+        // llama-server, dropping every connection for a fixed outage window): pi
+        // retries a failed turn itself, 4 attempts over ~15s, and a run that
+        // recovers no longer reports modelError at all (see JsonEventSink). So a
+        // surfaced connection error means pi's own ~15s budget is already spent, and
+        // a re-spawn only helps when the outage outlasts it. It does: at a 20s
+        // outage the baseline never recovered and this policy always did, 0/8 → 8/8
+        // (Fisher p=0.00016), and the same at 35s. Below ~15s pi absorbs it alone —
+        // 8/8 both arms, so the retry neither helps nor costs there. Beyond ~46s
+        // (three spawns' combined budget) both arms fail. The price is paid only on
+        // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
+        // scripts/connection-retry-ab.ts.
+        //
+        // Connection class ONLY. Auth, bad request and context overflow still fail
+        // fast: re-issuing the same request cannot fix them, so spending the budget
+        // would only delay the report.
+        if (
+            result.modelError
+            && isConnectionError(result.modelError)
+            && restarts < MAX_LOOP_RESTARTS
+            && connRetries < (input.connectionRetries ?? MAX_LOOP_RESTARTS)
+        ) {
+            await (input.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(connRetries))
+            restarts++
+            connRetries++
             continue
         }
         // Only treat output as a leak on a clean, complete run — a non-zero exit
