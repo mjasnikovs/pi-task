@@ -11,7 +11,12 @@ import {
 } from './orchestrator.js'
 import {consumeWatchdogAbort, noteWatchdogAbort, reminderMessage} from './command-watchdog.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
-import {agentEndResponse, fakeSpawnByPrompt, type SpawnResponse} from '../test-utils/fake-spawn.js'
+import {
+    agentEndResponse,
+    agentErrorResponse,
+    fakeSpawnByPrompt,
+    type SpawnResponse
+} from '../test-utils/fake-spawn.js'
 import {makeFakeCtx, assistantEntry, compactionEntry, userEntry} from '../test-utils/fake-ctx.js'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
@@ -748,7 +753,35 @@ describe('TaskRunner — failure modes', () => {
         })
     })
 
-    test('empty FILES research worker → state failed, reason names the worker', async () => {
+    // ISSUE #10. An empty research section used to fail the whole task, which is exactly
+    // what an extremely simple task provokes — nothing on disk to survey, no external
+    // symbol in play, so silence is the correct answer. It is now retried once and then
+    // recorded as an explicitly empty section. What stays fatal is silence with a
+    // provider-reported cause (the masked disconnect the old branch was written for).
+    test('empty FILES worker, retry answers → the retry becomes the section', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            let filesAttempts = 0
+            const spawn = scriptedSpawn({
+                refine: REFINED_FIXTURE,
+                researchFiles: () => (++filesAttempts === 1 ? '' : RESEARCH_FILES),
+                researchApis: RESEARCH_APIS,
+                researchContext: RESEARCH_CONTEXT,
+                researchTooling: RESEARCH_TOOLING,
+                verifyTooling: VERIFY_TOOLING_OUT,
+                grillGen: NO_QUESTIONS,
+                compose: COMPOSE_SPEC,
+                critique: COMPOSE_SPEC
+            })
+            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.state).toBe('completed')
+            expect(filesAttempts).toBe(2)
+            expect(await readSection(cwd, 'TASK_0001', 'research')).toContain(RESEARCH_FILES)
+        })
+    })
+
+    test('FILES worker empty twice → section recorded as (none), task still completes', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             const spawn = scriptedSpawn({
@@ -756,12 +789,75 @@ describe('TaskRunner — failure modes', () => {
                 researchFiles: '',
                 researchApis: RESEARCH_APIS,
                 researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING
+                researchTooling: RESEARCH_TOOLING,
+                verifyTooling: VERIFY_TOOLING_OUT,
+                grillGen: NO_QUESTIONS,
+                compose: COMPOSE_SPEC,
+                critique: COMPOSE_SPEC
+            })
+            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.state).toBe('completed')
+            const research = (await readSection(cwd, 'TASK_0001', 'research')) ?? ''
+            // The marker must say the worker RAN and found nothing — not merely be
+            // blank, which reads the same as a worker that never answered.
+            expect(research).toMatch(/FILES\n\(none — the FILES worker ran and reported no/)
+            // The other three workers are untouched by the gate.
+            expect(research).toContain(RESEARCH_APIS)
+        })
+    })
+
+    // The empty/failed distinction has to survive the case the two look identical in:
+    // a child that writes nothing at all. A worker that never emitted a byte died
+    // before it could answer, so it cannot have answered "nothing".
+    test('MUTE FILES worker (no stdout at all) → state failed, never recorded as empty', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const spawn = fakeSpawnByPrompt(args => {
+                const tag = findTag(args[args.length - 1])
+                if (tag === 'researchFiles') {
+                    // No events, no stdout, dead on arrival — the shape of a child
+                    // that could not resolve a provider and exited at startup.
+                    return {events: [], exitCode: 0, stderr: 'no model configured'}
+                }
+                const map: Partial<Record<typeof tag, string>> = {
+                    refine: REFINED_FIXTURE,
+                    researchApis: RESEARCH_APIS,
+                    researchContext: RESEARCH_CONTEXT,
+                    researchTooling: RESEARCH_TOOLING
+                }
+                return agentEndResponse(map[tag] ?? '') as SpawnResponse
             })
             await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
-            expect(frontMatter.reason).toMatch(/Research FILES worker produced no output/)
+            expect(frontMatter.reason).toMatch(/never wrote a single byte/)
+            expect(await readSection(cwd, 'TASK_0001', 'research')).toBeNull()
+        })
+    })
+
+    test('empty FILES worker WITH a model error → state failed, reason names the cause', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const spawn = fakeSpawnByPrompt(args => {
+                const prompt = args[args.length - 1]
+                const tag = findTag(prompt)
+                if (tag === 'researchFiles') {
+                    return agentErrorResponse('fetch failed: socket hang up') as SpawnResponse
+                }
+                const map: Partial<Record<typeof tag, string>> = {
+                    refine: REFINED_FIXTURE,
+                    researchApis: RESEARCH_APIS,
+                    researchContext: RESEARCH_CONTEXT,
+                    researchTooling: RESEARCH_TOOLING
+                }
+                return agentEndResponse(map[tag] ?? '') as SpawnResponse
+            })
+            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
+            expect(frontMatter.state).toBe('failed')
+            expect(frontMatter.reason).toMatch(/Research FILES worker: model error/)
+            expect(frontMatter.reason).toMatch(/socket hang up/)
         })
     })
 

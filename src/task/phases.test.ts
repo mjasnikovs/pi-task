@@ -12,6 +12,8 @@ import {
     postCommitPhase,
     refineExistingFilesBlock,
     searchConfigured,
+    emptySectionBody,
+    isBareNoneAnswer,
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
@@ -368,7 +370,10 @@ describe('phaseResearch silent-retry gate (worker:context)', () => {
     test('a legitimately-empty section (NONE) is NOT retried', async () => {
         const {out, contextAttempts} = await runWith(() => agentEndResponse('NONE'))
         expect(contextAttempts).toBe(1) // gate did not fire
-        expect(out).toContain('CONTEXT\nNONE')
+        // The honest "nothing to surface" answer survives — recorded with the marker
+        // that says the worker RAN and found nothing (issue #10), rather than as the
+        // bare token, which reads the same as a section nobody wrote.
+        expect(out).toContain('CONTEXT\n(none — the CONTEXT worker ran and reported no entries')
     })
 
     test('if the retry is also silent, the original is kept (no regression)', async () => {
@@ -416,25 +421,26 @@ describe('phaseResearch per-worker persistence', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 const which = classify(args)
                 spawns[which] = (spawns[which] ?? 0) + 1
-                // TOOLING (the last worker) hits a FATAL failure on run 1 — empty
-                // output, the untrustworthy mode that still throws (unlike a runaway,
-                // which would degrade-and-cache). It fails the phase after
-                // FILES/APIS/CONTEXT answered cleanly, and is NOT cached, so the
+                // TOOLING (the last worker) hits a FATAL failure on run 1 — a reported
+                // model error, the untrustworthy mode that still throws (unlike a
+                // runaway, which would degrade-and-cache, or a plain empty answer,
+                // which is now retried and accepted — issue #10). It fails the phase
+                // after FILES/APIS/CONTEXT answered cleanly, and is NOT cached, so the
                 // resume re-runs only it.
                 if (which === 'tooling' && toolingShouldFail) {
-                    return agentEndResponse('')
+                    return agentErrorResponse('fetch failed')
                 }
                 return agentEndResponse(`- finding for ${which}`)
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
 
-            // Run 1: TOOLING produces no output → the phase throws with a
+            // Run 1: TOOLING's model turn fails → the phase throws with a
             // TOOLING-named error.
             await expect(
                 phaseResearch(deps, 'a refined goal with no mentions', {
                     getFileInventory: async () => ''
                 })
-            ).rejects.toThrow(/TOOLING worker produced no output/i)
+            ).rejects.toThrow(/TOOLING worker: model error/i)
 
             // The three good workers were cached; the failed one was not.
             expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain('files')
@@ -495,7 +501,7 @@ describe('phaseResearch per-worker persistence', () => {
                     return loopResponse('read', {path: '/x'}, 6)
                 }
                 if (which === 'tooling' && toolingShouldFail) {
-                    return agentEndResponse('')
+                    return agentErrorResponse('fetch failed')
                 }
                 return agentEndResponse(`- finding for ${which}`)
             })
@@ -506,7 +512,7 @@ describe('phaseResearch per-worker persistence', () => {
                 phaseResearch(deps, 'a refined goal with no mentions', {
                     getFileInventory: async () => ''
                 })
-            ).rejects.toThrow(/TOOLING worker produced no output/i)
+            ).rejects.toThrow(/TOOLING worker: model error/i)
 
             // FILES looped through its full restart budget once, and its degraded
             // section was cached (unlike a fatal failure, which is not).
@@ -695,7 +701,7 @@ describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
                     return agentEndResponse(`${FATAL}\n${LEGIT}`)
                 }
                 if (prompt.includes('content of a TOOLING section') && toolingShouldFail) {
-                    return agentEndResponse('')
+                    return agentErrorResponse('fetch failed')
                 }
                 return agentEndResponse('- finding')
             })
@@ -708,7 +714,7 @@ describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
                 phaseResearch(deps, 'a refined goal with no mentions', {
                     getFileInventory: async () => ''
                 })
-            ).rejects.toThrow(/TOOLING worker produced no output/i)
+            ).rejects.toThrow(/TOOLING worker: model error/i)
 
             const cached = (await readSection(cwd, 'TASK_0001', 'research worker CONTEXT')) ?? ''
             expect(cached).toContain('OPEN QUESTION')
@@ -954,7 +960,8 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     spawns[which] = (spawns[which] ?? 0) + 1
                     // APIS fails fatally on run 1 while the others succeed
                     // slower — allSettled must still persist all three.
-                    if (which === 'apis' && apisShouldFail) return agentEndResponse('')
+                    if (which === 'apis' && apisShouldFail)
+                        return agentErrorResponse('fetch failed')
                     // A healthy APIS worker retrieves, so the zero-retrieval gate leaves it
                     // alone — otherwise it would re-run and inflate the resume spawn count.
                     if (which === 'apis')
@@ -971,7 +978,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     phaseResearch(deps, 'a refined goal with no mentions', {
                         getFileInventory: async () => ''
                     })
-                ).rejects.toThrow(/APIS worker produced no output/i)
+                ).rejects.toThrow(/APIS worker: model error/i)
 
                 expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain(
                     'files'
@@ -3063,4 +3070,57 @@ test('searchConfigured mirrors the search-core contract (keyless providers alway
     expect(searchConfigured(k => (k === 'BRAVE_API_KEY' ? 'x' : undefined), 'brave')).toBe(true)
     expect(searchConfigured(() => undefined, 'exa')).toBe(true)
     expect(searchConfigured(() => undefined, 'ddg')).toBe(true)
+})
+
+describe('empty-vs-failed distinction (issue #10)', () => {
+    test('isBareNoneAnswer matches a lone "nothing" token in the shapes workers write', () => {
+        for (const s of [
+            '(none)',
+            'none',
+            'N/A',
+            'n/a',
+            '- none',
+            '(no content)',
+            '(no entries)',
+            '(no response)',
+            '  (None.)  '
+        ]) {
+            expect(isBareNoneAnswer(s)).toBe(true)
+        }
+    })
+
+    test('isBareNoneAnswer leaves a REASONED non-answer and any real entry alone', () => {
+        for (const s of [
+            '(no APIs to list — this task creates a plain HTML file with no code symbols)',
+            'The directory is empty — no package.json, so there are no verification tools.',
+            'package.json  build/lint scripts',
+            '- none of the existing routes are touched, but src/app.ts is',
+            'none.ts  a file that is actually named none'
+        ]) {
+            expect(isBareNoneAnswer(s)).toBe(false)
+        }
+    })
+
+    test('emptySectionBody names the worker and reads as an answer, not an absence', () => {
+        const body = emptySectionBody('APIS')
+        expect(body).toContain('APIS')
+        expect(body).toMatch(/^\(none — /)
+        expect(body).toContain('ran and reported no entries')
+        // Must not collide with the degraded marker, which means something else.
+        expect(body).not.toContain('degraded')
+    })
+})
+
+describe('extractToolingCommands ignores section markers (issue #10)', () => {
+    test('an empty TOOLING section yields no commands, not a marker-shaped one', () => {
+        const research = `FILES\nsrc/a.ts  x\n\nTOOLING\n${emptySectionBody('TOOLING')}\n`
+        expect(extractToolingCommands(research)).toBeNull()
+    })
+
+    test('a degraded TOOLING section still yields its real commands, minus the banner', () => {
+        const research =
+            'TOOLING\n(degraded: research TOOLING worker timed out; this section may be'
+            + ' incomplete)\nlint  bun run lint\n'
+        expect(extractToolingCommands(research)).toEqual(['bun run lint'])
+    })
 })

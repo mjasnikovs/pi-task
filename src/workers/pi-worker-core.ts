@@ -209,6 +209,30 @@ export interface RunWorkerResult {
     stderr: string
     aborted: boolean
     /**
+     * The provider-reported cause when the model turn itself failed (disconnect,
+     * fetch failed, 5xx after pi's own retries): pi delivers it as an assistant
+     * message with stopReason "error" and EMPTY text, exit code 0. Phase children
+     * have always surfaced this (child-runner.ts) — research workers did not, so a
+     * swallowed provider error reached the caller as an indistinguishable empty
+     * answer and was reported as the useless "produced no output" (issue #10).
+     * Only meaningful when `text` is empty: a turn that produced text after pi
+     * recovered is a success, and the first-error capture must not relabel it.
+     */
+    modelError?: string
+    /**
+     * Whether the child ever produced a single byte of stdout. Under `--mode json`
+     * a live pi child streams protocol events long before any assistant text, so
+     * this separates the two ways a worker can come back with nothing:
+     *   sawOutput true  — the child ran and the MODEL chose to write nothing
+     *                     (a legitimately empty section on a trivial task)
+     *   sawOutput false — the child never spoke at all: it died at startup
+     *                     (unresolvable provider, missing key, bad argv). That is
+     *                     a FAILURE and must never be recorded as "no entries".
+     * Derived from the same first-byte timestamp `waitMs`/`workMs` use, so it
+     * cannot disagree with them.
+     */
+    sawOutput: boolean
+    /**
      * Milliseconds between spawn and the child's first stdout chunk. When
      * multiple workers run concurrently and the upstream model API queues at
      * some concurrency cap, this is the queue-wait portion of the run.
@@ -535,7 +559,9 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             aborted: result.aborted,
             waitMs,
             workMs,
+            sawOutput: tFirstByte !== null,
             groundingRetrievalCount,
+            ...(result.modelError ? {modelError: result.modelError} : {}),
             ...(leaked ? {leakedToolCall: leaked} : {}),
             ...(loopHit ? {loopHit} : {}),
             ...(timedOut ? {timedOut: true} : {}),
