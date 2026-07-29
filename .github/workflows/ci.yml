@@ -56,6 +56,13 @@ jobs:
         run: bun run test
         env:
           PI_SKIP_SMOKE: "1"
+          # Print `::test-file <path>` as each file starts (bunfig preload,
+          # inert without this var). Run 30472844957 hung with the log ending
+          # on orientation-replay.test.ts — but that is just the last file that
+          # console.logs; bun prints a file header only for files that write
+          # output, so the hung log named the wrong file. With this on, the
+          # last ::test-file line IS the file that hung.
+          PI_TEST_PROGRESS: "1"
 
       # ---------------------------------------------------------------------
       # Post-test diagnostics. These exist to characterise an intermittent hang

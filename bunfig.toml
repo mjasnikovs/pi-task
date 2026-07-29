@@ -1,2 +1,5 @@
 [test]
 pathIgnorePatterns = ["dist/**", "**/__fixtures__/**"]
+# Names each test file as it starts, so a hung CI log says WHICH file hung.
+# Inert unless PI_TEST_PROGRESS is set (CI sets it) — see the script's header.
+preload = ["./scripts/test-file-progress.ts"]
