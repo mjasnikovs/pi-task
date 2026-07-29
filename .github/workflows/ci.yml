@@ -39,7 +39,33 @@ jobs:
       - name: Build (tsc)
         run: bun run build
 
+      # TEMPORARY (this branch only): run 30476786365 named the hung file —
+      # src/task/stream-stall.test.ts, loaded at 17:47:42, silent until the
+      # step timeout 9 min later. Run its tests ONE AT A TIME under a hard
+      # per-test timeout so the log names the hung TEST. Delete before merge.
+      - name: Probe stream-stall (per test)
+        shell: bash
+        timeout-minutes: 8
+        env:
+          PI_SKIP_SMOKE: "1"
+        run: |
+          while IFS= read -r t; do
+            echo "=== $t"
+            timeout 60 bun test --isolate src/task/stream-stall.test.ts -t "$t" \
+              || echo "=== EXIT $? on: $t"
+          done <<'NAMES'
+          kills a child that streams events then goes silent
+          does NOT kill while a tool is executing
+          leaves the old behaviour
+          runWorker restarts a stream-stalled attempt
+          an attempt that keeps stalling surfaces streamStalled
+          a hung stream is retried and the retry succeeds
+          NAMES
+
       - name: Test
+        # TEMPORARY (this branch only): the full suite hangs 10 min on windows,
+        # and the probe above is what this run exists for. Restore before merge.
+        if: runner.os != 'Windows'
         # Skip the live-model smoke tests: they require a running pi model
         # endpoint, which CI has no access to. `pi` is on PATH here (installed
         # as a dependency), so the tests' own `which pi` guard doesn't catch
