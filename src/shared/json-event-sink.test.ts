@@ -48,6 +48,67 @@ describe('JsonEventSink', () => {
         expect(s.modelError).toBe('other side closed')
     })
 
+    test('clears modelError when a LATER agent_end answers (pi retried past a blip)', () => {
+        // Measured live (flaky proxy dropping the first connection): pi retries a
+        // failed turn itself and emits agent_end(error) → auto_retry_start →
+        // agent_end(text). Latching the first one reports a failure for a run that
+        // actually succeeded — which is how one dropped fetch used to fail a phase
+        // that had a perfectly good answer in hand.
+        const s = sink()
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: [],
+                        stopReason: 'error',
+                        errorMessage: 'Connection error.'
+                    }
+                ]
+            })
+        )
+        expect(s.modelError).toBe('Connection error.')
+        s.feed(line({type: 'auto_retry_start'}))
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [{role: 'assistant', content: [{type: 'text', text: 'OK'}]}]
+            })
+        )
+        expect(s.text).toBe('OK')
+        expect(s.modelError).toBeUndefined()
+    })
+
+    test('keeps modelError when the failure comes AFTER the answering turn', () => {
+        // The opposite order is a real partial failure: the child answered, then a
+        // later turn died. The text on hand is a truncated run, so the cause must
+        // survive and the caller must still treat it as failed.
+        const s = sink()
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [{role: 'assistant', content: [{type: 'text', text: 'partial'}]}]
+            })
+        )
+        s.feed(
+            line({
+                type: 'agent_end',
+                messages: [
+                    {role: 'assistant', content: [{type: 'text', text: 'partial'}]},
+                    {
+                        role: 'assistant',
+                        content: [],
+                        stopReason: 'error',
+                        errorMessage: 'socket hang up'
+                    }
+                ]
+            })
+        )
+        expect(s.text).toBe('partial')
+        expect(s.modelError).toBe('socket hang up')
+    })
+
     test('leaves modelError undefined on a normal successful agent_end', () => {
         const s = sink()
         s.feed(

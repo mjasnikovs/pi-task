@@ -193,6 +193,16 @@ export class JsonEventSink {
      * model/provider failed (disconnect, fetch failed, socket hang up, 5xx)
      * after pi exhausted its internal retries. Holds the provider's errorMessage
      * so callers can report the real cause instead of an empty completion.
+     *
+     * CLEARED when a LATER agent_end delivers assistant text: pi retries a failed
+     * turn itself (`auto_retry_start`) and each attempt emits its own agent_end,
+     * so a recovered blip arrives as agent_end(stopReason "error", empty) followed
+     * by agent_end(text). Measured live against a proxy that drops the first
+     * connection: pi makes up to 4 attempts over ~15s, and on attempts 1–3 the
+     * child returns the real answer WITH the dead first attempt's errorMessage
+     * still in the stream. Latching that would report a failure for a run that
+     * succeeded. An error AFTER the last text-bearing turn still latches — that
+     * one really did lose the tail of the work.
      */
     modelError: string | undefined = undefined
     private textDeltaAccum = ''
@@ -270,6 +280,10 @@ export class JsonEventSink {
         }
 
         if (t === 'agent_end' && Array.isArray(evt.messages)) {
+            // Errors latched by THIS batch describe a turn that failed AFTER the
+            // text found below it (the scan runs backwards), so they survive; only
+            // an error from an earlier agent_end is cleared by a later answer.
+            let latchedHere = false
             for (let i = evt.messages.length - 1; i >= 0; i--) {
                 const m = evt.messages[i] as Record<string, unknown> | undefined
                 if (!m || m.role !== 'assistant') continue
@@ -285,6 +299,7 @@ export class JsonEventSink {
                     && this.modelError === undefined
                 ) {
                     this.modelError = m.errorMessage
+                    latchedHere = true
                 }
                 if (Array.isArray(m.content)) {
                     const texts: string[] = []
@@ -295,6 +310,9 @@ export class JsonEventSink {
                     }
                     if (texts.length > 0) {
                         this.finalText = texts.join('')
+                        // This turn answered, so an error latched by an EARLIER
+                        // agent_end was a blip pi retried past — drop it.
+                        if (!latchedHere) this.modelError = undefined
                         break
                     }
                 }
