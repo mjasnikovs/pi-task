@@ -75,7 +75,7 @@ import {
     runDeepRenderCheck,
     type DeepRenderOutcome
 } from './deep-render-check.js'
-import {resolveRunner, runnerEnv} from './runner-resolve.js'
+import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
@@ -876,7 +876,9 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
  * needs no socket probe, so run 14's original true positive (a `--hot` runtime
  * pinning a crashed app) stays reportable wherever the tooling exists.
  *
- * Env-gap contract as everywhere: spawn error (ENOENT) or exit 127 → skip.
+ * Env-gap contract as everywhere: spawn error (ENOENT) or a command-not-found
+ * inside the chain (exit 127, or the runner's own wording where the platform
+ * reports it that way — see isCommandNotFound) → skip.
  */
 export async function runBootCheck(
     cwd: string,
@@ -1072,7 +1074,13 @@ export async function runBootCheck(
                 }
                 return settle({outcome: 'pass'})
             }
-            if (status === 127 || (status === null && signal === null)) {
+            // Command-not-found inside the boot chain — 127 on a posix shell, or
+            // the runner's own wording where it isn't (Windows bun exits 1). Either
+            // way the boot never RAN, so it is an environment gap, not an app fault.
+            if (
+                isCommandNotFound(status, `${out}\n${err}`)
+                || (status === null && signal === null)
+            ) {
                 return settle({outcome: 'skip'})
             }
             const what = status !== null ? `exited ${status}` : `was killed by ${signal}`
@@ -1178,9 +1186,10 @@ function runGateCommand(
         env: runnerEnv(runner)
     })
     if (r.error) return {outcome: 'skip', spawnFailed: true}
-    if (r.status === null || r.status === 127) return {outcome: 'skip', spawnFailed: false}
+    if (r.status === null) return {outcome: 'skip', spawnFailed: false}
     if (r.status !== 0) {
         const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+        if (isCommandNotFound(r.status, output)) return {outcome: 'skip', spawnFailed: false}
         if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'skip', spawnFailed: false}
         if (extraGapRe?.test(output)) return {outcome: 'skip', spawnFailed: false}
         return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}

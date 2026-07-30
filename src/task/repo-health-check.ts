@@ -32,7 +32,7 @@
 import {spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
-import {resolveRunner, runnerEnv} from './runner-resolve.js'
+import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 
 export interface HealthOutcome {
     /** true → every discovered static check passed, or there was nothing to run.
@@ -169,10 +169,12 @@ export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutc
         })
         // Tool missing (ENOENT) or killed by timeout → cannot conclude; skip it.
         if (r.error || r.status === null) continue
-        // Exit 127 = "command not found" INSIDE the script chain (e.g. `bun run lint`
-        // before node_modules exists — seen live failing TASK_0001's first verify).
-        // Same environment gap as ENOENT, just surfaced through the runner's shell.
-        if (r.status === 127) continue
+        // "Command not found" INSIDE the script chain (e.g. `bun run lint` before
+        // node_modules exists — seen live failing TASK_0001's first verify). Same
+        // environment gap as ENOENT, just surfaced through the runner's shell —
+        // as exit 127 where a posix shell ran it, else by the runner's own wording
+        // (Windows bun reports the miss itself and exits 1).
+        if (isCommandNotFound(r.status, `${r.stdout ?? ''}\n${r.stderr ?? ''}`)) continue
         if (r.status !== 0) {
             return {
                 ok: false,

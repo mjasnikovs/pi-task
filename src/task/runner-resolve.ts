@@ -105,6 +105,38 @@ export function resolveRunner(
 }
 
 /**
+ * Output shapes a RUNNER emits when the command inside a script chain does not
+ * exist, on platforms where that is not reported as exit 127.
+ *
+ * 127 is a POSIX-SHELL convention: on Linux/macOS bun hands the script to
+ * /bin/sh, the shell prints `…: command not found` and exits 127, and the whole
+ * env-gap contract keys off that number. On Windows there is no such shell —
+ * bun runs the script in its own built-in shell, which reports the miss itself
+ * (`bun: command not found: X`) and exits **1**, indistinguishable by status
+ * alone from a real code fault. cmd.exe (9009) and PowerShell have their own
+ * wording. Recognising the shape restores one env-gap contract on all three.
+ *
+ * Deliberately narrow: only wordings a RUNNER/SHELL produces, never the bare
+ * phrase. A suite that prints "command not found" inside a failing assertion is
+ * a real FAIL and must stay one — the posix shape already travels as 127.
+ */
+export const COMMAND_NOT_FOUND_OUTPUT_RE =
+    /\b(?:bun|npm|pnpm|yarn|node|deno): command not found:|is not recognized as an internal or external command|is not recognized as the name of a cmdlet/i
+
+/**
+ * Did this command fail because the thing it tried to run does not exist here,
+ * rather than because the code is wrong? Exit 127 (POSIX shell) or 9009
+ * (cmd.exe) say so outright; anything else needs the runner's own wording (see
+ * COMMAND_NOT_FOUND_OUTPUT_RE) — a Windows `bun run dev` on a missing binary
+ * exits 1. Callers treat a true here as an environment gap → skip, never FAIL.
+ */
+export function isCommandNotFound(status: number | null, output = ''): boolean {
+    if (status === 127 || status === 9009) return true
+    if (status === null || status === 0) return false
+    return COMMAND_NOT_FOUND_OUTPUT_RE.test(output)
+}
+
+/**
  * The env a spawn site should pass so the resolved runner's script chain can
  * re-invoke it: base env with the runner's directory prepended to PATH. With no
  * prefix (bare name resolved, or unresolvable) the base env is returned as-is.

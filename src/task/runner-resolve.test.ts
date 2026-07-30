@@ -9,7 +9,7 @@ import {afterEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {clearRunnerCache, resolveRunner, runnerEnv} from './runner-resolve.js'
+import {clearRunnerCache, isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 afterEach(() => clearRunnerCache())
 
@@ -112,5 +112,42 @@ describe('runnerEnv', () => {
             {PATH: '/usr/bin'}
         )
         expect(env.PATH).toBe(`/opt/bun/bin${path.delimiter}/usr/bin`)
+    })
+})
+
+describe('isCommandNotFound — the env-gap contract survives a shell that is not posix', () => {
+    test('exit codes that say it outright', () => {
+        // POSIX shell (linux/macOS: bun hands the script to /bin/sh).
+        expect(isCommandNotFound(127, '')).toBe(true)
+        // cmd.exe's equivalent.
+        expect(isCommandNotFound(9009, '')).toBe(true)
+        // A timeout/signal is a different gap, and a success is not one at all —
+        // both are the caller's to classify, not this predicate's.
+        expect(isCommandNotFound(null, 'bun: command not found: x')).toBe(false)
+        expect(isCommandNotFound(0, '')).toBe(false)
+    })
+
+    test('the windows shape: exit 1 + the RUNNER saying it (CI regression)', () => {
+        // Windows has no /bin/sh, so bun runs the script in its own shell and
+        // reports the miss itself — exit 1, indistinguishable by status from a
+        // real code fault. This exact output failed 5 final-gate tests on CI.
+        const bunWin =
+            '$ pi-task-no-such-bin\nbun: command not found: pi-task-no-such-bin\n'
+            + 'error: script "dev" exited with code 1'
+        expect(isCommandNotFound(1, bunWin)).toBe(true)
+        expect(
+            isCommandNotFound(1, "'foo' is not recognized as an internal or external command")
+        ).toBe(true)
+        expect(
+            isCommandNotFound(1, "The term 'foo' is not recognized as the name of a cmdlet")
+        ).toBe(true)
+    })
+
+    test('narrow by design: a real failure that merely MENTIONS it stays a failure', () => {
+        // The bare phrase is not enough — a suite asserting on this text, or a
+        // build printing it in a diagnostic, must still FAIL. The genuine posix
+        // shape always arrives as 127 anyway.
+        expect(isCommandNotFound(1, 'expected "command not found" but got ""')).toBe(false)
+        expect(isCommandNotFound(1, '2 tests failed')).toBe(false)
     })
 })

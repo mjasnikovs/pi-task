@@ -1832,6 +1832,27 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
         expect(out.ok).toBe(true)
         expect(out.unobserved).toBeUndefined()
         expect(out.reason).toBe('statics + `bun run test`, `bun run start` passed')
+        // Timeout > graceMs: where expectServer collapses (win32) there is no
+        // listener poll to end the boot early, so it always burns the full grace.
+    }, 30_000)
+
+    test('the same skip when the runner, not a posix shell, reports the miss (CI regression)', async () => {
+        // Windows bun runs the script in its OWN shell: no 127, just exit 1 with
+        // `bun: command not found: …`. Reproduced here on every platform so the
+        // contract is one contract — a boot that never ran is UNOBSERVED, never a
+        // FAIL, whichever shell noticed the binary was missing.
+        const dir = makeDir({
+            dependencies: {hono: '4.12.27'},
+            scripts: {
+                test: 'exit 0',
+                dev: `node -e "console.error('bun: command not found: no-such-bin'); process.exit(1)"`
+            }
+        })
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        expect(out.ok).toBe(true)
+        expect(out.failures ?? []).toEqual([])
+        expect(out.unobserved).toContain('NEVER RAN')
+        expect(out.unobserved).toContain('`bun run dev`')
     })
 
     test('a boot skip does NOT turn a FAILing gate into a different failure', async () => {
