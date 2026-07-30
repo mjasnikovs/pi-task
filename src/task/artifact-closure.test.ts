@@ -9,6 +9,7 @@ import {
     extractScriptEntrypoints,
     collectProducersFromCommand,
     collectProducersFromSource,
+    collectEmittedHtml,
     emptyProducers,
     resolveDanglingRefs,
     findDanglingArtifacts,
@@ -403,6 +404,174 @@ describe('findDanglingArtifacts (tree seam)', () => {
         } finally {
             rmSync(dir, {recursive: true, force: true})
         }
+    })
+})
+
+// The mx5 run-18 shape: the final-gate autofix closed `dist/index.html` by
+// APPENDING an HTML template literal to build.ts and Bun.write-ing it — and that
+// page pointed at `/app.css`, which only the watch-mode `dev:css` script emits.
+// Every test below pins one of nexttask 3's pre-registered invariants.
+describe('generated HTML (nexttask 3)', () => {
+    const BUILD_HEAD = "await Bun.build({entrypoints: ['src/main.ts'], outdir: 'dist'})"
+    const emit = (body: string): string =>
+        [BUILD_HEAD, '', `const html = \`${body}\``, '', "Bun.write('dist/index.html', html)"].join(
+            '\n'
+        )
+
+    function makeRepo(files: Record<string, string>, scripts: Record<string, string>): string {
+        const dir = mkdtempSync(path.join(tmpdir(), 'gen-html-'))
+        writeFileSync(
+            path.join(dir, 'package.json'),
+            JSON.stringify({name: 'fx', scripts: {build: 'bun run build.ts', ...scripts}})
+        )
+        for (const [rel, body] of Object.entries({'src/main.ts': 'export {}', ...files})) {
+            const abs = path.join(dir, rel)
+            mkdirSync(path.dirname(abs), {recursive: true})
+            writeFileSync(abs, body)
+        }
+        return dir
+    }
+
+    function scan(files: Record<string, string>, scripts: Record<string, string> = {}): string[] {
+        const dir = makeRepo(files, scripts)
+        try {
+            return findDanglingArtifacts(dir)
+                .map(d => d.path)
+                .sort()
+        } finally {
+            rmSync(dir, {recursive: true, force: true})
+        }
+    }
+
+    test('collectEmittedHtml resolves a const binding and ignores non-HTML writes', () => {
+        const out = collectEmittedHtml(
+            [
+                'const html = `<!doctype html><body><img src="/x.png"></body>`',
+                "Bun.write('dist/index.html', html)",
+                "Bun.write('dist/meta.json', JSON.stringify({a: 1}))",
+                'writeFileSync(\'dist/inline.html\', `<html><link href="/y.css"></html>`)'
+            ].join('\n')
+        )
+        expect(out.map(e => e.docPath)).toEqual(['dist/index.html', 'dist/inline.html'])
+        expect(out[0].html).toContain('/x.png')
+    })
+
+    test('the run-18 replay: a watch-only producer does NOT close a generated ref', () => {
+        // inv-dev-only-is-dangling — the rule the whole task turns on. `bun run
+        // build` never invokes `dev:css`, so the shipped page has no CSS.
+        expect(
+            scan(
+                {
+                    'build.ts': emit(
+                        '<html><head><link rel="stylesheet" href="/app.css" /></head>'
+                            + '<body><script type="module" src="/main.js"></script></body></html>'
+                    ),
+                    'src/app.css': ''
+                },
+                {'dev:css': 'bunx @tailwindcss/cli -i src/app.css -o dist/app.css --watch'}
+            )
+            // /main.js IS produced (Bun.build entrypoint stem `main` in dist).
+        ).toEqual(['dist/app.css'])
+    })
+
+    test('a real build step closes the same reference (the rule discriminates)', () => {
+        expect(
+            scan(
+                {
+                    'build.ts': emit('<html><link rel="stylesheet" href="/app.css" /></html>'),
+                    'src/app.css': ''
+                },
+                {
+                    build: 'bun run build.ts && bun run build:css',
+                    'build:css': 'bunx @tailwindcss/cli -i src/app.css -o dist/app.css'
+                }
+            )
+        ).toEqual([])
+    })
+
+    test('a --watch body counts as a dev script even when the name does not', () => {
+        expect(
+            scan(
+                {
+                    'build.ts': emit('<html><link rel="stylesheet" href="/app.css" /></html>'),
+                    'src/app.css': ''
+                },
+                {css: 'bunx @tailwindcss/cli -i src/app.css -o dist/app.css --watch'}
+            )
+        ).toEqual(['dist/app.css'])
+    })
+
+    test('inv-scheme-urls-ignored: schemes, protocol-relative and routes never fire', () => {
+        expect(
+            scan({
+                'build.ts': emit(
+                    '<html><head><script src="https://cdn.example/x.js"></script>'
+                        + '<link rel="stylesheet" href="//cdn.example/x.css" />'
+                        + '<link rel="icon" href="data:image/png;base64,AAAA" />'
+                        + '<link rel="canonical" href="#top" /></head>'
+                        + '<body><a href="/about">about</a></body></html>'
+                )
+            })
+        ).toEqual([])
+    })
+
+    test('inv-non-build-html-ignored: an email-body literal is never scanned', () => {
+        // The real shape: ~/hub/aiz-server/src/connections/mailTemplate.ts is
+        // `export default \`<!doctype html>…\`` — an email body, written nowhere.
+        // A cid: asset AND a root-relative one must both stay invisible.
+        expect(
+            scan({
+                'build.ts': BUILD_HEAD,
+                'src/mail-template.ts':
+                    'export default `<!doctype html><body><img src="cid:logo" />'
+                    + '<link rel="stylesheet" href="/brand.css" /><img src="/pixel.png" /></body>`'
+            })
+        ).toEqual([])
+    })
+
+    test('HTML written outside any declared build outdir is out of scope', () => {
+        // `report/` is not a build outdir — writing one file there must not turn
+        // the directory into a closure surface for its siblings.
+        expect(
+            scan({
+                'build.ts':
+                    'const html = `<html><img src="logo.png"></html>`\n'
+                    + "Bun.write('report/out.html', html)"
+            })
+        ).toEqual([])
+    })
+
+    test('root-relative resolves against the outdir, document-relative against the doc', () => {
+        // Same missing asset reached two ways from a nested document: `/a.css`
+        // hangs off the static root (dist), `b.css` off the document's own dir.
+        expect(
+            scan({
+                'build.ts':
+                    `${BUILD_HEAD}\n`
+                    + 'const html = `<html><link href="/a.css" /><link href="b.css" /></html>`\n'
+                    + "Bun.write('dist/pages/p.html', html)"
+            })
+        ).toEqual(['dist/a.css', 'dist/pages/b.css'])
+    })
+
+    test('media tags are scanned in generated HTML', () => {
+        expect(
+            scan({
+                'build.ts': emit('<html><video><source src="/clip.mp4" /></video></html>')
+            })
+        ).toEqual(['dist/clip.mp4'])
+    })
+
+    test('an asset that exists on disk or is a build entrypoint stem is satisfied', () => {
+        expect(
+            scan({
+                'build.ts': emit(
+                    '<html><script type="module" src="/main.js"></script>'
+                        + '<link rel="icon" href="/favicon.ico" /></html>'
+                ),
+                'dist/favicon.ico': ''
+            })
+        ).toEqual([])
     })
 })
 

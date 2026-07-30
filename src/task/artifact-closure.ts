@@ -71,10 +71,22 @@ export interface ProducedOutputs {
     opaque: Set<string>
     /** Dirs known to be created (mkdir, outdirs) — satisfies dir-kind refs. */
     dirs: Set<string>
+    /** Dirs a BUILD TOOL declared as its output location (`--outdir`, `Bun.build`
+     *  outdir, a bundler's known dir, tsconfig/vite outDir). Strictly narrower
+     *  than `dirs`: writing one file into `report/` makes `report` enumerable but
+     *  never a build outdir. Generated-HTML scanning is gated on this set, so a
+     *  one-off HTML report writer cannot pull its assets into the check. */
+    outdirs: Set<string>
 }
 
 export function emptyProducers(): ProducedOutputs {
-    return {files: new Set(), enumerable: new Map(), opaque: new Set(), dirs: new Set()}
+    return {
+        files: new Set(),
+        enumerable: new Map(),
+        opaque: new Set(),
+        dirs: new Set(),
+        outdirs: new Set()
+    }
 }
 
 /** Normalize a literal path: posix separators, strip ./ prefixes, query/hash
@@ -182,6 +194,165 @@ export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[
     return out
 }
 
+// ---------------------------------------------------------------------------
+// GENERATED HTML (nexttask 3, mx5 run 18).
+//
+// The run-13 checker fired correctly on `src/server/index.ts → dist/index.html`;
+// the autofix satisfied it by appending an HTML template literal to `build.ts`
+// and `Bun.write`ing it — and that page pointed at `/app.css`, which `bun run
+// build` never emits (only the watch-mode `dev:css` does). The re-run gate saw
+// nothing, because the extractor scans HTML FILES and JS READS, never the HTML a
+// source GENERATES. So one dangling reference was closed by creating another one
+// indirection deeper.
+//
+// Scope discipline, the reason this does not become an FP machine: a literal is
+// scanned ONLY when it reaches a write whose destination is an HTML file inside a
+// directory a BUILD TOOL declared as its output (`prod.outdirs`). An email-body
+// template (`~/hub/aiz-server/src/connections/mailTemplate.ts` — `export default
+// \`<!doctype html>…\``) is never written to a build output and is therefore
+// never scanned, `<img src="cid:logo">` and all.
+// ---------------------------------------------------------------------------
+
+/** Asset attributes scanned in GENERATED HTML. Wider than HTML_PATTERNS (which
+ *  keeps scanning on-disk .html files exactly as it always has) by the media
+ *  tags nexttask 3 names. */
+const GENERATED_HTML_PATTERNS: Pattern[] = [
+    ...HTML_PATTERNS,
+    {
+        re: /<(?:source|video|audio)\b[^>]*\bsrc\s*=\s*(['"])([^'"]+)\1/gi,
+        construct: 'media src',
+        kind: 'file'
+    }
+]
+
+/** One HTML document a source writes into a build output. */
+export interface EmittedHtml {
+    /** Repo-relative path written to (`dist/index.html`). */
+    docPath: string
+    /** The literal's raw text. */
+    html: string
+}
+
+/** Read a quoted/template literal starting at `i` (src[i] is the quote char).
+ *  Returns the body and the index just past the closing quote, or null when
+ *  unterminated. Escapes are honoured; a `${…}` hole is left in the text, where
+ *  normalizeRefPath rejects it. */
+function readLiteral(src: string, i: number): {text: string; end: number} | null {
+    const q = src[i]
+    if (q !== '"' && q !== "'" && q !== '`') return null
+    let out = ''
+    for (let j = i + 1; j < src.length; j++) {
+        const c = src[j]
+        if (c === '\\') {
+            out += src[j + 1] ?? ''
+            j++
+            continue
+        }
+        if (c === q) return {text: out, end: j + 1}
+        if (c === '\n' && q !== '`') return null // unterminated single-line literal
+        out += c
+    }
+    return null
+}
+
+/** `const NAME = <literal>` bindings (also let/var) — the mx5 build.ts shape is
+ *  `const html = \`…\`` followed by `Bun.write('dist/index.html', html)`. */
+function literalBindings(src: string): Map<string, string> {
+    const out = new Map<string, string>()
+    const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?=['"`])/g
+    for (let m = re.exec(src); m !== null; m = re.exec(src)) {
+        const lit = readLiteral(src, m.index + m[0].length)
+        if (lit === null) continue
+        out.set(m[1], lit.text)
+        re.lastIndex = lit.end
+    }
+    return out
+}
+
+/** HTML documents this source writes: `Bun.write('x.html', <literal|ident>)` and
+ *  the writeFile family. Only literal destinations, only HTML extensions. */
+export function collectEmittedHtml(source: string): EmittedHtml[] {
+    const src = stripCommentLines(source)
+    const bindings = literalBindings(src)
+    const out: EmittedHtml[] = []
+    const writeRe =
+        /\b(?:Bun\.write|writeFileSync|writeFile|fs\.promises\.writeFile)\(\s*(['"`])([^'"`\n]+)\1\s*,\s*/g
+    for (let m = writeRe.exec(src); m !== null; m = writeRe.exec(src)) {
+        const docPath = normalizeRefPath(m[2])
+        if (docPath === null || !SCAN_HTML_RE.test(docPath)) continue
+        const at = m.index + m[0].length
+        let html: string | undefined
+        const lit = readLiteral(src, at)
+        if (lit !== null) html = lit.text
+        else {
+            const id = /^[A-Za-z_$][\w$]*/.exec(src.slice(at, at + 80))
+            if (id) html = bindings.get(id[0])
+        }
+        if (html === undefined || !html.includes('<')) continue
+        out.push({docPath, html})
+    }
+    return out
+}
+
+/** The narrowest build outdir containing `p`, or null when no build tool
+ *  declared one that covers it. */
+function containingOutdir(p: string, prod: ProducedOutputs): string | null {
+    let best: string | null = null
+    for (const d of prod.outdirs) {
+        if (!underDir(p, d)) continue
+        if (best === null || d.length > best.length) best = d
+    }
+    return best
+}
+
+/**
+ * Asset references inside HTML this source GENERATES into a build output.
+ *
+ * Resolution, deterministic:
+ *  • root-relative (`/app.css`) resolves against the build OUTDIR the document
+ *    lands in (`dist/index.html` ⇒ `dist/`) — that dir is the server's static
+ *    root by construction;
+ *  • document-relative (`app.css`, `./assets/x.js`) resolves against the
+ *    document's own directory;
+ *  • schemes (`https:`, `data:`, `cid:`), protocol-relative `//host/x`, and bare
+ *    `#fragment`s are dropped by normalizeRefPath;
+ *  • a literal not written into a declared build outdir is never scanned at all.
+ */
+export function extractGeneratedHtmlRefs(
+    source: string,
+    referencer: string,
+    prod: ProducedOutputs
+): RuntimeRef[] {
+    const out: RuntimeRef[] = []
+    const seen = new Set<string>()
+    for (const {docPath, html} of collectEmittedHtml(source)) {
+        const outdir = containingOutdir(docPath, prod)
+        if (outdir === null) continue // not a build artifact — out of scope
+        const docDir = path.posix.dirname(docPath)
+        for (const {re, construct, kind} of GENERATED_HTML_PATTERNS) {
+            re.lastIndex = 0
+            for (let m = re.exec(html); m !== null; m = re.exec(html)) {
+                const raw = m[2]
+                const rootRelative = /^\/(?!\/)/.test(raw.trim())
+                const p = normalizeRefPath(raw)
+                if (p === null || !hasExt(p)) continue
+                const base = rootRelative ? outdir : docDir
+                const resolved = path.posix.normalize(base === '.' ? p : `${base}/${p}`)
+                if (resolved.startsWith('..')) continue
+                if (seen.has(resolved)) continue
+                seen.add(resolved)
+                out.push({
+                    path: resolved,
+                    referencer,
+                    construct: `${construct} in generated ${docPath}`,
+                    kind
+                })
+            }
+        }
+    }
+    return out
+}
+
 /** A path-shaped shell token: contains a separator or an extension, no shell
  *  metacharacters, not a flag. */
 function isPathToken(t: string): boolean {
@@ -270,7 +441,11 @@ export function collectProducersFromCommand(
 ): void {
     let rest = cmd.replace(/2>&1|&>\s*\S+|2>\s*\S+/g, ' ')
     for (const {re, dirs} of OPAQUE_TOOL_DIRS) {
-        if (re.test(rest)) for (const d of dirs) prod.opaque.add(d)
+        if (re.test(rest))
+            for (const d of dirs) {
+                prod.opaque.add(d)
+                prod.outdirs.add(d)
+            }
     }
     // Redirect target.
     rest = rest.replace(/>>?\s*([^\s&|;]+)/g, (_, f: string) => {
@@ -285,9 +460,14 @@ export function collectProducersFromCommand(
     rest = rest.replace(flagRe, (_, flag: string, val: string) => {
         const p = normalizeRefPath(val)
         if (p === null) return ' '
-        if (flag === '--outdir' || flag === '--out-dir') addEnumerable(prod, p, [])
-        else if (hasExt(p)) addFile(prod, p)
-        else addEnumerable(prod, p, [])
+        if (flag === '--outdir' || flag === '--out-dir') {
+            addEnumerable(prod, p, [])
+            prod.outdirs.add(p)
+        } else if (hasExt(p)) addFile(prod, p)
+        else {
+            addEnumerable(prod, p, [])
+            prod.outdirs.add(p)
+        }
         return ' '
     })
     const toks = rest.trim().split(/\s+/)
@@ -332,7 +512,10 @@ export function collectProducersFromCommand(
         const p = normalizeRefPath(m[1])
         if (p !== null) declaredDirs.push(p)
     }
-    for (const d of declaredDirs) addEnumerable(prod, d, sourceArgs.map(stem))
+    for (const d of declaredDirs) {
+        addEnumerable(prod, d, sourceArgs.map(stem))
+        prod.outdirs.add(d)
+    }
     // Unrecognized command: any leftover path token pointing INTO a directory
     // makes that directory opaque — the tool may generate arbitrary files there.
     if ((opts.escalate ?? true) && !KNOWN_NON_PRODUCING_RE.test(bin) && !/^@/.test(bin)) {
@@ -395,6 +578,7 @@ export function collectProducersFromSource(source: string, prod: ProducedOutputs
         if (!outdirM) continue
         const dir = normalizeRefPath(outdirM[2])
         if (dir === null) continue
+        prod.outdirs.add(dir)
         if (/\bnaming:/.test(body)) {
             prod.opaque.add(dir) // custom naming — outputs underivable
             continue
@@ -438,7 +622,10 @@ function collectTsconfigOutDirs(cwd: string, prod: ProducedOutputs): void {
             const m = /"outDir"\s*:\s*"([^"]+)"/.exec(readFileSync(path.join(cwd, n), 'utf8'))
             if (m) {
                 const p = normalizeRefPath(m[1])
-                if (p !== null) prod.opaque.add(p)
+                if (p !== null) {
+                    prod.opaque.add(p)
+                    prod.outdirs.add(p)
+                }
             }
         } catch {
             // unreadable config — nothing to learn
@@ -459,11 +646,15 @@ function collectBundlerConfigOutDirs(cwd: string, prod: ProducedOutputs): void {
         const f = path.join(cwd, n)
         if (!existsSync(f)) continue
         prod.opaque.add('dist')
+        prod.outdirs.add('dist')
         try {
             const m = /\boutDir:\s*(['"`])([^'"`\n]+)\1/.exec(readFileSync(f, 'utf8'))
             if (m) {
                 const p = normalizeRefPath(m[2])
-                if (p !== null) prod.opaque.add(p)
+                if (p !== null) {
+                    prod.opaque.add(p)
+                    prod.outdirs.add(p)
+                }
             }
         } catch {
             // default already recorded
@@ -484,13 +675,43 @@ function packageScripts(cwd: string): Record<string, string> {
 }
 
 /**
+ * A WATCH/DEV script — one a production build never invokes.
+ *
+ * The load-bearing rule of nexttask 3 (mx5 run 18): `dist/app.css` had exactly
+ * one producer, `dev:css` (`@tailwindcss/cli … -o dist/app.css --watch`), a
+ * watch-mode dev script. The gate's own commands are `build`, `test`, `lint` —
+ * none of them runs it, so the shipped page loaded zero CSS while the closure
+ * table happily reported the file "produced". A production artifact closed only
+ * by a watch script is dangling by construction.
+ *
+ * Deterministic and name-or-flag based, exactly as pre-registered: a script
+ * whose NAME starts with `dev`/`watch`, or whose BODY carries `--watch`.
+ */
+export function isDevScript(name: string, body: string): boolean {
+    return /^(?:dev|watch)\b|^(?:dev|watch)[:._-]/i.test(name) || /(?:^|\s)--watch\b/.test(body)
+}
+
+export interface ProducerOpts {
+    /**
+     * Drop watch/dev scripts (and the build files reachable only through them)
+     * from the producer table — the PRODUCTION view of what a release contains.
+     * Off by default: the shipped resolution path is unchanged by this task.
+     */
+    excludeDevScripts?: boolean
+}
+
+/**
  * Discover everything the project's own machinery produces: package.json script
  * bodies, build files those scripts run (plus conventional root build files),
  * tsconfig/vite outDirs.
  */
-export function discoverProducers(cwd: string): ProducedOutputs {
+export function discoverProducers(cwd: string, opts: ProducerOpts = {}): ProducedOutputs {
     const prod = emptyProducers()
-    const scripts = packageScripts(cwd)
+    const all = packageScripts(cwd)
+    const scripts =
+        opts.excludeDevScripts === true ?
+            Object.fromEntries(Object.entries(all).filter(([n, b]) => !isDevScript(n, b)))
+        :   all
     const buildFiles = new Set<string>(
         ['build.ts', 'build.js', 'build.mjs'].filter(f => existsSync(path.join(cwd, f)))
     )
@@ -520,6 +741,17 @@ export function discoverProducers(cwd: string): ProducedOutputs {
 }
 
 const underDir = (p: string, dir: string): boolean => p === dir || p.startsWith(dir + '/')
+
+/** Is a FILE path positively produced — named exactly, under an opaque dir, or
+ *  an enumerated stem of an enumerable outdir? */
+function fileProduced(c: string, prod: ProducedOutputs): boolean {
+    if (prod.files.has(c)) return true
+    if ([...prod.opaque].some(d => underDir(c, d))) return true
+    for (const [dir, stems] of prod.enumerable) {
+        if (underDir(path.posix.dirname(c), dir) && stems.has(stem(c))) return true
+    }
+    return false
+}
 
 /**
  * Resolve refs against existence + producers. DANGLING requires POSITIVE
@@ -572,14 +804,7 @@ export function resolveDanglingRefs(
             push(ref, `directory does not exist and no script or build step creates it`)
             continue
         }
-        const isSatisfied = candidates.some(c => {
-            if (prod.files.has(c)) return true
-            if ([...prod.opaque].some(d => underDir(c, d))) return true
-            for (const [dir, stems] of prod.enumerable) {
-                if (underDir(path.posix.dirname(c), dir) && stems.has(stem(c))) return true
-            }
-            return false
-        })
+        const isSatisfied = candidates.some(c => fileProduced(c, prod))
         if (isSatisfied) continue
         // Positive-evidence branches:
         const underEnumerable = candidates.some(c =>
@@ -662,7 +887,14 @@ function scanCandidates(cwd: string, prod: ProducedOutputs): string[] {
  */
 export function findDanglingArtifacts(cwd: string): DanglingRef[] {
     const prod = discoverProducers(cwd)
+    // Second, PRODUCTION-only table: identical machinery minus watch/dev scripts.
+    // Generated-HTML refs resolve against this one, so a file whose only producer
+    // is `dev:css --watch` does not close a reference the built page makes
+    // (nexttask 3's load-bearing rule). Everything else keeps resolving against
+    // the full table, so no existing finding moves.
+    const prodProduction = discoverProducers(cwd, {excludeDevScripts: true})
     const refs: RuntimeRef[] = []
+    const sources: Array<{rel: string; src: string}> = []
     for (const rel of scanCandidates(cwd, prod)) {
         let src: string
         try {
@@ -675,12 +907,79 @@ export function findDanglingArtifacts(cwd: string): DanglingRef[] {
         } else {
             refs.push(...extractJsRefs(src, rel))
             collectProducersFromSource(src, prod)
+            collectProducersFromSource(src, prodProduction)
+            sources.push({rel, src})
         }
     }
     for (const [name, body] of Object.entries(packageScripts(cwd))) {
         refs.push(...extractScriptEntrypoints(body, `package.json scripts.${name}`))
     }
-    return resolveDanglingRefs(refs, prod, rel => existsSync(path.join(cwd, rel)))
+    const out = resolveDanglingRefs(refs, prod, rel => existsSync(path.join(cwd, rel)))
+    // Generated HTML runs in a SECOND pass: whether a literal counts as a build
+    // artifact depends on outdirs any source in the tree may have declared, so
+    // the producer table has to be complete first.
+    const generated: RuntimeRef[] = []
+    for (const {rel, src} of sources) {
+        generated.push(...extractGeneratedHtmlRefs(src, rel, prodProduction))
+    }
+    const seen = new Set(out.map(d => `${d.referencer} ${d.path}`))
+    for (const d of resolveDanglingRefs(generated, prodProduction, rel =>
+        existsSync(path.join(cwd, rel))
+    )) {
+        if (seen.has(`${d.referencer} ${d.path}`)) continue
+        seen.add(`${d.referencer} ${d.path}`)
+        out.push(d)
+    }
+    return out
+}
+
+/** How a generated-HTML asset reference resolves — the STEP 0 measurement. */
+export type GeneratedHtmlRefClass =
+    /** Produced by the production build (or already on disk). */
+    | 'produced'
+    /** Only a watch/dev script produces it — dangling for a production build. */
+    | 'dev-only'
+    /** Nothing produces it at all. */
+    | 'missing'
+
+/** Classify one generated-HTML ref against both producer tables (STEP 0 / A/B
+ *  reporting; the gate itself only needs the dangling verdict). */
+export function classifyGeneratedHtmlRef(
+    ref: RuntimeRef,
+    full: ProducedOutputs,
+    production: ProducedOutputs,
+    exists: (rel: string) => boolean
+): GeneratedHtmlRefClass {
+    if (exists(ref.path) || fileProduced(ref.path, production)) return 'produced'
+    if (fileProduced(ref.path, full)) return 'dev-only'
+    return 'missing'
+}
+
+/** STEP 0 / A/B helper: every generated-HTML asset ref in a tree, with the
+ *  producer tables it was measured against. Read-only, deterministic. */
+export function collectGeneratedHtmlRefs(cwd: string): {
+    refs: RuntimeRef[]
+    full: ProducedOutputs
+    production: ProducedOutputs
+} {
+    const full = discoverProducers(cwd)
+    const production = discoverProducers(cwd, {excludeDevScripts: true})
+    const sources: Array<{rel: string; src: string}> = []
+    for (const rel of scanCandidates(cwd, full)) {
+        if (SCAN_HTML_RE.test(rel)) continue
+        let src: string
+        try {
+            src = readFileSync(path.join(cwd, rel), 'utf8')
+        } catch {
+            continue
+        }
+        collectProducersFromSource(src, full)
+        collectProducersFromSource(src, production)
+        sources.push({rel, src})
+    }
+    const refs: RuntimeRef[] = []
+    for (const {rel, src} of sources) refs.push(...extractGeneratedHtmlRefs(src, rel, production))
+    return {refs, full, production}
 }
 
 /** Ranked-failure text for the final gate (names referencer + missing path). */

@@ -53,6 +53,12 @@ not here. Last updated 2026-07-30.
 5. **Never run `bun test` while a model harness is running.**
    `src/task/real-pi.smoke.test.ts` spawns real pi and times out under
    llama-server contention (9.85s on a free server, >120s under load).
+6. **A regression net pointed at a live evidence tree rots.**
+   `scripts/dangling-artifact-fp-suite.ts` scanned `~/hub/mx5` at whatever HEAD it
+   had; the tree kept running, run 18's autofix closed the run-13 dangle, and the
+   suite sat RED for reasons unrelated to the extractor — so nobody read it. Evidence
+   arms now scan `git archive` exports of NAMED commits
+   (`scripts/html-asset-closure-corpus.ts`); the evidence repo is never checked out.
 
 ## PASS CONDITION for any selection fix
 
@@ -126,6 +132,29 @@ one blindness for another. Measure before choosing.
 
 ## GRAY AREAS — carried forward, still true
 
+- The **generated-HTML asset closure** (nexttask 3, shipped) passed its A/B 1/1 → 0/1
+  with six invariants holding, and its base rate is honest but *thin*: across 7 trees
+  the whole corpus contains **2** generated-HTML asset references, both in one file
+  (`mx5@a9c6145 build.ts`) — 1 produced, 1 dev-only. Every other tree is a structural
+  zero, not a passing test: none of them generates HTML into a build outdir at all, so
+  the FP arms prove the *gate* (a literal must reach a write into a declared build
+  outdir) and prove nothing about the *resolution rule*. The dev-only rule's
+  discrimination is argued from two fixtures — one where the producer carries
+  `--watch`, one where it does not — plus mx5. One real tree again.
+- The generated-HTML scan is **literal-only, one file at a time**: an HTML template
+  assembled from several bindings, returned by a function, imported from another
+  module, or written through a variable destination is invisible. Every one of those
+  errs toward silence. It also only ever fires *inside* a directory some build tool
+  declared as its output (`ProducedOutputs.outdirs`); a page written to an
+  undeclared directory is out of scope by construction, which is what keeps the
+  `mailTemplate.ts`-shaped email bodies out.
+- **`/main.js` in mx5 run 18 is unreachable and no checker sees it.** The generated
+  page is served by a single catch-all `app.get('*')` returning `dist/index.html` as
+  `text/html`, with **no static-asset route**, so both `/main.js` and any CSS URL
+  resolve to the HTML document. Artifact closure correctly calls `/main.js` *produced*
+  — it is — and cannot reason about route tables. This belongs to the **serve-entry
+  checker (nexttask 2B)**, extended to assert that a tree with an SPA catch-all also
+  mounts a static handler. It is deliberately NOT folded into artifact-closure.
 - The **boot-skip → UNOBSERVED** lever (mx5 run 18, shipped) passed its A/B 2/11 → 0/11
   with all four invariants holding, but its **generality is unproven**: of 10 trees in
   the STEP 0 corpus a boot command was discovered AND skipped in 4, still yielded a bare
