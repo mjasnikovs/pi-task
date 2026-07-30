@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, 'Liberation Sans', Arial, sans-serif" role="img" aria-label="pi-task — Deterministic AI Workflows. Five fixed phases: refine, research, grill, compose, critique.">
+  <defs>
+    <clipPath id="frame"><rect x="0" y="0" width="960" height="600"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1117"/><stop offset="1" stop-color="#010409"/>
+    </linearGradient>
+    <linearGradient id="hl" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b183f9"/><stop offset="1" stop-color="#8957e5"/>
+    </linearGradient>
+  </defs>
+  <rect width="960" height="600" fill="url(#bg)"/><g clip-path="url(#frame)" fill="none" stroke="#a371f7" stroke-linecap="round" stroke-linejoin="round" opacity="0.26"><path d="M224.4 600.0L252.1 539.1L270.6 559.4L302.9 486.3L326.0 506.6L356.1 451.8L383.8 470.1L411.5 423.4L432.3 437.6L455.4 397.0L473.9 439.6L492.4 421.4L520.1 478.2L543.2 462.0L577.8 516.8L603.2 500.5L631.0 553.3L654.1 537.1L686.4 600.0" stroke-width="1.4" opacity="0.16"/><path d="M666.6 600.0L692.7 547.5L710.2 565.0L740.7 502.0L762.4 519.5L790.7 472.3L816.9 488.0L843.0 447.8L862.6 460.0L884.4 425.0L901.8 461.8L919.2 446.0L945.4 495.0L967.2 481.0L999.8 528.3L1023.8 514.3L1049.9 559.8L1071.7 545.8L1102.2 600.0" stroke-width="1.4" opacity="0.16"/><path d="M660.0 250.0L330.0 600M660.0 250.0L412.5 600M660.0 250.0L495.0 600M660.0 250.0L577.5 600M660.0 250.0L660.0 600M660.0 250.0L742.5 600M660.0 250.0L825.0 600M660.0 250.0L907.5 600M660.0 250.0L990.0 600" stroke-width="1" opacity="0.1"/><path d="M369.6 495.0L369.6 600M396.0 530.0L396.0 600M442.2 404.0L442.2 600M475.2 439.0L475.2 600M518.1 344.5L518.1 600M557.7 376.0L557.7 600M597.3 295.5L597.3 600M627.0 320.0L627.0 600M660.0 250.0L660.0 600M686.4 323.5L686.4 600M712.8 292.0L712.8 600M752.4 390.0L752.4 600M785.4 362.0L785.4 600M834.9 456.5L834.9 600M871.2 428.5L871.2 600M910.8 519.5L910.8 600M943.8 491.5L943.8 600" stroke-width="1" opacity="0.13"/><path d="M330.0 600.0L369.6 495.0L396.0 530.0L442.2 404.0L475.2 439.0L518.1 344.5L557.7 376.0L597.3 295.5L627.0 320.0L660.0 250.0L686.4 323.5L712.8 292.0L752.4 390.0L785.4 362.0L834.9 456.5L871.2 428.5L910.8 519.5L943.8 491.5L990.0 600.0" stroke-width="2.2" opacity="0.55"/><path d="M330.0 600.0L396.0 530.0L475.2 439.0L557.7 376.0L627.0 320.0L660.0 250.0" stroke-width="1.8" stroke-dasharray="7 6" opacity="0.75"/><circle cx="330.0" cy="600.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="396.0" cy="530.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="475.2" cy="439.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="557.7" cy="376.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="627.0" cy="320.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="660.0" cy="250.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/></g>
+  <g transform="translate(44,28) scale(0.95)" fill="none" stroke="#a371f7" stroke-width="2.21" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M30.18 4.98A20 20 0 1 0 41.66 14.61"/>
+    <path d="M13.5 17H34.5M19.5 17V32M28.5 17V32"/>
+  </g>
+  <text x="98" y="62" font-size="36" font-weight="700" fill="#e6edf3" letter-spacing="-0.5">pi-task</text>
+  <text x="44" y="258" font-size="104" font-weight="700" fill="#e6edf3" letter-spacing="-4">Deterministic</text>
+  <text x="44" y="372" font-size="104" font-weight="700" fill="url(#hl)" letter-spacing="-4">AI Workflows.</text>
+  <rect x="44" y="404" width="104" height="7" rx="3.5" fill="#8957e5"/>
+  <rect x="98.2" y="452" width="66" height="66" rx="14.5" fill="#1e1633" stroke="#a371f7" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(113.8,467.6) scale(1.45)" fill="none" stroke="#a371f7" stroke-width="1.31" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></g>
+  <text x="131.2" y="543" text-anchor="middle" font-size="18" font-weight="700" fill="#8b949e" letter-spacing="0.6">REFINE</text>
+  <path d="M208.4 485h20M222.4 480l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="272.6" y="452" width="66" height="66" rx="14.5" fill="#0d2440" stroke="#58a6ff" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(288.2,467.6) scale(1.45)" fill="none" stroke="#58a6ff" stroke-width="1.31" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5 16 16"/></g>
+  <text x="305.6" y="543" text-anchor="middle" font-size="18" font-weight="700" fill="#8b949e" letter-spacing="0.6">RESEARCH</text>
+  <path d="M382.8 485h20M396.8 480l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="447.0" y="452" width="66" height="66" rx="14.5" fill="#33172a" stroke="#f778ba" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(462.6,467.6) scale(1.45)" fill="none" stroke="#f778ba" stroke-width="1.31" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3.5 21l1.9-4.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.5 8.5 8.5 0 0 1 7.5 7.5z"/><path d="M9.6 9.4a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.6-2.5 2.6"/><path d="M12 16.4h.01"/></g>
+  <text x="480.0" y="543" text-anchor="middle" font-size="18" font-weight="700" fill="#8b949e" letter-spacing="0.6">GRILL</text>
+  <path d="M557.2 485h20M571.2 480l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="621.4" y="452" width="66" height="66" rx="14.5" fill="#0f2a1b" stroke="#3fb950" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(637.0,467.6) scale(1.45)" fill="none" stroke="#3fb950" stroke-width="1.31" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 20.5H21"/><path d="M16.7 3.6a2.1 2.1 0 0 1 3 3L7.5 18.8 3.5 20l1.2-4z"/></g>
+  <text x="654.4" y="543" text-anchor="middle" font-size="18" font-weight="700" fill="#8b949e" letter-spacing="0.6">COMPOSE</text>
+  <path d="M731.6 485h20M745.6 480l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="795.8" y="452" width="66" height="66" rx="14.5" fill="#2d2410" stroke="#d29922" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(811.4,467.6) scale(1.45)" fill="none" stroke="#d29922" stroke-width="1.31" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21.5s7.5-3.8 7.5-9.5V5.2L12 2.5 4.5 5.2V12c0 5.7 7.5 9.5 7.5 9.5z"/></g>
+  <text x="828.8" y="543" text-anchor="middle" font-size="18" font-weight="700" fill="#8b949e" letter-spacing="0.6">CRITIQUE</text>
+</svg>

@@ -1,6 +1,6 @@
 <div align="center">
 
-![Local models drift. pi-task doesn't trust one prompt. Your ask runs through five fixed phases — refine, research, grill, compose, critique — and what comes out is a spec.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.svg)
+![pi-task — Deterministic AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.svg)
 
 # pi-task
 

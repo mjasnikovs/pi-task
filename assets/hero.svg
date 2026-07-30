@@ -1,92 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="pi-task. Local models drift. pi-task doesn't trust one prompt. Your ask runs through five fixed phases — refine, research, grill, compose, critique — and what comes out is a spec.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, 'Liberation Sans', Arial, sans-serif" role="img" aria-label="pi-task — Deterministic AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.">
   <defs>
-    <clipPath id="frame"><rect x="6" y="6" width="948" height="588" rx="18"/></clipPath>
-    <style>
-      .code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-      .ic   { fill:none; stroke-width:2.25; stroke-linecap:round; stroke-linejoin:round; }
-      .icf  { stroke:none; }
-      .ph   { font-size:18px; fill:#c9d1d9; }
-      .arw  { fill:none; stroke:#6e7681; stroke-width:2.07; stroke-linecap:round; stroke-linejoin:round; }
-    </style>
-  </defs>
-
-  <rect x="6" y="6" width="948" height="588" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
-
-  <!-- ── watermark ── -->
-  <defs>
-    <linearGradient id="mtFade" gradientUnits="userSpaceOnUse" x1="6" y1="0" x2="688" y2="0">
-      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
-      <stop offset="0.55" stop-color="#fff" stop-opacity="0.9"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    <clipPath id="frame"><rect x="0" y="0" width="960" height="600"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1117"/><stop offset="1" stop-color="#010409"/>
     </linearGradient>
-    <mask id="mtMask"><rect x="0" y="0" width="960" height="600" fill="url(#mtFade)"/></mask>
+    <linearGradient id="hl" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b183f9"/><stop offset="1" stop-color="#8957e5"/>
+    </linearGradient>
   </defs>
-  <g clip-path="url(#frame)" mask="url(#mtMask)" fill="none" stroke="#a371f7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M6.0 594.0L75.6 530.2L139.4 550.5L203.2 486.7L275.7 518.6L342.4 449.0L412.0 501.2L484.5 460.6L559.9 521.5L629.5 486.7L687.5 594.0" stroke-width="1.5" opacity="0.12"/>
-    <path d="M264.1 330.1L6.0 594.0M264.1 330.1L130.7 594.0M264.1 330.1L255.4 594.0M264.1 330.1L380.1 594.0M264.1 330.1L504.8 594.0M264.1 330.1L629.5 594.0" stroke-width="1" opacity="0.08"/>
-    <path d="M56.8 538.9L56.8 594.0M95.9 556.3L95.9 594.0M148.1 475.1L148.1 594.0M191.6 495.4L191.6 594.0M226.4 405.5L226.4 594.0M264.1 330.1L264.1 594.0M290.2 382.3L290.2 594.0M316.3 364.9L316.3 594.0M351.1 443.2L351.1 594.0M385.9 422.9L385.9 594.0M423.6 489.6L423.6 594.0M458.4 469.3L458.4 594.0M499.0 530.2L499.0 594.0M539.6 515.7L539.6 594.0M586.0 567.9L586.0 594.0" stroke-width="1" opacity="0.07"/>
-    <path d="M6.0 594.0L56.8 538.9L95.9 556.3L148.1 475.1L191.6 495.4L226.4 405.5L264.1 330.1L290.2 382.3L316.3 364.9L351.1 443.2L385.9 422.9L423.6 489.6L458.4 469.3L499.0 530.2L539.6 515.7L586.0 567.9L629.5 594.0" stroke-width="2" opacity="0.30"/>
-    <circle cx="6.0" cy="594.0" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-    <circle cx="148.1" cy="475.1" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-    <circle cx="264.1" cy="330.1" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-    <circle cx="351.1" cy="443.2" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-    <circle cx="458.4" cy="469.3" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-    <circle cx="586.0" cy="567.9" r="2.6" fill="#a371f7" stroke="none" opacity="0.34"/>
-  </g>
-
-  <!-- ── logo lockup · π in a broken circle, drawn as paths (no font dependency) ── -->
-  <g transform="translate(371,59) scale(1.2500)" fill="none" stroke="#a371f7" stroke-width="2.40" stroke-linecap="round" stroke-linejoin="round">
+  <rect width="960" height="600" fill="url(#bg)"/><g clip-path="url(#frame)" fill="none" stroke="#a371f7" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"><path d="M137.6 600.0L164.5 560.3L182.4 573.6L213.8 525.9L236.2 539.2L265.3 503.5L292.2 515.4L319.0 485.0L339.2 494.2L361.6 467.8L379.5 495.5L397.4 483.6L424.3 520.7L446.7 510.1L480.3 545.8L505.0 535.2L531.8 569.6L554.2 559.0L585.6 600.0" stroke-width="1.4" opacity="0.16"/><path d="M566.4 600.0L591.7 565.8L608.6 577.2L638.2 536.2L659.3 547.6L686.8 516.8L712.1 527.0L737.5 500.8L756.5 508.8L777.6 486.0L794.5 509.9L811.4 499.7L836.7 531.6L857.9 522.5L889.5 553.3L912.8 544.1L938.1 573.8L959.2 564.7L988.8 600.0" stroke-width="1.4" opacity="0.16"/><path d="M560.0 372.0L240.0 600M560.0 372.0L320.0 600M560.0 372.0L400.0 600M560.0 372.0L480.0 600M560.0 372.0L560.0 600M560.0 372.0L640.0 600M560.0 372.0L720.0 600M560.0 372.0L800.0 600M560.0 372.0L880.0 600" stroke-width="1" opacity="0.1"/><path d="M278.4 531.6L278.4 600M304.0 554.4L304.0 600M348.8 472.3L348.8 600M380.8 495.1L380.8 600M422.4 433.6L422.4 600M460.8 454.1L460.8 600M499.2 401.6L499.2 600M528.0 417.6L528.0 600M560.0 372.0L560.0 600M585.6 419.9L585.6 600M611.2 399.4L611.2 600M649.6 463.2L649.6 600M681.6 445.0L681.6 600M729.6 506.5L729.6 600M764.8 488.3L764.8 600M803.2 547.6L803.2 600M835.2 529.3L835.2 600" stroke-width="1" opacity="0.13"/><path d="M240.0 600.0L278.4 531.6L304.0 554.4L348.8 472.3L380.8 495.1L422.4 433.6L460.8 454.1L499.2 401.6L528.0 417.6L560.0 372.0L585.6 419.9L611.2 399.4L649.6 463.2L681.6 445.0L729.6 506.5L764.8 488.3L803.2 547.6L835.2 529.3L880.0 600.0" stroke-width="2.2" opacity="0.55"/><path d="M240.0 600.0L304.0 554.4L380.8 495.1L460.8 454.1L528.0 417.6L560.0 372.0" stroke-width="1.8" stroke-dasharray="7 6" opacity="0.75"/><circle cx="240.0" cy="600.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="304.0" cy="554.4" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="380.8" cy="495.1" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="460.8" cy="454.1" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="528.0" cy="417.6" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><circle cx="560.0" cy="372.0" r="3" fill="#a371f7" stroke="none" opacity="0.9"/><path d="M560.0 372.0L560.0 324.0" stroke-width="2.6" opacity="0.95"/><path d="M560.0 324.0h44l-10 13h-34z" fill="#8957e5" stroke="none"/><text x="575.0" y="335.0" font-size="15" font-weight="700" fill="#fff" stroke="none">&#960;</text></g>
+  <g transform="translate(44,34) scale(0.82)" fill="none" stroke="#a371f7" stroke-width="2.56" stroke-linecap="round" stroke-linejoin="round">
     <path d="M30.18 4.98A20 20 0 1 0 41.66 14.61"/>
     <path d="M13.5 17H34.5M19.5 17V32M28.5 17V32"/>
   </g>
-  <text x="449" y="99" font-size="44" font-weight="700" fill="#e6edf3">pi-task</text>
-
-  <!-- ── headline ── -->
-  <text x="480" y="224" text-anchor="middle" font-size="82" font-weight="700" fill="#6e7681">Local models drift.</text>
-  <text x="480" y="319" text-anchor="middle" font-size="82" font-weight="700" fill="#e6edf3">pi-task doesn&#39;t trust</text>
-  <text x="480" y="414" text-anchor="middle" font-size="82" font-weight="700" fill="#e6edf3">one prompt.</text>
-
-  <!-- ── phase strip ── -->
-  <rect x="65" y="473" width="831" height="61" rx="30.5" fill="#161b22" fill-opacity="0.92" stroke="#30363d" stroke-width="1.5"/>
-  <g transform="translate(108,492.5) scale(0.9167)" stroke="#58a6ff">
-    <circle class="ic" cx="12" cy="12" r="10"/>
-    <path class="ic" d="M22 12h-4M6 12H2M12 6V2M12 22v-4"/>
-    <circle class="icf" cx="12" cy="12" r="2.4" fill="#58a6ff"/>
-  </g>
-  <text x="139" y="509.8" class="ph">refine</text>
-  <path class="arw" d="M195 503.5h17.2M206.6 496.8l6.7 6.7-6.7 6.7"/>
-  <g transform="translate(229,492.5) scale(0.9167)" stroke="#39c5cf">
-    <path class="ic" d="M9.56 9.83 15.44 6.67M10.1 12h4.79M9.56 14.17 15.44 17.33"/>
-    <circle class="icf" cx="5.5" cy="12" r="2.4" fill="#39c5cf"/>
-    <circle class="icf" cx="19.5" cy="4.5" r="2.1" fill="#39c5cf"/>
-    <circle class="icf" cx="19.5" cy="12" r="2.1" fill="#39c5cf"/>
-    <circle class="icf" cx="19.5" cy="19.5" r="2.1" fill="#39c5cf"/>
-  </g>
-  <text x="260" y="509.8" class="ph">research</text>
-  <path class="arw" d="M341 503.5h17.2M352.6 496.8l6.7 6.7-6.7 6.7"/>
-  <g transform="translate(375,492.5) scale(0.9167)" stroke="#d29922">
-    <path class="ic" d="M7.6 8.4a4.5 4.5 0 1 1 5.9 4.3c-.9.35-1.5 1.2-1.5 2.2v.6"/>
-    <circle class="icf" cx="12" cy="19.8" r="1.5" fill="#d29922"/>
-  </g>
-  <text x="406" y="509.8" class="ph">grill</text>
-  <path class="arw" d="M446 503.5h17.2M457.6 496.8l6.7 6.7-6.7 6.7"/>
-  <g transform="translate(480,492.5) scale(0.9167)" stroke="#3fb950">
-    <path class="ic" d="M12 2.5 22 7.5 12 12.5 2 7.5 12 2.5z"/>
-    <path class="ic" d="M2 16.5 12 21.5 22 16.5"/>
-  </g>
-  <text x="511" y="509.8" class="ph">compose</text>
-  <path class="arw" d="M597 503.5h17.2M608.5 496.8l6.7 6.7-6.7 6.7"/>
-  <g transform="translate(631,492.5) scale(0.9167)" stroke="#a371f7">
-    <path class="ic" d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"/>
-    <path class="ic" d="M23 4v6h-6"/>
-  </g>
-  <text x="662" y="509.8" class="ph">critique</text>
-  <path class="arw" d="M732 503.5h17.2M743.5 496.8l6.7 6.7-6.7 6.7"/>
-  <g transform="translate(766,492.5) scale(0.9167)" stroke="#3fb950">
-    <path class="ic" d="M14 2.5H6.5a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8z"/>
-    <path class="ic" d="M14 2.5V8h5.5"/>
-    <path class="ic" d="M8.5 13.5h7M8.5 17.5h7"/>
-  </g>
-  <text x="797" y="509.8" class="ph" font-weight="600" fill="#3fb950">a spec</text>
-
+  <text x="90" y="63" font-size="30" font-weight="700" fill="#e6edf3" letter-spacing="-0.5">pi-task</text>
+  <text x="44" y="212" font-size="62" font-weight="700" fill="#e6edf3" letter-spacing="-2">Deterministic</text>
+  <text x="44" y="280" font-size="62" font-weight="700" fill="url(#hl)" letter-spacing="-2">AI Workflows.</text>
+  <rect x="44" y="312" width="72" height="4" rx="2" fill="#8957e5"/>
+  <text x="44" y="356" font-size="17" fill="#8b949e">pi-task orchestrates every request</text>
+  <text x="44" y="381" font-size="17" fill="#8b949e">through a fixed pipeline to produce</text>
+  <text x="44" y="406" font-size="17" fill="#8b949e">implementation specs you can trust.</text>
+  <rect x="470.0" y="132" width="74" height="74" rx="16.3" fill="#1e1633" stroke="#a371f7" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(489.0,151.0) scale(1.5)" fill="none" stroke="#a371f7" stroke-width="1.27" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></g>
+  <text x="507.0" y="227" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e6edf3" letter-spacing="0.4">REFINE</text>
+  <text x="507.0" y="245" text-anchor="middle" font-size="9.5" fill="#8b949e">Clarify and</text>
+  <text x="507.0" y="257" text-anchor="middle" font-size="9.5" fill="#8b949e">structure the</text>
+  <text x="507.0" y="269" text-anchor="middle" font-size="9.5" fill="#8b949e">request</text>
+  <path d="M546.5 169h14M554.5 164l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="563.0" y="132" width="74" height="74" rx="16.3" fill="#0d2440" stroke="#58a6ff" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(582.0,151.0) scale(1.5)" fill="none" stroke="#58a6ff" stroke-width="1.27" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5 16 16"/></g>
+  <text x="600.0" y="227" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e6edf3" letter-spacing="0.4">RESEARCH</text>
+  <text x="600.0" y="245" text-anchor="middle" font-size="9.5" fill="#8b949e">Parallel research</text>
+  <text x="600.0" y="257" text-anchor="middle" font-size="9.5" fill="#8b949e">agents gather</text>
+  <text x="600.0" y="269" text-anchor="middle" font-size="9.5" fill="#8b949e">information</text>
+  <path d="M639.5 169h14M647.5 164l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="656.0" y="132" width="74" height="74" rx="16.3" fill="#33172a" stroke="#f778ba" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(675.0,151.0) scale(1.5)" fill="none" stroke="#f778ba" stroke-width="1.27" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3.5 21l1.9-4.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.5 8.5 8.5 0 0 1 7.5 7.5z"/><path d="M9.6 9.4a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.6-2.5 2.6"/><path d="M12 16.4h.01"/></g>
+  <text x="693.0" y="227" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e6edf3" letter-spacing="0.4">GRILL</text>
+  <text x="693.0" y="245" text-anchor="middle" font-size="9.5" fill="#8b949e">Cross-examine</text>
+  <text x="693.0" y="257" text-anchor="middle" font-size="9.5" fill="#8b949e">findings to</text>
+  <text x="693.0" y="269" text-anchor="middle" font-size="9.5" fill="#8b949e">surface gaps</text>
+  <path d="M732.5 169h14M740.5 164l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="749.0" y="132" width="74" height="74" rx="16.3" fill="#0f2a1b" stroke="#3fb950" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(768.0,151.0) scale(1.5)" fill="none" stroke="#3fb950" stroke-width="1.27" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 20.5H21"/><path d="M16.7 3.6a2.1 2.1 0 0 1 3 3L7.5 18.8 3.5 20l1.2-4z"/></g>
+  <text x="786.0" y="227" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e6edf3" letter-spacing="0.4">COMPOSE</text>
+  <text x="786.0" y="245" text-anchor="middle" font-size="9.5" fill="#8b949e">Create detailed</text>
+  <text x="786.0" y="257" text-anchor="middle" font-size="9.5" fill="#8b949e">implementation</text>
+  <text x="786.0" y="269" text-anchor="middle" font-size="9.5" fill="#8b949e">spec</text>
+  <path d="M825.5 169h14M833.5 164l6 5-6 5" fill="none" stroke="#6e7681" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="842.0" y="132" width="74" height="74" rx="16.3" fill="#2d2410" stroke="#d29922" stroke-opacity="0.28" stroke-width="1.2"/>
+  <g transform="translate(861.0,151.0) scale(1.5)" fill="none" stroke="#d29922" stroke-width="1.27" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21.5s7.5-3.8 7.5-9.5V5.2L12 2.5 4.5 5.2V12c0 5.7 7.5 9.5 7.5 9.5z"/></g>
+  <text x="879.0" y="227" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e6edf3" letter-spacing="0.4">CRITIQUE</text>
+  <text x="879.0" y="245" text-anchor="middle" font-size="9.5" fill="#8b949e">Self-critique for</text>
+  <text x="879.0" y="257" text-anchor="middle" font-size="9.5" fill="#8b949e">quality and</text>
+  <text x="879.0" y="269" text-anchor="middle" font-size="9.5" fill="#8b949e">completeness</text>
 </svg>
