@@ -78,6 +78,7 @@ import {
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
+import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -268,21 +269,160 @@ export function discoverLockfileChecks(cwd: string): HealthCommand[] {
     return cmds
 }
 
+/** Leading `FOO=bar` env assignments and `sudo`/`exec` wrappers carry no verb. */
+function commandTokens(member: string): string[] {
+    const t = member.trim().split(/\s+/).filter(Boolean)
+    while (
+        t.length > 0
+        && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0]) || /^(?:sudo|exec|env)$/.test(t[0]))
+    ) {
+        t.shift()
+    }
+    return t
+}
+
+/** The chain members of a shell script body, in order (`&&`, `||`, `;`, `|`). */
+function chainMembers(body: string): string[] {
+    return body
+        .split(/&&|\|\||;|\|/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+}
+
+/** Container/infra orchestration: `docker compose … up`, `docker-compose … up -d`,
+ *  `podman-compose … up`, `docker run …`. The verb must be a bare token, so a
+ *  filename like `docker-compose.dev.yml` never counts as one. */
+function isContainerOrchestration(member: string): boolean {
+    const t = commandTokens(member)
+    if (t.length === 0) return false
+    const bin = path.posix.basename(t[0])
+    if (!/^(?:docker|podman|nerdctl)(?:-compose)?$/.test(bin)) return false
+    const verbs = new Set(['up', 'start', 'run'])
+    return t.slice(1).some(tok => verbs.has(tok))
+}
+
+const MULTIPLEXER_RE = /^(?:concurrently|npm-run-all|run-p|run-s|turbo)$/
+/** A watcher that recompiles ASSETS and never listens: the tool is a
+ *  bundler/compiler/preprocessor AND it is in watch mode. `bun run --watch x.ts`
+ *  is deliberately NOT here — that re-executes an entrypoint, which may serve. */
+const ASSET_TOOL_RE =
+    /(?:^|[\s/@])(?:tailwindcss|postcss|sass|node-sass|less|stylus|esbuild|rollup|webpack|parcel|swc|babel|tsc|tsup|chokidar)(?:$|[\s"'])/
+const WATCH_FLAG_RE = /(?:^|\s)(?:--watch|-w|--watch=[^\s]*)(?:\s|$)/
+
+/** The quoted commands a multiplexer runs, or its bare script-name arguments
+ *  resolved through the manifest (`run-p dev:css dev:js`). One level only. */
+function multiplexerChildren(member: string, scripts: Record<string, string>): string[] {
+    const quoted = [...member.matchAll(/"([^"]+)"|'([^']+)'/g)].map(m => m[1] ?? m[2])
+    if (quoted.length > 0) return quoted
+    const t = commandTokens(member)
+        .slice(1)
+        .filter(a => !a.startsWith('-'))
+    return t.flatMap(name => (scripts[name] !== undefined ? [scripts[name]] : []))
+}
+
+/** Every member of the chain that could plausibly stay up and serve. Members that
+ *  are one-shot setup (`mkdir`, `sleep`, an `until … done` wait loop) are not
+ *  themselves launches, but they are not disqualifying either — only the two
+ *  shapes below are. */
+function isWatcherOnlyMultiplexer(member: string, scripts: Record<string, string>): boolean {
+    const t = commandTokens(member)
+    if (t.length === 0) return false
+    const bin = path.posix.basename(t[0])
+    const runner = /^(?:npx|bunx|pnpm|yarn|npm)$/.test(bin)
+    const head =
+        runner ?
+            (t.slice(1).find(a => !a.startsWith('-') && a !== 'exec' && a !== 'dlx' && a !== 'run')
+            ?? '')
+        :   bin
+    if (!MULTIPLEXER_RE.test(path.posix.basename(head))) return false
+    const children = multiplexerChildren(member, scripts)
+    if (children.length === 0) return false
+    // Every child is an ASSET watcher ⇒ nothing in here ever listens.
+    return children.every(c => ASSET_TOOL_RE.test(c) && WATCH_FLAG_RE.test(c))
+}
+
+/**
+ * Why this script is NOT a launch of the shipped app, or null when it plausibly
+ * is one (mx5 run 18, validated).
+ *
+ * Run 18's boot command resolved to `bun run dev`, whose body is
+ * `docker compose -f docker-compose.dev.yml up -d && until docker compose … pg_isready
+ * … && concurrently "bun run dev:css" "bun run dev:js" "bun run --watch
+ * src/server/index.ts"`. The gate sandbox has no docker, so the chain died at 127 and
+ * the boot SKIPPED as an environment gap — while the shipped app had no HTTP listener
+ * at all. A script whose first act is `docker compose up` cannot distinguish "the app
+ * is broken" from "this box has no docker", so it is not evidence either way: better
+ * to discover NO boot command — reported as "nothing to boot" — and let the static
+ * serve-entry check (serve-entry.ts) carry the signal, than to spend the grace window
+ * producing an unfalsifiable skip.
+ *
+ * CONSERVATIVE AND LEXICAL BY CONSTRUCTION. Only two shapes are rejected, both
+ * decidable from the script text alone:
+ *   1. the chain OPENS with container orchestration (docker/podman/nerdctl … up|start|run);
+ *   2. the whole body is a multiplexer (concurrently/npm-run-all/run-p/run-s/turbo)
+ *      whose every child is an ASSET watcher in watch mode (tailwind/tsc/esbuild/…),
+ *      i.e. nothing in it can ever listen.
+ * Anything else — `vite`, `next dev`, `node dist/index.js`, `nodemon`, `bun --watch
+ * src/index.ts`, and any multiplexer with one non-asset child — is accepted
+ * unchanged. Deciding whether a watcher actually SERVES is not attempted here; that
+ * is exactly what the static serve-entry check is for.
+ */
+export function nonLaunchScriptReason(
+    body: string,
+    scripts: Record<string, string> = {}
+): string | null {
+    const members = chainMembers(body)
+    if (members.length === 0) return null
+    if (isContainerOrchestration(members[0])) {
+        return 'it opens with container orchestration, which starts infrastructure rather than the app'
+    }
+    if (members.every(m => isWatcherOnlyMultiplexer(m, scripts))) {
+        return 'its only long-running member multiplexes asset watchers, none of which serves'
+    }
+    return null
+}
+
 /**
  * The project's OWN launch command, if it declares one (package.json `start`,
  * else `dev`; Makefile `run`). null means the project has nothing to boot —
  * the boot check degrades to nothing-to-run.
+ *
+ * A script that is not a LAUNCH at all (nonLaunchScriptReason — mx5 run 18's
+ * `docker compose up` orchestrator) is rejected here and falls through to the
+ * next candidate, then to null. Discovering nothing is strictly better than
+ * discovering something unfalsifiable: an env-gap skip of an orchestration script
+ * says nothing about the app, and null is reported as "nothing to boot".
  */
 export function discoverBootCommand(cwd: string): HealthCommand | null {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
         for (const name of ['start', 'dev']) {
-            if (s[name]) return ['bun', ['run', name]]
+            if (s[name] && nonLaunchScriptReason(s[name], s) === null) return ['bun', ['run', name]]
         }
         return null
     }
     if (existsSync(path.join(cwd, 'Makefile')) && makeHasTarget(cwd, 'run')) {
         return ['make', ['run']]
+    }
+    return null
+}
+
+/**
+ * The launch script that EXISTS but was rejected as not-a-launch, if any. Without
+ * this the rejection would trade run 18's unfalsifiable skip for pure silence: no
+ * boot command means bootSkipVerdict has no label to name, and a project whose test
+ * suite ran still reports `observed > 0`, so unobservedVerdict stays quiet too. A
+ * served app whose only declared launch script cannot start it was not observed to
+ * run, and must say so.
+ */
+export function rejectedLaunchScript(cwd: string): {name: string; reason: string} | null {
+    if (!existsSync(path.join(cwd, 'package.json'))) return null
+    const s = packageScripts(cwd)
+    for (const name of ['start', 'dev']) {
+        if (!s[name]) continue
+        const reason = nonLaunchScriptReason(s[name], s)
+        if (reason === null) return null // this one IS a launch — it was chosen
+        return {name, reason}
     }
     return null
 }
@@ -1309,6 +1449,21 @@ export async function runFinalIntegrationGate(
             )
         }
     }
+    // Serve-entry closure (mx5 run 18, nexttask 2B): the tree builds a server app,
+    // expects to serve (SPA fallback / static read / a design clause), and NOTHING
+    // anywhere starts a listener — `src/server/index.ts` ended at `export {app}`, so
+    // the product could not be started at all while every dynamic probe went blind on
+    // a docker-less box. Static, deterministic, milliseconds, and — unlike the boot
+    // check — decidable in exactly the environment where the boot skipped. Rank 0:
+    // "the app cannot be started" is the same load-bearing class as boot/render.
+    // Placed BEFORE the zero-discovery early return on purpose: a project with no
+    // runnable command at all must still fail this, not report UNOBSERVED.
+    try {
+        const noServeEntry = findMissingServeEntry(cwd, planText)
+        if (noServeEntry) fail(serveEntryGateFailureText(noServeEntry), 0)
+    } catch {
+        // best-effort scan — a scanner fault must never break the gate
+    }
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
@@ -1477,6 +1632,17 @@ export async function runFinalIntegrationGate(
             // A listener that served, but whose page could not be OBSERVED to render
             // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
             if (b.renderNote) warnings.push(b.renderNote)
+        }
+    } else {
+        // Nothing to boot — but if the reason is that the project's only launch
+        // script was REJECTED as not-a-launch (2A), that is not the same thing as a
+        // project with no launch surface, and it must not degrade into silence.
+        const rejected = rejectedLaunchScript(cwd)
+        if (rejected && detectsServedApp(cwd, planText)) {
+            bootUnobserved =
+                `boot check: this project's only launch script (\`${rejected.name}\`) is not a `
+                + `launch — ${rejected.reason} — so nothing was started and the app was never `
+                + 'observed to run.'
         }
     }
     // Full-skip blindness guard (mx5 run 16): commands were discovered but every

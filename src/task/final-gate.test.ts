@@ -15,6 +15,7 @@ import {
     discoverIntegrationCommands,
     discoverGateCommandLabels,
     discoverLockfileChecks,
+    nonLaunchScriptReason,
     observabilityGapFailure,
     unobservedVerdict,
     parseLsofListeners,
@@ -362,6 +363,84 @@ describe('discoverBootCommand', () => {
         fs.writeFileSync(path.join(dir, 'Makefile'), 'run:\n\ttrue\n')
         expect(discoverBootCommand(dir)).toEqual(['make', ['run']])
         expect(discoverBootCommand(makeDir())).toBeNull()
+    })
+
+    test('a container-orchestration script is not a launch — run 18 verbatim', async () => {
+        const dev =
+            'docker compose -f docker-compose.dev.yml up -d && until docker compose -f '
+            + 'docker-compose.dev.yml exec -T postgres pg_isready > /dev/null 2>&1; do sleep 1; '
+            + 'done && concurrently "bun run dev:css" "bun run dev:js" "bun run --watch '
+            + 'src/server/index.ts"'
+        expect(discoverBootCommand(makeDir({scripts: {dev}}))).toBeNull()
+        // …and a REAL start script still wins, orchestration `dev` or not.
+        expect(discoverBootCommand(makeDir({scripts: {start: 'bun serve.ts', dev}}))).toEqual([
+            'bun',
+            ['run', 'start']
+        ])
+    })
+})
+
+describe('nonLaunchScriptReason', () => {
+    test('container orchestration at the head of the chain', () => {
+        for (const body of [
+            'docker compose -f docker-compose.dev.yml up -d && bun run serve.ts',
+            'docker-compose up',
+            'podman-compose -f x.yml up -d',
+            'sudo docker compose up',
+            'DEBUG=1 nerdctl compose up -d && node server.js'
+        ]) {
+            expect(nonLaunchScriptReason(body)).toContain('container orchestration')
+        }
+    })
+
+    test('orchestration LATER in the chain does not reject — the app leads', () => {
+        expect(nonLaunchScriptReason('node server.js && docker compose up')).toBeNull()
+    })
+
+    test('a compose FILENAME is not a verb', () => {
+        expect(nonLaunchScriptReason('bun run --watch src/server/index.ts')).toBeNull()
+        expect(nonLaunchScriptReason('node scripts/docker-compose-lint.js')).toBeNull()
+    })
+
+    test('a multiplexer of pure asset watchers can never listen', () => {
+        expect(
+            nonLaunchScriptReason(
+                'concurrently "tailwindcss -i a.css -o b.css --watch" "tsc --watch"'
+            )
+        ).toContain('asset watchers')
+        expect(
+            nonLaunchScriptReason('run-p css js', {
+                css: 'sass --watch a b',
+                js: 'esbuild --watch x'
+            })
+        ).toContain('asset watchers')
+    })
+
+    test('a multiplexer with ONE serving child is a launch', () => {
+        expect(
+            nonLaunchScriptReason(
+                'concurrently "tailwindcss -i a.css -o b.css --watch" "bun run --watch serve.ts"'
+            )
+        ).toBeNull()
+        expect(
+            nonLaunchScriptReason('npm-run-all -p css server', {
+                css: 'tailwindcss --watch -i a -o b',
+                server: 'node server.js'
+            })
+        ).toBeNull()
+    })
+
+    test('ordinary launch scripts are untouched', () => {
+        for (const body of [
+            'vite',
+            'next dev',
+            'node dist/index.js',
+            'bun --watch src/index.ts',
+            'npx nodemon -e ts --exec "npm run compile-and-run"',
+            'node --enable-source-maps --env-file=secrets.env.production ./dist/src/index.js'
+        ]) {
+            expect(nonLaunchScriptReason(body)).toBeNull()
+        }
     })
 })
 
@@ -1191,6 +1270,68 @@ describe('runFinalIntegrationGate — dangling-artifact closure (run 13, PROMPT 
         fs.writeFileSync(path.join(dir, 'src', 'server.ts'), "Bun.file('dist/index.html')")
         const out = await runFinalIntegrationGate(dir)
         expect((out.failures ?? []).filter(f => f.startsWith('dangling artifact:'))).toHaveLength(0)
+    })
+})
+
+describe('runFinalIntegrationGate — serve-entry closure (run 18, nexttask 2B)', () => {
+    /** The run-18 shape in miniature: a Hono app with an SPA fallback and no bind. */
+    function makeUnservableTree(scripts: Record<string, string>): string {
+        const dir = makeDir({name: 'x', dependencies: {hono: '4'}, scripts})
+        fs.mkdirSync(path.join(dir, 'src', 'server'), {recursive: true})
+        fs.writeFileSync(
+            path.join(dir, 'src', 'server', 'index.ts'),
+            "import {Hono} from 'hono'\nconst app = new Hono()\n"
+                + "app.get('*', async c => c.body(await Bun.file('dist/index.html').arrayBuffer()))\n"
+                + 'export {app}\n'
+        )
+        return dir
+    }
+
+    test('an app nothing can start FAILS the gate at rank 0, even with green tests', async () => {
+        const dir = makeUnservableTree({test: 'exit 0', dev: 'docker compose up'})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        const found = (out.failures ?? []).filter(f => f.startsWith('serve entry missing:'))
+        expect(found).toHaveLength(1)
+        expect(found[0]).toContain('src/server/index.ts')
+        // rank 0 — it leads the ranked list, ahead of any ordinary failure.
+        expect(out.failures![0]).toBe(found[0])
+    })
+
+    test('runs even when NOTHING dynamic is discoverable — a static check needs no runner', async () => {
+        // No scripts at all: the gate's zero-discovery door returns UNOBSERVED, which
+        // must not swallow a defect that is decidable from the tree alone.
+        const dir = makeUnservableTree({})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('serve entry missing:')
+    })
+
+    test('a rejected launch script is UNOBSERVED, not silence (2A + nexttask 1)', async () => {
+        // Served app that DOES bind, so the serve-entry section is quiet — the only
+        // thing wrong is that its one launch script cannot start it.
+        const dir = makeUnservableTree({test: 'exit 0', dev: 'docker compose up -d'})
+        fs.appendFileSync(
+            path.join(dir, 'src', 'server', 'index.ts'),
+            'Bun.serve({port: 3000, fetch: app.fetch})\n'
+        )
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('is not a launch')
+        expect(out.unobserved).toContain('container orchestration')
+        expect(out.reason).toContain('never observed to run')
+    })
+
+    test('the same tree WITH a listener passes the section', async () => {
+        const dir = makeUnservableTree({test: 'exit 0'})
+        fs.appendFileSync(
+            path.join(dir, 'src', 'server', 'index.ts'),
+            'Bun.serve({port: 3000, fetch: app.fetch})\n'
+        )
+        const out = await runFinalIntegrationGate(dir)
+        expect((out.failures ?? []).filter(f => f.startsWith('serve entry missing:'))).toHaveLength(
+            0
+        )
     })
 })
 
