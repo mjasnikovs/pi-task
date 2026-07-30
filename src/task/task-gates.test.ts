@@ -535,9 +535,16 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        expect(trail).toContain(
-            'enforce: fixes committed but re-verify FAILED (onClick handler gone) — REVERTED'
-        )
+        // The revert line also carries WHY the attribution filter did not save the
+        // edits (nexttask 4) — here: no touchedFiles dep, so the enforce diff is
+        // unknown and the conservative revert stands.
+        expect(
+            trail.some(l =>
+                l.startsWith(
+                    'enforce: fixes committed but re-verify FAILED (onClick handler gone) — REVERTED'
+                )
+            )
+        ).toBe(true)
     })
 })
 
@@ -700,6 +707,163 @@ test('enforce: unknown provenance / unreadable tree falls back to the REVERT pat
             expect(h.reverted).toHaveLength(1)
             expect(h.revertDebts).toHaveLength(1)
             expect(h.queued).toEqual([])
+        })
+    }
+})
+
+// ─── Enforce-differential ATTRIBUTION (mx5 run 18 / nexttask 4) ──────────────
+//
+// Run 18's TASK_0024 enforce commit was one line — redundant parentheses removed in
+// `Admin.tsx` — and it was REVERTED over a Playwright CT failure in
+// `MyListings.spec.tsx`, a file that change cannot reach. The root-cause channel
+// above could not save it: the FAIL text names a BARE `MyListings.spec.tsx:186`
+// (no path separator, so no accused file) and carries no blame cue near a path. The
+// differential now also asks the purely mechanical question — does the failing check
+// name anything the ENFORCE COMMIT touched? Verbatim run-18 text as the fixture.
+const RUN18_CT_FAIL =
+    'work did not verify: 1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186 — "toggle Mark as '
+    + 'Sold / Undo Sold updates listing status in-place") due to a pre-existing flaky locator collision '
+    + "where getByText('SOLD', {exact: true}) resolves to 2 elements; however, this test file was NOT modified b"
+
+const MX5_REPO_FILES = [
+    'src/client/pages/Admin.tsx',
+    'src/client/pages/MyListings.tsx',
+    'src/client/pages/MyListings.spec.tsx'
+]
+
+/** Deps whose enforce re-verify FAILs on a check the enforce diff cannot reach. */
+function attributionDeps(over: Partial<GateDeps> = {}): {
+    deps: GateDeps
+    reverted: string[]
+    revertDebts: string[]
+    keptDebts: string[]
+    queued: Array<{file: string; owner: string}>
+    trail: string[]
+} {
+    const reverted: string[] = []
+    const revertDebts: string[] = []
+    const keptDebts: string[] = []
+    const queued: Array<{file: string; owner: string}> = []
+    const trail: string[] = []
+    let verifyCalls = 0
+    const deps = makeDeps({
+        record: (_c, _id, line) => {
+            trail.push(line)
+            return Promise.resolve()
+        },
+        verify: () => {
+            verifyCalls += 1
+            return Promise.resolve(
+                verifyCalls === 1 ? {ok: true} : {ok: false, reason: RUN18_CT_FAIL}
+            )
+        },
+        enforce: () => Promise.resolve({ok: true}),
+        revert: c => {
+            reverted.push(c)
+            return Promise.resolve()
+        },
+        recordEnforceRevertDebt: (_c, _id, reason) => {
+            revertDebts.push(reason)
+            return Promise.resolve()
+        },
+        recordEnforceKeptDebt: (_c, _id, reason) => {
+            keptDebts.push(reason)
+            return Promise.resolve()
+        },
+        recordRepairCandidate: (_c, candidate) => {
+            queued.push({file: candidate.file, owner: candidate.owner})
+            return Promise.resolve()
+        },
+        // The enforce commit is the one-line Admin.tsx change; the TASK commit also
+        // rewrote MyListings.tsx — the answer the shipped code used to attribute on.
+        touchedFiles: (_c, scope) =>
+            Promise.resolve(
+                scope === 'enforce-commit' ?
+                    ['.pi-tasks/TASK_0024.md', 'src/client/pages/Admin.tsx']
+                :   ['src/client/pages/Admin.tsx', 'src/client/pages/MyListings.tsx']
+            ),
+        repoFiles: () => Promise.resolve(MX5_REPO_FILES),
+        introducedBy: (_c, rel) =>
+            Promise.resolve(
+                rel === 'src/client/pages/MyListings.spec.tsx' ? 'TASK_0021' : 'TASK_0024'
+            ),
+        ...over
+    })
+    return {deps, reverted, revertDebts, keptDebts, queued, trail}
+}
+
+test('enforce: a FAIL the enforce diff cannot reach KEEPS the edits and records the defect', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const h = attributionDeps()
+        const r = await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0024'}))
+        expect(r.kind).toBe('done')
+        // The whole point: the one-line change survives a failure it cannot cause.
+        expect(h.reverted).toEqual([])
+        expect(h.revertDebts).toEqual([])
+        // …and keeping the edits does NOT lose the finding (mx5 run 5's mistake).
+        expect(h.keptDebts).toHaveLength(1)
+        expect(h.keptDebts[0]).toContain('MyListings.spec.tsx')
+        expect(h.queued).toEqual([
+            {file: 'src/client/pages/MyListings.spec.tsx', owner: 'TASK_0021'}
+        ])
+        expect(h.trail.some(l => l.includes('the edits are KEPT'))).toBe(true)
+    })
+})
+
+test('enforce: a FAIL naming a file the ENFORCE COMMIT touched still REVERTS', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let verifyCalls = 0
+        const h = attributionDeps({
+            verify: () => {
+                verifyCalls += 1
+                return Promise.resolve(
+                    verifyCalls === 1 ?
+                        {ok: true}
+                    :   {
+                            ok: false,
+                            reason:
+                                'work did not verify: `bunx tsc --noEmit` exits 2 — '
+                                + 'src/client/pages/Admin.tsx:84:21 error TS2554'
+                        }
+                )
+            }
+        })
+        await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0024'}))
+        expect(h.reverted).toHaveLength(1)
+        expect(h.revertDebts).toHaveLength(1)
+        expect(h.keptDebts).toEqual([])
+        expect(h.trail.some(l => l.includes('named-file-in-enforce-diff'))).toBe(true)
+    })
+})
+
+test('enforce: a FAIL naming NO file reverts — the filter never keeps on ignorance', async () => {
+    for (const over of [
+        // nothing extractable in the text …
+        {
+            verify: (() => {
+                let n = 0
+                return () => {
+                    n += 1
+                    return Promise.resolve(
+                        n === 1 ?
+                            {ok: true}
+                        :   {ok: false, reason: 'work did not verify: the VERIFY command exited 1'}
+                    )
+                }
+            })()
+        },
+        // … and an unreadable enforce diff.
+        {touchedFiles: () => Promise.resolve(null)}
+    ] as Partial<GateDeps>[]) {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            const h = attributionDeps(over)
+            await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0024'}))
+            expect(h.reverted).toHaveLength(1)
+            expect(h.revertDebts).toHaveLength(1)
+            expect(h.keptDebts).toEqual([])
         })
     }
 })

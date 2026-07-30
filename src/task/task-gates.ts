@@ -41,7 +41,13 @@ import {
 } from './verify-resolution.js'
 import {SessionUI} from '../remote/bridge.js'
 import {isYoloMode, yoloVerifyResolution, YOLO_STAMP} from './yolo.js'
-import {findRepairCandidate, type RepairCandidate} from './root-cause-repair.js'
+import {
+    extractFailingCommand,
+    findRepairCandidate,
+    summariseDefect,
+    type RepairCandidate
+} from './root-cause-repair.js'
+import {attributeEnforceFailure} from './enforce-attribution.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -200,6 +206,13 @@ export interface GateDeps {
      */
     recordRootCauseDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
     /**
+     * Record a durable ENFORCE-KEPT debt (mx5 run 18 / nexttask 4): the enforce
+     * re-verify FAILED but the failing check names only files the ENFORCE COMMIT
+     * does not touch, so the edits were KEPT. The defect is still real and still in
+     * the shipped tree — keeping the work must not lose the finding.
+     */
+    recordEnforceKeptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    /**
      * Queue a scoped repair task for a root-caused defect. The gate DETECTS the
      * cause; only the /task-auto loop may mutate the plan, so the two are decoupled
      * through the durable `.pi-tasks/repair-queue.md` ledger this writes (see
@@ -213,12 +226,25 @@ export interface GateDeps {
      * this task's own fault, and only a file it never touched can be somebody
      * else's pre-existing bug. `worktree` = uncommitted changes (the pre-commit
      * verify site); `committed` = the files the task snapshot + the ENFORCE commit
-     * changed (the post-commit enforce site). `null` means UNKNOWN (git
-     * unavailable) and stands the whole channel down — inconclusive is never
-     * evidence, so an unreadable tree can only cost a repair task, never spawn a
-     * wrong one or wrongly keep a regression.
+     * changed (the post-commit enforce site); `enforce-commit` = the ENFORCE COMMIT
+     * ALONE, which is the only correct authorship question at the enforce
+     * differential (mx5 run 18 / nexttask 4 — that differential decides whether to
+     * discard the enforce commit, so what the TASK touched is irrelevant to it).
+     * `null` means UNKNOWN (git unavailable) and stands the whole channel down —
+     * inconclusive is never evidence, so an unreadable tree can only cost a repair
+     * task, never spawn a wrong one or wrongly keep a regression.
      */
-    touchedFiles?: (cwd: string, scope: 'worktree' | 'committed') => Promise<string[] | null>
+    touchedFiles?: (
+        cwd: string,
+        scope: 'worktree' | 'committed' | 'enforce-commit'
+    ) => Promise<string[] | null>
+    /**
+     * Every path git tracks in the repo — used ONLY to resolve a bare file name a
+     * FAIL text names (`MyListings.spec.tsx:186`) to its repo path, so the defect
+     * can be attributed and a repair queued for it. Absent/null costs resolution,
+     * never changes a keep/revert verdict.
+     */
+    repoFiles?: (cwd: string) => Promise<string[] | null>
     /** The task whose commit INTRODUCED a file (task-provenance.ts). Null for a
      *  file predating the run or any git error → unknown provenance. */
     introducedBy?: (cwd: string, rel: string) => Promise<string | null>
@@ -365,7 +391,7 @@ export async function runGatesForTask(
     const routeRootCause = async (
         failReason: string,
         rationale: string,
-        scope: 'worktree' | 'committed'
+        scope: 'worktree' | 'committed' | 'enforce-commit'
     ): Promise<RepairCandidate | null> => {
         if (!deps.touchedFiles || !deps.introducedBy) return null
         try {
@@ -796,8 +822,8 @@ export async function runGatesForTask(
                 const afterReason = after.reason ?? 'enforce re-verify failed'
                 // PRE-EXISTING-CAUSE KEEP PATH (mx5 run 14 item 5b). Both of run
                 // 14's enforce-reverts were this shape: the re-verify FAILed on
-                // TASK_0007's `test/teardown.ts` TRUNCATE bug — a file neither the
-                // task's work nor the enforce pass touched — and the differential
+                // TASK_0007's `test/teardown.ts` TRUNCATE bug — a file the enforce
+                // pass never touched — and the differential
                 // reverted enforce's edits anyway, destroying good work over a fault
                 // it did not cause AND leaving the actual cause unscheduled. When the
                 // FAIL is attributed to another task's untouched file, KEEP the edits
@@ -805,21 +831,96 @@ export async function runGatesForTask(
                 // unknown (git unavailable, no provenance, this task touched the file,
                 // an environment-blamed FAIL) falls through to the revert below —
                 // the conservative pre-existing behavior.
+                //
+                // The scope is `enforce-commit`, NOT the task's own commit (mx5 run
+                // 18 / nexttask 4). This differential decides whether to discard the
+                // ENFORCE COMMIT, so the causal question is "could the enforce diff
+                // have caused this?" — asking what the TASK touched answers a
+                // question nobody at this seam is asking, and in run 18 it answered
+                // it in a way that destroyed a correct one-line change.
                 const rootCause =
-                    after.ok ? null : await routeRootCause(afterReason, '', 'committed')
+                    after.ok ? null : await routeRootCause(afterReason, '', 'enforce-commit')
+                // ATTRIBUTION PRE-FILTER (mx5 run 18 / nexttask 4). The root-cause
+                // channel above needs a blame CUE, a path-separator token and known
+                // provenance; run 18's FAIL text carried none of the three (it named
+                // a bare `MyListings.spec.tsx:186`), so it fell straight through to
+                // the revert. This filter asks only the mechanical question: does the
+                // failing check name any file the ENFORCE COMMIT touched? Disjoint =>
+                // the revert cannot repair the failure, so keep the edits and route
+                // the defect. Unknown diff, or a FAIL naming no file at all, still
+                // reverts — never keep on ignorance.
+                const attribution =
+                    !after.ok && !rootCause ?
+                        attributeEnforceFailure({
+                            failReason: afterReason,
+                            enforceTouched:
+                                (await deps.touchedFiles?.(p.cwd, 'enforce-commit')) ?? null,
+                            repoFiles: (await deps.repoFiles?.(p.cwd)) ?? null
+                        })
+                    :   null
                 if (!after.ok && rootCause) {
                     await rec(
                         `enforce: re-verify FAILED (${afterReason.slice(0, 200)}) but the failure is attributed to a PRE-EXISTING defect in \`${rootCause.file}\` `
-                            + `(${rootCause.owner}'s file, untouched by this task and by the enforce pass) — edits KEPT, not reverted; repair task queued`
+                            + `(${rootCause.owner}'s file, untouched by the ENFORCE COMMIT whose fate this differential decides) — edits KEPT, not reverted; repair task queued`
                     )
                     active.ui.notify(
                         `${p.tag}: guideline fixes on "${p.title}" re-verified red on a pre-existing defect in ${rootCause.file} (${rootCause.owner}'s file) — keeping the fixes, queued a repair task.`,
+                        'warning'
+                    )
+                } else if (!after.ok && attribution?.verdict === 'keep') {
+                    // KEEP, mechanically justified: every file the failing check named
+                    // is outside the enforce diff (and outside its companions — a
+                    // touched file's own spec/story counts as inside). Discarding the
+                    // enforce commit could not repair this, and in run 18 doing so
+                    // cost a correct change that the final gate then re-made.
+                    await rec(
+                        `enforce: re-verify FAILED (${afterReason.slice(0, 200)}) but the failing check names only \`${attribution.named.join(', ')}\`, `
+                            + `which the ENFORCE COMMIT does not touch (its diff: ${attribution.enforceDiff.join(', ') || '—'}) — `
+                            + 'reverting it could not repair this, so the edits are KEPT and the defect is recorded as durable debt'
+                    )
+                    // Keeping the edits must NOT lose the finding — that was mx5 run
+                    // 5's mistake. Same durability as the revert path; only the
+                    // disposition of the edits differs.
+                    await deps.recordEnforceKeptDebt?.(p.cwd, p.taskId, afterReason)
+                    // …and, when the named file is somebody else's committed work,
+                    // queue the scoped repair so something actually FIXES it.
+                    if (attribution.file && deps.introducedBy && deps.recordRepairCandidate) {
+                        try {
+                            const owner = await deps.introducedBy(p.cwd, attribution.file)
+                            const verifyCommand = extractFailingCommand(afterReason)
+                            if (owner && owner !== p.taskId) {
+                                await deps.recordRepairCandidate(p.cwd, {
+                                    file: attribution.file,
+                                    owner,
+                                    defect: summariseDefect(afterReason, attribution.file),
+                                    blamedTask: p.taskId,
+                                    ...(verifyCommand ? {verifyCommand} : {})
+                                })
+                                await rec(
+                                    `root-cause: \`${attribution.file}\` is ${owner}'s file — scoped repair task queued`
+                                )
+                            }
+                        } catch {
+                            // queueing a repair must never break the gate sequence
+                        }
+                    }
+                    active.ui.notify(
+                        `${p.tag}: guideline fixes on "${p.title}" re-verified red on ${attribution.file ?? 'a file'} — outside the enforce diff, so keeping the fixes and recording the defect.`,
                         'warning'
                     )
                 } else if (!after.ok) {
                     if (deps.revert) await deps.revert(p.cwd)
                     await rec(
                         `enforce: fixes committed but re-verify FAILED (${(after.reason ?? 'now fails').slice(0, 200)}) — ${deps.revert ? 'REVERTED' : 'left in place (no revert available)'}`
+                            // Why the attribution filter did NOT save the edits, so a
+                            // revert is explainable from the trail alone.
+                            + (attribution ?
+                                ` [attribution: ${attribution.why}${
+                                    attribution.overlap ?
+                                        ` — the check names \`${attribution.overlap.named}\`, the enforce diff touches \`${attribution.overlap.enforce}\``
+                                    :   ''
+                                }]`
+                            :   '')
                     )
                     // Persist the FAIL as a durable defect (mx5 run 10 item 3). The
                     // revert restores the tree the ORIGINAL verify already blessed, so

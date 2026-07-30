@@ -80,6 +80,30 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## OPEN — 0. The stem-widened failure-file extractor (measured, NOT wired)
+
+The shipped extractor sees paths and bare basenames with a code extension. Live, that
+covers 100% of tsc-shaped failures and 45% of component-test-shaped ones, because the
+verifier writes "The MyListings component test …" and never a file name. A widened
+variant — accept a bare IDENTIFIER that matches some tracked file's stem, so
+`MyListings` resolves to `MyListings.spec.tsx` — scores **40/40 extractable, 0 wrong**
+across both live arms.
+
+It is not wired, for two reasons that are both about evidence, not taste:
+
+1. The *disjoint* arm is its design pool (it was written after reading trial 1), so
+   only the *reachable* arm counts as confirmation — and in that arm the failing file
+   was ALWAYS named outright, so the widened rule was never actually load-bearing
+   there. Its false-KEEP mode (an unnamed reachable failure whose prose happens to
+   mention an unrelated file) was never exercised.
+2. It demonstrably resolves prose nouns to files: in 3 disjoint trials the only token
+   it found was "listings" → `src/server/routes/listings.ts`, a file with nothing to
+   do with the failure. It scored *correct* there by luck of disjointness.
+
+To close it: an arm where the enforce diff DOES cause the failure and the verifier
+does NOT name the file (a runtime/behavioural break rather than a type error). If the
+widened rule holds 0 false keeps there, wire it — the coverage win is large.
+
 ## OPEN — 1. The requirement-extraction lottery (highest leverage)
 
 The selection half moved; the extraction half has not. Roughly **half the
@@ -131,6 +155,46 @@ one blindness for another. Measure before choosing.
 ---
 
 ## GRAY AREAS — carried forward, still true
+
+- The **enforce-differential attribution** filter (nexttask 4, shipped) passed its
+  deterministic replay A/B (baseline = the real `HEAD:task-gates.ts`, materialised and
+  imported) 1 recorded revert → 0, with the two regression fixtures and the
+  unparseable-reason fixture reverting identically in both arms — but its **live arm
+  FAILED its own pre-registered bar and it shipped anyway, deliberately**. Live, 20
+  reps per arm against the run-18 tree with a real verify child: the *reachable* arm
+  (enforce edit breaks `Admin.tsx`) named a resolvable file 20/20 and decided REVERT
+  20/20; the *disjoint* arm named a file in only **9 of 20**, against a bar of ≥80%.
+  The 11 misses name the UNIT rather than the file — "The MyListings component test
+  … expects 4 Edit links but MOCK_LISTINGS has only 3" — no path, no extension. They
+  fall through to the revert, i.e. exactly the behaviour that shipped before. The
+  justification for shipping on a failed bar is that the rule is **one-sided**: 29 of
+  29 extractable decisions across both arms matched ground truth, a miss costs
+  nothing new, and a false KEEP would ship a real regression. Coverage is the debt,
+  not correctness.
+- **The run-18 flake was never reproduced.** `getByText('SOLD')` matching two elements
+  is timing-dependent; on this box the tagged fixture runs 7 passed / 1.6s, 0/3 red.
+  Both live arms therefore use a DETERMINISTIC stand-in (an assertion that always
+  fails, placed in a file inside or outside the enforce diff as the arm requires).
+  Two fixture artifacts had to be stripped before that was even measurable:
+  `__screenshots__` is untracked in mx5 so `git archive` drops it, and the `screenshot
+  baseline` test renders differently on this box. Neither has anything to do with
+  attribution.
+- **Run 14 cannot confirm this lever and never will.** Its two enforce-reverts are the
+  same class, but their enforce commits were destroyed by the very reverts under
+  study and `~/hub/mx5` has since been rebuilt by run 18 — no reflog holds them. The
+  base rate therefore has exactly ONE incident with a recoverable enforce diff: run
+  18, the incident the lever was designed on (methodology rule 2). The run-14 entries
+  are reported as a conditional ("the lever keeps unless the enforce diff itself
+  touched one of {test/teardown.ts, test/invite.test.ts}"), never as a flip.
+- **The nexttask-4 seam analysis was half wrong, and the measurement says so.** It
+  attributed run 18's failure to the authorship test ("the task touched
+  `MyListings.tsx`"). It did not get that far: the FAIL text names a BARE
+  `MyListings.spec.tsx:186`, and `findAccusedFile` requires a path separator, so the
+  root-cause channel returned null at the extractor. `T ∩ F` is also empty
+  (`MyListings.tsx` ≠ `MyListings.spec.tsx`), so with a working extractor even the
+  OLD `scope: 'committed'` would have kept. The scope fix still matters for the
+  general class — a FAIL naming a file the TASK touched but the ENFORCE COMMIT did
+  not — but it is not what broke run 18. Both halves are now fixed.
 
 - The **generated-HTML asset closure** (nexttask 3, shipped) passed its A/B 1/1 → 0/1
   with six invariants holding, and its base rate is honest but *thin*: across 7 trees

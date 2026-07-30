@@ -26,6 +26,7 @@ import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
 import {
     recordAcceptDebt,
+    recordEnforceKeptDebt,
     recordEnforceRevertDebt,
     recordFrozenBlockedDebt,
     recordCrossTaskDeletionDebt,
@@ -580,6 +581,11 @@ export function buildGateDeps(params: {
         recordYoloAcceptDebt: (cwd2, taskId, reason) => recordYoloAcceptDebt(cwd2, taskId, reason),
         recordEnforceRevertDebt: (cwd2, taskId, reason) =>
             recordEnforceRevertDebt(cwd2, taskId, reason),
+        // Same ledger, the KEPT disposition (mx5 run 18 / nexttask 4): the enforce
+        // re-verify FAILed on a check the enforce diff cannot reach, so the edits
+        // stayed and only the defect was recorded.
+        recordEnforceKeptDebt: (cwd2, taskId, reason) =>
+            recordEnforceKeptDebt(cwd2, taskId, reason),
         // Durable cross-task-contradiction ledger (PROMPT 1 layer B): a repo-health
         // FAIL whose only fix is an edit to a path this task's spec froze — recorded
         // when the gate loop routes it to the picker, re-checked by the final gate.
@@ -598,6 +604,21 @@ export function buildGateDeps(params: {
         recordRepairCandidate: (cwd2, candidate) => recordRepairCandidate(cwd2, candidate),
         // file → introducing task, the provenance half of the discriminator.
         introducedBy: (cwd2, rel) => Promise.resolve(taskThatIntroduced(cwd2, rel)),
+        // Tracked paths, used only to resolve a bare file name a FAIL text names
+        // (`MyListings.spec.tsx:186`) to its repo path. A git fault returns null,
+        // which costs resolution and nothing else.
+        repoFiles: async cwd2 => {
+            try {
+                const r = await git(cwd2, ['ls-files'], signal)
+                if (r.exitCode !== 0) return null
+                return r.stdout
+                    .split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.length > 0)
+            } catch {
+                return null
+            }
+        },
         // The authorship half: which files THIS task's work touched. `worktree` is
         // the pre-commit verify site (uncommitted changes); `committed` is the
         // post-commit enforce site, where the task snapshot and the ENFORCE commit
@@ -611,9 +632,20 @@ export function buildGateDeps(params: {
                     const c = parseTreeChanges(r.stdout)
                     return [...c.modified, ...c.added, ...c.deleted]
                 }
+                // `enforce-commit` is HEAD ALONE — at the enforce differential HEAD is
+                // the ENFORCE commit, and that commit's own diff is the only file set
+                // that can answer "could reverting this repair the failure?" (mx5 run
+                // 18 / nexttask 4).
                 const r = await git(
                     cwd2,
-                    ['log', '-n', '2', '--name-only', '--format=', 'HEAD'],
+                    [
+                        'log',
+                        '-n',
+                        scope === 'enforce-commit' ? '1' : '2',
+                        '--name-only',
+                        '--format=',
+                        'HEAD'
+                    ],
                     signal
                 )
                 if (r.exitCode !== 0) return null

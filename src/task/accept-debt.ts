@@ -49,6 +49,12 @@ const FIELD_SEP = '\t'
  *     server entry point … the Hono server cannot be started"), so the terminal defect
  *     was FOUND and then erased by the very mechanism that found it. Persisted here so
  *     the final gate re-checks and surfaces it instead of letting it die with the revert.
+ *   - 'enforce-kept'   — the same enforce re-verify FAIL, but the failing check named
+ *     only files the ENFORCE COMMIT does not touch, so reverting that commit could not
+ *     possibly repair it (mx5 run 18 TASK_0024: a one-line paren removal in `Admin.tsx`
+ *     was reverted over a `MyListings.spec.tsx` CT failure it cannot reach, and the
+ *     final gate re-made the identical change 5 minutes later). The edits are KEPT and
+ *     the defect is recorded here — keeping the work must never mean losing the finding.
  *   - 'frozen-blocked' — a repo-health verify-FAIL whose only fix is an edit to a path
  *     THIS task's spec froze (mx5 run 12: `bun run lint` permanently red because the
  *     created files need a tsconfig registration every spec forbids). Cross-task
@@ -89,6 +95,7 @@ const FIELD_SEP = '\t'
 export type DebtOrigin =
     | 'accepted'
     | 'enforce-revert'
+    | 'enforce-kept'
     | 'frozen-blocked'
     | 'cross-task-deletion'
     | 'yolo-accepted'
@@ -148,6 +155,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
             reason: parts[1]!.trim(),
             ...((
                 origin === 'enforce-revert'
+                || origin === 'enforce-kept'
                 || origin === 'frozen-blocked'
                 || origin === 'cross-task-deletion'
                 || origin === 'yolo-accepted'
@@ -227,6 +235,25 @@ export async function recordEnforceRevertDebt(
         taskId: taskId.trim(),
         reason: normaliseReason(reason),
         origin: 'enforce-revert'
+    })
+}
+
+/**
+ * Record an ENFORCE-KEPT debt (mx5 run 18 / nexttask 4): an enforce re-verify FAILED
+ * on a check whose named files are DISJOINT from the enforce commit's own diff, so
+ * the edits were kept — discarding them could not have repaired a failure they cannot
+ * reach. The defect is real and still in the shipped tree, so it is recorded with the
+ * same durability as an enforce-revert; only the disposition of the edits differs.
+ */
+export async function recordEnforceKeptDebt(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<void> {
+    await appendDebt(cwd, {
+        taskId: taskId.trim(),
+        reason: normaliseReason(reason),
+        origin: 'enforce-kept'
     })
 }
 
@@ -489,6 +516,9 @@ export function buildAcceptDebtNote(open: AcceptDebt[]): string {
 export function describeDebt(d: AcceptDebt): string {
     if (d.origin === 'enforce-revert') {
         return 'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)'
+    }
+    if (d.origin === 'enforce-kept') {
+        return 'enforce re-verify FAILED on a check the enforce diff cannot reach — the guideline edits were KEPT (reverting them could not fix it) and the defect indicts the ORIGINAL work, still shipped'
     }
     if (d.origin === 'frozen-blocked') {
         return 'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)'
