@@ -9,6 +9,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    bootSkipVerdict,
     detectsServedApp,
     discoverBootCommand,
     discoverIntegrationCommands,
@@ -1585,5 +1586,132 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
         expect(out.unobserved).toBeUndefined()
         expect(out.reason).toContain('`bun run test` exited 1')
         expect(out.reason).not.toContain('UNOBSERVED')
+    })
+})
+
+/**
+ * A SKIPPED boot check is a verdict, not a silence (mx5 run 18, validated).
+ *
+ * The run-18 shape reproduced exactly: a served app whose boot command was
+ * discovered and env-gap-skipped, while every other dynamic command ran and
+ * passed — so dynObserved > 0, observabilityGapFailure stayed correctly quiet, and
+ * "the app was never observed to boot" produced byte-identical output to "the app
+ * booted fine". Harnesses: scripts/boot-skip-baserate.ts (base rate),
+ * scripts/boot-skip-verdict-ab.ts (A/B), scripts/boot-skip-fp-suite.ts (zero-FP).
+ */
+describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
+    /** A served app (hono in deps is what detectsServedApp reads) whose `dev`
+     *  script exits 127 inside the chain — run 18's docker-less skip, in miniature. */
+    const servedSkipPkg = (extra: Record<string, string> = {}) => ({
+        dependencies: {hono: '4.12.27'},
+        scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-binary-9f3c', ...extra}
+    })
+
+    test('truth table: fires only for a DISCOVERED + SKIPPED boot on a served app', () => {
+        const note = bootSkipVerdict({label: 'bun run dev', skipped: true, expectServer: true})
+        expect(note).toContain('`bun run dev`')
+        expect(note).toContain('NEVER RAN')
+        expect(note).toContain('not observed to start')
+        // Leads the reason, which the run-level trail slices at 300 chars — the
+        // command name must always survive that slice.
+        expect(note!.length).toBeLessThanOrEqual(200)
+        // Nothing to boot is NOT the same as a boot that was not observed.
+        expect(bootSkipVerdict({label: null, skipped: true, expectServer: true})).toBeNull()
+        // A boot that ran (pass/fail/orphan-port) is already a real observation.
+        expect(
+            bootSkipVerdict({label: 'bun run dev', skipped: false, expectServer: true})
+        ).toBeNull()
+        // CLI/library projects are fenced off by decision (inv-cli-unaffected).
+        expect(
+            bootSkipVerdict({label: 'bun run dev', skipped: true, expectServer: false})
+        ).toBeNull()
+    })
+
+    test('the run-18 shape: other commands PASS, the boot skips → UNOBSERVED, not a bare PASS', async () => {
+        const dir = makeDir(servedSkipPkg())
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        // Non-blocking by decision, exactly like unobservedVerdict: a missing docker
+        // is not something an autofix child can repair, and putting it in `reason`
+        // as a FAIL invites a fabricated boot command.
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('NEVER RAN')
+        expect(out.unobserved).toContain('`bun run dev`')
+        expect(out.reason).toContain('`bun run dev`')
+        expect(out.reason).toContain('NEVER RAN')
+    })
+
+    test('observations from OTHER commands cannot cancel it — the CT-tests trap', async () => {
+        // Run 18 had 51 green Playwright CT tests and no server: CT mounts components,
+        // it never assembles or starts one. Six observed commands here, boot still
+        // unobserved, and the zero-observation note must NOT fire (things did run).
+        const dir = makeDir(
+            servedSkipPkg({'test:ct': 'exit 0', 'test:e2e': 'exit 0', lint: 'exit 0'})
+        )
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('NEVER RAN')
+        expect(out.unobserved).not.toContain('gate ran nothing')
+        expect(out.reason).toContain('`bun run test:ct`')
+    })
+
+    test('inv-nothing-to-boot: a served app with NO start/dev script keeps its bare PASS', async () => {
+        const dir = makeDir({
+            dependencies: {hono: '4.12.27'},
+            scripts: {test: 'exit 0', build: 'exit 0'}
+        })
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.reason).toBe('statics + `bun run test`, `bun run build` passed')
+    })
+
+    test('inv-cli-unaffected: no server dependency ⇒ byte-identical to having no boot at all', async () => {
+        const cli = makeDir({
+            scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-bin'}
+        })
+        const none = makeDir({scripts: {test: 'exit 0', build: 'exit 0'}})
+        const a = await runFinalIntegrationGate(cli, 900_000, 400)
+        const b = await runFinalIntegrationGate(none, 900_000, 400)
+        expect(a.unobserved).toBeUndefined()
+        expect(a.reason).toBe(b.reason)
+    })
+
+    test('inv-boot-pass-untouched: a boot that really listens is unchanged', async () => {
+        const dir = makeDir({
+            dependencies: {hono: '4.12.27'},
+            scripts: {test: 'exit 0', start: 'sleep 30'}
+        })
+        // Grace must outlast the 500ms listener poll, or the boot never gets the
+        // chance to be observed and this stops being a boot-`pass` case at all.
+        const out = await runFinalIntegrationGate(dir, 900_000, 5_000, {
+            groupHasListener: () => true,
+            groupListeningPort: () => 3000,
+            renderProbe: () => ({outcome: 'pass', detail: 'rendered'}),
+            deepRenderProbe: () => ({outcome: 'pass', detail: 'authenticated'})
+        })
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.reason).toBe('statics + `bun run test`, `bun run start` passed')
+    })
+
+    test('a boot skip does NOT turn a FAILing gate into a different failure', async () => {
+        const dir = makeDir(servedSkipPkg({test: 'echo boom && exit 1'}))
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        expect(out.ok).toBe(false)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.failures?.some(f => f.includes('NEVER RAN'))).toBeFalsy()
+    })
+
+    test('both notes stack when NOTHING ran either — boot named first', async () => {
+        const dir = makeDir({
+            dependencies: {hono: '4.12.27'},
+            scripts: {test: "node -e 'process.exit(127)'", dev: 'pi-task-no-such-binary-9f3c'}
+        })
+        const out = await runFinalIntegrationGate(dir, 900_000, 400)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('NEVER RAN')
+        expect(out.unobserved).toContain('skipped as environment gaps')
+        expect(out.unobserved!.indexOf('NEVER RAN')).toBeLessThan(
+            out.unobserved!.indexOf('skipped as environment gaps')
+        )
     })
 })

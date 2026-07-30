@@ -14,3 +14,8 @@ docs/
 
 # Measurement pools produced by scripts/extraction-*-step0.ts (large, regenerable).
 .measure/
+
+# The shipped-at-BASELINE_REF copy of final-gate.ts that
+# scripts/boot-skip-verdict-ab.ts writes next to the real one so the baseline
+# arm's relative imports resolve. Created and deleted per run; never committed.
+src/task/final-gate.baseline.gen.ts

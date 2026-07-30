@@ -37,6 +37,13 @@
  * database is genuinely reachable-but-mis-wired — which is exactly the class the
  * per-task gates kept excusing — and the caller puts a human on the decision
  * (accept / leave failed), so a genuine external gap can still be overridden.
+ *
+ * A skip is never silent, though. A DISCOVERED boot command that never ran is its
+ * own verdict (bootSkipVerdict, mx5 run 18) — nothing else the gate observed can
+ * cancel it. Validation harnesses for that lever:
+ *   scripts/boot-skip-baserate.ts      base rate, shipped gate, before the change
+ *   scripts/boot-skip-verdict-ab.ts    two-armed deterministic A/B + invariants
+ *   scripts/boot-skip-fp-suite.ts      zero-FP arms over every local repo
  */
 import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
@@ -109,12 +116,15 @@ export interface FinalGateOutcome {
      */
     openDebts?: AcceptDebt[]
     /**
-     * Set (with the UNOBSERVED note) when the gate observed NOTHING dynamic — either
-     * no command was discoverable at all, or every discovered one was skipped as an
-     * environment gap. `ok` is still true (the statics did pass and there is nothing
-     * to fix), but this is NOT a PASS: the caller must record it as UNOBSERVED, never
-     * as "checked and fine". Absent ⇒ at least one dynamic command actually ran.
-     * See unobservedVerdict for the three-way verdict and the blocking decision.
+     * Set (with the UNOBSERVED note) when the gate could not OBSERVE something it was
+     * supposed to. Two independent triggers, either or both:
+     *   - nothing dynamic ran at all — no command was discoverable, or every discovered
+     *     one skipped as an environment gap (unobservedVerdict);
+     *   - a served app's boot command was discovered and SKIPPED, whatever else ran
+     *     (bootSkipVerdict, mx5 run 18 — test suites may not stand in for a launch).
+     * `ok` is still true (the statics did pass and there is nothing to fix), but this is
+     * NOT a PASS: the caller must record it as UNOBSERVED, never as "checked and fine".
+     * Absent ⇒ everything the gate meant to observe, it observed.
      */
     unobserved?: string
 }
@@ -1138,6 +1148,63 @@ export function unobservedVerdict(args: {
 }
 
 /**
+ * The SAME third verdict, at the door unobservedVerdict cannot reach: the boot
+ * check specifically (mx5 run 18, validated).
+ *
+ * Run 18 shipped an app with no HTTP server behind a converged final gate. Its
+ * `src/server/index.ts` ends at `export {app}` — no `Bun.serve`, no
+ * `export default app`, no `start` script — so `bun run src/server/index.ts` exits
+ * 0 immediately and the product cannot be started at all. The gate's boot command
+ * resolved to `bun run dev`, whose body begins `docker compose … up -d`; the gate
+ * sandbox had no docker, so the boot SKIPPED as an environment gap. Skips
+ * contribute nothing to `dynObserved`, and `bun run test`, `test:ct`, `build`,
+ * `lint`, `seed` and `migrate` all ran — so `dynObserved > 0`, the full-skip
+ * blindness guard (observabilityGapFailure) stayed correctly quiet, and the trail
+ * read `final-gate: autofix converged — statics + … passed` with 24/24 tasks green.
+ *
+ * The defect is that "the app was never observed to boot" and "the app booted
+ * fine" produced BYTE-IDENTICAL gate output. That is the class scripts/ab-verdict.ts
+ * exists to kill one layer up: absence of evidence rendered in the shape of
+ * evidence. So a discovered-but-skipped boot now names itself, and — unlike every
+ * other skip — it CANNOT be cancelled by observations from other commands.
+ * Component tests are the trap here, not the alibi: run 18 had 51 green Playwright
+ * CT tests, and CT mounts components in a browser without ever assembling or
+ * starting the server.
+ *
+ * DECIDED, do not silently re-open:
+ *  - NOT a FAIL. A boot skip on a docker-less box is a genuine environment gap, and
+ *    failing it re-creates run 16's unfalsifiable-FAIL mistake pointing the other
+ *    way. UNOBSERVED blocks nothing while being loud and durable (the caller records
+ *    it as final-gate debt the next run re-surfaces), and it keeps "boot never ran"
+ *    out of the autofix child's seed — a child cannot fix a missing docker, so the
+ *    highest-probability response would be to FABRICATE a bootable command, the
+ *    class that refuted the `## verified tooling` harvest.
+ *  - BOTH skip flavours count. Run 18's skip carried `spawnFailed: false` (127 inside
+ *    the script chain, not an ENOENT on the runner), so keying off spawnFailed would
+ *    have missed the actual defect.
+ *  - SERVED APPS ONLY. `expectServer === false` (a CLI/library project) is fenced off
+ *    deliberately: a CLI whose `dev` script needs an absent tool has no server to be
+ *    unobserved, and widening the lever there buys warnings nobody can act on.
+ */
+export function bootSkipVerdict(args: {
+    /** `bin args…` of the DISCOVERED boot command; null ⇒ nothing to boot, which is
+     *  not the same thing as a boot that was not observed. */
+    label: string | null
+    /** Did the boot check end in `skip` (either flavour)? */
+    skipped: boolean
+    /** Does this project stand up an HTTP server (detectsServedApp)? */
+    expectServer: boolean
+}): string | null {
+    if (args.label === null || !args.skipped || !args.expectServer) return null
+    // Deliberately short: the run-level trail slices the reason at 300 chars and this
+    // note leads it, so the command name always survives.
+    return (
+        `boot check: \`${args.label}\` NEVER RAN (environment gap) — the app was not observed `
+        + 'to start, and no test suite substitutes for that.'
+    )
+}
+
+/**
  * Boot check hit an address-in-use bind failure. If the port is held by one of OUR
  * own orphaned gate children (a `dev`/`start` run), reap it and retry the boot once
  * so the app gets a fair launch; otherwise leave the (foreign) holder alone and let
@@ -1348,6 +1415,10 @@ export async function runFinalIntegrationGate(
     // Boot + render ALWAYS runs (mx5 run 13): it is independent of test results by
     // construction, and it carries the run's most load-bearing signal — earlier
     // failures no longer shadow it. Its failures rank FIRST in the aggregate.
+    // A boot that never RAN is its own verdict (mx5 run 18 — see bootSkipVerdict);
+    // it lives outside the dynObserved counters on purpose, so the test/build
+    // commands that did run cannot cancel it.
+    let bootUnobserved: string | null = null
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
         dynAttempted += 1
@@ -1381,6 +1452,11 @@ export async function runFinalIntegrationGate(
         }
         if (b.outcome !== 'skip') dynObserved += 1
         else if (b.spawnFailed) dynSpawnFailures += 1
+        bootUnobserved = bootSkipVerdict({
+            label,
+            skipped: b.outcome === 'skip',
+            expectServer
+        })
         if (b.outcome === 'fail') {
             fail(`boot check: \`${label}\` ${b.detail}`, 0)
         } else if (b.outcome === 'orphan-port') {
@@ -1452,7 +1528,15 @@ export async function runFinalIntegrationGate(
     // (integration commands not runnable here)`, which is the identical "we never checked"
     // silence wearing different words. Unchanged when anything at all was observed, so a
     // project with runnable commands is byte-for-byte unaffected.
-    const unobserved = unobservedVerdict({discovered: dynAttempted, observed: dynObserved})
+    // Two independent UNOBSERVED notes, either or both of which may apply: the boot
+    // never ran (run 18), and/or NOTHING dynamic ran at all. The boot note leads
+    // because it names a concrete command and the trail line is sliced at 300 chars.
+    const unobserved = [
+        bootUnobserved,
+        unobservedVerdict({discovered: dynAttempted, observed: dynObserved})
+    ]
+        .filter(n => n !== null)
+        .join(' ')
     return withDebts({
         ok: true,
         ...(unobserved ? {unobserved} : {}),
