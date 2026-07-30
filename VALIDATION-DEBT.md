@@ -135,6 +135,41 @@ one blindness for another. Measure before choosing.
   all). The zero-FP arms are broad (17 local repos, 0 findings) so the blast radius is
   known to be small — two trees on this box — but "this fires on projects other than
   mx5" is not evidence anyone has.
+- The **non-launch boot command** rejection (nexttask 2A, shipped) passed its A/B 2/14
+  → 0/14 with three invariants holding, but only **one of its two rules is validated on
+  real code**. The container-orchestration rule fires on exactly one real tree (mx5) and
+  one fixture; the *multiplexer-of-asset-watchers* rule fires on **no real tree at all**
+  — `fx-watchers-only` is its only evidence, so that half is a fixture-only argument.
+  Six of the box's repos declare `start`/`dev` and five are plain launches
+  (`vite`, `nodemon`, `node dist/…`, `bun --watch`), which is why the invariants are
+  cheap to hold.
+- 2A **retires the real-tree arm of `scripts/boot-skip-verdict-ab.ts`**: mx5's boot
+  command is now `null` (measured — `scripts/serve-entry-baserate.ts` prints it), so the
+  boot-skip shape can no longer be produced there and that harness's mx5 arms will
+  abstain. Its four fixture arms still exercise the lever end to end (re-run 2026-07-30:
+  1/4 → 0/4, all four invariants holding). A served app whose only launch script is
+  rejected now reports its own UNOBSERVED note (`rejectedLaunchScript`) so the rejection
+  cannot trade an unfalsifiable skip for pure silence.
+- The 2A A/B measures mx5's baseline boot **under the dockerless shim**, so its outcome
+  is `skip` by construction. The docker-HAVING branch was deliberately **not** measured:
+  running `docker compose up` in a clone would start real containers on this box. So
+  "no tree OBSERVED to boot lost its command" is exactly as strong as it sounds — no
+  tree was observed to boot. The substantive argument that nothing was lost is 2B's:
+  mx5 has no bind anywhere, so no member of that chain could have served.
+- The **serve-entry** check (nexttask 2B, shipped) has the same generality gap as the
+  boot-skip lever: base rate `builds-an-app && !has-a-bind` is **2/9 trees, both of them
+  mx5 revisions** (`scripts/serve-entry-baserate.ts`), and the FP arms are 4 real repos
+  + 5 synthetic negatives at zero. It is a true positive reproduced twice, not a
+  population.
+- Known blind spots of the serve-entry checker, by construction: it reads **JS/TS only**
+  (a Go/Python server in the same tree is invisible); constructions come from a fixed
+  framework allowlist (Hono/Elysia/Koa/oak/express/fastify/polka) — a bespoke
+  `http.createServer` app never registers as building one, though that shape carries its
+  own bind; `.listen(` is matched loosely on purpose, so **one** `.listen(` anywhere in
+  authored source silences the whole tree; and a framework-launcher dependency
+  (next/nuxt/nest/wrangler/…) stands the check down **wholesale**, so a Next project
+  with a broken custom server is not examined at all. Every one of those errs toward
+  silence, which is the direction chosen deliberately.
 - The mx5 run-18 tree needs **two disclosed environment adjustments** to reproduce its
   PASS here, both in the clone and neither touching the boot section:
   `docker`/`docker-compose` shimmed to exit 127 (this box HAS docker; run 18's sandbox
