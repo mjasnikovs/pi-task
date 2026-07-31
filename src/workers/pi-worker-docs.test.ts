@@ -314,7 +314,9 @@ test('a project-docs budget refuses further "." lookups without spawning', async
             npmVersionLookup: async () => null,
             spawn: fakeSpawnByPrompt(() => {
                 spawns++
-                return {stdout: '<answer>it exposes list()</answer>\n<excerpt>class UserService</excerpt>'}
+                return {
+                    stdout: '<answer>it exposes list()</answer>\n<excerpt>class UserService</excerpt>'
+                }
             })
         })
         const call = (query: string, module = '.'): Promise<AgentToolResult<unknown>> =>
@@ -352,9 +354,15 @@ test('the budget counts ONLY project-source lookups — package docs are untouch
             }))
         })
         const call = (module: string): Promise<AgentToolResult<unknown>> =>
-            registered[0].execute('id', {module, query: 'how do I list users?'}, undefined, undefined, {
-                cwd: FIXTURES
-            })
+            registered[0].execute(
+                'id',
+                {module, query: 'how do I list users?'},
+                undefined,
+                undefined,
+                {
+                    cwd: FIXTURES
+                }
+            )
         for (let i = 0; i < 3; i++) {
             const text = ((await call('tiny-pkg')).content[0] as {type: 'text'; text: string}).text
             expect(text).toContain('Per tiny-pkg@1.0.0:')

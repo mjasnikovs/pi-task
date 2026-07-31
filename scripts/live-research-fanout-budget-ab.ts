@@ -114,6 +114,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {execFileSync, spawn as nodeSpawn} from 'node:child_process'
 import {findSynthesizedApis} from '../src/task/api-synthesis.js'
+import type {SpawnFn} from '../src/shared/child-process.js'
 import {isGroundingRetrieval} from '../src/workers/pi-worker-core.js'
 import {
     FANOUT_TIMEOUT_CEILING_ENV,
@@ -270,7 +271,7 @@ function loadFixture(taskId: string): Fixture {
     }
 }
 
-interface TrialResult {
+export interface TrialResult {
     arm: Arm
     taskId: string
     trial: number
@@ -672,6 +673,86 @@ async function runArm(arm: Arm, trials: number, only: string[]): Promise<void> {
 const mean = (xs: number[]): number =>
     xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length
 
+/**
+ * A trial can only ground symbols it actually wrote. `symbols === 0` means the
+ * APIS section is a stub — a degraded one-line "Now let me look at…" — and its
+ * 0% ungrounded rate is the ABSENCE of a measurement, not clean work.
+ */
+const scorable = (r: TrialResult): boolean => r.symbols > 0
+
+/**
+ * METRIC 3, quality — and the one place this harness has been wrong twice.
+ *
+ * The n=3 re-run had baseline time out 12/12, of which FIVE trials shipped a
+ * one-entry stub carrying zero symbols. Scored as written, those trials gave the
+ * baseline a 0.0% fabrication rate on three fixtures, which nothing can beat: a
+ * 28-entry section with one unretrieved-but-real symbol "regressed" against a
+ * stub sentence. That is not a strict guard, it is a guard measuring nothing and
+ * reporting the result as if it had.
+ *
+ * So the grounding comparison runs over SCORABLE trials only, and when either arm
+ * has none for a fixture the comparison is reported UNSCORABLE — which abstains
+ * the whole verdict rather than holding. Two ways that could be gamed, both
+ * closed here:
+ *
+ *   - a treatment that degrades to stubs would drop its own bad trials out of the
+ *     comparison, so `inv-quality-not-worse` also breaks outright if the
+ *     treatment ships MORE empty sections than the baseline;
+ *   - signature coverage stays over ALL trials, absolute, unchanged: a treatment
+ *     that answers less must not be able to hide its stubs behind a filter.
+ */
+export function scoreQuality(
+    shared: string[],
+    base: TrialResult[],
+    treat: TrialResult[]
+): {qualityBreaks: string[]; unscorable: string[]} {
+    const qualityBreaks: string[] = []
+    const unscorable: string[] = []
+    for (const id of shared) {
+        const b = base.filter(r => r.taskId === id)
+        const t = treat.filter(r => r.taskId === id)
+        const bSig = mean(b.map(r => r.withSignature))
+        const tSig = mean(t.map(r => r.withSignature))
+        if (tSig < bSig) qualityBreaks.push(`${id} signatures ${bSig.toFixed(1)}→${tSig.toFixed(1)}`)
+
+        const bEmpty = b.filter(r => !scorable(r)).length
+        const tEmpty = t.filter(r => !scorable(r)).length
+        if (tEmpty > bEmpty) {
+            qualityBreaks.push(`${id} empty sections ${bEmpty}/${b.length}→${tEmpty}/${t.length}`)
+        }
+
+        const bs = b.filter(scorable)
+        const ts = t.filter(scorable)
+        if (bs.length === 0 || ts.length === 0) {
+            unscorable.push(
+                `${id} grounding: ${bs.length}/${b.length} baseline and`
+                    + ` ${ts.length}/${t.length} treatment trial(s) produced a section with symbols`
+                    + ` — no fabrication comparison exists on this fixture`
+            )
+            continue
+        }
+        // D2 — compare the ungrounded SHARE, not the raw count. A section that
+        // grows trips an absolute-count test purely for being bigger. The
+        // absolute count stays as a secondary tripwire — a treatment must worsen
+        // on BOTH to break the invariant.
+        const rate = (rs: TrialResult[]): number => {
+            const sym = rs.reduce((n, r) => n + r.symbols, 0)
+            return sym === 0 ? 0 : (rs.reduce((n, r) => n + r.ungroundedSymbols, 0) / sym) * 100
+        }
+        const bUng = mean(bs.map(r => r.ungroundedSymbols))
+        const tUng = mean(ts.map(r => r.ungroundedSymbols))
+        const bRate = rate(bs)
+        const tRate = rate(ts)
+        if (tRate > bRate && tUng > bUng) {
+            qualityBreaks.push(
+                `${id} ungrounded ${bRate.toFixed(1)}%→${tRate.toFixed(1)}%`
+                    + ` (${bUng.toFixed(1)}→${tUng.toFixed(1)})`
+            )
+        }
+    }
+    return {qualityBreaks, unscorable}
+}
+
 function score(treatment: Arm): void {
     const base = loadResults('baseline')
     const treat = loadResults(treatment)
@@ -744,34 +825,8 @@ function score(treatment: Arm): void {
     const baseWall = mean(shared.flatMap(id => byFixture(base, id).map(r => r.apisWallMs)))
     const treatWall = mean(shared.flatMap(id => byFixture(treat, id).map(r => r.apisWallMs)))
 
-    const qualityBreaks: string[] = []
-    for (const id of shared) {
-        const b = byFixture(base, id)
-        const t = byFixture(treat, id)
-        const bSig = mean(b.map(r => r.withSignature))
-        const tSig = mean(t.map(r => r.withSignature))
-        // D2 — compare the ungrounded SHARE, not the raw count. A section that
-        // grows trips an absolute-count test purely for being bigger, and a
-        // baseline that DEGRADED to 6 symbols becomes nearly unbeatable:
-        // TASK_0021 improved 16.7%→5.5% by rate and still "regressed" 1.0→3.5.
-        // The absolute count stays as a secondary tripwire — a treatment must
-        // worsen on BOTH to break the invariant.
-        const rate = (rs: TrialResult[]): number => {
-            const sym = rs.reduce((n, r) => n + r.symbols, 0)
-            return sym === 0 ? 0 : (rs.reduce((n, r) => n + r.ungroundedSymbols, 0) / sym) * 100
-        }
-        const bUng = mean(b.map(r => r.ungroundedSymbols))
-        const tUng = mean(t.map(r => r.ungroundedSymbols))
-        const bRate = rate(b)
-        const tRate = rate(t)
-        if (tSig < bSig) qualityBreaks.push(`${id} signatures ${bSig.toFixed(1)}→${tSig.toFixed(1)}`)
-        if (tRate > bRate && tUng > bUng) {
-            qualityBreaks.push(
-                `${id} ungrounded ${bRate.toFixed(1)}%→${tRate.toFixed(1)}%`
-                    + ` (${bUng.toFixed(1)}→${tUng.toFixed(1)})`
-            )
-        }
-    }
+    const {qualityBreaks, unscorable} = scoreQuality(shared, base, treat)
+    for (const u of unscorable) console.log(`\n  quality UNSCORABLE — ${u}`)
 
     const lowBreaks: string[] = []
     for (const id of LOW_FANOUT) {
@@ -797,9 +852,10 @@ function score(treatment: Arm): void {
             label: 'inv-quality-not-worse',
             ok: qualityBreaks.length === 0,
             detail:
-                qualityBreaks.length === 0 ?
-                    'signature coverage held and fabricated symbols did not rise on any fixture'
-                :   qualityBreaks.join('; ')
+                qualityBreaks.length > 0 ? qualityBreaks.join('; ')
+                : unscorable.length > 0 ?
+                    `signature coverage held; grounding NOT EVALUATED on ${unscorable.length} fixture(s)`
+                :   'signature coverage held and fabricated symbols did not rise on any fixture'
         },
         {
             label: 'inv-no-new-degrade',
@@ -826,24 +882,30 @@ function score(treatment: Arm): void {
         targetShape: 'worker:apis logged >= 1 restart with reason=worker-timeout',
         baselineHits: highBase.filter(r => r.workerTimeouts > 0).length,
         treatmentHits: highTreat.filter(r => r.workerTimeouts > 0).length,
-        invariants
+        invariants,
+        unmeasured: unscorable
     })
 }
 
 // ─── entry ───────────────────────────────────────────────────────────────────
 
-const [modeArg, ...rest] = process.argv.slice(2)
-const only = rest.filter(a => a.startsWith('TASK_'))
-const trials = Number(rest.find(a => /^\d+$/.test(a)) ?? '1')
+// Guarded so the scorer can be imported and unit-tested. Before this, importing
+// the module ran the CLI and exited 1 on a missing mode argument, which is why
+// the quality comparison had no test while it was wrong twice.
+if (import.meta.main) {
+    const [modeArg, ...rest] = process.argv.slice(2)
+    const only = rest.filter(a => a.startsWith('TASK_'))
+    const trials = Number(rest.find(a => /^\d+$/.test(a)) ?? '1')
 
-if (modeArg === 'score') {
-    const treatment = (rest.find(a => ARMS.includes(a as Arm)) ?? 'cap') as Arm
-    score(treatment)
-} else if (ARMS.includes(modeArg as Arm)) {
-    await runArm(modeArg as Arm, trials, only)
-} else {
-    console.error(
-        `usage: live-research-fanout-budget-ab.ts <${ARMS.join('|')}|score> [TRIALS] [TASK_00NN …]`
-    )
-    process.exit(1)
+    if (modeArg === 'score') {
+        const treatment = (rest.find(a => ARMS.includes(a as Arm)) ?? 'cap') as Arm
+        score(treatment)
+    } else if (ARMS.includes(modeArg as Arm)) {
+        await runArm(modeArg as Arm, trials, only)
+    } else {
+        console.error(
+            `usage: live-research-fanout-budget-ab.ts <${ARMS.join('|')}|score> [TRIALS] [TASK_00NN …]`
+        )
+        process.exit(1)
+    }
 }

@@ -645,7 +645,8 @@ describe('runWorker', () => {
             // TASK_0021 of the live carry arm: all three attempts timed out, the
             // longest partial was one filler sentence, and both fixtures scored 2
             // entries and DEGRADED against 22 and 5 in baseline.
-            const preamble = 'Now let me get more details on the specific APIs and components I need:'
+            const preamble =
+                'Now let me get more details on the specific APIs and components I need:'
             expect(hasAnswerContent(preamble)).toBe(false)
             expect(
                 hasAnswerContent(

@@ -257,6 +257,29 @@ describe('groundEntriesStrict', () => {
         expect(strict[0]!.ungrounded).toContain('Textarea')
     })
 
+    test('members reached through a platform root are platform too', () => {
+        // progress/TASK_0021 trial 0: `navigator` was excluded and `writeText`
+        // was not, because PLATFORM_SYMBOLS is enumerated from bun's globalThis,
+        // which carries no `clipboard`. It was the trial's ONLY "fabrication".
+        const strict = groundEntriesStrict(
+            parseApisEntries('navigator.clipboard.writeText(url)  copy the invite URL'),
+            empty
+        )
+        expect(strict[0]!.ungrounded).toEqual([])
+        expect(strict[0]!.excluded).toContain('writeText')
+        expect(strict[0]!.channels).toContain('platform')
+    })
+
+    test('the chain rule does not launder a non-platform root', () => {
+        // Playwright's locator methods are a PACKAGE API — a retrieval gap, not a
+        // platform name. A flat list of DOM member names would have hidden them.
+        const strict = groundEntriesStrict(
+            parseApisEntries('locator.selectOption(value)  choose an option in a select'),
+            empty
+        )
+        expect(strict[0]!.ungrounded).toContain('selectOption')
+    })
+
     test('a retrieved symbol is grounded through its real channel', () => {
         const strict = groundEntriesStrict(parseApisEntries('zValidator  hono middleware'), {
             ...empty,

@@ -405,6 +405,36 @@ export function parameterSymbols(name: string): Set<string> {
     return inside
 }
 
+/**
+ * Members reached through a platform ROOT in the entry name: in
+ * `navigator.clipboard.writeText(url)`, `navigator` is a platform global, so
+ * `clipboard` and `writeText` are platform members too.
+ *
+ * PLATFORM_SYMBOLS is enumerated from the running `globalThis`, and a bun/node
+ * process carries no `clipboard`, no `HTMLElement.prototype`, no `Notification`.
+ * The gap was found live — `writeText` was the sole "fabrication" on a fan-out
+ * trial while `navigator` beside it was correctly excluded.
+ *
+ * Rooting the rule in the CHAIN rather than pasting the missing names into the
+ * set is the whole point: a flat list has to guess which DOM member names are
+ * also plausible project APIs (`click`, `open`, `remove`, `select`, `value`) and
+ * would launder a fabricated `Textarea` the moment one of those collided. Only a
+ * symbol the entry itself qualifies with a platform root is excluded here, so a
+ * bare identifier — and anything under a non-platform root like Playwright's
+ * `locator.selectOption` — still has to be grounded.
+ */
+export function platformChainSymbols(name: string): Set<string> {
+    const out = new Set<string>()
+    for (const chain of name.split(/[^A-Za-z0-9_$.]+/)) {
+        const parts = chain.split('.').filter(p => p.length > 0)
+        if (parts.length < 2) continue
+        const root = parts[0] ?? ''
+        if (!isPlatformSymbol(root)) continue
+        for (const p of parts.slice(1)) out.add(p)
+    }
+    return out
+}
+
 /** A `platform` channel, on top of the four retrieval channels. */
 export type StrictChannel = Channel | 'platform'
 
@@ -428,6 +458,7 @@ export function groundEntriesStrict(entries: ApisEntry[], c: GroundingCorpus): S
         .filter(e => !isProseLine(e))
         .map(entry => {
             const params = parameterSymbols(entry.name)
+            const chained = platformChainSymbols(entry.name)
             const ungrounded: string[] = []
             const excluded: string[] = []
             const channels = new Set<StrictChannel>()
@@ -436,7 +467,7 @@ export function groundEntriesStrict(entries: ApisEntry[], c: GroundingCorpus): S
                     excluded.push(s)
                     continue
                 }
-                if (isPlatformSymbol(s)) {
+                if (isPlatformSymbol(s) || chained.has(s)) {
                     excluded.push(s)
                     channels.add('platform')
                     continue

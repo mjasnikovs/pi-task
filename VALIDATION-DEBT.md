@@ -463,6 +463,28 @@ needs the DOM/Web surfaces bun's `globalThis` does not carry. Both are instrumen
 work, both are cheap, and neither may be done as part of scoring the arm they
 would change.
 
+**Both instrument fixes are now in, and the verdict did NOT move: still FAIL.**
+
+1. `scoreQuality()` compares grounding over SCORABLE trials only (`symbols > 0`)
+   and reports a fixture with none as UNSCORABLE, which now ABSTAINS the whole
+   verdict via `AbSpec.unmeasured` rather than letting an unevaluated invariant
+   print HOLDS. Two gaming routes are closed with it: a treatment that ships more
+   empty sections than the baseline breaks the invariant outright, and signature
+   coverage stays absolute over ALL trials.
+2. `platformChainSymbols()` treats members reached through a platform ROOT as
+   platform (`navigator.clipboard.writeText`). Rooted in the CHAIN, not a flat
+   list of DOM member names — a flat list would have to include `click`, `open`,
+   `remove`, `select`, and would launder a fabricated component the first time one
+   collided. Playwright's `locator.selectOption` therefore stays flagged, which is
+   correct: that is a package API and a retrieval gap, not a platform name.
+
+Re-scored on the same recorded trials: TASK_0021 drops out as UNSCORABLE (0/3
+baseline trials produced any symbol) and TASK_0019 + TASK_0020 still break, so
+`inv-quality-not-worse` is still BROKEN and the arm is still FAIL. Note the
+`ungrounded` column is baked into each trial JSON at run time, so fix 2 changes
+nothing here and takes effect only on the next arm. The instrument is now honest
+about what it cannot measure; it did not become friendlier to the lever.
+
 Instrumentation added so this stops being inferred: `onCarryForward` fires when a
 carried partial is INJECTED (not merely when a restart happens — the two diverge
 now that contentless partials are refused), logged as `CARRY-FORWARD injected
