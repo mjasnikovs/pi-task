@@ -112,8 +112,9 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {execFileSync} from 'node:child_process'
+import {execFileSync, spawn as nodeSpawn} from 'node:child_process'
 import {findSynthesizedApis} from '../src/task/api-synthesis.js'
+import {isGroundingRetrieval} from '../src/workers/pi-worker-core.js'
 import {
     FANOUT_TIMEOUT_CEILING_ENV,
     WORKER_CARRY_FORWARD_ENV,
@@ -126,7 +127,7 @@ import {TYPEONLY_LOG_ENV, readTypeOnlyLog, type TypeOnlyLogRecord} from '../src/
 import {buildCheckpointTree} from './run15-fixture-tree.js'
 import {
     extractSection,
-    groundEntries,
+    groundEntriesStrict,
     parseApisEntries,
     parseTrajectory,
     readTouchedFiles,
@@ -151,6 +152,10 @@ const CEILING_MS = 900_000
 const LOW_FANOUT_WALL_TOLERANCE = 1.5
 /** inv-low-fanout-untouched: nor may it lose more than this share of its entries. */
 const ENTRY_FLOOR = 0.8
+/** A fixture posed the problem if it fanned out this far via docs… */
+const WITNESS_LOOKUPS = 10
+/** …or this far across ALL content-returning retrieval tools (D5). */
+const WITNESS_RETRIEVALS = 20
 /**
  * RESCUE's absolute backstop. With a progress-based deadline, 240s stops being
  * the total time allowed and becomes the time allowed WITHOUT PROGRESS; this is
@@ -280,6 +285,8 @@ interface TrialResult {
     phaseWallMs: number
     /** The lever's precondition: how much fan-out this trial actually produced. */
     projectLookups: number
+    /** D5: every content-returning retrieval call, across all tools. */
+    retrievalCalls: number
     packageLookups: number
     /** How often the CAP arm refused a call (0 in every other arm). */
     budgetRefusals: number
@@ -387,6 +394,35 @@ function readInstrumentation(log: string): {
     return {attempts, reasons, apisWallMs, degraded, salvaged}
 }
 
+/**
+ * A spawn that records what every child is handed on stdin — i.e. the ASSEMBLED
+ * worker prompt.
+ *
+ * `GroundingCorpus.prompt` is documented as "the assembled worker:apis prompt:
+ * orientation dump, inventory, FILES map, refined task". This harness was
+ * supplying the 1.9KB seeded task file instead, which is why symbols the worker
+ * legitimately knew from orientation scored as fabrications — `$delete` was
+ * flagged while sitting in the fixture's own src/client/api.ts:143. Capturing it
+ * here needs no change to shipped code: phaseResearch already threads `spawn`
+ * down to runWorker, and the prompt goes to the child on stdin.
+ */
+function capturingSpawn(sink: string[]): SpawnFn {
+    return ((command: string, args: ReadonlyArray<string>, options: never) => {
+        const child = nodeSpawn(command, args as string[], options)
+        const stdin = child.stdin
+        if (stdin) {
+            const write = stdin.write.bind(stdin)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            stdin.write = ((chunk: any, ...rest: any[]) => {
+                if (typeof chunk === 'string') sink.push(chunk)
+                else if (Buffer.isBuffer(chunk)) sink.push(chunk.toString('utf8'))
+                return write(chunk, ...(rest as []))
+            }) as typeof stdin.write
+        }
+        return child
+    }) as unknown as SpawnFn
+}
+
 function corpusOf(
     trialDir: string,
     log: string,
@@ -426,6 +462,7 @@ async function runTrial(
     // trials answers earlier ones paid for, which is a per-arm speedup nobody asked for.
     process.env[RESEARCH_RUN_ID_ENV] = `${arm}-${fixture.taskId}-${trial}-${Date.now()}`
 
+    const promptSink: string[] = []
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), TRIAL_TIMEOUT_MS)
     const started = Date.now()
@@ -438,7 +475,8 @@ async function runTrial(
                 taskId: fixture.taskId,
                 signal: abort.signal,
                 onChildOutput: l => fs.appendFileSync(logPath, l + '\n'),
-                logDebug: m => fs.appendFileSync(logPath, `[debug] ${m}\n`)
+                logDebug: m => fs.appendFileSync(logPath, `[debug] ${m}\n`),
+                spawn: capturingSpawn(promptSink)
             },
             fixture.refined,
             // OFFLINE ENRICHMENT, identically in every arm. External context is a
@@ -467,8 +505,10 @@ async function runTrial(
     const apisSection = extractSection(research, 'APIS')
     const steps = parseTrajectory(log)
     const docsSteps = steps.filter(s => s.tool === 'pi-worker-docs')
-    const corpus = corpusOf(dir, log, answers, fixture.refined)
-    const grounded = groundEntries(parseApisEntries(apisSection), corpus)
+    // The REAL prompt channel: every assembled prompt this trial's children were
+    // given, not the seeded task file. See capturingSpawn.
+    const corpus = corpusOf(dir, log, answers, [fixture.refined, ...promptSink].join('\n'))
+    const grounded = groundEntriesStrict(parseApisEntries(apisSection), corpus)
     const entries = parseApisEntries(apisSection)
 
     return {
@@ -482,6 +522,10 @@ async function runTrial(
         apisWallMs: inst.apisWallMs,
         phaseWallMs,
         projectLookups: docsSteps.filter(s => s.arg.startsWith('.')).length,
+        // D5 — a worker that fans out through `read`/`grep` instead of
+        // `pi-worker-docs` was scoring as "never posed the problem" while timing
+        // out. The precondition is retrieval VOLUME, not one tool's name.
+        retrievalCalls: steps.filter(st => isGroundingRetrieval(st.tool)).length,
         packageLookups: docsSteps.filter(s => !s.arg.startsWith('.')).length,
         // Counted from the tool's own refusal text — the cap's firing rate is not
         // inferred from the lookup count, which the model controls.
@@ -606,7 +650,7 @@ async function runArm(arm: Arm, trials: number, only: string[]): Promise<void> {
     const witnessed = rows.filter(r =>
         arm === 'cap' || arm === 'both' ?
             r.budgetRefusals > 0 || r.projectLookups >= PROJECT_DOCS_BUDGET
-        :   r.projectLookups >= 10
+        :   r.projectLookups >= WITNESS_LOOKUPS || r.retrievalCalls >= WITNESS_RETRIEVALS
     ).length
     reportArm({
         name: 'research fan-out budget',
@@ -668,10 +712,35 @@ function score(treatment: Arm): void {
     const highTreat = treat.filter(r => HIGH_FANOUT.includes(r.taskId))
     const reps = Math.min(highBase.length, highTreat.length)
 
-    // METRIC 2 — wall clock, over the fixtures BOTH arms actually ran.
+    // METRIC 2 — wall clock, over the fixtures BOTH arms actually ran AND both
+    // actually fanned out on.
+    //
+    // D1: `witnessed` used to gate metric 1 only, so a fixture that never posed
+    // the problem still set the bar for metrics 2 and 3. TASK_0022's baseline
+    // made ONE project lookup and still contributed 234s against the treatment's
+    // 405s, and 24→23 signatures as a "quality break", on a lever it never
+    // exercised.
+    const posed = (rows: TrialResult[], id: string): boolean =>
+        byFixture(rows, id).some(
+            r => r.projectLookups >= WITNESS_LOOKUPS || r.retrievalCalls >= WITNESS_RETRIEVALS
+        )
     const shared = HIGH_FANOUT.filter(
-        id => byFixture(base, id).length > 0 && byFixture(treat, id).length > 0
+        id =>
+            byFixture(base, id).length > 0
+            && byFixture(treat, id).length > 0
+            && posed(base, id)
+            && posed(treat, id)
     )
+    const excluded = HIGH_FANOUT.filter(
+        id =>
+            byFixture(base, id).length > 0 && byFixture(treat, id).length > 0 && !shared.includes(id)
+    )
+    if (excluded.length > 0) {
+        console.log(
+            `\n  excluded from metrics 2-3 (never posed the problem in one or both arms):`
+                + ` ${excluded.join(', ')}`
+        )
+    }
     const baseWall = mean(shared.flatMap(id => byFixture(base, id).map(r => r.apisWallMs)))
     const treatWall = mean(shared.flatMap(id => byFixture(treat, id).map(r => r.apisWallMs)))
 
@@ -681,10 +750,27 @@ function score(treatment: Arm): void {
         const t = byFixture(treat, id)
         const bSig = mean(b.map(r => r.withSignature))
         const tSig = mean(t.map(r => r.withSignature))
+        // D2 — compare the ungrounded SHARE, not the raw count. A section that
+        // grows trips an absolute-count test purely for being bigger, and a
+        // baseline that DEGRADED to 6 symbols becomes nearly unbeatable:
+        // TASK_0021 improved 16.7%→5.5% by rate and still "regressed" 1.0→3.5.
+        // The absolute count stays as a secondary tripwire — a treatment must
+        // worsen on BOTH to break the invariant.
+        const rate = (rs: TrialResult[]): number => {
+            const sym = rs.reduce((n, r) => n + r.symbols, 0)
+            return sym === 0 ? 0 : (rs.reduce((n, r) => n + r.ungroundedSymbols, 0) / sym) * 100
+        }
         const bUng = mean(b.map(r => r.ungroundedSymbols))
         const tUng = mean(t.map(r => r.ungroundedSymbols))
+        const bRate = rate(b)
+        const tRate = rate(t)
         if (tSig < bSig) qualityBreaks.push(`${id} signatures ${bSig.toFixed(1)}→${tSig.toFixed(1)}`)
-        if (tUng > bUng) qualityBreaks.push(`${id} ungrounded ${bUng.toFixed(1)}→${tUng.toFixed(1)}`)
+        if (tRate > bRate && tUng > bUng) {
+            qualityBreaks.push(
+                `${id} ungrounded ${bRate.toFixed(1)}%→${tRate.toFixed(1)}%`
+                    + ` (${bUng.toFixed(1)}→${tUng.toFixed(1)})`
+            )
+        }
     }
 
     const lowBreaks: string[] = []

@@ -32,14 +32,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-    groundEntries,
+    groundEntriesStrict,
     parseApisEntries,
     parseTrajectory,
     readTouchedFiles,
     type GroundingCorpus
 } from './apis-trajectory.js'
 import {readTypeOnlyLog} from '../src/workers/typeonly-log.js'
-import {isProseLine} from './rescore-ungrounded.js'
 
 const ROOT = path.resolve(
     process.env.AB_DIR || path.join(os.homedir(), 'tmp', 'research-fanout-ab')
@@ -96,10 +95,7 @@ function load(arm: string, taskId: string, trial: number): Row | null {
         docsPackage: join(answers.filter(a => a.module !== '.')),
         reads: readTouchedFiles(dir, steps)
     }
-    const grounded = groundEntries(
-        parseApisEntries(rec.apisSection).filter(e => !isProseLine(e)),
-        corpus
-    )
+    const grounded = groundEntriesStrict(parseApisEntries(rec.apisSection), corpus)
     return {
         ...rec,
         arm,

@@ -7,6 +7,7 @@ import {
     extractSymbols,
     channelsFor,
     groundEntries,
+    groundEntriesStrict,
     queryTokens,
     jaccard,
     repeatFlags,
@@ -199,5 +200,69 @@ describe('repeat and novelty shape', () => {
         expect(noveltyCurve(['AppType baseUrl', 'AppType ClientResponse', 'AppType'])).toEqual([
             2, 1, 0
         ])
+    })
+})
+
+// ─── strict grounding ────────────────────────────────────────────────────────
+// Every case below is a symbol the live research-fanout A/B flagged as a
+// fabrication and that inspection proved real. Together they failed two arms.
+
+describe('groundEntriesStrict', () => {
+    const empty: GroundingCorpus = {prompt: '', docsProject: '', docsPackage: '', reads: ''}
+
+    test('drops the model preamble that was parsed as an entry', () => {
+        // Verbatim from carry/TASK_0019 and rescue/TASK_0022.
+        const section = [
+            'Now I have all the information needed. Here is the APIS section:',
+            'openDb  (path: string) => Database'
+        ].join('\n')
+        const strict = groundEntriesStrict(parseApisEntries(section), empty)
+        expect(strict.map(g => g.entry.name)).toEqual(['openDb'])
+        // The old path scored Now/information/needed/Here/APIS as ungrounded.
+        expect(groundEntries(parseApisEntries(section), empty)[0]!.ungrounded).toContain('information')
+    })
+
+    test('platform APIs are grounded, not fabricated', () => {
+        // rescue/TASK_0019's entire "regression" was these two entries.
+        const entries = parseApisEntries(
+            'URL.createObjectURL()  browser builtin for object URLs\n'
+                + 'URL.revokeObjectURL()  release a previously created object URL'
+        )
+        const strict = groundEntriesStrict(entries, empty)
+        expect(strict.flatMap(g => g.ungrounded)).toEqual([])
+        expect(strict[0]!.channels).toContain('platform')
+        // …and the exclusion is auditable rather than silent.
+        expect(strict[0]!.excluded).toContain('createObjectURL')
+    })
+
+    test('parameter placeholders are not claims about symbols', () => {
+        const strict = groundEntriesStrict(
+            parseApisEntries('component.locator(selector)  find an element within the component'),
+            empty
+        )
+        expect(strict[0]!.ungrounded).not.toContain('selector')
+        expect(strict[0]!.excluded).toContain('selector')
+        // The thing actually being claimed still gets tested.
+        expect(strict[0]!.ungrounded).toContain('locator')
+    })
+
+    test('a genuine fabrication still fails', () => {
+        // The anti-gaming property: none of the three corrections may hide a
+        // symbol that is neither platform, parameter, nor retrieved. `Textarea`
+        // is the real one the carry arm produced.
+        const strict = groundEntriesStrict(
+            parseApisEntries('Textarea  styled textarea component in src/client/components/ui'),
+            {...empty, reads: 'export const Input = ...\nexport const Label = ...'}
+        )
+        expect(strict[0]!.ungrounded).toContain('Textarea')
+    })
+
+    test('a retrieved symbol is grounded through its real channel', () => {
+        const strict = groundEntriesStrict(parseApisEntries('zValidator  hono middleware'), {
+            ...empty,
+            docsPackage: 'import { zValidator } from "@hono/zod-validator"'
+        })
+        expect(strict[0]!.ungrounded).toEqual([])
+        expect(strict[0]!.channels).toContain('docs-package')
     })
 })

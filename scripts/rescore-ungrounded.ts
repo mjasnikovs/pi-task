@@ -41,13 +41,17 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-    groundEntries,
+    groundEntriesStrict,
+    isProseLine,
     parseApisEntries,
     parseTrajectory,
     readTouchedFiles,
-    type ApisEntry,
     type GroundingCorpus
 } from './apis-trajectory.js'
+
+// Kept re-exported: rescore-invariants.ts imports it from here, and the shared
+// definition now lives in apis-trajectory.ts alongside the other corrections.
+export {isProseLine}
 import {readTypeOnlyLog} from '../src/workers/typeonly-log.js'
 
 const ROOT = path.resolve(
@@ -55,23 +59,6 @@ const ROOT = path.resolve(
 )
 const HIGH_FANOUT = ['TASK_0017', 'TASK_0019', 'TASK_0020', 'TASK_0021', 'TASK_0022']
 
-/**
- * Is this parsed "entry" actually a sentence the model wrote around its section?
- *
- * Deliberately conservative — it must never drop a real entry, so every test is
- * a property no API-symbol line has: a name that ends in sentence punctuation,
- * or reads as running English. A real entry name is a symbol or a dotted path,
- * optionally backticked; it does not end in `.` or `:` and does not contain a
- * first-person pronoun.
- */
-export function isProseLine(entry: ApisEntry): boolean {
-    const n = entry.name.trim()
-    if (/[.:]$/.test(n) && !/`/.test(n)) return true
-    if (/\b(?:I|we|let|now|here|good|okay)\b/i.test(n) && n.split(/\s+/).length >= 4) return true
-    // The degrade marker, which is not an entry either.
-    if (/^\(?degraded/i.test(n)) return true
-    return false
-}
 
 interface Recorded {
     apisSection: string
@@ -102,8 +89,7 @@ function rescore(
         docsPackage: join(answers.filter(a => a.module !== '.')),
         reads: readTouchedFiles(dir, steps)
     }
-    const entries = parseApisEntries(rec.apisSection).filter(e => !isProseLine(e))
-    const grounded = groundEntries(entries, corpus)
+    const grounded = groundEntriesStrict(parseApisEntries(rec.apisSection), corpus)
     const residue = grounded.flatMap(g => g.ungrounded)
     return {
         pre: rec.ungroundedSymbols,
