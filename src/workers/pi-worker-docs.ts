@@ -26,6 +26,7 @@ import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
+import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
 
 const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
@@ -65,6 +66,8 @@ interface DocsDetails {
      * never memoised and re-served to a later sibling task.
      */
     typeOnly?: boolean
+    /** The 5B CAP arm refused this call: the attempt's project-lookup budget is spent. */
+    budgetSpent?: boolean
 }
 
 /**
@@ -114,6 +117,14 @@ export function registerPiWorkerDocs(
     pi: ExtensionAPI,
     internals: PiWorkerDocsInternals = {}
 ): void {
+    // CAP arm of nexttask 5B — OFF unless PI_TASK_PROJECT_DOCS_BUDGET is set, and
+    // then per-ATTEMPT by construction: the extension is loaded into a fresh pi
+    // child on every spawn, so a restarted attempt starts this counter at 0. The
+    // budget it enforces is the one the worker was told about in its prompt
+    // (projectDocsBudgetNotice) — enforcement without the notice would be a
+    // silent tool failure, and the notice without enforcement is what run 18
+    // already shows does not bind.
+    let projectLookups = 0
     makeWorkerTool<typeof Params, DocsDetails>(pi, {
         name: 'pi-worker-docs',
         label: 'Pi Worker Docs',
@@ -163,6 +174,15 @@ export function registerPiWorkerDocs(
 
             // ── Project source lookup ───────────────────────────────────────
             if (params.module === '.') {
+                const budget = projectDocsBudget()
+                if (budget !== null && ++projectLookups > budget) {
+                    // Refused BEFORE any work: the point of the cap is the child
+                    // spawn and the model pass this branch would otherwise run.
+                    return {
+                        text: projectDocsBudgetExhausted(budget),
+                        details: {budgetSpent: true}
+                    }
+                }
                 const openCache = internals.openCache ?? defaultOpenCache
                 let cache
                 let cacheError: string | undefined

@@ -1,5 +1,10 @@
 import {describe, expect, test} from 'bun:test'
-import {isGroundingRetrieval, runWorker} from './pi-worker-core.js'
+import {
+    hasAnswerContent,
+    isGroundingRetrieval,
+    runWorker,
+    type WorkerRestart
+} from './pi-worker-core.js'
 import type {SpawnResponseJsonEvents} from '../test-utils/fake-spawn.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {
@@ -8,7 +13,8 @@ import {
     fakeSpawnByPrompt,
     fakeSpawnQueue,
     loopResponse,
-    makeProc
+    makeProc,
+    pacedSpawn
 } from '../test-utils/fake-spawn.js'
 
 // A tool call the model wrote as text instead of invoking — never executed.
@@ -348,5 +354,518 @@ describe('runWorker', () => {
             tools: 'read,grep'
         })
         expect(receivedArgs[receivedArgs.indexOf('--tools') + 1]).toBe('read,grep')
+    })
+
+    // ── restart accounting (nexttask 5A) ────────────────────────────────────────
+    // mx5 run 18: 30 wall-clock timeouts / 120 min of compute discarded, 21 of the
+    // 23 affected workers returning exit=0. None of it was visible from the result
+    // or any log — waitMs/workMs describe the FINAL attempt only.
+    describe('restart accounting', () => {
+        test('a clean run reports attempts=1, no restarts, and never calls onRestart', async () => {
+            const seen: unknown[] = []
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse('ok'))
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                onRestart: rs => void seen.push(rs)
+            })
+            expect(r.attempts).toBe(1)
+            expect(r.restarts).toEqual([])
+            expect(seen).toEqual([])
+            // The clean case is the one where the old fields must still add up.
+            expect(r.totalWallMs).toBeGreaterThanOrEqual(r.waitMs + r.workMs)
+        })
+
+        test('a wall-clock timeout is reported as a discarded attempt on a clean result', async () => {
+            // The exact run-18 shape: attempt 1 times out, attempt 2 answers, and
+            // the caller sees exit=0 with nothing to say an attempt was thrown away.
+            const spawn = fakeSpawnQueue([
+                {events: [], closeDelayMs: 80},
+                agentEndResponse('clean output')
+            ])
+            const seen: WorkerRestart[] = []
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                onRestart: rs => void seen.push(rs)
+            })
+            expect(r.text).toBe('clean output')
+            expect(r.exitCode).toBe(0)
+            expect(r.attempts).toBe(2)
+            expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout'])
+            expect(r.restarts[0]!.attempt).toBe(1)
+            expect(r.restarts[0]!.detail).toBe('cap 15ms')
+            // The discarded attempt ran the full cap, so total must exceed the
+            // final attempt's own split by at least that much.
+            expect(r.restarts[0]!.wallMs).toBeGreaterThanOrEqual(15)
+            expect(r.totalWallMs).toBeGreaterThanOrEqual(r.waitMs + r.workMs + 15)
+            // onRestart fires live, with the same records the result carries.
+            expect(seen).toEqual([...r.restarts])
+        })
+
+        test('every restart is recorded when the budget is spent on timeouts', async () => {
+            const spawn = fakeSpawnQueue([
+                {events: [], closeDelayMs: 60},
+                {events: [], closeDelayMs: 60},
+                {events: [], closeDelayMs: 60}
+            ])
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+            expect(r.timedOut).toBe(true)
+            expect(r.attempts).toBe(3) // MAX_LOOP_RESTARTS = 2
+            expect(r.restarts.map(x => x.attempt)).toEqual([1, 2])
+            expect(r.restarts.every(x => x.reason === 'worker-timeout')).toBe(true)
+        })
+
+        test('a loop restart names the offending call', async () => {
+            const spawn = fakeSpawnQueue([
+                loopResponse('grep', {pattern: 'glorptube'}, 8),
+                agentEndResponse('recovered')
+            ])
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            expect(r.text).toBe('recovered')
+            expect(r.attempts).toBe(2)
+            expect(r.restarts[0]!.reason).toBe('loop')
+            expect(r.restarts[0]!.detail).toContain('grep')
+        })
+
+        test('a connection retry is recorded, and its backoff lands in totalWallMs only', async () => {
+            const slept: number[] = []
+            const spawn = fakeSpawnQueue([
+                agentErrorResponse('Connection error.'),
+                agentEndResponse('clean output')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                sleepFor: async ms => void slept.push(ms)
+            })
+            expect(r.attempts).toBe(2)
+            expect(r.restarts.map(x => x.reason)).toEqual(['connection-error'])
+            expect(r.restarts[0]!.detail).toBe('Connection error.')
+            expect(slept).toEqual([500])
+        })
+
+        test('a leaked-tool-call re-prompt is a restart too', async () => {
+            const spawn = fakeSpawnQueue([
+                agentEndResponse(LEAKED),
+                agentEndResponse('clean output')
+            ])
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            expect(r.text).toBe('clean output')
+            expect(r.attempts).toBe(2)
+            expect(r.restarts.map(x => x.reason)).toEqual(['leaked-tool-call'])
+        })
+    })
+
+    /**
+     * A restart is supposed to buy another chance at an answer. Before this it
+     * also THREW AWAY everything the killed attempt had produced, which is why a
+     * high-fan-out worker re-read the same files against the same clock and died
+     * in the same place every time.
+     */
+    describe('carry-forward and salvage', () => {
+        /** An attempt that produces real output and is then killed by the clock. */
+        const partialThenTimeout = (text: string): SpawnResponseJsonEvents => ({
+            ...agentEndResponse(text),
+            closeDelayMs: 200
+        })
+
+        test('a timed-out attempt hands its work to the next one', async () => {
+            const prompts: string[] = []
+            let call = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                prompts.push(args.join(' '))
+                return call++ === 0 ?
+                        partialThenTimeout(
+                            'openDb  (path: string) => Database — from src/server/db.ts\n'
+                                + 'migrate  (db: Database) => void — applies pending migrations'
+                        )
+                    :   agentEndResponse('final answer')
+            })
+            const r = await runWorker({
+                prompt: 'ORIGINAL TASK',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.attempts).toBe(2)
+            expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout'])
+            // The whole point: attempt 2 can see what attempt 1 found.
+            expect(prompts[0]).not.toContain('WORK ALREADY DONE')
+            expect(prompts[1]).toContain('WORK ALREADY DONE')
+            expect(prompts[1]).toContain('(path: string) => Database')
+            // ...without losing the task itself, and framed as unverified so a
+            // half-written entry cannot be re-emitted as established fact.
+            expect(prompts[1]).toContain('ORIGINAL TASK')
+            expect(prompts[1]).toContain('UNVERIFIED')
+            // A clean final attempt still answers for itself.
+            expect(r.text).toBe('final answer')
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+        })
+
+        test('thrash is NOT carried forward', async () => {
+            // A loop kill is by definition the same call repeated and a leaked
+            // tool call is malformed protocol text. Replaying either would feed
+            // the failure back into the attempt meant to escape it.
+            const prompts: string[] = []
+            let call = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                prompts.push(args.join(' '))
+                return call++ === 0 ?
+                        loopResponse('grep', {pattern: 'glorptube'}, 8)
+                    :   agentEndResponse('recovered')
+            })
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                carryForward: true
+            })
+            expect(r.restarts.map(x => x.reason)).toEqual(['loop'])
+            expect(prompts[1]).not.toContain('WORK ALREADY DONE')
+        })
+
+        test('a discarded attempt is returned when the final attempt has less', async () => {
+            // The run-18 shape at its worst: the budget is spent, and the attempt
+            // that happens to be last is the one that got least far. Returning it
+            // unconditionally reports the worst of three attempts as the answer.
+            // A realistic partial section: entry-shaped lines, which is what
+            // hasAnswerContent requires before salvage will keep anything.
+            const long = [
+                'openDb  (path: string) => Database — open the sqlite handle',
+                'migrate  (db: Database) => void — apply pending migrations',
+                'listingsTable  table name constant used by the query helpers'
+            ].join('\n')
+            const spawn = fakeSpawnQueue([
+                partialThenTimeout(long),
+                partialThenTimeout('short'),
+                partialThenTimeout('tiny')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.attempts).toBe(3)
+            expect(r.timedOut).toBe(true)
+            expect(r.text).toBe(long)
+            expect(r.salvagedFromDiscardedAttempt).toBe(true)
+        })
+
+        test('a clean short final answer is NOT overridden by a longer fragment', async () => {
+            // Salvage is gated on the final attempt FAILING, not on it being
+            // shorter. Gating on length would let a long half-finished fragment
+            // beat a concise correct answer.
+            const spawn = fakeSpawnQueue([
+                partialThenTimeout('FINDING: ' + 'x'.repeat(400)),
+                agentEndResponse('no exported API')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.attempts).toBe(2)
+            expect(r.text).toBe('no exported API')
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+        })
+
+        test('OFF by default: the shipped path still discards and still returns the last attempt', async () => {
+            // The A/B's baseline arm depends on this being byte-for-byte the old
+            // behaviour. Without this test "default off" is an unverified claim.
+            const prompts: string[] = []
+            // A realistic partial section: entry-shaped lines, which is what
+            // hasAnswerContent requires before salvage will keep anything.
+            const long = [
+                'openDb  (path: string) => Database — open the sqlite handle',
+                'migrate  (db: Database) => void — apply pending migrations',
+                'listingsTable  table name constant used by the query helpers'
+            ].join('\n')
+            let call = 0
+            const spawn = fakeSpawnByPrompt(args => {
+                prompts.push(args.join(' '))
+                return call++ === 0 ? partialThenTimeout(long) : partialThenTimeout('tiny')
+            })
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+            expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout', 'worker-timeout'])
+            expect(prompts[1]).not.toContain('WORK ALREADY DONE')
+            expect(r.text).toBe('tiny')
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+        })
+
+        test('the injection is observable, and does not fire when nothing is carried', async () => {
+            // A restart says an attempt was discarded; it does NOT say the next
+            // one received anything. Those diverge whenever the partial had no
+            // answer content, so they need separate signals.
+            const seen: {attempt: number; chars: number}[] = []
+            const withContent = fakeSpawnQueue([
+                partialThenTimeout('openDb  (path: string) => Database\nmigrate  (db) => void'),
+                agentEndResponse('final')
+            ])
+            await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn: withContent,
+                timeoutMs: 15,
+                carryForward: true,
+                onCarryForward: i => void seen.push({attempt: i.attempt, chars: i.chars})
+            })
+            expect(seen.length).toBe(1)
+            expect(seen[0]!.attempt).toBe(2)
+            expect(seen[0]!.chars).toBeGreaterThan(0)
+
+            const preambleOnly: typeof seen = []
+            const noContent = fakeSpawnQueue([
+                partialThenTimeout('Now let me look at the remaining files:'),
+                agentEndResponse('final')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn: noContent,
+                timeoutMs: 15,
+                carryForward: true,
+                onCarryForward: i => void preambleOnly.push({attempt: i.attempt, chars: i.chars})
+            })
+            expect(r.restarts.length).toBe(1) // it DID restart …
+            expect(preambleOnly).toEqual([]) // … and carried nothing
+        })
+
+        test('salvage refuses a partial that is only preamble (live carry-arm regression)', async () => {
+            // The exact text salvage shipped as an APIS section on TASK_0020 and
+            // TASK_0021 of the live carry arm: all three attempts timed out, the
+            // longest partial was one filler sentence, and both fixtures scored 2
+            // entries and DEGRADED against 22 and 5 in baseline.
+            const preamble =
+                'Now let me get more details on the specific APIs and components I need:'
+            expect(hasAnswerContent(preamble)).toBe(false)
+            expect(
+                hasAnswerContent(
+                    'zValidator  Hono middleware for Zod validation\nz.object  construct object schema'
+                )
+            ).toBe(true)
+
+            const spawn = fakeSpawnQueue([
+                partialThenTimeout(preamble),
+                partialThenTimeout('x'),
+                partialThenTimeout('y')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.attempts).toBe(3)
+            // Nothing had answer content, so nothing is salvaged and the final
+            // attempt's own text stands — the caller sees a real degrade instead
+            // of chatter dressed up as a section.
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+            expect(r.text).toBe('y')
+        })
+
+        test('a clean run carries nothing and salvages nothing', async () => {
+            const prompts: string[] = []
+            const spawn = fakeSpawnByPrompt(args => {
+                prompts.push(args.join(' '))
+                return agentEndResponse('ok')
+            })
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                carryForward: true
+            })
+            expect(r.text).toBe('ok')
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+            expect(prompts[0]).not.toContain('WORK ALREADY DONE')
+        })
+    })
+
+    /**
+     * "Took too long" and "stopped working" are different faults. A fixed cap
+     * cannot tell them apart, so it kills slow-but-working workers — and how slow
+     * a worker is depends on the user's machine, which is why a fixed cap makes
+     * answer quality hardware-dependent.
+     */
+    describe('progress-based deadline', () => {
+        const toolCall = (n: number): Record<string, unknown> => ({
+            type: 'tool_execution_start',
+            toolName: 'read',
+            args: {path: `src/f${n}.ts`}
+        })
+
+        test('a worker that keeps working is not killed for being slow', async () => {
+            // Twelve reads paced past the 40ms no-progress window: total elapsed
+            // runs far beyond it, but the worker is never idle for a whole window.
+            const events = [
+                ...Array.from({length: 12}, (_, i) => toolCall(i)),
+                {
+                    type: 'agent_end',
+                    messages: [{role: 'assistant', content: [{type: 'text', text: 'answered'}]}]
+                }
+            ]
+            const spawn = pacedSpawn(events, 30)
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 150,
+                progressTimeoutCeilingMs: 10_000,
+                stall: false,
+                loop: false
+            })
+            expect(r.text).toBe('answered')
+            expect(r.timedOut).toBeUndefined()
+            expect(r.attempts).toBe(1)
+            // Proof the run really did outlive the no-progress window.
+            expect(r.totalWallMs).toBeGreaterThan(150)
+        })
+
+        test('the same worker IS killed by the same window when it goes quiet', async () => {
+            // Identical config, identical first events — only the silence differs.
+            // Without this the change would just be "the timeout is longer now".
+            const spawn = pacedSpawn([toolCall(0), toolCall(1)], 30, 900)
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 150,
+                progressTimeoutCeilingMs: 10_000,
+                stall: false,
+                loop: false
+            })
+            expect(r.timedOut).toBe(true)
+        })
+
+        test('the absolute ceiling still bounds a worker that never stops moving', async () => {
+            // Progress must not be a licence to run forever: a worker emitting a
+            // call every 5ms would otherwise re-arm the deadline indefinitely.
+            const spawn = pacedSpawn(
+                Array.from({length: 4_000}, (_, i) => toolCall(i)),
+                5
+            )
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 150,
+                progressTimeoutCeilingMs: 400,
+                stall: false,
+                loop: false
+            })
+            expect(r.timedOut).toBe(true)
+            expect(r.totalWallMs).toBeLessThan(2_000)
+        })
+
+        test('without the ceiling the fixed cap is unchanged', async () => {
+            // The opt-in must be exactly that: callers that do not set it keep
+            // the old behaviour, progress or no progress.
+            const spawn = pacedSpawn(
+                Array.from({length: 100}, (_, i) => toolCall(i)),
+                30
+            )
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 150,
+                stall: false,
+                loop: false
+            })
+            expect(r.timedOut).toBe(true)
+        })
+    })
+
+    describe('nexttask 5B levers', () => {
+        // ── SCALE arm of nexttask 5B (UNWIRED; see task/research-fanout-budget.ts) ──
+        test('fanoutTimeout extends the deadline on a project-source docs call', async () => {
+            const docsCall = {
+                type: 'tool_execution_start',
+                toolName: 'pi-worker-docs',
+                args: {module: '.', query: 'src/server/db.ts exports'}
+            }
+            const late = {
+                events: [
+                    docsCall,
+                    {
+                        type: 'agent_end',
+                        messages: [{role: 'assistant', content: [{type: 'text', text: 'answered'}]}]
+                    }
+                ],
+                closeDelayMs: 90
+            }
+            // Same child, same 40ms cap, twice: the only difference is the policy.
+            const withoutPolicy = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')]),
+                timeoutMs: 40
+            })
+            expect(withoutPolicy.restarts.map(r => r.reason)).toEqual(['worker-timeout'])
+
+            const withPolicy = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')]),
+                timeoutMs: 40,
+                fanoutTimeout: {perLookupMs: 400, ceilingMs: 10_000}
+            })
+            expect(withPolicy.text).toBe('answered')
+            expect(withPolicy.attempts).toBe(1)
+            expect(withPolicy.timedOut).toBeUndefined()
+        })
+
+        test('fanoutTimeout never pushes past its ceiling, and ignores package lookups', async () => {
+            // A ceiling BELOW the child's close time: the extension may not rescue
+            // it, or the bound is not a bound. The package-module call is not a
+            // project-source lookup and must buy nothing either.
+            const spawn = fakeSpawnQueue([
+                {
+                    events: [
+                        {
+                            type: 'tool_execution_start',
+                            toolName: 'pi-worker-docs',
+                            args: {module: 'hono', query: 'hc client'}
+                        }
+                    ],
+                    closeDelayMs: 200
+                },
+                agentEndResponse('second attempt')
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 30,
+                fanoutTimeout: {perLookupMs: 400, ceilingMs: 50}
+            })
+            expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout'])
+            // The restart names the EFFECTIVE cap, which is what actually killed it.
+            expect(r.restarts[0]!.detail).toBe('cap 30ms')
+        })
+
+        test('attempts always equals restarts.length + 1', async () => {
+            // The invariant every consumer of these fields relies on, checked over
+            // mixed causes rather than one branch at a time.
+            const spawn = fakeSpawnQueue([
+                loopResponse('grep', {pattern: 'glorptube'}, 8),
+                agentEndResponse(LEAKED),
+                agentEndResponse('done')
+            ])
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            expect(r.attempts).toBe(r.restarts.length + 1)
+            expect(r.restarts.map(x => x.reason)).toEqual(['loop', 'leaked-tool-call'])
+        })
     })
 })

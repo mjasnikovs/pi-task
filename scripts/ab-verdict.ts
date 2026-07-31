@@ -57,6 +57,17 @@ export interface AbSpec {
      */
     requireTreatmentZero?: boolean
     invariants?: Invariant[]
+    /**
+     * Invariants the data could not EVALUATE, one line each — not invariants that
+     * failed. An invariant with no evidence under it must not report HOLDS: that is
+     * the same false pass this module exists to prevent, one level down. When a
+     * baseline trial produced no artifact to score, its "0 fabrications" is the
+     * absence of a measurement, and a treatment cannot beat it or lose to it.
+     *
+     * A measured break still FAILS — see `judge`. This only decides what happens
+     * when nothing measurable broke.
+     */
+    unmeasured?: string[]
 }
 
 /**
@@ -147,6 +158,21 @@ export function judge(spec: AbSpec): {outcome: Outcome; lines: string[]} {
                 '',
                 `FAIL — the lever removed the shape but broke ${broken.length} invariant(s): `
                     + broken.map(i => i.label).join('; ')
+            ]
+        }
+    }
+    const unmeasured = spec.unmeasured ?? []
+    if (unmeasured.length > 0) {
+        return {
+            outcome: 'ABSTAIN',
+            lines: [
+                ...lines,
+                '',
+                '*** ABSTAIN — AN INVARIANT HAD NO EVIDENCE UNDER IT ***',
+                ...unmeasured.map(u => `  unmeasured: ${u}`),
+                'The lever removed the shape and nothing measurable broke, which is NOT',
+                'the same as a pass: the data cannot say whether the unmeasured invariant',
+                'held. Fix the fixture or raise n so it can be evaluated, then re-run.'
             ]
         }
     }

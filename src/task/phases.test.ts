@@ -32,6 +32,7 @@ import {
     type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
 import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
+import {PROJECT_DOCS_BUDGET_ENV, projectDocsBudgetNotice} from './research-fanout-budget.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {getConfig} from '../config/config.js'
@@ -3122,5 +3123,78 @@ describe('extractToolingCommands ignores section markers (issue #10)', () => {
             'TOOLING\n(degraded: research TOOLING worker timed out; this section may be'
             + ' incomplete)\nlint  bun run lint\n'
         expect(extractToolingCommands(research)).toEqual(['bun run lint'])
+    })
+})
+
+/**
+ * DELIVERY CHECK for the 5B CAP arm's prompt half (see task/research-fanout-budget.ts).
+ *
+ * The lever is two halves that must agree: the tool refuses past the budget, and the
+ * worker is told the number up front. A live A/B cannot see the assembled prompt, and a
+ * cap enforced without its notice reads to the worker as a broken tool — so the delivery
+ * is proven here, deterministically, instead of being assumed by the harness.
+ */
+describe('phaseResearch fan-out budget notice (nexttask 5B, UNWIRED)', () => {
+    const promptFor = async (
+        cwd: string,
+        marker: string
+    ): Promise<{apis: string; others: string[]}> => {
+        const prompts: Array<{isApis: boolean; text: string}> = []
+        const spawn = fakeSpawnByPrompt(args => {
+            const text = args[args.length - 1] ?? ''
+            prompts.push({isApis: text.includes(marker), text})
+            return agentEndResponse('- a finding')
+        })
+        await phaseResearch(
+            {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+            'a refined goal with no mentions',
+            {getFileInventory: async () => ''}
+        )
+        return {
+            apis: prompts.find(p => p.isApis)?.text ?? '',
+            others: prompts.filter(p => !p.isApis).map(p => p.text)
+        }
+    }
+
+    const withTask = async (fn: (cwd: string) => Promise<void>): Promise<void> =>
+        withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            await fn(cwd)
+        })
+
+    test('OFF by default: no worker prompt mentions a lookup budget', async () => {
+        await withTask(async cwd => {
+            const {apis, others} = await promptFor(cwd, 'content of an APIS section')
+            expect(apis).not.toContain('LOOKUP BUDGET')
+            for (const p of others) expect(p).not.toContain('LOOKUP BUDGET')
+        })
+    })
+
+    test('with the env set, the APIS worker — and only it — is told the number', async () => {
+        const saved = process.env[PROJECT_DOCS_BUDGET_ENV]
+        process.env[PROJECT_DOCS_BUDGET_ENV] = '20'
+        try {
+            await withTask(async cwd => {
+                const {apis, others} = await promptFor(cwd, 'content of an APIS section')
+                expect(apis).toContain(projectDocsBudgetNotice(20))
+                // The other three workers have no pi-worker-docs tool at all, so a
+                // budget notice there would be an instruction they cannot act on.
+                for (const p of others) expect(p).not.toContain('LOOKUP BUDGET')
+            })
+        } finally {
+            if (saved === undefined) delete process.env[PROJECT_DOCS_BUDGET_ENV]
+            else process.env[PROJECT_DOCS_BUDGET_ENV] = saved
+        }
     })
 })

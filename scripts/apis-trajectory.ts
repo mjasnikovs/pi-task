@@ -305,3 +305,177 @@ export const sd = (xs: number[]): number => {
     const m = mean(xs)
     return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1))
 }
+
+// ─── strict grounding ────────────────────────────────────────────────────────
+//
+// `groundEntries` above answers "did the worker retrieve this symbol?". The
+// research-fanout A/B needed "did the worker FABRICATE this symbol?", and used
+// the first as a proxy for the second. It is not one. Inspecting every symbol
+// that arm flagged (scripts/inspect-ungrounded.ts) found ZERO fabrications and
+// four distinct false-positive classes, which between them failed two arms:
+//
+//   PROSE          the model's preamble is parsed as an entry, so "Now I have
+//                  all the information needed. Here is the APIS section:" scores
+//                  Now/information/needed/Here/APIS as ungrounded API symbols.
+//   PLATFORM       `URL.createObjectURL` is real and no project-source or
+//                  package-docs channel can ever contain it.
+//   PARAMETERS     `component.locator(selector)` — `selector` is a parameter
+//                  name, not a symbol anyone claimed exists.
+//   RETRIEVAL-GAP  the corpus is the worker's own retrieval TRACE, so a symbol
+//                  it knew from orientation but did not re-read is unfalsifiable.
+//                  `$delete` was flagged while sitting in the fixture's own
+//                  src/client/api.ts:143. Only a real `prompt` channel fixes
+//                  this — see the spawn-capture in the fan-out harness.
+//
+// Kept SEPARATE from groundEntries rather than replacing it: eight other scripts
+// share that function and have results recorded against its current semantics.
+// Their ungrounded counts are inflated by these same classes, which is worth
+// knowing before any of them is re-read, but silently changing what their
+// numbers mean is worse than leaving them explicitly stale.
+
+/**
+ * Is this parsed "entry" a sentence the model wrote around its section?
+ *
+ * Conservative by construction — it must never drop a real entry, so each test
+ * names a property no API-symbol line has. A real entry name is a symbol or a
+ * dotted path, optionally backticked; it does not end in sentence punctuation
+ * and does not read as running English.
+ */
+export function isProseLine(entry: ApisEntry): boolean {
+    const n = entry.name.trim()
+    if (/[.:]$/.test(n) && !/`/.test(n)) return true
+    if (/\b(?:I|we|let|now|here|good|okay)\b/i.test(n) && n.split(/\s+/).length >= 4) return true
+    if (/^\(?degraded/i.test(n)) return true
+    return false
+}
+
+/**
+ * Every identifier reachable as a JS/Web platform global, including members.
+ *
+ * Built from the live `globalThis` (statics AND prototype members, so
+ * `createObjectURL` is included via `URL`) plus the browser/DOM names a Node
+ * process does not expose. A worker naming these is correct, not inventive, and
+ * no retrieval channel could ever ground them.
+ */
+const PLATFORM_SYMBOLS: ReadonlySet<string> = (() => {
+    const out = new Set<string>()
+    for (const key of Object.getOwnPropertyNames(globalThis)) {
+        out.add(key)
+        try {
+            const v = (globalThis as unknown as Record<string, unknown>)[key]
+            if (typeof v !== 'function' && typeof v !== 'object') continue
+            if (v === null) continue
+            for (const m of Object.getOwnPropertyNames(v)) out.add(m)
+            const proto = (v as {prototype?: object}).prototype
+            if (proto) for (const m of Object.getOwnPropertyNames(proto)) out.add(m)
+        } catch {
+            // Getters that throw on access contribute nothing.
+        }
+    }
+    for (const m of [
+        'document', 'window', 'navigator', 'localStorage', 'sessionStorage', 'history',
+        'HTMLElement', 'HTMLInputElement', 'HTMLFormElement', 'Element', 'Node', 'Event',
+        'CustomEvent', 'FormData', 'Blob', 'File', 'FileReader', 'FileList', 'DataTransfer',
+        'querySelector', 'querySelectorAll', 'addEventListener', 'removeEventListener',
+        'createObjectURL', 'revokeObjectURL', 'preventDefault', 'stopPropagation',
+        'getElementById', 'appendChild', 'setAttribute', 'getAttribute', 'classList'
+    ]) {
+        out.add(m)
+    }
+    return out
+})()
+
+/** True when `symbol` is a JS/Web platform name rather than a project or package API. */
+export function isPlatformSymbol(symbol: string): boolean {
+    return PLATFORM_SYMBOLS.has(symbol)
+}
+
+/**
+ * Identifiers that appear ONLY inside parentheses in an entry name — parameter
+ * names and placeholder types. `component.locator(selector)` claims `locator`
+ * exists; it claims nothing about `selector`.
+ */
+export function parameterSymbols(name: string): Set<string> {
+    const inside = new Set<string>()
+    for (const m of name.matchAll(/\(([^)]*)\)/g)) {
+        for (const s of extractSymbols(m[1] ?? '')) inside.add(s)
+    }
+    const outside = new Set(extractSymbols(name.replace(/\([^)]*\)/g, ' ')))
+    for (const s of outside) inside.delete(s)
+    return inside
+}
+
+/**
+ * Members reached through a platform ROOT in the entry name: in
+ * `navigator.clipboard.writeText(url)`, `navigator` is a platform global, so
+ * `clipboard` and `writeText` are platform members too.
+ *
+ * PLATFORM_SYMBOLS is enumerated from the running `globalThis`, and a bun/node
+ * process carries no `clipboard`, no `HTMLElement.prototype`, no `Notification`.
+ * The gap was found live — `writeText` was the sole "fabrication" on a fan-out
+ * trial while `navigator` beside it was correctly excluded.
+ *
+ * Rooting the rule in the CHAIN rather than pasting the missing names into the
+ * set is the whole point: a flat list has to guess which DOM member names are
+ * also plausible project APIs (`click`, `open`, `remove`, `select`, `value`) and
+ * would launder a fabricated `Textarea` the moment one of those collided. Only a
+ * symbol the entry itself qualifies with a platform root is excluded here, so a
+ * bare identifier — and anything under a non-platform root like Playwright's
+ * `locator.selectOption` — still has to be grounded.
+ */
+export function platformChainSymbols(name: string): Set<string> {
+    const out = new Set<string>()
+    for (const chain of name.split(/[^A-Za-z0-9_$.]+/)) {
+        const parts = chain.split('.').filter(p => p.length > 0)
+        if (parts.length < 2) continue
+        const root = parts[0] ?? ''
+        if (!isPlatformSymbol(root)) continue
+        for (const p of parts.slice(1)) out.add(p)
+    }
+    return out
+}
+
+/** A `platform` channel, on top of the four retrieval channels. */
+export type StrictChannel = Channel | 'platform'
+
+export interface StrictGrounding {
+    entry: ApisEntry
+    /** Symbols in no channel, that are not platform names or parameters. */
+    ungrounded: string[]
+    /** Symbols excluded as platform/parameter, kept so the exclusion is auditable. */
+    excluded: string[]
+    channels: StrictChannel[]
+}
+
+/**
+ * Grounding with the four false-positive classes removed. Prose entries are
+ * dropped whole; platform names and parameter placeholders are excluded from
+ * their entry's symbol set and REPORTED, so the correction can be audited rather
+ * than taken on trust.
+ */
+export function groundEntriesStrict(entries: ApisEntry[], c: GroundingCorpus): StrictGrounding[] {
+    return entries
+        .filter(e => !isProseLine(e))
+        .map(entry => {
+            const params = parameterSymbols(entry.name)
+            const chained = platformChainSymbols(entry.name)
+            const ungrounded: string[] = []
+            const excluded: string[] = []
+            const channels = new Set<StrictChannel>()
+            for (const s of entry.symbols) {
+                if (params.has(s)) {
+                    excluded.push(s)
+                    continue
+                }
+                if (isPlatformSymbol(s) || chained.has(s)) {
+                    excluded.push(s)
+                    channels.add('platform')
+                    continue
+                }
+                const hits = channelsFor(s, c)
+                if (hits.length === 0) ungrounded.push(s)
+                else for (const h of hits) channels.add(h)
+            }
+            return {entry, ungrounded, excluded, channels: [...channels]}
+        })
+}

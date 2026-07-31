@@ -18,6 +18,13 @@ import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import type {SearchProvider} from '../workers/search-types.js'
 import {extractEnrichTargets} from './enrichment.js'
+import {
+    fanoutTimeoutPolicy,
+    workerCarryForward,
+    workerProgressCeilingMs,
+    projectDocsBudget,
+    projectDocsBudgetNotice
+} from './research-fanout-budget.js'
 import {isIntegrationUnknown} from './unknown-routing.js'
 import {
     extractUserDirectives,
@@ -741,6 +748,14 @@ export async function phaseResearch(
     // this comment replaces — see the git history of this file and the PROMPT 4 entry in
     // nexxtasks.txt RESULTS.
 
+    // nexttask 5B fan-out bounds. Both read their env ONCE per research phase, so
+    // every worker in a run sees the same policy and a harness cannot half-apply
+    // an arm; both are null in the shipped configuration.
+    const fanoutBudget = projectDocsBudget()
+    const fanoutTimeout = fanoutTimeoutPolicy()
+    const carryForward = workerCarryForward()
+    const progressCeilingMs = workerProgressCeilingMs()
+
     let doneCount = 0
     const updateProgress = (): void => {
         doneCount++
@@ -754,13 +769,27 @@ export async function phaseResearch(
     // per-worker measurement — waitMs the worker's own cold-start, workMs its
     // generation+tool-call cost. Under the opt-in parallel mode the numbers are
     // wall-clock-relative (queueing shows up in waitMs).
-    const recordWorker = <T extends {waitMs: number; workMs: number}>(
+    //
+    // Restarted attempts get their OWN row. Without one the widget contradicts
+    // itself: mx5 run 18 printed `workers 722.2s` over a longest member reading
+    // `worker:apis work 239.3s`, because wait/work describe the final attempt
+    // while the phase clock counts all three. The discarded time is the whole
+    // gap, so naming it is what closes the widget.
+    const recordWorker = <
+        T extends {waitMs: number; workMs: number; attempts: number; totalWallMs: number}
+    >(
         label: string,
         p: Promise<T>
     ): Promise<T> =>
         p.then(r => {
             deps.recordSubStep?.(`${label} wait`, r.waitMs)
             deps.recordSubStep?.(`${label} work`, r.workMs)
+            if (r.attempts > 1) {
+                deps.recordSubStep?.(
+                    `${label} discarded (${r.attempts - 1} restart${r.attempts > 2 ? 's' : ''})`,
+                    Math.max(0, r.totalWallMs - r.waitMs - r.workMs)
+                )
+            }
             return r
         })
 
@@ -813,6 +842,9 @@ export async function phaseResearch(
          *  established every silent worker:context rep was a genuine loss, not an empty
          *  answer (context-silence.ts). */
         retryIfSilent?: string
+        /** This worker can issue project-source docs lookups, so the 5B fan-out
+         *  bounds apply to it (see task/research-fanout-budget.ts). */
+        fanoutBounded?: true
     }> = [
         {
             section: 'FILES',
@@ -838,10 +870,16 @@ export async function phaseResearch(
                             prior.find(s => s.name === 'FILES')?.text || undefined
                         )
                         + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+                        // 5B CAP arm — empty unless PI_TASK_PROJECT_DOCS_BUDGET is
+                        // set. The tool-side half lives in pi-worker-docs.ts; a
+                        // budget enforced without being announced would just read
+                        // to the worker as a broken tool.
+                        + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget))
                 ),
             tools:
                 'read,grep,find,ls,pi-worker-docs'
                 + (searchConfigured() ? ',pi-worker-search,pi-worker-fetch' : ''),
+            fanoutBounded: true,
             extensions: [
                 DOCS_EXTENSION_PATH,
                 ...(searchConfigured() ? [SEARCH_EXTENSION_PATH] : [])
@@ -973,6 +1011,36 @@ export async function phaseResearch(
                     spawn: deps.spawn,
                     ...(spec.tools ? {tools: spec.tools} : {}),
                     ...(spec.extensions ? {extensions: spec.extensions} : {}),
+                    // 5B SCALE arm — null unless both env vars are set. Only the
+                    // docs-capable worker can fan out, so only it can be scaled.
+                    ...(spec.fanoutBounded && fanoutTimeout ? {fanoutTimeout} : {}),
+                    // 5B RESCUE arm — off unless its env vars are set. Applies to
+                    // EVERY research worker, not just the docs-capable one: any
+                    // worker that gets killed loses its work the same way.
+                    ...(carryForward ? {carryForward: true} : {}),
+                    ...(progressCeilingMs !== null ?
+                        {progressTimeoutCeilingMs: progressCeilingMs}
+                    :   {}),
+                    // One line per DISCARDED attempt. The `done` line below reports
+                    // the final attempt only, so a worker that timed out twice at
+                    // 240s and then answered used to log exactly like a clean one —
+                    // 8 minutes of burned compute recoverable only by subtracting
+                    // its own wait+work from the start/done timestamps.
+                    onCarryForward: ci => {
+                        deps.logDebug?.(
+                            `${spec.label}: CARRY-FORWARD injected into attempt ${ci.attempt}`
+                                + ` (${ci.chars} chars onto a ${ci.promptCharsBefore}-char prompt)`
+                        )
+                    },
+                    onRestart: rs => {
+                        deps.logDebug?.(
+                            `${spec.label}: RESTART (attempt ${rs.attempt} discarded)`
+                                + ` reason=${rs.reason} wall=${rs.wallMs}ms`
+                                + ` wait=${rs.waitMs}ms work=${rs.workMs}ms`
+                                + (rs.detail ? ` — ${rs.detail}` : '')
+                        )
+                        deps.onChildOutput?.(`${spec.label}: restart (${rs.reason})`)
+                    },
                     onLine: line => {
                         // The one 'stream' site in this file: raw research-worker
                         // output. Every other logDebug here records a decision.
@@ -1090,6 +1158,18 @@ export async function phaseResearch(
         }
         deps.logDebug?.(
             `${spec.label}: done exit=${r.exitCode} wait=${r.waitMs}ms work=${r.workMs}ms`
+                // attempts/total are the pair that makes wait+work honest: they are
+                // the FINAL attempt's split, and only `total` sees the discarded ones.
+                + ` attempts=${r.attempts} total=${r.totalWallMs}ms`
+                + (r.restarts.length > 0 ?
+                    ` restarts=[${r.restarts.map(x => x.reason).join(',')}]`
+                :   '')
+                // Attribution for the RESCUE arm: a run with zero restarts was
+                // never killed (the progress deadline did it), while a run that
+                // restarted and salvaged was killed but kept its work. Without
+                // this the two are indistinguishable in the logs, and "0
+                // timeouts" cannot be traced to the half that earned it.
+                + (r.salvagedFromDiscardedAttempt ? ' salvaged=1' : '')
                 + (r.stderr ? ` stderr=${r.stderr.slice(0, 300)}` : '')
                 + (r.leakedToolCall ? ` leaked=${r.leakedToolCall.trim().slice(0, 80)}` : '')
         )
