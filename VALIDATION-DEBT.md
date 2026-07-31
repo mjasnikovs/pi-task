@@ -380,6 +380,89 @@ tools, not just `pi-worker-docs`); (3) compare RATES not absolute counts (D2);
 (4) raise n above the measured 26% within-fixture CV; (5) re-run. Only then is a
 quality verdict on either arm worth anything.
 
+### THE RE-RUN (n=3, fixed instrument, fresh corpus) — PROGRESS still FAILS
+
+Blocking items (1)-(3) shipped in `72fdb52`; (4)-(5) are this run. Fresh results
+dir (`AB_DIR=~/tmp/research-fanout-ab-v2`) so no trial recorded before
+prompt-capture existed can contaminate it. 4 fixtures x 3 trials x 2 arms, 24
+trials, all completed, none errored/quarantined. Verdict verbatim:
+
+    fixture     arm        n  timeouts  apisWall(s)  lookups  entries  sig  ungrounded
+    TASK_0017   baseline   3      3/3         507     21.0     21.7  21.0         1.0
+    TASK_0017   progress   3      0/3         706     28.7     38.3  37.0         0.0
+    TASK_0019   baseline   3      3/3         493     32.7     25.7  25.0         0.0
+    TASK_0019   progress   3      0/3         568     41.0     32.0  31.3         0.3
+    TASK_0020   baseline   3      3/3         720     51.7      9.0   8.7         0.0
+    TASK_0020   progress   3      0/3         650     39.7     38.3  37.3         2.0
+    TASK_0021   baseline   3      3/3         720     67.3      1.0   1.0         0.0
+    TASK_0021   progress   3      0/3         510     32.3     28.7  27.3         0.3
+
+    BASELINE  produced the shape: 12/12    TREATMENT shipped it: 0/12
+    inv-quality-not-worse    BROKEN  TASK_0019 0.0%→0.8%; TASK_0020 0.0%→4.4%;
+                                     TASK_0021 0.0%→0.6%
+    inv-no-new-degrade       HOLDS   0 degraded trials in progress
+    inv-low-fanout-untouched HOLDS   controls unchanged
+    inv-wall-clock-lower     HOLDS   610s → 608s over 4 shared fixtures
+
+    FAIL — the lever removed the shape but broke inv-quality-not-worse.
+
+**The FAIL stands as pre-registered and the lever does not ship on it.** What
+follows is diagnosis, not a re-score: no threshold was moved and no invariant was
+edited after seeing these numbers.
+
+**The fault reproduced far HARDER than in run 18.** Every baseline trial timed
+out (12/12, vs 4/5 in the first replay), 8 of 12 DEGRADED, and **5 of 12 shipped
+a ONE-ENTRY stub** carrying zero API symbols — TASK_0021 did it on all three
+trials at 65-69 project lookups. The progress arm ran every one of those 12
+trials in a SINGLE attempt with 19-56 entries.
+
+**The quality break is a zero denominator.** Baseline's 0.0% ungrounded on
+TASK_0019/0020/0021 is not a clean section; on the trials driving it there is no
+section — `symbols=0`, `entries=1`. The guard compares a 28-entry answer against
+a stub sentence and scores the stub as better grounded. Counting only baseline
+trials that produced any symbol at all, the two arms are indistinguishable:
+baseline 3/179 ungrounded symbols (1.7%), progress 8/515 (1.6%).
+
+**Every symbol the treatment was flagged for is REAL — 12 trials, 515 symbols, 8
+flags, zero fabrications.** Checked against each trial's own checkout:
+
+  - `Textarea`, `Label`, `Badge` (TASK_0020-2) — all three files exist in that
+    fixture's `src/client/components/ui/`. NOTE this is the same identifier that
+    was a genuine fabrication in the carry arm: TASK_0019's fixture has no
+    `Textarea.tsx`, TASK_0020's does. That earlier finding is unaffected.
+  - `useLocation` (TASK_0019-1) — wouter, imported by the fixture's own
+    `src/client/pages/ListingDetail.tsx:2`.
+  - `$patch` (TASK_0020-1) — the Hono RPC method for
+    `listings.patch('/:id', …)`, `src/server/routes/listings.ts:317`.
+  - `Nav` (TASK_0020-0) — `src/client/components/Nav.tsx` exists; the rest of
+    that trial's flags are playwright `locator.click` / `selectOption` /
+    `setInputFiles`.
+  - `writeText` (TASK_0021-0) — `navigator.clipboard.writeText`. `navigator` is
+    excluded as a platform name but `writeText` is not, because PLATFORM_SYMBOLS
+    is enumerated from bun's `globalThis`, which has no `clipboard`.
+
+So the surviving flags are two known classes, both already named above: the
+retrieval-gap (a real project symbol the worker knew without re-reading) and an
+incomplete platform list. Neither is fabrication, which is what the guard exists
+to catch.
+
+**What is now established, and what is not.** Metric 1 is unambiguous at any n
+and reproduces a second time on a fresh corpus: 12/12 → 0/12, plus 8/12 → 0/12
+degraded, which the progress deadline removes by letting a provably productive
+worker finish rather than killing it at 240s. The quality half is still
+unrendered — the guard could not distinguish the arms here because the baseline
+it measures against collapsed to empty sections, and n=3 remains under the
+measured 26% within-fixture CV. Wall clock is flat (610s→608s) and should not be
+read as a win either: baseline's 720s trials are pinned at the 3x240s cap, so
+that column compares a truncated distribution against an untruncated one.
+
+**Still nothing ships.** Before the progress deadline can be wired, the quality
+guard needs a baseline floor that is a measurement (a degraded/zero-symbol trial
+is not evidence of good grounding in either direction) and the platform channel
+needs the DOM/Web surfaces bun's `globalThis` does not carry. Both are instrument
+work, both are cheap, and neither may be done as part of scoring the arm they
+would change.
+
 Instrumentation added so this stops being inferred: `onCarryForward` fires when a
 carried partial is INJECTED (not merely when a restart happens — the two diverge
 now that contentless partials are refused), logged as `CARRY-FORWARD injected
