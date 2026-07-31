@@ -152,9 +152,303 @@ channel at all, or only on the deterministic unmapped-requirement channel? The
 judge channel is what catches areas the extractor *missed*, so deleting it trades
 one blindness for another. Measure before choosing.
 
+## OPEN — 3. worker:apis project-source fan-out (nexttask 5B)
+
+Instrumentation (5A) is **shipped**: `runWorker` now returns `attempts`,
+`totalWallMs` and a per-restart list, emits `onRestart` per discarded attempt, and
+`phases.ts` logs `RESTART (attempt N discarded) reason=…` plus `attempts=/total=`
+on the `done` line. Before it, a worker that burned two 240s attempts and then
+answered logged **identically to a clean one** — 21 of run 18's 23 restarted
+workers reported `exit=0`.
+
+STEP 0 is **measured**, and `scripts/research-restart-baserate.ts` reproduces it
+from the recorded logs on demand (mx5 run 18, 24 task logs, 96 worker runs):
+
+    23 runs restarted, 30 discarded attempts, 120.0 min discarded
+    = 42% of all worker wall time; 19 attempts / 76.0 min on the critical path
+    r(project-source lookups, worker:apis wall) = 0.909, n = 24
+    <=4 lookups: 1/8 restarted     >=46 lookups: 5/5 burned the FULL budget
+    464 of 615 docs calls (75.4%) are project-source `.` lookups
+
+The two candidate bounds live in `src/task/research-fanout-budget.ts`, **env-gated
+and OFF** — `PI_TASK_PROJECT_DOCS_BUDGET` (cap the fan-out to fit the 240s
+ceiling) and `PI_TASK_FANOUT_TIMEOUT_PER_LOOKUP_MS` + `_CEILING_MS` (scale the
+ceiling to fit the fan-out). Neither may be wired on argument; the A/B is
+`scripts/live-research-fanout-budget-ab.ts` and its verdict is recorded below.
+
+**Both of those answer the wrong question.** They argue about how long a worker
+may run. The defect is what happens when it runs out: the attempt is killed,
+everything it produced is **discarded**, and the re-spawn gets a hint but no
+findings — so it re-reads the same files against the same clock and dies in the
+same place. That is why every worker at >=46 lookups burned the FULL budget
+instead of converging; r=0.909 measures the amnesia, not an over-long task. The
+code says it outright — `WORKER_TIMEOUT_HINT` tells the re-spawn "do not
+re-explore ground you have already covered" while giving it no record of what
+that ground was, and `const text = result.text ?? ''` sits in hand at the kill
+site and is dropped. Judged against "the worker must return its work", CAP makes
+the worker read LESS (lowering the requirement so the metric goes green) and
+SCALE is a per-file constant that dies on one big file and, being wall-clock,
+makes answer quality a function of the user's hardware — the same task on a
+slower local model loses its work and degrades.
+
+The third arm, **RESCUE**, is the one aimed at the fault: carry the killed
+attempt's findings into the re-spawn so a restart CONVERGES, never return less
+than the best attempt produced, and deadline on lack of **progress** rather than
+elapsed time (`PI_TASK_WORKER_CARRY_FORWARD`, `PI_TASK_WORKER_PROGRESS_CEILING_MS`
+— both OFF by default, with a unit test asserting the shipped path is unchanged).
+Being *stuck* is already detected separately and correctly by the output-stall
+probe (`STALL_AFTER_MS`), which resets on progress and only kills when the model
+endpoint is unreachable; the 240s cap adds nothing there and only kills workers
+that are provably alive and productive. RESCUE's own risk is fabrication
+laundering — a half-written entry replayed under "work already done" — so the
+carry is framed as unverified and the same ungrounded/anti-synthesis invariants
+gate the arm.
+
+Baseline evidence so far (1 trial each, live): TASK_0019 `timeouts=1 attempts=2
+apisWall=454s lookups=30 entries=24 ungrounded=0/29`; TASK_0020 `timeouts=2
+attempts=3 apisWall=702s lookups=63 entries=22 ungrounded=5/39`. More compute,
+worse answer — the amnesia shape, though cross-fixture at n=1 it is suggestive
+rather than established.
+
+**VERDICT: RESCUE FAILS (exit 1). It does not ship.** 8 fixtures, baseline 1
+trial each, rescue 2 trials each, one dist, env-gated arms.
+
+    target shape (>=1 worker-timeout restart): baseline 4/5 → rescue 0/5
+    inv-wall-clock-lower  HOLDS  507s → 439s over 5 shared fixtures
+    inv-no-new-degrade    HOLDS  0 degraded trials (baseline degraded TASK_0021)
+    inv-quality-not-worse BROKEN TASK_0019 ungrounded 0.0→2.5;
+                                 TASK_0021 1.0→3.5; TASK_0022 0.0→4.0
+    inv-low-fanout-untouched BROKEN TASK_0003 wall 65s→98s;
+                                 TASK_0004 entries 17.0→13.0
+
+The fault it targeted is gone: every witnessed fixture, both trials, finished in
+ONE attempt with zero timeouts, while entries rose on all four (TASK_0021 5→29.5,
+TASK_0020 22→34.5) on FEWER lookups (44→27 mean) — baseline's extra reads were
+the same files re-read into discarded attempts.
+
+**The quality half of that FAIL does not survive inspection**
+(`scripts/inspect-ungrounded.ts` names the symbols; `scripts/rescore-ungrounded.ts`
+recomputes both arms). I first reported TASK_0019's 0→2.5 as a real, reproducible
+grounding regression. It is not. The flagged "API symbols" are:
+
+  - PROSE parsed as an entry — "Now I have all the information needed. Here is
+    the APIS section:" yields Now/information/needed/Here/APIS. This is most of
+    it, and it lands in BOTH arms (baseline TASK_0017 and TASK_0020 carry the
+    identical artifact; baseline TASK_0021's lone ungrounded symbol is the word
+    `degraded` from its own degrade marker).
+  - PLATFORM BUILTINS — `URL.createObjectURL`, `URL.revokeObjectURL`,
+    playwright's `PageAssertions`. No project/package docs channel can hold them.
+  - SYMBOLS THE TASK ASKS THE WORKER TO CREATE — TASK_0022's `AdminRoutes`,
+    `AdminUsersGet`, `AdminBanPost`.
+
+Correcting prose alone: baseline TASK_0017 4.0→0.0, baseline TASK_0020 5.0→1.0,
+rescue TASK_0020 3.5→0.0. **Zero fabricated project API signatures in either
+arm.** RESCUE retains more residue only because it writes far more entries
+(34-79 symbols vs 5-41) and so names more builtins — TASK_0021 compares 5
+baseline symbols against 59.
+
+`apis-trajectory.ts` declines to stop-list prose on the stated grounds that "a
+prose word in an entry name matches the prompt text and therefore always scores
+GROUNDED". That holds when `corpus.prompt` is what its doc comment describes —
+the ASSEMBLED worker:apis prompt. This harness can only supply the 1.9KB seeded
+task file, so the assumption fails here and prose falls through as ungrounded.
+
+**This does not make RESCUE a PASS, and it must not be recorded as one.** A metric
+corrected after seeing the verdict cannot ship a lever. What it establishes is
+that the FAIL is probably instrument-driven, which justifies fixing the
+instrument and RE-RUNNING the arm. Still genuinely open and NOT explained by any
+of this: **TASK_0004 lost 4 entries (17→13) on a CONTROL fixture**, which the
+lever should not touch at all.
+
+The other three breaks are instrument defects, all recorded BEFORE this verdict
+existed (below): TASK_0021 inverts on absolute-vs-rate (16.7%→5.5% by rate, and
+baseline "wins" only because it degraded to 6 symbols), TASK_0022's baseline draw
+never posed the problem (1 lookup, unwitnessed), and TASK_0003 breaks by ONE
+second (98.5s vs a 97.5s threshold). A re-score fixing gaps 1 and 2 is legitimate
+and cheap — the trial JSON is on disk, no model time needed — but it must be
+reported NEXT TO this pre-registered FAIL, never as a replacement for it.
+
+Also measured: **fixture fan-out is wildly non-deterministic.** Same fixture,
+same arm, adjacent trials: TASK_0020 52 vs 17 entries and 737s vs 302s;
+TASK_0017 24 vs 48 entries. Per-fixture quality means at n=2 are weakly powered,
+which is why metric 1 (0/10 vs 4/4 restarts) carries the weight here.
+
+**GRAY AREAS, WORKED THROUGH.** `scripts/rescore-invariants.ts` recomputes every
+invariant with the instrument defects corrected and prints the pre-registered
+number beside each. Corrected, on witnessed fixtures only:
+
+    metric 1 timeouts   baseline 4/4 → rescue 0/8
+    metric 2 wall       576s → 448s   HOLDS
+    metric 3 quality    BROKEN — TASK_0019 rate 0.0%→6.7%; TASK_0021 0.0%→1.7%
+
+- **Every remaining "ungrounded" symbol is a REAL API.** `$delete` is in the
+  fixture's own source (`src/client/api.ts:143`, used at `ListingDetail.tsx:84`);
+  `URL.createObjectURL` is a platform builtin (verified via node). The corpus is
+  the worker's own RETRIEVAL TRACE, not the project — a symbol the worker knew
+  from orientation or the FILES map but did not re-read is unfalsifiably
+  "ungrounded". **Zero fabricated symbols in either arm, on any fixture.**
+- **TASK_0004's control entry loss (17→13) is not the lever.** All three trials
+  ran `attempts=1` with no restart and 61-176s wall, so carry-forward (prompt
+  changes only on restart) and the progress deadline (changes only when a timer
+  fires) were both provably inert. The difference tracks PACKAGE lookups (15 vs
+  2) and entry granularity: baseline wrote zod per-method (`z.object`,
+  `ZodString.min`, 17 entries), rescue per-schema (`loginSchema`, 10 entries).
+- **Variance quantified: mean within-fixture CV for entries is 26%** (TASK_0020
+  52 vs 17, TASK_0017 24 vs 48, same arm, adjacent trials). Any between-arm
+  quality difference smaller than that is not resolvable at n=2 — which covers
+  both surviving "breaks".
+- **The progress ceiling never fired.** Max observed wall 737s against the
+  1,200,000ms ceiling — 61% used, 463s headroom. It is an arbitrary constant and
+  it is provably inert; it still needs justification before shipping, but it did
+  not influence this A/B.
+- **The replay reproduces the fault ATTENUATED.** Run 18 gave these five fixtures
+  3 attempts and 480s discarded each on 46-60 project lookups; the replay
+  baseline got 2/2/3/3/1 attempts on 15/30/63/67/1 lookups — 4 of 5. The measured
+  benefit is therefore a LOWER BOUND on the real-run benefit.
+- **D5 (new, found in the carry arm): `witnessed` counts only `pi-worker-docs`
+  project calls and ignores `read`/`grep`.** The carry arm's TASK_0017 trial
+  retrieved almost entirely via direct `read`/`grep`, scoring `lookups=2` while
+  its first attempt worked 239s and was killed by the 240s cap. A worker that
+  fans out through the file tools therefore reads as "never posed the problem"
+  while demonstrably posing it, and every witnessed count in this document
+  UNDERCOUNTS true fan-out. The precondition should be retrieval volume across
+  all grounding tools (`isGroundingRetrieval`), not one tool's name.
+- **CARRY-FORWARD IS HARMFUL ON ITS OWN — measured, `carry` arm, FAIL.** In the
+  rescue arm it never fired at all (`attempts=1` on all 8 trials, `salvaged=1`
+  never logged), so half the lever was credited with a result it took no part in.
+  The `carry` arm (carry ON, fixed 240s cap, so restarts still happen) put it
+  under test for the first time, 4 fixtures:
+
+      TASK_0017  1 timeout  38 entries   (baseline 35)
+      TASK_0019  2 timeouts 32 entries   (baseline 24) — fabricated `Textarea`
+      TASK_0020  2 timeouts  2 entries   (baseline 22) — SALVAGED, DEGRADED
+      TASK_0021  2 timeouts  2 entries   (baseline  5) — SALVAGED, DEGRADED
+
+  Two distinct harms, both mechanistic, neither visible in the rescue arm:
+
+  1. **Prompt inflation against a fixed cap.** Carry prepends up to
+     CARRY_FORWARD_LIMIT (24,000) chars, which every retry must then process
+     inside the SAME 240s. On TASK_0020 baseline's third attempt SUCCEEDED with
+     22 entries; with carry on, all three attempts timed out (`exit=143`) on
+     near-identical retrieval (61 vs 63 lookups). It spends the budget it exists
+     to save. This is why `rescue` worked and `carry` did not — the progress
+     deadline gives the enlarged prompt room, and without it the carry is
+     strictly negative.
+  2. **Fabrication laundering, observed once.** `Textarea` — a UI component that
+     does NOT exist in the fixture (`Input.tsx`, `Label.tsx`, `Select.tsx` do)
+     and that the task never names — appears ONLY in the carry arm, on the trial
+     with the most restarts. Absent from baseline (restarted, carry off) and from
+     both rescue trials (never restarted). n=1, but it is the exact predicted
+     signature on the only configuration that exercises the mechanism.
+
+  **Salvage bug, found and FIXED.** It kept the LONGEST partial with no test for
+  content, so on both degraded fixtures it shipped this as the APIS section:
+  *"Now let me get more details on the specific APIs and components I need:"*.
+  `hasAnswerContent()` now requires >=2 entry-shaped lines before a partial is
+  kept, and because the check sits in the shared `noteRestart` branch it gates
+  CARRY-FORWARD too — a contentless fragment is no longer prepended to the next
+  prompt either. Regression test uses the exact string that shipped.
+
+  **CORRECTION, from the `progress` arm:** I first read TASK_0020's 22→2 entries
+  as carry's damage. It is not attributable. Progress-only produced **1 entry** on
+  the same fixture with carry OFF; across five observations TASK_0020 ranges
+  1-52. What survives from the carry arm is the MECHANISM — with carry on, all
+  three attempts hit `exit=143` at the 240s cap where baseline's third completed
+  — plus the unreplicated `Textarea`. One demonstrated harm, not two.
+
+**THE FULL 2x2, all four cells measured:**
+
+    arm             timeouts   wall    verdict   failed on
+    baseline          4/4      576s      —       (control)
+    carry only        4/4        —      FAIL     shape survived; inflation; 1 fabrication
+    progress only    0/4       403s     FAIL     quality: builtins + the 1-entry outlier
+    rescue (both)    0/8       448s     FAIL     quality: builtins + variance
+
+Both timeout-fixing arms remove the fault COMPLETELY and run 20-30% faster.
+Both then fail `inv-quality-not-worse`, and in both cases the break decomposes
+into instrument artifacts (prose entries, `URL.createObjectURL`, `PageAssertions`)
+plus fixtures whose entry counts swing 1-52. Progress-only's three breaks:
+TASK_0017 signatures 34→30 (inside the 26% CV), TASK_0019 ungrounded 0→2 (both
+symbols are `URL.*` builtins), TASK_0020 signatures 21→1 (the outlier above).
+
+**Nothing ships. The instrument cannot render a verdict at this n.** The blocking
+work is, in order: (1) fix the grounding corpus — prose entries, platform
+builtins, parameter placeholders, and symbols the task asks the worker to CREATE
+must stop counting as fabrications, and `corpus.prompt` must be the ASSEMBLED
+prompt; (2) fix `witnessed` (D1: gate metrics 2-3 too; D5: count all grounding
+tools, not just `pi-worker-docs`); (3) compare RATES not absolute counts (D2);
+(4) raise n above the measured 26% within-fixture CV; (5) re-run. Only then is a
+quality verdict on either arm worth anything.
+
+Instrumentation added so this stops being inferred: `onCarryForward` fires when a
+carried partial is INJECTED (not merely when a restart happens — the two diverge
+now that contentless partials are refused), logged as `CARRY-FORWARD injected
+into attempt N (X chars onto a Y-char prompt)`, which also makes the inflation
+harm directly measurable.
+
+**Two harness gaps found DURING the rescue arm, recorded and deliberately NOT
+patched mid-run** — the numbers were already visible, and a scorer edited after
+seeing the numbers it would improve is not a scorer:
+
+1. **The `witnessed` gate applies to metric 1 only.** Timeout counts are gated on
+   a fixture having actually fanned out (>=10 project lookups), but wall clock and
+   quality are not. TASK_0022 posed the problem in neither arm (1 lookup baseline,
+   3 rescue, no timeout either side) yet still contributes to both scored means —
+   396s vs 234s inflates the treatment's wall mean and 24→23 signatures registers
+   as a quality break, on a lever it never exercised. Gate metrics 2 and 3 on
+   `witnessed` too, then re-score from the recorded JSON (no model time needed).
+2. **Quality invariants compare ABSOLUTE ungrounded counts, not rates.** A section
+   that grows trips the guard even when its grounding improves: TASK_0020 went
+   5/39 ungrounded (12.8%) → 4/73 (5.5%) — better on both count and rate — but a
+   section that doubled while holding its rate would break the invariant purely
+   for being bigger. The guard exists to catch fabrication; it should compare the
+   ungrounded SHARE, with the absolute count as a secondary tripwire.
+
+Also worth knowing when reading any verdict here: **fixture fan-out is not
+deterministic.** TASK_0022 burned the full restart budget in run 18 and made ONE
+project lookup on replay. At 1 trial per fixture a treatment arm can post "0
+timeouts" by drawing low fan-out rather than by fixing anything, which is why the
+rescue arm runs 2 trials and why the `witnessed` count, not the raw hit count, is
+the number to read.
+
+**The harness had a hole that pointed the wrong way, and it is now closed.**
+llama-server died partway through the first baseline arm; the remaining six
+fixtures each burned their three connection-error retries in ~46s and were
+recorded as `timeouts=0 entries=0`. A dead server would therefore have scored as
+this lever's strongest possible PASS — zero timeouts on every fixture — and a
+partial failure was no safer: baseline TASK_0019 fanned out to 28 lookups and DID
+time out, but threw afterwards and so carried `entries=0`, which would have
+dropped the baseline quality floor to zero and passed `inv-quality-not-worse` for
+free. A thrown trial produces no APIS section and therefore has no value for any
+of the three metrics, so it is now quarantined under `results/<arm>/errored/`,
+excluded from scoring, and re-run; the arm aborts outright if the server is gone.
+
+**Do NOT build the per-file digest cache (5C) yet.** Keyed on query TEXT a cache
+recovers ~3.5% on run 18 (independently reproducing the 0.7% recorded in
+`scripts/live-project-docs-retrieval-ab.ts`); keyed on FILE SET it collapses 42%.
+That harness poses H-cache vs H-retrieval and **has no recorded verdict**. If
+retrieval is the fault, a cache memoises the bad answers.
+
 ---
 
 ## GRAY AREAS — carried forward, still true
+
+- **The research cache did essentially nothing in mx5 run 18, and this is the
+  fourth time that has been measured.** 151 package-scoped docs lookups, **149
+  distinct** ⇒ at most 2 possible hits (1.3%), against 130 entries written. Not a
+  bug and not a lead: it is the expected value on an npm stack, where the docs
+  SQLite cache already serves the repeat work
+  (`memory/research-cache-value-is-stack-dependent.md` — the cache is worth most
+  on non-npm stacks). Recorded here so nobody measures it a fifth time.
+- **`pi-worker-search` fired 3 times in 8 hours of mx5 run 18** — against 615
+  `pi-worker-docs` calls and 6 `pi-worker-fetch` calls — while the run carried a
+  design requirement saying "Whenever an API, signature, config, or best practice
+  is unknown or unclear, use web search … before writing code".
+  `memory/pi-worker-search-nudge.md` records that a trigger-framed tool
+  description previously fixed exactly this skip, so the shape has moved before.
+  It needs **its own base rate first** (how often is a search-worthy unknown
+  present at all?) and must NOT be folded into the fan-out A/B: both levers change
+  worker:apis's tool budget, and run together neither one's effect is attributable.
 
 - The **enforce-differential attribution** filter (nexttask 4, shipped) passed its
   deterministic replay A/B (baseline = the real `HEAD:task-gates.ts`, materialised and

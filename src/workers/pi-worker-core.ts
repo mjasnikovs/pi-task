@@ -90,6 +90,96 @@ const WORKER_TIMEOUT_HINT =
     + 'were exploring too long. Be decisive: do the minimum reads/greps needed, '
     + 'then write your answer now. Do not re-explore ground you have already covered.]'
 
+/**
+ * How much of a discarded attempt's answer is carried into the next one.
+ *
+ * A restart used to hand the re-spawn nothing but a hint — which is why
+ * WORKER_TIMEOUT_HINT above can tell a worker "do not re-explore ground you have
+ * already covered" while giving it no record of what that ground was. It could
+ * not comply. mx5 run 18 shows the cost: on tasks with >=46 project-source
+ * lookups, 5 of 5 workers burned the FULL restart budget, because every attempt
+ * re-read the same files against the same clock and died in the same place.
+ *
+ * Carrying the partial answer forward is what makes a restart converge instead
+ * of repeat. The risk it takes is real and is the thing the A/B measures: a
+ * half-written or speculative entry, replayed under "already established", is
+ * exactly how a fabrication gets laundered into a final answer. That is what the
+ * ungrounded-symbol and anti-synthesis guards are pointed at, so the carry is
+ * framed as findings to VERIFY-or-DROP rather than as settled fact.
+ */
+const CARRY_FORWARD_LIMIT = 24_000
+
+/**
+ * Restart reasons whose partial output is worth keeping.
+ *
+ * A clock kill (`worker-timeout`), a hung tool (`command-timeout`), an idle
+ * stream (`stream-stall`) and a dropped socket (`connection-error`) all discard
+ * work the model genuinely did. A loop kill and a leaked tool call do not — the
+ * first is by definition the same call repeated, the second is malformed
+ * protocol text, and replaying either would feed the failure back to itself.
+ */
+const CARRY_FORWARD_REASONS: ReadonlySet<WorkerRestartReason> = new Set([
+    'worker-timeout',
+    'command-timeout',
+    'stream-stall',
+    'connection-error'
+])
+
+/**
+ * Does this partial output carry ANSWER CONTENT, or is it the model clearing its
+ * throat?
+ *
+ * Salvage originally kept the LONGEST partial, which is not the same question. On
+ * the live carry arm, TASK_0020 and TASK_0021 both timed out on all three
+ * attempts and salvage shipped this as the section:
+ *
+ *     "Now let me get more details on the specific APIs and components I need:"
+ *
+ * — a preamble sentence, which beats an empty string on length and carries
+ * nothing. Both trials scored 2 entries and DEGRADED, against 22 and 5 for the
+ * same fixtures in baseline.
+ *
+ * A research worker's answer is a list of lines that each name something and
+ * describe it. The test is therefore structural, not lexical: at least two lines
+ * that look like entries — a name, then a gap, then a description. Prose wraps
+ * at no particular column and does not repeat that shape.
+ */
+export function hasAnswerContent(text: string): boolean {
+    const entryish = text
+        .split('\n')
+        .map(l => l.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim())
+        .filter(l => /^\S.*?(?:\s{2,}|\s+[—–-]\s+)\S/.test(l) && !/[.:]$/.test(l))
+    return entryish.length >= 2
+}
+
+/**
+ * Frame a discarded attempt's output as work already done.
+ *
+ * Kept deliberately blunt about status. Appended text loses to preserved text
+ * when the two disagree, so the carry must not read as a finished answer the
+ * model can simply re-emit: it is labelled partial, unverified, and truncated
+ * when it is.
+ */
+export function formatCarryForward(text: string): string | null {
+    const body = text.trim()
+    if (body.length === 0) return null
+    const truncated = body.length > CARRY_FORWARD_LIMIT
+    // Keep the TAIL: the model writes progressively, so the end of a partial
+    // answer is the furthest it got and the best statement of where to resume.
+    const kept = truncated ? body.slice(body.length - CARRY_FORWARD_LIMIT) : body
+    return (
+        '[WORK ALREADY DONE — from your previous attempt, which was cut off before '
+        + 'it could answer. These findings came from real reads of this project, so '
+        + 'do NOT gather them again; spend your time on what is still missing. They '
+        + 'are PARTIAL and UNVERIFIED: keep every item you can confirm, and drop any '
+        + 'item you cannot — do not carry an unconfirmed item into your answer, and '
+        + 'do not treat this as your answer.'
+        + (truncated ? ' (Earlier portion omitted; this is the most recent part.)' : '')
+        + ']\n'
+        + kept
+    )
+}
+
 export interface RunWorkerInput {
     prompt: string
     cwd: string
@@ -170,8 +260,57 @@ export interface RunWorkerInput {
     /** Backoff sleep, injectable so tests don't wait out the real delays. */
     sleepFor?: (ms: number) => Promise<void>
     /**
+     * SCALE arm of nexttask 5B — OFF unless set, and set only by the harness that
+     * is measuring it (src/task/research-fanout-budget.ts explains both arms).
+     * Each project-source `pi-worker-docs` call pushes this attempt's deadline out
+     * by `perLookupMs`, never past `ceilingMs` from the attempt's start: a worker
+     * that is making retrieval progress is not killed for making it, while a
+     * worker that is thrashing still hits a hard bound.
+     */
+    fanoutTimeout?: {perLookupMs: number; ceilingMs: number}
+    /**
+     * Absolute backstop that turns `timeoutMs` from "total time allowed" into
+     * "time allowed WITHOUT PROGRESS". A tool call or a line of output re-arms
+     * the deadline; only a worker that goes quiet for `timeoutMs` — or exceeds
+     * this ceiling outright — is killed.
+     *
+     * This is the difference between "took too long" and "stopped working". The
+     * first is a property of the machine (a slower local model, a bigger file)
+     * and must not cost the user their answer; the second is a real fault, and
+     * one the output-stall probe already catches on its own terms.
+     */
+    progressTimeoutCeilingMs?: number
+    /**
+     * Carry a killed attempt's findings into the re-spawn, and never return less
+     * than the best attempt produced. OFF by default so the shipped path is
+     * unchanged while the A/B runs — see src/task/research-fanout-budget.ts.
+     */
+    carryForward?: boolean
+    /**
+     * Called when a carried-forward partial is INJECTED into an attempt's prompt
+     * — once per attempt that receives one. Distinct from `onRestart`, which says
+     * an attempt was thrown away; this says the next one was actually handed its
+     * findings. The two are separately observable because they can diverge: a
+     * restart whose partial had no answer content injects nothing.
+     */
+    onCarryForward?: (info: {attempt: number; chars: number; promptCharsBefore: number}) => void
+    /**
+     * Called once per DISCARDED attempt, at the moment the worker decides to
+     * re-spawn — the only window in which a restart is observable at all.
+     *
+     * WHY: every restart branch below throws away a whole attempt's wall clock
+     * along with its text, and `waitMs`/`workMs` describe the FINAL attempt only.
+     * With no hook here those attempts were structurally invisible: mx5 run 18
+     * burned 30 wall-clock timeouts / 120 minutes of compute that appeared in no
+     * log and no timing widget, and 21 of the 23 affected workers reported
+     * `exit=0` — clean successes as far as the run could tell. The discrepancy
+     * was only recoverable by subtracting reported wait+work from the timestamps
+     * of the `start` and `done` lines around it.
+     */
+    onRestart?: (restart: WorkerRestart) => void
+    /**
      * Connection-error restart budget. Defaults to MAX_LOOP_RESTARTS, and even
-     * then the SHARED `restarts` counter is what actually binds — a worker that
+     * then the SHARED restart counter is what actually binds — a worker that
      * already spent the budget looping does not get extra lives here. 0 turns the
      * retry off, which is how scripts/connection-retry-ab.ts gets a baseline arm
      * out of a build that already ships the retry.
@@ -190,19 +329,40 @@ const defaultSleep = (ms: number): Promise<void> =>
  */
 function workerTimeout(
     external: AbortSignal | undefined,
-    ms: number
-): {signal: AbortSignal; timedOut: () => boolean; cleanup: () => void} {
+    ms: number,
+    /**
+     * Absolute backstop for the progress-based deadline. When set, `ms` stops
+     * meaning "total time allowed" and starts meaning "time allowed WITHOUT
+     * PROGRESS"; this is the hard limit no amount of progress can pass.
+     */
+    absoluteCeilingMs?: number
+): {
+    signal: AbortSignal
+    timedOut: () => boolean
+    extend: (byMs: number, ceilingMs: number) => void
+    /**
+     * Report that the worker did something. Re-arms the deadline to
+     * `now + ms`, never past the absolute ceiling. Inert unless a ceiling is
+     * configured, so the fixed-cap behaviour is unchanged for callers that
+     * don't opt in.
+     */
+    progress: () => void
+    /** The wall clock this attempt was actually allowed, extensions included. */
+    budgetMs: () => number
+    cleanup: () => void
+} {
     const ctrl = new AbortController()
     let timedOut = false
+    const armed = ms > 0 && Number.isFinite(ms)
+    const started = Date.now()
+    let deadline = started + ms
+    const fire = (): void => {
+        timedOut = true
+        ctrl.abort()
+    }
     // ms <= 0 (or non-finite) disables the wall-clock timeout: no timer is armed,
     // so only the external signal can abort and timedOut() stays false forever.
-    const timer =
-        ms > 0 && Number.isFinite(ms) ?
-            setTimeout(() => {
-                timedOut = true
-                ctrl.abort()
-            }, ms)
-        :   undefined
+    let timer = armed ? setTimeout(fire, ms) : undefined
     const onExternal = (): void => ctrl.abort()
     if (external) {
         if (external.aborted) ctrl.abort()
@@ -211,11 +371,68 @@ function workerTimeout(
     return {
         signal: ctrl.signal,
         timedOut: () => timedOut,
+        // SCALE arm of nexttask 5B, inert unless a caller calls it: push the
+        // deadline out, never past `started + ceilingMs`. A disabled timeout
+        // (nothing armed) stays disabled — extending "never" is meaningless — and
+        // an already-fired timer is not resurrected.
+        extend: (byMs, ceilingMs) => {
+            if (!armed || timedOut || ctrl.signal.aborted) return
+            const next = Math.min(deadline + byMs, started + ceilingMs)
+            if (next <= deadline) return
+            deadline = next
+            clearTimeout(timer)
+            timer = setTimeout(fire, Math.max(0, deadline - Date.now()))
+        },
+        // PROGRESS-BASED DEADLINE. A worker that is making tool calls and
+        // emitting text is not stuck — it is slow, and how slow is a property of
+        // the user's machine, not of the task. Killing it on total elapsed time
+        // makes answer quality depend on the hardware: the same task on a slower
+        // local model loses its work and degrades, which no per-file constant can
+        // fix. Being STUCK is already detected separately and correctly, by the
+        // output-stall probe (STALL_AFTER_MS), which resets on progress and only
+        // kills when the model endpoint is unreachable.
+        progress: () => {
+            if (absoluteCeilingMs === undefined) return
+            if (!armed || timedOut || ctrl.signal.aborted) return
+            const next = Math.min(Date.now() + ms, started + absoluteCeilingMs)
+            if (next <= deadline) return
+            deadline = next
+            clearTimeout(timer)
+            timer = setTimeout(fire, Math.max(0, deadline - Date.now()))
+        },
+        budgetMs: () => deadline - started,
         cleanup: () => {
             clearTimeout(timer)
             external?.removeEventListener('abort', onExternal)
         }
     }
+}
+
+/**
+ * Why an attempt was thrown away. One value per restart branch in runWorker, so
+ * a log line naming the reason points at exactly one piece of code.
+ */
+export type WorkerRestartReason =
+    | 'loop'
+    | 'command-timeout'
+    | 'stream-stall'
+    | 'worker-timeout'
+    | 'connection-error'
+    | 'leaked-tool-call'
+
+/** One DISCARDED attempt: its cause and the wall clock it consumed and lost. */
+export interface WorkerRestart {
+    /** 1-based number of the attempt being discarded (the 1st restart ends attempt 1). */
+    attempt: number
+    reason: WorkerRestartReason
+    /** Wall clock this attempt spent before it was killed — time with no output. */
+    wallMs: number
+    /** The discarded attempt's own spawn → first-byte split. */
+    waitMs: number
+    /** The discarded attempt's own first-byte → exit split. */
+    workMs: number
+    /** Reason-specific diagnosis: the looping call, the hung tool, the error text. */
+    detail?: string
 }
 
 export interface RunWorkerResult {
@@ -251,14 +468,44 @@ export interface RunWorkerResult {
      * Milliseconds between spawn and the child's first stdout chunk. When
      * multiple workers run concurrently and the upstream model API queues at
      * some concurrency cap, this is the queue-wait portion of the run.
+     *
+     * FINAL ATTEMPT ONLY — a restarted attempt's clock is discarded with its
+     * text. `waitMs + workMs` is therefore NOT the worker's wall clock whenever
+     * `attempts > 1`; `totalWallMs` is.
      */
     waitMs: number
     /**
      * Milliseconds between first stdout chunk and process exit — the
      * generation/tool-call portion, independent of queue wait. Equals total
-     * elapsed when the child never produced output.
+     * elapsed when the child never produced output. Final attempt only, same as
+     * `waitMs`.
      */
     workMs: number
+    /**
+     * How many attempts (spawns) this call made, including the one that produced
+     * `text`. 1 for a worker that ran clean. Always `restarts.length + 1`.
+     */
+    attempts: number
+    /**
+     * The worker's TRUE wall clock: entry to return, spanning every discarded
+     * attempt and every connection backoff. `totalWallMs - waitMs - workMs` is
+     * the time this worker spent on output that was thrown away.
+     */
+    totalWallMs: number
+    /**
+     * One entry per discarded attempt, in order — empty on a clean run. The only
+     * record that a restart happened: the returned `exitCode`/`text` describe the
+     * final attempt and look identical whether it was the first or the third.
+     */
+    restarts: ReadonlyArray<WorkerRestart>
+    /**
+     * True when `text` came from a DISCARDED attempt rather than the final one,
+     * because the final attempt returned less. The answer is real output the
+     * worker produced, but it was cut off mid-flight, so it is likelier to be
+     * incomplete than a clean return — callers that grade completeness should
+     * treat it as partial rather than as a finished answer.
+     */
+    salvagedFromDiscardedAttempt: boolean
     /**
      * How many GROUNDING retrieval tool calls the FINAL attempt made — the calls
      * that returned content an APIS entry could be cited from (see
@@ -417,19 +664,49 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     // runPhaseWithLoopGuard: a runaway worker gets re-spawned with a corrective
     // hint up to MAX_LOOP_RESTARTS times before we give up. Leaked tool calls
     // keep their own MAX_LEAK_RETRIES budget below — a different failure mode.
-    let restarts = 0
+    let restartBudgetSpent = 0
     // Watchdog kills specifically — drives the ceiling halving. Kept apart from
-    // `restarts` (the shared budget) so a loop-caused restart doesn't shorten
+    // `restartBudgetSpent` (the shared budget) so a loop-caused restart doesn't shorten
     // the rope of a child that has never hung (see commandCeilingForAttempt).
     let hangKills = 0
     // Connection-error restarts specifically — drives the backoff schedule (and
     // lets a harness set the budget to 0 without touching the shared counter).
     let connRetries = 0
     let leakRetries = 0
+    // Entry-to-return wall clock. tAttemptStart below is per-attempt (it is what
+    // waitMs/workMs are measured from); this one is the only thing that sees the
+    // attempts that were killed and re-spawned.
+    const tRunStart = Date.now()
+    const restarts: WorkerRestart[] = []
+    // The best partial answer any discarded attempt produced, RAW. Without this a
+    // restart is amnesiac: it re-reads the same files against the same clock and
+    // dies in the same place (see CARRY_FORWARD_LIMIT). Held unformatted because
+    // it has two consumers — the next attempt's prompt, which wants it wrapped in
+    // the carry-forward framing, and the final return, which must never emit that
+    // framing as if it were the worker's answer.
+    // Held in a box, not a bare `let`: the only writer is the `noteRestart`
+    // closure below, and TypeScript narrows a closure-assigned `let` back to its
+    // initialiser at the return site.
+    const salvage: {text: string | null} = {text: null}
     for (;;) {
-        const prompt = hint === null ? input.prompt : `${hint}\n\n${input.prompt}`
+        const carried = salvage.text === null ? null : formatCarryForward(salvage.text)
+        // Announce the INJECTION, not just the restart. Without this, "the carry
+        // reached the re-spawn" can only be inferred from entry counts — and
+        // inferring what a worker did from what it produced is the exact gap 5A
+        // exists to close. The prompt goes to the child on stdin, so no log
+        // downstream of here can show it.
+        if (carried !== null) {
+            input.onCarryForward?.({
+                attempt: restarts.length + 1,
+                chars: carried.length,
+                promptCharsBefore: input.prompt.length
+            })
+        }
+        const prompt = [hint, carried, input.prompt]
+            .filter((p): p is string => p !== null)
+            .join('\n\n')
         const invocation = getPiInvocation([...baseArgs], prompt)
-        const tStart = Date.now()
+        const tAttemptStart = Date.now()
         let tFirstByte: number | null = null
         // loop === false turns the guard off entirely (detector is null and no
         // tool call is ever flagged); otherwise build a detector from the override
@@ -455,7 +732,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // discarded with its text, so the count must describe only the attempt
         // whose text this call returns.
         let groundingRetrievalCount = 0
-        const timeout = workerTimeout(input.signal, timeoutMs)
+        const timeout = workerTimeout(input.signal, timeoutMs, input.progressTimeoutCeilingMs)
         // Per-tool-call watchdog for this attempt (null when off). Its abort is
         // OR'd with the worker timeout / external cancel into the child's signal.
         const cmdWatch = commandWatch(
@@ -487,23 +764,42 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
                         cmdWatch?.onStart(call)
+                        // A tool call is the worker working. Inert unless the
+                        // caller opted into a progress-based deadline.
+                        timeout.progress()
+                        if (
+                            input.fanoutTimeout
+                            && call.name === 'pi-worker-docs'
+                            && (call.args as {module?: unknown} | undefined)?.module === '.'
+                        ) {
+                            timeout.extend(
+                                input.fanoutTimeout.perLookupMs,
+                                input.fanoutTimeout.ceilingMs
+                            )
+                        }
                         if (isGroundingRetrieval(call.name)) groundingRetrievalCount++
                         if (!loopDetector) return null
                         const hit = loopDetector.record(call)
                         if (hit && !loopHit) loopHit = hit
                         return hit
                     },
-                    onLine: input.onLine,
-                    // Always wired when the watchdog is on — the sink only emits
-                    // tool_execution_end if a handler exists, and without it every
-                    // timer would stay armed and fire on a finished command.
-                    onToolResult:
-                        cmdWatch ?
-                            r => {
-                                cmdWatch.onEnd(r.toolCallId)
-                                input.onToolResult?.(r)
-                            }
-                        :   input.onToolResult,
+                    // Output is the other half of "still working": a worker
+                    // writing its answer is making progress even when it has no
+                    // more tool calls to make.
+                    onLine: line => {
+                        timeout.progress()
+                        input.onLine?.(line)
+                    },
+                    // Always wired now (it used to be conditional on the command
+                    // watchdog): the sink only emits tool_execution_end if a
+                    // handler exists, and a completed tool call is the clearest
+                    // progress signal there is. Without it a worker whose tool
+                    // calls all succeed would still look idle to the deadline.
+                    onToolResult: r => {
+                        timeout.progress()
+                        cmdWatch?.onEnd(r.toolCallId)
+                        input.onToolResult?.(r)
+                    },
                     onContextUsage: input.onContextUsage
                 },
                 input.spawn
@@ -513,8 +809,36 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             cmdWatch?.clear()
         }
         const tEnd = Date.now()
-        const waitMs = tFirstByte === null ? tEnd - tStart : tFirstByte - tStart
+        const effectiveCapMs = timeout.budgetMs()
+        const waitMs = tFirstByte === null ? tEnd - tAttemptStart : tFirstByte - tAttemptStart
         const workMs = tFirstByte === null ? 0 : tEnd - tFirstByte
+        // Record + announce a discarded attempt. Called from every `continue`
+        // branch below, so a restart cannot be added without becoming visible.
+        const noteRestart = (reason: WorkerRestartReason, detail?: string): void => {
+            const record: WorkerRestart = {
+                attempt: restarts.length + 1,
+                reason,
+                wallMs: tEnd - tAttemptStart,
+                waitMs,
+                workMs,
+                ...(detail ? {detail} : {})
+            }
+            restarts.push(record)
+            input.onRestart?.(record)
+            // Harvest here rather than in each branch: `noteRestart` is the one
+            // place every `continue` already has to pass through, so a restart
+            // path cannot be added that silently drops the attempt's work.
+            // Longest-wins — a later attempt killed early should not replace a
+            // fuller answer an earlier one had already reached.
+            if (input.carryForward === true && CARRY_FORWARD_REASONS.has(reason)) {
+                const partial = text.trim()
+                // Longest-with-CONTENT wins. Length alone let a preamble sentence
+                // become the answer — see hasAnswerContent.
+                if (partial.length > (salvage.text?.length ?? 0) && hasAnswerContent(partial)) {
+                    salvage.text = partial
+                }
+            }
+        }
         const text = result.text ?? ''
         const timedOut = timeout.timedOut()
         const commandKill = cmdWatch?.killed()
@@ -523,16 +847,17 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // A loop-kill gets the same restart-with-hint treatment every other phase
         // already gets (runPhaseWithLoopGuard) — name the offending call so the
         // re-spawn avoids it. Bounded by the shared restart budget.
-        if (loopHit && restarts < MAX_LOOP_RESTARTS) {
+        if (loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
             hint = formatLoopHint(loopHit)
-            restarts++
+            restartBudgetSpent++
+            noteRestart('loop', `${loopHit.call.name} ×${loopHit.count}/${loopHit.windowSize}`)
             continue
         }
         // A hung COMMAND is restartable too, on the same budget, but checked
         // before the whole-worker timeout because its hint is the specific one:
         // bound the command. (The two can't be confused — a watchdog kill leaves
         // timeout.timedOut() false, since that flag tracks only its own timer.)
-        if (commandKill && !loopHit && restarts < MAX_LOOP_RESTARTS) {
+        if (commandKill && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
             hint = commandTimeoutHint(commandKill.toolName, commandKill.timeoutMs, {
                 commandDetail: commandKill.detail,
                 // Nothing reverts the tree between attempts, so a child that can
@@ -541,24 +866,33 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 // gate logger uses — decided by tools, not by phase.
                 editsMayPersist: /\b(?:edit|bash|write)\b/.test(tools)
             })
-            restarts++
+            restartBudgetSpent++
             hangKills++
+            noteRestart(
+                'command-timeout',
+                `${commandKill.toolName} > ${commandKill.timeoutMs}ms`
+                    + (commandKill.detail ? `: ${commandKill.detail}` : '')
+            )
             continue
         }
         // A hung model stream is restartable on the same budget. Checked before
         // the wall-clock timeout because it is the more specific diagnosis (and
         // its hint does not blame the model: nothing it did caused the hang).
-        if (streamStalled && !loopHit && restarts < MAX_LOOP_RESTARTS) {
+        if (streamStalled && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
             hint = streamStallHint(streamStalled.idleMs)
-            restarts++
+            restartBudgetSpent++
+            noteRestart('stream-stall', `idle ${streamStalled.idleMs}ms`)
             continue
         }
         // A wall-clock timeout (the backstop for varied thrash the exact-match
         // detector misses) is also restartable, sharing the same budget. Skip when
         // a loop also tripped — the loop hint above is more specific.
-        if (timedOut && !loopHit && restarts < MAX_LOOP_RESTARTS) {
+        if (timedOut && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
             hint = WORKER_TIMEOUT_HINT
-            restarts++
+            restartBudgetSpent++
+            // The EFFECTIVE cap, which the SCALE arm moves — reporting the
+            // configured one would misname why this attempt died.
+            noteRestart('worker-timeout', `cap ${effectiveCapMs}ms`)
             continue
         }
         // A connection-class model error is restartable on the same budget, exactly
@@ -585,11 +919,14 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         if (
             result.modelError
             && isConnectionError(result.modelError)
-            && restarts < MAX_LOOP_RESTARTS
+            && restartBudgetSpent < MAX_LOOP_RESTARTS
             && connRetries < (input.connectionRetries ?? MAX_LOOP_RESTARTS)
         ) {
+            // Noted BEFORE the backoff sleep, so the record's wallMs stays the
+            // attempt's own clock; the sleep lands in totalWallMs, where it belongs.
+            noteRestart('connection-error', result.modelError.slice(0, 120))
             await (input.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(connRetries))
-            restarts++
+            restartBudgetSpent++
             connRetries++
             continue
         }
@@ -600,15 +937,48 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         if (leaked && leakRetries < MAX_LEAK_RETRIES) {
             hint = leakedToolCallHint(leaked)
             leakRetries++
+            noteRestart('leaked-tool-call', leaked.trim().slice(0, 80))
             continue
         }
+        // SALVAGE. The run used to return the LAST attempt's text unconditionally,
+        // so a worker whose final attempt was killed early reported nothing at all
+        // — even when a discarded attempt had produced a usable answer that was
+        // still in hand at the moment it was thrown away. A restart budget is
+        // meant to buy more chances at an answer, not to overwrite a good attempt
+        // with a worse one.
+        //
+        // Gated on the final attempt having FAILED, not on it being shorter. A
+        // worker that finished cleanly has answered, and a short answer is a
+        // legitimate answer — length would let a long half-finished fragment
+        // override a concise correct one, which is the opposite of the fix.
+        const finalAttemptFailed =
+            timedOut === true
+            || result.aborted
+            || result.modelError !== undefined
+            || result.stalled === true
+            || streamStalled !== undefined
+            || commandKill !== undefined
+            || loopHit !== undefined
+            || text.trim().length === 0
+        const answer =
+            (
+                finalAttemptFailed
+                && salvage.text !== null
+                && salvage.text.length > text.trim().length
+            ) ?
+                salvage.text
+            :   text
         return {
-            text,
+            text: answer,
+            salvagedFromDiscardedAttempt: answer !== text,
             exitCode: result.exitCode,
             stderr: result.stderr.trim(),
             aborted: result.aborted,
             waitMs,
             workMs,
+            attempts: restarts.length + 1,
+            totalWallMs: Date.now() - tRunStart,
+            restarts,
             sawOutput: tFirstByte !== null,
             groundingRetrievalCount,
             ...(result.modelError ? {modelError: result.modelError} : {}),

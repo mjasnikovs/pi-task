@@ -494,6 +494,17 @@ export function buildGateDeps(params: {
                         // (a healthy endpoint reads as proof of life).
                         streamInactivityMs: getConfig().streamInactivityMs,
                         loop: {pathThreshold: Number.POSITIVE_INFINITY},
+                        // A discarded attempt is otherwise invisible here too: the
+                        // returned exitCode/text describe the FINAL attempt, so a
+                        // gate child that burned two attempts and its wall clock
+                        // reads exactly like one that ran clean.
+                        onRestart: rs =>
+                            log(
+                                `=== ${kind} RESTART (attempt ${rs.attempt} discarded)`
+                                    + ` reason=${rs.reason} wall=${rs.wallMs}ms`
+                                    + (rs.detail ? ` — ${rs.detail}` : '')
+                                    + ' ==='
+                            ),
                         onLine: line => {
                             // `lastLine` feeds the LIVE status widget and is not
                             // logging — it stays outside the gate, or a quiet
@@ -735,6 +746,15 @@ export function buildGateDeps(params: {
                             // file (which IS this pass's job) never trips — only a
                             // literally-identical call repeated past threshold does.
                             loop: {pathThreshold: Number.POSITIVE_INFINITY},
+                            // Same reasoning as the gate child: without this a
+                            // discarded attempt leaves no trace anywhere.
+                            onRestart: rs =>
+                                logEnforce(
+                                    `=== enforce RESTART (attempt ${rs.attempt} discarded)`
+                                        + ` reason=${rs.reason} wall=${rs.wallMs}ms`
+                                        + (rs.detail ? ` — ${rs.detail}` : '')
+                                        + ' ==='
+                                ),
                             onLine: line => {
                                 // `lastLine` drives the live widget, not the trail.
                                 lastLine = line

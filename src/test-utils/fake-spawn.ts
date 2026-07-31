@@ -136,6 +136,45 @@ export function fakeSpawnByPrompt(match: (args: ReadonlyArray<string>) => SpawnR
 }
 
 /**
+ * A child that emits its events SPACED OUT over time, rather than all at once.
+ *
+ * The other factories deliver everything in one microtask, which makes every
+ * worker instantaneous and hides any distinction between "slow" and "stuck".
+ * Pacing is what lets a test tell a worker that is steadily working from one
+ * that has gone quiet — the whole point of a progress-based deadline.
+ *
+ * @param gapMs             delay between consecutive events
+ * @param trailingSilenceMs quiet time after the last event, before `close`
+ */
+export function pacedSpawn(
+    events: ReadonlyArray<Record<string, unknown>>,
+    gapMs: number,
+    trailingSilenceMs = 0
+): SpawnFn {
+    return (() => {
+        const p = makeProc()
+        let i = 0
+        const step = (): void => {
+            // A killed child still has to close, or the run promise never
+            // settles and the test hangs instead of failing.
+            if (p.killed) {
+                p.emit('close', 0)
+                return
+            }
+            if (i >= events.length) {
+                setTimeout(() => p.emit('close', 0), trailingSilenceMs)
+                return
+            }
+            ;(p.stdout as EventEmitter).emit('data', Buffer.from(JSON.stringify(events[i]) + '\n'))
+            i++
+            setTimeout(step, gapMs)
+        }
+        setTimeout(step, gapMs)
+        return p
+    }) as unknown as SpawnFn
+}
+
+/**
  * Convenience: a response whose event stream repeats the SAME tool_execution_start
  * `count` times — enough identical calls to trip a LoopDetector(window, threshold).
  * No agent_end, so the only assistant text is whatever `trailingText` supplies

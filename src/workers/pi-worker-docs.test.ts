@@ -7,6 +7,7 @@ import {registerPiWorkerDocs, packageRootOf, type PiWorkerDocsInternals} from '.
 import {openCache} from './docs-cache.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {readTypeOnlyLog, TYPEONLY_LOG_ENV} from './typeonly-log.js'
+import {PROJECT_DOCS_BUDGET_ENV} from '../task/research-fanout-budget.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
@@ -287,5 +288,80 @@ test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', asy
         if (saved === undefined) delete process.env[TYPEONLY_LOG_ENV]
         else process.env[TYPEONLY_LOG_ENV] = saved
         fs.rmSync(dir, {recursive: true, force: true})
+    }
+})
+
+/**
+ * CAP arm of nexttask 5B (src/task/research-fanout-budget.ts) — UNWIRED: the
+ * budget is off unless PI_TASK_PROJECT_DOCS_BUDGET is set, which only
+ * scripts/live-research-fanout-budget-ab.ts does.
+ *
+ * The property that matters is where the refusal happens: BEFORE the child spawn.
+ * The cost this lever exists to remove is the summarising model pass each
+ * project-source lookup runs, so a refusal that still spawns saves nothing.
+ */
+test('a project-docs budget refuses further "." lookups without spawning', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-budget-'))
+    fs.writeFileSync(path.join(dir, 'svc.ts'), 'export class UserService {}\n', 'utf8')
+    const saved = process.env[PROJECT_DOCS_BUDGET_ENV]
+    process.env[PROJECT_DOCS_BUDGET_ENV] = '2'
+    const cache = openCache(':memory:')
+    let spawns = 0
+    try {
+        const {registered, api} = makePi()
+        registerPiWorkerDocs(api as unknown as Parameters<typeof registerPiWorkerDocs>[0], {
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            spawn: fakeSpawnByPrompt(() => {
+                spawns++
+                return {stdout: '<answer>it exposes list()</answer>\n<excerpt>class UserService</excerpt>'}
+            })
+        })
+        const call = (query: string, module = '.'): Promise<AgentToolResult<unknown>> =>
+            registered[0].execute('id', {module, query}, undefined, undefined, {cwd: dir})
+        const textOf = (r: AgentToolResult<unknown>): string =>
+            (r.content[0] as {type: 'text'; text: string}).text
+
+        expect(textOf(await call('q1'))).toContain('UserService')
+        expect(textOf(await call('q2'))).toContain('UserService')
+        const third = await call('q3')
+        expect(textOf(third)).toContain('BUDGET SPENT')
+        expect((third.details as {budgetSpent?: boolean}).budgetSpent).toBe(true)
+        // The refusal cost nothing: the two allowed calls each spawned once, the
+        // refused one did not spawn at all.
+        expect(spawns).toBe(2)
+    } finally {
+        cache.close()
+        if (saved === undefined) delete process.env[PROJECT_DOCS_BUDGET_ENV]
+        else process.env[PROJECT_DOCS_BUDGET_ENV] = saved
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+})
+
+test('the budget counts ONLY project-source lookups — package docs are untouched', async () => {
+    const saved = process.env[PROJECT_DOCS_BUDGET_ENV]
+    process.env[PROJECT_DOCS_BUDGET_ENV] = '1'
+    const cache = openCache(':memory:')
+    try {
+        const {registered, api} = makePi()
+        registerPiWorkerDocs(api as unknown as Parameters<typeof registerPiWorkerDocs>[0], {
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>Use UserService.list().</answer>\n<excerpt>class UserService</excerpt>'
+            }))
+        })
+        const call = (module: string): Promise<AgentToolResult<unknown>> =>
+            registered[0].execute('id', {module, query: 'how do I list users?'}, undefined, undefined, {
+                cwd: FIXTURES
+            })
+        for (let i = 0; i < 3; i++) {
+            const text = ((await call('tiny-pkg')).content[0] as {type: 'text'; text: string}).text
+            expect(text).toContain('Per tiny-pkg@1.0.0:')
+        }
+    } finally {
+        cache.close()
+        if (saved === undefined) delete process.env[PROJECT_DOCS_BUDGET_ENV]
+        else process.env[PROJECT_DOCS_BUDGET_ENV] = saved
     }
 })
