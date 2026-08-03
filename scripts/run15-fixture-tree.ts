@@ -63,6 +63,90 @@ export function buildPreTask27Tree(root: string, trial: number): string {
     })
 }
 
+// ─── the project-source channel ──────────────────────────────────────────────
+//
+// A fabrication guard scored against the worker's own RETRIEVAL TRACE cannot
+// tell "invented" from "known but not re-read". Every symbol the fan-out A/B
+// ever flagged was checked by hand against the fixture's own checkout and was
+// REAL — `Textarea`/`Label`/`Badge` (files in src/client/components/ui/),
+// `useLocation` (wouter), `$patch` (listings.patch('/:id')), `Nav`, `writeText`.
+// So the corpus gets a fifth channel: the fixture's own source at the commit its
+// research actually saw.
+//
+// THE FILTER IS THE WHOLE GUARD. mx5 commits `.playwright-cache/assets/*.js` —
+// vendored, minified UI bundles — and those contain `Textarea` at EVERY
+// checkpoint, including the one whose tree has no Textarea component and on
+// which carry-forward produced the single observed fabrication. Widen this to
+// "every tracked file" and that fabrication scores GROUNDED and the guard is
+// dead. Verified at both checkpoints: `Textarea` 0 hits at TASK_0019's tree,
+// 6 at TASK_0020's.
+
+/** Hand-authored source. No `.md` — design prose must not ground an invented symbol. */
+const PROJECT_SOURCE_EXT = new Set([
+    '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.css', '.html', '.sql', '.json'
+])
+
+/** Generated, vendored, cached or agent-owned — none of it is the project's own source. */
+const NON_SOURCE_DIR = new Set([
+    'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', 'test-results',
+    'playwright-report', '.next', '.cache', '.playwright-cache', '.pi', '.pi-tasks', '.git'
+])
+
+const LOCKFILE = new Set(['bun.lock', 'bun.lockb', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'])
+
+/** Is this repo-relative path part of the project's hand-authored source? */
+export function isProjectSourcePath(p: string): boolean {
+    const parts = p.split('/')
+    const base = parts[parts.length - 1] ?? ''
+    if (parts.slice(0, -1).some(seg => NON_SOURCE_DIR.has(seg))) return false
+    if (LOCKFILE.has(base)) return false
+    if (base.endsWith('.map') || base.endsWith('.min.js') || base.endsWith('.min.css')) return false
+    return PROJECT_SOURCE_EXT.has(path.extname(base))
+}
+
+const sourceTextCache = new Map<string, string>()
+
+/**
+ * Every hand-authored source file tracked at `commit`, concatenated — the
+ * grounding corpus's `projectTree` channel.
+ *
+ * Read straight out of git rather than off the trial tree: the SHA is recorded
+ * in every trial JSON, so a trial can be re-scored years later from the result
+ * file alone, and the answer cannot drift with whatever is left in a scratch
+ * directory. Cached per commit; ~60 files per mx5 checkpoint.
+ */
+export function checkpointSourceText(commit: string, capBytes = 8_000_000): string {
+    const hit = sourceTextCache.get(commit)
+    if (hit !== undefined) return hit
+    const paths = execFileSync('git', ['ls-tree', '-r', '--name-only', commit], {
+        cwd: MX5,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: 'utf8'
+    })
+        .split('\n')
+        .filter(p => p.length > 0 && isProjectSourcePath(p))
+    const parts: string[] = []
+    let total = 0
+    for (const p of paths) {
+        let text: string
+        try {
+            text = execFileSync('git', ['show', `${commit}:${p}`], {
+                cwd: MX5,
+                maxBuffer: 64 * 1024 * 1024,
+                encoding: 'utf8'
+            })
+        } catch {
+            continue // A submodule entry or an unreadable blob contributes nothing.
+        }
+        if (total + text.length > capBytes) continue
+        total += text.length
+        parts.push(text)
+    }
+    const out = parts.join('\n')
+    sourceTextCache.set(commit, out)
+    return out
+}
+
 /** One run-15 task's pre-implementation state: its checkpoint commit and its task file. */
 export interface CheckpointFixture {
     /** mx5 `chore: checkpoint before "<title>"` commit — the tree as that task's research saw it. */

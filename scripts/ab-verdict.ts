@@ -33,6 +33,15 @@ export interface Invariant {
     label: string
     ok: boolean
     detail?: string
+    /**
+     * The data could not evaluate this one. It prints as NO DATA rather than
+     * HOLDS: `ok: true` here means "nothing broke", and an invariant with no
+     * evidence under it reporting HOLDS is the false pass this module exists to
+     * prevent. Setting it does not by itself abstain the run — add the matching
+     * line to `AbSpec.unmeasured` for that, which is what makes the outcome
+     * non-zero.
+     */
+    unmeasured?: boolean
 }
 
 /** A two-armed A/B where both arms run in the same process, so counts are directly comparable. */
@@ -101,7 +110,9 @@ export interface ArmSpec {
 
 function invariantLines(invariants: Invariant[]): string[] {
     return invariants.map(
-        i => `  invariant ${i.ok ? 'HOLDS ' : 'BROKEN'}  ${i.label}${i.detail ? ` — ${i.detail}` : ''}`
+        i =>
+            `  invariant ${i.unmeasured ? 'NO DATA' : i.ok ? 'HOLDS  ' : 'BROKEN '} ${i.label}`
+            + (i.detail ? ` — ${i.detail}` : '')
     )
 }
 

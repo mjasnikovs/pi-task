@@ -485,6 +485,90 @@ baseline trials produced any symbol) and TASK_0019 + TASK_0020 still break, so
 nothing here and takes effect only on the next arm. The instrument is now honest
 about what it cannot measure; it did not become friendlier to the lever.
 
+### ROUND 2 INSTRUMENT WORK — three more false readings, all closed
+
+All three are deterministic, re-score trials already on disk, and were written
+BEFORE the n=6 arms were started. Tests: `scripts/live-research-fanout-budget-ab.test.ts`.
+
+1. **`inv-low-fanout-untouched` reported HOLDS on ZERO control trials.** The n=3
+   run never ran TASK_0001/0003/0004; the scoring loop `continue`d on each for
+   want of trials, produced no breaks, and no breaks printed as "controls
+   unchanged". That is the identical false pass that had just been fixed one
+   metric up. `scoreLowFanout()` now reports a control fixture missing from
+   either arm through `AbSpec.unmeasured`, which ABSTAINS the verdict. A control
+   that RAN and broke still FAILs.
+2. **The grounding corpus gained a PROJECT-SOURCE channel** — the fixture's own
+   hand-authored source at the checkpoint SHA recorded in every trial JSON
+   (`checkpointSourceText`, read straight out of git so a trial can be re-scored
+   from its result file alone). The other four channels are RETRIEVAL channels,
+   so they answer "did the worker fetch this?"; fabrication is "did the worker
+   invent this?", and a symbol sitting in the project's own source was not
+   invented. RETRIEVAL-GAP was recorded as a named defect class before this run,
+   alongside `$delete` being flagged while sitting in the fixture's own
+   `src/client/api.ts:143`.
+
+   **The filter is the whole guard, and it is tested as such.** mx5 tracks
+   `.playwright-cache/assets/*.js` — vendored minified UI bundles that contain
+   `Textarea` at EVERY checkpoint. Admitting build output would ground the single
+   real fabrication this experiment ever observed (carry arm, TASK_0019) and kill
+   the invariant. `isProjectSourcePath` excludes build/cache/vendor/agent-owned
+   paths, lockfiles, maps and `.md`, and the test asserts both directions against
+   the real trees: `Textarea` absent from TASK_0019's, present in TASK_0020's.
+3. **`inv-wall-clock-lower` compared censored data and is gone.** A baseline
+   trial killed at 3x240s did not take 720s to answer — it never answered, and
+   720s is a lower bound truncated by the cap under test. `610s → 608s HOLDS` was
+   arithmetic across two scales. The raw mean is now printed as DESCRIPTIVE ONLY
+   with its censoring rate, never as an invariant or a lever benefit.
+
+   The obvious replacement is censored too, and only the v2 data showed it:
+   scored as "mean over the trials that ANSWERED", baseline is represented by
+   exactly the 4 of 12 trials that got there in two attempts (325-434s) while
+   every trial needing a third hit 720s and answered nothing — so conditioning on
+   answering selects the baseline's fastest third. Scored that way the progress
+   arm, which answered 12/12, read as **390s → 637s WORSE**. `inv-time-to-answer-lower`
+   is therefore evaluated only on fixtures where EVERY trial of BOTH arms
+   answered, with the answer RATE printed beside it. `Invariant.unmeasured` now
+   prints `NO DATA` instead of `HOLDS`, so an unevaluated side condition can no
+   longer read as a satisfied one.
+
+**Re-scored on the v2 corpus with the project-source channel** (`scripts/rescore-fanout-grounding.ts`,
+no model time). It cannot reproduce the spawn-captured prompt channel, which is
+in-memory only, so these bound fabrication from ABOVE:
+
+    fixture     arm        recorded  trace-only  +projectTree  symbols
+    TASK_0017   baseline        1.0         1.0           1.0     22.7
+    TASK_0017   progress        0.0         0.0           0.0     44.3
+    TASK_0019   baseline        0.0         0.3           0.3     27.7
+    TASK_0019   progress        0.3         0.3           0.0     39.3
+    TASK_0020   baseline        0.0         0.0           0.0      9.3
+    TASK_0020   progress        2.0         2.7           0.7     45.0
+    TASK_0021   baseline        0.0         0.0           0.0      0.0
+    TASK_0021   progress        0.3         0.0           0.0     58.3
+
+    inv-quality-not-worse    BROKEN   TASK_0020 0.0%→1.5% (0.0→0.7)
+    inv-no-new-degrade       HOLDS    0 degraded trials in progress
+    inv-low-fanout-untouched NO DATA  3 control fixtures were not run
+    inv-time-to-answer-lower NO DATA  no fixture answered in every trial of both arms
+    wall clock (descriptive) baseline 610s, 12/12 truncated, answered 4/12
+                             progress 608s,  0/12 truncated, answered 12/12
+
+    FAIL — still, on TASK_0020.
+
+**THE VERDICT DID NOT MOVE.** The channel closed TASK_0019 (0.3→0.0) and cut
+TASK_0020 by three quarters, and the arm still FAILS. What remains on TASK_0020
+is `setInputFiles` (playwright `locator.setInputFiles`) and `$patch` (the Hono
+RPC method) — measured against a baseline whose 0.0% comes from the ONE of three
+trials that wrote a section at all.
+
+**PACKAGE-GAP is the next named defect class, and it is NOT being fixed now.**
+Both survivors are real APIs of installed dependencies that the worker did not
+re-retrieve. The symmetric fix — a channel over `node_modules` — would ground
+essentially any identifier, which is the same failure mode as admitting
+`.playwright-cache`, and there is no observed fabrication living in a dependency
+to test the filter against. Widening the corpus a second time AFTER seeing which
+fixture it would rescue is tuning to the verdict, not instrument work. It is
+recorded here and left open.
+
 Instrumentation added so this stops being inferred: `onCarryForward` fires when a
 carried partial is INJECTED (not merely when a restart happens — the two diverge
 now that contentless partials are refused), logged as `CARRY-FORWARD injected

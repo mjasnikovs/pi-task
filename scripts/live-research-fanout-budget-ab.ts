@@ -68,16 +68,21 @@
  *   1. TARGET SHAPE (decides the verdict): worker:apis logged >= 1
  *      `RESTART … reason=worker-timeout` in the trial. Read from the 5A
  *      instrumentation, which is why 5A had to land first.
- *   2. worker:apis wall clock (`total=` on its done line — again 5A).
+ *   2. TIME TO A USABLE ANSWER (`total=` on the done line — again 5A), over the
+ *      trials that produced one. The raw mean is CENSORED — a baseline trial
+ *      killed at 3x240s never answered, so its 720s is a truncated lower bound —
+ *      and is printed as descriptive text only, never as an invariant.
  *   3. QUALITY GUARD, the load-bearing one. A faster worker that ships a thinner
  *      APIS section is a regression, not a win (memory/apis-contract-stage2-failed.md:
  *      a lever moved behaviour 20/20 while fabricating 15% of it):
  *        - signature coverage: entries carrying the `<name>  <signature or use>`
  *          second field the APIS contract demands (src/task/apis-contract.ts),
  *          scored with the committed parser in scripts/apis-trajectory.ts;
- *        - fabrication: entry symbols present in NO retrieval channel
- *          (groundEntries), plus findSynthesizedApis (src/task/api-synthesis.ts)
- *          over the section against the same corpus.
+ *        - fabrication: entry symbols present in NO channel (groundEntriesStrict)
+ *          — the four retrieval channels PLUS the fixture's own source at its
+ *          checkpoint commit, because a symbol that exists in the project was not
+ *          invented — plus findSynthesizedApis (src/task/api-synthesis.ts), which
+ *          still catches wrong-signature claims about symbols that do exist.
  *
  *   PASS     baseline >= 1 timeout per fixture; treatment 0 timeouts; AND
  *            wall-clock strictly lower; AND quality invariants hold.   exit 0
@@ -85,13 +90,20 @@
  *   ABSTAIN  baseline produced 0 timeouts — the fixture does not exercise
  *            the lever. Extend the fixture; do NOT wire.               exit 2
  *
- * Invariants (checked in `score`):
+ * Invariants (checked in `score`). Any of them can also come back UNMEASURED,
+ * which ABSTAINS the verdict — an invariant with no evidence under it must never
+ * report HOLDS, and each of these has done exactly that once:
  *   inv-quality-not-worse    per fixture: treatment signature coverage >= baseline
- *                            and fabricated-symbol count not higher.
+ *                            and fabricated-symbol RATE not higher. Unmeasured
+ *                            when an arm shipped no section carrying symbols.
  *   inv-no-new-degrade       no `degraded — timed out after restarts` in treatment.
  *   inv-low-fanout-untouched TASK_0001/0003/0004 (0-3 lookups): wall clock within
  *                            LOW_FANOUT_WALL_TOLERANCE, entries >= 80% of baseline,
  *                            and zero budget refusals (the cap must never fire there).
+ *                            Unmeasured when a control fixture was not run — it
+ *                            reported HOLDS on ZERO control trials in the n=3 run.
+ *   inv-time-to-answer-lower over trials that produced a usable answer, so the
+ *                            comparison is uncensored on both sides.
  *
  * ── RUNNING IT ────────────────────────────────────────────────────────────────
  *
@@ -125,7 +137,7 @@ import {
 } from '../src/task/research-fanout-budget.js'
 import {RESEARCH_RUN_ID_ENV} from '../src/workers/research-cache.js'
 import {TYPEONLY_LOG_ENV, readTypeOnlyLog, type TypeOnlyLogRecord} from '../src/workers/typeonly-log.js'
-import {buildCheckpointTree} from './run15-fixture-tree.js'
+import {buildCheckpointTree, checkpointSourceText} from './run15-fixture-tree.js'
 import {
     extractSection,
     groundEntriesStrict,
@@ -424,11 +436,24 @@ function capturingSpawn(sink: string[]): SpawnFn {
     }) as unknown as SpawnFn
 }
 
+/**
+ * The five grounding channels for one trial.
+ *
+ * `projectTree` is the one that decides whether the quality invariant measures
+ * FABRICATION or merely retrieval. Everything else here is what the worker
+ * fetched; a symbol it knew from orientation and did not re-read scored as
+ * invented, and that is 100% of what still broke TASK_0019 and TASK_0020 — every
+ * flagged symbol was checked by hand against the trial's own checkout and was
+ * real. `checkpointSourceText` reads the fixture's hand-authored source at the
+ * SHA recorded in the trial, and deliberately excludes build/cache output so a
+ * symbol that exists only in a vendored bundle is still a fabrication.
+ */
 function corpusOf(
     trialDir: string,
     log: string,
     answers: TypeOnlyLogRecord[],
-    prompt: string
+    prompt: string,
+    commit: string
 ): GroundingCorpus {
     const join = (rs: TypeOnlyLogRecord[]): string =>
         rs.map(a => `${a.toolText ?? ''}\n${a.answer}`).join('\n')
@@ -436,7 +461,8 @@ function corpusOf(
         prompt,
         docsProject: join(answers.filter(a => a.module === '.')),
         docsPackage: join(answers.filter(a => a.module !== '.')),
-        reads: fs.existsSync(trialDir) ? readTouchedFiles(trialDir, parseTrajectory(log)) : ''
+        reads: fs.existsSync(trialDir) ? readTouchedFiles(trialDir, parseTrajectory(log)) : '',
+        projectTree: checkpointSourceText(commit)
     }
 }
 
@@ -508,7 +534,13 @@ async function runTrial(
     const docsSteps = steps.filter(s => s.tool === 'pi-worker-docs')
     // The REAL prompt channel: every assembled prompt this trial's children were
     // given, not the seeded task file. See capturingSpawn.
-    const corpus = corpusOf(dir, log, answers, [fixture.refined, ...promptSink].join('\n'))
+    const corpus = corpusOf(
+        dir,
+        log,
+        answers,
+        [fixture.refined, ...promptSink].join('\n'),
+        fixture.commit
+    )
     const grounded = groundEntriesStrict(parseApisEntries(apisSection), corpus)
     const entries = parseApisEntries(apisSection)
 
@@ -753,6 +785,152 @@ export function scoreQuality(
     return {qualityBreaks, unscorable}
 }
 
+/**
+ * inv-low-fanout-untouched — and the same false pass, one metric down.
+ *
+ * The n=3 re-run reported this invariant HOLDS having run NO control fixture at
+ * all: the loop `continue`d on every control for want of trials, produced zero
+ * breaks, and zero breaks read as "controls unchanged". A control invariant with
+ * no controls under it is exactly the absence of evidence wearing the shape of
+ * evidence — the thing ab-verdict.ts exists to prevent — so a control fixture
+ * missing from either arm is now reported as UNMEASURED, which ABSTAINS the
+ * verdict instead of passing it.
+ *
+ * A control that RAN and broke still FAILS: `unmeasured` only decides what
+ * happens when there was nothing to measure.
+ */
+export function scoreLowFanout(
+    base: TrialResult[],
+    treat: TrialResult[]
+): {lowBreaks: string[]; unmeasured: string[]} {
+    const lowBreaks: string[] = []
+    const unmeasured: string[] = []
+    const byFixture = (rows: TrialResult[], id: string): TrialResult[] =>
+        rows.filter(r => r.taskId === id)
+    for (const id of LOW_FANOUT) {
+        const b = byFixture(base, id)
+        const t = byFixture(treat, id)
+        if (b.length === 0 || t.length === 0) {
+            unmeasured.push(
+                `${id} control: ${b.length} baseline and ${t.length} treatment trial(s)`
+                    + ` — inv-low-fanout-untouched has no evidence on this fixture`
+            )
+            continue
+        }
+        const bw = mean(b.map(r => r.apisWallMs))
+        const tw = mean(t.map(r => r.apisWallMs))
+        const be = mean(b.map(r => r.entries))
+        const te = mean(t.map(r => r.entries))
+        if (bw > 0 && tw > bw * LOW_FANOUT_WALL_TOLERANCE) {
+            lowBreaks.push(`${id} wall ${(bw / 1000).toFixed(0)}s→${(tw / 1000).toFixed(0)}s`)
+        }
+        if (be > 0 && te < be * ENTRY_FLOOR) {
+            lowBreaks.push(`${id} entries ${be.toFixed(1)}→${te.toFixed(1)}`)
+        }
+        const fired = t.reduce((n, r) => n + r.budgetRefusals, 0)
+        if (fired > 0) lowBreaks.push(`${id} budget fired ${fired}× on a low-fan-out task`)
+    }
+    return {lowBreaks, unmeasured}
+}
+
+/**
+ * A trial that produced an answer someone could use. Both halves matter: a
+ * DEGRADED trial was killed on its last attempt, and a zero-symbol trial shipped
+ * a stub sentence.
+ */
+export const usableAnswer = (r: TrialResult): boolean => !r.degraded && r.symbols > 0
+
+/**
+ * METRIC 2, wall clock — and why the pre-registered version of it must not be
+ * read as a lever benefit.
+ *
+ * Baseline trials are RIGHT-CENSORED. A trial killed at 3x240s did not take 720s
+ * to answer; it never answered, and 720s is a lower bound truncated by the cap
+ * that is itself under test. The n=3 run compared a mean over 12/12 such trials
+ * against an arm where none were truncated and reported `610s → 608s HOLDS`.
+ * That number is arithmetic across two different scales.
+ *
+ * So the censored mean is DESCRIPTIVE ONLY, printed with its censoring rate and
+ * never an invariant.
+ *
+ * The obvious replacement — mean over the trials that DID answer — is censored
+ * too, just less visibly, and it took the v2 corpus to show it. Baseline answered
+ * in 4 of 12 trials, and those four are precisely the ones that got there in two
+ * attempts (325-434s); every trial that needed a third hit the 720s cap and
+ * answered nothing. Conditioning on answering therefore selects the baseline's
+ * fastest third and hides its failures, and on this corpus it reported the
+ * progress arm 390s → 637s WORSE while that arm answered 12/12. Survivorship in
+ * one arm is not a comparison either.
+ *
+ * So the invariant is evaluated only on fixtures where EVERY trial in BOTH arms
+ * produced a usable answer — no selection on either side — and the answer RATE is
+ * printed beside it, since "how often it answers at all" is the thing that
+ * conditioning throws away. A treatment cannot buy its way in by degrading:
+ * degrades break inv-no-new-degrade and stubs break inv-quality-not-worse's
+ * empty-section test, both over ALL trials.
+ */
+export function scoreTimeToAnswer(
+    shared: string[],
+    base: TrialResult[],
+    treat: TrialResult[]
+): {invariant: Invariant; unmeasured: string[]; descriptive: string[]} {
+    const pick = (rows: TrialResult[], id: string): TrialResult[] =>
+        rows.filter(r => r.taskId === id)
+    const note = (rows: TrialResult[], label: string): string => {
+        const shown = shared.flatMap(id => pick(rows, id))
+        const cut = shown.filter(r => r.workerTimeouts > 0).length
+        const answered = shown.filter(usableAnswer).length
+        return (
+            `${label} mean ${(mean(shown.map(r => r.apisWallMs)) / 1000).toFixed(0)}s`
+            + ` over ${shown.length} trial(s), ${cut} truncated by the cap;`
+            + ` reached a usable answer ${answered}/${shown.length}`
+        )
+    }
+    const descriptive = [
+        'wall clock, CENSORED — descriptive only, NOT an invariant and NOT a lever benefit:',
+        `    ${note(base, 'baseline ')}`,
+        `    ${note(treat, 'treatment')}`,
+        '    a truncated distribution against an untruncated one is not a comparison'
+    ]
+    const complete = (rows: TrialResult[], id: string): boolean => {
+        const rs = pick(rows, id)
+        return rs.length > 0 && rs.every(usableAnswer)
+    }
+    const comparable = shared.filter(id => complete(base, id) && complete(treat, id))
+    const fixtureMean = (rows: TrialResult[], id: string): number =>
+        mean(pick(rows, id).map(r => r.apisWallMs))
+    const bMean = mean(comparable.map(id => fixtureMean(base, id)))
+    const tMean = mean(comparable.map(id => fixtureMean(treat, id)))
+    if (comparable.length === 0) {
+        return {
+            invariant: {
+                label: 'inv-time-to-answer-lower',
+                ok: true,
+                unmeasured: true,
+                detail: 'no fixture answered in EVERY trial of both arms — see the note above'
+            },
+            unmeasured: [
+                'time-to-answer: no shared fixture produced a usable answer in every trial of'
+                    + ' BOTH arms, so any comparison would condition on which trials answered'
+                    + ' — an arm that answers a third of the time would score as the fast one'
+            ],
+            descriptive
+        }
+    }
+    return {
+        invariant: {
+            label: 'inv-time-to-answer-lower',
+            ok: tMean < bMean,
+            detail:
+                `${(bMean / 1000).toFixed(0)}s → ${(tMean / 1000).toFixed(0)}s`
+                + ` over ${comparable.length} fixture(s) that answered in every trial of both`
+                + ` arms (${comparable.join(', ')})`
+        },
+        unmeasured: [],
+        descriptive
+    }
+}
+
 function score(treatment: Arm): void {
     const base = loadResults('baseline')
     const treat = loadResults(treatment)
@@ -822,30 +1000,15 @@ function score(treatment: Arm): void {
                 + ` ${excluded.join(', ')}`
         )
     }
-    const baseWall = mean(shared.flatMap(id => byFixture(base, id).map(r => r.apisWallMs)))
-    const treatWall = mean(shared.flatMap(id => byFixture(treat, id).map(r => r.apisWallMs)))
-
     const {qualityBreaks, unscorable} = scoreQuality(shared, base, treat)
     for (const u of unscorable) console.log(`\n  quality UNSCORABLE — ${u}`)
 
-    const lowBreaks: string[] = []
-    for (const id of LOW_FANOUT) {
-        const b = byFixture(base, id)
-        const t = byFixture(treat, id)
-        if (b.length === 0 || t.length === 0) continue
-        const bw = mean(b.map(r => r.apisWallMs))
-        const tw = mean(t.map(r => r.apisWallMs))
-        const be = mean(b.map(r => r.entries))
-        const te = mean(t.map(r => r.entries))
-        if (bw > 0 && tw > bw * LOW_FANOUT_WALL_TOLERANCE) {
-            lowBreaks.push(`${id} wall ${(bw / 1000).toFixed(0)}s→${(tw / 1000).toFixed(0)}s`)
-        }
-        if (be > 0 && te < be * ENTRY_FLOOR) {
-            lowBreaks.push(`${id} entries ${be.toFixed(1)}→${te.toFixed(1)}`)
-        }
-        const fired = t.reduce((n, r) => n + r.budgetRefusals, 0)
-        if (fired > 0) lowBreaks.push(`${id} budget fired ${fired}× on a low-fan-out task`)
-    }
+    const {lowBreaks, unmeasured: lowUnmeasured} = scoreLowFanout(base, treat)
+    for (const u of lowUnmeasured) console.log(`\n  control UNMEASURED — ${u}`)
+
+    const wall = scoreTimeToAnswer(shared, base, treat)
+    console.log('')
+    for (const d of wall.descriptive) console.log(`  ${d}`)
 
     const invariants: Invariant[] = [
         {
@@ -865,15 +1028,14 @@ function score(treatment: Arm): void {
         {
             label: 'inv-low-fanout-untouched',
             ok: lowBreaks.length === 0,
-            detail: lowBreaks.length === 0 ? 'controls unchanged' : lowBreaks.join('; ')
-        },
-        {
-            label: 'inv-wall-clock-lower',
-            ok: treatWall < baseWall,
+            ...(lowBreaks.length === 0 && lowUnmeasured.length > 0 ? {unmeasured: true} : {}),
             detail:
-                `worker:apis mean wall ${(baseWall / 1000).toFixed(0)}s → `
-                + `${(treatWall / 1000).toFixed(0)}s over ${shared.length} shared fixture(s)`
-        }
+                lowBreaks.length > 0 ? lowBreaks.join('; ')
+                : lowUnmeasured.length > 0 ?
+                    `${lowUnmeasured.length} control fixture(s) were not run — nothing to compare`
+                :   'controls unchanged'
+        },
+        wall.invariant
     ]
 
     reportAb({
@@ -883,7 +1045,7 @@ function score(treatment: Arm): void {
         baselineHits: highBase.filter(r => r.workerTimeouts > 0).length,
         treatmentHits: highTreat.filter(r => r.workerTimeouts > 0).length,
         invariants,
-        unmeasured: unscorable
+        unmeasured: [...unscorable, ...lowUnmeasured, ...wall.unmeasured]
     })
 }
 

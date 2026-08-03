@@ -129,9 +129,9 @@ export function extractSymbols(name: string): string[] {
 // ─── grounding ───────────────────────────────────────────────────────────────
 
 /** Where a symbol was found. `none` is the finding; the rest are all "the worker had it". */
-export type Channel = 'prompt' | 'docs-project' | 'docs-package' | 'read' | 'none'
+export type Channel = 'prompt' | 'docs-project' | 'docs-package' | 'read' | 'project-tree' | 'none'
 
-/** The four texts a rep's worker could have taken a symbol from, kept apart so `none` is decidable. */
+/** The texts a rep's worker could have taken a symbol from, kept apart so `none` is decidable. */
 export interface GroundingCorpus {
     /** The assembled worker:apis prompt: orientation dump, inventory, FILES map, refined task. */
     prompt: string
@@ -141,6 +141,27 @@ export interface GroundingCorpus {
     docsPackage: string
     /** Contents of every file the worker read or grepped, from the preserved trial tree. */
     reads: string
+    /**
+     * The PROJECT'S OWN SOURCE at the tree the worker was pointed at — optional,
+     * because the eight older scripts that share this corpus recorded their
+     * numbers without it and must keep meaning what they meant.
+     *
+     * The other four channels are all RETRIEVAL channels: they answer "did the
+     * worker fetch this?". Fabrication is a different question — "did the worker
+     * INVENT this?" — and a symbol sitting in the project's own source was not
+     * invented, whether the worker re-read the file or remembered it from
+     * orientation. That gap (RETRIEVAL-GAP, below) is what flagged `$delete`
+     * while it sat in the fixture's own src/client/api.ts:143.
+     *
+     * It must be the hand-authored source ONLY. Bundled or cached build output
+     * (mx5 commits .playwright-cache/assets/*.js) carries every symbol of every
+     * vendored UI library, and feeding that in would ground `Textarea` on a
+     * fixture that has no Textarea — i.e. it would launder the one real
+     * fabrication ever observed here. See isProjectSourcePath in
+     * run15-fixture-tree.ts, which owns that filter and is tested on exactly
+     * that case.
+     */
+    projectTree?: string
 }
 
 /**
@@ -156,6 +177,7 @@ export function channelsFor(symbol: string, c: GroundingCorpus): Channel[] {
     if (c.docsProject.includes(symbol)) hits.push('docs-project')
     if (c.reads.includes(symbol)) hits.push('read')
     if (c.prompt.includes(symbol)) hits.push('prompt')
+    if (c.projectTree !== undefined && c.projectTree.includes(symbol)) hits.push('project-tree')
     return hits
 }
 
@@ -324,8 +346,12 @@ export const sd = (xs: number[]): number => {
 //   RETRIEVAL-GAP  the corpus is the worker's own retrieval TRACE, so a symbol
 //                  it knew from orientation but did not re-read is unfalsifiable.
 //                  `$delete` was flagged while sitting in the fixture's own
-//                  src/client/api.ts:143. Only a real `prompt` channel fixes
-//                  this — see the spawn-capture in the fan-out harness.
+//                  src/client/api.ts:143. Closed by two channels, both optional
+//                  and both supplied by the fan-out harness: the real `prompt`
+//                  (spawn-capture) and `projectTree` (the fixture's own source at
+//                  its checkpoint commit). A symbol that exists in the project is
+//                  not an invention; a symbol that exists only in a committed
+//                  build artifact still is — see isProjectSourcePath.
 //
 // Kept SEPARATE from groundEntries rather than replacing it: eight other scripts
 // share that function and have results recorded against its current semantics.
