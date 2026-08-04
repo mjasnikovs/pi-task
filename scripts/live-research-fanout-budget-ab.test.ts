@@ -59,10 +59,13 @@ describe('scoreQuality', () => {
         // Verbatim shape of progress-arm TASK_0021: baseline degraded to a stub on
         // all three trials; the treatment wrote 28 entries with one real-but-
         // unretrieved symbol and was scored as a regression against it.
-        const base = [stub('TASK_0021'), stub('TASK_0021'), stub('TASK_0021')]
+        const base = Array.from({length: 5}, () => stub('TASK_0021'))
         const treat = [
             trial('TASK_0021', {entries: 36, withSignature: 33, symbols: 82, ungroundedSymbols: 1}),
-            trial('TASK_0021', {entries: 25, withSignature: 24, symbols: 36})
+            trial('TASK_0021', {entries: 25, withSignature: 24, symbols: 36}),
+            trial('TASK_0021', {entries: 30, withSignature: 28, symbols: 51}),
+            trial('TASK_0021', {entries: 28, withSignature: 27, symbols: 44}),
+            trial('TASK_0021', {entries: 31, withSignature: 30, symbols: 60})
         ]
         const {qualityBreaks, unscorable} = scoreQuality(['TASK_0021'], base, treat)
         expect(qualityBreaks).toEqual([])
@@ -97,29 +100,62 @@ describe('scoreQuality', () => {
         expect(v.outcome).toBe('FAIL')
     })
 
+    // n=5 per arm throughout: one fixture ⇒ 3 tests ⇒ corrected alpha 0.0167,
+    // whose floor 2/C(10,5) = 0.0079 is reachable at 5 and not at 4 (0.029).
+    const five = (f: () => TrialResult): TrialResult[] => Array.from({length: 5}, f)
+
     test('a treatment that ships MORE empty sections breaks the invariant', () => {
         // The gaming route the filter opens: drop your own stubs out of the
         // comparison and the survivors look clean.
-        const base = [trial('TASK_0020', {}), trial('TASK_0020', {})]
-        const treat = [trial('TASK_0020', {}), stub('TASK_0020')]
+        const base = five(() => trial('TASK_0020', {}))
+        const treat = five(() => stub('TASK_0020'))
         const {qualityBreaks} = scoreQuality(['TASK_0020'], base, treat)
-        expect(qualityBreaks.join('; ')).toContain('empty sections 0/2→1/2')
+        expect(qualityBreaks.join('; ')).toContain('empty sections 0/5→5/5')
     })
 
     test('signature coverage is still absolute, over ALL trials', () => {
         // A treatment answering less must not hide behind the scorable filter.
-        const base = [trial('TASK_0017', {withSignature: 30})]
-        const treat = [trial('TASK_0017', {withSignature: 12})]
+        const base = five(() => trial('TASK_0017', {withSignature: 30}))
+        const treat = five(() => trial('TASK_0017', {withSignature: 12}))
         const {qualityBreaks} = scoreQuality(['TASK_0017'], base, treat)
         expect(qualityBreaks.join('; ')).toContain('signatures 30.0→12.0')
     })
 
     test('with symbols on both sides the rate comparison still bites', () => {
-        const base = [trial('TASK_0019', {symbols: 40, ungroundedSymbols: 1})]
-        const treat = [trial('TASK_0019', {symbols: 40, ungroundedSymbols: 8})]
+        const base = five(() => trial('TASK_0019', {symbols: 40, ungroundedSymbols: 1}))
+        const treat = five(() => trial('TASK_0019', {symbols: 40, ungroundedSymbols: 8}))
         const {qualityBreaks, unscorable} = scoreQuality(['TASK_0019'], base, treat)
         expect(unscorable).toEqual([])
         expect(qualityBreaks.join('; ')).toContain('ungrounded 2.5%→20.0%')
+    })
+
+    test('a difference too small to distinguish from noise is NOT a break', () => {
+        // The rule this replaced was `treatment mean < baseline mean`, a strict
+        // inequality: one signature fewer on one trial broke the invariant.
+        // MEASURED on the null corpus, that fired on 98.1% of pure-baseline
+        // splits — every break it ever reported was uninformative.
+        const base = [30, 29, 31, 28, 32].map(n => trial('TASK_0017', {withSignature: n}))
+        const treat = [29, 28, 30, 31, 27].map(n => trial('TASK_0017', {withSignature: n}))
+        const {qualityBreaks} = scoreQuality(['TASK_0017'], base, treat)
+        expect(qualityBreaks).toEqual([])
+    })
+
+    test('too few trials is UNSCORABLE, not a clean quality report', () => {
+        const base = [trial('TASK_0017', {withSignature: 30})]
+        const treat = [trial('TASK_0017', {withSignature: 12})]
+        const {qualityBreaks, unscorable} = scoreQuality(['TASK_0017'], base, treat)
+        expect(qualityBreaks).toEqual([])
+        expect(unscorable.join('\n')).toContain('smallest p an exact test can report here is 1.000')
+    })
+
+    test('a CONTROL fixture is checked for fabrication too', () => {
+        // v3 printed "fabricated symbols did not rise on any fixture" while
+        // TASK_0001 went 0.0→2.0 and TASK_0004 0.7→2.7, because scoreQuality
+        // only ever ran over HIGH_FANOUT. "Did not look" is not "did not rise".
+        const base = five(() => trial('TASK_0001', {symbols: 30, ungroundedSymbols: 0}))
+        const treat = five(() => trial('TASK_0001', {symbols: 30, ungroundedSymbols: 9}))
+        const {qualityBreaks} = scoreQuality(['TASK_0001'], base, treat)
+        expect(qualityBreaks.join('; ')).toContain('TASK_0001 ungrounded 0.0%→30.0%')
     })
 })
 

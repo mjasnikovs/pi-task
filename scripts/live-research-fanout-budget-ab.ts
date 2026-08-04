@@ -177,6 +177,24 @@ const CEILING_MS = 900_000
  * Same sweep, directional exact permutation test: 4.4% at 0.05, 0.9% at 0.01.
  */
 const CONTROL_ALPHA = 0.05
+/**
+ * inv-quality-not-worse: the same, and it needed it more.
+ *
+ * Its rule was `treatment mean < baseline mean` on signature coverage — a strict
+ * inequality with no variance model, which is a coin flip per fixture by
+ * construction. MEASURED on the null corpus over the same 924 splits: **98.1%**
+ * of pure-baseline splits broke this invariant, 437-442 of them on the signature
+ * clause alone for each of the three fixtures.
+ *
+ * Two things follow, and they point in opposite directions:
+ *   - every BREAK this invariant has ever reported is uninformative, including
+ *     the n=3 FAIL on TASK_0020 that sent this whole investigation down the
+ *     grounding-corpus path;
+ *   - every HOLD is strong. A guard that fires on 98% of null data and did NOT
+ *     fire is saying something real, which is why the n=6 quality HOLD survives
+ *     this correction rather than being undone by it.
+ */
+const QUALITY_ALPHA = 0.05
 /** Above this, C(2n,n) stops being worth enumerating and the test samples instead. */
 const EXACT_PERMUTATION_MAX_N = 12
 /** Draws for the sampled fallback. Ample for a p<=0.05 decision. */
@@ -836,45 +854,89 @@ export function scoreQuality(
 ): {qualityBreaks: string[]; unscorable: string[]} {
     const qualityBreaks: string[] = []
     const unscorable: string[] = []
+    const rate = (rs: TrialResult[]): number => {
+        const sym = rs.reduce((n, r) => n + r.symbols, 0)
+        return sym === 0 ? 0 : (rs.reduce((n, r) => n + r.ungroundedSymbols, 0) / sym) * 100
+    }
+
+    // Pass 1 — establish what can be tested, so the correction below divides by
+    // the tests actually performed rather than the ones this fixture list
+    // implies. Three metrics per fixture: signatures, stub count, grounding.
+    const cases: {id: string; b: TrialResult[]; t: TrialResult[]}[] = []
     for (const id of shared) {
         const b = base.filter(r => r.taskId === id)
         const t = treat.filter(r => r.taskId === id)
-        const bSig = mean(b.map(r => r.withSignature))
-        const tSig = mean(t.map(r => r.withSignature))
-        if (tSig < bSig) qualityBreaks.push(`${id} signatures ${bSig.toFixed(1)}→${tSig.toFixed(1)}`)
+        if (b.length > 0 && t.length > 0) cases.push({id, b, t})
+    }
+    // Conservative when a fixture's grounding turns out to be unscorable and
+    // only 2 of its 3 tests run — over-correcting costs power, under-correcting
+    // costs a false FAIL, and only one of those is a verdict.
+    const alpha = cases.length === 0 ? QUALITY_ALPHA : QUALITY_ALPHA / (cases.length * 3)
 
-        const bEmpty = b.filter(r => !scorable(r)).length
-        const tEmpty = t.filter(r => !scorable(r)).length
-        if (tEmpty > bEmpty) {
-            qualityBreaks.push(`${id} empty sections ${bEmpty}/${b.length}→${tEmpty}/${t.length}`)
-        }
-
+    for (const {id, b, t} of cases) {
+        // Only GROUNDING needs a section with symbols on both sides, and it is
+        // reported first because it is a fact about the DATA, independent of how
+        // many trials ran. Signature coverage and the stub count below are
+        // computed over ALL trials on purpose: a treatment that degrades to
+        // stubs would otherwise drop its own bad trials out of the comparison
+        // and report UNSCORABLE — the exact gaming route the stub tripwire
+        // exists to close.
         const bs = b.filter(scorable)
         const ts = t.filter(scorable)
-        if (bs.length === 0 || ts.length === 0) {
+        const groundable = bs.length > 0 && ts.length > 0
+        if (!groundable) {
             unscorable.push(
                 `${id} grounding: ${bs.length}/${b.length} baseline and`
                     + ` ${ts.length}/${t.length} treatment trial(s) produced a section with symbols`
                     + ` — no fabrication comparison exists on this fixture`
             )
+        }
+
+        const floor = 2 / binomial(b.length + t.length, b.length)
+        if (floor > alpha) {
+            unscorable.push(
+                `${id} quality: ${b.length} baseline and ${t.length} treatment trial(s)`
+                    + ` — the smallest p an exact test can report here is ${floor.toFixed(3)},`
+                    + ` above the corrected ${alpha.toFixed(4)}, so this fixture can neither`
+                    + ` break nor hold`
+            )
             continue
         }
-        // D2 — compare the ungrounded SHARE, not the raw count. A section that
-        // grows trips an absolute-count test purely for being bigger. The
-        // absolute count stays as a secondary tripwire — a treatment must worsen
-        // on BOTH to break the invariant.
-        const rate = (rs: TrialResult[]): number => {
-            const sym = rs.reduce((n, r) => n + r.symbols, 0)
-            return sym === 0 ? 0 : (rs.reduce((n, r) => n + r.ungroundedSymbols, 0) / sym) * 100
-        }
-        const bUng = mean(bs.map(r => r.ungroundedSymbols))
-        const tUng = mean(ts.map(r => r.ungroundedSymbols))
-        const bRate = rate(bs)
-        const tRate = rate(ts)
-        if (tRate > bRate && tUng > bUng) {
+
+        const bSigs = b.map(r => r.withSignature)
+        const tSigs = t.map(r => r.withSignature)
+        const pSig = permutationP(bSigs, tSigs)
+        if (mean(tSigs) < mean(bSigs) && pSig <= alpha) {
             qualityBreaks.push(
-                `${id} ungrounded ${bRate.toFixed(1)}%→${tRate.toFixed(1)}%`
-                    + ` (${bUng.toFixed(1)}→${tUng.toFixed(1)})`
+                `${id} signatures ${mean(bSigs).toFixed(1)}→${mean(tSigs).toFixed(1)}`
+                    + ` (p=${pSig.toFixed(3)})`
+            )
+        }
+
+        // Stubs are 0/1 per trial; a permutation test on the indicator is the
+        // same machinery and needs no separate small-sample rule.
+        const bEmpty = b.map(r => (scorable(r) ? 0 : 1))
+        const tEmpty = t.map(r => (scorable(r) ? 0 : 1))
+        const pEmpty = permutationP(bEmpty, tEmpty)
+        if (mean(tEmpty) > mean(bEmpty) && pEmpty <= alpha) {
+            const n = (xs: number[]): number => xs.reduce((s, x) => s + x, 0)
+            qualityBreaks.push(
+                `${id} empty sections ${n(bEmpty)}/${b.length}→${n(tEmpty)}/${t.length}`
+                    + ` (p=${pEmpty.toFixed(3)})`
+            )
+        }
+
+        if (!groundable) continue
+        // D2 — the SHARE decides direction, not the raw count: a section that
+        // grows trips an absolute-count test purely for being bigger. The count
+        // is the secondary tripwire, and the test is what makes either binding.
+        const bUng = bs.map(r => r.ungroundedSymbols)
+        const tUng = ts.map(r => r.ungroundedSymbols)
+        const pUng = permutationP(bUng, tUng)
+        if (rate(ts) > rate(bs) && mean(tUng) > mean(bUng) && pUng <= alpha) {
+            qualityBreaks.push(
+                `${id} ungrounded ${rate(bs).toFixed(1)}%→${rate(ts).toFixed(1)}%`
+                    + ` (${mean(bUng).toFixed(1)}→${mean(tUng).toFixed(1)}, p=${pUng.toFixed(3)})`
             )
         }
     }
@@ -1143,7 +1205,20 @@ function score(treatment: Arm): void {
                 + ` ${excluded.join(', ')}`
         )
     }
-    const {qualityBreaks, unscorable} = scoreQuality(shared, base, treat)
+    // Controls are checked for FABRICATION too. They are excluded from metrics
+    // 2-3 as a lever BENEFIT — they never posed the problem, so a wall-clock or
+    // coverage win there measures nothing — but collateral damage is not a
+    // benefit, and quality was the one invariant that never looked. The v3 run
+    // put real numbers in that blind spot: TASK_0001 ungrounded 0.0→2.0 and
+    // TASK_0004 0.7→2.7, while the invariant printed "did not rise on any
+    // fixture". "Did not look" must not render as "did not rise".
+    const qualityFixtures = [
+        ...shared,
+        ...LOW_FANOUT.filter(
+            id => byFixture(base, id).length > 0 && byFixture(treat, id).length > 0
+        )
+    ]
+    const {qualityBreaks, unscorable} = scoreQuality(qualityFixtures, base, treat)
     for (const u of unscorable) console.log(`\n  quality UNSCORABLE — ${u}`)
 
     const {lowBreaks, unmeasured: lowUnmeasured} = scoreLowFanout(base, treat)

@@ -826,6 +826,49 @@ Tests: `scripts/live-research-fanout-budget-ab.test.ts`, 28 cases, pinning the
 p-floor derivation, the Bonferroni feedback, the calibration property, and that
 round 3's control numbers were never significant. Suite 2650 pass / 1 skip / 0 fail.
 
+#### ROUND 6 — the quality invariant had a 98.1% false-break rate
+
+Closing the control blind spot meant measuring `scoreQuality` the same way, and
+it turned out to be the worse of the two by a wide margin. Its signature clause
+was `treatment mean < baseline mean` — a strict inequality with no variance
+model, which is a coin flip per fixture by construction.
+
+    scoreQuality on the null corpus, same 924 pure-baseline splits
+      before   906/924 = 98.1%   (437-442 of them on the signature clause alone,
+                                  per fixture, plus the ungrounded clause)
+      after      3/924 =  0.3%
+
+**Both readings matter, and they point in opposite directions.** Every BREAK
+this invariant ever reported is uninformative — including the n=3 FAIL on
+TASK_0020 that sent this entire investigation down the grounding-corpus path,
+and which the round-2 work then "closed" by widening the corpus. But every HOLD
+is strong: a guard that fires on 98% of null data and did NOT fire is saying
+something real, which is why the n=6 quality HOLD survives this correction
+instead of being undone by it.
+
+Same machinery as `scoreLowFanout`: directional exact permutation test,
+Bonferroni over fixtures x 3 metrics, p-floor checked against the corrected
+alpha so a fixture that could never break does not report HOLDS. Power on the
+same splits: 100% at a 25% signature cut, 57.1% at 50%, 100% at 6x ungrounded,
+85% at 3x, and **100% when the treatment degrades to stubs**.
+
+**Controls are now inside the invariant.** They stay excluded from metrics 2-3,
+where a win measures nothing because they never posed the problem — but
+collateral damage is not a benefit, and this was the one invariant that never
+looked. v3 had printed "fabricated symbols did not rise on any fixture" while
+TASK_0001 went 0.0→2.0 and TASK_0004 0.7→2.7.
+
+**A bug this introduced and the tests caught, worth recording because it was
+the exact hole the code already had a guard for.** Hoisting the unscorable check
+into the pass that computes the correction made an all-stub treatment report
+UNSCORABLE instead of breaking — reopening the gaming route the stub tripwire
+exists to close. Signature coverage and the stub count are computed over ALL
+trials; only grounding needs a section with symbols on both sides. Pinned by
+`a treatment that ships MORE empty sections breaks the invariant`.
+
+**v3 re-scores PASS again, exit 0**, with controls inside the quality invariant:
+the two control rises are not significant. Suite 2653 pass / 1 skip / 0 fail.
+
 #### Still open, and a PASS would not have closed it
 
 `PI_TASK_WORKER_PROGRESS_CEILING_MS` ran at 1,200,000ms against a maximum
