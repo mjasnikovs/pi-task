@@ -64,7 +64,7 @@ import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import {buildGateDeps, collectTreeChanges, type FinalGateFixFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
-import {runFinalIntegrationGate} from './final-gate.js'
+import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
 import {describeDebt, recordFinalGateUnobservedDebt, type AcceptDebt} from './accept-debt.js'
 import {
     applyDemotions,
@@ -278,6 +278,25 @@ export interface AutoDeps extends GateDeps {
      * handling is skipped entirely (prior behavior).
      */
     pendingChanges?: (cwd: string) => Promise<string[]>
+    /**
+     * Re-derive the still-open ACCEPT-debt ledger against the tree AS IT IS NOW
+     * (final-gate.ts `deriveOpenDebts`). Needed because the run's "N recorded
+     * verify-FAIL defect(s) are STILL unresolved" report used to be built from the
+     * FIRST gate result and the converged-autofix path then rebuilt the gate
+     * outcome as a bare `{ok, reason}` — so `openDebts` was not merely un-actioned,
+     * it was GONE from the value, and no code path could ever clear, re-check or
+     * act on it (mx5 run 18: four defects reported STILL OPEN at 14:58, one of them
+     * fixed by the autofix that converged at 15:03, and the report never moved).
+     *
+     * `staticOk` is the caller's PROOF about the current statics, never a guess:
+     * pass true only where the gate itself just passed them. Absent (tests) → the
+     * post-autofix re-check is skipped and the pre-autofix report stands, exactly
+     * the prior behavior.
+     */
+    recheckOpenDebts?: (
+        cwd: string,
+        staticOk: boolean
+    ) => Promise<{openDebts: AcceptDebt[]; debtNote?: string}>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -1475,7 +1494,11 @@ function defaultDeps(
         pendingChanges: async cwd2 => {
             const changes = await collectTreeChanges(cwd2, signal)
             return [...changes.modified, ...changes.added, ...changes.deleted].sort()
-        }
+        },
+        // Re-derive the debt ledger against the FINAL tree after a converged
+        // autofix (nexttask 6). Only ever reached from inside the gate's own
+        // resolution loop, so it needs no `verify work` switch of its own.
+        recheckOpenDebts: (cwd2, staticOk) => deriveOpenDebts(cwd2, staticOk)
     }
 }
 
@@ -1619,8 +1642,10 @@ export async function runAutoLoop(
                     // gate moment — on PASS or FAIL — so a run never completes silently
                     // carrying an accepted defect. Informational: the per-task ACCEPT was
                     // already a human decision, so this reports, it does not re-fail.
-                    if (fin.openDebts && fin.openDebts.length > 0) {
-                        for (const d of fin.openDebts) {
+                    const debtKey = (d: AcceptDebt): string => `${d.taskId}\t${d.reason}`
+                    const surfaceOpenDebts = async (debts: AcceptDebt[]): Promise<void> => {
+                        if (debts.length === 0) return
+                        for (const d of debts) {
                             await recGate(
                                 `defect STILL OPEN — ${d.taskId || '(unknown task)'}: ${describeDebt(d)}: ${d.reason.slice(0, 240)}${
                                     d.conflict ? ` [CONFLICTING CLAIM — ${d.conflict}]` : ''
@@ -1628,8 +1653,80 @@ export async function runAutoLoop(
                             )
                         }
                         active.ui.notify(
-                            `${id}: ${fin.openDebts.length} recorded verify-FAIL defect(s) are STILL unresolved at run end — see the gate trail.`,
+                            `${id}: ${debts.length} recorded verify-FAIL defect(s) are STILL unresolved at run end — see the gate trail.`,
                             'warning'
+                        )
+                    }
+                    // What was REPORTED, so a post-autofix re-derivation can be
+                    // compared against it rather than blindly re-printed.
+                    let reportedDebts: AcceptDebt[] = fin.openDebts ?? []
+                    await surfaceOpenDebts(reportedDebts)
+                    /**
+                     * nexttask 6 (mx5 run 18). The lines above are emitted from the
+                     * FIRST gate result; the converged-autofix paths below used to
+                     * rebuild `fin` as `{ok, reason}`, so `openDebts` did not survive
+                     * the fix pass — the run's last word on its own defects was a
+                     * snapshot of a tree that no longer existed, and no code path
+                     * could clear, re-check or act on it. Re-derive here, against the
+                     * tree the run actually ends with, and correct the record.
+                     *
+                     * FP-safe by inheritance: `deriveOpenDebts` auto-closes only what
+                     * a deterministic check can stand behind (a static-class debt when
+                     * the statics provably pass, a cross-task-deletion whose file is
+                     * back). Anything model-judged or behavioral STAYS OPEN —
+                     * `inv-no-false-clear`. `staticOk` is therefore only ever passed
+                     * true where the gate itself just passed the statics.
+                     */
+                    const reconcileDebts = async (staticOk: boolean): Promise<void> => {
+                        if (!deps.recheckOpenDebts) return
+                        let fresh: {openDebts: AcceptDebt[]; debtNote?: string}
+                        try {
+                            fresh = await deps.recheckOpenDebts(cwd, staticOk)
+                        } catch {
+                            // A ledger read fault is inconclusive: say nothing rather
+                            // than imply the defects cleared.
+                            return
+                        }
+                        fin = {
+                            ...fin,
+                            openDebts: fresh.openDebts,
+                            ...(fresh.debtNote ? {debtNote: fresh.debtNote} : {})
+                        }
+                        // Identity is (task, origin, reason), but a RESOLUTION claim
+                        // needs more than a key miss: a ledger entry whose TEXT changed
+                        // is the same defect re-recorded, never a fix. So a debt counts
+                        // as closed only when nothing for that (task, origin) survives.
+                        const slot = (d: AcceptDebt): string => `${d.taskId}\t${d.origin ?? ''}`
+                        const before = new Set(reportedDebts.map(debtKey))
+                        const after = new Set(fresh.openDebts.map(debtKey))
+                        const beforeSlots = new Set(reportedDebts.map(slot))
+                        const afterSlots = new Set(fresh.openDebts.map(slot))
+                        const closed = reportedDebts.filter(
+                            d => !after.has(debtKey(d)) && !afterSlots.has(slot(d))
+                        )
+                        const added = fresh.openDebts.filter(
+                            d => !before.has(debtKey(d)) && !beforeSlots.has(slot(d))
+                        )
+                        if (closed.length === 0 && added.length === 0) {
+                            if (reportedDebts.length > 0) {
+                                await recGate(
+                                    `defect re-check after autofix: all ${reportedDebts.length} defect(s) `
+                                        + 'above re-derived against the FINAL tree and still open'
+                                )
+                            }
+                            return
+                        }
+                        for (const d of closed) {
+                            await recGate(
+                                `defect RESOLVED by the final-gate autofix — ${d.taskId || '(unknown task)'}: `
+                                    + `${d.reason.slice(0, 240)}`
+                            )
+                        }
+                        await surfaceOpenDebts(added)
+                        reportedDebts = fresh.openDebts
+                        await recGate(
+                            `defect re-check after autofix: ${closed.length} resolved, `
+                                + `${fresh.openDebts.length} still open (re-derived against the FINAL tree)`
                         )
                     }
                     // Resolution loop: Leave-failed (recommended) / Autofix (bounded,
@@ -1800,6 +1897,9 @@ export async function runAutoLoop(
                                     fix.unobserved ? 'warning' : 'info'
                                 )
                                 fin = {ok: true, reason: fix.reason}
+                                // The gate itself just passed, statics included, so
+                                // `staticOk` here is proof rather than assumption.
+                                await reconcileDebts(true)
                                 break
                             }
                             await recGate(
@@ -1883,6 +1983,12 @@ export async function runAutoLoop(
                                         'warning'
                                     )
                                     fin = {ok: true, reason: converged}
+                                    // Converged on the REMAINING checks only: one or
+                                    // more were DEMOTED as unfalsifiable here, and the
+                                    // statics may be among them. No proof ⇒ pass false,
+                                    // so nothing static-class can auto-close on this
+                                    // door (inv-no-false-clear).
+                                    await reconcileDebts(false)
                                     break
                                 }
                             }

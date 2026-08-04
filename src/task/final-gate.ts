@@ -1384,6 +1384,47 @@ async function recoverOrphanPort(
 export {taskThatIntroduced}
 
 /**
+ * ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
+ * the user accepted despite a verify-FAIL and re-check each against the CURRENT
+ * tree. A static-class debt whose statics now pass is provably RESOLVED (a later
+ * task fixed it) and pruned from the ledger; every other debt cannot be proven
+ * resolved deterministically, so it stays OPEN and is surfaced — a run may not
+ * complete silently carrying an accepted defect. FP-safe by construction (see
+ * accept-debt.ts). Best-effort: a ledger read/write failure must never break the
+ * caller.
+ *
+ * FACTORED OUT of runFinalIntegrationGate (nexttask 6): the derivation has to be
+ * runnable at a SECOND moment — after a converged final-gate autofix, where the
+ * orchestrator used to rebuild its gate outcome as a bare `{ok, reason}` and drop
+ * `openDebts` entirely. The report a run ends on has to be derived from the tree
+ * the run ends with, not from the tree as it was before the fix pass.
+ *
+ * `staticOk` is the caller's claim about the CURRENT statics, and it is the only
+ * thing that can auto-close a static-class debt — so a caller that does not know
+ * must pass `false` (unprovable ⇒ stays open), never a guess.
+ */
+export async function deriveOpenDebts(
+    cwd: string,
+    staticOk: boolean
+): Promise<{openDebts: AcceptDebt[]; debtNote?: string}> {
+    const {open: openRaw, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
+        staticOk,
+        // Cross-task-deletion debts auto-close iff the deleted file is back in the
+        // tree — a deterministic existence check, corroborating the per-file
+        // provenance the record already carries.
+        fileExists: rel => existsSync(path.join(cwd, rel))
+    })
+    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
+    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
+    // named file is another task's committed deliverable is a plan defect — surface
+    // the contradiction with the debt so nobody (human or child) treats the claim as
+    // a deletion instruction. Pure git-history lookup; degrades to no annotation.
+    const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
+    const debtNote = buildAcceptDebtNote(openDebts)
+    return {openDebts, ...(debtNote ? {debtNote} : {})}
+}
+
+/**
  * Run the final gate: static analysis first, then the lockfile consistency
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
@@ -1407,28 +1448,7 @@ export async function runFinalIntegrationGate(
     planText?: string
 ): Promise<FinalGateOutcome> {
     const stat = runRepoHealthCheck(cwd)
-    // ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
-    // the user accepted despite a verify-FAIL and re-check each against the current
-    // tree. A static-class debt whose statics now pass is provably RESOLVED (a later
-    // task fixed it) and pruned; every other debt cannot be proven resolved
-    // deterministically, so it stays OPEN and is surfaced in this gate's report — a
-    // run may not complete silently carrying an accepted defect. FP-safe by
-    // construction (see accept-debt.ts). Best-effort: a ledger read/write failure
-    // must never break the gate.
-    const {open: openRaw, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
-        staticOk: stat.ok,
-        // Cross-task-deletion debts auto-close iff the deleted file is back in the
-        // tree — a deterministic existence check, corroborating the per-file
-        // provenance the record already carries.
-        fileExists: rel => existsSync(path.join(cwd, rel))
-    })
-    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
-    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
-    // named file is another task's committed deliverable is a plan defect — surface
-    // the contradiction with the debt so nobody (human or child) treats the claim as
-    // a deletion instruction. Pure git-history lookup; degrades to no annotation.
-    const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
-    const debtNote = buildAcceptDebtNote(openDebts)
+    const {openDebts, debtNote} = await deriveOpenDebts(cwd, stat.ok)
     // The debt note rides in its OWN field: `reason` stays the mechanical failure
     // because it seeds the autofix child's prompt (see FinalGateOutcome.reason —
     // run 11's fix child executed a recorded claim as an instruction).

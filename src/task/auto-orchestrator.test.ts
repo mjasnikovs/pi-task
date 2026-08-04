@@ -14,7 +14,7 @@ import {
 import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
-import {readAcceptDebts} from './accept-debt.js'
+import {readAcceptDebts, type AcceptDebt} from './accept-debt.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {spawnSync} from 'node:child_process'
@@ -2915,4 +2915,188 @@ test('runAutoLoop: free text typed at the final-gate picker becomes autofix guid
         expect(fixSeed).toContain('User guidance: move the e2e spec out of the unit glob')
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
     })
+})
+
+// ─── open-debt carry + recompute across a converged autofix (nexttask 6) ─────
+//
+// mx5 run 18: four verify-FAIL defects were trailed STILL OPEN at 14:58:29 from
+// the FIRST gate result, the autofix converged at 15:03:16, and the converged
+// path rebuilt the gate outcome as a bare `{ok, reason}` — so `openDebts` was not
+// merely un-actioned, it was GONE from the value and nothing could ever clear,
+// re-check or act on it. One of the four had been fixed by that very autofix.
+
+/** Deps for a run whose gate FAILs once, then converges on the first autofix. */
+function convergingDebtDeps(
+    trail: string[],
+    over: Partial<AutoDeps> = {},
+    openDebts: AcceptDebt[] = [
+        {taskId: 'TASK_0007', reason: 'repo health: `bun run lint` exited 1', origin: 'accepted'}
+    ]
+): AutoDeps {
+    return {
+        runChild: () => Promise.resolve(''),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        commit: () => Promise.resolve({committed: true}),
+        record: (_c, _id, line) => {
+            trail.push(line)
+            return Promise.resolve()
+        },
+        finalGate: () =>
+            Promise.resolve({
+                ok: false,
+                reason: '`bun run lint` exited 1',
+                openDebts
+            }),
+        finalGateFix: () => Promise.resolve({ok: true, reason: 'statics passed'}),
+        ...over
+    }
+}
+
+test('runAutoLoop: a converged autofix RE-DERIVES the open debts and corrects the record', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const trail: string[] = []
+        let sawStaticOk: boolean | undefined
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            convergingDebtDeps(trail, {
+                // The debt the first gate reported is gone from the post-fix tree.
+                recheckOpenDebts: (_c, staticOk) => {
+                    sawStaticOk = staticOk
+                    return Promise.resolve({openDebts: []})
+                }
+            })
+        )
+        // The gate itself passed, statics included, so the re-check is told so.
+        expect(sawStaticOk).toBe(true)
+        expect(trail.some(l => /^defect STILL OPEN — TASK_0007:/.test(l))).toBe(true)
+        expect(
+            trail.some(l => /^defect RESOLVED by the final-gate autofix — TASK_0007:/.test(l))
+        ).toBe(true)
+        expect(trail.some(l => /re-check after autofix: 1 resolved, 0 still open/.test(l))).toBe(
+            true
+        )
+        // The run still completes — 6A corrects accounting, it never blocks.
+        expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
+        expect(captured.notifies.some(n => /STILL unresolved at run end/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: a debt the re-check cannot prove resolved is NEVER cleared', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const trail: string[] = []
+        const debt: AcceptDebt = {
+            taskId: 'TASK_0024',
+            reason: '1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186)',
+            origin: 'enforce-revert'
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            convergingDebtDeps(
+                trail,
+                {recheckOpenDebts: () => Promise.resolve({openDebts: [debt]})},
+                [debt]
+            )
+        )
+        expect(trail.some(l => /^defect RESOLVED/.test(l))).toBe(false)
+        expect(
+            trail.some(l => /re-check after autofix: all 1 defect\(s\) above .* still open/.test(l))
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: a ledger entry whose TEXT changed is re-recorded, not reported resolved', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            convergingDebtDeps(
+                trail,
+                {
+                    recheckOpenDebts: () =>
+                        Promise.resolve({
+                            openDebts: [
+                                {
+                                    taskId: 'TASK_0007',
+                                    reason: 'repo health: `bun run lint` exited 1 (truncated)',
+                                    origin: 'accepted'
+                                } satisfies AcceptDebt
+                            ]
+                        })
+                },
+                [
+                    {
+                        taskId: 'TASK_0007',
+                        reason: 'repo health: `bun run lint` exited 1',
+                        origin: 'accepted'
+                    }
+                ]
+            )
+        )
+        // Same (task, origin) slot survives ⇒ the defect is still open, whatever
+        // its recorded text now says.
+        expect(trail.some(l => /^defect RESOLVED/.test(l))).toBe(false)
+    })
+})
+
+test('runAutoLoop: without the recheck dep the converged path is byte-identical to before', async () => {
+    const run = async (withDep: boolean): Promise<string[]> => {
+        return withTmpTaskDir(async dir => {
+            const handle = makeFakeCtx(dir)
+            await writeTaskFile(
+                dir,
+                autoFm('TASK_AUTO_0001'),
+                buildAutoBody('feat', '(none)', ['A'])
+            )
+            const trail: string[] = []
+            handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+            await runAutoLoop(
+                handle.ctx,
+                dir,
+                'TASK_AUTO_0001',
+                convergingDebtDeps(
+                    trail,
+                    withDep ?
+                        {
+                            recheckOpenDebts: () =>
+                                Promise.resolve({
+                                    openDebts: [
+                                        {
+                                            taskId: 'TASK_0007',
+                                            reason: 'repo health: `bun run lint` exited 1',
+                                            origin: 'accepted'
+                                        } satisfies AcceptDebt
+                                    ]
+                                })
+                        }
+                    :   {}
+                )
+            )
+            return trail
+        })
+    }
+    const without = await run(false)
+    const with_ = await run(true)
+    // The dep adds exactly one line — the re-check confirmation — and changes
+    // nothing that came before it.
+    expect(with_.slice(0, without.length)).toEqual(without)
+    expect(with_.length).toBe(without.length + 1)
+    expect(with_[with_.length - 1]).toMatch(/re-check after autofix: all 1 defect\(s\)/)
 })
