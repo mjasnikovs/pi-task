@@ -169,19 +169,6 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 
 Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`.
 
-Long-running extension tools that already implement their own bounded child
-timeouts and cancellation can be excluded from the generic per-tool command
-watchdog without disabling protection for `bash`:
-
-```json
-{
-  "commandTimeoutExemptTools": ["fable_loop"]
-}
-```
-
-Names are matched exactly. This does not disable the model-stream watchdog or
-any timeout implemented by the exempt tool itself.
-
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **remote control** | on | The remote UI server (QR code, phone access). Turn off to never start it. |
@@ -197,6 +184,7 @@ any timeout implemented by the exempt tool itself.
 | **stuck reply retry** | 10 min | Inactivity ceiling on the **model stream**. A hung or silently-dropped stream throws nothing at all, so neither the connection-error retry (it needs a reported error) nor the **command timeout** (tool calls only) nor the dead-backend stall guard (a reachable endpoint reads as proof of life) can see it — an mx5 run lost ~2.9h to three of them while the model server stayed healthy. Measured as time since the **last stream event of any kind**, so a slow model emitting one token every 30s is never touched, and it pauses while a tool runs. On expiry the main session aborts the turn (through the same channel the command watchdog uses) and posts a resume reminder; a child is killed and routed into the existing connection-error retry. Choices: 5/10/20/30 min or **off**. Keep it generous on local backends — prompt processing on a large context legitimately emits nothing for minutes. |
 | **yolo mode** | off | **Unattended runs.** Wherever pi-task would stop and ask, it takes the option already marked RECOMMENDED, stamps the artifact `(YOLO)` so an audit can tell a machine decided, and shows no prompt at all — clarify/grill answers, the verify-FAIL picker (auto-**Accept**, recorded as a yolo debt), and the final-gate picker (autofix while the budget lasts, then leave the run FAILED). A question with no recommendation is **skipped**, never invented. For throwaway/test projects nobody is watching; a real run should decide these itself. |
 | **debug logs** | events | How much of a run is written to `.pi-tasks/*-debug.log`. **`events`** keeps decisions and guard actions — which phase ran, why a worker was retried, what the git-state guard restored, what a write-capable child changed on disk, why a gate returned FAIL — a few lines per task. **`full`** adds every line the child model emitted and every tool result; that's ~85% of the bytes (a real 247 KB `verify-debug.log` is 1315 lines, 521 of them tool dumps) and is what you want while actively debugging. **`off`** writes nothing. Nothing in pi-task ever reads these files back, so the setting cannot change how a run behaves — only whether you can explain it afterwards, and a log not written can't be recovered later. |
+| **watch: …** | all on | One toggle per tool in the live session, deciding whether **command timeout** applies to it. The list is discovered from `pi.getAllTools()` when the menu opens — built-ins first, then each extension's tools with the owning entry-point path in the description — so nothing is typed by hand and an uninstalled tool just stops being listed. Turn one **off** only for a tool that already owns a longer bounded, cancellable contract of its own (the guard exists because pi's `bash` has an optional timeout with *no* default — that reasoning doesn't transfer to a tool that has one). Two things to know before you do: a genuine hang in an unwatched tool is caught by nothing, since **stuck reply retry** is paused for the whole time any tool runs; and an unwatched tool is still killed as collateral if a *watched* sibling in the same turn overruns, because pi runs sibling tool calls concurrently and the abort ends the whole turn. Stored as exemptions, so the default and every tool pi-task has never seen stay guarded. |
 | **ext: …** | all off | One toggle per installed host `pi` extension, loading it into every child session by explicit path. Children otherwise run with extensions off, so a provider registered by an extension (e.g. `pi-lmstudio`) doesn't exist in them and they can't resolve the default model. Children also inherit the extension's tools and hooks, so only enable ones you trust. The list is strictly additive (discovery stays off), and an entry whose file is gone is skipped at spawn time, never fatal. |
 
 ## Configuration

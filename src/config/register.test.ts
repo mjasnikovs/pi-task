@@ -2,10 +2,12 @@ import {describe, expect, test} from 'bun:test'
 import {getConfig} from './config.js'
 import {
     applyExtensionToggle,
+    applyToolToggle,
     createSettingsPanel,
     extensionItems,
     panelItems,
-    settingsBodyHeight
+    settingsBodyHeight,
+    toolItems
 } from './register.js'
 
 /** Enough of the host theme for the panel to render into plain strings. */
@@ -84,6 +86,54 @@ describe('setting descriptions', () => {
         for (const d of descriptions) {
             expect(d).not.toMatch(/mx5|E-EXCLUSIVE|pipeline’s digest|VERIFY block/i)
         }
+    })
+})
+
+describe('toolItems', () => {
+    const tools = [
+        {name: 'bash', origin: 'built in'},
+        {name: 'fable_loop', origin: 'discovered (/x/fable/index.js)'}
+    ]
+
+    test('one toggle per live tool; ON is guarded, and the config stores the exemptions', () => {
+        const items = toolItems(tools, ['fable_loop'])
+        expect(items).toHaveLength(2)
+        expect(items[0]!.id).toBe('tool:bash')
+        expect(items[0]!.label).toBe('watch: bash')
+        expect(items[0]!.currentValue).toBe('on')
+        expect(items[1]!.currentValue).toBe('off')
+    })
+
+    test('an empty exemption list guards everything — the default cannot unguard bash', () => {
+        expect(toolItems(tools, []).map(i => i.currentValue)).toEqual(['on', 'on'])
+    })
+
+    test('description names the owner and states what turning it off costs', () => {
+        const items = toolItems(tools, [])
+        expect(items[1]!.description).toContain('/x/fable/index.js')
+        expect(items[1]!.description).toContain('never be caught')
+    })
+
+    test('rows join the menu, and a config with no live tools adds none', () => {
+        const ids = panelItems(getConfig(), [], tools).map(i => i.id)
+        expect(ids).toContain('tool:bash')
+        expect(panelItems(getConfig(), []).some(i => i.id.startsWith('tool:'))).toBe(false)
+    })
+})
+
+describe('applyToolToggle', () => {
+    test('off exempts once, on re-guards; both idempotent', () => {
+        let ex: string[] = []
+        ex = applyToolToggle(ex, 'fable_loop', false)
+        ex = applyToolToggle(ex, 'fable_loop', false)
+        expect(ex).toEqual(['fable_loop'])
+        ex = applyToolToggle(ex, 'fable_loop', true)
+        ex = applyToolToggle(ex, 'fable_loop', true)
+        expect(ex).toEqual([])
+    })
+
+    test('toggling one tool leaves the others exempt', () => {
+        expect(applyToolToggle(['a', 'b'], 'a', true)).toEqual(['b'])
     })
 })
 

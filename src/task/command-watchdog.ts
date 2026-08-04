@@ -19,8 +19,10 @@ import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command
  * what happened so it retries with a timeout instead of hanging again.
  *
  * Tool-agnostic by default: it arms on every tool except exact names listed in
- * `commandTimeoutExemptTools`. Exemptions are reserved for extension tools
- * that already own a bounded timeout and cancellation contract.
+ * `commandTimeoutExemptTools`, which /task-config fills from the live tool list
+ * (config/tool-list.ts). Exemptions are for tools that already own a bounded
+ * timeout and cancellation contract — the guard's whole justification is that
+ * pi's bash has NO default timeout, which says nothing about a tool that does.
  *
  * SCOPE — this covers the main session ONLY, which is where the implementation
  * turn runs (orchestrator hands the spec off via sendUserMessage). Gate

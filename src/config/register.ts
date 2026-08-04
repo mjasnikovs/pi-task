@@ -18,6 +18,7 @@ import {
     type PiTaskConfig
 } from './config.js'
 import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
+import {listGuardableTools, type GuardableTool} from './tool-list.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
 
@@ -259,6 +260,46 @@ export function applyExtensionToggle(
     return on ? [...rest, entryPath] : rest
 }
 
+/**
+ * One /task-config toggle per tool in the live session, so the command watchdog
+ * can be turned off for a single tool without unguarding `bash` with it.
+ *
+ * The list is DISCOVERED (see tool-list.ts), never typed: the id carries the
+ * exact tool name pi reports, which is the same string the watchdog matches on.
+ * A tool that is uninstalled simply stops being listed, and a stale name left in
+ * the config matches nothing.
+ */
+const TOOL_ID_PREFIX = 'tool:'
+
+export function toolItems(
+    tools: readonly GuardableTool[],
+    exempt: readonly string[]
+): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+    return tools.map(t => ({
+        id: TOOL_ID_PREFIX + t.name,
+        label: `watch: ${t.name}`,
+        description:
+            `Apply the command timeout to this tool. Leave it on unless the tool runs its own `
+            + `bounded, cancellable work for longer than the timeout — turning it off means a `
+            + `genuine hang in this tool will never be caught, and nothing else is watching `
+            + `while a tool runs. ${t.origin}`,
+        // Stored inverted: the config records the EXEMPTIONS, so an empty list
+        // (and any tool pi-task has never heard of) stays guarded by default.
+        currentValue: exempt.includes(t.name) ? 'off' : 'on',
+        values: ['on', 'off']
+    }))
+}
+
+/** Apply a per-tool watchdog toggle to the exemption list (idempotent both ways). */
+export function applyToolToggle(
+    exempt: readonly string[],
+    toolName: string,
+    watched: boolean
+): string[] {
+    const rest = exempt.filter(n => n !== toolName)
+    return watched ? rest : [...rest, toolName]
+}
+
 /** Overlay width; the list gets `- 4` of it, the description `- 4` again. */
 const OVERLAY_WIDTH = 68
 /** Settings rows shown at once before the list scrolls. */
@@ -337,7 +378,11 @@ export function createSettingsPanel(
 }
 
 /** The full settings row list for the current config, in menu order. */
-export function panelItems(cfg: PiTaskConfig, installed: InstalledExtension[]): PanelItem[] {
+export function panelItems(
+    cfg: PiTaskConfig,
+    installed: InstalledExtension[],
+    tools: readonly GuardableTool[] = []
+): PanelItem[] {
     return [
         ...ITEMS.map(({id, label, description, values}) => ({
             id: id as string,
@@ -346,22 +391,39 @@ export function panelItems(cfg: PiTaskConfig, installed: InstalledExtension[]): 
             currentValue: displayValue(cfg, id, Boolean(values)),
             values: values ?? ['on', 'off']
         })),
+        ...toolItems(tools, cfg.commandTimeoutExemptTools),
         ...extensionItems(installed, cfg.extensionWhitelist)
     ]
 }
 
-async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Promise<void> {
-    const cfg = {...getConfig(), extensionWhitelist: [...getConfig().extensionWhitelist]}
+async function handleTaskConfig(
+    _args: string,
+    ctx: ExtensionCommandContext,
+    getTools: () => GuardableTool[] = () => []
+): Promise<void> {
+    const cfg = {
+        ...getConfig(),
+        extensionWhitelist: [...getConfig().extensionWhitelist],
+        commandTimeoutExemptTools: [...getConfig().commandTimeoutExemptTools]
+    }
 
     // Enumerated live at open so an installed extension appears and an
     // uninstalled one vanishes without pi-task doing any bookkeeping. A failed
     // enumeration only costs the extension toggles, never the whole menu.
     const installed = await listInstalledExtensions({cwd: ctx.cwd}).catch(() => [])
+    // Same contract for tools, and for the same reason — plus one pi-specific
+    // one: getAllTools() throws until the extension runtime is initialized, so
+    // it can only be read here, when the menu opens, never at registration.
+    const tools = getTools()
 
     if (ctx.mode !== 'tui') {
         const lines = ITEMS.map(
             ({id, label, values}) => `${label.padEnd(22)} ${displayValue(cfg, id, Boolean(values))}`
         )
+        for (const t of tools) {
+            const state = cfg.commandTimeoutExemptTools.includes(t.name) ? 'off' : 'on'
+            lines.push(`${('watch: ' + t.name).padEnd(22)} ${state}`)
+        }
         for (const e of installed) {
             const state = cfg.extensionWhitelist.includes(e.path) ? 'on' : 'off'
             lines.push(`${('ext: ' + e.label).padEnd(22)} ${state}`)
@@ -373,13 +435,19 @@ async function handleTaskConfig(_args: string, ctx: ExtensionCommandContext): Pr
     await ctx.ui.custom<void>(
         (_tui, theme, _kb, done) =>
             createSettingsPanel(
-                panelItems(cfg, installed),
+                panelItems(cfg, installed, tools),
                 theme,
                 (id, newValue) => {
                     if (id.startsWith(EXT_ID_PREFIX)) {
                         cfg.extensionWhitelist = applyExtensionToggle(
                             cfg.extensionWhitelist,
                             id.slice(EXT_ID_PREFIX.length),
+                            newValue === 'on'
+                        )
+                    } else if (id.startsWith(TOOL_ID_PREFIX)) {
+                        cfg.commandTimeoutExemptTools = applyToolToggle(
+                            cfg.commandTimeoutExemptTools,
+                            id.slice(TOOL_ID_PREFIX.length),
                             newValue === 'on'
                         )
                     } else if (id === 'searchProvider') {
@@ -411,7 +479,11 @@ export function registerConfig(pi: ExtensionAPI): void {
     registerBridgeCommand(pi, 'task-config', {
         description:
             'Configure pi-task settings (remote control, auto-commit, verify work, enforce '
-            + 'guidelines, research, timeouts, extensions for helper sessions).',
-        handler: handleTaskConfig
+            + 'guidelines, research, timeouts, per-tool command watchdog, extensions for helper '
+            + 'sessions).',
+        // `pi` is closed over rather than taken from ctx: ExtensionCommandContext
+        // has no tool accessor, and the read must happen inside the handler
+        // anyway (getAllTools throws until the runtime is initialized).
+        handler: (args, ctx) => handleTaskConfig(args, ctx, () => listGuardableTools(pi))
     })
 }

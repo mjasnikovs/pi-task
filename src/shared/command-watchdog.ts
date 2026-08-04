@@ -18,8 +18,15 @@
  * TIMER STATE MACHINE is identical, and lives here once. What differs is only
  * the `onFire` side effect, which each adapter supplies:
  *
- *   main session — ctx.abort() cancels just that tool call and the session
- *                  survives to receive a follow-up reminder turn.
+ *   main session — ctx.abort() ends the whole agent operation, not just the one
+ *                  tool call (pi types it "Abort the current agent operation"),
+ *                  and pi runs sibling tool calls CONCURRENTLY by default. So an
+ *                  overrun kills every tool in flight in that turn — including
+ *                  one exempted via commandTimeoutExemptTools, which only stops
+ *                  a timer being armed FOR that tool, not its being collateral
+ *                  when a guarded sibling trips. There is no per-call
+ *                  cancellation channel to do better with. The session itself
+ *                  survives to receive the follow-up reminder turn.
  *   child        — there is no per-tool cancellation channel into a child, so
  *                  the whole child is killed and re-spawned with
  *                  {@link commandTimeoutHint} prepended. Coarser by necessity:

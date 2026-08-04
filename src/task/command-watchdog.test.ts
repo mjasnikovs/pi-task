@@ -75,6 +75,30 @@ describe('CommandWatchdog', () => {
         expect(h.fired).toEqual([{toolCallId: 'call-2', toolName: 'bash', timeoutMs: 900_000}])
     })
 
+    test('an exempt tool still running when a guarded sibling overruns is never itself fired', () => {
+        // pi runs sibling tool calls CONCURRENTLY (extensions docs: "sibling
+        // tool calls ... executed concurrently"), so the overlap is real, not
+        // hypothetical. The machine's guarantee is narrow and worth pinning: the
+        // exempt call is never the one reported. It is NOT spared the abort —
+        // ctx.abort() ends the whole agent operation (see shared/
+        // command-watchdog.ts) and there is no per-call cancellation channel.
+        const h = makeHarness(900_000, toolName => toolName !== 'fable_loop')
+        h.watchdog.onStart('call-1', 'fable_loop')
+        h.watchdog.onStart('call-2', 'bash')
+        h.elapse(0)
+        expect(h.fired.map(f => f.toolName)).toEqual(['bash'])
+    })
+
+    test('re-guarding a tool mid-session takes effect on its next start', () => {
+        let exempt = true
+        const h = makeHarness(900_000, name => !(exempt && name === 'fable_loop'))
+        h.watchdog.onStart('call-1', 'fable_loop')
+        expect(h.armedCount()).toBe(0)
+        exempt = false // the operator flips the /task-config row back on
+        h.watchdog.onStart('call-2', 'fable_loop')
+        expect(h.armedCount()).toBe(1)
+    })
+
     test('the ceiling is read per start, so a config change takes effect next command', () => {
         const h = makeHarness(0)
         h.watchdog.onStart('call-1', 'bash') // off → no arm

@@ -68,12 +68,19 @@ export interface PiTaskConfig {
      */
     requestTimeoutMs: number
     /**
-     * Extension tools that own a stronger, domain-specific timeout and
-     * cancellation contract. The generic command watchdog must not abort these
-     * tools mid-transaction; bash and every other tool remain guarded.
+     * Tools the generic command watchdog must NOT arm on, by exact name — for
+     * tools that own a stronger, domain-specific timeout and cancellation
+     * contract of their own and would otherwise be aborted mid-transaction at
+     * the generic ceiling. `bash` and every unlisted tool stay guarded.
      *
-     * This is intentionally an advanced config-file setting rather than a
-     * blanket switch in /task-config. Tool names are matched exactly.
+     * Stored as the EXEMPTIONS, not the guarded set, so the default (`[]`) and
+     * every tool pi-task has never seen are guarded — a new or renamed tool can
+     * never silently lose its watchdog.
+     *
+     * Populated from `/task-config`'s `watch:` rows, which are discovered from
+     * the live session via `pi.getAllTools()` (see config/tool-list.ts), so the
+     * names here are pi's own and never hand-typed. A stale entry left behind by
+     * an uninstalled tool matches nothing and is harmless.
      */
     commandTimeoutExemptTools: string[]
     /**
