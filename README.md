@@ -1,6 +1,6 @@
 <div align="center">
 
-![pi-task — Deterministic AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.svg)
+![pi-task — Deterministic Local AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.](https://raw.githubusercontent.com/mjasnikovs/pi-task/main/assets/hero.svg)
 
 # pi-task
 

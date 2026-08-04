@@ -10,8 +10,10 @@
  * at 168px wide — a non-16:10 source loses the overflow to the crop. At that
  * size everything shrinks by 0.175x, which is what splits the two files: the
  * README hero's 9.5px tile descriptions would render at 1.7px on the card, so
- * the card drops them and spends the space on the headline instead (104px ->
- * 18.2px, against 62px -> 10.8px for the hero's).
+ * the card drops them and spends the space on the headline instead (88px ->
+ * 15.4px, against 62px -> 10.8px for the hero's). The card also keeps the
+ * headline to two lines — a third would land on the tiles — which is why
+ * "Local AI Workflows." rides one line there and breaks over two on the hero.
  *
  * PNG export shells out to rsvg-convert at 2x (1920x1200) when it is on PATH;
  * the SVGs are always written.
@@ -214,9 +216,16 @@ const tile = (p: Phase, x: number, y: number, size: number, iconScale: number) =
   <g transform="translate(${ix},${iy}) scale(${iconScale})" fill="none" stroke="${p.stroke}" stroke-width="${(1.9 / iconScale).toFixed(2)}" stroke-linecap="round" stroke-linejoin="round">${p.icon}</g>`
 }
 
-const headline = (baseline: number, size: number, tracking: number) =>
-    `<text x="${M}" y="${baseline}" font-size="${size}" font-weight="700" fill="${C.text}" letter-spacing="${tracking}">Deterministic</text>
-  <text x="${M}" y="${baseline + Math.round(size * 1.1)}" font-size="${size}" font-weight="700" fill="url(#hl)" letter-spacing="${tracking}">AI Workflows.</text>`
+// First line carries the promise in plain white; the rest is the gradient.
+// Line count differs per asset: the hero has the vertical room to break
+// "Local AI / Workflows." over two lines at full size, the card does not.
+const headline = (lines: string[], baseline: number, size: number, tracking: number) =>
+    lines
+        .map(
+            (line, i) =>
+                `<text x="${M}" y="${baseline + i * Math.round(size * 1.1)}" font-size="${size}" font-weight="700" fill="${i ? 'url(#hl)' : C.text}" letter-spacing="${tracking}">${line}</text>`
+        )
+        .join('\n  ')
 
 /** README hero: full detail, read at full width. */
 function hero() {
@@ -230,14 +239,14 @@ function hero() {
     ]
     let s =
         open(
-            'pi-task — Deterministic AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.'
+            'pi-task — Deterministic Local AI Workflows. Every request runs a fixed pipeline: refine to clarify and structure it, research to gather information in parallel, grill to cross-examine the findings, compose to write the implementation spec, critique to check it for quality and completeness.'
         ) + defs()
     s += mountain({cx: 560, sy: 372, hw: 320, o: 0.5})
     s += `\n  ${logo(M, 34, 0.82, 30)}`
-    s += `\n  ${headline(212, 62, -2)}`
-    s += `\n  <rect x="${M}" y="312" width="72" height="4" rx="2" fill="${C.purpleDeep}"/>`
+    s += `\n  ${headline(['Deterministic', 'Local AI', 'Workflows.'], 186, 62, -2)}`
+    s += `\n  <rect x="${M}" y="354" width="72" height="4" rx="2" fill="${C.purpleDeep}"/>`
     sub.forEach((line, i) => {
-        s += `\n  <text x="${M}" y="${356 + i * 25}" font-size="17" fill="${C.muted}">${line}</text>`
+        s += `\n  <text x="${M}" y="${398 + i * 25}" font-size="17" fill="${C.muted}">${line}</text>`
     })
     PHASES.forEach((p, i) => {
         const x = left + i * (size + gap)
@@ -258,11 +267,11 @@ function card() {
     const step = (W - M * 2) / PHASES.length
     let s =
         open(
-            'pi-task — Deterministic AI Workflows. Five fixed phases: refine, research, grill, compose, critique.'
+            'pi-task — Deterministic Local AI Workflows. Five fixed phases: refine, research, grill, compose, critique.'
         ) + defs()
     s += mountain({cx: 660, sy: 250, hw: 330, o: 0.26, flag: false})
     s += `\n  ${logo(M, 28, 0.95, 36)}`
-    s += `\n  ${headline(258, 104, -4)}`
+    s += `\n  ${headline(['Deterministic', 'Local AI Workflows.'], 268, 88, -4)}`
     s += `\n  <rect x="${M}" y="404" width="104" height="7" rx="3.5" fill="${C.purpleDeep}"/>`
     PHASES.forEach((p, i) => {
         const cx = M + step * (i + 0.5)
