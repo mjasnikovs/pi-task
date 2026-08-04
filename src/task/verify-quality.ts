@@ -149,6 +149,46 @@ export function findGrepOnlyVerify(spec: string): GrepOnlyVerifyFinding[] {
     return [...inspected.entries()].map(([target, lines]) => ({target, lines}))
 }
 
+/** One VERIFY command, classified by what it can observe. */
+export interface VerifyCommandClass {
+    /** The command line, verbatim. */
+    raw: string
+    /** Every pipeline segment is a STATIC head (grep/test/tsc/…) — it inspects
+     *  files and can never observe the deliverable's behaviour. */
+    staticOnly: boolean
+    /**
+     * The command observes RUNTIME behaviour: an HTTP request, a port probe, a
+     * process it starts and watches. This is the distinction nexttask 7's M3
+     * turns on — mx5 run 18's TASK_0023 VERIFY is all `node -e "…package.json…"`,
+     * which EXECUTES node yet can only assert that a string is present in a
+     * config file, and the behavioural half of the owned requirement ("serves
+     * `/api` + static `dist/`") is exactly what it cannot see.
+     */
+    observesBehaviour: boolean
+}
+
+const BEHAVIOUR_RE =
+    /\bcurl\b|\bwget\b|\bhttpie?\b|https?:\/\/|\bnc\s+-z\b|\bss\s+-|\blsof\b|127\.0\.0\.1|localhost|\bplaywright\b|\bfetch\(/i
+
+/**
+ * Classify each command of a spec's VERIFY block. Shares `segmentHead` with the
+ * grep-theater detector, so "static" means one thing across the two measures.
+ * Empty when the spec has no runnable VERIFY block.
+ */
+export function classifyVerifyCommands(spec: string): VerifyCommandClass[] {
+    const cmds = parseVerifyBlock(spec)
+    if (!cmds) return []
+    return cmds.map(({raw}) => {
+        let staticOnly = true
+        for (const segment of raw.split(/&&|\|\||;|\|/)) {
+            const s = segmentHead(segment)
+            if (s === null) continue
+            if (!STATIC_HEADS.has(s.head)) staticOnly = false
+        }
+        return {raw, staticOnly, observesBehaviour: BEHAVIOUR_RE.test(raw)}
+    })
+}
+
 /**
  * Retry hint when the critique rewrite KEPT the grep-theater block it was told
  * to fix (live A/B: 1/5 rewrites ignored the injected defect). Prepended to the

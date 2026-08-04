@@ -7,7 +7,7 @@ need. It is not a to-do list — the entries that cost the most are the dead end
 
 Formerly `nexttask.txt`; code comments citing "nexttask TASK n" mean this file.
 Details of anything shipped live in git history and in each script's own header,
-not here. Last updated 2026-07-30.
+not here. Last updated 2026-08-04.
 
 ---
 
@@ -32,6 +32,41 @@ not here. Last updated 2026-07-30.
 - **`marked.slice(0, MAX_REQUIREMENTS)` as a latent run-16 defect.** It is a
   first-N truncation and looks like one, but `marked` never exceeds 40 in 60 runs
   (max 8), so it never truncates.
+- **Resolving the owned-requirement/category-freeze pair in the CRITIQUE rewrite**
+  (nexttask 7). Refuted 2026-08-04, 20 trials/arm, and refuted twice over.
+  *(a) The seam is blind.* `appendOwnedConstraints` — the BRACES that stamp the
+  machine-marked owned bullet the detector keys on — runs AFTER
+  `critiqueWithFallback` in the `critique` step, so at critique time the stamped
+  line does not exist and compose's own folding is a paraphrase ("The server watch
+  command must match the contract exactly: `…` — serves `/api` + static `dist/`").
+  Live: **0/40 compose drafts carried a detectable pair while 11/40 carried the
+  clause semantically**; both compose arms ABSTAINed for that reason.
+  *(b) Forced through the controlled critique seam* on run 18's real TASK_0023
+  draft, the probe drives pair-present **8/20 → 0/20 — by deleting the
+  authoritative clause as often as by granting ownership**: 11/20
+  requirement-dropped (0 of the 11 reassigned it to the task that owns the file;
+  they rationalised — "this references an existing file; no edits are required or
+  permitted") vs 9/20 scoped-ownership. Behavioural VERIFY is **6/20 in BOTH
+  arms** — the delivered spec still checks the behavioural requirement by grepping
+  `package.json`, which was the whole defect. `inv-no-spec-inflation` holds
+  (CONSTRAINTS lines 11.2 → 10.4), and that shrink is the deletion showing up in a
+  second measure. **Removal of the pair is not satisfaction of the requirement** —
+  the run-16 delivery-metric lesson one level down. The detector itself is sound
+  and kept UNWIRED (`src/task/owned-freeze-conflict.ts`, 16 unit tests,
+  `scripts/owned-freeze-conflict-fp-suite.ts` PASS: 1 finding over 58 real specs,
+  0 on 6 negatives, 3/3 positive controls). Any next attempt must act AFTER the
+  braces, where the pair exists — and cannot be a model rewrite, because the
+  braces are the last spec-producing step.
+  **STEP 0 (`scripts/owned-vs-freeze-baserate.ts`, 58 recorded specs, 5 trees):**
+  N=29 specs carry an owned requirement, n1=3 of those also carry a category
+  freeze, **n2=1** is the unsatisfiable shape (mx5 TASK_0023) and n3=0 of those
+  were met at HEAD. The other two co-occurrences are gofer-pixel's, and both
+  EXEMPT the deliverable by name — compose usually gets this right. n2==1 means
+  the rule is designed on a single instance: **generality ABSTAINS**, and the
+  confirmation pool nexttask 7 nominates is gone — `~/hub/mx5` history begins at
+  run 18's `base`, run 16's specs are retained nowhere on disk (which also means
+  `scripts/live-owned-requirement-compose-ab.ts` now reads run-18 files from the
+  paths it documents as run-16 fixtures).
 
 ## METHODOLOGY RULES — each one cost real time
 

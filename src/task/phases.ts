@@ -1611,7 +1611,18 @@ export async function phaseCritique(
     refined: string,
     qa: string,
     planContext?: string,
-    research?: string
+    research?: string,
+    /**
+     * An additional deterministic defect block, forced into the rewrite exactly
+     * like the probes below and overriding a CLEAN triage the same way.
+     *
+     * This is the A/B seam for a probe that is not wired yet: the discipline
+     * here is "wire only on PASS" (memory/prompt4-spec-urls-failed.md), so a
+     * candidate probe has to be measurable through the SHIPPED critique path
+     * rather than through a hand-copied replica of it, or the two arms differ by
+     * more than the probe. Undefined in production.
+     */
+    extraDefects?: string | null
 ): Promise<string> {
     // Fast triage before the expensive full rewrite. The rewrite regenerates
     // the entire spec from scratch and is the costliest tail of the pipeline
@@ -1756,6 +1767,7 @@ export async function phaseCritique(
                     && frozenProbe === null
                     && grepOnlyProbe === null
                     && scriptProbe === null
+                    && (extraDefects ?? null) === null
                 ) {
                     return spec
                 }
@@ -1775,6 +1787,7 @@ export async function phaseCritique(
             frozenProbe,
             grepOnlyProbe,
             scriptProbe,
+            extraDefects ?? null,
             triageDefects
         ]
             .filter(Boolean)

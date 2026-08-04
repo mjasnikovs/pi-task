@@ -27,6 +27,18 @@
  * fixture's recorded spec already carries it, the fixture cannot discriminate
  * and the run refuses to spend model time).
  *
+ * WHAT ITS PASS DOES **NOT** COVER (nexttask 7, added 2026-08-04). This harness
+ * passed on a DELIVERY metric — "does the composed spec carry the clause". It
+ * does not measure whether the delivered clause is SATISFIABLE. mx5 run 18 is
+ * the demonstration: `.pi-tasks/requirements-owned.md:21` carried this very
+ * clause, TASK_0023's CONSTRAINTS carried it verbatim and marked AUTHORITATIVE —
+ * delivery 100% — and the same spec froze `src/server/index.ts` with a category
+ * freeze while converting the behavioural half ("serves `/api` + static `dist/`")
+ * into a string-match on `package.json`. Satisfaction 0%; the app shipped with no
+ * static route behind a green run. Do not read this PASS as covering that class:
+ * it is `scripts/live-owned-freeze-conflict-ab.ts`'s question, scored on
+ * satisfiability (pair-present / resolution-shape / verify-can-fail).
+ *
  * METRIC, mechanical, pre-registered: the composed spec's CONSTRAINTS+ACCEPTANCE
  * span contains the normalised QUOTE or a DISCRIMINATING PHRASE (see Fixture.
  * phrases — chosen to be present only when the spec obligates the missing
