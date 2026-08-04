@@ -869,6 +869,61 @@ trials; only grounding needs a section with symbols on both sides. Pinned by
 **v3 re-scores PASS again, exit 0**, with controls inside the quality invariant:
 the two control rises are not significant. Suite 2653 pass / 1 skip / 0 fail.
 
+#### PACKAGE-GAP — REFUTED as formulated, and superseded by an upstream defect
+
+`scripts/package-gap-classify.ts` walks all 84 v3 trials, recomputes grounding,
+and classifies every ungrounded symbol against the fixture's OWN `node_modules`
+at its checkpoint by exhaustive grep. 71 occurrences, 54 distinct:
+
+    IN-DEPS      42 distinct  — a node_modules channel WOULD ground these
+                                  of which identifier-shaped:  7
+                                  of which English PROSE:      35
+    NOT-IN-DEPS  12 distinct  — invisible to node_modules
+                                  of which identifier-shaped: 12
+                                  of which English PROSE:      0
+
+**The channel does what it was proposed to do, and it is still the wrong fix.**
+It grounds `$patch` (hono `dist/types/client/types.d.ts`), `tailwindcss`,
+`postcss`, `ZodObject` — real dependency APIs the worker did not re-retrieve,
+exactly the RETRIEVAL-GAP argument. But 35 of the 42 symbols it grounds are
+English words: `making`, `against`, `being`, `official`, `minimum`, `says`,
+`modify`, `available`, `standard`, `internal`. `being` occurs in 279 files under
+one fixture's `node_modules`. The debt file's prediction — "would ground
+essentially any identifier" — is CONFIRMED at 78% of the residue, and 83% of
+what it grounds is coincidence.
+
+**It cannot be refuted by counterexample, and that is worth stating precisely.**
+The anti-gaming test this gap was waiting for — an observed fabrication that a
+node_modules channel would wrongly ground — does not exist in this corpus. All
+12 NOT-IN-DEPS symbols are project-shaped invented identifiers
+(`photoContentTypeAllowlist`, `ListingsQuery`, `PHOTO_CONTENT_TYPES`,
+`snapshotsPathTemplate`) and dependency text does not reach any of them. So the
+channel would not launder a known fabrication. It would instead mask the defect
+below.
+
+**THE ACTUAL DEFECT IS UPSTREAM: `extractSymbols` emits English prose as
+symbols.** 35 of 54 distinct "ungrounded symbols" (65%) are ordinary words
+lifted out of APIS prose. They inflate BOTH sides of the quality invariant —
+`symbols` is its denominator and `ungroundedSymbols` its numerator — and they
+are groundable by any sufficiently large text, which is the only reason a
+node_modules channel looks like it helps. Adding the channel would drive the
+ungrounded count down for reasons that have nothing to do with fabrication.
+
+Named **PROSE-SYMBOLS**, and it is the next thing to fix, not the channel. Note
+the split is perfectly clean in the direction that matters: every one of the 12
+genuine invented identifiers is identifier-shaped, and every one of the 35 prose
+tokens is not. Post-fix the residue is 19 symbols, of which the real
+dependency-API cases are `$patch`, `tailwindcss`, `postcss`, `ZodObject` — at
+which point PACKAGE-GAP should be re-asked against a corpus that isn't 65%
+noise, rather than answered now.
+
+**A bug in the classifier itself, caught before it was believed.** Its first cut
+read `node_modules` into a string under a 60MB budget and silently truncated:
+`$patch` came back NOT-IN-DEPS while sitting in hono's own type declarations —
+the budget invented exactly the answer this gap had been waiting for. Replaced
+with an exhaustive `grep -rhoF -f`, verified in both directions against a known
+symbol and a control string that must not match.
+
 #### Still open, and a PASS would not have closed it
 
 `PI_TASK_WORKER_PROGRESS_CEILING_MS` ran at 1,200,000ms against a maximum
