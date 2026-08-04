@@ -772,6 +772,60 @@ a verdict rendered by an instrument repaired after the run it judges. The
 honest reading is that round 3 has **no verdict on this invariant** until the
 repaired scorer is wired and the v3 corpus re-scored.
 
+#### ROUND 5 — the repaired invariant is wired, and v3 re-scores PASS
+
+`scoreLowFanout` no longer compares means against fixed ratios. It runs a
+directional exact permutation test (`permutationP`, exact to n=12 per arm,
+seeded sampling above that so a re-score reports the same p). Three properties,
+all measured on the null corpus and none on treatment data:
+
+    rule                                      false-break rate on 924 null splits
+    fixed ratios (ENTRY_FLOOR / 1.5x wall)                  419/924 = 45.3%
+    permutation test, per-test alpha 0.05                   108/924 = 11.7%
+    permutation test, Bonferroni over tests performed        14/924 =  1.5%
+
+**The 11.7% step is the one worth remembering.** Swapping in a significance test
+fixed the statistic but not the invariant: this is ONE invariant that breaks if
+ANY sub-test fires, and it runs 3 fixtures x 2 metrics = 6 of them, so 0.05 per
+test is not 0.05 for the invariant. Bonferroni over the tests ACTUALLY PERFORMED
+(a run with fewer controls is not penalised for controls it did not run) brings
+it to 1.5% — conservative, because the sub-tests are positively correlated
+within a fixture.
+
+**The correction feeds back into what counts as measurable, and that closed a
+hole the first cut had.** The smallest two-sided p an exact test can report is
+`2/C(nb+nt, nb)`. At n=4 that is 0.029, ABOVE the corrected 0.0083 — so a
+fixed `MIN_CONTROL_N = 4` would have let three controls report HOLDS when no
+arrangement of their data could ever have broken them. The floor is now computed
+against the corrected alpha per run, and a fixture below it is UNMEASURED, which
+abstains. With 3 controls that means n>=5.
+
+**Power, because a guard that never fires is also useless** (same 924 splits,
+regression injected into the entries of one arm):
+
+    no regression      1.5%      <- false-positive rate
+    entries at 75%    31.3%
+    entries at 50%    60.6%
+    entries at 25%   100.0%
+    entries at 0%    100.0%
+
+**The v3 re-score: PASS, exit 0.** All four invariants hold; metric 1 is 22/24 →
+0/24. `inv-low-fanout-untouched` reads HOLDS because round 3's two breaks are
+p=0.152 and p=0.132, an order of magnitude off the corrected 0.0083.
+
+**Read it as exactly what it is.** This verdict was rendered by an instrument
+repaired AFTER the run it judges. What makes that admissible rather than
+verdict-shopping is that every number in the repair came from a corpus with no
+treatment in it — the null control was run, and calibrated against, before the
+v3 re-score was attempted. It is still weaker evidence than a PASS from an
+instrument fixed beforehand, and the honest statement is: *the progress deadline
+removes the timeout shape with no measured cost on any invariant this harness can
+currently evaluate.* Not "the lever is validated".
+
+Tests: `scripts/live-research-fanout-budget-ab.test.ts`, 28 cases, pinning the
+p-floor derivation, the Bonferroni feedback, the calibration property, and that
+round 3's control numbers were never significant. Suite 2650 pass / 1 skip / 0 fail.
+
 #### Still open, and a PASS would not have closed it
 
 `PI_TASK_WORKER_PROGRESS_CEILING_MS` ran at 1,200,000ms against a maximum

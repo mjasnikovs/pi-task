@@ -14,6 +14,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {describe, expect, test} from 'bun:test'
 import {
+    permutationP,
     scoreLowFanout,
     scoreQuality,
     scoreTimeToAnswer,
@@ -144,20 +145,120 @@ describe('scoreLowFanout', () => {
     })
 
     test('a control that ran and broke still FAILS — unmeasured is not an escape', () => {
-        const base = [trial('TASK_0003', {apisWallMs: 65_000, entries: 17})]
-        const treat = [trial('TASK_0003', {apisWallMs: 200_000, entries: 17})]
+        const wall = (ms: number): TrialResult => trial('TASK_0003', {apisWallMs: ms, entries: 17})
+        // One testable fixture ⇒ 2 tests ⇒ corrected alpha 0.025, whose floor
+        // 2/C(10,5) = 0.0079 is reachable at n=5.
+        const base = [wall(64_000), wall(65_000), wall(66_000), wall(67_000), wall(68_000)]
+        const treat = [
+            wall(200_000),
+            wall(201_000),
+            wall(202_000),
+            wall(203_000),
+            wall(204_000)
+        ]
         const {lowBreaks, unmeasured} = scoreLowFanout(base, treat)
-        expect(lowBreaks.join('; ')).toContain('TASK_0003 wall 65s→200s')
+        expect(lowBreaks.join('; ')).toContain('TASK_0003 wall 66s→202s')
         // The other two controls are still missing, so both channels report.
         expect(unmeasured).toHaveLength(2)
     })
 
-    test('an entry floor and a budget refusal on a control both break it', () => {
+    test('a budget refusal on a control breaks it at ANY n — it is a fact, not a mean', () => {
+        // The CAP lever engaging on a fixture it should never reach needs no
+        // significance test, so this fires on the single trial the entries
+        // comparison is too small to judge.
         const base = [trial('TASK_0004', {entries: 17})]
         const treat = [trial('TASK_0004', {entries: 12, budgetRefusals: 2})]
-        const {lowBreaks} = scoreLowFanout(base, treat)
-        expect(lowBreaks.join('; ')).toContain('entries 17.0→12.0')
+        const {lowBreaks, unmeasured} = scoreLowFanout(base, treat)
         expect(lowBreaks.join('; ')).toContain('budget fired 2×')
+        expect(lowBreaks.join('; ')).not.toContain('entries')
+        expect(unmeasured.join('\n')).toContain('TASK_0004 control: 1 baseline and 1 treatment')
+    })
+
+    test('too few trials is UNMEASURED, not HOLDS — the p floor sits above alpha', () => {
+        // The old rule broke on a 17→12 mean difference drawn from one trial per
+        // arm. Three trials per arm still cannot: the smallest two-sided p an
+        // exact test can report at n=3 is 2/C(6,3) = 0.10, and no arrangement of
+        // the data gets under it. A maximally separated sample must still abstain.
+        const e = (n: number): TrialResult => trial('TASK_0001', {entries: n})
+        const {lowBreaks, unmeasured} = scoreLowFanout([e(17), e(17), e(17)], [e(1), e(1), e(1)])
+        expect(lowBreaks).toEqual([])
+        expect(unmeasured.join('\n')).toContain('smallest p an exact test can report here is 0.100')
+    })
+
+    test('the Bonferroni correction feeds back into what is measurable', () => {
+        // Three testable controls ⇒ 6 tests ⇒ alpha 0.0083. n=4's floor
+        // (2/C(8,4) = 0.029) is above that, so all three abstain rather than
+        // reporting a HOLDS no data could have overturned.
+        const e = (id: string, n: number): TrialResult => trial(id, {entries: n})
+        const four = (id: string, n: number): TrialResult[] => [
+            e(id, n),
+            e(id, n),
+            e(id, n),
+            e(id, n)
+        ]
+        const {lowBreaks, unmeasured} = scoreLowFanout(
+            [...four('TASK_0001', 17), ...four('TASK_0003', 17), ...four('TASK_0004', 17)],
+            [...four('TASK_0001', 1), ...four('TASK_0003', 1), ...four('TASK_0004', 1)]
+        )
+        expect(lowBreaks).toEqual([])
+        expect(unmeasured).toHaveLength(3)
+        expect(unmeasured.join('\n')).toContain('above the corrected 0.0083')
+    })
+
+    test('the calibration that replaced the fixed ratios, pinned', () => {
+        // MEASURED on ~/tmp/research-fanout-ab-nullctl: the shipped ratio rule
+        // broke on 419/924 = 45.3% of 6-vs-6 splits of a pure-baseline corpus,
+        // where both halves are the same arm and every break is false by
+        // construction. This pins the property that replaced it — the test must
+        // hold its nominal size on data drawn from ONE distribution.
+        const rng = (seed: number) => () => {
+            seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+            return seed / 0x1_0000_0000
+        }
+        const next = rng(42)
+        // Entry counts with the dispersion the real controls show (CV ~0.9).
+        const draw = (): number => Math.max(0, Math.round(6 + (next() - 0.5) * 22))
+        let broke = 0
+        const reps = 400
+        for (let i = 0; i < reps; i++) {
+            const pool = Array.from({length: 12}, draw)
+            const base = pool.slice(0, 6).map(n => trial('TASK_0001', {entries: n}))
+            const treat = pool.slice(6).map(n => trial('TASK_0001', {entries: n}))
+            if (scoreLowFanout(base, treat).lowBreaks.length > 0) broke++
+        }
+        // Nominal 5% for the invariant, and Bonferroni over 2 tests on the one
+        // fixture present makes it conservative. The rule this replaced sat at
+        // 45.3%; per-test alpha with no correction sat at 11.7%.
+        expect(broke / reps).toBeLessThan(0.05)
+    })
+})
+
+describe('permutationP', () => {
+    test('exact and symmetric', () => {
+        expect(permutationP([1, 2, 3, 4], [1, 2, 3, 4])).toBe(1)
+        expect(permutationP([1, 2, 3, 4], [10, 20, 30, 40])).toBeCloseTo(2 / 70, 6)
+        expect(permutationP([10, 20, 30, 40], [1, 2, 3, 4])).toBeCloseTo(2 / 70, 6)
+    })
+
+    test('n=3 per arm can never reach 0.05 — this is why MIN_CONTROL_N is 4', () => {
+        expect(permutationP([100, 100, 100], [0, 0, 0])).toBeCloseTo(2 / 20, 6)
+    })
+
+    test('the round-3 control breaks were never significant', () => {
+        // The numbers the n=6 verdict FAILed on, through the rule that replaced
+        // the one it FAILed under.
+        expect(permutationP([5, 6, 15, 1, 8, 1], [1, 1, 1, 6, 1, 1])).toBeGreaterThan(0.05)
+        expect(permutationP([5, 9, 7, 7, 8, 5], [8, 5, 3, 6, 3, 5])).toBeGreaterThan(0.05)
+    })
+
+    test('sampled fallback agrees with exact near the boundary and is deterministic', () => {
+        const a = Array.from({length: 13}, (_, i) => i)
+        const b = Array.from({length: 13}, (_, i) => i + 6)
+        const p1 = permutationP(a, b)
+        const p2 = permutationP(a, b)
+        expect(p1).toBe(p2)
+        expect(p1).toBeGreaterThan(0)
+        expect(p1).toBeLessThan(1)
     })
 })
 

@@ -161,10 +161,26 @@ const PROJECT_DOCS_BUDGET = 20
 const PER_LOOKUP_MS = 10_000
 /** Hard bound the extensions may never cross — a scaled worker is still a bounded worker. */
 const CEILING_MS = 900_000
-/** inv-low-fanout-untouched: a control fixture may not get slower than this multiple. */
-const LOW_FANOUT_WALL_TOLERANCE = 1.5
-/** inv-low-fanout-untouched: nor may it lose more than this share of its entries. */
-const ENTRY_FLOOR = 0.8
+/**
+ * inv-low-fanout-untouched: significance level for a control regression.
+ *
+ * Replaces the fixed ratios this invariant used to compare means against
+ * (`LOW_FANOUT_WALL_TOLERANCE = 1.5`, `ENTRY_FLOOR = 0.8`). Those had no variance
+ * model, and on count metrics whose within-fixture CV reaches 87% they were a
+ * coin flip: MEASURED at 419/924 = 45.3% false breaks over every 6-vs-6 split of
+ * a 36-trial pure-baseline corpus, where both halves are the same arm and every
+ * break is therefore false by construction
+ * (`scripts/lowfanout-null-control.ts`, corpus `~/tmp/research-fanout-ab-nullctl`).
+ *
+ * Calibrated on that null corpus and NOTHING else — no treatment data enters it,
+ * which is what makes this admissible after a treatment run broke the old rule.
+ * Same sweep, directional exact permutation test: 4.4% at 0.05, 0.9% at 0.01.
+ */
+const CONTROL_ALPHA = 0.05
+/** Above this, C(2n,n) stops being worth enumerating and the test samples instead. */
+const EXACT_PERMUTATION_MAX_N = 12
+/** Draws for the sampled fallback. Ample for a p<=0.05 decision. */
+const SAMPLED_PERMUTATIONS = 20_000
 /** A fixture posed the problem if it fanned out this far via docs… */
 const WITNESS_LOOKUPS = 10
 /** …or this far across ALL content-returning retrieval tools (D5). */
@@ -705,6 +721,86 @@ async function runArm(arm: Arm, trials: number, only: string[]): Promise<void> {
 const mean = (xs: number[]): number =>
     xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length
 
+/** C(n, k), multiplicatively so the intermediate values stay small. */
+export function binomial(n: number, k: number): number {
+    if (k < 0 || k > n) return 0
+    const kk = Math.min(k, n - k)
+    let r = 1
+    for (let i = 1; i <= kk; i++) r = (r * (n - kk + i)) / i
+    return Math.round(r)
+}
+
+/**
+ * Two-sided permutation p for a difference in means, EXACT where that is cheap.
+ *
+ * Why a permutation test and not a t-test: these are small integer counts with
+ * no normality to appeal to (entries has ranged 1-52 on one fixture and arm),
+ * and a permutation test assumes only exchangeability under the null — which is
+ * exactly the claim "the arm label doesn't matter", i.e. the null this invariant
+ * is testing. It also needs no variance estimate, which is the thing an n=6
+ * sample is worst at.
+ *
+ * Exact enumeration up to EXACT_PERMUTATION_MAX_N per arm (C(24,12) ≈ 2.7M,
+ * ~9s); above that it samples, because C(2n,n) grows past any budget and a
+ * sampled p is ample for a threshold decision. Sampling is seeded so a verdict
+ * is reproducible — an A/B that reports a different p on re-score is not a
+ * verdict.
+ */
+export function permutationP(a: number[], b: number[]): number {
+    const all = [...a, ...b]
+    const n = all.length
+    const k = a.length
+    const obs = Math.abs(mean(a) - mean(b))
+    // Guard the degenerate cases before enumerating: identical means can never
+    // be exceeded, and an empty arm has nothing to permute.
+    if (k === 0 || b.length === 0) return 1
+    const total = all.reduce((s, x) => s + x, 0)
+    // Work in SUMS: with k fixed, comparing |sumA/k - sumB/(n-k)| is monotone in
+    // sumA, so only the chosen half's sum is needed per arrangement.
+    const diffOf = (sumA: number): number => Math.abs(sumA / k - (total - sumA) / (n - k))
+    const EPS = 1e-9
+
+    if (a.length <= EXACT_PERMUTATION_MAX_N && b.length <= EXACT_PERMUTATION_MAX_N) {
+        let ge = 0
+        let seen = 0
+        // Enumerate every k-subset by index, accumulating its sum as we descend.
+        const walk = (start: number, chosen: number, sumA: number): void => {
+            if (chosen === k) {
+                seen++
+                if (diffOf(sumA) >= obs - EPS) ge++
+                return
+            }
+            // Prune: not enough elements left to finish a k-subset.
+            for (let i = start; i <= n - (k - chosen); i++) walk(i + 1, chosen + 1, sumA + all[i]!)
+        }
+        walk(0, 0, 0)
+        return ge / seen
+    }
+
+    // Sampled fallback. Deterministic LCG rather than Math.random so re-scoring
+    // the same corpus reports the same p.
+    let seed = 0x9e3779b9
+    const next = (): number => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+        return seed / 0x1_0000_0000
+    }
+    let ge = 0
+    const pool = [...all]
+    for (let s = 0; s < SAMPLED_PERMUTATIONS; s++) {
+        // Partial Fisher-Yates: only the first k slots need to be settled.
+        for (let i = 0; i < k; i++) {
+            const j = i + Math.floor(next() * (n - i))
+            ;[pool[i], pool[j]] = [pool[j]!, pool[i]!]
+        }
+        let sumA = 0
+        for (let i = 0; i < k; i++) sumA += pool[i]!
+        if (diffOf(sumA) >= obs - EPS) ge++
+    }
+    // Add-one so a sampled p is never exactly 0 — an unobserved event is not an
+    // impossible one, and 0 would read as infinite confidence.
+    return (ge + 1) / (SAMPLED_PERMUTATIONS + 1)
+}
+
 /**
  * A trial can only ground symbols it actually wrote. `symbols === 0` means the
  * APIS section is a stub — a degraded one-line "Now let me look at…" — and its
@@ -805,6 +901,7 @@ export function scoreLowFanout(
 ): {lowBreaks: string[]; unmeasured: string[]} {
     const lowBreaks: string[] = []
     const unmeasured: string[] = []
+    const testable: {id: string; b: TrialResult[]; t: TrialResult[]}[] = []
     const byFixture = (rows: TrialResult[], id: string): TrialResult[] =>
         rows.filter(r => r.taskId === id)
     for (const id of LOW_FANOUT) {
@@ -817,18 +914,64 @@ export function scoreLowFanout(
             )
             continue
         }
-        const bw = mean(b.map(r => r.apisWallMs))
-        const tw = mean(t.map(r => r.apisWallMs))
-        const be = mean(b.map(r => r.entries))
-        const te = mean(t.map(r => r.entries))
-        if (bw > 0 && tw > bw * LOW_FANOUT_WALL_TOLERANCE) {
-            lowBreaks.push(`${id} wall ${(bw / 1000).toFixed(0)}s→${(tw / 1000).toFixed(0)}s`)
-        }
-        if (be > 0 && te < be * ENTRY_FLOOR) {
-            lowBreaks.push(`${id} entries ${be.toFixed(1)}→${te.toFixed(1)}`)
-        }
+        // A refusal is a categorical fact, not a noisy mean: the CAP lever
+        // engaged on a fixture it was never supposed to reach. It needs no
+        // significance test and is checked at any n.
         const fired = t.reduce((n, r) => n + r.budgetRefusals, 0)
         if (fired > 0) lowBreaks.push(`${id} budget fired ${fired}× on a low-fan-out task`)
+
+        testable.push({id, b, t})
+    }
+
+    // MULTIPLICITY. This is ONE invariant that breaks if ANY of its sub-tests
+    // fires, so 0.05 belongs to the invariant, not to each test. Measured on the
+    // null corpus: per-test 0.05 across 3 fixtures x 2 metrics gives an 11.7%
+    // false-break rate for the invariant — better than the 45.3% of the ratio
+    // rule it replaced, but still not the 5% it claims. Bonferroni over the
+    // tests ACTUALLY PERFORMED (so a run with fewer controls is not silently
+    // penalised) restores it: 1.5% on the same sweep. The sub-tests are
+    // positively correlated within a fixture, which only makes this conservative.
+    const alpha = testable.length === 0 ? CONTROL_ALPHA : CONTROL_ALPHA / (testable.length * 2)
+    // …and the correction feeds back into what counts as measurable. The
+    // smallest two-sided p an exact test can report is 2/C(nb+nt, nb); a fixture
+    // whose floor sits above the CORRECTED alpha can neither break nor hold, and
+    // saying HOLDS there is arithmetic wearing the shape of evidence. With 3
+    // controls the corrected alpha is 0.0083, so n=4 per arm (floor 2/70 =
+    // 0.029) is NOT enough and n=5 (2/252 = 0.0079) is — a threshold derived
+    // from the test, never chosen to suit a run.
+    const measurable = testable.filter(({id, b, t}) => {
+        const floor = 2 / binomial(b.length + t.length, b.length)
+        if (floor <= alpha) return true
+        unmeasured.push(
+            `${id} control: ${b.length} baseline and ${t.length} treatment trial(s)`
+                + ` — the smallest p an exact test can report here is ${floor.toFixed(3)},`
+                + ` above the corrected ${alpha.toFixed(4)}, so this fixture can neither`
+                + ` break nor hold`
+        )
+        return false
+    })
+    for (const {id, b, t} of measurable) {
+        const bw = b.map(r => r.apisWallMs)
+        const tw = t.map(r => r.apisWallMs)
+        const be = b.map(r => r.entries)
+        const te = t.map(r => r.entries)
+        // Directional: only a treatment that is SLOWER, or that lost entries,
+        // can break a control. Two-sided p with a direction filter is exactly
+        // the shape the null-control sweep calibrated.
+        const slower = permutationP(bw, tw)
+        if (mean(tw) > mean(bw) && slower <= alpha) {
+            lowBreaks.push(
+                `${id} wall ${(mean(bw) / 1000).toFixed(0)}s→${(mean(tw) / 1000).toFixed(0)}s`
+                    + ` (p=${slower.toFixed(3)})`
+            )
+        }
+        const thinner = permutationP(be, te)
+        if (mean(te) < mean(be) && thinner <= alpha) {
+            lowBreaks.push(
+                `${id} entries ${mean(be).toFixed(1)}→${mean(te).toFixed(1)}`
+                    + ` (p=${thinner.toFixed(3)})`
+            )
+        }
     }
     return {lowBreaks, unmeasured}
 }
