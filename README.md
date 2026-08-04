@@ -169,6 +169,19 @@ Resolves an installed npm package, indexes its `.d.ts` files and README into a l
 
 Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings persist to `~/.config/pi-task/config.json`.
 
+Long-running extension tools that already implement their own bounded child
+timeouts and cancellation can be excluded from the generic per-tool command
+watchdog without disabling protection for `bash`:
+
+```json
+{
+  "commandTimeoutExemptTools": ["fable_loop"]
+}
+```
+
+Names are matched exactly. This does not disable the model-stream watchdog or
+any timeout implemented by the exempt tool itself.
+
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **remote control** | on | The remote UI server (QR code, phone access). Turn off to never start it. |

@@ -40,6 +40,8 @@ export interface WatchdogDeps {
      * 0 (or any non-positive value) means the watchdog is off and never arms.
      */
     getTimeoutMs: () => number
+    /** Optional exact policy for tools with their own bounded execution contract. */
+    shouldWatch?: (toolName: string) => boolean
     schedule: (fn: () => void, ms: number) => TimerHandle
     cancel: (handle: TimerHandle) => void
     /** Invoked when a command overruns: each adapter aborts/kills here. */
@@ -141,10 +143,12 @@ export class CommandWatchdog {
 
     /** Arm a timer for a starting tool. No-op when the watchdog is off. */
     onStart(toolCallId: string, toolName: string): void {
+        // Disarm first so a live policy/config change cannot leave a timer from
+        // a duplicate start armed after the tool becomes exempt or watchdog-off.
+        this.disarm(toolCallId)
+        if (this.deps.shouldWatch?.(toolName) === false) return
         const ms = this.deps.getTimeoutMs()
         if (!(ms > 0)) return
-        // A duplicate start for the same id must not leak the previous timer.
-        this.disarm(toolCallId)
         const handle = this.deps.schedule(() => this.fire(toolCallId, toolName, ms), ms)
         this.active.set(toolCallId, handle)
     }

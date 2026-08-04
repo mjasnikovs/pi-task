@@ -6,7 +6,7 @@ import {realTimerDeps} from '../shared/command-watchdog.js'
  * A synchronous fake scheduler: records armed timers and lets the test fire one
  * by id, so the state machine is exercised without real time passing.
  */
-function makeHarness(timeoutMs: number) {
+function makeHarness(timeoutMs: number, shouldWatch?: (toolName: string) => boolean) {
     let nextId = 0
     const timers = new Map<number, () => void>()
     const fired: {toolCallId: string; toolName: string; timeoutMs: number}[] = []
@@ -14,6 +14,7 @@ function makeHarness(timeoutMs: number) {
 
     const deps: WatchdogDeps = {
         getTimeoutMs: () => currentTimeout,
+        shouldWatch,
         schedule: fn => {
             const id = nextId++
             timers.set(id, fn)
@@ -61,6 +62,17 @@ describe('CommandWatchdog', () => {
         h.watchdog.onStart('call-1', 'bash')
         expect(h.armedCount()).toBe(0)
         expect(h.fired).toHaveLength(0)
+    })
+
+    test('an explicitly exempt tool never arms while other tools remain guarded', () => {
+        const h = makeHarness(900_000, toolName => toolName !== 'fable_loop')
+        h.watchdog.onStart('call-1', 'fable_loop')
+        expect(h.armedCount()).toBe(0)
+
+        h.watchdog.onStart('call-2', 'bash')
+        expect(h.armedCount()).toBe(1)
+        h.elapse(0)
+        expect(h.fired).toEqual([{toolCallId: 'call-2', toolName: 'bash', timeoutMs: 900_000}])
     })
 
     test('the ceiling is read per start, so a config change takes effect next command', () => {

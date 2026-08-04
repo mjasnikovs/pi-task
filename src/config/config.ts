@@ -68,6 +68,15 @@ export interface PiTaskConfig {
      */
     requestTimeoutMs: number
     /**
+     * Extension tools that own a stronger, domain-specific timeout and
+     * cancellation contract. The generic command watchdog must not abort these
+     * tools mid-transaction; bash and every other tool remain guarded.
+     *
+     * This is intentionally an advanced config-file setting rather than a
+     * blanket switch in /task-config. Tool names are matched exactly.
+     */
+    commandTimeoutExemptTools: string[]
+    /**
      * Inactivity ceiling (ms) on the MODEL STREAM before the stream watchdog
      * aborts the request (shared/stream-watchdog.ts). A hung or silently-dropped
      * stream throws nothing, so neither the connection-error retry (needs a
@@ -175,6 +184,21 @@ export function sanitizeRequestTimeoutMs(value: unknown): number {
         :   DEFAULT_REQUEST_TIMEOUT_MS
 }
 
+/** Keep only exact, unique Pi tool names from an advanced config override. */
+export function sanitizeCommandTimeoutExemptTools(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    const result: string[] = []
+    const seen = new Set<string>()
+    for (const item of value) {
+        if (typeof item !== 'string') continue
+        const name = item.trim()
+        if (!/^[A-Za-z0-9_][A-Za-z0-9_.:-]*$/.test(name) || seen.has(name)) continue
+        seen.add(name)
+        result.push(name)
+    }
+    return result
+}
+
 /**
  * The stream-watchdog choices offered by /task-config, in cycle order. Every
  * option is minutes, not seconds: the failure this guards costs hours, and the
@@ -210,6 +234,7 @@ const DEFAULTS: PiTaskConfig = {
     searchProvider: 'exa',
     extensionWhitelist: [],
     requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+    commandTimeoutExemptTools: [],
     streamInactivityMs: DEFAULT_STREAM_INACTIVITY_MS,
     // OFF: auto-answering is for unattended throwaway runs only.
     yoloMode: false,
@@ -247,6 +272,9 @@ if (!G.loaded) {
         if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
         parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
         parsed.requestTimeoutMs = sanitizeRequestTimeoutMs(parsed.requestTimeoutMs)
+        parsed.commandTimeoutExemptTools = sanitizeCommandTimeoutExemptTools(
+            parsed.commandTimeoutExemptTools
+        )
         parsed.streamInactivityMs = sanitizeStreamInactivityMs(parsed.streamInactivityMs)
         // A hand-edited `"yoloMode": "false"` is a truthy string — it must not
         // silently switch a watched run into unattended auto-pick. Only a real

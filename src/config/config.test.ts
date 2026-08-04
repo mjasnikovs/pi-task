@@ -3,10 +3,26 @@ import {
     COMMAND_TIMEOUT_OPTIONS,
     DEBUG_LOG_OPTIONS,
     sanitizeDebugLogs,
+    sanitizeCommandTimeoutExemptTools,
     sanitizeRequestTimeoutMs,
     sanitizeStreamInactivityMs,
     STREAM_INACTIVITY_OPTIONS
 } from './config.js'
+
+describe('sanitizeCommandTimeoutExemptTools', () => {
+    test('keeps unique non-empty tool names', () => {
+        expect(
+            sanitizeCommandTimeoutExemptTools(['fable_loop', ' fable_loop ', 'durable_job', '', 42])
+        ).toEqual(['fable_loop', 'durable_job'])
+    })
+
+    test('rejects non-arrays and entries that are not tool names', () => {
+        for (const bad of [undefined, null, 'fable_loop', {}, 1]) {
+            expect(sanitizeCommandTimeoutExemptTools(bad)).toEqual([])
+        }
+        expect(sanitizeCommandTimeoutExemptTools(['has spaces', 'slash/name', '-bad'])).toEqual([])
+    })
+})
 
 describe('COMMAND_TIMEOUT_OPTIONS', () => {
     test('offers 5/10/15/30 min plus off, with off stored as 0', () => {

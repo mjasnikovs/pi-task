@@ -18,8 +18,9 @@ import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command
  * the whole process tree on abort — then a follow-up user turn tells the model
  * what happened so it retries with a timeout instead of hanging again.
  *
- * Tool-agnostic: it arms on ANY tool, honouring "any command can run forever",
- * though in practice only bash runs long enough to trip it.
+ * Tool-agnostic by default: it arms on every tool except exact names listed in
+ * `commandTimeoutExemptTools`. Exemptions are reserved for extension tools
+ * that already own a bounded timeout and cancellation contract.
  *
  * SCOPE — this covers the main session ONLY, which is where the implementation
  * turn runs (orchestrator hands the spec off via sendUserMessage). Gate
@@ -80,6 +81,7 @@ export function registerCommandWatchdog(pi: ExtensionAPI): void {
 
     const watchdog = new CommandWatchdog({
         getTimeoutMs: () => getConfig().requestTimeoutMs,
+        shouldWatch: toolName => !getConfig().commandTimeoutExemptTools.includes(toolName),
         ...realTimerDeps,
         onFire: (toolCallId, toolName, timeoutMs) => {
             const ctx = ctxByCall.get(toolCallId)
