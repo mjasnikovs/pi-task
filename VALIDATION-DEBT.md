@@ -719,6 +719,59 @@ Recorded rather than patched mid-verdict, and noted for what it is: closing this
 gap can only make the treatment look WORSE, never better, so it is the one
 instrument change here that is safe to make after seeing the numbers.
 
+#### ROUND 4 — the negative control ran. The invariant is a noise detector.
+
+Corpus `~/tmp/research-fanout-ab-nullctl`, one `baseline` arm at n=12 over
+TASK_0001/0003/0004 = 36 trials, 0 quarantined, no llama-server revive (so all
+12 trials per fixture were drawn under one server state). Scored by
+`scripts/lowfanout-null-control.ts` (`60c2389`), whose design was pre-registered
+in its header before the corpus existed. **Exit 1.**
+
+    924 pure-baseline 6-vs-6 splits scored (462 partitions x both orientations)
+    splits with >=1 break: 419/924 = 45.3%
+
+    276x  TASK_0001 entries …        <- every one of these is a FALSE break:
+    187x  TASK_0004 entries …           both halves are the SAME arm
+      1x  TASK_0003 entries …
+     ~45  TASK_0001/0004 wall …s→…s  (e.g. 120s→187s, 61s→92s)
+
+**`inv-low-fanout-untouched` breaks 45.3% of the time on data with no treatment
+in it.** The round-3 FAIL is therefore uninformative about the lever — a coin
+weighted 45/55 would have produced it. Both tripwires are implicated, not just
+the one that fired in round 3: the `ENTRY_FLOOR` ratio dominates, and
+`LOW_FANOUT_WALL_TOLERANCE = 1.5` also false-fires on TASK_0001 and TASK_0004.
+The defect is structural — `scoreLowFanout` compares raw MEANS against fixed
+ratios with no variance model, on count metrics whose within-fixture CV runs to
+87%.
+
+**The exit-2 on the arm was correct behaviour, not a fault.** A controls-only
+arm never produces the timeout shape, so the single-arm reporter ABSTAINed rather
+than reading `0/0 timeouts` as a win. The chain's revive step then fired
+harmlessly against an already-healthy container and the 36/36 check let it
+proceed.
+
+**The repair, calibrated on null data only.** A directional exact permutation
+test on the same 924 splits, replacing the fixed ratio:
+
+    fixed ratio floor (shipped)                    45.3%   false-break rate
+    permutation test, one-sided, p<=0.05            4.4%
+    permutation test, one-sided, p<=0.01            0.9%
+
+p<=0.05 holds its nominal size across all three fixtures. This calibration
+contains **no treatment data**, which is the whole reason it is admissible after
+seeing round 3 break: nothing here can be tuned toward or away from the lever's
+numbers.
+
+**What this does and does not do to the round-3 verdict.** It voids the FAIL; it
+does NOT convert it to a PASS. Under the repaired rule round 3's two breaks read
+p=0.152 (TASK_0001) and p=0.132 (TASK_0003) — neither significant — so a
+re-score would report `inv-low-fanout-untouched HOLDS` and, with the other three
+already holding, a PASS. That re-score is legitimate only because the repair was
+calibrated on the independent null corpus, and it must be recorded as what it is:
+a verdict rendered by an instrument repaired after the run it judges. The
+honest reading is that round 3 has **no verdict on this invariant** until the
+repaired scorer is wired and the v3 corpus re-scored.
+
 #### Still open, and a PASS would not have closed it
 
 `PI_TASK_WORKER_PROGRESS_CEILING_MS` ran at 1,200,000ms against a maximum
