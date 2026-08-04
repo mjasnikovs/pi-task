@@ -618,6 +618,115 @@ recovers ~3.5% on run 18 (independently reproducing the 0.7% recorded in
 That harness poses H-cache vs H-retrieval and **has no recorded verdict**. If
 retrieval is the fault, a cache memoises the bad answers.
 
+### ROUND 3 — n=6, controls RAN, verdict FAIL and it moved to a new invariant
+
+Corpus `~/tmp/research-fanout-ab-v3`, 42 trials per arm (7 fixtures x n=6), both
+arms at `e4d4c9f`, scored by the round-2 instrument. Four trials quarantined
+under `results/*/errored/` (one CUDA OOM, two `503 Loading model` off a `/health`
+that lies, one mid-arm llama-server death) and re-run. **Exit 1 — FAIL.**
+
+    fixture     arm        n  timeouts  apisWall(s)  lookups  entries  sig  ungrounded  synth
+    TASK_0017   baseline   6      6/6         626     25.7     21.2  20.3         0.5    0.0
+    TASK_0017   progress   6      0/6         500     22.8     36.7  35.8         0.5    0.0
+    TASK_0019   baseline   6      5/6         361     29.3     26.2  26.0         0.0    0.3
+    TASK_0019   progress   6      0/6         301     22.5     29.5  29.3         0.0    0.3
+    TASK_0020   baseline   6      5/6         569     48.5     21.3  20.5         0.3    0.0
+    TASK_0020   progress   6      0/6         420     34.3     35.0  34.7         0.3    0.0
+    TASK_0021   baseline   6      6/6         652     64.8     11.0   8.3         0.8    0.0
+    TASK_0021   progress   6      0/6         391     29.0     25.5  24.8         0.2    0.0
+    TASK_0001   baseline   6      0/6          67      0.2      6.0   6.0         0.0    0.0   control
+    TASK_0001   progress   6      0/6          51      0.0      1.8   1.7         2.0    0.0   control
+    TASK_0003   baseline   6      0/6          58      0.0      6.8   6.8         0.0    0.2   control
+    TASK_0003   progress   6      0/6          54      0.0      5.0   5.0         0.0    0.0   control
+    TASK_0004   baseline   6      0/6         134      1.3      9.5   9.0         0.7    0.0   control
+    TASK_0004   progress   6      0/6         147      1.2     10.5   9.0         2.7    0.3   control
+
+    inv-quality-not-worse    HOLDS   signature coverage held, ungrounded rose on no
+                                     high-fan-out fixture     <- was BROKEN at n=3
+    inv-no-new-degrade       HOLDS   0 degraded trials in progress
+    inv-low-fanout-untouched BROKEN  TASK_0001 entries 6.0→1.8; TASK_0003 6.8→5.0
+    inv-time-to-answer-lower HOLDS   361s → 301s, over the 1 fixture (TASK_0019)
+                                     that answered in EVERY trial of BOTH arms
+    descriptive (CENSORED)   baseline 552s, 22/24 truncated, answered 16/24
+                             progress 403s,  0/24 truncated, answered 24/24
+
+**Which invariants had data, plainly:** all four. This is the first run where
+`inv-low-fanout-untouched` was actually evaluated — round 2's item 1 is finished,
+and the first thing it did on real data was break. That is the instrument
+working, not the instrument failing.
+
+**Metric 1 reproduced a third time: 22/24 → 0/24 witnessed timeouts.** Every
+high-fan-out fixture went from mostly-or-always timing out to never. The
+baseline reached a usable answer in 16/24 trials, the progress arm in 24/24.
+
+**inv-quality-not-worse flipped BROKEN→HOLDS on more data, with no instrument
+change.** The n=3 break was TASK_0020 `0.0%→1.5%`, where the baseline's 0.0%
+came from the one of three trials that wrote a section at all. At n=6 the
+baseline actually answers there and the comparison has two real sides:
+ungrounded 0.3 vs 0.3. The n=3 FAIL on quality was a small-sample artifact of a
+degenerate baseline — which is what UNSCORABLE exists to catch and did not,
+because one trial did squeak through with symbols.
+
+#### The FAIL is on a control the lever provably cannot touch
+
+Recorded as the verdict, and NOT overturned by argument. But three facts about
+it, all checked before writing this:
+
+1. **The mechanism cannot reach these fixtures.** `progress` sets exactly one
+   env var, `PI_TASK_WORKER_PROGRESS_CEILING_MS` (no carry-forward), and it
+   reaches only `workerTimeout`'s abort deadline. Across all 18 control trials in
+   both arms: `budgetRefusals=0`, `degraded=false`, `attempts=1`, wall 37-218s
+   against a 240s per-attempt cap that was never hit. The deadline never armed,
+   never fired, and can only ever push a deadline OUT. The two arms ran an
+   identical code path on every one of these trials.
+2. **Neither break is distinguishable from noise.** Exact permutation test on the
+   difference of means, all 924 splits:
+
+       TASK_0001  baseline 6.0 (sd 5.2, CV 87%) → 1.8   ratio 0.31   p=0.152
+       TASK_0003  baseline 6.8 (sd 1.6, CV 23%) → 5.0   ratio 0.73   p=0.132
+       TASK_0004  baseline 9.5 (sd 6.3, CV 66%) → 10.5  ratio 1.11   p=0.784
+
+   Baseline TASK_0001 ran 5, 6, 15, 1, 8, 1 — it produced the same 1-entry stub
+   twice in six trials on its own. `scoreLowFanout` compares raw MEANS against a
+   fixed 80% floor with no variance model at all, on a metric whose within-fixture
+   CV reaches 87%. It can break on a lever that did nothing.
+3. **It is not the mid-arm llama-server revive.** The progress arm died after 8
+   trials and was revived at 02:05. TASK_0001's first trial, recorded at 01:49
+   BEFORE the revive, was already a 1-entry stub, and the stubs sit on both sides
+   of it (01:49, 02:26, 03:01, 04:11, 04:37 stub; 03:33 not).
+
+**The fix is NOT to relax `ENTRY_FLOOR`.** That threshold would be moving after
+seeing the number it changes, which this file has ruled out twice. The resolution
+is a NEGATIVE CONTROL: run the three control fixtures baseline-vs-baseline, n=6,
+and score them through the same `scoreLowFanout`. If an entries floor breaks
+between two independent samples of the SAME arm, the invariant is measuring
+run-to-run variance, and that is established from data containing no treatment at
+all — so it cannot be tuning to the verdict. Until that runs, the FAIL stands and
+`PI_TASK_WORKER_PROGRESS_CEILING_MS` does not ship.
+
+#### Instrument gap found while reading this verdict, pointing the OTHER way
+
+`scoreQuality` runs over `shared = HIGH_FANOUT.filter(...)`. **Control fixtures
+are never checked for fabrication at all.** This run put real numbers in that
+blind spot: TASK_0001 ungrounded 0.0→2.0 and TASK_0004 0.7→2.7, neither seen by
+`inv-quality-not-worse`, which reported "fabricated symbols did not rise on any
+fixture" while two control fixtures had risen. Two single trials carry it
+(TASK_0001-5: 1 entry, 34 symbols, 10 ungrounded; TASK_0004-3: 14 entries, 121
+symbols, 14 ungrounded), so it may well be the same variance — but the guard did
+not look, and "did not look" printed as "did not rise".
+
+Recorded rather than patched mid-verdict, and noted for what it is: closing this
+gap can only make the treatment look WORSE, never better, so it is the one
+instrument change here that is safe to make after seeing the numbers.
+
+#### Still open, and a PASS would not have closed it
+
+`PI_TASK_WORKER_PROGRESS_CEILING_MS` ran at 1,200,000ms against a maximum
+observed wall of 980s. It has never fired. An arbitrary constant that has never
+fired is not shippable on a green A/B — see
+`memory/fix-must-preserve-work-not-bound-it.md`. And the quality result at n=6 is
+directional only: within-fixture CV for entries reaches 87% on this corpus.
+
 ---
 
 ## GRAY AREAS — carried forward, still true
