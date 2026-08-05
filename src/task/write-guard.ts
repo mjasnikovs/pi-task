@@ -143,6 +143,161 @@ export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
     return changes.deleted.filter(p => !addedNames.has(basename(p)))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// IGNORED-PATH CHANNEL (mx5 run 19)
+//
+// The final-gate autofix greened `bun run seed` by writing DATABASE_URL and
+// ADMIN_* into `/workspace/.env`, which `.gitignore:14` ignores. Everything
+// above consumes `git status --porcelain`, which does not report ignored paths,
+// so the edit was invisible to the diff capture, the deletion guard, the probe
+// scan and the stranded-fix commit. The gate then certified a PASS that a fresh
+// clone cannot reproduce: `.env` is not in the commit and `.env.example` never
+// grew the ADMIN_* keys the seed requires.
+//
+// The rule is NOT to reject the write. A local `.env` is often the only way to
+// make a check run at all, and rejecting it would leave the gate unable to test
+// anything. What is illegitimate is the VERDICT: a PASS that depends on a file
+// the repository does not contain is not an observation of the shipped product.
+// So the write is recorded, carried as debt, and any gate PASS proven to depend
+// on it is downgraded to UNOBSERVED (the verdict class settled in final-gate.ts
+// unobservedVerdict: zero reproducible observation is UNOBSERVED, not PASS).
+//
+// EXEMPT BY MECHANISM, not by hope: build output and dependency trees are
+// ignored too and a rule that fires on every `dist/` write is unusable. STEP 0
+// (scripts/ignored-writes-baserate.ts) measured the real shape — over 68
+// recorded child logs in ~/hub the gate children announced 29 writes, 9 of them
+// to ignored paths, and 8 of those 9 are `.env` (the other is `node_modules`,
+// from `bun install`). Gate children do not hand-write build output; the
+// COMMANDS they run do, and that never enters this channel because it is
+// attributed by a before/after snapshot of the child's own window.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Why an ignored path is (or is not) something the gate may rule on. */
+export type IgnoredClass = 'build-output' | 'dep-dir' | 'task-dir' | 'vcs-meta' | 'actionable'
+
+/**
+ * Directory names that are build output or a dependency tree by convention. The
+ * parsed outdirs (see classifyIgnoredPath's `outdirs`) come from the project's
+ * own tooling and are the primary mechanism; this list is the fallback for
+ * projects whose build is not declared in a package.json (CMake, cargo, gradle).
+ */
+const BUILD_DIR_NAMES = new Set([
+    'node_modules',
+    'dist',
+    'build',
+    'target',
+    'out',
+    'coverage',
+    '.next',
+    '.nuxt',
+    '.svelte-kit',
+    '.turbo',
+    '.cache',
+    '.parcel-cache',
+    '.vite',
+    '.gradle',
+    '__pycache__',
+    '.pytest_cache',
+    '.venv',
+    'venv'
+])
+
+/**
+ * Classify one repo-relative ignored path. `outdirs` are build output directories
+ * parsed from the project's own build commands. Only `actionable` may produce a
+ * finding — everything else is reproducible from the repository by running the
+ * project's own tooling, which is exactly what makes it not a gate concern.
+ */
+export function classifyIgnoredPath(rel: string, outdirs: string[]): IgnoredClass {
+    const segs = rel
+        .replace(/^\.\//, '')
+        .split('/')
+        .filter(s => s.length > 0)
+    if (segs.length === 0) return 'actionable'
+    if (segs.includes('.pi-tasks')) return 'task-dir'
+    if (segs.includes('.git')) return 'vcs-meta'
+    if (segs.includes('node_modules')) return 'dep-dir'
+    for (const o of outdirs) {
+        const oSegs = o
+            .replace(/^\.\//, '')
+            .split('/')
+            .filter(s => s.length > 0)
+        if (oSegs.length > 0 && oSegs.every((s, i) => segs[i] === s)) return 'build-output'
+    }
+    if (segs.some(s => BUILD_DIR_NAMES.has(s))) return 'build-output'
+    return 'actionable'
+}
+
+/** The ignored paths a gate may rule on: everything not exempt by mechanism. */
+export function findActionableIgnoredWrites(paths: string[], outdirs: string[]): string[] {
+    return paths.filter(p => classifyIgnoredPath(p, outdirs) === 'actionable')
+}
+
+/**
+ * A fingerprint per ignored path (`mtimeMs:size`, or a marker for a directory),
+ * taken before and after a write-capable child so a write is ATTRIBUTED to that
+ * child rather than to the tree's pre-existing state. Ignored files are untracked,
+ * so git cannot tell "changed" from "was always there" — only the snapshot can.
+ */
+export type IgnoredSnapshot = Record<string, string>
+
+/**
+ * Paths whose fingerprint appeared or changed across the child's window. Pure, so
+ * the attribution rule is unit-testable without a repo.
+ */
+export function diffIgnoredSnapshots(before: IgnoredSnapshot, after: IgnoredSnapshot): string[] {
+    const out: string[] = []
+    for (const [p, fp] of Object.entries(after)) {
+        if (before[p] !== fp) out.push(p)
+    }
+    return out.sort()
+}
+
+/**
+ * The gate-trail line. PATH NAMES ONLY: the contents of an ignored file are never
+ * read into a log, a debt reason or a child prompt (`.env` is the canonical case —
+ * this channel exists because of a file full of credentials).
+ */
+export function ignoredWriteTrailLine(paths: string[]): string {
+    return (
+        `final-gate: fix pass modified IGNORED path(s) — ${paths.join(', ')}; `
+        + 'these are NOT committed and NOT reproducible from the repository'
+    )
+}
+
+/**
+ * The durable debt reason for the same event. Path names only, same rule.
+ *
+ * The wording tracks what was actually PROVEN. `dependent === true` is the probe's
+ * answer that the gate does not pass without these files; `undefined` is an
+ * unanswered probe (the attempt never converged, or the probe could not run), which
+ * is still worth carrying because the file is on disk and can green a LATER attempt.
+ * A debt that overstates its evidence is the same defect this whole channel exists
+ * to fix, one level up.
+ */
+export function ignoredWriteDebtReason(paths: string[], dependent?: boolean): string {
+    const head =
+        dependent === true ?
+            `final-gate PASS depended on gitignored file(s) the run wrote and cannot ship: ${paths.join(', ')}. `
+            + 'A fresh clone does NOT have them, so the checks that passed here cannot be reproduced. '
+        :   `the final-gate fix pass wrote gitignored file(s) that are NOT in the commit: ${paths.join(', ')}. `
+            + 'Whether the gate needs them was not established, so a fresh clone may not reproduce this run. '
+    return (
+        head
+        + 'The durable fix is a TRACKED counterpart (e.g. .env.example) or a check that '
+        + 'does not need the file — never committing the ignored file itself.'
+    )
+}
+
+/** The UNOBSERVED note that replaces such a PASS. Path names only, same rule. */
+export function ignoredWriteUnobservedNote(paths: string[]): string {
+    return (
+        `UNOBSERVED — NOT a pass: the gate's checks passed only with gitignored file(s) `
+        + `this run wrote (${paths.join(', ')}), which are not in the commit; re-running `
+        + 'them without those files FAILS, so no reproducible evidence was produced.'
+    )
+}
+
 /**
  * One-line summary for the gate debug log — the diff capture every write-capable
  * child gets so "what did this pass change" is answerable from artifacts (the

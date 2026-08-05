@@ -66,6 +66,7 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
 import {describeDebt, recordFinalGateUnobservedDebt, type AcceptDebt} from './accept-debt.js'
+import {ignoredWriteTrailLine, ignoredWriteDebtReason} from './write-guard.js'
 import {
     applyDemotions,
     isNonProgress,
@@ -1760,6 +1761,11 @@ export async function runAutoLoop(
                     // after MAX_FINAL_GATE_AUTOFIX attempts that still FAIL the
                     // autofix card is withdrawn so the loop cannot run unbounded.
                     let fixAttempts = 0
+                    // Gitignored paths the fix passes have written so far in this
+                    // resolution loop (mx5 run 19). Accumulated across attempts: a
+                    // `.env` written by a failed attempt is still on disk for the next
+                    // one, and that attempt's own before/after diff cannot see it.
+                    let ignoredWritten: string[] = []
                     // Sub-fixes a non-converging autofix attempt left uncommitted.
                     // Refreshed after every attempt; drives the picker note and the
                     // terminal commit (mx5 run 13 PROMPT 4 item 3, run 14 item 2b).
@@ -1904,7 +1910,37 @@ export async function runAutoLoop(
                                 choice.guidance ?
                                     `${fin.reason}\n\nUser guidance: ${choice.guidance}`
                                 :   fin.reason
-                            const fix = await deps.finalGateFix!(active, cwd, seed)
+                            const fix = await deps.finalGateFix!(active, cwd, seed, ignoredWritten)
+                            // IGNORED-PATH WRITES (mx5 run 19). The pass wrote file(s)
+                            // git ignores, so they are not in the commit and a fresh
+                            // clone does not have them. Trailed on EVERY outcome — a
+                            // rejected attempt's tracked edits are discarded while its
+                            // ignored writes survive on disk — and carried forward, so a
+                            // later attempt's PASS is judged against everything this loop
+                            // wrote, not just its own attempt. PATH NAMES ONLY: an ignored
+                            // file's contents (`.env` is the canonical case) never enter a
+                            // log, a debt or a child prompt.
+                            if (fix.ignoredWrites && fix.ignoredWrites.length > 0) {
+                                ignoredWritten = [
+                                    ...new Set([...ignoredWritten, ...fix.ignoredWrites])
+                                ].sort()
+                                await recGate(ignoredWriteTrailLine(fix.ignoredWrites))
+                                // Debt only where a verdict can rest on the file: the
+                                // probe proved the gate needs it, or the question stayed
+                                // open. A write the gate demonstrably does NOT need is
+                                // trailed and nothing more — a ledger full of scratch
+                                // files is a ledger nobody reads.
+                                if (fix.ignoredDependent !== false) {
+                                    await recordFinalGateUnobservedDebt(
+                                        cwd,
+                                        id,
+                                        ignoredWriteDebtReason(
+                                            fix.ignoredWrites,
+                                            fix.ignoredDependent
+                                        )
+                                    )
+                                }
+                            }
                             if (fix.ok) {
                                 await deps.commit(cwd, `FINAL GATE AUTOFIX (${id})`)
                                 // A converged re-run that observed nothing dynamic is
