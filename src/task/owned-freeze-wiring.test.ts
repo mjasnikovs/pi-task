@@ -163,9 +163,14 @@ describe('resolveOwnedFreezeForThisTask (wired, DETACH)', () => {
     test('a spec with no category freeze is untouched', async () => {
         const cwd = fixture()
         const spec = appendOwnedConstraints(
-            ['GOAL', '  Build tooling.', 'CONSTRAINTS', '  - Preserve every existing script.', 'ACCEPTANCE', '  - ok'].join(
-                '\n'
-            ),
+            [
+                'GOAL',
+                '  Build tooling.',
+                'CONSTRAINTS',
+                '  - Preserve every existing script.',
+                'ACCEPTANCE',
+                '  - ok'
+            ].join('\n'),
             [{quote: QUOTE, anchor: '9. Build & run', title: BUILD_TOOLING}]
         )
         expect(await resolveOwnedFreezeForThisTask(deps(cwd), spec)).toBe(spec)
@@ -255,6 +260,8 @@ describe('claimOwnedFreezeForThisTask (wired, CLAIM)', () => {
         const cwd = fixture()
         const before = fs.readFileSync(path.join(cwd, '.pi-tasks', 'requirements-owned.md'), 'utf8')
         await claimOwnedFreezeForThisTask(claimantDeps(cwd), CLAIMANT_REFINED)
-        expect(fs.readFileSync(path.join(cwd, '.pi-tasks', 'requirements-owned.md'), 'utf8')).toBe(before)
+        expect(fs.readFileSync(path.join(cwd, '.pi-tasks', 'requirements-owned.md'), 'utf8')).toBe(
+            before
+        )
     })
 })

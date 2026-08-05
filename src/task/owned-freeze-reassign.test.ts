@@ -39,7 +39,11 @@ const REFINED = {
 
 const ledger = (): OwnedRequirement[] => [
     {quote: QUOTE, anchor: '9. Build & run', title: BUILD_TOOLING},
-    {quote: 'Use `Bun.password` (argon2id) for password hashing', anchor: '2. Tech stack', title: CLIENT_API}
+    {
+        quote: 'Use `Bun.password` (argon2id) for password hashing',
+        anchor: '2. Tech stack',
+        title: CLIENT_API
+    }
 ]
 
 const specWith = (bullets: string[]): string =>
@@ -53,7 +57,8 @@ const specWith = (bullets: string[]): string =>
     ].join('\n')
 
 /** The composed spec run 19 shipped: the stamped owned bullet plus the freeze. */
-const conflictSpec = (): string => appendOwnedConstraints(specWith([CATEGORY_FREEZE]), [ledger()[0]])
+const conflictSpec = (): string =>
+    appendOwnedConstraints(specWith([CATEGORY_FREEZE]), [ledger()[0]])
 
 /**
  * Stands in for the git oracle: a repo-relative source file, i.e. something with
@@ -75,9 +80,12 @@ describe('writeIntent', () => {
     test('a fenced mention does not — the negation may sit before the verb', () => {
         expect(writeIntent(REFINED.fenced, P)).toBe(false)
         expect(writeIntent('Do not modify `src/server/index.ts`.', P)).toBe(false)
-        expect(writeIntent('All engine modules must remain untouched, including `src/server/index.ts`', P)).toBe(
-            false
-        )
+        expect(
+            writeIntent(
+                'All engine modules must remain untouched, including `src/server/index.ts`',
+                P
+            )
+        ).toBe(false)
     })
 
     test('a bare import is not a write', () => {
@@ -86,7 +94,9 @@ describe('writeIntent', () => {
     })
 
     test('the verb may not reach across a sentence boundary', () => {
-        expect(writeIntent('Create the client shell. It reads `src/server/index.ts`.', P)).toBe(false)
+        expect(writeIntent('Create the client shell. It reads `src/server/index.ts`.', P)).toBe(
+            false
+        )
     })
 })
 
@@ -103,7 +113,11 @@ describe('detachUnsatisfiableRequirements', () => {
 
     test('inv-no-requirement-loss — the quote multiset is identical, text for text', () => {
         const r = detach()
-        expect(r.ledger.map(o => o.quote).sort()).toEqual(ledger().map(o => o.quote).sort())
+        expect(r.ledger.map(o => o.quote).sort()).toEqual(
+            ledger()
+                .map(o => o.quote)
+                .sort()
+        )
     })
 
     test('a detached entry is owned by nobody until it is claimed', () => {

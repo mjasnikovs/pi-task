@@ -360,10 +360,7 @@ export async function resolveOwnedFreezeForThisTask(
  * the same run's 26 REFINED prompts, `writeIntent` picks out exactly the two
  * tasks that write the server file.
  */
-export async function claimOwnedFreezeForThisTask(
-    deps: PhaseDeps,
-    refined: string
-): Promise<void> {
+export async function claimOwnedFreezeForThisTask(deps: PhaseDeps, refined: string): Promise<void> {
     const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
     if (unclaimedPendingRequirements(ledger).length === 0) return
     const title = await planTitle(deps)
