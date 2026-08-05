@@ -7,6 +7,7 @@ import {
     typesPackageName,
     hasTypeFiles,
     detectTypesRedirect,
+    countEntryDeclarations,
     splitRuntimeNamespace
 } from './docs-resolve.js'
 
@@ -124,6 +125,70 @@ test('detectTypesRedirect follows a pure @types redirect stub', () => {
 test('detectTypesRedirect returns null for an aggregator package', () => {
     // target-types references node + local paths and ships its own .d.ts files
     expect(detectTypesRedirect(resolvePackage('target-types', FIXTURES))).toBeNull()
+})
+
+// --- the empty-entry rule (nexttask 1) ---------------------------------------
+// `sharp` ships ONE 1971-line .d.ts whose line 28 is `/// <reference types="node" />`.
+// The file-count guard cannot tell that apart from `@types/bun`'s one-line stub, so
+// every sharp question in mx5 run 19 was answered out of @types/node (tty.d.ts,
+// zlib.d.ts). The discriminator is what is IN the entry file, not how many there are.
+
+test('detectTypesRedirect does not follow an ambient `reference types` in a package that declares its own API', () => {
+    expect(detectTypesRedirect(resolvePackage('ambient-pkg', FIXTURES))).toBeNull()
+})
+
+test('detectTypesRedirect still follows a pointer-only `export * from` stub', () => {
+    expect(detectTypesRedirect(resolvePackage('reexport-stub', FIXTURES))).toBe('target-types')
+})
+
+test('detectTypesRedirect does not follow `export * from` when the entry also declares', () => {
+    expect(detectTypesRedirect(resolvePackage('reexport-decl-pkg', FIXTURES))).toBeNull()
+})
+
+test('detectTypesRedirect leaves the typeless -> @types branch alone', () => {
+    // launcher-pkg ships no declarations at all: no entry file, so no redirect
+    // decision to make here — docs-core's `!hasTypeFiles` branch owns it.
+    const launcher = resolvePackage('launcher-pkg', FIXTURES)
+    expect(detectTypesRedirect(launcher)).toBeNull()
+    expect(hasTypeFiles(launcher.root)).toBe(false)
+})
+
+test('detectTypesRedirect degrades to null on an absent or unreadable entry file', () => {
+    const absent = {
+        name: 'ghost',
+        version: '0.0.0',
+        root: path.join(FIXTURES, 'node_modules', 'no-such-pkg'),
+        entryDts: path.join(FIXTURES, 'node_modules', 'no-such-pkg', 'index.d.ts'),
+        readme: null
+    }
+    expect(detectTypesRedirect(absent)).toBeNull()
+    // A directory where the entry file should be: readFileSync throws EISDIR.
+    // stub-pkg is used because it has ONE .d.ts, so the file-count guard does not
+    // short-circuit and the read really is what has to degrade.
+    const asDir = {
+        ...absent,
+        root: path.join(FIXTURES, 'node_modules', 'stub-pkg'),
+        entryDts: path.join(FIXTURES, 'node_modules', 'stub-pkg')
+    }
+    expect(detectTypesRedirect(asDir)).toBeNull()
+})
+
+test('countEntryDeclarations counts declarations, not lines, comments, or pointers', () => {
+    expect(countEntryDeclarations('/// <reference types="bun-types" />\n')).toBe(0)
+    expect(countEntryDeclarations('export * from "x";\n')).toBe(0)
+    expect(
+        countEntryDeclarations(
+            '/// <reference types="react" />\nimport * as R from "react";\nexport = R;\n'
+        )
+    ).toBe(0)
+    expect(
+        countEntryDeclarations('/* declare function fake(): void */\n// declare const nope: 1\n')
+    ).toBe(0)
+    expect(
+        countEntryDeclarations(
+            '/// <reference types="node" />\ndeclare function f(): void\ninterface I {\n  m(): void\n}\nexport type T = string\n'
+        )
+    ).toBe(3)
 })
 
 test.each(['../etc/passwd', '/abs/path', 'pkg with spaces', '', '@scope/', '@/name'])(

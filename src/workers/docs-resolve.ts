@@ -250,11 +250,54 @@ function isBareSpecifier(spec: string): boolean {
 const REFERENCE_TYPES_RE = /\/\/\/\s*<reference\s+types=["']([^"']+)["']\s*\/>/
 const REEXPORT_ALL_RE = /^\s*export\s+(?:type\s+)?\*\s+from\s+["']([^"']+)["'];?\s*$/m
 
+const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g
+const DECLARATION_RE =
+    /^\s*(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:abstract\s+|async\s+)?(?:interface|type|class|function|const|let|var|namespace|module|enum)\b/
+
+/**
+ * Count declarations in a declaration file's text, ignoring comments, blank
+ * lines, and the pointer lines a redirect stub is made of (`/// <reference .. />`
+ * and `export * from "X"`).
+ *
+ * This is the discriminator `detectTypesRedirect` needs: a redirect stub is a
+ * file with essentially nothing in it but the pointer, while an API surface that
+ * merely *declares an ambient dependency* on another types package (the
+ * `sharp` -> `/// <reference types="node" />` shape) carries its own
+ * declarations. Counting `.d.ts` FILES cannot tell those apart — sharp ships one
+ * 1971-line file and `@types/bun` ships one 1-line file, and both count as 1.
+ *
+ * Deliberately lexical, not a TypeScript parse: this runs in the shipped worker,
+ * which has no compiler dependency. Over-counting is the safe direction (a
+ * declaration found ⇒ not a stub ⇒ keep the package's own types).
+ */
+export function countEntryDeclarations(content: string): number {
+    const stripped = content.replace(BLOCK_COMMENT_RE, '')
+    let n = 0
+    for (const raw of stripped.split('\n')) {
+        const line = raw.trim()
+        if (!line || line.startsWith('//')) continue
+        if (REEXPORT_ALL_RE.test(line)) continue
+        if (DECLARATION_RE.test(line)) n++
+    }
+    return n
+}
+
+/** The package a declaration file points at: a triple-slash `<reference types>`
+ *  or a whole-module `export * from`. Null when the file points nowhere. */
+function pointerTarget(content: string): string | null {
+    const ref = REFERENCE_TYPES_RE.exec(content)
+    if (ref && isBareSpecifier(ref[1])) return parentPackageName(ref[1])
+    const rex = REEXPORT_ALL_RE.exec(content)
+    if (rex && isBareSpecifier(rex[1])) return parentPackageName(rex[1])
+    return null
+}
+
 /** When a package is a pure pointer to another types package — a single-file
  *  `/// <reference types="X" />` (the `@types/bun -> bun-types` shape) or a lone
  *  `export * from "X"` re-export — return the target package name. Returns null
- *  for packages that ship their own declarations (more than one .d.ts file, or a
- *  local `/// <reference path=... />` aggregator entry). */
+ *  for packages that ship their own declarations (more than one .d.ts file, a
+ *  local `/// <reference path=... />` aggregator entry, or an entry file that
+ *  declares anything of its own). */
 export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
     // A package that ships multiple declaration files is an aggregator, not a
     // redirect stub — use its own types.
@@ -270,9 +313,14 @@ export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
     // A local `/// <reference path="..." />` means the entry aggregates sibling
     // declarations (e.g. bun-types) — not a redirect to another package.
     if (/\/\/\/\s*<reference\s+path=/.test(content)) return null
-    const ref = REFERENCE_TYPES_RE.exec(content)
-    if (ref && isBareSpecifier(ref[1])) return parentPackageName(ref[1])
-    const rex = REEXPORT_ALL_RE.exec(content)
-    if (rex && isBareSpecifier(rex[1])) return parentPackageName(rex[1])
-    return null
+    const target = pointerTarget(content)
+    if (!target) return null
+    // A pointer line is not a redirect when the file it sits in also declares an
+    // API. `/// <reference types="node" />` in a package like sharp is an AMBIENT
+    // DEPENDENCY declaration — "my types need node's" — not "my types ARE node's";
+    // following it answered every sharp question out of @types/node (tty.d.ts,
+    // zlib.d.ts) while sharp's own 1971-line surface sat one file away. The .d.ts
+    // FILE count cannot see this: sharp ships one file and so does @types/bun.
+    if (countEntryDeclarations(content) > 0) return null
+    return target
 }
