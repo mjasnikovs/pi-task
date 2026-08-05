@@ -5,6 +5,7 @@
  * each case is fast and hermetic.
  */
 import {describe, expect, test} from 'bun:test'
+import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -1309,6 +1310,132 @@ describe('runFinalIntegrationGate — dangling-artifact closure (run 13, PROMPT 
         fs.writeFileSync(path.join(dir, 'src', 'server.ts'), "Bun.file('dist/index.html')")
         const out = await runFinalIntegrationGate(dir)
         expect((out.failures ?? []).filter(f => f.startsWith('dangling artifact:'))).toHaveLength(0)
+    })
+})
+
+describe('runFinalIntegrationGate — env-template closure (run 19, nexttask 10)', () => {
+    /** The check reads git, so a fixture must be a real work tree. Files written
+     *  AFTER the commit are untracked on purpose (inv-untracked-invisible). */
+    function makeRepo(
+        files: Record<string, string>,
+        untracked: Record<string, string> = {}
+    ): string {
+        const dir = makeDir()
+        const write = (rel: string, body: string): void => {
+            fs.mkdirSync(path.dirname(path.join(dir, rel)), {recursive: true})
+            fs.writeFileSync(path.join(dir, rel), body)
+        }
+        write(
+            'package.json',
+            JSON.stringify({name: 'fx', private: true, scripts: {test: 'exit 0'}})
+        )
+        for (const [rel, body] of Object.entries(files)) write(rel, body)
+        spawnSync('git', ['init', '-q'], {cwd: dir})
+        spawnSync('git', ['add', '-A'], {cwd: dir})
+        spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'x'], {
+            cwd: dir
+        })
+        for (const [rel, body] of Object.entries(untracked)) write(rel, body)
+        return dir
+    }
+
+    const envFailures = (out: {failures?: string[]}): string[] =>
+        (out.failures ?? []).filter(f => f.startsWith('env closure:'))
+
+    /** mx5 run 19 in miniature: `seed.ts` requires two variables the tracked
+     *  `.env.example` never declares, and every command passes. */
+    const SEED_TS =
+        'const phone = process.env.ADMIN_PHONE\n'
+        + 'const password = process.env.ADMIN_PASSWORD\n'
+        + "const displayName = process.env.ADMIN_DISPLAY_NAME ?? 'Admin'\n"
+        + "if (!phone) throw new Error('ADMIN_PHONE environment variable is required')\n"
+        + "if (!password) throw new Error('ADMIN_PASSWORD environment variable is required')\n"
+        + 'export {displayName}\n'
+
+    test('a required variable no template declares FAILS the gate at rank 0', async () => {
+        const dir = makeRepo({
+            '.env.example': 'DATABASE_URL=postgres://x\nAPP_URL=http://localhost:3000\n',
+            'src/server/seed.ts': SEED_TS
+        })
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        const env = envFailures(out)
+        expect(env).toHaveLength(2)
+        expect(env[0]).toContain('ADMIN_PHONE')
+        expect(env[0]).toContain('src/server/seed.ts:1')
+        expect(env[1]).toContain('ADMIN_PASSWORD')
+        expect(env[1]).toContain('.env.example')
+        // rank 0 — the same load-bearing class as boot/render and dangling refs.
+        expect(out.failures![0]).toBe(env[0])
+    })
+
+    test('inv-no-template-no-finding — no tracked template ⇒ inert, gate PASSes', async () => {
+        const out = await runFinalIntegrationGate(makeRepo({'src/server/seed.ts': SEED_TS}))
+        expect(envFailures(out)).toHaveLength(0)
+        expect(out.ok).toBe(true)
+    })
+
+    test('inv-declared-silent — a declared variable never produces a finding', async () => {
+        const out = await runFinalIntegrationGate(
+            makeRepo({
+                '.env.example': 'ADMIN_PHONE=\nADMIN_PASSWORD=\n',
+                'src/server/seed.ts': SEED_TS
+            })
+        )
+        expect(envFailures(out)).toHaveLength(0)
+        expect(out.ok).toBe(true)
+    })
+
+    test('inv-untracked-invisible — gitignored/untracked reads and templates are silent', async () => {
+        const out = await runFinalIntegrationGate(
+            makeRepo(
+                {'.env.example': 'DATABASE_URL=\n', '.gitignore': 'scratch.ts\n.env\n'},
+                {
+                    'scratch.ts':
+                        "const k = process.env.IGNORED_SECRET\nif (!k) throw new Error('x')\n",
+                    'untracked.ts':
+                        "const k = process.env.OTHER_SECRET\nif (!k) throw new Error('x')\n",
+                    '.env.sample': '# untracked template\n',
+                    '.env': 'DATABASE_URL=postgres://local\n'
+                }
+            )
+        )
+        expect(envFailures(out)).toHaveLength(0)
+        expect(out.ok).toBe(true)
+    })
+
+    test('inv-no-verdict-flip-on-clean — a complete template with unread extras stays green', async () => {
+        // dace-pro's shape: more declared than required. The check is
+        // one-directional and must never complain about the other direction.
+        const out = await runFinalIntegrationGate(
+            makeRepo({
+                '.env.example': 'ADMIN_PHONE=\nADMIN_PASSWORD=\nSMTP_HOST=\nSMTP_PORT=\nUNUSED=\n',
+                'src/server/seed.ts': SEED_TS
+            })
+        )
+        expect(envFailures(out)).toHaveLength(0)
+        expect(out.ok).toBe(true)
+    })
+
+    test('inv-idempotent — the same tree yields the same failure list twice', async () => {
+        const dir = makeRepo({
+            '.env.example': 'DATABASE_URL=\n',
+            'src/server/seed.ts': SEED_TS
+        })
+        const a = await runFinalIntegrationGate(dir)
+        const b = await runFinalIntegrationGate(dir)
+        expect(envFailures(a)).toEqual(envFailures(b))
+    })
+
+    test('one finding per variable, however many files read it', async () => {
+        const out = await runFinalIntegrationGate(
+            makeRepo({
+                '.env.example': 'DATABASE_URL=\n',
+                'src/a.ts': "const p = process.env.ADMIN_PHONE\nif (!p) throw new Error('x')\n",
+                'src/b.ts': "const q = process.env.ADMIN_PHONE\nif (!q) throw new Error('x')\n"
+            })
+        )
+        expect(envFailures(out)).toHaveLength(1)
     })
 })
 

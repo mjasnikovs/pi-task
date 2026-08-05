@@ -235,6 +235,68 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## OPEN — 0c. The env-template check NAMES the defect (wired); its DELIVERY claim missed by one trial (nexttask 10/11, A/B-2)
+
+The check is **wired and A/B-1 PASSes** (`src/task/env-template-closure.ts`, beside
+`findDanglingArtifacts` in `final-gate.ts`; `scripts/env-template-closure-ab.ts`,
+exit 0, 4.4 min). On mx5@dfbdd6f it adds two rank-0 lines naming `ADMIN_PHONE` @
+`src/server/seed.ts:20` and `ADMIN_PASSWORD` @ `:21` against a template that omits
+both; dace-pro and pi-task-self are byte-identical PASS→PASS, and all six
+invariants hold. STEP 0 is in that script's own header: 82 findings / 41 trees of
+188, the close condition (*"supplied by CI/compose/secrets"*) **NOT met** — no
+finding's variable appears in any workflow, compose file or Dockerfile; they
+appear in `DESIGN/PROJECT.md` and `.pi-tasks/TASK_*.md`, i.e. the run knew.
+
+**A/B-2 FAILs its pre-registered gate by ONE TRIAL on the baseline ceiling, and
+the mechanism is confirmed anyway** (`scripts/env-template-closure-delivery-ab.ts`,
+n=12/arm, real `runFinalGateAutofix` + real pi child + real write-guard stack,
+~20 min — the doc's 2–4 h estimate was 6× too high at ~40 s/trial):
+
+    seed OK on the COMMITTED tree   baseline  4/12   treatment 12/12   p=0.0007
+    template gained both vars       baseline  4/12   treatment 12/12
+    wrote a gitignored path         baseline 12/12   treatment  3/12
+
+The rule was `treatment ≥ 9/12 AND baseline ≤ 3/12 AND p < 0.05`. Treatment is
+perfect and p clears by 70×; baseline came in at 4. **The threshold was not
+re-tuned after the fact.** The true baseline is ~33%, not ≤25%; a rule fitted to
+data already seen is not a pre-registration, so this is recorded unproven rather
+than relabelled. The two supporting rows are nonetheless the pre-registered PASS
+reading verbatim: all 8 baseline seed-FAILs show `changed[]` / `ignored[.env]` —
+not one tracked file moved, the child papered over the gate with a gitignored
+`.env`, which is mx5 run 19 reproduced 8 times — while every treatment trial
+changed `.env.example` and only that.
+
+**The finding that makes this more than a threshold argument, and the next lever.**
+Treatment converged **3/12, and those 3 are exactly the 3 that also wrote `.env`**
+— perfect correlation, no exceptions. `bun run seed` in the working tree reads a
+real `.env`, so a child that correctly fixes only the template ships a working
+tree and leaves the gate red: wired as the delivery lever, the RIGHT fix would end
+the run FAIL/UNOBSERVED 9 times in 12. That points at the gate's seed command
+needing a template-sourced environment. **Measure it before writing it.**
+
+**Instrument fault, caught by the first trial — the recorded run is the second.**
+`ab-child.log` was written INSIDE the trial tree, where mx5's `.gitignore`
+(`*.log`) made the harness's own writes register as the CHILD's ignored writes.
+That pinned row 3 at 12/12 in both arms — the row that distinguishes a clean
+template fix from another `.env` write — so the PASS reading was unreachable by
+construction, and it also fed `gateWithoutIgnored`, downgrading converged PASSes
+over a file the lever never touches. Every instrument fault in this family has now
+run in the direction that HIDES the lever's success; that is four for four with
+nexttask 8's scorer.
+
+**Generality is still owed and is not paid by more mx5 replicates.** Every STEP-0
+positive comes from one spec family; dace-pro is the only independent
+human-authored project carrying a template and it is clean, so the FP burden rests
+on template-LESS trees where the check is inert by contract. The highest-value
+addition is a real project with a template and a real `.env` requirement —
+`aiz-server` has 98 required reads and NO template.
+
+**Disclosed contaminant in the corpus, present identically in both arms:**
+`~/hub/mx5` carries an untracked `src/server/seed-data.ts` (7 KB, imported by
+nothing — `grep` finds zero references). It CoW-copies into every clone and
+`git add -A` stages it into the measurement tree. Not removed: `~/hub` is
+read-only to this work.
+
 ## OPEN — 0b. The refuted-constraint drop is WIRED; its DELIVERY claim is under-powered (nexttask 8, A/B-2)
 
 The deletion pass is **wired and A/B-1 PASSes** (`src/task/refuted-constraint.ts`,

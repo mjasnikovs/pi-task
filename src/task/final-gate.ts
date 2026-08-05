@@ -79,6 +79,7 @@ import {
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
+import {findMissingEnvDeclarations, envGateFailureText} from './env-template-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 import {makefileRecipe} from './command-shrink.js'
 
@@ -1884,6 +1885,20 @@ export async function runFinalIntegrationGate(
     // serve what it references" is the same load-bearing class as boot/render.
     try {
         for (const d of findDanglingArtifacts(cwd)) fail(danglingGateFailureText(d), 0)
+    } catch {
+        // best-effort scan — a scanner fault must never break the gate
+    }
+    // Env-template closure (mx5 run 19, nexttask 10): a shipped source file
+    // requires an env var the shipped template never mentions. `seed.ts` read
+    // `process.env.ADMIN_PHONE`/`ADMIN_PASSWORD`, `.env.example` declared neither,
+    // `bun run seed` exited 1, and the autofix "fixed" it by writing the GITIGNORED
+    // `.env` — so the committed tree still cannot seed and nothing at run end said
+    // why. Same shape and rank as the dangling-artifact scan one layer up: naming
+    // the ARTIFACT that is wrong, statically, instead of only the command that
+    // failed. Inert on any tree with no tracked template (ENOENT = pass).
+    try {
+        const env = findMissingEnvDeclarations(cwd)
+        for (const m of env.missing) fail(envGateFailureText(m, env.templates), 0)
     } catch {
         // best-effort scan — a scanner fault must never break the gate
     }
