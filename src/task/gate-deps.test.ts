@@ -149,6 +149,31 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
         expect(before.added).toEqual([]) // the ignored file never enters this channel
     })
 
+    test('a wholly-ignored DIRECTORY is one entry, fingerprinted without walking it', async () => {
+        // `--ignored=matching` collapses the directory, and a dir's own mtime moves
+        // when entries are added or removed — that is the whole fingerprint
+        // available without a walk, and a walk is the cost this channel refuses.
+        const dir = makeRepo({'.gitignore': 'logs/\n'})
+        fs.mkdirSync(path.join(dir, 'logs'))
+        fs.writeFileSync(path.join(dir, 'logs/a.log'), 'a\n')
+        const before = await collectIgnoredSnapshot(dir)
+        expect(Object.keys(before)).toEqual(['logs/'])
+        expect(before['logs/']!.startsWith('dir:')).toBe(true)
+        fs.writeFileSync(path.join(dir, 'logs/b.log'), 'b\n')
+        expect(diffIgnoredSnapshots(before, await collectIgnoredSnapshot(dir))).toEqual(['logs/'])
+    })
+
+    test('the probe can move a DIRECTORY aside and restore it with its contents', async () => {
+        const dir = makeRepo({'.gitignore': 'logs/\n'})
+        fs.mkdirSync(path.join(dir, 'logs'))
+        fs.writeFileSync(path.join(dir, 'logs/a.log'), 'a\n')
+        const answer = await gatePassesWithoutIgnored(dir, ['logs/'], async cwd => ({
+            ok: fs.existsSync(path.join(cwd, 'logs'))
+        }))
+        expect(answer).toBe(false)
+        expect(fs.readFileSync(path.join(dir, 'logs/a.log'), 'utf8')).toBe('a\n')
+    })
+
     test('inv-degrade: no git repo at all → empty snapshot, no throw', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ignored-nogit-'))
         fs.writeFileSync(path.join(dir, '.env'), 'A=1\n')

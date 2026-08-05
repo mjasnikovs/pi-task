@@ -119,6 +119,17 @@ const ENTRIES: Entry[] = [
             fs.rmSync(path.join(dir, '.env'), {force: true})
             // The run's own artifacts must not travel into the replay's ledger.
             fs.rmSync(path.join(dir, '.pi-tasks'), {recursive: true, force: true})
+            // `bun run migrate` runs BEFORE `bun run seed` in the real gate, and
+            // seed.ts throws "the 'users' table does not exist" without it. Run it
+            // here, from the TRACKED .env.example rather than an .env, so the
+            // replay's precondition is the repository's own — not a leftover from
+            // whoever set the database up by hand.
+            const url = /^DATABASE_URL=(.+)$/m.exec(
+                fs.readFileSync(path.join(dir, '.env.example'), 'utf8')
+            )?.[1]
+            if (!url) throw new Error('.env.example has no DATABASE_URL')
+            const m = sh(dir, ['bun', 'run', 'migrate'], {DATABASE_URL: url})
+            if (m.code !== 0) throw new Error(`ABSTAIN-migrate: ${m.out.slice(-300)}`)
         },
         child: cwd => {
             // The recorded repair: `.env.example` + the ADMIN_* keys seed.ts requires.
@@ -413,13 +424,26 @@ async function main(): Promise<void> {
         )
         process.exit(2)
     }
+    // A database that is up but not mx5's own (wrong role, wrong db) cannot host
+    // the replay; `bun run migrate` says so precisely, and an ABSTAIN is the only
+    // honest answer — never a FAIL blamed on the lever.
+    const abstain = (err: unknown): never => {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.log(`ABSTAIN — the mx5 replay could not be prepared: ${msg}`)
+        process.exit(2)
+    }
     fs.mkdirSync(WORK, {recursive: true})
 
     const results = new Map<string, {baseline: Metric; treatment: Metric}>()
     for (const e of ENTRIES) {
-        const baseline = await runArm(e, 'baseline')
-        const treatment = await runArm(e, 'treatment')
-        results.set(e.label, {baseline, treatment})
+        try {
+            const baseline = await runArm(e, 'baseline')
+            const treatment = await runArm(e, 'treatment')
+            results.set(e.label, {baseline, treatment})
+        } catch (err) {
+            if (String(err).includes('ABSTAIN-migrate')) abstain(err)
+            throw err
+        }
     }
 
     console.log('# A/B — ignored-path channel\n')

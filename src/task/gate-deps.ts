@@ -431,7 +431,11 @@ export async function gatePassesWithoutIgnored(
     const moved: Array<{from: string; to: string}> = []
     try {
         for (const rel of paths) {
-            const from = path.join(cwd, rel)
+            // `--ignored=matching` reports a wholly-ignored DIRECTORY with a trailing
+            // slash (`logs/`). Left on, `${path.join(cwd, 'logs/')}.pi-gate-probe`
+            // names a path INSIDE the directory, so the rename is a move-into-itself
+            // and the probe silently answers null for every directory entry.
+            const from = path.join(cwd, rel.replace(/\/+$/, ''))
             const to = `${from}.pi-gate-probe`
             try {
                 await fsp.rename(from, to)

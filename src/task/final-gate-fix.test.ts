@@ -437,3 +437,168 @@ describe('runFinalGateAutofix — write-guard stack', () => {
         expect(p).toContain('legitimate relocation keeps the file')
     })
 })
+
+/**
+ * IGNORED-PATH CHANNEL at the fix seam (mx5 run 19). The A/B
+ * (scripts/ignored-writes-ab.ts) replays this against a real mx5 clone, but it
+ * ABSTAINS without a Postgres, so the module contract is pinned here with fakes:
+ * attribution, the trail line's position relative to the guards, the downgrade,
+ * and every path where the channel must stay silent.
+ */
+describe('runFinalGateAutofix — ignored-path channel', () => {
+    /** Two snapshots in sequence: the second call models what the child wrote. */
+    const snapshots = (before: Record<string, string>, after: Record<string, string>) => {
+        let n = 0
+        return () => Promise.resolve(n++ === 0 ? before : after)
+    }
+    const base = (over: Partial<FinalFixDeps>): FinalFixDeps => ({
+        cwd: '/tmp/x',
+        failReason: '`bun run seed` exited 1',
+        runChild: () => Promise.resolve('FINAL-GATE-FIX: DONE'),
+        gate: () => Promise.resolve({ok: true, reason: 'statics + `bun run seed` passed'}),
+        discoverLabels: () => ['bun run seed'],
+        ...over
+    })
+
+    test('THE LEAD: a dependent ignored write downgrades the converged PASS', async () => {
+        const log: string[] = []
+        let probed: string[] = []
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'}),
+                gateWithoutIgnored: paths => {
+                    probed = paths
+                    return Promise.resolve(false) // does NOT pass without .env
+                },
+                log: m => log.push(m)
+            })
+        )
+        expect(r.ok).toBe(true) // still not a FAIL — the fix is real, it just does not ship
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(r.ignoredDependent).toBe(true)
+        expect(r.unobserved).toContain('UNOBSERVED')
+        expect(r.unobserved).toContain('.env')
+        expect(probed).toEqual(['.env'])
+        expect(log.some(l => l.includes('IGNORED path(s) — .env'))).toBe(true)
+        expect(log.some(l => l.includes('DOWNGRADED to UNOBSERVED'))).toBe(true)
+    })
+
+    test('an INDEPENDENT ignored write is trailed but leaves the PASS alone', async () => {
+        const log: string[] = []
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({}, {'scratch.log': '1:5'}),
+                gateWithoutIgnored: () => Promise.resolve(true),
+                log: m => log.push(m)
+            })
+        )
+        expect(r.ignoredWrites).toEqual(['scratch.log'])
+        expect(r.ignoredDependent).toBe(false)
+        expect(r.unobserved).toBeUndefined()
+        expect(log.some(l => l.includes('IGNORED path(s) — scratch.log'))).toBe(true)
+        expect(log.some(l => l.includes('DOWNGRADED'))).toBe(false)
+    })
+
+    test('an UNANSWERED probe never downgrades a verdict', async () => {
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'}),
+                gateWithoutIgnored: () => Promise.resolve(null)
+            })
+        )
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(r.ignoredDependent).toBeUndefined()
+        expect(r.unobserved).toBeUndefined()
+    })
+
+    test('an ignored file that was ALREADY there is not attributed to this pass', async () => {
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({'.env': '1:20'}, {'.env': '1:20'}),
+                gateWithoutIgnored: () => Promise.resolve(false)
+            })
+        )
+        expect(r.ignoredWrites).toBeUndefined()
+        expect(r.unobserved).toBeUndefined()
+    })
+
+    test('the write is trailed and REPORTED even when a guard rejects the attempt', async () => {
+        // `discard` reverts tracked edits only — the ignored file stays on disk, so
+        // the trail is the only record that it was ever written.
+        const log: string[] = []
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'}),
+                treeChanges: () =>
+                    Promise.resolve({modified: [], added: [], deleted: ['src/kept.ts']}),
+                discard: () => Promise.resolve(),
+                log: m => log.push(m)
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.guardTripped).toBe(true)
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(log.some(l => l.includes('IGNORED path(s) — .env'))).toBe(true)
+    })
+
+    test('a non-converged attempt still reports what it wrote', async () => {
+        const r = await runFinalGateAutofix(
+            base({
+                gate: () => Promise.resolve({ok: false, reason: '`bun run seed` exited 1'}),
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'})
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(r.ignoredDependent).toBeUndefined() // the probe only asks about a PASS
+    })
+
+    test("ignoredKnown carries an earlier attempt's write into this one", async () => {
+        // Attempt 1 wrote .env and failed; attempt 2 changes something else and the
+        // gate goes green. Attempt 2's own diff sees nothing — the carry is what
+        // keeps the PASS honest.
+        let probed: string[] = []
+        const r = await runFinalGateAutofix(
+            base({
+                ignoredSnapshot: snapshots({'.env': '1:20'}, {'.env': '1:20'}),
+                ignoredKnown: ['.env'],
+                gateWithoutIgnored: paths => {
+                    probed = paths
+                    return Promise.resolve(false)
+                }
+            })
+        )
+        expect(r.ignoredWrites).toEqual(['.env'])
+        expect(probed).toEqual(['.env'])
+        expect(r.unobserved).toContain('UNOBSERVED')
+    })
+
+    test('ignoredKnown alone does nothing while the channel is off (inv-degrade)', async () => {
+        const r = await runFinalGateAutofix(base({ignoredKnown: ['.env']}))
+        expect(r.ok).toBe(true)
+        expect(r.ignoredWrites).toBeUndefined()
+        expect(r.unobserved).toBeUndefined()
+    })
+
+    test("the gate's own UNOBSERVED note and this one are both carried", async () => {
+        const r = await runFinalGateAutofix(
+            base({
+                gate: () =>
+                    Promise.resolve({
+                        ok: true,
+                        reason: 'statics passed',
+                        unobserved: 'UNOBSERVED — NOT a pass: nothing dynamic ran'
+                    }),
+                ignoredSnapshot: snapshots({}, {'.env': '1:20'}),
+                gateWithoutIgnored: () => Promise.resolve(false)
+            })
+        )
+        expect(r.unobserved).toContain('nothing dynamic ran')
+        expect(r.unobserved).toContain('.env')
+    })
+
+    test('with no channel wired the result is byte-identical to the old contract', async () => {
+        const r = await runFinalGateAutofix(base({}))
+        expect(r).toEqual({ok: true, reason: 'statics + `bun run seed` passed'})
+    })
+})

@@ -3100,3 +3100,123 @@ test('runAutoLoop: without the recheck dep the converged path is byte-identical 
     expect(with_.length).toBe(without.length + 1)
     expect(with_[with_.length - 1]).toMatch(/re-check after autofix: all 1 defect\(s\)/)
 })
+
+/**
+ * IGNORED-PATH WRITES at the resolution loop (mx5 run 19). The fix pass reports
+ * what it wrote to gitignored paths; this branch decides what the RUN does with
+ * that — the gate record, the durable debt, and the set carried into the next
+ * attempt. The A/B mirrors this branch rather than driving it, so these pin it
+ * against drift.
+ */
+test('runAutoLoop: a DEPENDENT ignored write is trailed, carried as debt, and lands UNOBSERVED', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx, captured} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const trail: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run seed` exited 1'}),
+            finalGateFix: () =>
+                Promise.resolve({
+                    ok: true,
+                    reason: 'statics + `bun run seed` passed',
+                    ignoredWrites: ['.env'],
+                    ignoredDependent: true,
+                    unobserved: 'UNOBSERVED — NOT a pass: the gate passed only with .env'
+                })
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+
+        expect(trail.some(l => l.includes('IGNORED path(s) — .env'))).toBe(true)
+        expect(trail.some(l => /autofix ended UNOBSERVED/.test(l))).toBe(true)
+        const debts = await readAcceptDebts(dir)
+        expect(debts.some(x => x.reason.includes('.env') && x.origin === 'final-gate')).toBe(true)
+        expect(debts.some(x => x.reason.includes('PASS depended on'))).toBe(true)
+        // PATH NAMES ONLY — no ignored file's contents anywhere in the record.
+        expect(JSON.stringify({trail, debts})).not.toContain('hunter2')
+        expect(captured.notifies.some(n => /UNOBSERVED/.test(n.msg))).toBe(true)
+    })
+})
+
+test('runAutoLoop: an INDEPENDENT ignored write is trailed and opens NO debt', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const trail: string[] = []
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            record: (_c, _id, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
+            finalGateFix: () =>
+                Promise.resolve({
+                    ok: true,
+                    reason: 'statics + `bun run test` passed',
+                    ignoredWrites: ['scratch.log'],
+                    ignoredDependent: false
+                })
+        }
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+
+        expect(trail.some(l => l.includes('IGNORED path(s) — scratch.log'))).toBe(true)
+        // A ledger full of scratch files is a ledger nobody reads.
+        expect(await readAcceptDebts(dir)).toEqual([])
+        expect(trail.some(l => /autofix converged/.test(l))).toBe(true)
+    })
+})
+
+test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the next one', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const known: (string[] | undefined)[] = []
+        let attempt = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true}),
+            finalGate: () => Promise.resolve({ok: false, reason: '`bun run seed` exited 1'}),
+            finalGateFix: (_ctx, _cwd, _seed, ignoredKnown) => {
+                known.push(ignoredKnown)
+                attempt++
+                // Attempt 1 writes .env and does not converge; attempt 2 converges
+                // WITHOUT writing anything ignored — its own diff would see nothing.
+                return Promise.resolve(
+                    attempt === 1 ?
+                        {
+                            ok: false,
+                            reason: 'did not converge: `bun run seed` exited 1',
+                            gateReason: '`bun run seed` exited 1',
+                            ignoredWrites: ['.env']
+                        }
+                    :   {ok: true, reason: 'statics + `bun run seed` passed'}
+                )
+            }
+        }
+        const label = 'Autofix — run a bounded fix pass and re-run the gate'
+        handle.queueSelect(label)
+        handle.queueSelect(label)
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+
+        expect(known[0]).toEqual([])
+        expect(known[1]).toEqual(['.env']) // attempt 2 judges its PASS against it
+    })
+})
