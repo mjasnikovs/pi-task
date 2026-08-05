@@ -38,7 +38,24 @@ import {
     formatPlanDecisions,
     type PlanEntry
 } from './plan-io.js'
-import {writeTaskFile, setTaskSection, updateTaskFrontMatter, tasksDir} from './task-io.js'
+import {
+    writeTaskFile,
+    readTaskFile,
+    setTaskSection,
+    readSection,
+    updateTaskFrontMatter,
+    taskFilePath,
+    tasksDir
+} from './task-io.js'
+import {extractSection} from './task-parsers.js'
+import {collectTreeChanges} from './gate-deps.js'
+import type {TreeChangeSummary} from './write-guard.js'
+import {
+    PLAN_TOOLS,
+    newTreeChanges,
+    isEmptyChange,
+    formatReadOnlyViolation
+} from './plan-readonly.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {deriveTitle} from './parsers.js'
 import {renderInlineMarkdown} from './inline-markdown.js'
@@ -102,7 +119,14 @@ export function buildPlanDeps(
         ...(logDebug && {logDebug})
     }
 
-    /** Run a planning child under the shared /task-auto-style loader. */
+    /**
+     * Run a planning child under the shared /task-auto-style loader, with the
+     * read-only contract enforced around it: the child gets exactly
+     * {@link PLAN_TOOLS}, and the working tree is compared before and after so a
+     * hole in that prevention is reported instead of shipped silently. The
+     * comparison excludes `.pi-tasks/` (collectTreeChanges does), which is where
+     * the plan file itself is written.
+     */
     const child = async (name: string, prompt: string): Promise<string> => {
         lastLine = undefined
         contextUsage = undefined
@@ -117,10 +141,20 @@ export function buildPlanDeps(
             lastLine,
             contextUsage
         }))
+        const before = await collectTreeChanges(cwd, signal).catch(() => null)
         try {
-            return await runPhaseChild(phaseDeps, name, 'read', prompt)
+            return await runPhaseChild(phaseDeps, name, PLAN_TOOLS, prompt)
         } finally {
             stopLoader()
+            // Outside a git repo `before` is null and there is nothing to compare
+            // against — the same degrade every other tree-reading guard here takes.
+            if (before) {
+                const after = await collectTreeChanges(cwd, signal).catch(() => null)
+                const touched = after ? newTreeChanges(before, after) : null
+                if (touched && !isEmptyChange(touched)) {
+                    await reportReadOnlyViolation(ctx, cwd, planId, name, touched, logDebug)
+                }
+            }
         }
     }
 
@@ -153,6 +187,43 @@ export function buildPlanDeps(
         },
         yolo: isYoloMode(),
         ...(logDebug && {logDebug})
+    }
+}
+
+/**
+ * A planning step touched the project: say so on every surface and write it into
+ * the plan file, which is the one record that outlives the session.
+ *
+ * Deliberately NOT a rollback. If this ever fires, something wrote a file we
+ * cannot account for; deleting it unseen would turn a reporting bug into data
+ * loss. The user gets the path and decides.
+ */
+async function reportReadOnlyViolation(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    planId: string,
+    step: string,
+    touched: TreeChangeSummary,
+    logDebug?: (msg: string) => void
+): Promise<void> {
+    const line = formatReadOnlyViolation(step, touched)
+    logDebug?.(line)
+    try {
+        ctx.ui.notify(line, 'error')
+    } catch {
+        /* stale ctx — the record below is what matters */
+    }
+    publishLifecycleNotice(line, 'error')
+    try {
+        const existing = (await readSection(cwd, planId, 'read-only violations')) ?? ''
+        await setTaskSection(
+            cwd,
+            planId,
+            'read-only violations',
+            existing ? `${existing}\n- ${line}` : `- ${line}`
+        )
+    } catch {
+        /* best-effort */
     }
 }
 
@@ -234,6 +305,34 @@ const DEFAULT_COMMAND_DEPS: PlanCommandDeps = {
     handoff: defaultHandoff
 }
 
+/**
+ * Remove the plan file (and its debug log) when the session ended with nothing
+ * in it — the user opened /task-plan and backed out at the first question.
+ *
+ * The file is allocated up front so a crash mid-session still leaves the record,
+ * which means an abandoned session would otherwise leave a stub whose whole
+ * content is "(none yet)". That is exactly the artifact this command is not
+ * supposed to produce.
+ *
+ * It refuses to delete anything that carries a read-only violation: that section
+ * is the report of a file we could not account for, and it must outlive the
+ * session that found it. Best-effort — a failure here leaves the stub, which is
+ * harmless.
+ */
+export async function discardEmptyPlanFile(cwd: string, planId: string): Promise<void> {
+    try {
+        const {body} = await readTaskFile(cwd, planId)
+        if (extractSection(body, 'read-only violations') !== null) return
+        const decisions = extractSection(body, 'decisions')
+        if (decisions !== null && decisions.trim() !== '(none yet)') return
+        if (extractSection(body, 'notes') !== null) return
+        await fsp.rm(taskFilePath(cwd, planId), {force: true})
+        await fsp.rm(path.join(tasksDir(cwd), `${planId}-debug.log`), {force: true})
+    } catch {
+        /* best-effort: an unreadable file is left exactly where it is */
+    }
+}
+
 export async function handleTaskPlan(
     args: string,
     ctx: ExtensionCommandContext,
@@ -285,9 +384,10 @@ export async function handleTaskPlan(
     }
 
     if (outcome.kind === 'cancelled') {
-        // Nothing is handed to /task, but whatever WAS decided stays on disk —
-        // a cancelled plan is a record, not a rollback.
+        // Whatever WAS decided stays on disk — a cancelled plan is a record, not
+        // a rollback. A session that decided NOTHING leaves nothing at all.
         await updateTaskFrontMatter(cwd, planId, {state: 'cancelled'}).catch(() => {})
+        if (outcome.entries.length === 0) await discardEmptyPlanFile(cwd, planId)
         const line =
             outcome.entries.length === 0 ?
                 `${planId} cancelled — nothing planned.`

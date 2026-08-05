@@ -111,7 +111,9 @@ It works like the clarify step you already know — **one question at a time, ea
 
 When the model runs out of questions it says so and offers the same three moves rather than proceeding behind your back. Answering something new re-opens it: a decision you volunteer can make a fresh question worth asking.
 
-Everything lands in `.pi-tasks/TASK_PLAN_NNNN.md` — the task prompt, the `## decisions` transcript, and a separate `## notes` section for what you asked. Only the decisions are handed to `/task`, as an authoritative block ahead of your original prompt; the notes stay behind, because an answer you read is not a decision you made. From there it is an ordinary `/task` run — same pipeline, same gates.
+**Planning is read-only.** Nothing in your project is created, edited, or deleted while you plan — the planning model runs with a one-tool allowlist (`read`), which also excludes write tools contributed by any extension you have whitelisted for helper sessions. That is verified as well as prevented: the working tree is compared before and after every step, and if anything outside `.pi-tasks/` ever changes, the run says so loudly and records it in the plan file rather than carrying on quietly. Read-only ends the moment you choose **Proceed to execution** — from there it is a normal `/task` run and it writes code.
+
+The one thing written during planning is the plan file itself, `.pi-tasks/TASK_PLAN_NNNN.md` — the task prompt, the `## decisions` transcript, and a separate `## notes` section for what you asked (a session you abandon before deciding anything deletes its own file, so an aborted plan leaves nothing at all). Only the decisions are handed to `/task`, as an authoritative block ahead of your original prompt; the notes stay behind, because an answer you read is not a decision you made. From there it is an ordinary `/task` run — same pipeline, same gates.
 
 It works from the browser too (see [Remote](#remote--drive-a-task-from-your-phone)): the prompt card grows an **Ask the model** and a **Proceed to execution** button alongside the usual Accept / Manual answer.
 

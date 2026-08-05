@@ -29,6 +29,10 @@ concept get that concept recorded here.
   **transcript** of `PlanEntry`s — decisions (authoritative, handed to `/task`)
   and notes (advisory, kept in the plan file only) — persisted to
   `.pi-tasks/TASK_PLAN_NNNN.md` via the same task-file machinery as TASK_AUTO.
+  Read-only by contract (`plan-readonly.ts`): planning children run under
+  `PLAN_TOOLS` (one tool, `read` — which pi applies to extension tools too), and
+  the working tree is diffed around every child so a hole in that prevention is
+  reported, never silently tolerated. The contract ends at the handoff.
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).

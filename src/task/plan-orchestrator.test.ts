@@ -4,6 +4,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     buildPlanDeps,
+    discardEmptyPlanFile,
     handleTaskPlan,
     persistEntries,
     type PlanCommandDeps
@@ -11,7 +12,7 @@ import {
 import {buildPlanBody} from './plan-io.js'
 import type {PlanEntry} from './plan-io.js'
 import {buildIdleSpec, type PlanOutcome} from './plan-session.js'
-import {writeTaskFile, readSection, readTaskFile} from './task-io.js'
+import {writeTaskFile, readSection, readTaskFile, setTaskSection} from './task-io.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 
@@ -241,5 +242,53 @@ describe('handleTaskPlan', () => {
         await handleTaskPlan('one', h.ctx, deps)
         await handleTaskPlan('two', h.ctx, deps)
         expect((await readTaskFile(cwd, 'TASK_PLAN_0002')).frontMatter.title).toContain('two')
+    })
+})
+
+describe('the read-only contract', () => {
+    async function freshRepo2(): Promise<string> {
+        return await fsp.mkdtemp(path.join(os.tmpdir(), 'pi-plan-ro-'))
+    }
+
+    test('an abandoned plan leaves no file behind', async () => {
+        const cwd = await freshRepo2()
+        const h = makeFakeCtx(cwd)
+        const {deps} = commandHarness({kind: 'cancelled', entries: []})
+        await handleTaskPlan('add rate limiting', h.ctx, deps)
+        await expect(readTaskFile(cwd, PLAN_ID)).rejects.toThrow()
+    })
+
+    test('a cancelled plan that decided something IS kept', async () => {
+        const cwd = await freshRepo2()
+        const h = makeFakeCtx(cwd)
+        const {deps} = commandHarness({kind: 'cancelled', entries: DECIDED.entries})
+        await handleTaskPlan('add rate limiting', h.ctx, deps)
+        expect((await readTaskFile(cwd, PLAN_ID)).frontMatter.state).toBe('cancelled')
+    })
+
+    test('a recorded violation is never discarded, even with nothing decided', async () => {
+        const cwd = await freshRepo2()
+        const h = makeFakeCtx(cwd)
+        const {deps} = commandHarness({kind: 'cancelled', entries: []})
+        // Record the violation from inside the session, as the child wrapper does.
+        deps.run = async () => {
+            await setTaskSection(
+                cwd,
+                PLAN_ID,
+                'read-only violations',
+                '- /task-plan is read-only, but the plan-question step created NOTES.md'
+            )
+            return {kind: 'cancelled', entries: []}
+        }
+        await handleTaskPlan('add rate limiting', h.ctx, deps)
+        expect(await readSection(cwd, PLAN_ID, 'read-only violations')).toContain('NOTES.md')
+    })
+
+    test('discardEmptyPlanFile removes the debug log with the plan file', async () => {
+        const cwd = await seededRepo()
+        const log = path.join(cwd, '.pi-tasks', `${PLAN_ID}-debug.log`)
+        await fsp.writeFile(log, 'x\n')
+        await discardEmptyPlanFile(cwd, PLAN_ID)
+        await expect(fsp.access(log)).rejects.toThrow()
     })
 })
