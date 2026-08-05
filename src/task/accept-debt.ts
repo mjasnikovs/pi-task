@@ -27,7 +27,8 @@
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
+import {parseVerifyBlockStrict} from './spec-validation.js'
+import {taskFilePath, tasksDir} from './task-io.js'
 
 const ACCEPT_DEBT_FILE = 'accept-debt.md'
 /** Cap kept records so a run that accepts many FAILs cannot grow the report unboundedly. */
@@ -116,6 +117,19 @@ export interface AcceptDebt {
      * child `rm`'d TASK_0008's verified admin page to satisfy exactly such a claim.
      */
     conflict?: string
+    /**
+     * The ONE command this debt's own reason NAMES, quoted verbatim in backticks and
+     * present byte-identically in the owning task's VERIFY block (nexttask 5, mx5 run
+     * 19 TASK_0009). Set at record time by classifyVerifyCommand; absent whenever the
+     * reason names no such command — which is most of them (measured: 2 of 19
+     * PROJECT-pool debts, `scripts/debt-verify-class-baserate.ts`).
+     *
+     * It exists so the run-end re-check can settle the debt the way the debt was
+     * created: by RUNNING the command and reading its exit status. Never
+     * synthesised, never paraphrased, never reconstructed from prose — the stored
+     * string is the VERIFY-block line itself (`inv-command-provenance`).
+     */
+    verifyCommand?: string
 }
 
 export function acceptDebtFile(cwd: string): string {
@@ -150,6 +164,9 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
             continue
         }
         const origin = parts[2]?.trim()
+        // 4th field: the verbatim VERIFY command the reason names (nexttask 5).
+        // Absent in every legacy record, and absent in most new ones.
+        const verifyCommand = parts[3]?.trim()
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
@@ -163,7 +180,8 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
                 || origin === 'root-cause'
             ) ?
                 {origin: origin as DebtOrigin}
-            :   {})
+            :   {}),
+            ...(verifyCommand !== undefined && verifyCommand.length > 0 ? {verifyCommand} : {})
         })
     }
     return out
@@ -185,6 +203,11 @@ function normaliseReason(reason: string): string {
 function serialize(d: AcceptDebt): string {
     // Legacy 2-field shape for 'accepted' (backward compatible); a 3rd origin field
     // only for the non-accepted classes, so old readers/files round-trip unchanged.
+    // The 4th verify-command field forces the origin field to be written (positional
+    // format) — 'accepted' spelled out there parses back to the same absent origin.
+    if (d.verifyCommand !== undefined && d.verifyCommand.length > 0) {
+        return [d.taskId, d.reason, d.origin ?? 'accepted', d.verifyCommand].join(FIELD_SEP)
+    }
     return d.origin && d.origin !== 'accepted' ?
             `${d.taskId}${FIELD_SEP}${d.reason}${FIELD_SEP}${d.origin}`
         :   `${d.taskId}${FIELD_SEP}${d.reason}`
@@ -204,6 +227,12 @@ function debtKey(d: AcceptDebt): string {
 async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
     if (entry.reason.length === 0) return
     try {
+        // Classify AT RECORD TIME, against the spec as it stands when the defect is
+        // recorded (nexttask 5). Doing it later would read a spec a subsequent task
+        // may have rewritten — the provenance claim has to be made where it is true.
+        const verifyCommand =
+            entry.verifyCommand ?? (await classifyVerifyCommand(cwd, entry.taskId, entry.reason))
+        if (verifyCommand !== null && verifyCommand !== undefined) entry = {...entry, verifyCommand}
         const existing = parseAcceptDebts(await readAcceptDebtsRaw(cwd))
         const seen = new Set(existing.map(debtKey))
         if (seen.has(debtKey(entry))) return
@@ -394,19 +423,133 @@ export function isStaticClassDebt(reason: string): boolean {
 }
 
 /**
+ * The VERIFY-COMMAND class (nexttask 5): the ONE command a recorded reason itself
+ * NAMES, quoted verbatim in backticks, and present byte-identically in the owning
+ * task's VERIFY block.
+ *
+ * mx5 run 19 recorded `work did not verify: The VERIFY block command \`AGENT=1 bun
+ * test test/listings.test.ts\` fails unaided …`; eleven minutes later the final-gate
+ * autofix fixed exactly that, the gate's own re-run printed `121 pass 0 fail`, and
+ * the run still ended reporting the debt STILL OPEN — because no reachable code path
+ * could ever have closed it (see recheckAcceptDebts: two classes, neither reachable
+ * for a `work did not verify:` reason).
+ *
+ * Deliberately NOT fuzzy: a backticked span is accepted only when it equals a parsed
+ * VERIFY line exactly (after trimming). No paraphrase, no reconstruction, no prefix
+ * match — the returned string is the VERIFY-block entry itself, so anything stored
+ * or re-run carries the task spec's own provenance (`inv-command-provenance`). A
+ * reason that quotes a path, a symbol or a truncated command matches nothing and the
+ * debt stays unclassified, i.e. exactly as un-closable as it is today.
+ */
+/**
+ * A stored command must survive the ledger's own storage format and stay something
+ * a shell can be handed verbatim. A tab would break the positional record, a newline
+ * would split it into two, and an over-long line is a heredoc/prose artefact rather
+ * than a command. Any of those ⇒ not stored ⇒ the debt is simply unclassified, i.e.
+ * exactly as un-closable as it is today.
+ */
+function isStorableCommand(cmd: string): boolean {
+    return cmd.length > 0 && cmd.length <= MAX_REASON_LENGTH && !/[\t\n\r]/.test(cmd)
+}
+
+/**
+ * Read the owning task's spec and return the VERIFY command its FAIL reason names,
+ * or null. Best-effort by design: a missing task file, an unparseable or UNCLOSED
+ * VERIFY fence, or a reason that quotes nothing all yield null, and null simply
+ * means the debt keeps today's behaviour (surfaced, never auto-closed).
+ *
+ * The STRICT parse matters here. mx5 run 19's `TASK_0001.md` opens ```sh and never
+ * closes it, so the lenient parser hands back the phase-timings table and every
+ * appended gate-trail line as "VERIFY commands" — including sentences that quote
+ * `bun run lint`. Matching a reason against that would mint a stored, re-runnable
+ * command with fabricated provenance, which is the one thing this class may not do.
+ */
+export async function classifyVerifyCommand(
+    cwd: string,
+    taskId: string,
+    reason: string
+): Promise<string | null> {
+    if (taskId.trim().length === 0) return null
+    try {
+        const spec = await fsp.readFile(taskFilePath(cwd, taskId.trim()), 'utf8')
+        const cmds = parseVerifyBlockStrict(spec)
+        if (cmds === null || cmds.length === 0) return null
+        const hit = verifyCommandFromReason(
+            reason,
+            cmds.map(c => c.raw)
+        )
+        return hit !== null && isStorableCommand(hit) ? hit : null
+    } catch {
+        return null
+    }
+}
+
+export function verifyCommandFromReason(
+    reason: string,
+    verifyCommands: readonly string[]
+): string | null {
+    const byText = new Map<string, string>()
+    for (const c of verifyCommands) {
+        const t = c.trim()
+        if (t.length > 0 && !byText.has(t)) byText.set(t, t)
+    }
+    if (byText.size === 0) return null
+    for (const m of reason.matchAll(/`([^`]+)`/g)) {
+        const hit = byText.get(m[1]!.trim())
+        if (hit !== undefined) return hit
+    }
+    return null
+}
+
+/**
+ * How a re-run of a debt's stored VERIFY command ended, as the re-check sees it.
+ * `pass` is the ONLY conclusive outcome: everything else — a real failure, a missing
+ * tool, unreachable infrastructure, a timeout, a tree the run mutated — leaves the
+ * debt exactly as open as it was.
+ */
+export interface VerifyRerunResult {
+    outcome: 'pass' | 'fail' | 'gap'
+    detail?: string
+}
+
+/**
+ * Re-runs allowed per re-check. `inv-bounded`: a run that accepted many command-shaped
+ * FAILs must not turn its own report into an unbounded second test suite. Three covers
+ * every recorded run in the corpus (max classified per run: 1) with room to spare, and
+ * anything past it stays open with the budget stated in the trail — never closed.
+ */
+const MAX_VERIFY_RERUNS = 3
+
+/**
  * Re-check the ledger against the current run state. A static-class debt is RESOLVED
  * iff the final gate's own static check now passes (`staticOk`); a cross-task-deletion
  * debt is RESOLVED iff the file it names is back in the tree (`fileExists` — a later
  * task or a human restored it, so the deletion no longer holds); every other debt
- * stays OPEN (unprovable ⇒ surface, never re-hide). FP-safe: the only auto-closes are
- * ones a deterministic check can stand behind.
+ * stays OPEN (unprovable ⇒ surface, never re-hide) — unless it carries a stored
+ * `verifyCommand` and `rerunVerify` re-runs that command to a ZERO exit, which is the
+ * third class (nexttask 5): the debt named a command, the command was run, and it
+ * passed. FP-safe: the only auto-closes are ones a deterministic check can stand
+ * behind, and here the check is the task spec's own command.
  */
 export function recheckAcceptDebts(
     debts: AcceptDebt[],
-    opts: {staticOk: boolean; fileExists?: (rel: string) => boolean}
-): {open: AcceptDebt[]; resolved: AcceptDebt[]} {
+    opts: {
+        staticOk: boolean
+        fileExists?: (rel: string) => boolean
+        /**
+         * Re-run a debt's stored VERIFY command (nexttask 5). Absent ⇒ the class is
+         * inert and every debt behaves exactly as it did before it existed. Only
+         * `pass` may close a debt; `fail` and `gap` both leave it open, and the
+         * caller is expected to have made `pass` mean "ran, exited 0, and changed
+         * nothing tracked" (`inv-no-write`).
+         */
+        rerunVerify?: (command: string, debt: AcceptDebt) => VerifyRerunResult
+    }
+): {open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]} {
     const open: AcceptDebt[] = []
     const resolved: AcceptDebt[] = []
+    const trail: string[] = []
+    let rerunsLeft = MAX_VERIFY_RERUNS
     for (const d of debts) {
         if (d.origin === 'cross-task-deletion') {
             const p = extractDeletedDebtPath(d.reason)
@@ -420,10 +563,48 @@ export function recheckAcceptDebts(
             else open.push(d)
             continue
         }
-        if (opts.staticOk && isStaticClassDebt(d.reason)) resolved.push(d)
-        else open.push(d)
+        if (opts.staticOk && isStaticClassDebt(d.reason)) {
+            resolved.push(d)
+            continue
+        }
+        // VERIFY-COMMAND class, LAST so the two older classes decide exactly what they
+        // decided before (`inv-existing-classes-kept`) and nothing is re-run that was
+        // already settled without running anything.
+        const cmd = d.verifyCommand
+        if (opts.rerunVerify === undefined || cmd === undefined || !isStorableCommand(cmd)) {
+            open.push(d)
+            continue
+        }
+        if (rerunsLeft <= 0) {
+            trail.push(
+                `${d.taskId}: NOT re-checked — the per-run re-run budget `
+                    + `(${MAX_VERIFY_RERUNS}) is spent; the debt stays open`
+            )
+            open.push(d)
+            continue
+        }
+        rerunsLeft -= 1
+        let r: VerifyRerunResult
+        try {
+            r = opts.rerunVerify(cmd, d)
+        } catch {
+            // A harness fault observes nothing, so it proves nothing.
+            r = {outcome: 'gap', detail: 're-run harness fault'}
+        }
+        if (r.outcome === 'pass') {
+            resolved.push(d)
+            trail.push(`${d.taskId}: RESOLVED — re-ran \`${cmd}\` and it exited 0`)
+            continue
+        }
+        trail.push(
+            `${d.taskId}: still open — re-ran \`${cmd}\`: `
+                + (r.outcome === 'fail' ?
+                    `it FAILED${r.detail ? ` (${r.detail})` : ''}`
+                :   `INCONCLUSIVE${r.detail ? ` (${r.detail})` : ''}, nothing was observed`)
+        )
+        open.push(d)
     }
-    return {open, resolved}
+    return {open, resolved, trail}
 }
 
 // ─── Conflicting-claim classification (mx5 run 11) ──────────────────────────

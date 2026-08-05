@@ -2976,7 +2976,10 @@ test('runAutoLoop: a converged autofix RE-DERIVES the open debts and corrects th
         expect(sawStaticOk).toBe(true)
         expect(trail.some(l => /^defect STILL OPEN — TASK_0007:/.test(l))).toBe(true)
         expect(
-            trail.some(l => /^defect RESOLVED by the final-gate autofix — TASK_0007:/.test(l))
+            // Not "resolved BY the autofix": a close can now also come from the
+            // debt's own VERIFY command being re-run (nexttask 5), and the trail
+            // line above it says which.
+            trail.some(l => /^defect RESOLVED — TASK_0007:/.test(l))
         ).toBe(true)
         expect(trail.some(l => /re-check after autofix: 1 resolved, 0 still open/.test(l))).toBe(
             true

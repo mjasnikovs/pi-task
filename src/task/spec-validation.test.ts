@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {
     parseVerifyBlock,
+    parseVerifyBlockStrict,
     isCritiqueClean,
     stripSpecPreamble,
     validateSpecShape
@@ -66,6 +67,23 @@ describe('parseVerifyBlock', () => {
         const spec = 'VERIFY:\n```sh\n# comment\nnpm test\n\nnpm run lint\n```'
         const cmds = parseVerifyBlock(spec)
         expect(cmds!.map(c => c.raw)).toEqual(['npm test', 'npm run lint'])
+    })
+
+    test('an UNCLOSED fence swallows the rest of the file — strict rejects it', () => {
+        // mx5 run 19's TASK_0001.md never closes its ```sh, so everything after it —
+        // the phase-timings table, every appended gate-trail line — parses as a
+        // "command". Harmless when the question is "is there anything runnable here",
+        // and NOT harmless when a parsed line is treated as provenance for a command
+        // the run will re-execute (accept-debt.ts, nexttask 5).
+        const runaway = 'VERIFY:\n```sh\nnpm test\n\n## phase timings\nrefine 22.2s\n'
+        expect(parseVerifyBlock(runaway)!.map(c => c.raw)).toEqual(['npm test', 'refine 22.2s'])
+        expect(parseVerifyBlockStrict(runaway)).toBeNull()
+    })
+
+    test('strict returns the same commands when the fence IS closed', () => {
+        const spec = 'VERIFY:\n```sh\nnpm test\n```\n\n## trail\nanything at all\n'
+        expect(parseVerifyBlockStrict(spec)!.map(c => c.raw)).toEqual(['npm test'])
+        expect(parseVerifyBlockStrict('no header here')).toBeNull()
     })
 })
 

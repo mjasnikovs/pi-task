@@ -60,7 +60,8 @@ import {
     writeAcceptDebts,
     buildAcceptDebtNote,
     annotateDebtConflicts,
-    type AcceptDebt
+    type AcceptDebt,
+    type VerifyRerunResult
 } from './accept-debt.js'
 import {
     readDeclaredScripts,
@@ -1253,6 +1254,71 @@ function runGateCommand(
 }
 
 /**
+ * How a re-run of ONE recorded VERIFY command line ended.
+ *   pass — it ran and exited 0. The ONLY outcome that may close a debt.
+ *   fail — it ran and exited non-zero for a real reason. Debt stays open.
+ *   gap  — nothing was observed: the shell/runner never spawned, 127 inside the
+ *          chain, a timeout, a missing browser, or absent external infrastructure.
+ *          INCONCLUSIVE, so the debt stays open (surface, never re-hide).
+ */
+export type VerifyRerunOutcome =
+    | {outcome: 'pass'}
+    | {outcome: 'fail'; status: number; tail: string}
+    | {outcome: 'gap'; detail: string}
+
+/** The command word of a shell line, past any leading `VAR=value` assignments. */
+function leadingBin(line: string): string | null {
+    for (const tok of line.trim().split(/\s+/)) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue
+        return tok
+    }
+    return null
+}
+
+/**
+ * Re-run one VERIFY-block command line (nexttask 5) under the gate's existing
+ * env-gap contract, so a debt whose reason NAMES that command can be closed by the
+ * command itself rather than by a judgement about it.
+ *
+ * Runs through `sh -c` because a VERIFY line is a shell line, not an argv: run 19's
+ * is `AGENT=1 bun test test/listings.test.ts`, and env prefixes, `&&` and redirects
+ * are all ordinary there. The leading command word is still resolved through
+ * runner-resolve so a login-shell-stripped PATH cannot make every re-run look like a
+ * gap (mx5 run 16's blindness, one level down).
+ *
+ * The asymmetry is the point: only exit 0 is conclusive. Every other ending — real
+ * failure, missing tool, unreachable database, timeout, no POSIX shell — leaves the
+ * debt exactly as open as it was.
+ */
+export function runVerifyCommandLine(
+    cwd: string,
+    line: string,
+    timeoutMs: number,
+    extraGapRe?: RegExp
+): VerifyRerunOutcome {
+    const bin = leadingBin(line)
+    const runner = bin === null ? null : resolveRunner(bin)
+    const r = spawnSync('sh', ['-c', line], {
+        cwd,
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        env: runner ? runnerEnv(runner) : {...process.env}
+    })
+    if (r.error) return {outcome: 'gap', detail: `shell did not spawn (${r.error.message})`}
+    if (r.status === null) return {outcome: 'gap', detail: 'killed (timeout or signal)'}
+    const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
+    if (r.status === 0) return {outcome: 'pass'}
+    if (isCommandNotFound(r.status, output)) {
+        return {outcome: 'gap', detail: 'command not found (127)'}
+    }
+    if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'gap', detail: 'missing browser/runtime'}
+    if (INFRA_GAP_OUTPUT_RE.test(output) || extraGapRe?.test(output) === true) {
+        return {outcome: 'gap', detail: 'external infrastructure unreachable'}
+    }
+    return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
+}
+
+/**
  * The full-skip blindness guard (mx5 run 16, validated): dynamic commands were
  * DISCOVERED but every single one skipped as an environment gap, so the gate
  * decided on statics alone and stamped a permanently blank app green. Per-command
@@ -1461,13 +1527,21 @@ export {taskThatIntroduced}
 export async function deriveOpenDebts(
     cwd: string,
     staticOk: boolean
-): Promise<{openDebts: AcceptDebt[]; debtNote?: string}> {
-    const {open: openRaw, resolved} = recheckAcceptDebts(await readAcceptDebts(cwd), {
+): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
+    const {
+        open: openRaw,
+        resolved,
+        trail
+    } = recheckAcceptDebts(await readAcceptDebts(cwd), {
         staticOk,
         // Cross-task-deletion debts auto-close iff the deleted file is back in the
         // tree — a deterministic existence check, corroborating the per-file
         // provenance the record already carries.
-        fileExists: rel => existsSync(path.join(cwd, rel))
+        fileExists: rel => existsSync(path.join(cwd, rel)),
+        // VERIFY-COMMAND class (nexttask 5): a debt that NAMES a command is settled
+        // by running that command, under the gate's own env-gap contract and behind
+        // the no-write guard below.
+        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd)
     })
     if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
     // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
@@ -1476,7 +1550,66 @@ export async function deriveOpenDebts(
     // a deletion instruction. Pure git-history lookup; degrades to no annotation.
     const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
     const debtNote = buildAcceptDebtNote(openDebts)
-    return {openDebts, ...(debtNote ? {debtNote} : {})}
+    return {openDebts, ...(debtNote ? {debtNote} : {}), ...(trail.length > 0 ? {trail} : {})}
+}
+
+/** Per-command ceiling for a debt re-run (`inv-bounded`). */
+const DEBT_RERUN_TIMEOUT_MS = 300_000
+
+/**
+ * Extra infrastructure-gap shapes recognised ONLY when re-running a debt's command,
+ * never in the gate's own verdicts. A driver that reports its connection simply
+ * closed (`ERR_POSTGRES_CONNECTION_CLOSED` — what bun's SQL client says when the
+ * database is not there at all, as on this box with the mx5 container stopped) is an
+ * absent dependency, and calling that "the defect is still present" would be a
+ * finding the environment invented. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
+ * gate verdict the same wording can be a real fault the suite must own, and only the
+ * debt re-check needs the conservative reading — where it costs nothing, because gap
+ * and fail both leave the debt open.
+ */
+const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|ECONNRESET/i
+
+/**
+ * Re-run ONE debt's stored VERIFY command for the re-check, with the no-write guard
+ * (`inv-no-write`) wrapped around it.
+ *
+ * A VERIFY command is the project's own command and may legitimately write (a build
+ * emits `dist/`, a suite writes a snapshot). What it may NOT do is turn the tree into
+ * a passing tree and have that count as the debt being fixed — the run would then be
+ * certifying its own side effect. So tracked state is captured before and after, and
+ * a pass that came with a tracked change is downgraded to INCONCLUSIVE with the
+ * change named. Untracked output is left alone: it is what a build legitimately
+ * produces, and `git status --porcelain` in a repo with the usual ignores does not
+ * see it.
+ *
+ * A repository the guard cannot read (no git, git absent) is not a licence to skip
+ * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
+ * assumption rather than an observation.
+ */
+export function rerunDebtVerifyCommand(cwd: string, command: string): VerifyRerunResult {
+    const tracked = (): string | null => {
+        const r = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+            cwd,
+            encoding: 'utf8',
+            timeout: 60_000
+        })
+        return r.error || r.status !== 0 ? null : (r.stdout ?? '')
+    }
+    const before = tracked()
+    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE)
+    if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
+    if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
+    const after = tracked()
+    if (before === null || after === null) {
+        return {outcome: 'gap', detail: 'tracked-state guard could not read git status'}
+    }
+    if (before !== after) {
+        return {
+            outcome: 'gap',
+            detail: 'the re-run itself CHANGED tracked files — a command that edits the tree into a pass proves nothing'
+        }
+    }
+    return {outcome: 'pass'}
 }
 
 /**

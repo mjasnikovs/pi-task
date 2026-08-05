@@ -14,6 +14,28 @@ export interface VerifyCommand {
 // ─── Verify block parser ─────────────────────────────────────────────────────
 
 export function parseVerifyBlock(spec: string): VerifyCommand[] | null {
+    return scanVerifyBlock(spec)?.cmds ?? null
+}
+
+/**
+ * parseVerifyBlock, but only when the fenced block is actually CLOSED.
+ *
+ * An unterminated fence makes the lenient parser swallow the rest of the file:
+ * mx5 run 19's `TASK_0001.md` opens ```sh and never closes it, so its "VERIFY
+ * commands" include the phase-timings table and every appended gate-trail line.
+ * That is harmless where the parser only asks "is there something runnable here",
+ * and NOT harmless where a parsed line is treated as provenance — a debt reason
+ * quoting `bun run lint` would match a gate-trail sentence and mint a stored,
+ * re-runnable command the spec never asked for (accept-debt.ts
+ * verifyCommandFromReason, `inv-command-provenance`). Callers that need the block
+ * to MEAN something use this one: an unclosed fence is no block at all.
+ */
+export function parseVerifyBlockStrict(spec: string): VerifyCommand[] | null {
+    const scan = scanVerifyBlock(spec)
+    return scan && scan.terminated ? scan.cmds : null
+}
+
+function scanVerifyBlock(spec: string): {cmds: VerifyCommand[]; terminated: boolean} | null {
     const lines = spec.split('\n')
     let i = 0
     while (i < lines.length && !/^VERIFY:\s*$/.test(lines[i])) i++
@@ -29,7 +51,7 @@ export function parseVerifyBlock(spec: string): VerifyCommand[] | null {
         if (line.length > 0 && !line.startsWith('#')) cmds.push({raw: line})
         i++
     }
-    return cmds
+    return {cmds, terminated: i < lines.length}
 }
 
 // ─── Critique triage gate ────────────────────────────────────────────────────

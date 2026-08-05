@@ -299,7 +299,7 @@ export interface AutoDeps extends GateDeps {
     recheckOpenDebts?: (
         cwd: string,
         staticOk: boolean
-    ) => Promise<{openDebts: AcceptDebt[]; debtNote?: string}>
+    ) => Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}>
 }
 
 // Matches pi's @-file completion token (a path after @, until whitespace).
@@ -1705,7 +1705,7 @@ export async function runAutoLoop(
                      */
                     const reconcileDebts = async (staticOk: boolean): Promise<void> => {
                         if (!deps.recheckOpenDebts) return
-                        let fresh: {openDebts: AcceptDebt[]; debtNote?: string}
+                        let fresh: {openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}
                         try {
                             fresh = await deps.recheckOpenDebts(cwd, staticOk)
                         } catch {
@@ -1717,6 +1717,15 @@ export async function runAutoLoop(
                             ...fin,
                             openDebts: fresh.openDebts,
                             ...(fresh.debtNote ? {debtNote: fresh.debtNote} : {})
+                        }
+                        // Per-debt evidence from the VERIFY-COMMAND re-check
+                        // (nexttask 5): which command was re-run and what it did. A
+                        // close that cannot be read back from the trail is a close
+                        // nobody can audit, and an INCONCLUSIVE re-run is worth
+                        // saying out loud — it is the difference between "still
+                        // broken" and "nothing could observe it".
+                        for (const line of fresh.trail ?? []) {
+                            await recGate(`defect re-check: ${line}`)
                         }
                         // Identity is (task, origin, reason), but a RESOLUTION claim
                         // needs more than a key miss: a ledger entry whose TEXT changed
@@ -1744,7 +1753,7 @@ export async function runAutoLoop(
                         }
                         for (const d of closed) {
                             await recGate(
-                                `defect RESOLVED by the final-gate autofix — ${d.taskId || '(unknown task)'}: `
+                                `defect RESOLVED — ${d.taskId || '(unknown task)'}: `
                                     + `${d.reason.slice(0, 240)}`
                             )
                         }

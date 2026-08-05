@@ -25,6 +25,8 @@ import {
     recordCrossTaskDeletionDebt,
     extractDeletedDebtPath,
     writeAcceptDebts,
+    classifyVerifyCommand,
+    verifyCommandFromReason,
     type AcceptDebt
 } from './accept-debt.js'
 
@@ -154,7 +156,11 @@ describe('recheckAcceptDebts (FP-safe re-check)', () => {
     })
 
     test('nothing recorded → nothing open (clean)', () => {
-        expect(recheckAcceptDebts([], {staticOk: true})).toEqual({open: [], resolved: []})
+        expect(recheckAcceptDebts([], {staticOk: true})).toEqual({
+            open: [],
+            resolved: [],
+            trail: []
+        })
     })
 })
 
@@ -447,5 +453,200 @@ describe('recordYoloAcceptDebt — an auto-pick never masquerades as a human cal
         const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved.map(d => d.taskId)).toEqual(['TASK_0007'])
         expect(open.map(d => d.taskId)).toEqual(['TASK_0008'])
+    })
+})
+
+/**
+ * The VERIFY-COMMAND class (nexttask 5, mx5 run 19). A debt whose reason quotes —
+ * verbatim, in backticks — a line of its OWN task's VERIFY block carries that command
+ * in the ledger, and the run-end re-check settles it by RUNNING it. run 19 reported
+ * TASK_0009 "STILL OPEN" eleven minutes after the autofix fixed exactly the thing its
+ * reason named, and the gate's own re-run printed `121 pass 0 fail`; no reachable code
+ * path could have closed it, because neither existing class can reach a
+ * `work did not verify:` reason.
+ *
+ * The six invariants below are the whole safety argument. Each is also asserted over
+ * the recorded corpus by scripts/debt-verify-close-ab.ts; these are the deterministic
+ * copies that cannot drift with a corpus tree.
+ */
+describe('verify-command debt class', () => {
+    const SPEC = [
+        'GOAL',
+        'ship the listings routes',
+        '',
+        'VERIFY:',
+        '```sh',
+        '# comment lines are not commands',
+        'bunx tsc --noEmit',
+        'AGENT=1 bun test test/listings.test.ts',
+        '```',
+        '',
+        '## gate trail',
+        '- verify: FAIL — repo health: `bun run lint` exited 2'
+    ].join('\n')
+    const REASON =
+        'work did not verify: The VERIFY block command `AGENT=1 bun test '
+        + 'test/listings.test.ts` fails unaided because no `.env` file exists'
+
+    async function withSpec(taskId: string, spec: string): Promise<string> {
+        const cwd = makeCwd()
+        fs.mkdirSync(path.join(cwd, '.pi-tasks'), {recursive: true})
+        fs.writeFileSync(path.join(cwd, '.pi-tasks', `${taskId}.md`), spec, 'utf8')
+        return cwd
+    }
+
+    test('extracts ONLY a backticked span that is a verbatim VERIFY line', () => {
+        const cmds = ['bunx tsc --noEmit', 'AGENT=1 bun test test/listings.test.ts']
+        expect(verifyCommandFromReason(REASON, cmds)).toBe('AGENT=1 bun test test/listings.test.ts')
+        // A near-miss is a miss: no prefix, no paraphrase, no substring.
+        expect(verifyCommandFromReason('… `bun test test/listings.test.ts` fails', cmds)).toBeNull()
+        expect(verifyCommandFromReason('… `AGENT=1 bun test` fails', cmds)).toBeNull()
+        // Un-quoted mention is not a claim about a command (run 19's TASK_0001 reads
+        // exactly this way and must NOT classify).
+        expect(verifyCommandFromReason('bunx tsc --noEmit could not run', cmds)).toBeNull()
+        expect(verifyCommandFromReason(REASON, [])).toBeNull()
+    })
+
+    test('records the command, and it round-trips through the ledger', async () => {
+        const cwd = await withSpec('TASK_0009', SPEC)
+        await recordYoloAcceptDebt(cwd, 'TASK_0009', REASON)
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.verifyCommand).toBe('AGENT=1 bun test test/listings.test.ts')
+        expect(debt.origin).toBe('yolo-accepted')
+        // 4 tab-separated fields on disk, and legacy 2/3-field records still parse.
+        expect(fs.readFileSync(acceptDebtFile(cwd), 'utf8').split('\t')).toHaveLength(4)
+        const legacy = parseAcceptDebts('T1\treason only\nT2\tanother\tyolo-accepted')
+        expect(legacy.map(d => d.verifyCommand)).toEqual([undefined, undefined])
+        // The plain 'accepted' origin survives the positional 4-field shape.
+        const accepted = parseAcceptDebts('T3\twhy\taccepted\tbun test')
+        expect(accepted[0].origin).toBeUndefined()
+        expect(accepted[0].verifyCommand).toBe('bun test')
+    })
+
+    test('inv-command-provenance — an UNCLOSED VERIFY fence stores nothing', async () => {
+        // mx5 run 19's TASK_0001.md opens ```sh and never closes it, so the lenient
+        // parser hands back the phase timings and every appended gate-trail line as
+        // "commands" — including a sentence quoting `bun run lint`. Storing that would
+        // be provenance this project invented.
+        const runaway = SPEC.replace('```\n\n## gate trail', '\n## gate trail')
+        const cwd = await withSpec('TASK_0001', runaway)
+        expect(await classifyVerifyCommand(cwd, 'TASK_0001', REASON)).toBeNull()
+        expect(
+            await classifyVerifyCommand(cwd, 'TASK_0001', 'repo health: `bun run lint` exited 2')
+        ).toBeNull()
+        // No spec at all, and no task id, are the same story: nothing to stand behind.
+        expect(await classifyVerifyCommand(cwd, 'TASK_0404', REASON)).toBeNull()
+        expect(await classifyVerifyCommand(cwd, '', REASON)).toBeNull()
+    })
+
+    test('inv-no-false-clear — only a ZERO exit closes; fail/gap/absent never do', () => {
+        const debt: AcceptDebt = {
+            taskId: 'TASK_0009',
+            reason: REASON,
+            origin: 'yolo-accepted',
+            verifyCommand: 'AGENT=1 bun test test/listings.test.ts'
+        }
+        const noCommand: AcceptDebt = {taskId: 'TASK_0019', reason: 'main.tsx was modified'}
+        const closes = recheckAcceptDebts([debt, noCommand], {
+            staticOk: true,
+            rerunVerify: () => ({outcome: 'pass'})
+        })
+        expect(closes.resolved.map(d => d.taskId)).toEqual(['TASK_0009'])
+        expect(closes.trail.join(' ')).toContain('RESOLVED')
+        for (const r of [
+            {outcome: 'fail' as const, detail: 'exit 1'},
+            {outcome: 'gap' as const, detail: 'command not found (127)'},
+            {outcome: 'gap' as const, detail: 'killed (timeout or signal)'}
+        ]) {
+            const out = recheckAcceptDebts([debt, noCommand], {
+                staticOk: true,
+                rerunVerify: () => r
+            })
+            expect(out.resolved).toEqual([])
+            expect(out.open.map(d => d.taskId)).toEqual(['TASK_0009', 'TASK_0019'])
+        }
+        // No re-runner wired, or no stored command: the class is inert, not lenient.
+        expect(recheckAcceptDebts([debt], {staticOk: true}).open).toHaveLength(1)
+        expect(
+            recheckAcceptDebts([noCommand], {
+                staticOk: true,
+                rerunVerify: () => ({outcome: 'pass'})
+            }).open
+        ).toHaveLength(1)
+        // A throwing re-runner observed nothing, so it proves nothing.
+        const faulted = recheckAcceptDebts([debt], {
+            staticOk: true,
+            rerunVerify: () => {
+                throw new Error('spawn exploded')
+            }
+        })
+        expect(faulted.resolved).toEqual([])
+    })
+
+    test('inv-prohibition-never-closes — a prohibition debt stays open even when its VERIFY passes', () => {
+        // run 19's TASK_0019: `main.tsx` was edited under a spec freeze. The violation
+        // is permanent; the task's VERIFY (tsc, eslint, a CT spec) can pass all day.
+        // It never classifies, because the reason quotes a PATH, not a command — and
+        // even with the re-runner passing everything it is handed, it stays open.
+        const t19: AcceptDebt = {
+            taskId: 'TASK_0019',
+            reason:
+                'work did not verify: main.tsx was modified by this task, violating the spec '
+                + 'prohibition "Do not modify `main.tsx`, router shell, nav components"',
+            origin: 'yolo-accepted'
+        }
+        expect(verifyCommandFromReason(t19.reason, ['bunx tsc --noEmit', 'bun test'])).toBeNull()
+        const out = recheckAcceptDebts([t19], {
+            staticOk: true,
+            rerunVerify: () => ({outcome: 'pass'})
+        })
+        expect(out.resolved).toEqual([])
+        expect(out.open).toEqual([t19])
+    })
+
+    test('inv-existing-classes-kept — the two shipped classes decide exactly what they did', () => {
+        const staticClass: AcceptDebt = {
+            taskId: 'T9',
+            reason: 'repo health: `bun run lint` exited 1',
+            // Even carrying a command, a static-class debt is settled by the statics —
+            // the new class runs nothing here.
+            verifyCommand: 'bun run lint'
+        }
+        const deletion: AcceptDebt = {
+            taskId: 'T4',
+            reason: 'deleted `src/pages/Admin.tsx` — TASK_0008’s committed deliverable',
+            origin: 'cross-task-deletion'
+        }
+        let ran = 0
+        const out = recheckAcceptDebts([staticClass, deletion], {
+            staticOk: true,
+            fileExists: () => true,
+            rerunVerify: () => {
+                ran++
+                return {outcome: 'fail'}
+            }
+        })
+        expect(out.resolved.map(d => d.taskId).sort()).toEqual(['T4', 'T9'])
+        expect(ran).toBe(0)
+    })
+
+    test('inv-bounded — the per-run re-run budget caps the work and never closes past it', () => {
+        const many: AcceptDebt[] = Array.from({length: 10}, (_, i) => ({
+            taskId: `T${i}`,
+            reason: 'work did not verify: `bun test` fails',
+            origin: 'yolo-accepted' as const,
+            verifyCommand: 'bun test'
+        }))
+        let ran = 0
+        const out = recheckAcceptDebts(many, {
+            staticOk: true,
+            rerunVerify: () => {
+                ran++
+                return {outcome: 'gap', detail: 'stub'}
+            }
+        })
+        expect(ran).toBeLessThanOrEqual(3)
+        expect(out.open).toHaveLength(10)
+        expect(out.trail.some(l => /re-run budget/.test(l))).toBe(true)
     })
 })
