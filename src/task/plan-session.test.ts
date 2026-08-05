@@ -110,10 +110,12 @@ describe('the three moves are on every prompt', () => {
             PLAN_ASK,
             PLAN_PROCEED
         ])
-        // The free-text card is askQuestionBox's own, appended after the options —
-        // it is not re-implemented here, only re-labelled.
+        // The free-text card is askQuestionBox's own — it is not re-implemented
+        // here, only re-labelled and slotted in above the trailing proceed card.
         expect(spec.manualLabel).not.toBe(MANUAL_CARD_LABEL)
         expect(spec.manualLabel).toContain('own words')
+        expect(spec.manualPosition).toBe(spec.options.length - 1)
+        expect(spec.options[spec.options.length - 1]?.value).toBe(PLAN_PROCEED)
         // The remote card gets the same two actions as buttons.
         expect(spec.actions.map(a => a.value)).toEqual([PLAN_ASK, PLAN_PROCEED])
         // …and the recommendation still rides the existing remote fields.
@@ -127,10 +129,12 @@ describe('the three moves are on every prompt', () => {
         expect(spec.recommended2).toBeUndefined()
     })
 
-    test('with no question at all, proceed leads and the free-text card restates', () => {
+    test('with no question at all, proceed stays last and the free-text card restates', () => {
         const spec = buildIdleSpec()
-        expect(spec.options.map(o => o.label)).toEqual([PLAN_PROCEED_LABEL, PLAN_ASK_LABEL])
+        expect(spec.options.map(o => o.label)).toEqual([PLAN_ASK_LABEL, PLAN_PROCEED_LABEL])
         expect(spec.manualLabel).toContain('decision of your own')
+        // …with the free-text card between them, so proceed is the last card.
+        expect(spec.manualPosition).toBe(1)
         // No `recommended`: on the remote that field is the accept button, and
         // "proceed" is an action, not an answer to a question.
         expect(spec.recommended).toBeUndefined()

@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {visibleWidth} from '@earendil-works/pi-tui'
 import {
+    askQuestionBox,
     HINT_TEXT,
     MANUAL_CARD_LABEL,
     QUESTION_LABEL,
@@ -9,6 +10,7 @@ import {
     type BoxCard,
     type BoxColors
 } from './question-box.js'
+import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 
 // Identity colourers → output is plain text we can assert structure on.
 const PLAIN: BoxColors = {
@@ -145,5 +147,51 @@ describe('QuestionBoxComponent', () => {
         const t = make()
         t.comp.handleInput('\x1b')
         expect(t.cancelled).toBe(1)
+    })
+})
+
+// ─── Driver: where the free-text card sits ───────────────────────────────────
+
+describe('askQuestionBox manualPosition', () => {
+    const OPTS = [
+        {label: 'A', value: 'a'},
+        {label: 'B', value: 'b'},
+        {label: '▶ proceed', value: '__proceed__'}
+    ]
+    const ask = async (pick: string, manualPosition?: number) => {
+        const {ctx, captured, queueSelect, queueInput} = makeFakeCtx(process.cwd())
+        queueSelect(pick)
+        queueInput('typed text')
+        const value = await askQuestionBox(ctx, {
+            question: 'Q?',
+            inputTitle: 'title',
+            options: OPTS,
+            signal: new AbortController().signal,
+            ...(manualPosition !== undefined && {manualPosition})
+        })
+        return {value, labels: captured.selects[0]?.options ?? []}
+    }
+
+    test('defaults to last, and every option still maps to its own value', async () => {
+        expect((await ask('A')).labels).toEqual(['A', 'B', '▶ proceed', MANUAL_CARD_LABEL])
+        expect((await ask('A')).value).toBe('a')
+        expect((await ask('▶ proceed')).value).toBe('__proceed__')
+        expect((await ask(MANUAL_CARD_LABEL)).value).toBe('typed text')
+    })
+
+    test('an earlier position slots the card in without shifting any value', async () => {
+        expect((await ask('A', 2)).labels).toEqual(['A', 'B', MANUAL_CARD_LABEL, '▶ proceed'])
+        // Cards after the inserted manual card still resolve to their own option.
+        expect((await ask('▶ proceed', 2)).value).toBe('__proceed__')
+        expect((await ask('B', 2)).value).toBe('b')
+        expect((await ask('A', 2)).value).toBe('a')
+        expect((await ask(MANUAL_CARD_LABEL, 2)).value).toBe('typed text')
+    })
+
+    test('out-of-range positions clamp instead of dropping a card', async () => {
+        expect((await ask('A', 0)).labels).toEqual([MANUAL_CARD_LABEL, 'A', 'B', '▶ proceed'])
+        expect((await ask('A', 0)).value).toBe('a')
+        expect((await ask('A', 99)).labels).toEqual(['A', 'B', '▶ proceed', MANUAL_CARD_LABEL])
+        expect((await ask('A', -1)).value).toBe('a')
     })
 })

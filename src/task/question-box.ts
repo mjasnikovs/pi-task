@@ -209,6 +209,14 @@ export interface AskQuestionBoxSpec {
      * what the card actually does.
      */
     manualLabel?: string
+    /**
+     * Where the free-text card sits among the options. Defaults to the end, which
+     * is right when the picker is answering a question. /task-plan passes an
+     * earlier index so its "proceed to execution" card — the one that ENDS the
+     * session — is literally the last entry in the list, and never sits above a
+     * card the user is more likely to want.
+     */
+    manualPosition?: number
 }
 
 /**
@@ -220,12 +228,14 @@ export async function askQuestionBox(
     spec: AskQuestionBoxSpec
 ): Promise<string | undefined> {
     const {question, options, inputTitle, signal} = spec
+    const manualIndex = Math.max(0, Math.min(options.length, spec.manualPosition ?? options.length))
+    const asCard = (o: BoxOption): BoxCard => ({label: o.label, recommended: o.recommended})
     const cards: BoxCard[] = [
-        ...options.map(o => ({label: o.label, recommended: o.recommended})),
-        {label: spec.manualLabel ?? MANUAL_CARD_LABEL}
+        ...options.slice(0, manualIndex).map(asCard),
+        {label: spec.manualLabel ?? MANUAL_CARD_LABEL},
+        ...options.slice(manualIndex).map(asCard)
     ]
     const colors = boxColors(ctx.ui.theme)
-    const manualIndex = options.length
 
     const choice = await ctx.ui.custom<number | undefined>((_tui, _theme, _kb, done) => {
         if (signal.aborted) {
@@ -257,5 +267,5 @@ export async function askQuestionBox(
     if (choice === manualIndex) {
         return ctx.ui.input(inputTitle, undefined, {signal})
     }
-    return options[choice]?.value
+    return options[choice < manualIndex ? choice : choice - 1]?.value
 }

@@ -87,6 +87,12 @@ export interface AskSpec {
      */
     manualLabel?: string
     /**
+     * Where the free-text card sits among `options` (see
+     * {@link AskQuestionBoxSpec.manualPosition}). Local picker only — remote
+     * browsers always render the text box above the action buttons.
+     */
+    manualPosition?: number
+    /**
      * Extra buttons the BROWSER card shows alongside the recommendation, each
      * answering with its own `value`. Unlike `options` — which are answers, and
      * which the remote already covers with the recommended/recommended2 buttons —
@@ -178,6 +184,7 @@ export class SessionUI {
                     recommended: i === 0
                 })),
                 ...(spec.manualLabel !== undefined && {manualLabel: spec.manualLabel}),
+                ...(spec.manualPosition !== undefined && {manualPosition: spec.manualPosition}),
                 signal
             })
         }

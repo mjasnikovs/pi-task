@@ -20,7 +20,10 @@
  *                                    doubles as "state a decision" when the model
  *                                    has nothing to ask
  *   ▶ proceed to execution        — stop planning, hand the decisions to /task
- *                                    (PLAN_PROCEED)
+ *                                    (PLAN_PROCEED). Always the LAST card in the
+ *                                    box — it ends the session, so it sits under
+ *                                    every move that continues it, including the
+ *                                    free-text card (see `manualPosition`).
  *
  * The loop is pure with respect to I/O: every side effect (child calls, dialogs,
  * persistence) arrives through {@link PlanSessionDeps}, so the whole interaction
@@ -146,6 +149,7 @@ export function planForkHint(question: string): string {
 export type PlanAskSpec = AskSpec & {
     options: {label: string; value: string}[]
     manualLabel: string
+    manualPosition: number
     actions: {label: string; value: string}[]
 }
 
@@ -191,9 +195,10 @@ interface PendingQuestion {
 /**
  * Build the picker for a pending model question: the recommendation first (index
  * 0 is the green RECOMMENDED card), the alternative second when the question is a
- * binary fork, then the two control actions. The free-text card is appended by
+ * binary fork, then the two control actions. The free-text card is supplied by
  * askQuestionBox itself — that is the "answer in your own words" affordance, and
- * it is the same card grill and clarify already show.
+ * it is the same card grill and clarify already show — placed just above the
+ * trailing "proceed to execution" card so proceed stays last.
  */
 export function buildQuestionSpec(p: PendingQuestion): PlanAskSpec {
     const options: {label: string; value: string}[] = []
@@ -219,7 +224,10 @@ export function buildQuestionSpec(p: PendingQuestion): PlanAskSpec {
         allowSkip: false,
         options: [...options, ...actions],
         actions,
-        manualLabel: PLAN_ANSWER_LABEL
+        manualLabel: PLAN_ANSWER_LABEL,
+        // The free-text card goes ABOVE "proceed to execution" — proceed ends the
+        // session, so it is the last card in the box, under every other move.
+        manualPosition: options.length + actions.length - 1
     }
 }
 
@@ -228,11 +236,13 @@ export function buildQuestionSpec(p: PendingQuestion): PlanAskSpec {
  * questions, or the cap/duplicate backstop stopped it. The same three moves are
  * still on offer; only "answer this question" is gone, because there is no
  * question, so the free-text card becomes "add a decision of your own".
+ * Proceed stays last here, as it is under a question: handing off to /task ends
+ * planning, so it never sits where a reflexive first-item press can hit it.
  */
 export function buildIdleSpec(): PlanAskSpec {
     const actions = [
-        {label: PLAN_PROCEED_LABEL, value: PLAN_PROCEED},
-        {label: PLAN_ASK_LABEL, value: PLAN_ASK}
+        {label: PLAN_ASK_LABEL, value: PLAN_ASK},
+        {label: PLAN_PROCEED_LABEL, value: PLAN_PROCEED}
     ]
     return {
         localTitle: PLAN_NO_QUESTIONS,
@@ -244,7 +254,8 @@ export function buildIdleSpec(): PlanAskSpec {
         allowSkip: false,
         options: actions,
         actions,
-        manualLabel: PLAN_STATE_LABEL
+        manualLabel: PLAN_STATE_LABEL,
+        manualPosition: actions.length - 1
     }
 }
 
