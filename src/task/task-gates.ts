@@ -311,6 +311,42 @@ export type GateResult =
  */
 export const MAX_AUTO_AUTOFIX = 3
 
+/** Which of the four disjoint branches sent a FAIL to the terminal YOLO ACCEPT. */
+export interface YoloAcceptContext {
+    /** Rule 5c: the spec-required check could not run (tooling absent). */
+    isUnobserved: boolean
+    /** Cross-task contradiction: the repo-health fix needs a spec-frozen path. */
+    isFrozenBlocked: boolean
+    /** What the resolution research recommended, when it was consulted at all. */
+    recommend: ResolutionOutcome['recommend']
+    /** Unattended AUTOFIX attempts already spent on this task. */
+    autoFixCount: number
+}
+
+/**
+ * The reason an auto-ACCEPT is being written — NAMED, not assumed.
+ *
+ * The line this replaces asserted "autofix budget spent" on every branch. It was
+ * measured false in 2709 of 2709 recorded accepts (scripts/yolo-accept-baserate.ts):
+ * the budget has never once reached MAX_AUTO_AUTOFIX anywhere in the corpus — 30%
+ * of accepts are UNOBSERVED (the research is never even consulted) and 70% are an
+ * ACCEPT recommendation with the budget fully untouched. A durable trail that
+ * misstates why a defect shipped is worse than no trail: mx5 run 19's TASK_0009
+ * reads as an exhausted fixer when nothing was ever attempted.
+ */
+export function yoloAcceptReason(c: YoloAcceptContext): string {
+    if (c.isUnobserved)
+        return 'verify UNOBSERVED — tooling absent, an unattended re-run cannot provision it'
+    if (c.isFrozenBlocked)
+        return 'repo-health blocked by a spec-frozen path — an impl re-run under the same freeze cannot converge'
+    if (c.recommend === 'autofix') {
+        return `autofix budget spent (${c.autoFixCount}/${MAX_AUTO_AUTOFIX})`
+    }
+    return c.autoFixCount === 0 ?
+            `judge recommended ACCEPT (autofix budget 0/${MAX_AUTO_AUTOFIX} unused)`
+        :   `judge recommended ACCEPT (autofix budget ${c.autoFixCount}/${MAX_AUTO_AUTOFIX} already spent)`
+}
+
 /**
  * Bound a captured health-check output before it is embedded in a gate-trail line.
  * appendGateRecord flattens newlines to spaces, so the trail stays one line per
@@ -451,6 +487,8 @@ export async function runGatesForTask(
         // defect is recorded as a durable debt for the final gate.
         let frozenContradiction: string | null = null
         let frozenDebtRecorded = false
+        // YOLO only: has the one-attempt rescue below already been spent on this task?
+        let yoloRescueUsed = false
         while (!verified.ok) {
             const failReason = verified.reason ?? 'did not verify'
             // GRADUATED resolution: a repo-health FAIL (pure static findings) gets ONE
@@ -547,26 +585,60 @@ export async function runGatesForTask(
                 && !isFrozenBlocked
                 && recOutcome.recommend === 'autofix'
                 && autoFixCount < MAX_AUTO_AUTOFIX
-            // YOLO: the picker is unreachable with nobody watching, and by the time
-            // we are here the unattended AUTOFIX budget is ALREADY spent (autoFixNow
-            // is false) — so the only option left that terminates is ACCEPT, recorded
-            // as its own 'yolo-accepted' debt. Deliberately NOT a re-entry into
-            // autofix: MAX_AUTO_AUTOFIX exists to break a non-converging loop, and an
+                // A rescue attempt that still FAILed is terminal under YOLO: the
+                // recommendation that got us here was ACCEPT, so a later flip to
+                // AUTOFIX must not bootstrap the full budget from it.
+                && !yoloRescueUsed
+            // YOLO, THE RESCUE BRANCH: the recommendation is ACCEPT, nobody can be
+            // asked, and the unattended budget is UNTOUCHED. Accepting here ships a
+            // defect having attempted nothing — mx5 run 19 did exactly that twice,
+            // and the final-gate autofix later fixed one of the two in a single pass
+            // (`0 pass 130 fail` → `121 pass 0 fail`). So spend ONE attempt first.
+            // Bounded by construction: one, not MAX_AUTO_AUTOFIX, so an ACCEPT
+            // recommendation can never restart a full loop; if it still FAILs the
+            // next turn falls through to the same auto-ACCEPT and the same debt.
+            const yoloRescueNow =
+                isYoloMode()
+                && !yoloRescueUsed
+                && !isUnobserved
+                && !isFrozenBlocked
+                && recOutcome.recommend === 'accept'
+                && autoFixCount === 0
+            // YOLO: the picker is unreachable with nobody watching, and every
+            // unattended attempt this task may make has been made — so the only
+            // option left that terminates is ACCEPT, recorded as its own
+            // 'yolo-accepted' debt. Deliberately NOT a re-entry into autofix:
+            // MAX_AUTO_AUTOFIX exists to break a non-converging loop, and an
             // auto-pick here would restart the budget from the site that proves it ran out.
-            const yoloChoice = autoFixNow ? null : yoloVerifyResolution(isYoloMode())
+            const yoloChoice =
+                autoFixNow || yoloRescueNow ? null : yoloVerifyResolution(isYoloMode())
             let choice: ResolutionChoice
             if (yoloChoice !== null) {
                 choice = yoloChoice
+                // NAME the branch. This line is the durable record of why a defect
+                // shipped; asserting a spent budget on all four branches made run
+                // 19's zero-attempt accepts read as an exhausted fixer.
                 await rec(
-                    `resolution: auto-ACCEPTED despite verify FAIL — autofix budget spent, nobody to ask ${YOLO_STAMP}`
+                    `resolution: auto-ACCEPTED despite verify FAIL — ${yoloAcceptReason({
+                        isUnobserved,
+                        isFrozenBlocked,
+                        recommend: recOutcome.recommend,
+                        autoFixCount
+                    })}, nobody to ask ${YOLO_STAMP}`
                 )
-            } else if (autoFixNow) {
+            } else if (autoFixNow || yoloRescueNow) {
                 autoFixCount += 1
+                if (yoloRescueNow) yoloRescueUsed = true
                 await rec(
-                    `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
+                    yoloRescueNow ?
+                        `resolution: auto-AUTOFIX (${YOLO_STAMP} rescue — judge recommended ACCEPT with the unattended `
+                            + `budget unspent; one attempt, ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
+                    :   `resolution: auto-AUTOFIX (recommended, unattended ${autoFixCount}/${MAX_AUTO_AUTOFIX})`
                 )
                 active.ui.notify(
-                    `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (recommended, ${autoFixCount}/${MAX_AUTO_AUTOFIX})…`,
+                    `${p.tag}: verify FAIL on "${p.title}" — auto-fixing (${
+                        yoloRescueNow ? `${YOLO_STAMP} one attempt before accepting` : 'recommended'
+                    }, ${autoFixCount}/${MAX_AUTO_AUTOFIX})…`,
                     'info'
                 )
                 choice = {action: 'autofix'}
@@ -633,7 +705,13 @@ export async function runGatesForTask(
             // hand that diagnosis to the re-run so it fixes the located cause
             // instead of re-deriving it from the bare FAIL line. Skipped when there
             // is no researched rationale beyond the failure text itself.
-            await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
+            // Only the picker branch may claim a person chose this: the two
+            // unattended branches already recorded themselves one line above, and a
+            // trail that says "user chose" when nobody was asked is the same lie the
+            // accept line used to tell.
+            if (!autoFixNow && !yoloRescueNow) {
+                await rec('resolution: user chose AUTOFIX — re-running the implementation turn')
+            }
             active.ui.notify(`${p.tag}: autofixing "${p.title}"…`, 'info')
             const diagnosis =
                 (

@@ -1,7 +1,13 @@
 import {expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
-import {runGatesForTask, MAX_AUTO_AUTOFIX, type GateDeps, type GateParams} from './task-gates.js'
+import {
+    runGatesForTask,
+    yoloAcceptReason,
+    MAX_AUTO_AUTOFIX,
+    type GateDeps,
+    type GateParams
+} from './task-gates.js'
 import {ACCEPT_LABEL} from './verify-resolution.js'
 import {getConfig} from '../config/config.js'
 import {YOLO_STAMP} from './yolo.js'
@@ -1548,5 +1554,252 @@ test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () 
         expect(resolution).toContain(YOLO_STAMP)
         // …and never claims a person made the call.
         expect(trail.some(l => /user ACCEPTED/.test(l))).toBe(false)
+    })
+})
+
+// ─── nexttask 6: the auto-ACCEPT trail names its real branch, and YOLO spends one
+//     unattended attempt before shipping a defect the judge merely blessed. ────
+
+test('yoloAcceptReason: each of the four branches names ITSELF', () => {
+    // The line this replaces said "autofix budget spent" on all four. Measured
+    // false in 2709 of 2709 recorded accepts (scripts/yolo-accept-baserate.ts).
+    expect(
+        yoloAcceptReason({
+            isUnobserved: true,
+            isFrozenBlocked: false,
+            recommend: 'autofix',
+            autoFixCount: 0
+        })
+    ).toBe('verify UNOBSERVED — tooling absent, an unattended re-run cannot provision it')
+    expect(
+        yoloAcceptReason({
+            isUnobserved: false,
+            isFrozenBlocked: true,
+            recommend: 'accept',
+            autoFixCount: 0
+        })
+    ).toContain('repo-health blocked by a spec-frozen path')
+    expect(
+        yoloAcceptReason({
+            isUnobserved: false,
+            isFrozenBlocked: false,
+            recommend: 'autofix',
+            autoFixCount: MAX_AUTO_AUTOFIX
+        })
+    ).toBe(`autofix budget spent (${MAX_AUTO_AUTOFIX}/${MAX_AUTO_AUTOFIX})`)
+    expect(
+        yoloAcceptReason({
+            isUnobserved: false,
+            isFrozenBlocked: false,
+            recommend: 'accept',
+            autoFixCount: 0
+        })
+    ).toBe(`judge recommended ACCEPT (autofix budget 0/${MAX_AUTO_AUTOFIX} unused)`)
+    // …and the rescue's own aftermath: an ACCEPT with the budget partly spent.
+    expect(
+        yoloAcceptReason({
+            isUnobserved: false,
+            isFrozenBlocked: false,
+            recommend: 'accept',
+            autoFixCount: 1
+        })
+    ).toBe(`judge recommended ACCEPT (autofix budget 1/${MAX_AUTO_AUTOFIX} already spent)`)
+})
+
+test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed FAIL', async () => {
+    // mx5 run 19 TASK_0009: recommend ACCEPT, budget 0/3, defect shipped with
+    // nothing attempted — and a later single pass fixed it.
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let runTaskCalls = 0
+        const yoloDebts: unknown[] = []
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            // Converges on the re-run: FAIL first, PASS after the one attempt.
+            verify: () =>
+                Promise.resolve(
+                    runTaskCalls === 0 ? {ok: false, reason: 'real defect'} : {ok: true}
+                ),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'ship it'}),
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            recordYoloAcceptDebt: () => {
+                yoloDebts.push(1)
+                return Promise.resolve()
+            }
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        expect(runTaskCalls).toBe(1)
+        // The defect never ships: no accept, no debt, no picker.
+        expect(yoloDebts).toEqual([])
+        expect(captured.selects).toHaveLength(0)
+        expect(trail.some(l => /^resolution: auto-ACCEPTED/.test(l))).toBe(false)
+        const rescue = trail.find(l => /^resolution: auto-AUTOFIX/.test(l))
+        expect(rescue).toContain(YOLO_STAMP)
+        expect(rescue).toContain(`1/${MAX_AUTO_AUTOFIX}`)
+        // The unattended branch never claims a person picked it.
+        expect(trail.some(l => /user chose AUTOFIX/.test(l))).toBe(false)
+    })
+})
+
+test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as before', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let runTaskCalls = 0
+        const yoloDebts: Array<{taskId: string; reason: string}> = []
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            recordYoloAcceptDebt: (_c, taskId, reason) => {
+                yoloDebts.push({taskId, reason})
+                return Promise.resolve()
+            }
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        // ONE extra attempt, not MAX_AUTO_AUTOFIX.
+        expect(runTaskCalls).toBe(1)
+        // inv-debt-preserved: same debt, same origin, same reason as before the lever.
+        expect(yoloDebts).toEqual([{taskId: 'TASK_0006', reason: 'over-strict check'}])
+        expect(captured.selects).toHaveLength(0)
+        const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
+        expect(accept).toContain(`autofix budget 1/${MAX_AUTO_AUTOFIX} already spent`)
+        expect(accept).toContain(YOLO_STAMP)
+    })
+})
+
+test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the budget after a rescue', async () => {
+    // The concern the old comment named: an ACCEPT recommendation must never
+    // bootstrap the full unattended loop from the site that terminates it.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let runTaskCalls = 0
+        const recommends = ['accept', 'autofix', 'autofix', 'autofix'] as const
+        let recIdx = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
+            recommend: () =>
+                Promise.resolve({recommend: recommends[Math.min(recIdx++, 3)], rationale: 'r'}),
+            recordYoloAcceptDebt: () => Promise.resolve()
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        expect(runTaskCalls).toBe(1)
+    })
+})
+
+test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () => {
+    // inv-no-unobserved-autofix. mx5 run 19 TASK_0001: an unattended re-run
+    // cannot install Docker.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let runTaskCalls = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () =>
+                Promise.resolve({
+                    ok: false,
+                    unobserved: true,
+                    reason: 'work unobserved: docker absent'
+                }),
+            // Never consulted on this branch — and even if it were, ACCEPT must not fire.
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'x'}),
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            recordYoloAcceptDebt: () => Promise.resolve()
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        expect(runTaskCalls).toBe(0)
+        const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
+        expect(accept).toContain('verify UNOBSERVED — tooling absent')
+    })
+})
+
+test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the rescue', async () => {
+    // inv-no-frozen-autofix (mx5 run 12): the fix needs a path this spec freezes,
+    // so an impl re-run under the same freeze cannot converge.
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const trail: string[] = []
+        let runTaskCalls = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () =>
+                Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 2'}),
+            lintFix: () => Promise.resolve({ok: false, reason: 'frozen-path: tsconfig.json'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'x'}),
+            record: (_c, _i, line) => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            recordFrozenBlockedDebt: () => Promise.resolve(),
+            recordYoloAcceptDebt: () => Promise.resolve()
+        })
+        await withYolo(async () => {
+            const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+            expect(r.kind).toBe('done')
+        })
+        expect(runTaskCalls).toBe(0)
+        const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
+        expect(accept).toContain('repo-health blocked by a spec-frozen path')
+    })
+})
+
+test('runGatesForTask: without YOLO the rescue never fires — the picker still decides', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        let runTaskCalls = 0
+        const deps = makeDeps({
+            runTask: () => {
+                runTaskCalls++
+                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+            },
+            verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
+            recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
+            recordAcceptDebt: () => Promise.resolve()
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        // No queued answer ⇒ the picker was reached and dismissed.
+        expect(r.kind).toBe('paused')
+        expect(captured.selects).toHaveLength(1)
+        expect(runTaskCalls).toBe(0)
     })
 })
