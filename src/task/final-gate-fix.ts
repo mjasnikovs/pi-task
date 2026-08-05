@@ -45,6 +45,7 @@
  */
 import {USER_CANCELLED} from './child-runner.js'
 import {findForbiddenDeletions, type TreeChangeSummary} from './write-guard.js'
+import {findNarrowedCommands, narrowingRejectionText} from './command-shrink.js'
 
 /** Same bounded-fix contract as lint-fix: edit in place, bash exists to RUN the
  *  failing command (and the project's own tooling), not to mutate git state. */
@@ -270,6 +271,10 @@ export interface FinalFixDeps {
     /** Labels of every currently-discoverable gate command (static + integration),
      *  for the shrink guard. Pure discovery — nothing is executed. */
     discoverLabels: (cwd: string) => string[]
+    /** The same commands' RESOLVED BODIES (`label → scripts[name]` / Makefile
+     *  recipe), for the scope-shrink half of the guard. Absent → only the label
+     *  comparison runs, i.e. the pre-run-19 behaviour. */
+    discoverBodies?: (cwd: string) => Record<string, string>
     /** Discard the fix child's working-tree edits (guard trips only). Absent
      *  → the violation is still rejected, edits are left for inspection. */
     discard?: (cwd: string) => Promise<void>
@@ -304,6 +309,7 @@ export interface FinalFixDeps {
  */
 export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixResult> {
     const before = deps.discoverLabels(deps.cwd)
+    const bodiesBefore = deps.discoverBodies?.(deps.cwd) ?? {}
 
     let text: string
     try {
@@ -346,8 +352,9 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
 
     // DELETION GUARD (post-revert state): a tracked file the pass deleted without
     // relocating it is a committed deliverable destroyed — reject the attempt.
-    if (deps.treeChanges) {
-        const gone = findForbiddenDeletions(await deps.treeChanges())
+    const changes = deps.treeChanges ? await deps.treeChanges() : null
+    if (changes) {
+        const gone = findForbiddenDeletions(changes)
         if (gone.length > 0) {
             if (deps.discard) await deps.discard(deps.cwd)
             const r = rejected(
@@ -367,6 +374,30 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     if (vanished.length > 0) {
         if (deps.discard) await deps.discard(deps.cwd)
         return rejected(`fix pass removed the gate's own command(s) (${vanished.join(', ')})`)
+    }
+
+    // SCOPE-SHRINK GUARD (mx5 run 19): the label surviving is not enough. The
+    // autofix kept `bun run test` and rewrote its BODY from `AGENT=1 bun test`
+    // to `AGENT=1 bun test ./test`, so the set difference above was empty while
+    // the suite stopped covering the repository — and the gate re-ran, went
+    // green, and reported "converged". Compare the resolved bodies and reject a
+    // fix that shrinks what the gate measures (command-shrink.ts: four
+    // mechanical shapes, measured at 3 hits in 274 manifest-touching corpus
+    // commits, all three read by hand as real narrowings).
+    if (deps.discoverBodies) {
+        const addedByFix = new Set((changes?.added ?? []).map(p => p.replace(/^\.\//, '')))
+        const narrowed = findNarrowedCommands(bodiesBefore, deps.discoverBodies(deps.cwd), {
+            createdByFix: p => {
+                const n = p.replace(/^\.\//, '')
+                return addedByFix.has(n) || [...addedByFix].some(a => a.endsWith(`/${n}`))
+            }
+        })
+        if (narrowed.length > 0) {
+            if (deps.discard) await deps.discard(deps.cwd)
+            const r = rejected(narrowingRejectionText(narrowed))
+            deps.log?.(`final-fix SCOPE-SHRINK GUARD — ${r.reason}`)
+            return r
+        }
     }
 
     // PROBE SCAN (F6): added lines whose stated purpose is to make a check pass

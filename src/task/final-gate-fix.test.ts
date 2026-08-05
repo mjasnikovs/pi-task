@@ -195,6 +195,78 @@ describe('runFinalGateAutofix', () => {
         expect(r.reason).toContain('left in the tree')
     })
 
+    test('SCOPE-SHRINK GUARD (mx5 run 19): the label survives, the BODY narrows → rejected', async () => {
+        let discarded = false
+        let gateRuns = 0
+        const bodies = [
+            {'bun run test': 'AGENT=1 bun test'},
+            {'bun run test': 'AGENT=1 bun test ./test'}
+        ]
+        const r = await runFinalGateAutofix(
+            baseDeps({
+                discoverLabels: () => ['bun run test'],
+                discoverBodies: () => bodies.shift() ?? {},
+                discard: () => {
+                    discarded = true
+                    return Promise.resolve()
+                },
+                gate: () => {
+                    gateRuns++
+                    return Promise.resolve({ok: true, reason: '121 pass 0 fail'})
+                }
+            })
+        )
+        expect(r.ok).toBe(false)
+        expect(r.reason).toContain('NARROWED')
+        expect(r.reason).toContain('bun run test')
+        expect(r.guardTripped).toBe(true)
+        expect(r.editsDiscarded).toBe(true)
+        expect(discarded).toBe(true)
+        expect(gateRuns).toBe(0)
+    })
+
+    test('scope-shrink: widening, env vars and non-restricting flags all pass', async () => {
+        for (const [before, after] of [
+            ['AGENT=1 bun test ./test', 'AGENT=1 bun test'],
+            ['bun test', 'AGENT=1 bun test --bail --reporter junit'],
+            ['eslint . && tsc --noEmit', 'tsc --noEmit && eslint .']
+        ]) {
+            const bodies = [{'bun run test': before}, {'bun run test': after}]
+            const r = await runFinalGateAutofix(
+                baseDeps({
+                    discoverLabels: () => ['bun run test'],
+                    discoverBodies: () => bodies.shift() ?? {}
+                })
+            )
+            expect(r.ok).toBe(true)
+        }
+    })
+
+    test('scope-shrink: a config swap counts only when the fix pass CREATED the config', async () => {
+        const run = async (added: string[]) => {
+            const bodies = [
+                {'bun run test': 'playwright test -c playwright.config.ts'},
+                {'bun run test': 'playwright test -c playwright.smoke.ts'}
+            ]
+            return runFinalGateAutofix(
+                baseDeps({
+                    discoverLabels: () => ['bun run test'],
+                    discoverBodies: () => bodies.shift() ?? {},
+                    treeChanges: () =>
+                        Promise.resolve({modified: ['package.json'], deleted: [], added})
+                })
+            )
+        }
+        expect((await run([])).ok).toBe(true)
+        expect((await run(['playwright.smoke.ts'])).reason).toContain('NARROWED')
+    })
+
+    test('without discoverBodies the guard degrades to the label comparison', async () => {
+        const labels = [['bun run test'], ['bun run test']]
+        const r = await runFinalGateAutofix(baseDeps({discoverLabels: () => labels.shift() ?? []}))
+        expect(r.ok).toBe(true)
+    })
+
     test('a NEW command appearing does not trip the guard', async () => {
         const labels = [['bun run test'], ['bun run test', 'bun run build']]
         const r = await runFinalGateAutofix(baseDeps({discoverLabels: () => labels.shift() ?? []}))

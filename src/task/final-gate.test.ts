@@ -14,6 +14,7 @@ import {
     discoverBootCommand,
     discoverIntegrationCommands,
     discoverGateCommandLabels,
+    discoverGateCommandBodies,
     discoverLockfileChecks,
     nonLaunchScriptReason,
     observabilityGapFailure,
@@ -1075,6 +1076,44 @@ describe('discoverGateCommandLabels', () => {
 
     test('nothing discoverable → empty (degrades to nothing-to-guard)', async () => {
         expect(discoverGateCommandLabels(makeDir())).toEqual([])
+    })
+})
+
+describe('discoverGateCommandBodies', () => {
+    test('each label resolves to what it actually RUNS (mx5 run 19)', async () => {
+        const dir = makeDir({
+            scripts: {
+                lint: 'eslint . && tsc --noEmit',
+                test: 'AGENT=1 bun test',
+                start: 'bun src/i.ts'
+            }
+        })
+        expect(discoverGateCommandBodies(dir)).toEqual({
+            'bun run lint': 'eslint . && tsc --noEmit',
+            'bun run test': 'AGENT=1 bun test',
+            'bun run start': 'bun src/i.ts'
+        })
+    })
+
+    test('a command with no indirection resolves to itself', async () => {
+        const dir = makeDir({scripts: {test: 'echo t'}})
+        fs.writeFileSync(path.join(dir, 'bun.lock'), '{}')
+        expect(discoverGateCommandBodies(dir)['bun install --frozen-lockfile --dry-run']).toBe(
+            'bun install --frozen-lockfile --dry-run'
+        )
+    })
+
+    test('Makefile targets resolve to their recipe lines (non-npm parity)', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-bodies-'))
+        fs.writeFileSync(
+            path.join(dir, 'Makefile'),
+            'lint:\n\truff check .\n\ntest:\n\tpytest -q\n'
+        )
+        expect(discoverGateCommandBodies(dir)).toEqual({
+            'make lint': 'ruff check .',
+            'make test': 'pytest -q'
+        })
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 })
 

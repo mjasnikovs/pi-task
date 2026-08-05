@@ -79,6 +79,7 @@ import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
+import {makefileRecipe} from './command-shrink.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -1117,6 +1118,60 @@ export function discoverGateCommandLabels(cwd: string): string[] {
         ...(boot ? [boot] : [])
     ].map(([bin, args]) => `${bin} ${args.join(' ')}`)
     return [...new Set(labels)]
+}
+
+/**
+ * The RESOLVED BODY of every discoverable gate command, keyed by the same label
+ * `discoverGateCommandLabels` produces.
+ *
+ * The label is what the gate CALLS; the body is what actually runs. mx5 run 19's
+ * autofix changed `scripts.test` from `AGENT=1 bun test` to `AGENT=1 bun test
+ * ./test` — the label `bun run test` was identical before and after, so the
+ * label guard saw nothing while the suite stopped covering the repository. The
+ * shrink guard compares these bodies (see command-shrink.ts).
+ *
+ * A command with no indirection (`cargo test --quiet`, `pytest -q`) resolves to
+ * itself: it cannot be narrowed without changing the label, which the label
+ * guard already owns.
+ */
+export function discoverGateCommandBodies(cwd: string): Record<string, string> {
+    const boot = discoverBootCommand(cwd)
+    const cmds = [
+        ...discoverHealthCommands(cwd).cmds,
+        ...discoverLockfileChecks(cwd),
+        ...discoverIntegrationCommands(cwd).cmds,
+        ...(boot ? [boot] : [])
+    ]
+    const scripts = existsSync(path.join(cwd, 'package.json')) ? packageScripts(cwd) : {}
+    let makefile: string | null = null
+    if (existsSync(path.join(cwd, 'Makefile'))) {
+        try {
+            makefile = readFileSync(path.join(cwd, 'Makefile'), 'utf8')
+        } catch {
+            makefile = null
+        }
+    }
+    const out: Record<string, string> = {}
+    for (const [bin, args] of cmds) {
+        const label = `${bin} ${args.join(' ')}`
+        if (out[label] !== undefined) continue
+        out[label] = resolveCommandBody(bin, args, scripts, makefile) ?? label
+    }
+    return out
+}
+
+/** `bun run test` → `scripts.test`; `make test` → the target's recipe lines. */
+function resolveCommandBody(
+    bin: string,
+    args: string[],
+    scripts: Record<string, string>,
+    makefile: string | null
+): string | null {
+    if (args[0] === 'run' && args[1] !== undefined) return scripts[args[1]] ?? null
+    if (bin === 'make' && args[0] !== undefined && makefile !== null) {
+        return makefileRecipe(makefile, args[0])
+    }
+    return null
 }
 
 /** Last ~`limit` chars of the command's combined output, one line, for the reason. */

@@ -35,7 +35,11 @@ import {
 } from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
 import {runRepoHealthCheck} from './repo-health-check.js'
-import {runFinalIntegrationGate, discoverGateCommandLabels} from './final-gate.js'
+import {
+    runFinalIntegrationGate,
+    discoverGateCommandLabels,
+    discoverGateCommandBodies
+} from './final-gate.js'
 import {runFinalGateAutofix, type FinalFixResult} from './final-gate-fix.js'
 import {researchResolution} from './verify-resolution.js'
 import {extractProhibitions, findProhibitionViolations} from './prohibition-probe.js'
@@ -971,6 +975,7 @@ export function buildGateDeps(params: {
                 // shrink guard's discovery is the gate's own (see final-gate.ts).
                 gate: c => runFinalIntegrationGate(c),
                 discoverLabels: discoverGateCommandLabels,
+                discoverBodies: discoverGateCommandBodies,
                 discard: discardTreeEdits,
                 // WRITE-GUARD STACK (mx5 run 11: this child ran with free bash and
                 // none of the run-8 guards — it rm'd a sibling task's verified
