@@ -1,13 +1,18 @@
 /**
  * nexttask 5B — the two candidate bounds on worker:apis's project-source fan-out.
  *
- * ⚠ NOT WIRED. Both levers here are OFF unless their env var is set, so the
- * shipped path is bit-for-bit what it was. They exist so
- * `scripts/live-research-fanout-budget-ab.ts` can run them against the shipped
- * baseline in the SAME build — the alternative (dist surgery) measures a patched
- * copy of the code and not the code. Nothing may read these outside that harness
- * until it reports PASS; a lever wired on argument rather than measurement is the
- * failure mode nexttasks exists to prevent.
+ * ⚠ ONE of the levers in this file is wired: the RESCUE progress deadline
+ * (`workerProgressCeilingMs`) SHIPPED ON in nexttask 9, on a PASS measured over 42
+ * trials per arm against an instrument whose own false-break rate is on record at
+ * 1.5%. CAP, SCALE and RESCUE-CARRY remain OFF unless their env var is set — CAP
+ * and SCALE were rejected on argument (see below), carry-forward was measured
+ * HARMFUL on its own.
+ *
+ * The OFF levers exist so `scripts/live-research-fanout-budget-ab.ts` can run them
+ * against the shipped baseline in the SAME build — the alternative (dist surgery)
+ * measures a patched copy of the code and not the code. Nothing may read them
+ * outside that harness until it reports PASS; a lever wired on argument rather
+ * than measurement is the failure mode nexttasks exists to prevent.
  *
  * THE FAULT THEY TARGET (mx5 run 18, measured — scripts/research-restart-baserate.ts):
  * `worker:apis` fans out `pi-worker-docs(module: ".")` project-source lookups, each
@@ -124,12 +129,47 @@ export function workerCarryForward(env: Env = defaultEnv): boolean {
 }
 
 /**
- * The absolute backstop for the progress-based deadline, or null when off.
- * Required rather than defaulted: a progress deadline with no ceiling is an
- * unbounded worker, which is the one thing the fixed cap exists to prevent.
+ * The absolute backstop for the progress-based deadline.
+ *
+ * WHY THIS NUMBER. It is not a budget and it does not decide how long a worker
+ * may take — the no-progress deadline does that, and it resets on every tool call.
+ * This is the last-resort bound on a worker that never stops moving (an infinite
+ * tool-call loop the loop detector somehow misses), so its only requirement is to
+ * sit clear of the real workload. Measured on 42 progress-arm trials
+ * (`~/tmp/research-fanout-ab-v3`): median 275s, p90 523s, **max 730s**. 20 minutes
+ * is 1.6x the observed worst case, and 1.7x the 720s the SHIPPED path already
+ * spends on a worker that burns all three attempts and returns nothing.
+ *
+ * A ceiling that never fires in production is the correct behaviour for a
+ * backstop, not evidence it is untested: it fires under test
+ * (`pi-worker-core.test.ts` — 'the absolute ceiling still bounds a worker that
+ * never stops moving'), and a worker that goes QUIET is killed long before it, at
+ * `timeoutMs` without progress and by the stall probe.
+ */
+export const DEFAULT_WORKER_PROGRESS_CEILING_MS = 1_200_000
+
+/**
+ * The progress-based deadline's ceiling, or null when the lever is OFF.
+ *
+ * SHIPPED ON as of nexttask 9 — the env var is now the OFF switch, not the on
+ * switch. Measured baseline vs progress over 42 trials/arm on a calibrated
+ * instrument (A/A false-break 1.5%): worker-timeout restarts 22/24 → 0/24,
+ * degrades 8/24 → 0/24, entries up on all four high-fan-out fixtures (TASK_0021
+ * 11.0 → 25.5), quality invariants HOLD, every treatment-arm ungrounded flag
+ * hand-verified as an instrument artifact rather than a fabrication.
+ *
+ *     unset            ON at DEFAULT_WORKER_PROGRESS_CEILING_MS
+ *     "0" | "off"      OFF — the fixed elapsed-time cap, exactly as before
+ *     positive int     ON at that ceiling, in ms
+ *
+ * A garbage value keeps the SHIPPED behaviour rather than silently disabling the
+ * lever: turning it off is a decision and has to be spelled.
  */
 export function workerProgressCeilingMs(env: Env = defaultEnv): number | null {
-    return positiveInt(env(WORKER_PROGRESS_CEILING_ENV))
+    const raw = env(WORKER_PROGRESS_CEILING_ENV)
+    if (raw === undefined || raw.trim() === '') return DEFAULT_WORKER_PROGRESS_CEILING_MS
+    if (raw.trim() === '0' || raw.trim().toLowerCase() === 'off') return null
+    return positiveInt(raw) ?? DEFAULT_WORKER_PROGRESS_CEILING_MS
 }
 
 /**

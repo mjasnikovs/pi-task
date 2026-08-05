@@ -785,6 +785,69 @@ describe('runWorker', () => {
             })
             expect(r.timedOut).toBe(true)
         })
+
+        // inv-no-unbounded-worker (nexttask 9). The progress deadline SHIPPED ON,
+        // so "a worker that is progressing may run to 20 minutes" is now the
+        // default path, and the question stops being hypothetical: what bounds a
+        // worker whose model endpoint is simply gone?
+        //
+        // Two independent bounds, and the point of the test is that neither one
+        // needs the ceiling. A hung child emits nothing, so it never calls
+        // progress() and the deadline never re-arms — it dies at `timeoutMs`
+        // exactly as it did before the lever. And the stall probe kills it sooner
+        // still. A ceiling 20 minutes out is reached by neither.
+        test('a hung endpoint is still killed fast with the ceiling ON', async () => {
+            const spawn = (() => {
+                const p = makeProc()
+                // Emits nothing and never closes on its own — a child wedged on a
+                // dead backend. Only a kill from the guard closes it.
+                const origKill = p.kill.bind(p)
+                p.kill = (sig: string) => {
+                    origKill(sig)
+                    setTimeout(() => p.emit('close', null), 5)
+                    return true
+                }
+                return p
+            }) as unknown as SpawnFn
+            const started = Date.now()
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 60,
+                // The real ratio, scaled: the ceiling is ~5000x the no-progress
+                // window here, as 1_200_000 is ~5x the shipped 240_000.
+                progressTimeoutCeilingMs: 300_000,
+                stall: {afterMs: 40, probe: () => Promise.resolve(false)},
+                loop: false
+            })
+            expect(r.stalled).toBe(true)
+            expect(Date.now() - started).toBeLessThan(5_000)
+        })
+
+        test('…and without the stall probe the no-progress deadline still bounds it', async () => {
+            // The stall probe off, so the ONLY thing left is the progress-based
+            // deadline itself. A worker that never progresses gets `timeoutMs`,
+            // not the ceiling — which is what makes the ceiling a backstop rather
+            // than the bound.
+            const spawn = fakeSpawnQueue([
+                {events: [], closeDelayMs: 400},
+                {events: [], closeDelayMs: 400},
+                {events: [], closeDelayMs: 400}
+            ])
+            const started = Date.now()
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 30,
+                progressTimeoutCeilingMs: 300_000,
+                stall: false,
+                loop: false
+            })
+            expect(r.timedOut).toBe(true)
+            expect(Date.now() - started).toBeLessThan(5_000)
+        })
     })
 
     describe('nexttask 5B levers', () => {

@@ -409,7 +409,15 @@ channel at all, or only on the deterministic unmapped-requirement channel? The
 judge channel is what catches areas the extractor *missed*, so deleting it trades
 one blindness for another. Measure before choosing.
 
-## OPEN — 3. worker:apis project-source fan-out (nexttask 5B)
+## SHIPPED — 3. worker:apis project-source fan-out (nexttask 5B → 9)
+
+> **Resolved 2026-08-05 (nexttask 9).** The progress deadline is **wired ON by
+> default**; `PI_TASK_WORKER_PROGRESS_CEILING_MS` is now the OFF switch
+> (`0`/`off`). Carry-forward, CAP and SCALE stay OFF. The verdict below stood as
+> FAIL for three rounds and was overturned by fixing the INSTRUMENT, not the
+> lever — read `### ROUND 4` at the end of this section before re-opening
+> anything here.
+
 
 Instrumentation (5A) is **shipped**: `runWorker` now returns `attempts`,
 `totalWallMs` and a per-restart list, emits `onRestart` per discarded attempt, and
@@ -1188,6 +1196,96 @@ observed wall of 980s. It has never fired. An arbitrary constant that has never
 fired is not shippable on a green A/B — see
 `memory/fix-must-preserve-work-not-bound-it.md`. And the quality result at n=6 is
 directional only: within-fixture CV for entries reaches 87% on this corpus.
+
+### ROUND 4 (nexttask 9) — the instrument was the blocker; PASS, WIRED
+
+**STEP 0, over every recorded run, not just the one that motivated the lever.**
+`scripts/research-discard-baserate.ts` reads the discarded wall straight off the
+5A `RESTART` lines and divides it by `phase:research: done ms=`:
+
+    mx5 (run 19)   17 restarts (14 worker-timeout)   59.4 / 110.5 min   54%
+    gofer-pixel    12 restarts ( 7 worker-timeout)   32.9 /  64.0 min   51%
+    aiz-client      0 restarts                        0.0 /   4.6 min    0%
+    IAR1, runner   pre-5A logs — NOT MEASURABLE, and reported as blind, not clean
+
+**The prize is not mx5-shaped.** gofer-pixel is an independent workload on an
+independent stack and lands within 3 points of mx5. That was the question STEP 0
+existed to answer and the answer is the opposite of the cautious guess. The two
+zero rows are pre-5A checkouts with no `RESTART` instrumentation at all; the
+script says NOT MEASURABLE rather than 0%, because a blind corpus that reports a
+clean one is how a lever gets scoped away for nothing.
+
+**Phase A — the instrument, and a TRUE A/A finally run over the whole verdict.**
+`--aa` splits the baseline corpus in half within each fixture and puts both halves
+through the same `evaluate()` the A/B verdict uses, so every break is false by
+construction. First run, on the shipped instrument:
+
+    inv-no-degrade + inv-time-to-answer      200/200 = 100.0% FALSE-BREAK
+
+Two more invariants of exactly the shape this file has now caught three times:
+
+- `inv-no-new-degrade` was `highTreat.every(r => !r.degraded)` — an **absolute
+  zero** that never looked at the baseline, on a corpus whose baseline degrades
+  8 trials in 12. The label said NEW, the code said ANY: 100.0% false-break.
+- `inv-time-to-answer-lower` was `tMean < bMean` — a strict inequality on means,
+  57.0% false-break, and it was demanding the treatment be FASTER on a metric its
+  own header calls censored and not a lever benefit.
+
+Both repaired to directional permutation tests calibrated on treatment-free data,
+the same repair as `scoreQuality`/`scoreLowFanout`. Re-run: **3/200 = 1.5%**,
+under the 5% ceiling, written to `$AB_DIR/aa-calibration.json` and reproduced in
+the A/B report — `inv-aa-calibrated` fails the verdict if it is missing.
+
+**Phase B — the verdict, on the v3 corpus (42 trials/arm, no new model time).**
+
+    timeouts        22/24 → 0/24          degrades        8/24 → 0/24 (p=0.004)
+    entries         TASK_0017 21.2→36.7   TASK_0019 26.2→29.5
+                    TASK_0020 21.3→35.0   TASK_0021 11.0→25.5
+    admissible-n    baseline 34/42 (8 degraded excluded)   progress 42/42
+    A/A             1.5% false-break, 200 same-arm splits
+    every invariant HOLDS                                            exit 0 PASS
+
+`inv-no-fabrication` was discharged by hand over **every** flagged symbol in the
+treatment arm, controls included (`scripts/inspect-ungrounded.ts`): prose parsed
+as an entry (`Now`/`information`/`Let`/`compile`/`APIS` — present in both arms,
+see `memory/prose-symbols-defect.md`), markdown italics (`_listing endpoint_`),
+real Hono RPC methods (`$patch`, `$post`), a real Playwright key
+(`snapshotsPathTemplate`), platform surfaces (`navigator.clipboard.writeText`),
+and — on the two control trials that carry the whole control "rise" — correct
+external facts from trials whose retrieval corpus was **empty** (`postgres`,
+`tailwindcss`, `postcss`, `POSTGRES_DB`). **Zero fabricated project signatures.**
+
+#### The 1,200,000ms objection, answered rather than waved
+
+The round-3 note above is right that an arbitrary constant which has never fired
+is not shippable — and the answer is that this constant is not a budget. The
+no-progress deadline decides how long a worker may take, and it re-arms on every
+tool call; the ceiling is the last-resort bound on a worker that never stops
+moving. Its only requirement is to sit clear of the real workload, and it does:
+**median 275s, p90 523s, max 730s over 42 progress-arm trials** — 1.6x headroom,
+and 1.7x the 720s the shipped path already spends to return nothing. It fires
+under test and not in production, which is what a backstop is for. A hung
+endpoint never reaches it at all: a silent worker never calls `progress()`, so it
+dies at `timeoutMs` exactly as before, and the stall probe kills it sooner
+(`inv-no-unbounded-worker`, two tests in `pi-worker-core.test.ts`).
+
+#### Carry-forward is REFUTED and stays off
+
+Not re-run at n=12, and deliberately: the full 2x2 already isolated it, and
+nothing about it is shipping. Alone it prepends up to 24,000 chars to a prompt
+that must still fit the SAME cap, so it spends the budget it exists to save —
+TASK_0020 hit `exit=143` on all three attempts where baseline's third completed,
+22 entries → 2. It produced the only observed fabrication (`Textarea`, run 18,
+TASK_0019). Inside `rescue` it never fired at all (`attempts=1` x8), so that
+arm's clean result credited a mechanism that never ran. `inv-carry-is-unverified`
+holds by unit test (the re-spawn prompt carries `UNVERIFIED`) and is moot while
+the lever is off.
+
+**The salvage half is the open follow-up.** Carry (prepend findings to the
+re-spawn) and salvage (return the best attempt instead of nothing) sit behind ONE
+env var, and only carry is refuted. Splitting them would let a worker killed at
+the absolute ceiling return its partial section rather than a degrade. Its own
+A/B, not this one's.
 
 ---
 

@@ -215,14 +215,26 @@ const PROGRESS_CEILING_MS = 1_200_000
 type Arm = 'baseline' | 'cap' | 'scale' | 'both' | 'rescue' | 'carry' | 'progress'
 const ARMS: Arm[] = ['baseline', 'cap', 'scale', 'both', 'rescue', 'carry', 'progress']
 
+/**
+ * The progress deadline SHIPPED ON in nexttask 9, so `PI_TASK_WORKER_PROGRESS_CEILING_MS`
+ * is now the OFF switch. Every arm that is not the progress arm must therefore
+ * spell the off value: leaving it unset used to mean "shipped default = fixed cap"
+ * and now means "shipped default = progress deadline", which would quietly turn
+ * the baseline into a second copy of the treatment — and an A/B whose baseline is
+ * the treatment reports 0/0 and calls it a win.
+ */
+const PROGRESS_OFF = {[WORKER_PROGRESS_CEILING_ENV]: 'off'}
+
 const ARM_ENV: Record<Arm, Record<string, string>> = {
-    baseline: {},
-    cap: {[PROJECT_DOCS_BUDGET_ENV]: String(PROJECT_DOCS_BUDGET)},
+    baseline: {...PROGRESS_OFF},
+    cap: {...PROGRESS_OFF, [PROJECT_DOCS_BUDGET_ENV]: String(PROJECT_DOCS_BUDGET)},
     scale: {
+        ...PROGRESS_OFF,
         [FANOUT_TIMEOUT_PER_LOOKUP_ENV]: String(PER_LOOKUP_MS),
         [FANOUT_TIMEOUT_CEILING_ENV]: String(CEILING_MS)
     },
     both: {
+        ...PROGRESS_OFF,
         [PROJECT_DOCS_BUDGET_ENV]: String(PROJECT_DOCS_BUDGET),
         [FANOUT_TIMEOUT_PER_LOOKUP_ENV]: String(PER_LOOKUP_MS),
         [FANOUT_TIMEOUT_CEILING_ENV]: String(CEILING_MS)
@@ -242,7 +254,7 @@ const ARM_ENV: Record<Arm, Record<string, string>> = {
     // failure mode (a half-written entry replayed as established fact) went
     // completely unexercised. Keeping the fixed 240s cap restores the restarts,
     // so this arm is the only one in which the carry is actually under test.
-    carry: {[WORKER_CARRY_FORWARD_ENV]: '1'},
+    carry: {...PROGRESS_OFF, [WORKER_CARRY_FORWARD_ENV]: '1'},
     // PROGRESS-ONLY — the missing cell of the 2x2, and on the evidence the only
     // one worth shipping. `rescue` (both halves) removed every timeout, but
     // `carry` (carry alone) shows carry-forward is not merely inert without the
@@ -1122,19 +1134,384 @@ export function scoreTimeToAnswer(
             descriptive
         }
     }
+    // WAS `ok: tMean < bMean` — a strict inequality on means with no variance
+    // model, i.e. the exact shape [[quality-invariant-false-break]] and
+    // [[lowfanout-invariant-noise-detector]] were written about, and the A/A
+    // caught it: 114/200 = 57.0% false-break on pure-baseline splits of
+    // `~/tmp/research-fanout-ab-v3`. At n=21 a coin flip is what it should be —
+    // two samples of the same arm have no reason to tie.
+    //
+    // It was also demanding the wrong thing. This header already says wall clock
+    // is censored and is NOT a lever benefit; requiring the treatment to be
+    // FASTER made a benefit claim out of it anyway, and nexttask 9 rules that
+    // claim out on its own terms (baseline's 720s trials are pinned at the 3x240s
+    // cap, so the comparison is an artifact of the cap). What is worth guarding is
+    // the harm direction: an arm that pushes a deadline outward must not end up
+    // significantly SLOWER to a usable answer. Hence a directional permutation
+    // test over per-trial wall — same repair, same discipline, calibrated on
+    // treatment-free data.
+    const bw = comparable.flatMap(id => pick(base, id).map(r => r.apisWallMs))
+    const tw = comparable.flatMap(id => pick(treat, id).map(r => r.apisWallMs))
+    const floor = 2 / binomial(bw.length + tw.length, bw.length)
+    const shift = `${(bMean / 1000).toFixed(0)}s → ${(tMean / 1000).toFixed(0)}s`
+        + ` over ${comparable.length} fixture(s) that answered in every trial of both`
+        + ` arms (${comparable.join(', ')})`
+    if (floor > VERDICT_ALPHA) {
+        return {
+            invariant: {
+                label: 'inv-time-to-answer-not-worse',
+                ok: true,
+                unmeasured: true,
+                detail:
+                    `${shift} — but the smallest p an exact test can report at`
+                    + ` ${bw.length}v${tw.length} trials is ${floor.toFixed(3)}, above`
+                    + ` ${VERDICT_ALPHA}, so this can neither break nor hold`
+            },
+            unmeasured: [
+                `time-to-answer: ${bw.length} baseline and ${tw.length} treatment trial(s) on`
+                    + ` complete fixtures — too few for the test to resolve anything`
+            ],
+            descriptive
+        }
+    }
+    const slower = permutationP(bw, tw)
     return {
         invariant: {
-            label: 'inv-time-to-answer-lower',
-            ok: tMean < bMean,
-            detail:
-                `${(bMean / 1000).toFixed(0)}s → ${(tMean / 1000).toFixed(0)}s`
-                + ` over ${comparable.length} fixture(s) that answered in every trial of both`
-                + ` arms (${comparable.join(', ')})`
+            label: 'inv-time-to-answer-not-worse',
+            ok: !(mean(tw) > mean(bw) && slower <= VERDICT_ALPHA),
+            detail: `${shift} (p=${slower.toFixed(3)}, breaks only on a significant SLOWDOWN)`
         },
         unmeasured: [],
         descriptive
     }
 }
+
+/**
+ * ADMISSIBILITY (nexttask 9, Phase A.1).
+ *
+ * A trial is admissible evidence for the QUALITY comparison only if it produced a
+ * non-degraded section carrying at least one extracted symbol. The n=3 FAIL that
+ * sent this investigation down the grounding-corpus path was a zero denominator: a
+ * baseline trial that shipped a one-sentence stub has an ungrounded rate of
+ * 0/0 = 0.0%, which then scores as better grounded than a 28-entry section.
+ *
+ * Two rules keep this from becoming a filter that hides a regression:
+ *
+ *   - it applies to the quality comparison ONLY. Metric 1 (timeouts) and metric 2
+ *     (delivered work) are computed over every measurable trial, because a
+ *     treatment that ships stubs must show up as a loss there, not vanish into an
+ *     exclusion;
+ *   - the counts are PRINTED, per arm, with the reason. An unreported exclusion
+ *     invalidates the run (`inv-admissibility-reported`).
+ */
+const isAdmissible = (r: TrialResult): boolean => !isUnmeasurable(r) && usableAnswer(r)
+
+/** nexttask 9's pre-registered floor: below this an arm cannot render a quality verdict. */
+const N_MIN_ADMISSIBLE = 12
+
+interface Ledger {
+    arm: string
+    recorded: number
+    degraded: number
+    zeroSymbol: number
+    admissible: number
+}
+
+function ledger(arm: string, rows: TrialResult[]): Ledger {
+    const measurable = rows.filter(r => !isUnmeasurable(r))
+    return {
+        arm,
+        recorded: rows.length,
+        degraded: measurable.filter(r => r.degraded).length,
+        zeroSymbol: measurable.filter(r => !r.degraded && r.symbols === 0).length,
+        admissible: measurable.filter(isAdmissible).length
+    }
+}
+
+const ledgerLine = (l: Ledger): string =>
+    `  admissible-n ${l.arm.padEnd(9)} ${String(l.admissible).padStart(3)} of ${String(l.recorded).padStart(3)}`
+    + ` scored  |  excluded: ${l.degraded} degraded, ${l.zeroSymbol} zero-symbol`
+
+/**
+ * A/A CALIBRATION (nexttask 9, Phase A.3), read back into the A/B report.
+ *
+ * `inv-aa-calibrated`: an A/B result is not believable until the same instrument
+ * has been run with BOTH arms set to baseline and its false-break rate measured
+ * under 5%. The number is written by `--aa` and reproduced here, because a
+ * calibration that lives only in a chat log is a calibration nobody can check.
+ */
+interface AaCalibration {
+    corpus: string
+    splits: number
+    perArm: number
+    breaks: number
+    rate: number
+    byInvariant: Record<string, number>
+    at: string
+}
+
+const AA_PATH = path.join(ROOT, 'aa-calibration.json')
+
+function loadAaCalibration(): AaCalibration | null {
+    if (!fs.existsSync(AA_PATH)) return null
+    return JSON.parse(fs.readFileSync(AA_PATH, 'utf8')) as AaCalibration
+}
+
+/**
+ * Significance level for the two verdict-level invariants that compare the arms
+ * directly — degrade rate and time to answer. Same 0.05 the other two use; they
+ * carry their own Bonferroni over their own sub-tests, and these two are one test
+ * each, so the correction here is the identity.
+ */
+const VERDICT_ALPHA = 0.05
+
+/**
+ * `inv-no-new-degrade`, repaired.
+ *
+ * WAS `highTreat.every(r => !r.degraded)` — an ABSOLUTE zero, on a corpus where
+ * the baseline itself degrades 8 trials in 12. The A/A caught it at **200/200 =
+ * 100.0%**: feed the instrument two halves of the same baseline and it reports
+ * "the treatment introduced degrades" every single time, because the rule never
+ * looked at the baseline at all. The label said NEW; the code said ANY.
+ *
+ * Repaired to what the label claims: the treatment may not degrade SIGNIFICANTLY
+ * MORE OFTEN than the baseline, by a directional permutation test on the 0/1
+ * indicator. The direction matters — an arm that degrades LESS (the whole point
+ * of the progress deadline) must not be penalised for degrading at all — and the
+ * gaming route stays shut, because a treatment that degrades more still breaks
+ * this, and one that ships stubs instead breaks `inv-quality-not-worse`'s
+ * empty-section test over ALL trials.
+ */
+function degradeInvariant(base: TrialResult[], treat: TrialResult[]): Invariant {
+    const b: number[] = base.map(r => (r.degraded ? 1 : 0))
+    const t: number[] = treat.map(r => (r.degraded ? 1 : 0))
+    const counts = `${b.reduce((n, x) => n + x, 0)}/${b.length} baseline`
+        + ` → ${t.reduce((n, x) => n + x, 0)}/${t.length} treatment`
+    if (b.length === 0 || t.length === 0) {
+        return {
+            label: 'inv-no-new-degrade',
+            ok: true,
+            unmeasured: true,
+            detail: 'one arm has no high-fan-out trials — nothing to compare'
+        }
+    }
+    const floor = 2 / binomial(b.length + t.length, b.length)
+    if (floor > VERDICT_ALPHA) {
+        return {
+            label: 'inv-no-new-degrade',
+            ok: true,
+            unmeasured: true,
+            detail:
+                `${counts} — the smallest p an exact test can report at these n is`
+                + ` ${floor.toFixed(3)}, above ${VERDICT_ALPHA}: can neither break nor hold`
+        }
+    }
+    const p = permutationP(b, t)
+    return {
+        label: 'inv-no-new-degrade',
+        ok: !(mean(t) > mean(b) && p <= VERDICT_ALPHA),
+        detail: `${counts} degraded (p=${p.toFixed(3)}, breaks only on a significant RISE)`
+    }
+}
+
+/**
+ * Everything the verdict rests on, computed without printing, so the A/A can put
+ * pure-baseline data through the SAME code path the A/B verdict uses. A
+ * calibration run against a re-implementation of the scorer measures the
+ * re-implementation.
+ */
+interface Evaluation {
+    shared: string[]
+    excluded: string[]
+    qualityBreaks: string[]
+    unscorable: string[]
+    lowBreaks: string[]
+    lowUnmeasured: string[]
+    wall: ReturnType<typeof scoreTimeToAnswer>
+    highBase: TrialResult[]
+    highTreat: TrialResult[]
+    reps: number
+    invariants: Invariant[]
+    unmeasured: string[]
+}
+
+function evaluate(base: TrialResult[], treat: TrialResult[]): Evaluation {
+    const byFixture = (rows: TrialResult[], id: string): TrialResult[] =>
+        rows.filter(r => r.taskId === id)
+    const highBase = base.filter(r => HIGH_FANOUT.includes(r.taskId))
+    const highTreat = treat.filter(r => HIGH_FANOUT.includes(r.taskId))
+
+    // METRIC 2 — wall clock, over the fixtures BOTH arms actually ran AND both
+    // actually fanned out on.
+    //
+    // D1: `witnessed` used to gate metric 1 only, so a fixture that never posed
+    // the problem still set the bar for metrics 2 and 3. TASK_0022's baseline
+    // made ONE project lookup and still contributed 234s against the treatment's
+    // 405s, and 24→23 signatures as a "quality break", on a lever it never
+    // exercised.
+    const posed = (rows: TrialResult[], id: string): boolean =>
+        byFixture(rows, id).some(
+            r => r.projectLookups >= WITNESS_LOOKUPS || r.retrievalCalls >= WITNESS_RETRIEVALS
+        )
+    const shared = HIGH_FANOUT.filter(
+        id =>
+            byFixture(base, id).length > 0
+            && byFixture(treat, id).length > 0
+            && posed(base, id)
+            && posed(treat, id)
+    )
+    const excluded = HIGH_FANOUT.filter(
+        id =>
+            byFixture(base, id).length > 0 && byFixture(treat, id).length > 0 && !shared.includes(id)
+    )
+    // Controls are checked for FABRICATION too. They are excluded from metrics
+    // 2-3 as a lever BENEFIT — they never posed the problem, so a wall-clock or
+    // coverage win there measures nothing — but collateral damage is not a
+    // benefit, and quality was the one invariant that never looked. The v3 run
+    // put real numbers in that blind spot: TASK_0001 ungrounded 0.0→2.0 and
+    // TASK_0004 0.7→2.7, while the invariant printed "did not rise on any
+    // fixture". "Did not look" must not render as "did not rise".
+    const qualityFixtures = [
+        ...shared,
+        ...LOW_FANOUT.filter(
+            id => byFixture(base, id).length > 0 && byFixture(treat, id).length > 0
+        )
+    ]
+    const {qualityBreaks, unscorable} = scoreQuality(qualityFixtures, base, treat)
+    const {lowBreaks, unmeasured: lowUnmeasured} = scoreLowFanout(base, treat)
+    const wall = scoreTimeToAnswer(shared, base, treat)
+
+    const invariants: Invariant[] = [
+        {
+            label: 'inv-quality-not-worse',
+            ok: qualityBreaks.length === 0,
+            detail:
+                qualityBreaks.length > 0 ? qualityBreaks.join('; ')
+                : unscorable.length > 0 ?
+                    `signature coverage held; grounding NOT EVALUATED on ${unscorable.length} fixture(s)`
+                :   'signature coverage held and fabricated symbols did not rise on any fixture'
+        },
+        degradeInvariant(highBase, highTreat),
+        {
+            label: 'inv-low-fanout-untouched',
+            ok: lowBreaks.length === 0,
+            ...(lowBreaks.length === 0 && lowUnmeasured.length > 0 ? {unmeasured: true} : {}),
+            detail:
+                lowBreaks.length > 0 ? lowBreaks.join('; ')
+                : lowUnmeasured.length > 0 ?
+                    `${lowUnmeasured.length} control fixture(s) were not run — nothing to compare`
+                :   'controls unchanged'
+        },
+        wall.invariant
+    ]
+
+    return {
+        shared,
+        excluded,
+        qualityBreaks,
+        unscorable,
+        lowBreaks,
+        lowUnmeasured,
+        wall,
+        highBase,
+        highTreat,
+        reps: Math.min(highBase.length, highTreat.length),
+        invariants,
+        unmeasured: [...unscorable, ...lowUnmeasured, ...wall.unmeasured]
+    }
+}
+
+/**
+ * TRUE A/A (nexttask 9, Phase A.3). Both "arms" are baseline trials, so every
+ * break the instrument reports is false by construction, and the rate at which it
+ * reports one is its false-break rate.
+ *
+ * Split by TRIAL INDEX within each fixture, not across fixtures: the fixtures
+ * differ from each other by far more than the arms do, so a split that put
+ * TASK_0017 on one side and TASK_0020 on the other would measure the fixture, not
+ * the instrument. Every split keeps both halves balanced per fixture — exactly the
+ * structure a real A/B has.
+ *
+ * `scripts/lowfanout-null-control.ts` did this for two invariants over 6-vs-6
+ * splits of a dedicated null corpus; this runs the WHOLE verdict, including the
+ * invariants that only exist inside `score`.
+ */
+function calibrateAa(splits: number): void {
+    const base = loadResults('baseline')
+    if (base.length === 0) {
+        console.error(`no baseline trials under ${path.join(ROOT, 'results')} — run that arm first.`)
+        process.exit(2)
+    }
+    const byId = new Map<string, TrialResult[]>()
+    for (const r of base) byId.set(r.taskId, [...(byId.get(r.taskId) ?? []), r])
+    const splittable = [...byId.entries()].filter(([, rs]) => rs.length >= 2)
+    if (splittable.length === 0) {
+        console.error('no fixture has >=2 baseline trials — an A/A needs both halves per fixture.')
+        process.exit(2)
+    }
+    const perArm = splittable.reduce((n, [, rs]) => n + Math.floor(rs.length / 2), 0)
+
+    console.log(`=== A/A CALIBRATION — both arms are baseline, every break is false by construction`)
+    console.log(`  corpus: ${ROOT}`)
+    console.log(
+        `  ${base.length} baseline trials over ${splittable.length} splittable fixture(s)`
+            + ` → ${perArm} per half, ${splits} random splits`
+    )
+
+    const byInvariant: Record<string, number> = {}
+    let breaks = 0
+    for (let i = 0; i < splits; i++) {
+        const a: TrialResult[] = []
+        const b: TrialResult[] = []
+        for (const [, rows] of splittable) {
+            // Shuffle within the fixture, then deal alternately: both halves get
+            // the same fixture mix and the same n, and an odd trial is dropped
+            // rather than handed to one side.
+            const shuffled = [...rows].sort(() => Math.random() - 0.5)
+            const half = Math.floor(shuffled.length / 2)
+            a.push(...shuffled.slice(0, half))
+            b.push(...shuffled.slice(half, half * 2))
+        }
+        const ev = evaluate(a, b)
+        const broken = ev.invariants.filter(inv => !inv.ok)
+        if (broken.length > 0) breaks++
+        for (const inv of broken) byInvariant[inv.label] = (byInvariant[inv.label] ?? 0) + 1
+    }
+
+    const rate = breaks / splits
+    const calibration: AaCalibration = {
+        corpus: ROOT,
+        splits,
+        perArm,
+        breaks,
+        rate,
+        byInvariant,
+        at: new Date().toISOString()
+    }
+    fs.writeFileSync(AA_PATH, `${JSON.stringify(calibration, null, 4)}\n`)
+
+    console.log('')
+    console.log(`  FALSE-BREAK RATE  ${breaks}/${splits} = ${(rate * 100).toFixed(1)}%`)
+    for (const [label, n] of Object.entries(byInvariant).sort((x, y) => y[1] - x[1])) {
+        console.log(`    ${label.padEnd(28)} ${n}/${splits} = ${((n / splits) * 100).toFixed(1)}%`)
+    }
+    console.log(`\n  written to ${AA_PATH}`)
+    if (rate >= AA_MAX_FALSE_BREAK) {
+        console.log(
+            `\n*** NOT CALIBRATED — ${(rate * 100).toFixed(1)}% >= the ${(AA_MAX_FALSE_BREAK * 100).toFixed(0)}%`
+                + ` ceiling. Any A/B verdict on this instrument is noise. Fix the instrument.`
+        )
+        process.exitCode = 1
+        return
+    }
+    console.log(
+        `\nCALIBRATED — under the ${(AA_MAX_FALSE_BREAK * 100).toFixed(0)}% ceiling.`
+            + ' An A/B on this instrument may now be believed.'
+    )
+}
+
+/** nexttask 9: "measured false-break rate must be < 5% before any A/B result is believed". */
+const AA_MAX_FALSE_BREAK = 0.05
 
 function score(treatment: Arm): void {
     const base = loadResults('baseline')
@@ -1172,98 +1549,80 @@ function score(treatment: Arm): void {
         }
     }
 
-    const highBase = base.filter(r => HIGH_FANOUT.includes(r.taskId))
-    const highTreat = treat.filter(r => HIGH_FANOUT.includes(r.taskId))
-    const reps = Math.min(highBase.length, highTreat.length)
-
-    // METRIC 2 — wall clock, over the fixtures BOTH arms actually ran AND both
-    // actually fanned out on.
-    //
-    // D1: `witnessed` used to gate metric 1 only, so a fixture that never posed
-    // the problem still set the bar for metrics 2 and 3. TASK_0022's baseline
-    // made ONE project lookup and still contributed 234s against the treatment's
-    // 405s, and 24→23 signatures as a "quality break", on a lever it never
-    // exercised.
-    const posed = (rows: TrialResult[], id: string): boolean =>
-        byFixture(rows, id).some(
-            r => r.projectLookups >= WITNESS_LOOKUPS || r.retrievalCalls >= WITNESS_RETRIEVALS
-        )
-    const shared = HIGH_FANOUT.filter(
-        id =>
-            byFixture(base, id).length > 0
-            && byFixture(treat, id).length > 0
-            && posed(base, id)
-            && posed(treat, id)
-    )
-    const excluded = HIGH_FANOUT.filter(
-        id =>
-            byFixture(base, id).length > 0 && byFixture(treat, id).length > 0 && !shared.includes(id)
-    )
-    if (excluded.length > 0) {
+    const ev = evaluate(base, treat)
+    if (ev.excluded.length > 0) {
         console.log(
             `\n  excluded from metrics 2-3 (never posed the problem in one or both arms):`
-                + ` ${excluded.join(', ')}`
+                + ` ${ev.excluded.join(', ')}`
         )
     }
-    // Controls are checked for FABRICATION too. They are excluded from metrics
-    // 2-3 as a lever BENEFIT — they never posed the problem, so a wall-clock or
-    // coverage win there measures nothing — but collateral damage is not a
-    // benefit, and quality was the one invariant that never looked. The v3 run
-    // put real numbers in that blind spot: TASK_0001 ungrounded 0.0→2.0 and
-    // TASK_0004 0.7→2.7, while the invariant printed "did not rise on any
-    // fixture". "Did not look" must not render as "did not rise".
-    const qualityFixtures = [
-        ...shared,
-        ...LOW_FANOUT.filter(
-            id => byFixture(base, id).length > 0 && byFixture(treat, id).length > 0
-        )
-    ]
-    const {qualityBreaks, unscorable} = scoreQuality(qualityFixtures, base, treat)
-    for (const u of unscorable) console.log(`\n  quality UNSCORABLE — ${u}`)
-
-    const {lowBreaks, unmeasured: lowUnmeasured} = scoreLowFanout(base, treat)
-    for (const u of lowUnmeasured) console.log(`\n  control UNMEASURED — ${u}`)
-
-    const wall = scoreTimeToAnswer(shared, base, treat)
+    for (const u of ev.unscorable) console.log(`\n  quality UNSCORABLE — ${u}`)
+    for (const u of ev.lowUnmeasured) console.log(`\n  control UNMEASURED — ${u}`)
     console.log('')
-    for (const d of wall.descriptive) console.log(`  ${d}`)
+    for (const d of ev.wall.descriptive) console.log(`  ${d}`)
+
+    // ADMISSIBILITY LEDGER — printed before the verdict, always, whatever it says.
+    const ledgers = [ledger('baseline', base), ledger(treatment, treat)]
+    console.log('')
+    for (const l of ledgers) console.log(ledgerLine(l))
+    const thin = ledgers.filter(l => l.admissible < N_MIN_ADMISSIBLE)
+
+    const aa = loadAaCalibration()
+    console.log(
+        aa === null ?
+            `  A/A calibration: NOT ON RECORD (${AA_PATH} missing) — run \`--aa\` first`
+        :   `  A/A calibration: ${(aa.rate * 100).toFixed(1)}% false-break`
+                + ` (${aa.breaks}/${aa.splits} same-arm splits, ${aa.perArm}/half, ${aa.at.slice(0, 10)})`
+    )
 
     const invariants: Invariant[] = [
+        ...ev.invariants,
+        // Not a property of the lever — a property of THIS RUN's evidence. Both are
+        // stated as invariants so a verdict cannot be printed without them, and both
+        // are placed last: a MEASURED break in the invariants above still FAILs
+        // first, because a treatment that degrades to stubs must not be able to
+        // ABSTAIN its way out by making its own trials inadmissible.
         {
-            label: 'inv-quality-not-worse',
-            ok: qualityBreaks.length === 0,
+            label: 'inv-admissibility-reported',
+            ok: true,
+            ...(thin.length > 0 ? {unmeasured: true} : {}),
             detail:
-                qualityBreaks.length > 0 ? qualityBreaks.join('; ')
-                : unscorable.length > 0 ?
-                    `signature coverage held; grounding NOT EVALUATED on ${unscorable.length} fixture(s)`
-                :   'signature coverage held and fabricated symbols did not rise on any fixture'
+                thin.length > 0 ?
+                    `${thin.map(l => `${l.arm} has ${l.admissible}`).join(', ')} admissible trial(s),`
+                        + ` below the pre-registered n_min=${N_MIN_ADMISSIBLE}`
+                :   ledgers.map(l => `${l.arm} ${l.admissible}/${l.recorded}`).join(', ')
+                        + ' admissible; exclusions reported above'
         },
         {
-            label: 'inv-no-new-degrade',
-            ok: highTreat.every(r => !r.degraded),
-            detail: `${highTreat.filter(r => r.degraded).length} degraded trial(s) in ${treatment}`
-        },
-        {
-            label: 'inv-low-fanout-untouched',
-            ok: lowBreaks.length === 0,
-            ...(lowBreaks.length === 0 && lowUnmeasured.length > 0 ? {unmeasured: true} : {}),
+            label: 'inv-aa-calibrated',
+            ok: aa === null || aa.rate < AA_MAX_FALSE_BREAK,
+            ...(aa === null ? {unmeasured: true} : {}),
             detail:
-                lowBreaks.length > 0 ? lowBreaks.join('; ')
-                : lowUnmeasured.length > 0 ?
-                    `${lowUnmeasured.length} control fixture(s) were not run — nothing to compare`
-                :   'controls unchanged'
-        },
-        wall.invariant
+                aa === null ?
+                    'no A/A on record — the false-break rate of this instrument is unknown'
+                : aa.rate < AA_MAX_FALSE_BREAK ?
+                    `${(aa.rate * 100).toFixed(1)}% < ${(AA_MAX_FALSE_BREAK * 100).toFixed(0)}% on`
+                        + ` ${aa.splits} same-arm splits`
+                :   `${(aa.rate * 100).toFixed(1)}% false-break — this instrument reports noise`
+        }
     ]
 
     reportAb({
         name: `research fan-out budget (baseline vs ${treatment})`,
-        reps,
+        reps: ev.reps,
         targetShape: 'worker:apis logged >= 1 restart with reason=worker-timeout',
-        baselineHits: highBase.filter(r => r.workerTimeouts > 0).length,
-        treatmentHits: highTreat.filter(r => r.workerTimeouts > 0).length,
+        baselineHits: ev.highBase.filter(r => r.workerTimeouts > 0).length,
+        treatmentHits: ev.highTreat.filter(r => r.workerTimeouts > 0).length,
         invariants,
-        unmeasured: [...unscorable, ...lowUnmeasured, ...wall.unmeasured]
+        unmeasured: [
+            ...ev.unmeasured,
+            ...(aa === null ? ['A/A false-break rate not on record — run `--aa`'] : []),
+            ...thin.map(
+                l =>
+                    `${l.arm} has ${l.admissible} admissible trial(s) (< n_min=${N_MIN_ADMISSIBLE}):`
+                    + ` ${l.degraded} degraded, ${l.zeroSymbol} zero-symbol excluded`
+            )
+        ]
     })
 }
 
@@ -1277,14 +1636,16 @@ if (import.meta.main) {
     const only = rest.filter(a => a.startsWith('TASK_'))
     const trials = Number(rest.find(a => /^\d+$/.test(a)) ?? '1')
 
-    if (modeArg === 'score') {
+    if (modeArg === '--aa' || modeArg === 'aa') {
+        calibrateAa(Number(rest.find(a => /^\d+$/.test(a)) ?? '200'))
+    } else if (modeArg === 'score') {
         const treatment = (rest.find(a => ARMS.includes(a as Arm)) ?? 'cap') as Arm
         score(treatment)
     } else if (ARMS.includes(modeArg as Arm)) {
         await runArm(modeArg as Arm, trials, only)
     } else {
         console.error(
-            `usage: live-research-fanout-budget-ab.ts <${ARMS.join('|')}|score> [TRIALS] [TASK_00NN …]`
+            `usage: live-research-fanout-budget-ab.ts <${ARMS.join('|')}|score|--aa> [TRIALS] [TASK_00NN …]`
         )
         process.exit(1)
     }

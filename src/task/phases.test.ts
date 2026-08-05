@@ -33,7 +33,12 @@ import {
     type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
 import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
-import {PROJECT_DOCS_BUDGET_ENV, projectDocsBudgetNotice} from './research-fanout-budget.js'
+import {
+    DEFAULT_WORKER_PROGRESS_CEILING_MS,
+    PROJECT_DOCS_BUDGET_ENV,
+    WORKER_PROGRESS_CEILING_ENV,
+    projectDocsBudgetNotice
+} from './research-fanout-budget.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {getConfig} from '../config/config.js'
@@ -3142,7 +3147,7 @@ describe('extractToolingCommands ignores section markers (issue #10)', () => {
  * cap enforced without its notice reads to the worker as a broken tool — so the delivery
  * is proven here, deterministically, instead of being assumed by the harness.
  */
-describe('phaseResearch fan-out budget notice (nexttask 5B, UNWIRED)', () => {
+describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadline shipped)', () => {
     const promptFor = async (
         cwd: string,
         marker: string
@@ -3162,6 +3167,23 @@ describe('phaseResearch fan-out budget notice (nexttask 5B, UNWIRED)', () => {
             apis: prompts.find(p => p.isApis)?.text ?? '',
             others: prompts.filter(p => !p.isApis).map(p => p.text)
         }
+    }
+
+    /** Run the phase with a stub worker and return everything it logged. */
+    const researchDebugLog = async (cwd: string): Promise<string[]> => {
+        const lines: string[] = []
+        await phaseResearch(
+            {
+                cwd,
+                taskId: 'TASK_0001',
+                signal: new AbortController().signal,
+                spawn: fakeSpawnByPrompt(() => agentEndResponse('- a finding')),
+                logDebug: (line: string) => lines.push(line)
+            },
+            'a refined goal with no mentions',
+            {getFileInventory: async () => ''}
+        )
+        return lines
     }
 
     const withTask = async (fn: (cwd: string) => Promise<void>): Promise<void> =>
@@ -3187,6 +3209,43 @@ describe('phaseResearch fan-out budget notice (nexttask 5B, UNWIRED)', () => {
             expect(apis).not.toContain('LOOKUP BUDGET')
             for (const p of others) expect(p).not.toContain('LOOKUP BUDGET')
         })
+    })
+
+    // nexttask 9 — the plumbing test for the ONE lever in this file that shipped.
+    // `workerProgressCeilingMs()`'s default and `runWorker`'s behaviour under a
+    // ceiling both have their own unit tests; this covers the line between them,
+    // which is the only place the wiring can silently come undone.
+    test('the progress deadline is applied by default, and the log says so', async () => {
+        const saved = process.env[WORKER_PROGRESS_CEILING_ENV]
+        delete process.env[WORKER_PROGRESS_CEILING_ENV]
+        try {
+            await withTask(async cwd => {
+                const lines = await researchDebugLog(cwd)
+                expect(lines).toContain(
+                    `phase:research: worker deadline = no-progress,`
+                        + ` ceiling ${DEFAULT_WORKER_PROGRESS_CEILING_MS}ms`
+                )
+            })
+        } finally {
+            if (saved === undefined) delete process.env[WORKER_PROGRESS_CEILING_ENV]
+            else process.env[WORKER_PROGRESS_CEILING_ENV] = saved
+        }
+    })
+
+    test('and the env var turns it back off, which the log also says', async () => {
+        const saved = process.env[WORKER_PROGRESS_CEILING_ENV]
+        process.env[WORKER_PROGRESS_CEILING_ENV] = 'off'
+        try {
+            await withTask(async cwd => {
+                const lines = await researchDebugLog(cwd)
+                expect(lines).toContain(
+                    'phase:research: worker deadline = fixed elapsed cap (progress deadline DISABLED)'
+                )
+            })
+        } finally {
+            if (saved === undefined) delete process.env[WORKER_PROGRESS_CEILING_ENV]
+            else process.env[WORKER_PROGRESS_CEILING_ENV] = saved
+        }
     })
 
     test('with the env set, the APIS worker — and only it — is told the number', async () => {
@@ -3223,7 +3282,14 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
         "- Password hashing uses `Bun.password` (built-in argon2id) — no external `argon2` dependency needed despite the task's mention of it.",
         ''
     ].join('\n')
-    const refinedText = ['GOAL', 'Scaffold the project.', '', 'CONSTRAINTS', LEAD_CONSTRAINT, ''].join('\n')
+    const refinedText = [
+        'GOAL',
+        'Scaffold the project.',
+        '',
+        'CONSTRAINTS',
+        LEAD_CONSTRAINT,
+        ''
+    ].join('\n')
 
     const composePhase = (): PhaseConfig => {
         const p = PHASES.find(x => x.name === 'compose')
@@ -3302,7 +3368,9 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
             await composePhase().run(deps as never, pc)
 
             const gates = await readSection(cwd, 'TASK_0001', 'gates')
-            expect(gates).toContain("constraint refuted by research — dropped 'argon2' from CONSTRAINTS")
+            expect(gates).toContain(
+                "constraint refuted by research — dropped 'argon2' from CONSTRAINTS"
+            )
             expect(gates).toContain('| constraint: "')
             expect(gates).toContain('no external `argon2` dependency needed')
         })

@@ -838,13 +838,23 @@ export async function phaseResearch(
     // this comment replaces — see the git history of this file and the PROMPT 4 entry in
     // nexxtasks.txt RESULTS.
 
-    // nexttask 5B fan-out bounds. Both read their env ONCE per research phase, so
-    // every worker in a run sees the same policy and a harness cannot half-apply
-    // an arm; both are null in the shipped configuration.
+    // nexttask 5B fan-out bounds. All four read their env ONCE per research
+    // phase, so every worker in a run sees the same policy and a harness cannot
+    // half-apply an arm. CAP, SCALE and carry-forward are null/false in the
+    // shipped configuration; the progress deadline shipped ON (nexttask 9).
     const fanoutBudget = projectDocsBudget()
     const fanoutTimeout = fanoutTimeoutPolicy()
     const carryForward = workerCarryForward()
     const progressCeilingMs = workerProgressCeilingMs()
+    // Which deadline policy was in force is a fact about how every number below
+    // was produced. Run 18's 120 discarded minutes were only recoverable because
+    // 5A started writing down what the workers actually did; a run whose logs do
+    // not say which policy it ran under cannot be compared with one that does.
+    deps.logDebug?.(
+        progressCeilingMs === null ?
+            'phase:research: worker deadline = fixed elapsed cap (progress deadline DISABLED)'
+        :   `phase:research: worker deadline = no-progress, ceiling ${progressCeilingMs}ms`
+    )
 
     let doneCount = 0
     const updateProgress = (): void => {
@@ -1104,9 +1114,11 @@ export async function phaseResearch(
                     // 5B SCALE arm — null unless both env vars are set. Only the
                     // docs-capable worker can fan out, so only it can be scaled.
                     ...(spec.fanoutBounded && fanoutTimeout ? {fanoutTimeout} : {}),
-                    // 5B RESCUE arm — off unless its env vars are set. Applies to
-                    // EVERY research worker, not just the docs-capable one: any
-                    // worker that gets killed loses its work the same way.
+                    // 5B RESCUE. Applies to EVERY research worker, not just the
+                    // docs-capable one: any worker that gets killed loses its work
+                    // the same way. carry-forward stays OFF unless asked for
+                    // (measured harmful on its own); the progress deadline SHIPPED
+                    // ON in nexttask 9 and is null only when explicitly disabled.
                     ...(carryForward ? {carryForward: true} : {}),
                     ...(progressCeilingMs !== null ?
                         {progressTimeoutCeilingMs: progressCeilingMs}

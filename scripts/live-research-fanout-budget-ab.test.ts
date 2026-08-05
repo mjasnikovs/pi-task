@@ -349,14 +349,11 @@ describe('scoreTimeToAnswer', () => {
     })
 
     test('a fixture that answered in EVERY trial of both arms IS compared', () => {
-        const base = [
-            trial('TASK_0017', {apisWallMs: 500_000, workerTimeouts: 1}),
-            trial('TASK_0017', {apisWallMs: 500_000, workerTimeouts: 1})
-        ]
-        const treat = [
-            trial('TASK_0017', {apisWallMs: 300_000}),
-            trial('TASK_0017', {apisWallMs: 300_000})
-        ]
+        const wall = (ms: number) => trial('TASK_0017', {apisWallMs: ms, workerTimeouts: 1})
+        const base = [500_000, 505_000, 495_000, 510_000, 490_000].map(wall)
+        const treat = [300_000, 305_000, 295_000, 310_000, 290_000].map(w =>
+            trial('TASK_0017', {apisWallMs: w})
+        )
         const {invariant, unmeasured} = scoreTimeToAnswer(['TASK_0017'], base, treat)
         expect(unmeasured).toEqual([])
         expect(invariant.unmeasured).toBeUndefined()
@@ -364,9 +361,26 @@ describe('scoreTimeToAnswer', () => {
         expect(invariant.detail).toContain('500s → 300s')
     })
 
-    test('a treatment that is SLOWER on such a fixture breaks it', () => {
-        const base = [trial('TASK_0017', {apisWallMs: 300_000})]
-        const treat = [trial('TASK_0017', {apisWallMs: 500_000})]
+    test('two trials a side cannot render this verdict at all', () => {
+        // The repair the A/A forced. `tMean < bMean` happily judged 2-vs-2 — and
+        // judged pure-baseline splits at 57% too. The smallest p an exact test
+        // can report at 2-vs-2 is 2/C(4,2) = 0.333, so there is no data here
+        // either way, and saying so is the only honest output.
+        const base = [500_000, 500_000].map(w => trial('TASK_0017', {apisWallMs: w}))
+        const treat = [300_000, 300_000].map(w => trial('TASK_0017', {apisWallMs: w}))
+        const {invariant, unmeasured} = scoreTimeToAnswer(['TASK_0017'], base, treat)
+        expect(invariant.unmeasured).toBe(true)
+        expect(invariant.ok).toBe(true)
+        expect(unmeasured).toHaveLength(1)
+    })
+
+    test('a treatment that is SIGNIFICANTLY slower on such a fixture breaks it', () => {
+        const base = [300_000, 305_000, 295_000, 310_000, 290_000].map(w =>
+            trial('TASK_0017', {apisWallMs: w})
+        )
+        const treat = [500_000, 505_000, 495_000, 510_000, 490_000].map(w =>
+            trial('TASK_0017', {apisWallMs: w})
+        )
         expect(scoreTimeToAnswer(['TASK_0017'], base, treat).invariant.ok).toBe(false)
     })
 })
