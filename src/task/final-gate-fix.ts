@@ -44,7 +44,14 @@
  * producing task). It activates only when a run-GLOBAL freeze source exists.
  */
 import {USER_CANCELLED} from './child-runner.js'
-import {findForbiddenDeletions, type TreeChangeSummary} from './write-guard.js'
+import {
+    findForbiddenDeletions,
+    diffIgnoredSnapshots,
+    ignoredWriteTrailLine,
+    ignoredWriteUnobservedNote,
+    type TreeChangeSummary,
+    type IgnoredSnapshot
+} from './write-guard.js'
 import {findNarrowedCommands, narrowingRejectionText} from './command-shrink.js'
 
 /** Same bounded-fix contract as lint-fix: edit in place, bash exists to RUN the
@@ -242,6 +249,14 @@ export interface FinalFixResult {
      *  labels a converge-on-statics-alone the same way it labels a first-pass one —
      *  "converged" must never quietly mean "we stopped being able to check". */
     unobserved?: string
+    /** Gitignored path(s) this fix pass wrote, exempt classes already removed (see
+     *  write-guard.ts). Present whether or not the gate converged — the caller
+     *  trails them either way; path names only, never contents. */
+    ignoredWrites?: string[]
+    /** …and the mechanical dependency probe found the converged gate does NOT pass
+     *  without them, so `unobserved` above carries the downgrade. Absent when the
+     *  probe could not answer (no probe wired, restore risk, too many paths). */
+    ignoredDependent?: boolean
     /** A write-guard rejected this attempt (deletion / shrink / probe-gaming). */
     guardTripped?: boolean
     /** …and its edits were discarded. When a guard tripped and this is false, the
@@ -297,6 +312,22 @@ export interface FinalFixDeps {
      *  run 11's autofix replaced the typed client with a hand-written contract
      *  copy to green the lint. Findings are verbatim offending lines. */
     probeScan?: () => Promise<string[]>
+    // ── Ignored-path channel (mx5 run 19: the fix pass greened `bun run seed` by
+    //    writing credentials into a gitignored `.env`, invisible to every guard
+    //    above because porcelain does not report ignored paths).
+    /** Fingerprint of the ACTIONABLE ignored paths (build output and node_modules
+     *  already exempt). Called before and after the child; the difference is what
+     *  this pass wrote. Absent → the channel is off and behaviour is unchanged. */
+    ignoredSnapshot?: () => Promise<IgnoredSnapshot>
+    /** Ignored paths EARLIER attempts in this resolution loop already wrote. An
+     *  attempt that fails still leaves its ignored writes on disk (discard reverts
+     *  tracked files only), so without this a `.env` written by attempt 1 would be
+     *  invisible to attempt 2's before/after diff — and attempt 2's converged PASS
+     *  would rest on it unrecorded. The caller accumulates. */
+    ignoredKnown?: string[]
+    /** The mechanical dependency test: does the gate still pass with these paths
+     *  moved aside? `null` ⇒ unanswerable, which never downgrades a verdict. */
+    gateWithoutIgnored?: (paths: string[]) => Promise<boolean | null>
     /** Write a timestamped line to the gate debug log (guard events). */
     log?: (msg: string) => void
 }
@@ -310,6 +341,10 @@ export interface FinalFixDeps {
 export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixResult> {
     const before = deps.discoverLabels(deps.cwd)
     const bodiesBefore = deps.discoverBodies?.(deps.cwd) ?? {}
+    // Ignored paths as they stood BEFORE the child. Attribution needs both ends:
+    // ignored files are untracked, so git alone cannot tell a file this pass wrote
+    // from one that was already sitting in the worktree.
+    const ignoredBefore = deps.ignoredSnapshot ? await deps.ignoredSnapshot() : null
 
     let text: string
     try {
@@ -324,12 +359,30 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return {ok: false, reason: `fix child failed: ${msg}`}
     }
 
-    const rejected = (what: string): FinalFixResult => ({
-        ok: false,
-        reason: `${what} — edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`,
-        guardTripped: true,
-        editsDiscarded: deps.discard !== undefined
-    })
+    // What the child wrote to gitignored paths. Recorded on the trail IMMEDIATELY —
+    // before any guard can reject the attempt — because `discard` reverts tracked
+    // edits only: an ignored file the pass wrote survives a rejection, and the trail
+    // is the only place that fact can ever be read back.
+    const ignoredWrites =
+        ignoredBefore === null || !deps.ignoredSnapshot ?
+            []
+        :   [
+                ...new Set([
+                    ...diffIgnoredSnapshots(ignoredBefore, await deps.ignoredSnapshot()),
+                    ...(deps.ignoredKnown ?? [])
+                ])
+            ].sort()
+    if (ignoredWrites.length > 0) deps.log?.(ignoredWriteTrailLine(ignoredWrites))
+    const withIgnored = <T extends FinalFixResult>(r: T): T =>
+        ignoredWrites.length > 0 ? {...r, ignoredWrites} : r
+
+    const rejected = (what: string): FinalFixResult =>
+        withIgnored({
+            ok: false,
+            reason: `${what} — edits ${deps.discard ? 'discarded' : 'REJECTED but left in the tree (no discard available)'}`,
+            guardTripped: true,
+            editsDiscarded: deps.discard !== undefined
+        })
 
     // (Diff capture — what the pass changed, durably — happens at the gate-deps
     // seam for every write-capable child; here only the guards act on it.)
@@ -419,17 +472,47 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     const marker = parseFinalFixMarker(text)
     if (marker.blocked) {
         // Self-declared blocked: skip the (expensive) gate re-run; nothing converged.
-        return {ok: false, reason: `fix child blocked: ${marker.note}`}
+        return withIgnored({ok: false, reason: `fix child blocked: ${marker.note}`})
     }
 
     const fin = await deps.gate(deps.cwd)
     if (!fin.ok) {
-        return {
+        return withIgnored({
             ok: false,
             reason: `did not converge: ${fin.reason}`,
             gateReason: fin.reason,
             gateFailures: fin.failures
-        }
+        })
     }
-    return {ok: true, reason: fin.reason, ...(fin.unobserved ? {unobserved: fin.unobserved} : {})}
+
+    // IGNORED-DEPENDENCY DOWNGRADE (mx5 run 19). The gate says PASS; the question
+    // this answers is whether that PASS belongs to the REPOSITORY or only to this
+    // worktree. Decided mechanically, never by judgement: move the ignored files
+    // the pass wrote aside, re-run the gate once, put them back. Still passing ⇒
+    // they were incidental and the PASS stands. Failing ⇒ the checks were passing
+    // on state no fresh clone has, which is the definition of UNOBSERVED (see
+    // final-gate.ts unobservedVerdict) — not a FAIL: the fix is real, it just did
+    // not ship. The probe runs only here, so a run with no ignored writes (the
+    // overwhelming majority — 1 of 68 recorded child logs) pays nothing.
+    let ignoredDependent: boolean | undefined
+    if (ignoredWrites.length > 0 && deps.gateWithoutIgnored) {
+        const passesWithout = await deps.gateWithoutIgnored(ignoredWrites)
+        if (passesWithout !== null) ignoredDependent = !passesWithout
+    }
+    const notes = [
+        ...(fin.unobserved ? [fin.unobserved] : []),
+        ...(ignoredDependent === true ? [ignoredWriteUnobservedNote(ignoredWrites)] : [])
+    ]
+    if (ignoredDependent === true) {
+        deps.log?.(
+            `final-gate: converged PASS DOWNGRADED to UNOBSERVED — the gate does not pass with `
+                + `${ignoredWrites.join(', ')} moved aside, and those path(s) are gitignored`
+        )
+    }
+    return withIgnored({
+        ok: true,
+        reason: fin.reason,
+        ...(notes.length > 0 ? {unobserved: notes.join(' ')} : {}),
+        ...(ignoredDependent !== undefined ? {ignoredDependent} : {})
+    })
 }

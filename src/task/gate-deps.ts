@@ -13,7 +13,7 @@
  * path-revisit disabled because re-running the same check IS the job), each with a
  * status widget and a per-gate debug log under .pi-tasks/.
  */
-import {existsSync} from 'node:fs'
+import {existsSync, readFileSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -50,7 +50,9 @@ import {
     parseTreeChanges,
     parseNameStatusChanges,
     formatTreeChanges,
-    type TreeChangeSummary
+    findActionableIgnoredWrites,
+    type TreeChangeSummary,
+    type IgnoredSnapshot
 } from './write-guard.js'
 import {taskThatIntroduced, findCrossTaskDeletions} from './task-provenance.js'
 import {
@@ -97,7 +99,11 @@ export function truncateToolResult(text: string, limit = TOOL_RESULT_LOG_LIMIT):
 export type FinalGateFixFn = (
     ctx: ExtensionCommandContext,
     cwd: string,
-    failReason: string
+    failReason: string,
+    /** Ignored paths earlier attempts in this resolution loop already wrote (see
+     *  FinalFixDeps.ignoredKnown) — a failed attempt's ignored writes survive its
+     *  discard and can green a later attempt. */
+    ignoredKnown?: string[]
 ) => Promise<FinalFixResult>
 
 /** Keep the gate machinery's own artifacts out of every git pathspec below. */
@@ -328,6 +334,135 @@ export async function collectTreeChanges(
     const r = await git(cwd, ['status', '--porcelain', '--', '.', EXCLUDE_TASKS_DIR], signal)
     return r.exitCode === 0 ? parseTreeChanges(r.stdout) : {modified: [], deleted: [], added: []}
 }
+
+/**
+ * Build output directories declared by the project's OWN build commands
+ * (`--outdir=X`, `--out-dir X`), so the ignored-write exemption follows the real
+ * tooling instead of a name list. Best-effort: an unreadable or non-JSON manifest
+ * contributes nothing and the name-list fallback in classifyIgnoredPath applies.
+ */
+export function parseBuildOutdirs(cwd: string): string[] {
+    let raw: string
+    try {
+        raw = readFileSync(path.join(cwd, 'package.json'), 'utf8')
+    } catch {
+        return []
+    }
+    let scripts: Record<string, string>
+    try {
+        scripts = (JSON.parse(raw) as {scripts?: Record<string, string>}).scripts ?? {}
+    } catch {
+        return []
+    }
+    const out = new Set<string>()
+    for (const body of Object.values(scripts)) {
+        if (typeof body !== 'string') continue
+        for (const m of body.matchAll(/--out-?dir[= ]([^\s'"]+)/g)) {
+            const p = (m[1] ?? '').replace(/^\.\//, '').replace(/\/+$/, '')
+            if (p.length > 0 && !p.startsWith('-')) out.add(p)
+        }
+    }
+    return [...out]
+}
+
+/**
+ * IGNORED-PATH CHANNEL (mx5 run 19 — see write-guard.ts). A fingerprint of every
+ * ACTIONABLE ignored path (`git status --porcelain --ignored=matching`, minus
+ * build output / node_modules / .pi-tasks / .git), taken before and after a
+ * write-capable gate child so its writes to files git never reports are
+ * attributable to it.
+ *
+ * `--ignored=matching` collapses a wholly-ignored directory into ONE entry, which
+ * is what keeps this cheap: `node_modules/` is one exempt line, never 40,000
+ * stats. Every failure mode degrades to `{}` — no git, an older git that rejects
+ * `--ignored=matching`, an unreadable path — so the gate behaves exactly as it did
+ * before this channel existed.
+ */
+export async function collectIgnoredSnapshot(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<IgnoredSnapshot> {
+    const r = await git(
+        cwd,
+        ['status', '--porcelain', '--ignored=matching', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
+    if (r.exitCode !== 0) return {}
+    const outdirs = parseBuildOutdirs(cwd)
+    const paths = r.stdout
+        .split('\n')
+        .filter(l => l.startsWith('!! '))
+        .map(l => l.slice(3).trim())
+        .map(p => (p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p))
+        .filter(p => p.length > 0)
+    const snap: IgnoredSnapshot = {}
+    for (const rel of findActionableIgnoredWrites(paths, outdirs)) {
+        try {
+            const st = await fsp.stat(path.join(cwd, rel))
+            // A directory's own mtime moves when entries are added or removed; that
+            // is the whole fingerprint available for one without walking it, and a
+            // walk is exactly the cost this channel refuses to pay.
+            snap[rel] = st.isDirectory() ? `dir:${st.mtimeMs}` : `${st.mtimeMs}:${st.size}`
+        } catch {
+            // Vanished between status and stat — nothing to fingerprint.
+        }
+    }
+    return snap
+}
+
+/**
+ * The dependency test, decided mechanically rather than by judgement: move the
+ * ignored paths aside, re-run the gate once, put them back. A gate that no longer
+ * passes without them was passing on state the repository does not contain.
+ *
+ * Returns null when the question could not be answered (nothing movable, a move or
+ * a restore fault, too many paths) — an unanswered probe never downgrades a
+ * verdict. Restoration runs in a finally and is best-effort per path: leaving a
+ * developer's `.env` renamed on disk would be a far worse failure than a missed
+ * downgrade.
+ */
+export async function gatePassesWithoutIgnored(
+    cwd: string,
+    paths: string[],
+    runGate: (cwd: string) => Promise<{ok: boolean}>,
+    log?: (msg: string) => void
+): Promise<boolean | null> {
+    if (paths.length === 0 || paths.length > MAX_IGNORED_PROBE_PATHS) return null
+    const moved: Array<{from: string; to: string}> = []
+    try {
+        for (const rel of paths) {
+            const from = path.join(cwd, rel)
+            const to = `${from}.pi-gate-probe`
+            try {
+                await fsp.rename(from, to)
+                moved.push({from, to})
+            } catch {
+                // Could not move one → the probe cannot answer the question at all.
+                return null
+            }
+        }
+        if (moved.length === 0) return null
+        const again = await runGate(cwd)
+        return again.ok
+    } catch {
+        return null
+    } finally {
+        for (const m of moved) {
+            try {
+                await fsp.rename(m.to, m.from)
+            } catch {
+                log?.(
+                    `final-gate: WARNING — could not restore ${path.relative(cwd, m.from)} after `
+                        + `the ignored-dependency probe; it is on disk as ${path.basename(m.to)}`
+                )
+            }
+        }
+    }
+}
+
+/** Bound on the ignored-dependency probe: past this the set is not a fix child's
+ *  handful of files and moving them is not a safe thing to do to a worktree. */
+const MAX_IGNORED_PROBE_PATHS = 20
 
 /**
  * The task's changes for the cross-task deletion probe: the working tree's status
@@ -959,7 +1094,7 @@ export function buildGateDeps(params: {
             return r.exitCode === 0 && r.stdout.trim().length > 0
         },
         discardEdits: discardTreeEdits,
-        finalGateFix: (fixCtx, cwd2, failReason) =>
+        finalGateFix: (fixCtx, cwd2, failReason, ignoredKnown) =>
             runFinalGateAutofix({
                 cwd: cwd2,
                 signal,
@@ -991,6 +1126,23 @@ export function buildGateDeps(params: {
                 // preserve registry), never a per-task union.
                 treeChanges: () => collectTreeChanges(cwd2, signal),
                 probeScan: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
+                // IGNORED-PATH CHANNEL (mx5 run 19): the write guards above read
+                // `git status --porcelain`, which never reports ignored paths, so
+                // the pass that greened `bun run seed` by writing credentials into
+                // a gitignored `.env` was structurally invisible to all of them —
+                // and the gate certified a PASS no fresh clone can reproduce. This
+                // does not reject the write (a local `.env` is often the only way to
+                // make a check run); it records it, and downgrades a PASS proven to
+                // depend on it.
+                ignoredSnapshot: () => collectIgnoredSnapshot(cwd2, signal),
+                ...(ignoredKnown && ignoredKnown.length > 0 ? {ignoredKnown} : {}),
+                gateWithoutIgnored: paths =>
+                    gatePassesWithoutIgnored(
+                        cwd2,
+                        paths,
+                        c => runFinalIntegrationGate(c),
+                        makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
+                    ),
                 log: makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
             }),
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
