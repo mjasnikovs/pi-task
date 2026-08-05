@@ -97,19 +97,46 @@ export function formatPlanDecisions(entries: readonly PlanEntry[]): string {
 }
 
 /**
+ * The line that pins the DELIVERABLE, and it is not optional.
+ *
+ * The task prompt leads the handoff verbatim, and users reach /task-plan by
+ * phrasing the request as planning — live (aiz-client TASK_PLAN_0001,
+ * 2026-08-05): "Lets plan new tab and report @src/app/reports/". /task's refine
+ * read the verb as the deliverable and produced a task titled "Plan the addition
+ * of a new sub-tab…", whose ACCEPTANCE was "a planning document exists with
+ * placeholder sections" and whose VERIFY asserted that no `.ts`/`.tsx` file had
+ * changed. It passed. Nothing was built.
+ *
+ * Planning already happened — this prompt IS its output — so the handoff says so
+ * rather than letting the request's own wording re-open it. It rides on every
+ * handoff, decisions or none: the verb leaks regardless of how much got settled.
+ */
+export const HANDOFF_DELIVERABLE_RULE =
+    'PLANNING IS ALREADY DONE. This prompt is the OUTPUT of an interactive planning session '
+    + 'that has now ended; you are the implementation step. Build the thing. Do not produce a '
+    + 'plan, a design, a proposal, or a "planning-only" deliverable, do not write a document '
+    + 'whose acceptance is that no code changed, and do not defer the work pending user '
+    + 'confirmation — no user is available from here on.'
+
+/**
  * The prompt handed to /task when the user proceeds to execution.
  *
  * The task prompt leads, exactly as a bare `/task <prompt>` would, so refine sees
- * a normal task description first; the decisions follow as an authoritative block.
- * Anything the user did NOT settle is simply absent — /task's own grill phase asks
- * about what is left, which is why this block never invents a decision to fill a
- * gap.
+ * a normal task description first; the deliverable rule and then the decisions
+ * follow as an authoritative block. Anything the user did NOT settle is simply
+ * absent — /task's own grill phase asks about what is left, which is why this
+ * block never invents a decision to fill a gap. A question the user left
+ * unanswered is likewise absent: "(skipped)" is not a decision, and carrying it
+ * as one is how a non-answer becomes an instruction.
  */
 export function buildHandoffPrompt(task: string, entries: readonly PlanEntry[]): string {
-    const decisions = entries.filter(e => e.kind !== 'note')
-    if (decisions.length === 0) return task.trim()
+    const decisions = entries.filter(
+        e => e.kind !== 'note' && !(e.kind === 'decision' && /^\(skipped/i.test(e.answer.trim()))
+    )
+    const head = `${task.trim()}\n\n${HANDOFF_DELIVERABLE_RULE}`
+    if (decisions.length === 0) return head
     return (
-        `${task.trim()}\n\n`
+        `${head}\n\n`
         + `PLANNING DECISIONS — these were settled with the user before this task was started. `
         + `They are authoritative: implement them as written, and do not re-open or contradict `
         + `them. They may not cover everything; decide anything they leave open as usual.\n\n`

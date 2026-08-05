@@ -227,12 +227,17 @@ describe('handleTaskPlan', () => {
         expect(frontMatter.reason).toContain('socket hang up')
     })
 
-    test('a plan with no decisions hands over the bare prompt — same as a plain /task', async () => {
+    // A plan with no decisions still went THROUGH planning, and the request that
+    // opened it is routinely phrased as one ("lets plan X") — so the deliverable
+    // rule rides along even here; only the decisions block is absent.
+    test('a plan with no decisions hands over the prompt plus the deliverable rule', async () => {
         const cwd = await freshRepo()
         const h = makeFakeCtx(cwd)
         const {deps, rec} = commandHarness({kind: 'proceed', entries: []})
         await handleTaskPlan('add rate limiting', h.ctx, deps)
-        expect(rec.prompts[0]).toBe('add rate limiting')
+        expect(rec.prompts[0].startsWith('add rate limiting')).toBe(true)
+        expect(rec.prompts[0]).toContain('PLANNING IS ALREADY DONE')
+        expect(rec.prompts[0]).not.toContain('PLANNING DECISIONS')
     })
 
     test('each run allocates its own plan file', async () => {

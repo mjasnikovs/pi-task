@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test'
 import {
     buildIdleSpec,
     buildQuestionSpec,
+    isDeferralSuggestion,
     isNoneReply,
     MAX_PLAN_QUESTIONS,
     PLAN_ASK,
@@ -471,6 +472,94 @@ describe('looksLikeFork', () => {
 describe('planForkHint', () => {
     test('quotes the question back, because the child is stateless', () => {
         expect(planForkHint('A or B?')).toContain('"A or B?"')
+    })
+})
+
+describe('isDeferralSuggestion', () => {
+    test('fires on the live one and its neighbours', () => {
+        // aiz-client TASK_PLAN_0001: accepted, then handed to /task as an
+        // authoritative decision NOT to proceed.
+        expect(
+            isDeferralSuggestion(
+                'clarify with the user what the report is meant to show before proceeding'
+            )
+        ).toBe(true)
+        expect(isDeferralSuggestion('ask the user which domain the report covers')).toBe(true)
+        expect(isDeferralSuggestion('wait for the user to specify the columns')).toBe(true)
+        expect(isDeferralSuggestion('TBD — pending product input')).toBe(true)
+        expect(isDeferralSuggestion('leave it open until the schema is settled')).toBe(true)
+        expect(isDeferralSuggestion('the user must decide the retention window')).toBe(true)
+        expect(isDeferralSuggestion('do not implement until the API is confirmed')).toBe(true)
+        expect(isDeferralSuggestion('**Defer** this to a follow-up task')).toBe(true)
+    })
+
+    test('leaves real defaults alone, including ones that mention the user', () => {
+        expect(isDeferralSuggestion('per-provider, so each backend keeps its own bucket')).toBe(
+            false
+        )
+        // Product behaviour that happens to involve a user is a DECISION.
+        expect(isDeferralSuggestion('prompt the user to confirm before deleting a listing')).toBe(
+            false
+        )
+        expect(isDeferralSuggestion('show the user a toast on failure')).toBe(false)
+        expect(isDeferralSuggestion('check the session cookie in requireAuth')).toBe(false)
+        expect(isDeferralSuggestion('confirm the phone is E.164 with the shared zod schema')).toBe(
+            false
+        )
+    })
+})
+
+describe('the deferring-SUGGESTED recovery', () => {
+    const defer =
+        '1. **What should the report show?** rationale\nSUGGESTED: clarify with the user what the report is meant to show'
+    const decisive =
+        '1. **What should the report show?** rationale\nSUGGESTED: order lines grouped by workstation'
+
+    test('a deferring default is re-prompted once, quoting the question and the default', async () => {
+        const {deps, rec} = harness({
+            questions: [defer, decisive, NONE],
+            picks: ['', PLAN_PROCEED]
+        })
+        await runPlanSession(deps)
+        expect(rec.hints[1]).toContain('DEFERS the decision')
+        expect(rec.hints[1]).toContain('What should the report show?')
+        expect(rec.specs[0].recommended).toBe('order lines grouped by workstation')
+    })
+
+    test('a second deferral is DROPPED, so an empty submit records no decision', async () => {
+        const {deps, rec} = harness({
+            questions: [defer, defer, NONE],
+            picks: ['', PLAN_PROCEED]
+        })
+        const out = await runPlanSession(deps)
+        // No recommendation card: the picker shows only the control actions.
+        expect(rec.specs[0].recommended).toBeUndefined()
+        expect(rec.specs[0].options.map(o => o.value)).toEqual([PLAN_ASK, PLAN_PROCEED])
+        expect(out.entries[0]).toMatchObject({answer: '(skipped)', source: 'skipped'})
+    })
+
+    test('when only the recommendation defers, the ALT is promoted', async () => {
+        const forkHalfDeferred =
+            '1. **Should it reuse the orders query or add a new one?** rationale'
+            + '\nSUGGESTED: ask the user which query to use'
+            + '\nALT: add a new query in src/querys.ts'
+        const {deps, rec} = harness({
+            questions: [forkHalfDeferred, forkHalfDeferred, NONE],
+            picks: ['', PLAN_PROCEED]
+        })
+        const out = await runPlanSession(deps)
+        expect(rec.specs[0].recommended).toBe('add a new query in src/querys.ts')
+        expect(rec.specs[0].recommended2).toBeUndefined()
+        expect(out.entries[0]).toMatchObject({
+            answer: 'add a new query in src/querys.ts',
+            source: 'accepted'
+        })
+    })
+
+    test('a decisive default never pays for a retry', async () => {
+        const {deps, rec} = harness({questions: [decisive, NONE], picks: ['', PLAN_PROCEED]})
+        await runPlanSession(deps)
+        expect(rec.hints).toEqual([null, null])
     })
 })
 

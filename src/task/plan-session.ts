@@ -116,6 +116,61 @@ export function looksLikeFork(question: string): boolean {
 }
 
 /**
+ * Does the recommended default DEFER the decision instead of making one?
+ *
+ * The prompt asks for a "concrete, decisive default", and nothing enforced it.
+ * Live (aiz-client TASK_PLAN_0001, 2026-08-05): the model asked "what specific
+ * report should this new tab display?" and recommended
+ * "clarify with the user what the report is meant to show before proceeding".
+ * The user pressed enter, so it was recorded `(accepted recommendation)` and rode
+ * into /task's handoff as an AUTHORITATIVE decision — an order not to proceed,
+ * addressed to a run where no user exists. /task duly built a task whose
+ * ACCEPTANCE was "a planning document with placeholder sections" and whose VERIFY
+ * asserted that no source file had changed.
+ *
+ * A deferral is not an answer, and the one place it can never be one is here: the
+ * user IS present during planning, so "ask the user" is a null move — that IS the
+ * question. Detection is anchored to the START of the default, which keeps it off
+ * legitimate product behaviour ("prompt the user to confirm deletion" decides
+ * something; "ask the user which report" decides nothing).
+ */
+export function isDeferralSuggestion(suggested: string): boolean {
+    const s = suggested.trim().replace(/^["'`*_\s]+/, '')
+    return (
+        /^(ask|clarify|confirm|check|discuss|decide)\b[^.]{0,60}\b(with |from |the )?user\b/i.test(
+            s
+        )
+        || /^(wait|hold off|hold|defer|postpone|pause|park)\b/i.test(s)
+        || /^(tbd|to be (determined|decided|defined|specified))\b/i.test(s)
+        || /^(pending|awaiting|await)\b/i.test(s)
+        || /^leave (it|this|that)?\s*(to|for|open|undecided|unspecified)\b/i.test(s)
+        || /^the user (must|should|needs? to|has to|will)\b/i.test(s)
+        || /^(do not|don'?t|no)\b[^.]{0,40}\b(proceed|implement|build|start|write|decide)\b/i.test(
+            s
+        )
+    )
+}
+
+/**
+ * Corrective re-prompt for a default that deferred the decision. Same one-shot
+ * budget and same quote-it-back shape as {@link planForkHint}, because the child
+ * is stateless and cannot otherwise know what it just recommended.
+ */
+export function planDecisiveHint(question: string, suggested: string): string {
+    return (
+        '[SYSTEM NOTE: Your previous reply asked this question:\n'
+        + `"${question}"\n`
+        + `and recommended: "${suggested}"\n`
+        + 'That recommendation DEFERS the decision instead of making one — it tells the user to '
+        + 'ask, clarify, wait, or leave it open. The user is answering this question RIGHT NOW, so '
+        + '"find out from the user" is not an answer, it is the question you just asked. Ask the '
+        + 'SAME question again — do not change the subject — and this time make SUGGESTED a '
+        + 'concrete choice that could be implemented as written, naming real things from the repo. '
+        + 'If the question is a genuine A-or-B fork, add the ALT line too. Nothing else.]'
+    )
+}
+
+/**
  * Corrective re-prompt for a fork-shaped question that shipped only ONE option.
  *
  * Measured on the local model (scripts/live-task-plan-step0.ts, 15 reps): the
@@ -365,11 +420,33 @@ export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome
                 formatHint = PLAN_FORMAT_HINT
                 continue
             }
+            // A default that defers decides nothing, and an accepted deferral
+            // reaches /task dressed as an authoritative decision. One re-prompt to
+            // make it decisive; if it comes back deferring anyway the option is
+            // DROPPED rather than shown, so an empty submit records "(skipped)" —
+            // an unanswered question — instead of a decision the user never made.
+            const defers = suggested !== undefined && isDeferralSuggestion(suggested)
+            if (defers && formatHint === null) {
+                deps.logDebug?.('plan: SUGGESTED deferred the decision — one re-prompt')
+                formatHint = planDecisiveHint(plain, suggested!)
+                continue
+            }
+            // When only the recommendation defers, the ALT is still a real
+            // commitment: promote it so the question keeps a usable default.
+            const usableSuggested = defers ? alt : suggested
+            const usableAlt = defers ? undefined : alt
+            if (defers) {
+                deps.logDebug?.(
+                    usableSuggested === undefined ?
+                        'plan: SUGGESTED still deferred — question shown with no recommendation'
+                    :   'plan: SUGGESTED still deferred — promoted the ALT to the recommendation'
+                )
+            }
             // A question that offers a choice but ships one option leaves the
             // user typing out the alternative the model just named. Same one-shot
             // budget, quoting the question back so the (stateless) child re-asks
             // this one instead of a new one.
-            if (alt === undefined && formatHint === null && looksLikeFork(plain)) {
+            if (usableAlt === undefined && formatHint === null && !defers && looksLikeFork(plain)) {
                 deps.logDebug?.('plan: fork-shaped question with no ALT — one re-prompt')
                 formatHint = planForkHint(plain)
                 continue
@@ -381,13 +458,13 @@ export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome
             pending = {
                 plain,
                 shown: render(question),
-                ...(suggested !== undefined && {
-                    suggested: stripInlineMarkdown(suggested),
-                    shownSuggested: render(suggested)
+                ...(usableSuggested !== undefined && {
+                    suggested: stripInlineMarkdown(usableSuggested),
+                    shownSuggested: render(usableSuggested)
                 }),
-                ...(alt !== undefined && {
-                    alt: stripInlineMarkdown(alt),
-                    shownAlt: render(alt)
+                ...(usableAlt !== undefined && {
+                    alt: stripInlineMarkdown(usableAlt),
+                    shownAlt: render(usableAlt)
                 })
             }
         }

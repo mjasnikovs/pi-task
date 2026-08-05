@@ -69,6 +69,14 @@ repo, and any stated constraints; it is shown to the user as a recommendation th
 accept or override. When the question is a genuine binary "A or B?" fork, also give
 the single best alternative as an ALT line; otherwise emit only the one SUGGESTED.
 
+The SUGGESTED must DECIDE. Never recommend asking, clarifying, confirming, or
+checking with the user, and never recommend waiting, deferring, or leaving the
+question open — the user is answering this very question right now, so "find out
+from the user" is not an answer, it is the question you just asked. If you truly
+cannot tell which way to go, still commit to the option you would take if it were
+your call, and let the user override it. A default that could not be implemented
+as written is not a default.
+
 OUTPUT FORMAT (exact) — read as much as you like, but your written REPLY is 2 or
 3 lines and nothing else:
 - Do NOT report what you read. No preamble, no analysis, no findings, no numbered

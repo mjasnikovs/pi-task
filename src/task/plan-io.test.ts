@@ -8,6 +8,7 @@ import {
     buildPlanBody,
     formatPlanDecisions,
     formatPlanTranscript,
+    HANDOFF_DELIVERABLE_RULE,
     type PlanEntry
 } from './plan-io.js'
 import {ensureTasksDir, tasksDir} from './task-io.js'
@@ -101,9 +102,46 @@ describe('buildHandoffPrompt', () => {
         expect(p).not.toContain('THE USER ASKED')
     })
 
-    test('is the bare prompt when nothing was decided (identical to a plain /task)', () => {
-        expect(buildHandoffPrompt('  add rate limiting  ', [])).toBe('add rate limiting')
+    test('is the prompt plus the deliverable rule when nothing was decided', () => {
+        const bare = buildHandoffPrompt('  add rate limiting  ', [])
+        expect(bare.startsWith('add rate limiting')).toBe(true)
+        expect(bare).toContain(HANDOFF_DELIVERABLE_RULE)
+        expect(bare).not.toContain('PLANNING DECISIONS')
         const notesOnly: PlanEntry[] = [{kind: 'note', question: 'q', answer: 'a'}]
-        expect(buildHandoffPrompt('add rate limiting', notesOnly)).toBe('add rate limiting')
+        expect(buildHandoffPrompt('add rate limiting', notesOnly)).toBe(bare)
+    })
+
+    // The live failure: "Lets plan new tab and report" led the handoff, /task's
+    // refine took the verb as the deliverable, and the task it built accepted a
+    // document and verified that no source file had changed.
+    test('pins the deliverable so a "plan X" request is not re-planned by /task', () => {
+        const p = buildHandoffPrompt('Lets plan new tab and report @src/app/reports/', ENTRIES)
+        expect(p).toContain('PLANNING IS ALREADY DONE')
+        expect(p).toContain('Build the thing')
+        expect(p).toContain('no user is available')
+        // It sits above the decisions, not buried under them.
+        expect(p.indexOf(HANDOFF_DELIVERABLE_RULE)).toBeLessThan(p.indexOf('PLANNING DECISIONS'))
+    })
+
+    test('drops a skipped question — a non-answer is not an authoritative decision', () => {
+        const withSkip: PlanEntry[] = [
+            ...ENTRIES,
+            {
+                kind: 'decision',
+                question: 'Which cache backend?',
+                answer: '(skipped)',
+                source: 'skipped'
+            },
+            {
+                kind: 'decision',
+                question: 'Which queue?',
+                answer: '(skipped — no recommended option)',
+                source: 'yolo'
+            }
+        ]
+        const p = buildHandoffPrompt('add rate limiting', withSkip)
+        expect(p).not.toContain('Which cache backend?')
+        expect(p).not.toContain('Which queue?')
+        expect(p).toContain('Cap the retries?')
     })
 })
