@@ -7,7 +7,7 @@ need. It is not a to-do list — the entries that cost the most are the dead end
 
 Formerly `nexttask.txt`; code comments citing "nexttask TASK n" mean this file.
 Details of anything shipped live in git history and in each script's own header,
-not here. Last updated 2026-08-04.
+not here. Last updated 2026-08-05.
 
 ---
 
@@ -68,6 +68,35 @@ not here. Last updated 2026-08-04.
   `scripts/live-owned-requirement-compose-ab.ts` now reads run-18 files from the
   paths it documents as run-16 fixtures).
 
+- **Any lever on the docs redirect loop's auto-install hop** — negative cache,
+  pre-install existence probe, or pinning the hop (nexttask 1-1). Refuted
+  2026-08-05 at STEP 0, before a lever existed, on two grounds that are
+  independent of each other. *(a) The cost is mostly useful work.* Of the 947 hops
+  that would `npm install`, **634 (66.9%) install a package that really ships
+  declarations** — 336 of 538 distinct `@types/<x>` targets exist on npm. Only 313
+  can never produce anything (308 absent from npm, 5 install but ship no `.d.ts`).
+  The premise that "nearly all are guaranteed-miss round trips" was wrong.
+  *(b) No workload reaches them.* The hop fires only under a package that ships no
+  types of its own, and a docs lookup only ever names a package the SPEC names — a
+  direct dependency. Of the 947, **4 sit under a direct dep (0.4%)**: `tap-min`,
+  `semantic-ui-css-offline`, `jsdom`, `start-server-and-test` — and `@types/jsdom`
+  exists, so one of the four is a *useful* hop. Addressable waste ≈ 3 × 470ms, and
+  only if someone asks the docs worker about those three packages. Replayed
+  against run 19's own debug logs (`scripts/docs-hop-replay.ts`, 500 real lookups,
+  22 distinct packages): **0 install hops**. The A/B nexttask 1-1 pre-registered
+  ("installs strictly down" over that replay) is therefore **unrunnable, not
+  failing** — a zero baseline, the shape ruled ABSTAIN in
+  `scripts/ab-verdict.ts`. The 947 is an artifact of walking every *installed*
+  package, which nothing in the product does: `gatherExternalContext`
+  (`src/task/external-context.ts:64`) looks up the spec's named deps under a cap
+  of 12, and never enumerates `node_modules`. Both runs of
+  `scripts/docs-hop-install-baserate.ts` agree on every count; only wall clock
+  moved (hit-install mean 920ms vs 682ms), which is the registry, not a decision.
+  The two aggravating facts in the lead are real and stay unfixed on purpose: the
+  hop passes no `versionRange` (`docs-core.ts:270`) where the top-level path
+  resolves `findDeclaredRange` first (`:344`), and the shared install cache is
+  never GC'd (94 top-level deps). Both are worth ~0 because the hop is worth ~0.
+
 ## METHODOLOGY RULES — each one cost real time
 
 1. **A pooled FP suite is not an admissibility test.** The cap runs *per run*.
@@ -94,6 +123,13 @@ not here. Last updated 2026-08-04.
    suite sat RED for reasons unrelated to the extractor — so nobody read it. Evidence
    arms now scan `git archive` exports of NAMED commits
    (`scripts/html-asset-closure-corpus.ts`); the evidence repo is never checked out.
+7. **A corpus-walk base rate is not a workload base rate.** Sweeping every
+   installed package through a seam counts what the seam *could* cost, not what it
+   *does*. nexttask 1-1's 947 auto-installs collapse to **0** on the replay of the
+   run that motivated it, because 943 of them sit under transitive packages no
+   lookup ever names. Before costing a seam, replay a real run's own logs through
+   it and check the baseline is non-zero — a zero baseline means the A/B was never
+   runnable, not that the lever failed.
 
 ## PASS CONDITION for any selection fix
 
