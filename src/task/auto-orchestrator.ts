@@ -120,9 +120,11 @@ import {
     isCrossCuttingRequirement,
     appendCarriedRequirements,
     buildRequirementsLedger,
+    readOwnedRequirements,
     type RequirementEntry,
     type CoverageAccounting
 } from './requirements.js'
+import {unclaimedPendingRequirements} from './owned-freeze-reassign.js'
 import {decideAdoption, groundedCoverage, type CoveragePlan} from './coverage-loop.js'
 import {
     findSpecDanglingArtifacts,
@@ -1661,6 +1663,29 @@ export async function runAutoLoop(
                     // compared against it rather than blindly re-printed.
                     let reportedDebts: AcceptDebt[] = fin.openDebts ?? []
                     await surfaceOpenDebts(reportedDebts)
+                    // An owned obligation a task DETACHED (its own spec froze the
+                    // only file that could satisfy it, nexttask 2) and no later
+                    // task claimed. Detach never deletes the quote, so the run
+                    // ends holding it — say so, or the resolution would be a
+                    // quieter version of the deletion it exists to prevent.
+                    const unclaimed = unclaimedPendingRequirements(
+                        await readOwnedRequirements(cwd).catch(() => [])
+                    )
+                    for (const o of unclaimed) {
+                        await recGate(
+                            `owned requirement UNCLAIMED — "${o.quote.slice(0, 200)}"`
+                                + ` [frozen in "${o.title.slice(0, 60)}"; no task claimed`
+                                + ` ${(o.pending ?? []).join(', ')}]`
+                        )
+                    }
+                    if (unclaimed.length > 0) {
+                        active.ui.notify(
+                            `${id}: ${unclaimed.length} authoritative design requirement(s) ended the run`
+                                + ' owned by NO task — the task they were mapped to could not touch the'
+                                + ' file, and nothing else claimed it. See the gate trail.',
+                            'warning'
+                        )
+                    }
                     /**
                      * nexttask 6 (mx5 run 18). The lines above are emitted from the
                      * FIRST gate result; the converged-autofix paths below used to

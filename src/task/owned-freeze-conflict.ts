@@ -32,7 +32,17 @@
  *     outside of X", "any files other than X", "only X may be modified",
  *     "no files outside X").
  *
- * ── STATUS: NOT WIRED. The critique seam FAILED its A/B, 2026-08-04. ─────────
+ * ── STATUS, 2026-08-05: WIRED — but as a DETACH, not as a rewrite. ──────────
+ *
+ * `owned-freeze-reassign.ts` consumes this detector at the last spec-producing
+ * step (`phases.ts`, right after `appendOwnedConstraints`) and resolves a finding
+ * by BOOKKEEPING: the requirement leaves the task that cannot satisfy it and is
+ * claimed later by the task whose refined prompt says it writes the frozen file.
+ * The quote is never edited, so the deletion failure below cannot recur. A/B-1
+ * (scripts/owned-freeze-reassign-ab.ts) PASSes on the corpus with five
+ * invariants. The rewrite lever recorded below stays REFUTED and unwired.
+ *
+ * ── The critique-REWRITE seam FAILED its A/B, 2026-08-04. ────────────────────
  *
  * The detector is precise — 1 finding over 58 real composed specs, and it is the
  * true positive (scripts/owned-freeze-conflict-fp-suite.ts, PASS; STEP 0 in

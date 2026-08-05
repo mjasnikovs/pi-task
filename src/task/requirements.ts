@@ -661,6 +661,16 @@ export interface OwnedRequirement {
      *  against the executing task's title at phase time (ids don't exist yet at
      *  plan time, and spliced repair tasks shift them). */
     title: string
+    /**
+     * DETACHED (nexttask 2, owned-freeze-reassign.ts): the files this obligation
+     * names that its assigned task FROZE, making it unsatisfiable there. While
+     * set, the entry is owned by nobody — `ownedForTitle` skips it — and `title`
+     * records only where it came from. The next task whose refined prompt shows
+     * a write intent on one of these paths claims it (clearing this field), and
+     * an entry nobody claims is surfaced at the end of the run rather than
+     * silently dropped. Absent on every ordinary entry.
+     */
+    pending?: string[]
 }
 
 export function ownedRequirementsFile(cwd: string): string {
@@ -678,7 +688,9 @@ export async function writeOwnedRequirements(
         await fsp.mkdir(tasksDir(cwd), {recursive: true})
         const lines = owned.map(
             o =>
-                `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''} [title: ${o.title.replace(/\n/g, ' ')}]`
+                `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''}`
+                + (o.pending && o.pending.length > 0 ? ` [pending: ${o.pending.join(', ')}]` : '')
+                + ` [title: ${o.title.replace(/\n/g, ' ')}]`
         )
         await fsp.writeFile(ownedRequirementsFile(cwd), lines.join('\n') + '\n', 'utf8')
     } catch {
@@ -697,12 +709,17 @@ export async function readOwnedRequirements(cwd: string): Promise<OwnedRequireme
 export function parseOwnedRequirements(text: string): OwnedRequirement[] {
     const out: OwnedRequirement[] = []
     for (const m of text.matchAll(
-        /^OWNED:\s*"([^"\n]+)"(?:\s*\[anchor:\s*([^\]]*)\])?\s*\[title:\s*([^\n]+)\]\s*$/gim
+        /^OWNED:\s*"([^"\n]+)"(?:\s*\[anchor:\s*([^\]]*)\])?(?:\s*\[pending:\s*([^\]]*)\])?\s*\[title:\s*([^\n]+)\]\s*$/gim
     )) {
+        const pending = (m[3] ?? '')
+            .split(',')
+            .map(p => p.trim())
+            .filter(p => p.length > 0)
         out.push({
             quote: m[1].trim(),
             anchor: (m[2] ?? '').trim(),
-            title: m[3].replace(/\]\s*$/, '').trim()
+            title: m[4].replace(/\]\s*$/, '').trim(),
+            ...(pending.length > 0 ? {pending} : {})
         })
     }
     return out
@@ -710,11 +727,13 @@ export function parseOwnedRequirements(text: string): OwnedRequirement[] {
 
 /** The owned entries whose plan title matches THIS task's title (normalised
  *  equality — titles travel verbatim from the plan list into task creation;
- *  spliced repair tasks simply match nothing). */
+ *  spliced repair tasks simply match nothing). A DETACHED entry (`pending`) is
+ *  owned by nobody until a task claims it, so it is never returned here — its
+ *  `title` is provenance, not ownership. */
 export function ownedForTitle(owned: OwnedRequirement[], title: string): OwnedRequirement[] {
     const t = normalise(title)
     if (t.length === 0) return []
-    return owned.filter(o => normalise(o.title) === t)
+    return owned.filter(o => normalise(o.title) === t && !(o.pending && o.pending.length > 0))
 }
 
 /** The injection block for a task's OWN mapped obligations. Mirrors
