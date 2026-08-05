@@ -226,11 +226,26 @@ export async function runAutoInstall(
     // `shell: false` in runChild, so a `^`/`~`/space in the range stays a single
     // literal arg — no glob/expansion risk from `<pkg>@<range>`.
     const target = versionRange ? `${packageName}@${versionRange}` : packageName
+    // `--ignore-scripts` is not optional here. The package NAME is model-chosen —
+    // it comes out of a worker's question, or out of a `/// <reference types="X" />`
+    // line in someone else's declaration file — so a hallucinated or typosquatted
+    // name would otherwise run its preinstall/postinstall as the user. This cache
+    // has already run install hooks for `node`, `argon2`, `onnxruntime-node` and
+    // `sharp`, next to fetched names like `app.ts`, `pkg.json` and `tsconfig.json`.
+    // Nothing is lost: the docs worker only ever READS `.d.ts` files and the README
+    // out of the installed tree, and those ship in the tarball.
     const result = await runChild(
         spawn,
         {
             command: 'npm',
-            args: ['install', '--no-audit', '--no-fund', '--loglevel=error', target]
+            args: [
+                'install',
+                '--ignore-scripts',
+                '--no-audit',
+                '--no-fund',
+                '--loglevel=error',
+                target
+            ]
         },
         installDir,
         signal,

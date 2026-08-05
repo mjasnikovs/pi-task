@@ -207,6 +207,29 @@ describe('docsRaw auto-install version pinning', () => {
         cache.close()
         fs.rmSync(dir, {recursive: true, force: true})
     })
+
+    // The package NAME is model-chosen (a worker's question, or a
+    // `/// <reference types="X" />` line in someone else's declarations), so a
+    // hallucinated or typosquatted name must never get to run its install hooks.
+    test('never lets an auto-installed package run its lifecycle scripts', async () => {
+        const dir = makeProjectDir({dependencies: {}})
+        const cache = openCache(':memory:')
+        const h = pinHarness()
+        await docsRaw({
+            pkg: 'app.ts',
+            query: 'x',
+            cwd: dir,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            resolvePackage: h.resolvePackage,
+            spawn: h.spawn
+        })
+        const npmInstall = h.installArgs.find(a => a.includes('install'))
+        expect(npmInstall).toBeDefined()
+        expect(npmInstall).toContain('--ignore-scripts')
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
 })
 
 describe('docsFocused', () => {
