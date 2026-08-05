@@ -191,11 +191,15 @@ export interface AutoLoaderState {
      *  for a repo-health verify FAIL; 'final-fix' the bounded fix pass for a
      *  final-integration-gate FAIL. */
     kind?: 'planning' | 'enforce' | 'verify' | 'recommend' | 'lint-fix' | 'final-fix'
+    /** Command shown in the head line. Defaults to '/task-auto', which is what
+     *  every existing producer is; /task-plan reuses this same loader and only
+     *  needs its own name on it. */
+    command?: string
 }
 
 export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): string[] {
     const elapsed = formatDuration(Date.now() - s.startedAt)
-    const head = `/task-auto · ${s.title}`
+    const head = `${s.command ?? '/task-auto'} · ${s.title}`
     let detail =
         s.kind === 'enforce' ? `enforcing guidelines · ${elapsed}`
         : s.kind === 'verify' ? `verifying work · ${elapsed}`
@@ -224,7 +228,7 @@ export function buildAutoLoaderData(s: AutoLoaderState): WidgetData {
         : s.kind === 'final-fix' ? 'fixing the final gate'
         : s.step
     const d: WidgetData = {
-        title: `/task-auto · ${s.title}`,
+        title: `${s.command ?? '/task-auto'} · ${s.title}`,
         phase,
         elapsed: formatDuration(Date.now() - s.startedAt)
     }

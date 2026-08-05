@@ -85,7 +85,14 @@ const snapshot = {
                     toolCallId: 't1',
                     toolName: 'read',
                     args: {path: 'src/remote/ui-styles.ts'},
-                    result: {content: [{type: 'text', text: ':root {\n  --base: #1e1e2e;\n  --mauve: #cba6f7;\n}'}]},
+                    result: {
+                        content: [
+                            {
+                                type: 'text',
+                                text: ':root {\n  --base: #1e1e2e;\n  --mauve: #cba6f7;\n}'
+                            }
+                        ]
+                    },
                     isError: false,
                     done: true,
                     elapsedMs: 120
@@ -96,7 +103,14 @@ const snapshot = {
                     toolCallId: 't2',
                     toolName: 'bash',
                     args: {command: 'bun test src/theme --coverage --reporter=verbose --bail'},
-                    result: {content: [{type: 'text', text: 'error: 2 tests failed\n  ✗ ramp() returns n tints\n  ✗ no hex literals in components'}]},
+                    result: {
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'error: 2 tests failed\n  ✗ ramp() returns n tints\n  ✗ no hex literals in components'
+                            }
+                        ]
+                    },
                     isError: true,
                     done: true,
                     elapsedMs: 8400
@@ -111,7 +125,9 @@ const snapshot = {
                         old_string: 'return [mix(base, i) for i in range(n)]',
                         new_string: 'return [mix(base, i / n) for i in range(n)]'
                     },
-                    result: {content: [{type: 'text', text: 'Applied 1 edit to src/theme/ramp.ts'}]},
+                    result: {
+                        content: [{type: 'text', text: 'Applied 1 edit to src/theme/ramp.ts'}]
+                    },
                     isError: false,
                     done: true,
                     elapsedMs: 340
@@ -119,7 +135,11 @@ const snapshot = {
             ]
         },
         {role: 'system', text: 'Context compacted'},
-        {role: 'assistant', text: 'Model error: connection reset while streaming the summary.', error: true}
+        {
+            role: 'assistant',
+            text: 'Model error: connection reset while streaming the summary.',
+            error: true
+        }
     ],
     live: null,
     agentRunning: false,
@@ -153,10 +173,33 @@ const snapshot = {
 const promptMsg = {
     type: 'prompt',
     id: 'p1',
-    question: 'The design pins Hono on the Bun adapter. Keep the page/offset pagination contract, or switch to cursor pagination as some routes hint?',
+    question:
+        'The design pins Hono on the Bun adapter. Keep the page/offset pagination contract, or switch to cursor pagination as some routes hint?',
     recommended: 'Keep page/offset — it is the documented contract in the spec.',
     recommended2: 'Switch to cursor pagination for the feed routes only.',
     allowSkip: true
+}
+
+/**
+ * The /task-plan prompt card: the same recommendation buttons every prompt has,
+ * plus the two ACTION buttons that make the planning loop steerable from a
+ * phone. Screenshot mode `#planprompt` — the acceptance instrument for the
+ * remote half of /task-plan, since the terminal picker and the browser card are
+ * built by completely different code.
+ */
+const planPromptMsg = {
+    type: 'prompt',
+    id: 'p2',
+    question:
+        'Should the rate limiter live in search-core.ts (covering every path to a provider), or only in the pi-worker-search tool?',
+    recommended: 'put it in search-core.ts so every path through to the provider is covered',
+    recommended2:
+        'limit only the pi-worker-search tool, leaving direct enrichment calls unthrottled',
+    actions: [
+        {label: '❓ Ask the model a question…', value: '__plan_ask__'},
+        {label: '▶ Proceed to execution', value: '__plan_proceed__'}
+    ],
+    allowSkip: false
 }
 
 // ─── Fake WebSocket stub, spliced in BEFORE the real client script ───────────
@@ -180,9 +223,11 @@ const stub = `  <script>
       };
       const SNAPSHOT = ${JSON.stringify(snapshot)};
       const PROMPT = ${JSON.stringify(promptMsg)};
+      const PLAN_PROMPT = ${JSON.stringify(planPromptMsg)};
       window.addEventListener('load', function () {
         window.__push(SNAPSHOT);
         if (location.hash === '#prompt') window.__push(PROMPT);
+        if (location.hash === '#planprompt') window.__push(PLAN_PROMPT);
         if (location.hash === '#live') {
           window.__push({type: 'agent_start'});
           window.__push({type: 'text_delta', delta: 'Streaming a **live** reply with a fence:\\n\\n\`\`\`ts\\nconst x = 1;\\n\`\`\`'});
@@ -216,7 +261,8 @@ const stub = `  <script>
 
 function buildHtml(): string {
     const page = html('ws://127.0.0.1:8800/ws')
-    if (!page.includes('  <script>')) throw new Error('splice anchor "  <script>" not found in ui.ts output')
+    if (!page.includes('  <script>'))
+        throw new Error('splice anchor "  <script>" not found in ui.ts output')
     // Only the FIRST occurrence (the main client script's opening tag).
     return page.replace('  <script>', stub)
 }
@@ -233,6 +279,7 @@ const SHOTS: Shot[] = [
     {mode: 'default-wide', hash: '', size: '1280,800'},
     {mode: 'open', hash: '#open', size: '430,2400'},
     {mode: 'prompt', hash: '#prompt', size: '390,844'},
+    {mode: 'planprompt', hash: '#planprompt', size: '390,844'},
     {mode: 'live', hash: '#live', size: '390,844'},
     {mode: 'think', hash: '#think', size: '390,844'},
     {mode: 'notif', hash: '#notif', size: '390,844'}
@@ -271,11 +318,14 @@ function shoot(shot: Shot, dumpDom: boolean): void {
 function main(): void {
     const args = process.argv.slice(2)
     const dumpDom = args.includes('--dump-dom')
-    const modeArg = args.find((a) => a.startsWith('--mode='))?.slice('--mode='.length)
+    const modeArg = args.find(a => a.startsWith('--mode='))?.slice('--mode='.length)
     writeFileSync(OUT_HTML, buildHtml())
     console.log(`page → ${OUT_HTML}`)
-    const shots = modeArg ? SHOTS.filter((s) => s.mode === modeArg) : SHOTS
-    if (shots.length === 0) throw new Error(`no shot matches --mode=${modeArg} (have: ${SHOTS.map((s) => s.mode).join(', ')})`)
+    const shots = modeArg ? SHOTS.filter(s => s.mode === modeArg) : SHOTS
+    if (shots.length === 0)
+        throw new Error(
+            `no shot matches --mode=${modeArg} (have: ${SHOTS.map(s => s.mode).join(', ')})`
+        )
     for (const s of shots) shoot(s, dumpDom)
 }
 

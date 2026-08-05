@@ -81,6 +81,21 @@ export interface AskSpec {
      * rendering recommended/recommended2 as buttons.
      */
     options?: {label: string; value: string}[]
+    /**
+     * Label for the local picker's trailing free-text card (see
+     * {@link AskQuestionBoxSpec.manualLabel}). Ignored without `options`.
+     */
+    manualLabel?: string
+    /**
+     * Extra buttons the BROWSER card shows alongside the recommendation, each
+     * answering with its own `value`. Unlike `options` — which are answers, and
+     * which the remote already covers with the recommended/recommended2 buttons —
+     * these are ACTIONS that mean something other than "here is my answer", so
+     * the remote cannot express them by any existing field. /task-plan's "ask the
+     * model" and "proceed to execution" are the only producers; every other call
+     * site omits this and the card is byte-for-byte what it was.
+     */
+    actions?: {label: string; value: string}[]
 }
 
 /** Wraps a live command ctx and fans interactions out to local TUI + browsers. */
@@ -114,6 +129,7 @@ export class SessionUI {
             question: spec.question,
             recommended: spec.recommended,
             ...(spec.recommended2 !== undefined && {recommended2: spec.recommended2}),
+            ...(spec.actions !== undefined && spec.actions.length > 0 && {actions: spec.actions}),
             allowSkip: spec.allowSkip
         }
         setPrompt(prompt)
@@ -161,6 +177,7 @@ export class SessionUI {
                     value: o.value,
                     recommended: i === 0
                 })),
+                ...(spec.manualLabel !== undefined && {manualLabel: spec.manualLabel}),
                 signal
             })
         }

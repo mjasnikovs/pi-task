@@ -46,6 +46,12 @@ One change — `/task` runs it through the full pipeline and hands the finished 
 /task add rate limiting to the /api/upload endpoint
 ```
 
+One change, but you want a say in HOW — `/task-plan` talks it through with you first, one question at a time, then hands the decisions to `/task`:
+
+```
+/task-plan add rate limiting to the /api/upload endpoint
+```
+
 A whole plan — `/task-auto` splits it into an ordered task list and runs each one through `/task`:
 
 ```
@@ -59,6 +65,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | Command | What it does |
 | --- | --- |
 | `/task <prompt>` | Start a new task and run it through the full pipeline. |
+| `/task-plan <prompt>` | Plan one task with the model — it asks, you answer, ask it something back, or proceed — then run it through `/task`. |
 | `/task-list` | Open the task list in an editor dialog. |
 | `/task-resume [id]` | Resume the most recent (or named) unfinished task. |
 | `/task-cancel` | Cancel the running task (soft-terminal — still resumable). |
@@ -85,6 +92,28 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | **critique** | `spec` | Triages the draft; if it isn't already clean, rewrites it. The triage pass skips the expensive rewrite when the draft already holds up. |
 
 The finished spec is delivered to your main `pi` conversation via `sendUserMessage`, so you keep working in the same chat — no context handoff, no copy-paste.
+
+## Planning one task — `/task-plan`
+
+`/task` decides most things for you: refine sharpens the ask, research gathers context, and grill only surfaces the questions its research could not settle. That is the right trade when you want the change done. When you want a say in **how** it gets done, `/task-plan` puts the conversation first.
+
+```
+/task-plan add rate limiting to the /api/upload endpoint
+```
+
+It works like the clarify step you already know — **one question at a time, each one shaped by your last answer** — with a recommendation you can take with one keystroke. The difference is that three moves are on screen at *every* prompt, so the conversation is yours to steer:
+
+| Move | What it does |
+| --- | --- |
+| **Answer** | Take the recommendation (or the `B` option), or type your own answer. Empty submit = accept the recommendation. |
+| **❓ Ask the model a question** | You ask, it answers — grounded in the repo, with the read tool. The answer is recorded as a **note**, and the same question you were being asked comes straight back. Notes do not decide anything; they are context, and they ride into the next question. |
+| **▶ Proceed to execution** | Stop planning and hand what you have to `/task`. Available from the very first prompt — you are never forced through a question you do not care about. |
+
+When the model runs out of questions it says so and offers the same three moves rather than proceeding behind your back. Answering something new re-opens it: a decision you volunteer can make a fresh question worth asking.
+
+Everything lands in `.pi-tasks/TASK_PLAN_NNNN.md` — the task prompt, the `## decisions` transcript, and a separate `## notes` section for what you asked. Only the decisions are handed to `/task`, as an authoritative block ahead of your original prompt; the notes stay behind, because an answer you read is not a decision you made. From there it is an ordinary `/task` run — same pipeline, same gates.
+
+It works from the browser too (see [Remote](#remote--drive-a-task-from-your-phone)): the prompt card grows an **Ask the model** and a **Proceed to execution** button alongside the usual Accept / Manual answer.
 
 ## Orchestrating multiple tasks — `/task-auto`
 

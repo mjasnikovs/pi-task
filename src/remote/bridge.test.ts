@@ -210,6 +210,63 @@ test('boxed picker: "type a different answer" falls through to a text input', as
     ).resolves.toBe('yarn')
 })
 
+test('actions ride to the remote card as their own buttons (/task-plan)', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const {ctx} = boxedCtx({down: 1}) // card 0 is the answer; card 1 is the first action
+    const ui = new SessionUI(ctx, b)
+    const actions = [
+        {label: '❓ Ask the model a question…', value: '__plan_ask__'},
+        {label: '▶ Proceed to execution', value: '__plan_proceed__'}
+    ]
+    // Locally the actions are just more picker cards; on the wire they are a
+    // separate field, because the browser has no picker and its recommendation
+    // buttons are answers, not actions.
+    await expect(
+        ui.ask({
+            localTitle: 'Q',
+            question: 'Q',
+            recommended: 'do X',
+            allowSkip: false,
+            options: [{label: 'do X', value: 'do X'}, ...actions],
+            actions
+        })
+    ).resolves.toBe('__plan_ask__')
+    const prompt = b.sent.find(m => (m as {type: string}).type === 'prompt') as unknown as {
+        actions?: {label: string; value: string}[]
+    }
+    expect(prompt.actions).toEqual(actions)
+})
+
+test('a prompt with no actions carries no actions field at all', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('x')}), b)
+    await ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})
+    const prompt = b.sent.find(m => (m as {type: string}).type === 'prompt') as unknown as Record<
+        string,
+        unknown
+    >
+    expect('actions' in prompt).toBe(false)
+})
+
+test('manualLabel re-labels the picker free-text card', async () => {
+    const b = getBridge()
+    _setSink(msg => b.sent.push(msg as never))
+    const {ctx, rendered} = boxedCtx({down: 0})
+    const ui = new SessionUI(ctx, b)
+    await ui.ask({
+        localTitle: 'Q',
+        question: 'Q',
+        allowSkip: false,
+        options: [{label: 'proceed', value: 'proceed'}],
+        manualLabel: '✎ Add a decision of your own…'
+    })
+    const all = rendered.join('\n')
+    expect(all).toContain('Add a decision of your own…')
+    expect(all).not.toContain('Type a different answer…')
+})
+
 test('publishNotify broadcasts a notify message', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)

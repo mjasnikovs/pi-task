@@ -21,6 +21,14 @@ concept get that concept recorded here.
   > (runChild/runTask/commit) are deliberately different abstractions. Their one
   > real overlap — mirroring child context_usage into the widget — lives in
   > `task/context-usage.ts` (`getParentContextWindow`, `resolveContextUsage`).
+- **Plan session** — the interactive planning loop `/task-plan` runs before a task
+  exists (`task/plan-session.ts`). Same adaptive one-question-at-a-time shape as
+  grill and clarify, and it reuses their parser, duplicate backstop, picker and
+  YOLO policy; what it adds is a control surface where every prompt also offers
+  "ask the model a question" and "proceed to execution". Its output is a
+  **transcript** of `PlanEntry`s — decisions (authoritative, handed to `/task`)
+  and notes (advisory, kept in the plan file only) — persisted to
+  `.pi-tasks/TASK_PLAN_NNNN.md` via the same task-file machinery as TASK_AUTO.
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).

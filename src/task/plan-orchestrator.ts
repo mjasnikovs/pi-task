@@ -1,0 +1,330 @@
+/**
+ * /task-plan — plan ONE task with the model, then hand it to /task.
+ *
+ * The command is a thin wiring layer. Everything it does is already in the
+ * codebase and is reused as-is:
+ *
+ *   • the adaptive question loop, the duplicate backstop, the boxed picker and
+ *     the A/B answer mapping        → plan-session.ts (which reuses parsers.ts,
+ *                                     question-dedup.ts, inline-markdown.ts,
+ *                                     question-box.ts, yolo.ts)
+ *   • the child process, its loop/leak/stall guards and retries → child-runner.ts
+ *   • local TUI + remote browser prompt fan-out                 → remote/bridge.ts
+ *   • the status widget                                         → widget.ts
+ *   • the plan file (.pi-tasks/TASK_PLAN_NNNN.md)               → task-io.ts
+ *   • the handoff itself                                        → orchestrator.ts
+ *
+ * The handoff is deliberately the SAME call /task makes for a typed prompt —
+ * gated when `verify work` / `enforce guidelines` is on, fire-and-forget
+ * otherwise — so a planned task is not a second kind of task. The only thing
+ * /task receives that a bare /task would not is the decisions block.
+ */
+
+import * as path from 'node:path'
+import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {PLAN_QUESTION_PROMPT, PLAN_ANSWER_PROMPT} from './plan-prompts.js'
+import {
+    runPlanSession,
+    type PlanSessionDeps,
+    type PlanAskSpec,
+    type PlanOutcome,
+    ASK_TITLE
+} from './plan-session.js'
+import {
+    allocatePlanId,
+    buildPlanBody,
+    buildHandoffPrompt,
+    formatPlanDecisions,
+    type PlanEntry
+} from './plan-io.js'
+import {writeTaskFile, setTaskSection, updateTaskFrontMatter, tasksDir} from './task-io.js'
+import type {TaskFrontMatter} from './task-types.js'
+import {deriveTitle} from './parsers.js'
+import {renderInlineMarkdown} from './inline-markdown.js'
+import {expandFeatureMentions} from './auto-orchestrator.js'
+import {runSingleTask, runGatedTask} from './orchestrator.js'
+import {startAutoLoader, type ContextSnapshot} from './widget.js'
+import {
+    SessionUI,
+    publishViewer,
+    publishNotify,
+    publishLifecycleNotice,
+    registerBridgeCommand
+} from '../remote/bridge.js'
+import {getConfig} from '../config/config.js'
+import {isYoloMode} from './yolo.js'
+import {gateDebugWriter} from './debug-log.js'
+import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
+import * as fsp from 'node:fs/promises'
+
+/** Loader labels for the two planning children. */
+const PLAN_STEPS: Record<string, string> = {
+    'plan-question': 'question',
+    'plan-answer': 'answering you'
+}
+
+/**
+ * Build the session deps around a live command ctx: children with a status
+ * loader, prompts fanned out to the terminal AND any remote viewer, and the plan
+ * file rewritten after every entry.
+ */
+export function buildPlanDeps(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    planId: string,
+    task: string,
+    signal: AbortSignal
+): PlanSessionDeps {
+    const ui = new SessionUI(ctx)
+    const theme = ctx.ui.theme
+    let lastLine: string | undefined
+    let status: string | undefined
+    let contextUsage: ContextSnapshot | undefined
+    const parentContextWindow = getParentContextWindow(ctx)
+    const title = deriveTitle(task)
+
+    const logDebug = gateDebugWriter((msg: string) => {
+        const line = `${new Date().toISOString()} ${msg}\n`
+        void fsp.appendFile(path.join(tasksDir(cwd), `${planId}-debug.log`), line).catch(() => {})
+    })
+
+    const phaseDeps: PhaseDeps = {
+        cwd,
+        taskId: planId,
+        signal,
+        onChildOutput: line => {
+            lastLine = line
+        },
+        onContextUsage: snapshot => {
+            contextUsage = resolveContextUsage(snapshot, contextUsage, parentContextWindow)
+        },
+        ...(logDebug && {logDebug})
+    }
+
+    /** Run a planning child under the shared /task-auto-style loader. */
+    const child = async (name: string, prompt: string): Promise<string> => {
+        lastLine = undefined
+        contextUsage = undefined
+        const startedAt = Date.now()
+        const stopLoader = startAutoLoader(ctx, () => ({
+            command: '/task-plan',
+            title,
+            step: status ?? PLAN_STEPS[name] ?? name,
+            stepNum: 1,
+            stepTotal: 1,
+            startedAt,
+            lastLine,
+            contextUsage
+        }))
+        try {
+            return await runPhaseChild(phaseDeps, name, 'read', prompt)
+        } finally {
+            stopLoader()
+        }
+    }
+
+    return {
+        generateQuestion: (priorQA, hint) =>
+            child('plan-question', prependHint(hint, PLAN_QUESTION_PROMPT(task, priorQA))),
+        answerUserQuestion: (priorQA, question) =>
+            child('plan-answer', PLAN_ANSWER_PROMPT(task, priorQA, question)),
+        ask: (spec: PlanAskSpec) => ui.ask(spec),
+        promptText: (localTitle, question) =>
+            ui.ask({
+                localTitle,
+                question,
+                // No recommendation and no options: both surfaces fall back to
+                // their plain text input, which is exactly what "type your
+                // question" needs. Skip = changed my mind.
+                allowSkip: true
+            }),
+        showAnswer: async (question, answer) => {
+            const text = `You asked:\n${question}\n\n${answer}\n`
+            publishViewer(ASK_TITLE, text)
+            await ctx.ui.editor(ASK_TITLE, text)
+        },
+        onEntries: async entries => {
+            await persistEntries(cwd, planId, entries)
+        },
+        renderMarkdown: (s: string) => renderInlineMarkdown(s, theme),
+        setStatus: line => {
+            status = line
+        },
+        yolo: isYoloMode(),
+        ...(logDebug && {logDebug})
+    }
+}
+
+/**
+ * Write the transcript into the plan file. The decisions and the model's answers
+ * to the user's questions live in separate sections: only the decisions are
+ * authoritative for the implementation, and the file must not blur that.
+ */
+export async function persistEntries(
+    cwd: string,
+    planId: string,
+    entries: readonly PlanEntry[]
+): Promise<void> {
+    const decisions = entries.filter(e => e.kind !== 'note')
+    const notes = entries.filter(e => e.kind === 'note')
+    await setTaskSection(cwd, planId, 'decisions', formatPlanDecisions(decisions))
+    if (notes.length > 0) {
+        await setTaskSection(
+            cwd,
+            planId,
+            'notes',
+            notes
+                .map(n => (n.kind === 'note' ? `Q: ${n.question}\nA: ${n.answer}` : ''))
+                .join('\n\n')
+        )
+    }
+}
+
+/**
+ * Seams the command flow needs from the outside world. Defaulted to the real
+ * thing in {@link handleTaskPlan}; injected in tests so the whole flow — plan
+ * file, transcript, handoff prompt — can be exercised without a model or a
+ * session replacement.
+ */
+export interface PlanCommandDeps {
+    /** Build the session deps (children + dialogs) for this run. */
+    session(
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        planId: string,
+        task: string,
+        signal: AbortSignal
+    ): PlanSessionDeps
+    /** Run the loop. */
+    run(deps: PlanSessionDeps): Promise<PlanOutcome>
+    /** Hand the composed prompt to /task. Returns the produced task id, if any. */
+    handoff(ctx: ExtensionCommandContext, cwd: string, prompt: string): Promise<string | undefined>
+}
+
+/**
+ * The default handoff: EXACTLY what `/task <prompt>` does with a typed prompt —
+ * gated when `verify work` / `enforce guidelines` is on, fire-and-forget
+ * otherwise. A planned task must not be a second kind of task.
+ */
+async function defaultHandoff(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    prompt: string
+): Promise<string | undefined> {
+    const cfg = getConfig()
+    if (cfg.verifyWork || cfg.enforceGuidelines) {
+        // runGatedTask owns the whole gated sequence and reports its own outcome;
+        // it does not surface the inner task id, so the plan file records the
+        // handoff without one.
+        await runGatedTask(ctx, cwd, prompt)
+        return undefined
+    }
+    const {taskId, sessionCancelled} = await runSingleTask(ctx, cwd, prompt, {notifyFinish: true})
+    if (sessionCancelled) {
+        ctx.ui.notify('Could not start a fresh session for /task-plan.', 'warning')
+        return undefined
+    }
+    return taskId || undefined
+}
+
+const DEFAULT_COMMAND_DEPS: PlanCommandDeps = {
+    session: buildPlanDeps,
+    run: runPlanSession,
+    handoff: defaultHandoff
+}
+
+export async function handleTaskPlan(
+    args: string,
+    ctx: ExtensionCommandContext,
+    commandDeps: PlanCommandDeps = DEFAULT_COMMAND_DEPS
+): Promise<void> {
+    await ctx.waitForIdle()
+    const cwd = ctx.cwd
+    const raw = args.trim()
+    if (raw.length === 0) {
+        ctx.ui.setEditorText('/task-plan ')
+        ctx.ui.notify('Describe the task after /task-plan (use @ for file completion).', 'info')
+        return
+    }
+
+    // Inline any @file the user referenced, exactly as /task-auto's planner does:
+    // a one-line "Implement @spec.md" reads as trivial to a model that cannot see
+    // the file, and the first question comes out useless.
+    const task = await expandFeatureMentions(cwd, raw)
+
+    const planId = await allocatePlanId(cwd)
+    const now = new Date().toISOString()
+    const fm: TaskFrontMatter = {
+        id: planId,
+        state: 'in_progress',
+        // Plan files have no phase pipeline of their own — same as TASK_AUTO_*,
+        // which parks at 'done' so the phase progress bar never claims otherwise.
+        phase: 'done',
+        created_at: now,
+        updated_at: now,
+        title: deriveTitle(raw)
+    }
+    await writeTaskFile(cwd, fm, buildPlanBody(task))
+
+    const abort = new AbortController()
+
+    let outcome: PlanOutcome
+    try {
+        outcome = await commandDeps.run(commandDeps.session(ctx, cwd, planId, task, abort.signal))
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        await updateTaskFrontMatter(cwd, planId, {
+            state: msg === USER_CANCELLED ? 'cancelled' : 'failed',
+            reason: msg.slice(0, 200)
+        }).catch(() => {})
+        const line = `${planId} stopped — ${msg.slice(0, 160)}`
+        ctx.ui.notify(line, 'error')
+        publishLifecycleNotice(line, 'error')
+        return
+    }
+
+    if (outcome.kind === 'cancelled') {
+        // Nothing is handed to /task, but whatever WAS decided stays on disk —
+        // a cancelled plan is a record, not a rollback.
+        await updateTaskFrontMatter(cwd, planId, {state: 'cancelled'}).catch(() => {})
+        const line =
+            outcome.entries.length === 0 ?
+                `${planId} cancelled — nothing planned.`
+            :   `${planId} cancelled — ${outcome.entries.length} entr${outcome.entries.length === 1 ? 'y' : 'ies'} kept in .pi-tasks/${planId}.md`
+        ctx.ui.notify(line, 'warning')
+        publishNotify(line, 'warning')
+        return
+    }
+
+    const prompt = buildHandoffPrompt(task, outcome.entries)
+    const decisions = outcome.entries.filter(e => e.kind !== 'note').length
+    await setTaskSection(
+        cwd,
+        planId,
+        'handoff',
+        `handoff_at: ${new Date().toISOString()}\ndecisions: ${decisions}`
+    ).catch(() => {})
+    await updateTaskFrontMatter(cwd, planId, {state: 'completed'}).catch(() => {})
+
+    const taskId = await commandDeps.handoff(ctx, cwd, prompt)
+    if (taskId) {
+        // Stamped after the fact: this is the one link from the plan to the task
+        // it produced, and /task allocates the id only once its own run starts.
+        await setTaskSection(
+            cwd,
+            planId,
+            'handoff',
+            `handoff_at: ${new Date().toISOString()}\ndecisions: ${decisions}\ntask: ${taskId}`
+        ).catch(() => {})
+    }
+}
+
+export function registerTaskPlan(pi: ExtensionAPI): void {
+    registerBridgeCommand(pi, 'task-plan', {
+        description:
+            'Plan one task with the model — it asks, you answer (or ask it something, or '
+            + 'proceed) — then hand the decisions to /task. Usage: /task-plan <prompt>',
+        handler: handleTaskPlan
+    })
+}

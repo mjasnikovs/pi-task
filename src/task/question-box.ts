@@ -201,6 +201,14 @@ export interface AskQuestionBoxSpec {
     inputTitle: string
     options: BoxOption[]
     signal: AbortSignal
+    /**
+     * Label for the trailing free-text card. Defaults to
+     * {@link MANUAL_CARD_LABEL} ("type a different answer"), which is right when
+     * the picker is answering a question. /task-plan shows the same card when
+     * there is no question on screen — there, "add a decision of your own" is
+     * what the card actually does.
+     */
+    manualLabel?: string
 }
 
 /**
@@ -214,7 +222,7 @@ export async function askQuestionBox(
     const {question, options, inputTitle, signal} = spec
     const cards: BoxCard[] = [
         ...options.map(o => ({label: o.label, recommended: o.recommended})),
-        {label: MANUAL_CARD_LABEL}
+        {label: spec.manualLabel ?? MANUAL_CARD_LABEL}
     ]
     const colors = boxColors(ctx.ui.theme)
     const manualIndex = options.length

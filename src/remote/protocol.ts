@@ -7,6 +7,12 @@ export interface PromptMessage {
     question: string
     recommended?: string
     recommended2?: string
+    /**
+     * Buttons that answer with their own `value` instead of with an answer to the
+     * question — /task-plan's "ask the model" and "proceed to execution". Absent
+     * on every other prompt, so an older card renders exactly as before.
+     */
+    actions?: {label: string; value: string}[]
     allowSkip: boolean
 }
 

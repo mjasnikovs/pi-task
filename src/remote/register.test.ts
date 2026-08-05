@@ -3,6 +3,7 @@ import {registerRemote} from './register.js'
 import {registerConfig} from '../config/register.js'
 import {registerTask} from '../task/orchestrator.js'
 import {registerTaskAuto} from '../task/auto-orchestrator.js'
+import {registerTaskPlan} from '../task/plan-orchestrator.js'
 import {getBridge, dispatchRemoteLine, makeShimmedCtx} from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {clientScript} from './ui-script.js'
@@ -94,6 +95,7 @@ test('every command the web UI advertises is dispatchable', () => {
     registerConfig(pi)
     registerTask(pi)
     registerTaskAuto(pi)
+    registerTaskPlan(pi)
     registerRemote(pi)
 
     const advertised = [...clientScript('ws://x/ws').matchAll(/\{ name: '\/([^']+)'/g)].map(

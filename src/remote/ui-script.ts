@@ -109,6 +109,7 @@ export function clientScript(wsUrl: string): string {
     let activePromptId = null;
     let activeRecommended = '';
     let activeRecommended2 = '';
+    let activeActions = [];
     let cancelArmTimer = null;
     const toolCallMap = {};
     let currentBubble = null;
@@ -144,6 +145,7 @@ export function clientScript(wsUrl: string): string {
 
     const COMMANDS = [
       { name: '/task',             desc: 'Start a new task' },
+      { name: '/task-plan',        desc: 'Plan one task with the model, then run it' },
       { name: '/task-list',        desc: 'List tasks in this project' },
       { name: '/task-resume',      desc: 'Resume a task' },
       { name: '/task-cancel',      desc: 'Cancel the currently running task' },
@@ -782,6 +784,7 @@ export function clientScript(wsUrl: string): string {
       promptInput.style.display = 'none';
       promptRec.style.display = 'none';
       activeRecommended2 = '';
+      activeActions = [];
       if (cancelArmTimer) { clearTimeout(cancelArmTimer); cancelArmTimer = null; }
       refreshComposer();
     }
@@ -815,10 +818,26 @@ export function clientScript(wsUrl: string): string {
       return btn;
     }
 
+    // Action buttons (/task-plan's "ask the model" / "proceed to execution").
+    // They answer with their own sentinel value rather than with an answer to the
+    // question, so they sit between the answer buttons and Cancel. Empty — and
+    // therefore invisible — for every prompt that carries no actions.
+    function makeActionBtns() {
+      const out = [];
+      for (let i = 0; i < activeActions.length; i++) {
+        (function (a) {
+          out.push(makeBtn(a.label, 'secondary', function () { answer(a.value); }));
+        })(activeActions[i]);
+      }
+      return out;
+    }
+
     function renderButtons(buttons, stacked) {
       promptButtons.className = stacked ? 'row stacked' : 'row';
       promptButtons.innerHTML = '';
       for (let i = 0; i < buttons.length; i++) promptButtons.appendChild(buttons[i]);
+      const actions = makeActionBtns();
+      for (let i = 0; i < actions.length; i++) promptButtons.appendChild(actions[i]);
       promptButtons.appendChild(makeCancelBtn());
     }
 
@@ -861,6 +880,7 @@ export function clientScript(wsUrl: string): string {
       promptQ.textContent = msg.question;
       activeRecommended = msg.recommended || '';
       activeRecommended2 = msg.recommended2 || '';
+      activeActions = msg.actions || [];
       if (msg.recommended) {
         // Mode A: recommendation(s) present. Render markdown in the panel so a
         // recommendation with code/emphasis reads the same as an assistant bubble.
