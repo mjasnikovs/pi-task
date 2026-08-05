@@ -57,6 +57,7 @@ import {
     appendNoThink
 } from './prompts.js'
 import {readSection, removeTaskSection, setTaskSection, updateTaskFrontMatter} from './task-io.js'
+import {spawnSync} from 'node:child_process'
 import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
@@ -98,10 +99,18 @@ import {
     buildRequirementsBlock,
     buildOwnedRequirementsBlock,
     readOwnedRequirements,
+    writeOwnedRequirements,
     ownedForTitle,
     appendOwnedConstraints,
     type OwnedRequirement
 } from './requirements.js'
+import {
+    detachUnsatisfiableRequirements,
+    claimPendingRequirements,
+    unclaimedPendingRequirements,
+    formatReassignActions
+} from './owned-freeze-reassign.js'
+import {trackedSourceOracle} from './owned-freeze-conflict.js'
 import {
     runPhaseChild,
     runPhaseWithLoopGuard,
@@ -286,6 +295,83 @@ async function ownedForThisTask(deps: PhaseDeps): Promise<OwnedRequirement[]> {
     } catch {
         return []
     }
+}
+
+/** This task's plan title — the owned ledger's join key. */
+async function planTitle(deps: PhaseDeps): Promise<string> {
+    try {
+        return ((await readSection(deps.cwd, deps.taskId, 'raw prompt')) ?? '').trim()
+    } catch {
+        return ''
+    }
+}
+
+/** The `isSource` oracle production uses: git tracks the path in this tree. */
+function repoSourceOracle(cwd: string): (p: string) => boolean {
+    return trackedSourceOracle(p => {
+        const r = spawnSync('git', ['ls-files', '--', p], {cwd, encoding: 'utf8', timeout: 4000})
+        return {stdout: r.stdout ?? '', exitCode: r.status ?? 1}
+    })
+}
+
+/**
+ * DETACH (nexttask 2) — an owned requirement this task cannot satisfy, because a
+ * category freeze in the very spec that carries it covers the only file that
+ * could, stops being this task's obligation and is released to whichever later
+ * task writes that file.
+ *
+ * Runs at the LAST spec-producing step, where the pair first exists: the stamped
+ * bullet is written one statement earlier by `appendOwnedConstraints`, and a
+ * critique-time probe measured 0/40 because the stamp did not exist yet. It
+ * never edits prose and never asks a model — the run-18 rewrite lever resolved
+ * 11 of 20 pairs by DELETING the authoritative clause. The quote stays in the
+ * ledger throughout; only its owner changes.
+ */
+export async function resolveOwnedFreezeForThisTask(
+    deps: PhaseDeps,
+    spec: string
+): Promise<string> {
+    const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
+    if (ledger.length === 0) return spec
+    const title = await planTitle(deps)
+    if (title.length === 0) return spec
+    const res = detachUnsatisfiableRequirements({
+        spec,
+        title,
+        ledger,
+        isSource: repoSourceOracle(deps.cwd)
+    })
+    if (res.actions.length === 0) return spec
+    deps.logDebug?.(formatReassignActions(res.actions))
+    if (!res.actions.some(a => a.kind === 'detach')) return spec
+    await writeOwnedRequirements(deps.cwd, res.ledger)
+    return res.spec
+}
+
+/**
+ * CLAIM (nexttask 2) — the other half. A requirement detached by an earlier task
+ * becomes THIS task's own when its refined prompt says it writes the frozen
+ * file. Run before compose builds its carried blocks, so the claimed obligation
+ * rides the same belt every owned requirement does and the braces stamp it onto
+ * this spec.
+ *
+ * The claimant is the only party that knows: at detach time the later tasks are
+ * bare plan titles, and none of mx5 run 19's 26 titles contains the path. Over
+ * the same run's 26 REFINED prompts, `writeIntent` picks out exactly the two
+ * tasks that write the server file.
+ */
+export async function claimOwnedFreezeForThisTask(
+    deps: PhaseDeps,
+    refined: string
+): Promise<void> {
+    const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
+    if (unclaimedPendingRequirements(ledger).length === 0) return
+    const title = await planTitle(deps)
+    if (title.length === 0) return
+    const res = claimPendingRequirements({intent: refined, title, ledger})
+    if (res.actions.length === 0) return
+    deps.logDebug?.(formatReassignActions(res.actions))
+    await writeOwnedRequirements(deps.cwd, res.ledger)
 }
 
 export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: string) => {
@@ -1576,6 +1662,10 @@ export async function phaseCompose(
     research: string,
     qa: string
 ): Promise<string> {
+    // CLAIM before the belt is built: an obligation an earlier task had to
+    // detach (its own spec froze the only file that could satisfy it) becomes
+    // this task's own when this task is the one that writes that file.
+    await claimOwnedFreezeForThisTask(deps, refined).catch(() => {})
     const contracts = await phaseCarriedBlocks(deps)
     return runWithEmphasisRetry(
         deps,
@@ -1949,7 +2039,10 @@ export const PHASES: PhaseConfig[] = [
                     'owned-requirements braces: appended omitted design obligation(s) to CONSTRAINTS'
                 )
             }
-            return out
+            // An owned obligation whose only file this spec also FREEZES is
+            // unsatisfiable here; move it to the pending task that writes that
+            // file rather than shipping a requirement no one can meet.
+            return await resolveOwnedFreezeForThisTask(d, out)
         }
     }
 ]

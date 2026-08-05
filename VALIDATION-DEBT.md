@@ -13,6 +13,36 @@ not here. Last updated 2026-08-05.
 
 ## RULED OUT — do not re-propose
 
+- **Choosing the reassignment TARGET at the moment the owned/freeze conflict is
+  found** (nexttask 2's branch 1), and **demoting the loser to CROSS-CUTTING**
+  (its branch 2). Refuted 2026-08-05 at STEP 0, over all 60 recorded composed
+  specs on disk (`scripts/owned-freeze-reassign-baserate.ts`), before a lever
+  existed. The corpus holds exactly ONE conflict — mx5 run 19 TASK_0015, the §9
+  Build & run server clause against `src/server/index.ts` — and on it:
+  *(a) "exactly one other task names P" never holds.* Candidates: 3 by plan title,
+  7 by research FILES, **8 either way** — a plain mention cannot tell the file's
+  author from the seven tasks that import from it. Branch 1 fires 0 times; the
+  lever CARRIES everything, which is a no-op dressed as a fix.
+  *(b) The proposed target has already run.* nexttask 2 nominates TASK_0014;
+  it completed immediately BEFORE TASK_0015, and the pair is only detectable at
+  TASK_0015's own compose, so editing TASK_0014's ledger entry changes nothing
+  that will ever be composed again.
+  *(c) At that moment the information does not exist.* Pending tasks are bare plan
+  titles — **none of run 19's 26 titles contains the string
+  `src/server/index.ts`**, TASK_0017's reads "…small fetch/mutation hooks, SPA
+  fallback route on server". A path-lexical target rule at detach time is BLIND IN
+  PRODUCTION, exactly like the run-18 critique probe it was meant to replace. The
+  same rule scores 8 candidates against RECORDED SPECS, which is why a corpus
+  replay must feed each task only the artifacts it had at that moment.
+  *(d) CARRY is spec inflation.* The one conflicting quote is a task-specific
+  deliverable, not prohibition- or policy-shaped, so `isCrossCuttingRequirement`
+  rejects it; carrying it anyway would push "the server serves static `dist/`"
+  into the 11 tasks that had not yet run, none of which owns the server file.
+  What replaced it (SHIPPED): **DETACH at the conflicting task, CLAIM by the task
+  whose own REFINED prompt says it writes the frozen file** — over run 19's 26
+  refined prompts `writeIntent` fires on exactly two, the file's creator (already
+  run) and TASK_0017 (pending). See `src/task/owned-freeze-reassign.ts`.
+
 - **Lexical obligation ranking** (`OBLIGATION_RE`, or any stricter modal subset).
   Refuted 2026-07-29. It *passes* the old mx5-only pass condition and is still
   wrong: mx5 pools A/B 9.37→10.77 and 8.43→10.27 of 16 criticals, zero losses,
@@ -150,6 +180,48 @@ The harness **abstains** when the cap engages in under half the runs — below 4
 entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
+
+## OPEN — 0a. Ownership is fixed; VERIFICATION DEPTH is not (nexttask 2, A/B-2)
+
+The owned/freeze detach-claim pass is **wired and A/B-1 PASSes** (bookkeeping:
+conflicts 1→0 on the corpus, five invariants, 82 clean specs byte-identical —
+`scripts/owned-freeze-reassign-ab.ts`). Its DELIVERY half **FAILs**, and the
+failure is the same shape run 18 recorded one level up.
+
+A/B-2 (`scripts/owned-freeze-delivered-ab.ts`, 20 live trials/arm on run 19's
+real TASK_0017 inputs, arms differing only in `requirements-owned.md`):
+
+    M1  an ACCEPTANCE/VERIFY line that OBSERVES static asset serving
+        baseline 0/20   treatment 0/20      (pre-registered PASS was >= 14/20)
+    the clause delivered VERBATIM and AUTHORITATIVE
+        baseline 0/20   treatment 20/20
+
+So the pass does exactly what it claims — the authoritative clause reaches the
+spec of the task that writes the file, and no quote is ever lost — and that
+changes NOTHING about how the spec verifies it. Both arms deliver the same
+ACCEPTANCE ("the SPA fallback serves `dist/index.html` for non-`/api` GETs") and
+neither ever requests a built asset. The static half of "serves `/api` + static
+`dist/`" is not converted into an observation by anybody.
+
+The mechanism is visible in the delivered files: in all 20 treatment specs the
+clause appears **once**, as the machine-stamped CONSTRAINTS bullet
+`appendOwnedConstraints` writes AFTER critique. Compose had the same clause in
+its belt block and folded it into ACCEPTANCE/VERIFY **0 times** — the run-16
+measurement ("the belt alone is obeyed ~25%") is optimistic for a behavioural
+clause of this shape.
+
+The metric is not the problem: `scripts/owned-freeze-delivered-scorer-check.ts`
+PASSes — 0 hits over all 60 recorded specs, 0 on 5 hand-built negatives (SPA
+shell only, the run-18 `package.json` grep, build-without-request), 3/3 on
+positives.
+
+**What this rules out:** moving ownership as a route to verification depth. The
+next lever has to act on the VERIFY block itself, for an owned requirement whose
+behaviour is observable, and it cannot be the braces — they run after the last
+model step, which is why a bullet appended there never reaches ACCEPTANCE. Note
+`scripts/verify-integration-depth-step0.ts`'s refutation applies to appending a
+generic boot command; a clause that names its own observable
+(a request for `dist/app.css`) is a narrower target that has not been measured.
 
 ## OPEN — 0. The stem-widened failure-file extractor (measured, NOT wired)
 

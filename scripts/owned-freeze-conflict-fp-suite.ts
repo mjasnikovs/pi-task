@@ -7,11 +7,20 @@
  * FORCED into the critique rewrite spends model time on every fire, so a false
  * positive is not a nuisance, it is a spec the model is ordered to damage.
  *
- *   arm 1  every recorded composed spec on this box — mx5 run 18 (24), the
- *          independent gofer-pixel run (21), IAR1 (10), runner (2), aiz-client
- *          (1). Expected finding set: exactly ONE, mx5 TASK_0023's server
- *          clause, which STEP 0 (scripts/owned-vs-freeze-baserate.ts) shows was
- *          not met at HEAD. Anything else is a false positive to fix here.
+ *   arm 1  every recorded composed spec on this box — mx5 (26), the independent
+ *          gofer-pixel run (21), IAR1 (10), runner (2), aiz-client (1).
+ *          Expected finding set: exactly ONE, mx5's server clause, which STEP 0
+ *          (scripts/owned-vs-freeze-baserate.ts) shows was not met at HEAD.
+ *          Anything else is a false positive to fix here.
+ *
+ *          THE CORPUS ROLLED OVER, 2026-08-05. `~/hub/mx5/.pi-tasks` now holds
+ *          run 19, not run 18, so the expected id moved TASK_0023 → TASK_0015 —
+ *          the SAME clause ("**Server:** `bun run --watch src/server/index.ts` —
+ *          serves `/api` + static `dist/`.") against the same file, a second
+ *          independent occurrence of the shape on a different task. Precision
+ *          over the two runs is 2 findings / 84 real specs, both true positives.
+ *          Run 18's spec is preserved verbatim as an arm-3 fixture below, so
+ *          rolling the tree can never silently retire the original evidence.
  *   arm 2  the four hand-built negatives nexttask 7 names, each a spec that
  *          carries BOTH sides of the shape and is nonetheless satisfiable.
  *   arm 3  positive controls — the same specs with the satisfiability removed.
@@ -33,8 +42,9 @@ import {parseOwnedRequirements, ownedForTitle} from '../src/task/requirements.js
 const HUB = path.join(os.homedir(), 'hub')
 const POOLS = ['mx5', 'gofer-pixel', 'IAR1', 'runner', 'aiz-client']
 
-/** The one pair the corpus is known to contain (STEP 0, hand-checked). */
-const EXPECTED = ['mx5/TASK_0023 src/server/index.ts']
+/** The one pair the corpus is known to contain (STEP 0, hand-checked). Run 19's
+ *  TASK_0015 — see the corpus-rollover note above. */
+const EXPECTED = ['mx5/TASK_0015 src/server/index.ts']
 
 let failures = 0
 
