@@ -809,18 +809,25 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
             return apisPrompt
         }
 
-        const serialPrompt = await run()
-        expect(serialPrompt).toContain('PROJECT FILE MAP')
-        expect(serialPrompt).toContain('src/server/routes.ts  the route table')
-        expect(serialPrompt).toContain('USE THE MAP')
-
+        // BOTH halves pin the flag, and the finally restores what was there. Reading
+        // the ambient value for the serial half made this test fail on any machine
+        // whose ~/.config/pi-task/config.json turns parallel workers ON (the map only
+        // rides along in serial mode) — and restoring a hardcoded `false` silently
+        // rewrote that user's setting in the process.
         const cfg = getConfig()
-        cfg.parallelResearchWorkers = true
+        const prev = cfg.parallelResearchWorkers
         try {
+            cfg.parallelResearchWorkers = false
+            const serialPrompt = await run()
+            expect(serialPrompt).toContain('PROJECT FILE MAP')
+            expect(serialPrompt).toContain('src/server/routes.ts  the route table')
+            expect(serialPrompt).toContain('USE THE MAP')
+
+            cfg.parallelResearchWorkers = true
             const parallelPrompt = await run()
             expect(parallelPrompt).not.toContain('PROJECT FILE MAP')
         } finally {
-            cfg.parallelResearchWorkers = false
+            cfg.parallelResearchWorkers = prev
         }
     })
 })
