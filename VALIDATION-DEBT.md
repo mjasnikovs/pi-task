@@ -13,6 +13,60 @@ not here. Last updated 2026-08-05.
 
 ## RULED OUT — do not re-propose
 
+- **A deterministic veto over a grill auto-answer that NARROWS a design-enumerated
+  set** (nexttask 7). Refuted 2026-08-05 at STEP 0, over every recorded run —
+  14,561 task files, 733 run-revisions, **24,522 `(auto)` answers / 220 distinct
+  (question, answer) pairs** — by `scripts/autoanswer-narrowing-baserate.ts`,
+  before any lever was wired. The corpus is A/B-replicated (trial directories
+  replay one task dozens of times), so DISTINCT is the honest denominator:
+
+      not-a-set     216 / 220   98.2%      23,634 instances   96.4%
+      undecidable     3 / 220    1.4%         835 instances    3.4%
+      widening        0 / 220    0.0%           0 instances    0.0%
+      narrowing       1 / 220    0.5%          53 instances    0.2%
+
+  **The one narrowing IS the lead** — mx5 run 19 TASK_0001 Q1, `.env.example`
+  cut from five variables to one, grounded on `DESIGN/PROJECT.md:77`. There is no
+  second instance anywhere in the corpus, so the rule would be fitted to a sample
+  of one and A/B-1's pre-registered PASS ("run 19's TASK_0001 Q1 resolves to the
+  full five-variable set") would be satisfied by construction. nexttask 7's own
+  pre-registered close condition — *"if set-selection questions are rare the
+  guard's blast radius is tiny and the task should be closed as low-value — say so
+  with the numbers, do not build it anyway"* — fires here. A/B-1 and A/B-2 were
+  never built.
+  *(a) Set-selection questions are rare and mostly UNENUMERABLE.* A loose keyword
+  sweep (`only|also|just|in addition|as well as|full|all of`) flags 56 of the 220,
+  but only **4** carry two parseable enumerated option lists of |U| ≥ 3. The rest
+  are binary preferences ("401 or 403"), unenumerated inclusions ("or also
+  additional metadata such as remaining time until expiry"), or `<!DOCTYPE html>,
+  <html>, <head>, <body>` boilerplate on runs with no design at all.
+  *(b) All three `undecidable`s are CORRECT abstentions, hand-read.* The design
+  genuinely does not enumerate `c.var.user`'s fields (§6 says only "loads the user
+  onto `c.var.user`"), does not enumerate the login response (§5 line 190 says
+  "returns user"), does not contain `toolName` at all (gofer-pixel), and never
+  enumerates the marketplace filter chips (§8 defers them to `marketplace.html`).
+  Nothing was lost by abstaining.
+  *(c) `widening` is empty, so the "veto only touches set-valued answers"
+  invariant has nothing to hold it down.* The one shape it must never damage never
+  occurs.
+  *(d) The SUBJECT half of the grounding rule is load-bearing and was found by
+  hand-read, not by design.* Without it the classifier's second hit was "what
+  exact fields should `c.var.user` carry — only id, role, is_banned or also phone,
+  display_name?" grounded against `` `GET /api/admin/users` → all users (id,
+  phone, display_name, role, is_banned, listing count) `` — a different artifact
+  that happens to list the same columns. Requiring the design line to also NAME the
+  question's subject (matching across dotted extensions, which is what lets
+  `.env.example` ground on the design's `.env`) drops it. Two more hand-read
+  parser corrections are pinned in the module: `/` is not a list separator
+  (`src/server/seed.ts` became the items `src`, `server`, `seed.ts`), and `e.g`
+  is not an item.
+  The classifier is kept, unwired, at **`scripts/answer-narrowing.ts`** so the base
+  rate stays re-runnable; nothing in `src/` imports it.
+  **What to do instead:** the run-end static check written up in `nexttask10.md` —
+  every `process.env.X` in tracked source must appear in the tracked env template.
+  It catches this defect and every other route to it, needs no set-shaped question,
+  and does not depend on a clarification ever being asked.
+
 - **Choosing the reassignment TARGET at the moment the owned/freeze conflict is
   found** (nexttask 2's branch 1), and **demoting the loser to CROSS-CUTTING**
   (its branch 2). Refuted 2026-08-05 at STEP 0, over all 60 recorded composed
