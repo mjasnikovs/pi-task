@@ -56,7 +56,14 @@ import {
     MAX_GRILL_QUESTIONS,
     appendNoThink
 } from './prompts.js'
-import {readSection, removeTaskSection, setTaskSection, updateTaskFrontMatter} from './task-io.js'
+import {
+    appendGateRecord,
+    readSection,
+    removeTaskSection,
+    setTaskSection,
+    updateTaskFrontMatter
+} from './task-io.js'
+import {applyRefutations} from './refuted-constraint.js'
 import {spawnSync} from 'node:child_process'
 import {type PhaseName} from './task-types.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
@@ -1653,6 +1660,40 @@ export async function phaseGrill(
     return out.join('\n')
 }
 
+/**
+ * A refutation is a DELETION. Where the run's own research explicitly says a
+ * dependency refine invented is not needed, drop that token from CONSTRAINTS —
+ * compose cannot forbid the design's own API "because the refined task
+ * explicitly requires `argon2`" if the refined task no longer requires it.
+ *
+ * Applied to the REFINED TASK ITSELF, not to compose's copy of it, and that is
+ * load-bearing: critique receives the refined task as GROUND TRUTH and is told
+ * its CONSTRAINTS "MUST be preserved in spirit — do not silently drop or weaken
+ * them", so a deletion visible only to compose is restored one phase later. Both
+ * spec-producing phases have to see the same text.
+ *
+ * Purely subtractive and never touches an owned line (task/refuted-constraint.ts).
+ * Idempotent, so a resumed run re-deriving `refined` from the task file lands in
+ * the same place. The task file's `## refined prompt` is deliberately left as
+ * refine wrote it; the drop is recorded on the `## gates` trail with both source
+ * lines quoted, so the decision stays auditable after the fact.
+ *
+ * STEP 0 `scripts/refuted-constraint-baserate.ts`; A/B-1 `…-ab.ts` (PASS).
+ */
+export async function dropRefutedConstraints(
+    deps: PhaseDeps,
+    refined: string,
+    research: string
+): Promise<string> {
+    const refuted = applyRefutations(refined, research)
+    if (refuted.trail.length === 0) return refined
+    for (const line of refuted.trail) {
+        deps.logDebug?.(`compose: ${line}`)
+        await appendGateRecord(deps.cwd, deps.taskId, line).catch(() => {})
+    }
+    return refuted.refined
+}
+
 export async function phaseCompose(
     deps: PhaseDeps,
     refined: string,
@@ -2015,7 +2056,10 @@ export const PHASES: PhaseConfig[] = [
         name: 'compose',
         section: 'spec',
         field: 'spec',
-        run: (d, p) => phaseCompose(d, p.refined, p.research, p.qa)
+        run: async (d, p) => {
+            p.refined = await dropRefutedConstraints(d, p.refined, p.research)
+            return await phaseCompose(d, p.refined, p.research, p.qa)
+        }
     },
     {
         name: 'critique',

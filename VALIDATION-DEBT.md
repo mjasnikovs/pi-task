@@ -235,6 +235,66 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## OPEN — 0b. The refuted-constraint drop is WIRED; its DELIVERY claim is under-powered (nexttask 8, A/B-2)
+
+The deletion pass is **wired and A/B-1 PASSes** (`src/task/refuted-constraint.ts`,
+`scripts/refuted-constraint-ab.ts`): over **12,810 recorded task files** the count
+of tasks whose CONSTRAINTS still require a token their own research refutes goes
+**3 → 0**, with all five invariants holding. It is provably subtractive — the
+treatment text is a strict character subsequence of the baseline — and it can
+never touch an owned line, so it lands despite the A/B-2 result below.
+
+**STEP 0 killed one third of the doc's proposed negation set, and the corpus said
+so before anything was wired.** The bare shape `no \`X\` dependency` fired **300
+times in 306 hits**, every one a MANIFEST-STATE bullet asserting the opposite of a
+refutation — "`package.json` currently lists no `hono` or `@hono/zod-validator`
+dependencies; **they must be added**". Dropping on it mutilated real constraints
+("use  with the shared `loginSchema`"). The shipped rule requires an explicit
+negation of NEED, and a near-miss census (985 bullets, 3 shapes) forced a
+dependency-word guard onto two more patterns — "does not require" appears in 412
+CONTEXT bullets and is almost always behavioural prose ("the endpoint does NOT
+require authentication"). Final base rate: **6 hits / 12,810 files, all 6
+hand-verified true**, all on the lead, catching both `argon2` and `bun-sql`.
+
+**Wiring correction worth keeping.** The drop must land on the phase context's
+`refined`, not on compose's local copy: `phaseCritique` is handed the refined task
+as GROUND TRUTH under "CONSTRAINTS … MUST be preserved in spirit", so a deletion
+only compose could see is restorable one phase later. Pinned by
+`phases.test.ts` → "the drop lands on p.refined, so CRITIQUE sees it too".
+
+**A/B-2 FAILs its pre-registered gate, and the honest reason is power, not
+direction** (`scripts/refuted-constraint-delivered-ab.ts`, 20 reps/arm through the
+real compose→critique chain on run 19's TASK_0001 inputs):
+
+    scoring                     baseline   treatment   p
+    clause-level (registered)     9/20        1/20      0.0084
+    spec-level  (sensitivity)     3/20        0/20      0.2308
+    hand-read, all 10 hits        2/20        0/20      0.4872
+
+All 10 hits were read. Six baseline hits and the single treatment hit are scorer
+artifacts on specs that PROHIBIT both tokens: an ACCEPTANCE line "No `argon2`,
+`bun-sql` … are present" and VERIFY assertions like `if (p.dependencies?.argon2)
+throw` carry no negation cue a clause splitter can see. Only reps 1 and 2 are the
+real defect (rep 2 reproduces the shipped shape exactly — a dependency list naming
+`argon2`, an ACCEPTANCE echoing it, and a VERIFY that throws when it is absent).
+So the pre-registered "baseline ≥ 8/20" bar is met **only** by the contaminated
+metric; the clean base rate is ~2/20 and n=20 cannot resolve it.
+
+**What is nonetheless established:** across **60 live treatment specs** (20 chain +
+40 compose-only) not one genuinely requires a refuted dependency, spec-shape
+validity is 20/20 in both arms, and the treatment never sheds the REAL pinned
+dependencies (`hono`, `sharp`, `react` — 20/20). The next attempt needs
+**n ≈ 60/arm**, or a second stack where refine invents a design-refuted dependency,
+before the delivery claim can be made.
+
+**Methodology note that cost the most here.** The metric was wrong three times
+before it was right, each caught by hand-reading a live rep, and every error ran
+in the LEVER'S FAVOUR-hiding direction — bare token presence scored `do not add
+\`argon2\`` as *requiring* argon2, i.e. it reported the lever's own success as its
+failure. `scripts/refuted-constraint-scorer-check.ts` (11 cases: the recorded
+run-19 spec, four requirement shapes, six prohibition shapes) exists so no
+proportion from this harness is ever trusted before the instrument is.
+
 ## OPEN — 0a. Ownership is fixed; VERIFICATION DEPTH is not (nexttask 2, A/B-2)
 
 The owned/freeze detach-claim pass is **wired and A/B-1 PASSes** (bookkeeping:

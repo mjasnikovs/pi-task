@@ -14,6 +14,7 @@ import {
     searchConfigured,
     emptySectionBody,
     isBareNoneAnswer,
+    PHASES,
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
@@ -3203,5 +3204,131 @@ describe('phaseResearch fan-out budget notice (nexttask 5B, UNWIRED)', () => {
             if (saved === undefined) delete process.env[PROJECT_DOCS_BUDGET_ENV]
             else process.env[PROJECT_DOCS_BUDGET_ENV] = saved
         }
+    })
+})
+
+describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
+    const taskMeta = {
+        id: 'TASK_0001',
+        state: 'in_progress' as const,
+        phase: 'compose' as const,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        title: 'scaffold'
+    }
+    const LEAD_CONSTRAINT =
+        '- Add only new entries the task requires (e.g., `hono`, `bun-sql`-equivalent, `argon2`, `sharp`).'
+    const LEAD_RESEARCH = [
+        'CONTEXT',
+        "- Password hashing uses `Bun.password` (built-in argon2id) — no external `argon2` dependency needed despite the task's mention of it.",
+        ''
+    ].join('\n')
+    const refinedText = ['GOAL', 'Scaffold the project.', '', 'CONSTRAINTS', LEAD_CONSTRAINT, ''].join('\n')
+
+    const composePhase = (): PhaseConfig => {
+        const p = PHASES.find(x => x.name === 'compose')
+        if (!p) throw new Error('compose phase missing')
+        return p
+    }
+
+    const specReply = [
+        'GOAL',
+        'Scaffold.',
+        '',
+        'CONSTRAINTS',
+        '- Add `hono` and `sharp`.',
+        '',
+        'ACCEPTANCE',
+        '- deps present',
+        '',
+        'VERIFY:',
+        '```sh',
+        'bun test',
+        '```'
+    ].join('\n')
+
+    test('the drop lands on p.refined, so CRITIQUE sees it too — not just compose', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, taskMeta, '## raw prompt\n\nscaffold\n')
+            const prompts: string[] = []
+            const spawn = fakeSpawnByPrompt(args => {
+                prompts.push(args[args.length - 1] ?? '')
+                return agentEndResponse(specReply)
+            })
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const pc = {
+                cwd,
+                id: 'TASK_0001',
+                ctx: {} as ExtensionCommandContext,
+                widgetState: {} as WidgetState,
+                rawPrompt: 'scaffold',
+                refined: refinedText,
+                research: LEAD_RESEARCH,
+                qa: '(no questions produced)',
+                spec: ''
+            } as PhaseContext
+
+            await composePhase().run(deps as never, pc)
+
+            // The context's refined task no longer requires the refuted token —
+            // this is what critique is handed as GROUND TRUTH one phase later.
+            expect(pc.refined).not.toContain('`argon2`')
+            expect(pc.refined).toContain('`hono`')
+            expect(pc.refined).toContain('`sharp`')
+            // …and the prompt compose actually sent carries that same text, not
+            // the original constraint line.
+            expect(prompts.some(p => p.includes(pc.refined))).toBe(true)
+            expect(prompts.some(p => p.includes(LEAD_CONSTRAINT))).toBe(false)
+        })
+    })
+
+    test('the drop is recorded on the gates trail with both source lines', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, taskMeta, '## raw prompt\n\nscaffold\n')
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(specReply))
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const pc = {
+                cwd,
+                id: 'TASK_0001',
+                ctx: {} as ExtensionCommandContext,
+                widgetState: {} as WidgetState,
+                rawPrompt: 'scaffold',
+                refined: refinedText,
+                research: LEAD_RESEARCH,
+                qa: '(no questions produced)',
+                spec: ''
+            } as PhaseContext
+
+            await composePhase().run(deps as never, pc)
+
+            const gates = await readSection(cwd, 'TASK_0001', 'gates')
+            expect(gates).toContain("constraint refuted by research — dropped 'argon2' from CONSTRAINTS")
+            expect(gates).toContain('| constraint: "')
+            expect(gates).toContain('no external `argon2` dependency needed')
+        })
+    })
+
+    test('no refutation ⇒ the refined task reaches compose untouched', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(cwd, taskMeta, '## raw prompt\n\nscaffold\n')
+            const spawn = fakeSpawnByPrompt(() => agentEndResponse(specReply))
+            const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
+            const pc = {
+                cwd,
+                id: 'TASK_0001',
+                ctx: {} as ExtensionCommandContext,
+                widgetState: {} as WidgetState,
+                rawPrompt: 'scaffold',
+                refined: refinedText,
+                research: 'CONTEXT\n- `package.json` pins `hono` at 4.12.27.\n',
+                qa: '(no questions produced)',
+                spec: ''
+            } as PhaseContext
+
+            await composePhase().run(deps as never, pc)
+
+            expect(pc.refined).toBe(refinedText)
+            expect(await readSection(cwd, 'TASK_0001', 'gates')).toBeNull()
+        })
     })
 })
