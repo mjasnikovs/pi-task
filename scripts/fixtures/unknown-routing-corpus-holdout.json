@@ -1,0 +1,1034 @@
+[
+ {
+  "name": null,
+  "question": "After deleting a listing or toggling its sold status, should the item be removed from the grid immediately (optimistic UI) or should the page wait for the server response before updating the display?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 10
+ },
+ {
+  "name": null,
+  "question": "Any preference for heading level (<h1> vs <h2>, etc.)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Are libobs-dev, obs-frontend-api-dev, qt6-base-dev, and libssl-dev already installed on the target system via apt, or do I need to determine and provide the installation commands as part of this build?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Are the SQL migration files (src/server/db/migrations/0001_init.sql) and the migrations runner (src/server/db/migrate.ts) already on disk, so that tests can call runMigrations() to bootstrap the schema before running?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Are there additional resource files beyond data/locale/en-US.ini (e.g., icons, config templates) that must be installed alongside the shared library, or is the locale file the only required companion artifact?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Are there any other OBS API functions or types used in the plugin (beyond those already identified in the research) that need to be verified for compatibility with OBS 32.1.x, such as calls related to video output, scene management, or signal handlers?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Are there specific mobile breakpoints beyond 768px that need handling (e.g., tablet at 1024px), or is the single 768px breakpoint from the mockup sufficient?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 120
+ },
+ {
+  "name": null,
+  "question": "Default behavior when size is omitted on GET /api/photos/:id",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Does CanvasRenderer need a resize method for dynamic dimension changes after construction, or is the canvas size fixed at construction time (with user-configurable sizes handled by creating a new renderer instance)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 30
+ },
+ {
+  "name": null,
+  "question": "Does the design specify any component-level variants (e.g., Button variant=\"destructive\", size=\"sm\") or should default shadcn variant patterns be followed?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Does the login card need the \"MX-5 Private\" logo and subtitle text from DESIGN/login.html, or should those be omitted for the SPA context?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "For the Playwright component test, should API responses be mocked via page.route() (as done in listing-detail.spec.tsx), or should a different testing strategy be used?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 312
+ },
+ {
+  "name": null,
+  "question": "For the Tailwind v4 @theme directive, should brand tokens be defined with --color- and --font- prefixed names (e.g., --color-accent: oklch(52% 0.22 25)) to auto-map to utility classes like bg-accent and font-display, or as raw variable names (--bg, --fg, --accent) used directly via CSS var() in components?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "For the concurrent redeem test, should it verify only HTTP response codes (one 200, one 400 via Promise.all), or also include a DB-level assertion confirming exactly one row has used_at IS NOT NULL after both requests settle?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "For the dev script's concurrent processes (docker-compose, Tailwind watch, Bun build watch, Hono server watch), should I use shell background operators (&) to avoid adding a new dependency, or add concurrently as a devDependency for better process management?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 824
+ },
+ {
+  "name": null,
+  "question": "For the docker-compose Postgres service, should port 5432 be exposed to the host (e.g., ports: [\"5432:5432\"]) so DATABASE_URL=postgres://mx5:mx5@localhost:5432/mx5 works directly, or should it remain internal-only?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 55
+ },
+ {
+  "name": null,
+  "question": "For the listing deletion section on the admin page, should it display all marketplace listings fetched via GET /api/listings in a grid with delete buttons per row (reusing PartCard), or should it provide a search/filter input where the admin can look up a specific listing by ID before deleting?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 184
+ },
+ {
+  "name": null,
+  "question": "For the ~15 MB pre-compression rejection threshold, should this be exactly 15 MiB (15728640 bytes) or approximately 15 MB (15000000 bytes)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1080
+ },
+ {
+  "name": null,
+  "question": "GET /api/photos/:id: Task says \"use requireAuth only\" but DESIGN/PROJECT.md §5 explicitly declares it \"Deliberately unauthenticated\" — photo IDs are unguessable UUIDs and cache headers require it.",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 34
+ },
+ {
+  "name": null,
+  "question": "How should ModelProxyServer receive the PixelDocument reference needed for getDocumentGridText() — as a direct document instance in the constructor, a getter callback () => PixelDocument, or bundled into the same ToolExecutor map (where tools mutate and return documents)?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 11
+ },
+ {
+  "name": null,
+  "question": "How should the owner guard be enforced on the client side — redirect to /login if unauthenticated, show a \"not your listing\" error if authenticated but not the owner, or rely solely on the server rejecting non-owner PATCH requests with a 403?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 29
+ },
+ {
+  "name": null,
+  "question": "Katakana scope — the research identified the specific string (エクスファイブ プライベート) but didn't clarify if it's Nav-specific or global",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Login response body fields — \"returns user\" but exact fields not specified (minimal vs full row including phone)",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Minimum password length for auth — not answered yet",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 47
+ },
+ {
+  "name": null,
+  "question": "NONE",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 31
+ },
+ {
+  "name": null,
+  "question": "On successful edit, should the page show an inline success message (like NewListing does after creation), stay on the edit form with refreshed data, or redirect elsewhere?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 12
+ },
+ {
+  "name": null,
+  "question": "On successful redeem, should the redirect go to / (Marketplace) or /me (My Listings)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Pencil brush radius — configurable vs. single-pixel only",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 26
+ },
+ {
+  "name": null,
+  "question": "Position compaction approach (single SQL vs fetch-all-then-update)",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1016
+ },
+ {
+  "name": null,
+  "question": "Redirect vs success message: The research clearly states wouter isn't wired yet, and the constraint says \"self-contained without router dependencies.\" The Login page shows a success state inline (not redirect). This pattern is established — show success message, no redirect needed. Resolved by research.",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 20
+ },
+ {
+  "name": null,
+  "question": "Should .prettierrc.cjs be left untouched since it already exists with a full configuration, or does the task require creating it anew?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 152
+ },
+ {
+  "name": null,
+  "question": "Should I add a \"seed\" entry to package.json scripts (e.g., \"seed\": \"bun src/server/seed.ts\"), or should the script only be runnable via bun run src/server/seed.ts directly?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should I add a new APP_URL entry to .env.example (e.g., APP_URL=http://localhost:3000) since it's required by the spec for constructing invite URLs but currently absent from the file?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1336
+ },
+ {
+  "name": null,
+  "question": "Should I create .env (which will be gitignored per existing .gitignore rules) or .env.example (which will be tracked by git) as the environment variable template?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 55
+ },
+ {
+  "name": null,
+  "question": "Should I create a minimal placeholder src/client/main.tsx (importing index.css and rendering a trivial element) so that Bun.build can succeed now, or is it acceptable for build.ts to reference a non-existent entrypoint since the real file will be created in step 25?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 26
+ },
+ {
+  "name": null,
+  "question": "Should I update the existing redeemInviteSchema in src/shared/schema.ts in-place to { phone, password, display_name } (replacing the current { code } shape), or create a separate new schema for the redeem endpoint body?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1336
+ },
+ {
+  "name": null,
+  "question": "Should c.var.user include all five fields (id, phone, display_name, role, is_banned) or a subset?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 45
+ },
+ {
+  "name": null,
+  "question": "Should charToIndex and deserializeGrid throw on unrecognized characters, or return a sentinel value (e.g., -1) — and if throwing, should the error message include the offending character for debugging LLM round-trip issues?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 34
+ },
+ {
+  "name": null,
+  "question": "Should concurrently be added with a pinned version (e.g., \"10.0.4\") or a caret range (e.g., \"^10.0.4\") in the devDependencies?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 3
+ },
+ {
+  "name": null,
+  "question": "Should condition filter chips (new/used) be added to the UI alongside generation and type chips, or follow the mockup exactly with only generation and type filters?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 75
+ },
+ {
+  "name": null,
+  "question": "Should db.query() and db.first() accept raw SQL objects (the return value of sql\\...\\) directly as parameters, or should they be exposed as tagged template functions themselves (e.g., db.query\\select * from users where id = ${id}\\)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 53
+ },
+ {
+  "name": null,
+  "question": "Should dist/index.html be generated dynamically by build.ts (using Bun.build to emit HTML alongside the JS bundle), or should it be created as a static template file that gets copied to dist/ during the build process?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 760
+ },
+ {
+  "name": null,
+  "question": "Should each .sql migration file be executed as a single atomic transaction (wrapping all its statements together so partial failures roll back the entire migration), or should individual statements within each file be split and executed independently without transactional grouping?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 51
+ },
+ {
+  "name": null,
+  "question": "Should each route module be mounted under a specific /api/<prefix> path (e.g., /api/auth, /api/listings) using app.route(), or should they register their endpoints directly on the shared app instance without any path prefix as required by the \"no separate sub-apps\" constraint?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should end-to-end tests use hardcoded prompts like \"draw a 4x4 square using index 1\", or accept any freeform prompt and only verify structural correctness of the response?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 4
+ },
+ {
+  "name": null,
+  "question": "Should expired sessions be cleaned up (deleted from Postgres) when encountered during middleware execution, or left to expire naturally without active cleanup?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should expired sessions be deleted from the database during the middleware lookup, or left for a separate cleanup process?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should git initialization be performed at this step, or is version control setup deferred (given the repo already has a git history)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 42
+ },
+ {
+  "name": null,
+  "question": "Should migrate.ts include an if (import.meta.main) guard to run migrations when invoked directly via bun run src/server/migrate.ts, export a runMigrations() function for programmatic use, or do both?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 51
+ },
+ {
+  "name": null,
+  "question": "Should migrate.ts support rollback/down migrations, or only forward-only apply?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 152
+ },
+ {
+  "name": null,
+  "question": "Should named constraints be used for foreign keys and unique/check constraints (e.g., CONSTRAINT fk_invites_created_by_users), or are anonymous inline constraints sufficient?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1592
+ },
+ {
+  "name": null,
+  "question": "Should set_pixels batch N pixel writes into a single undo entry (e.g., by directly mutating the active layer's pixel buffer and calling a bulk update), or is it acceptable to call setPixel per-pixel creating N separate undo entries?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 8
+ },
+ {
+  "name": null,
+  "question": "Should sold listings be shown greyed with a SOLD badge on the Marketplace grid (as the design states \"Sold stays in the grid\"), or should they be hidden entirely since the API only returns active listings by default?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 18
+ },
+ {
+  "name": null,
+  "question": "Should src/mcp/server-proxy.ts reuse the existing chatCompletion() function and types (Message, ToolCall, ChatCompletionResponse) from src/llm/client.ts, or implement its own independent fetch call to the LLM endpoint?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 11
+ },
+ {
+  "name": null,
+  "question": "Should the \"Invite a member\" button automatically copy the generated invite URL to the clipboard on click, or display it for manual copying?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 248
+ },
+ {
+  "name": null,
+  "question": "Should the \"Invite a member\" button automatically copy the invite URL to the clipboard, or display it in a toast/alert for manual copying?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 6
+ },
+ {
+  "name": null,
+  "question": "Should the EditListing page also allow toggling sold status via the status field in editListingSchema, or should that toggle remain exclusively on the ListingDetail page?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 312
+ },
+ {
+  "name": null,
+  "question": "Should the HTML include a full document structure (<!DOCTYPE html>, <html>, <head>, <body>) or is a minimal heading-only file sufficient?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Should the HTML include a full document structure (<!DOCTYPE html>, <html>, <head>, <body>) or just the heading element?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "Should the HTML include a full document structure (<!DOCTYPE html>, <html>, <head>, <body>), or is a bare heading element sufficient?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 2
+ },
+ {
+  "name": null,
+  "question": "Should the Login page render as a standalone full-page layout without the global <Nav> wrapper (with its own \"← Back\" link as in the mockup), or should it keep <Nav> rendered at the top like all other routes currently do in main.tsx?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 632
+ },
+ {
+  "name": null,
+  "question": "Should the My Listings page include pagination controls like Marketplace (12 listings per page), or should it display all of the user's own listings without pagination? The API returns paginated results, but for a personal listings view the dataset is typically small enough that pagination may be unnecessary overhead.",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 248
+ },
+ {
+  "name": null,
+  "question": "Should the Nav component get a hamburger menu for mobile screens, or should nav links simply wrap/stack on small screens?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 120
+ },
+ {
+  "name": null,
+  "question": "Should the Nav component include a mobile hamburger menu, or is responsive navigation deferred entirely to later steps?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should the POST /api/invites response return only { url } as specified in §5 API, or should it also include the raw token field for convenience?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1336
+ },
+ {
+  "name": null,
+  "question": "Should the PartCard be extracted into its own file (src/client/components/PartCard.tsx) or inlined within the Marketplace page?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 504
+ },
+ {
+  "name": null,
+  "question": "Should the SPA fallback use app.get('*', ...) to match only GET requests, or app.all('*', ...) to match all HTTP methods for non-API paths?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should the StatusPanel auto-scroll to the bottom when new entries are appended, or is scroll behavior out of scope for this step?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 17
+ },
+ {
+  "name": null,
+  "question": "Should the Toolbar and PalettePanel use controlled props (e.g., activeTool, onToolChange, activeColorIndex, onColorSelect) with sensible defaults for maximum flexibility, or should they maintain their own internal state via useState?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 22
+ },
+ {
+  "name": null,
+  "question": "Should the auth route module export a named authRoutes Hono instance, or should it export individual handlers that the consumer (step 13) chains? The spec says routes live in routes/auth.ts and are \"chained on a single app\" — I will assume a Hono<AuthEnv> sub-app exported as default or named export; please confirm if a specific export name is required.",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 43
+ },
+ {
+  "name": null,
+  "question": "Should the color tokens use Tailwind v4's --color-* prefix convention (e.g., --color-bg, --color-surface) to enable utility classes like bg-bg, text-fg, or should they remain as bare CSS variables (--bg, --surface) matching the brand spec names exactly — which would require referencing via var(--bg) directly instead of Tailwind utilities?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should the delete route also exclude photos belonging to listings of banned sellers (returning 404 if the seller is banned), or should it only check ownership via seller_id?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should the dev script use concurrently --kill-others-on-fail to ensure all watchers stop together if one fails, or should they run independently?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 3
+ },
+ {
+  "name": null,
+  "question": "Should the display_name field be validated with a max-length constraint (e.g., matching .max(100)), or should it only require non-empty on the client side?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 20
+ },
+ {
+  "name": null,
+  "question": "Should the hc client be configured globally with init: { credentials: 'include' } to automatically send session cookies on all RPC calls, or should individual calls specify credentials explicitly (relying on browser defaults for same-origin '/' requests)?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 696
+ },
+ {
+  "name": null,
+  "question": "Should the login route enforce basic rate-limiting (in-memory counter per §11) as part of this step, or defer rate-limiting to a later step?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1400
+ },
+ {
+  "name": null,
+  "question": "Should the login route reject attempts for users who exist but have is_banned = true (returning 403), or is that handled entirely by sessionMiddleware on subsequent requests?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should the login route return the full user object ({ id, phone, display_name, role }) matching the GET /me response shape, or only a subset (e.g., { id, display_name }) on success?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Should the migration use CREATE TABLE IF NOT EXISTS for idempotency (safe for repeated test runs), or plain CREATE TABLE (fails if table exists, requiring drop/recreate between test runs)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1592
+ },
+ {
+  "name": null,
+  "question": "Should the module export a connection-pooling configuration, or rely on Bun SQL defaults?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": true,
+  "instances": 53
+ },
+ {
+  "name": null,
+  "question": "Should the onSubmit prop name be used for the callback, or do you prefer a different name (e.g., submitPrompt, handleSubmit, etc.)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 20
+ },
+ {
+  "name": null,
+  "question": "Should the price input accept EUR in major units (e.g., \"12.50\") and convert to cents server-side, matching NewListing behavior — or should it accept cents directly?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 12
+ },
+ {
+  "name": null,
+  "question": "Should the price input accept decimal euro amounts (e.g., \"129.50\") that get converted to cents internally (12950), or should it only accept whole-euro integer values?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 376
+ },
+ {
+  "name": null,
+  "question": "Should the prominent SOLD badge on the listing detail page use the same styling as the PartCard badge (bg-border/90, text-muted, font-mono, uppercase tracking-widest), or should it be more visually prominent using the Soul Red accent (bg-accent) to stand out on the full detail page?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 75
+ },
+ {
+  "name": null,
+  "question": "Should the seed script validate ADMIN_PHONE against the E.164 regex /^\\+[1-9]\\d{6,14}$/ before inserting, or store it as-is and defer validation to auth?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 49
+ },
+ {
+  "name": null,
+  "question": "Should the skeleton example test be placed at test/api/auth.test.ts (matching a subdirectory-per-route convention) or flat at test/example.test.ts?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should the top-level Hono app in src/server/index.ts be instantiated with AuthEnv as its generic type parameter (e.g., new Hono<AuthEnv>()) to ensure proper type inference for route modules that use it, or should it remain plain new Hono() and let each sub-router carry its own generics?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "Should the upload endpoint accept a single file per request (returning one photo id) or multiple files in one multipart request (returning an array of photo ids), and should the server auto-assign positions or accept the optional position field from photoUploadSchema in the form data?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1080
+ },
+ {
+  "name": null,
+  "question": "Should this step add react and react-dom (at version 19.2.7 per the design) to package.json devDependencies now so Playwright CT can function immediately, or defer that addition to step [15] (Client shell)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 28
+ },
+ {
+  "name": null,
+  "question": "Since no clsx / tailwind-merge / cva dependencies exist but shadcn components require conditional class merging and variant patterns, should I create a local cn() utility function (e.g., in src/client/components/ui/cn.ts) or handle conditional classes with inline ternary expressions directly in each component?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "The Admin page already exists at src/client/admin/page.tsx (exporting AdminPage), but the task references src/client/pages/Admin.tsx which does not exist — should I import from src/client/admin/page.tsx directly, or create an alias file at src/client/pages/Admin.tsx that re-exports it?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 5
+ },
+ {
+  "name": null,
+  "question": "The existing createInviteSchema in src/shared/schema.ts contains { token, phone, password, display_name } and redeemInviteSchema contains only { token } — neither matches the actual endpoint contracts (POST /api/invites needs no body fields since the token is generated server-side, and POST /api/invites/:token/redeem needs { phone, password, display_name } from the body). Should I create new schemas specifically for these endpoints (e.g., redeemInviteBodySchema) while leaving the existing schemas untouched per the constraint \"Do NOT create, modify, or delete any files outside src/server/routes/invites.ts and the new test file\", or should I define inline Zod schemas within invites.ts instead?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 40
+ },
+ {
+  "name": null,
+  "question": "The server handler for POST /api/listings does not insert location, part_number, or contact_note into the database — should I add these fields to createListingSchema anyway (knowing they'll be validated client-side but silently dropped by the server), or omit them from the schema until the server is updated?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 14
+ },
+ {
+  "name": null,
+  "question": "The task requires the edit form to include location, part_number, and contact_note fields, but they are absent from updateListingSchema, the server's mapListing function, and the client RPC types — should I extend the shared schema and server mapping to support these three fields, or should the edit form omit them from its scope?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 12
+ },
+ {
+  "name": null,
+  "question": "The task specifies separate POST /api/admin/users/:id/ban and POST /api/admin/users/:id/unban endpoints, but the design doc specifies a single POST /api/admin/users/:id/ban endpoint accepting { banned: boolean } body — which route shape should I implement?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "The useMe hook returns {id, phone, display_name, role} with no is_banned field — should the banned-user guard be omitted entirely since it cannot detect ban status without modifying api.ts (which is forbidden), or should I add a separate API call to check ban status?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 5
+ },
+ {
+  "name": null,
+  "question": "They implement full portal/overlay/focus-trap behavior from scratch (significant complexity)",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "Title max length — not defined anywhere in spec or mockups",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 47
+ },
+ {
+  "name": null,
+  "question": "UUID validation for :id — unanswered. Existing routes like photos use path params without UUID validation (e.g., c.req.param('id') with no format check). The spec doesn't pin a UUID schema.",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 32
+ },
+ {
+  "name": null,
+  "question": "What HTML heading level should be used for \"Hello World\" (e.g., <h1>, <h2>)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "What HTTP status code should banned users receive from sessionMiddleware — 401 (Unauthorized) or 403 (Forbidden)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "What HTTP status code should the upload route return when the listing already has 5 photos — 400 Bad Request, 413 Payload Too Large, or 422 Unprocessable Entity?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "What Postgres version should docker-compose.dev.yml use, and what port mapping is expected (default 5432)?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 152
+ },
+ {
+  "name": null,
+  "question": "What base URL pattern should the mock RPC intercept? The client creates its RPC via hc<AppType>('http://localhost:3000'), so should page.route() match /api/ on that origin (http://localhost:3000/api/), or just a relative /api/ pattern (which would work regardless of the CT page's origin)?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 98
+ },
+ {
+  "name": null,
+  "question": "What color index should the pencil use by default when no palette UI exists yet — should it default to index 1 (dark blue, first non-transparent Pico-8 color) or another value?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 24
+ },
+ {
+  "name": null,
+  "question": "What exact fields should c.var.user carry — only id, role, is_banned or also phone, display_name?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "What exact hook names and signatures should the fetch/mutation helpers use? Options include TanStack-style useQuery/useMutation, or simpler useFetch/useSubmit.",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 696
+ },
+ {
+  "name": null,
+  "question": "What exact shape should each conversation log entry have — specifically, should entries include fields like toolName, arguments, result, timestamp, or type (e.g., user prompt vs. tool call), or should we use a minimal interface with just toolName, arguments, and result?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 17
+ },
+ {
+  "name": null,
+  "question": "What exact shape should the paginated GET /api/listings response envelope have — should it be { listings: ListingCard[], total: number, page: number, per_page: number } or another field naming convention?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "What is the exact build directory containing the compiled plugin shared library (e.g., build_x86_64 from the Linux preset or another custom path), so that the installation step can locate and copy the already-compiled artifacts without triggering a rebuild?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "What is the exact file path for the new photo route tests — should they be test/photos.test.ts or follow a different naming convention already established in the repo?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "What is the exact test database URL? Should tests assume DATABASE_URL env var points to a test DB, or use a separate TEST_DATABASE_URL?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": "mx5-form-a-known-unknown",
+  "question": "What is the expected base URL for the `hc` client at runtime? Should it default to `/api` (relative, same-origin) or accept a configurable base URL via an environment variable? The spec says \"API (Hono RPC, `/api`)\" but doesn't specify whether the client should hardcode this or make it configurable.",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 0
+ },
+ {
+  "name": null,
+  "question": "What is the maximum undo/redo stack depth — should there be a configurable cap to prevent unbounded memory growth (e.g., 50 snapshots), or should the stacks be unlimited as the spec currently leaves them?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 28
+ },
+ {
+  "name": null,
+  "question": "What pagination strategy for listings on the admin page — load all at once with no query params, or use the existing paginated /api/listings?page= endpoint?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 3
+ },
+ {
+  "name": null,
+  "question": "What request limit and time window should the rate limiter enforce (e.g., 5 requests per 60 seconds), and should these values be configurable via an options parameter passed to the middleware function?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "What should happen on successful login — should the Login page accept an optional onSuccess callback prop for now (since wouter routing is deferred to step [25]), or should it display a success state in place?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 22
+ },
+ {
+  "name": null,
+  "question": "What should migrate.ts do when DATABASE_URL is missing or the database connection fails — throw a descriptive error and exit non-zero, or handle it differently?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 152
+ },
+ {
+  "name": null,
+  "question": "What should the UI display when a listing has no photos? — Not answered",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 440
+ },
+ {
+  "name": null,
+  "question": "What should the branded placeholder text say on cards without photos — dynamically show the listing title (e.g., \"Headlight Assembly\") or use a static label like \"No photo\"?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 18
+ },
+ {
+  "name": null,
+  "question": "What text should the branded placeholder display when there is no photo — the listing title truncated, a generic \"No photo\" label, or an SVG graphic?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 504
+ },
+ {
+  "name": null,
+  "question": "What title string should be passed as the second argument to obs_frontend_add_dock_by_id() — should I use the same localized text pattern already used elsewhere in plugin_main.cpp (e.g., obs_module_text(\"Menu.Settings\")), or a specific literal string?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "When the contact_note field is empty in the database, should the contact endpoint return it as null, undefined, or omit the key entirely from the response?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 409
+ },
+ {
+  "name": null,
+  "question": "When the size query parameter is omitted entirely (e.g. GET /api/photos/:id with no ?size=...), should the route return a 400 error or default to full?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1016
+ },
+ {
+  "name": null,
+  "question": "Which host language/runtime should the pixel-art editor target (e.g., Python with Pygame, TypeScript/Electron, Rust with Iced, JavaScript/Canvas in a browser)?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 44
+ },
+ {
+  "name": null,
+  "question": "Which target directory should be used for installation: system-wide (/usr/lib/obs-plugins) or user-local (~/.config/obs-studio/plugins)?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1
+ },
+ {
+  "name": null,
+  "question": "mine filter behavior when unauthenticated — The research notes this is unresolved. searchListingsQuerySchema has mine: z.coerce.boolean().optional() and GET /api/listings is public. Should it return 401 if mine=true without auth, or silently return empty array?",
+  "is_wiring_truth": true,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 38
+ },
+ {
+  "name": null,
+  "question": "schema_migrations — checksum column or just name-based tracking?",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 1656
+ },
+ {
+  "name": null,
+  "question": "✅ User fields for display — UserRow type is { id, phone, display_name, role, is_banned, listing_count } — confirmed",
+  "is_wiring_truth": false,
+  "shipped": false,
+  "factor_b": false,
+  "instances": 7
+ }
+]

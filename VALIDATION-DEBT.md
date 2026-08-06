@@ -181,6 +181,80 @@ not here. Last updated 2026-08-06.
   resolves `findDeclaredRange` first (`:344`), and the shared install cache is
   never GC'd (94 top-level deps). Both are worth ~0 because the hop is worth ~0.
 
+- **Teaching the surviving-unknown guard a RUNTIME-wiring vocabulary** (nexttask
+  13). Refuted 2026-08-06 on a held-out half, by
+  `scripts/unknown-routing-coverage-baserate.ts` (STEP 1/2) and
+  `scripts/unknown-routing-classifier-ab.ts` (STEP 3, exit 1). Nothing is wired;
+  `src/task/unknown-routing.ts` is untouched. Corpus: **38,510 task files,
+  68,555 `(auto)` answers / 264 distinct**, plus the two named mx5 forms of the
+  base-URL question, hand-labelled in
+  `scripts/fixtures/unknown-routing-labels.json` by nexttask 13's own rule — a
+  wrong answer must yield a program that *builds, type-checks, starts, and fails
+  only when two components talk*. **40 wiring / 225 preference.** Deterministic
+  50/50 FNV-1a split: fit 136 rows (17 wiring), holdout 129 rows (23 wiring).
+
+      recall_shipped            0 / 40    0.0%     (no false positives either: 0/225)
+      Factor-B ceiling          5 / 40   12.5%
+      recall_extended, holdout  2 / 23    8.7%     fp 0/106  0.0%
+      both named mx5 forms      0 / 2
+
+  **The premise in the lead is factually wrong.** It claims Factor B
+  (`WIRING_INTENT_RE`) already matches the mx5 question ("should it default … or
+  accept a configurable"). It does not: `configur(?:e|ed|es|ing|ation)` does not
+  match `configurable`. Since `isIntegrationUnknown` is `A && B` and the task
+  forbids touching Factor B, **12.5% is a hard ceiling against a 90% bar**, and
+  both mx5 forms are Factor B misses — so two of the four PASS bounds were
+  unreachable by construction before a single term was written.
+
+  **Relaxing the one-variable rule does not rescue it, which is the real finding.**
+  Dropping the Factor-B conjunction and tuning *freely on the fit half* — including
+  terms the lead's own NEVER list forbids (`auth\w*`, `tokens?`, `outdir`,
+  `@theme`, `--color`) — tops out at **88% recall / 17% false positives IN
+  SAMPLE**; on the holdout the vocabulary alone peaks at 52.2% recall / 21.7% fp.
+  Three of the 17 fit-half wiring questions carry no coupling vocabulary at all
+  ("Multiple files per request — still open", "Auth check mechanism for member
+  guard", "What exact model string should be sent in the request body …"). **The
+  wiring class in this corpus is not lexical**, so no word list reaches it. Terms
+  tried, in removal order: `base\s*urls?`, `route\s+prefix`, `url\s+prefix`,
+  `api\s+(?:client|prefix|base|path)`, `mount\s+points?`, `request\s+paths?`,
+  `server\s+urls?`, `proxy`, `cors`, `origins?`, `endpoints?`, `ports?`, `hosts?`,
+  `routes?`; the ladder removed `routes?`, then `hosts?`, then `ports?`.
+
+  **STEP 4 (the live 12×2 delivery A/B) was not run, deliberately.** A classifier
+  that fires on 2 of 23 held-out wiring questions and 0 of 2 mx5 forms cannot move
+  a delivery metric; 24 live trials would have measured the fixture, not the lever.
+  STEP 5's control arm did run and passes (`--control`, 0 of 12 preference
+  questions newly routed) — the vocabulary is not *wide*, it is *blind*.
+
+  **What is still true and still unfixed:** mx5 run 20 really did ship a permanent
+  login screen because grill auto-answered the base URL and compose froze
+  "hardcoded to `/api`" (`~/hub/mx5/.pi-tasks/TASK_0016.md:36,116,130`;
+  `src/client/api.ts:95`; every one of 33 calls 404'd at `/api/api/…`). The defect
+  is real. **A vocabulary regex over the question text is not the instrument** —
+  the next lever should key on something the question is *about* (does the answer
+  pin a string that one component uses to reach another?), not on the words it
+  happens to use.
+
+  **…but the incident itself is already closed downstream, so do not build that
+  either.** Replaying run 20's own recorded session (`scripts/fixtures/
+  deep-sessions.json`, `real-run20`) through the *shipped* `judgeDeepSession`
+  returns **fail**, naming `POST /api/api/auth/login` → 404 — nexttask 12's Rule A
+  fires on the sign-in request itself, before the credential check. The broken app
+  no longer ships; it is caught at the gate. What a grill-side guard would still
+  buy is **rework, not correctness** — the run wastes an implementation turn on a
+  frozen-wrong constraint before the gate stops it.
+
+  The answer-side base rate was measured anyway, so nobody repeats it: an
+  auto-answer that pins a coupling literal (an absolute request path, a scheme
+  URL, or a host:port) fires on **19 of 266 distinct (q,a) pairs — 7.1%; 3,555 of
+  68,555 instances — 5.2%**, and mx5's `use /api as the hardcoded base URL for the
+  hc client` is one of the 19. Blast radius is workable, but hand-reading the 19
+  gives roughly **11 genuine cross-component pins to 8 client-side navigation
+  targets** (`redirect to /listing/:id`, `stay on /login`) — ~58% precision on
+  distinct. Interrupting the user on 8 settled questions to save rework on 11 is a
+  bad trade against the whole point of auto-answer. **Revisit only if the deep-
+  render gate stops covering this class.**
+
 ## METHODOLOGY RULES — each one cost real time
 
 1. **A pooled FP suite is not an admissibility test.** The cap runs *per run*.
