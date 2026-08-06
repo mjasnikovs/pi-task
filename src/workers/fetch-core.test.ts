@@ -144,6 +144,44 @@ describe('fetchFocused', () => {
         expect(r.coverageMiss).toBe(true)
         // A coverage miss is a distinct outcome, NOT the ambiguity fallback.
         expect(r.answer.includes(UNCLEAR_ANSWER)).toBe(false)
+        // 14B: the miss carries the next step, not just the verdict.
+        expect(r.nextStep).toContain('do not re-read it')
+        expect(r.nextStep).toContain('https://example.com/')
+    })
+
+    test('a coverage miss on a rewritten blob URL names the page that was actually read', async () => {
+        const r = await fetchFocused({
+            url: 'https://github.com/o/r/blob/main/a.ts',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async (url: string) => ({
+                markdown: 'a different file',
+                finalUrl: url,
+                title: 'a.ts'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: `<answer>${NOT_COVERED_ANSWER}</answer>\n<excerpt>a different file</excerpt>`
+            }))
+        })
+        expect(r.nextStep).toContain('https://raw.githubusercontent.com/o/r/main/a.ts')
+        expect(r.nextStep).toContain('returns exactly this')
+    })
+
+    test('an answered fetch carries no next step', async () => {
+        const r = await fetchFocused({
+            url: 'https://example.com/',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: 'The key fact.',
+                finalUrl: 'https://example.com/',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>The key fact.</answer>\n<excerpt>The key fact.</excerpt>'
+            }))
+        })
+        expect(r.nextStep).toBeUndefined()
     })
 
     test('coverageMiss is false when a sourced answer merely mentions the sentinel wording', async () => {

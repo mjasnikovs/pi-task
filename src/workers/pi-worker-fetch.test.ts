@@ -64,6 +64,31 @@ test('pi-worker-fetch always extracts via child pi, even for short pages', async
     expect(details.excerptVerified).toBe(true)
 })
 
+test('a coverage miss reaches the worker as an instruction, not only in details', async () => {
+    const cleaned: CleanResult = {
+        title: 'Other',
+        markdown: 'This page is about something else.',
+        finalUrl: 'https://example.com/other'
+    }
+    const result = await runTool(
+        {
+            fetchAndClean: () => Promise.resolve(cleaned),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout:
+                    '<answer>not covered by this page</answer>\n'
+                    + '<excerpt>This page is about something else.</excerpt>'
+            }))
+        },
+        {url: 'https://example.com/other', query: 'what is the base URL joined with?'}
+    )
+
+    const text = (result.content[0] as {type: 'text'; text: string}).text
+    expect(text).toContain('not covered by this page')
+    expect(text).toContain('NEXT STEP')
+    expect(text).toContain('do not re-read it')
+    expect((result.details as {coverageMiss?: boolean}).coverageMiss).toBe(true)
+})
+
 test('pi-worker-fetch parses structured output from child pi', async () => {
     const longMarkdown = `${'x'.repeat(5000)}\nThe answer is 42.\n${'y'.repeat(5000)}`
     const cleaned: CleanResult = {

@@ -118,6 +118,15 @@ export interface FetchFocusedResult {
      * "page has no answer" and "answer is ambiguous" as the same thing (PROMPT-3 item 3).
      */
     coverageMiss: boolean
+    /**
+     * What to do INSTEAD, present only on a coverage miss. `coverageMiss` was computed and
+     * stored and read nowhere, so the distinct channel it exists to provide never reached the
+     * worker: all it ever saw was the bare sentence "not covered by this page", which reads
+     * as "ask again, differently". It did — 9 of the 84 corpus fetches re-read a URL that had
+     * already returned a non-answer, one release-notes page three times with near-identical
+     * questions.
+     */
+    nextStep?: string
     /** The #fragment slug that was anchored, when the URL carried one and it was located. */
     anchoredSection?: string
     /** Retained evidence for a false `excerptVerified`, so it is diagnosable without re-fetch. */
@@ -135,7 +144,8 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
     const spawnFn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const strategy = input.strategy ?? shippedStrategy
 
-    const cleaned = await fetchAndCleanFn(normaliseSourceUrl(input.url), {signal: input.signal})
+    const fetchedUrl = normaliseSourceUrl(input.url)
+    const cleaned = await fetchAndCleanFn(fetchedUrl, {signal: input.signal})
 
     // The #fragment is a client-side concern the server never sees, so anchor from the
     // ORIGINALLY REQUESTED url, not the post-redirect finalUrl (which will have dropped it).
@@ -178,6 +188,7 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
     }
 
     const parsed = parseChildOutput(childResult.stdout)
+    const coverageMiss = NOT_COVERED_RE.test(parsed.answer.trim())
     // Verify against the FULL page, not the anchored slice: the slice is a substring of it,
     // so a genuine excerpt still verifies, and an excerpt the child pulled from memory still
     // fails — the detector's discrimination is unchanged by fragment anchoring.
@@ -188,11 +199,35 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         excerpt: parsed.excerpt,
         excerptVerified: check?.verified,
         excerptCheck: check,
-        coverageMiss: NOT_COVERED_RE.test(parsed.answer.trim()),
+        coverageMiss,
+        nextStep: coverageMiss ? coverageMissNextStep(input.url, fetchedUrl) : undefined,
         childExitCode: 0,
         aborted: false,
         ...base
     }
+}
+
+/**
+ * The instruction that goes with a coverage miss. It says two things the bare sentinel does
+ * not: WHICH page was actually read (after the blob rewrite these differ, and a worker that
+ * cannot see that would "retry" the raw URL it already got), and that re-reading this page
+ * with a reworded question returns the same answer — so the next move is a different URL.
+ *
+ * Deliberately not a suggestion of WHICH other URL. Nothing at this layer knows one, and
+ * naming a guess is how a dead end becomes two dead ends.
+ */
+export function coverageMissNextStep(requestedUrl: string, fetchedUrl: string): string {
+    const rewritten =
+        fetchedUrl !== requestedUrl ?
+            ` ${requestedUrl} is a GitHub file viewer whose HTML does not carry the file, so the`
+            + ` file itself was already read from ${fetchedUrl} — fetching that raw URL by hand`
+            + ` returns exactly this.`
+        :   ''
+    return (
+        `NEXT STEP: this page does not contain the answer.${rewritten}`
+        + ` Asking ${fetchedUrl} the same question a different way returns this same result —`
+        + ` do not re-read it. Try a different URL, or search for one.`
+    )
 }
 
 export interface SelectedContent {

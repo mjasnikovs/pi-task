@@ -93,11 +93,15 @@ export function registerPiWorkerFetch(
                     return {text: failure, details: {childExitCode: result.childExitCode}}
                 }
 
-                const text =
+                const body =
                     formatResultText(
                         {answer: result.answer, excerpt: result.excerpt},
                         result.excerptVerified
                     ) || '(no output)'
+                // The coverage miss is the one outcome that carries an instruction. It goes
+                // in the TEXT, not only in details: details are for the harness, and the
+                // worker acts on what it reads.
+                const text = result.nextStep ? `${body}\n\n${result.nextStep}` : body
                 return {
                     text,
                     details: {
