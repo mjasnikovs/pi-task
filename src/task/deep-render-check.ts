@@ -288,6 +288,11 @@ export function deriveLegacyFacts(
     }
 }
 
+/** Statuses that mean "no handler is mounted here", as opposed to a handler that
+ *  answered No. 501 is included because a server that routes but implements
+ *  nothing is the same dead call from the client's side. */
+const MISSING_ROUTE_STATUS = new Set([404, 405, 501])
+
 /**
  * Judge a recorded session. The ONE thing that may FAIL is a session the SERVER
  * authenticated (2xx on the sign-in request) whose client then could not use it:
@@ -335,6 +340,42 @@ export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
         return {
             outcome: 'skip',
             note: `submitting the sign-in form issued no request to the app's own origin${pinned} — the authenticated half of the app was NOT observed`
+        }
+    }
+    // Rule A — a route the server does not have. The client addressed a path
+    // nothing is mounted on, so the request was never evaluated by any handler.
+    // Deliberately narrow: 400/401/403/419/422 are a handler ANSWERING (a rejected
+    // password, a missing permission — the app working), 5xx is the server failing,
+    // and both keep their existing behaviour. Only "no such route" is here.
+    const missingRoute = (f.sessionRequests ?? []).find(
+        r => r.initiator === 'xhr' && r.status !== null && MISSING_ROUTE_STATUS.has(r.status)
+    )
+    if (missingRoute) {
+        return {
+            outcome: 'fail',
+            detail:
+                `\`${missingRoute.method} ${missingRoute.path}\` → ${String(missingRoute.status)}: `
+                + 'the client sent this to a path the server does not route. The credentials were '
+                + 'never evaluated. This is a dead client call — a base URL joined twice, a renamed '
+                + 'route, a wrong method. No type or mock can produce a route that is not mounted.'
+        }
+    }
+    // Rule B — the SPA catch-all answering an API call. Any server with a
+    // `GET /*` → index.html fallback returns 200 for a route it does not have, so
+    // the status is healthy and the body is the app shell. A document navigation
+    // answered with HTML is normal; an XHR asking for data and getting HTML is a
+    // call that reached nothing.
+    const swallowed = (f.sessionRequests ?? []).find(
+        r => r.initiator === 'xhr' && (r.mimeType ?? '').startsWith('text/html')
+    )
+    if (swallowed) {
+        return {
+            outcome: 'fail',
+            detail:
+                `\`${swallowed.method} ${swallowed.path}\` → ${String(swallowed.status)} `
+                + `${swallowed.mimeType ?? ''}: an XHR asked this server for data and got the SPA `
+                + 'shell. The route is not mounted and the catch-all answered instead, so the client '
+                + 'sees a 200 it cannot parse. No status check can see this.'
         }
     }
     const {method, path: p, status, failed} = f.authRequest

@@ -235,6 +235,101 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## SHIPPED — 0e. The deep-render gate sees every request, not two counts (nexttask 12, 2026-08-06)
+
+**The defect.** `DeepSessionFacts` collapsed a whole authenticated browser session
+into `postAuthDataAttempted` / `postAuthData2xx` plus one request, and the only rule
+over them was all-or-nothing (`attempted > 0 && 2xx === 0`). Nineteen dead endpoints
+and one live one PASSED. On mx5@`348af86` the probe read the defect out loud and
+abstained: `POST /api/api/auth/login` → 404 (the client is built with `hc('/api')`
+while every RPC path already starts `/api/`, so all 33 call sites address
+`/api/api/…`), and a 404 on the sign-in request is a credential gap → SKIP → gate
+PASS. That app is dead in a browser and it shipped.
+
+**Two rules over the log**, `judgeDeepSession`, after the pinned-origin branch:
+
+    A  an XHR whose status is 404/405/501            → FAIL, naming METHOD /path
+    B  an XHR answered with `text/html`              → FAIL, naming METHOD /path
+
+Rule B is not redundant: any SPA catch-all (`app.get('/*')` → index.html) answers an
+unmounted GET with **200 text/html**, so a status rule sees a healthy app. 400, 401,
+403, 419, 422, 3xx, 5xx and transport failures keep their previous behaviour
+exactly — a handler that ANSWERS is the app working.
+
+**Corpus** (`scripts/deep-session-corpus.ts` → `scripts/fixtures/deep-sessions.json`):
+nine REAL browser sessions against a real server, each in a throwaway worktree of
+mx5@`348af86`. `shipped` is the gate as of v0.37.0.
+
+    real-run20              shipped skip   expected fail   POST /api/api/auth/login 404
+    mut-fixed               shipped pass   expected pass   the healthy control, 2854/2855 2xx
+    mut-badpass             shipped skip   expected skip   login 401
+    mut-auth-unmounted      shipped skip   expected fail   404
+    mut-auth-wrong-method   shipped skip   expected fail   404
+    mut-listings-unmounted  shipped skip   expected fail   404
+    mut-one-of-eight        shipped PASS   expected fail   GET /api/listings 200 text/html
+    mut-no-catchall         shipped skip   expected fail   404 text/plain
+    mut-db-down             shipped skip   expected skip   login 500
+
+`mut-one-of-eight` is the entry that separates a general rule from a point fix, and
+it is the ONLY entry rule A cannot reach: sign-in and `/api/auth/me` are healthy
+JSON, listings is unmounted, the catch-all answers its XHR with the shell, and both
+counters read 2/2 healthy.
+
+**A/B PASS, three levels.**
+
+    judge      scripts/deep-session-judge-ab.ts       baseline 6/9 → treatment 0/9, 3 invariants HOLD
+    FP sweep   scripts/deep-session-fp-suite.ts       12 projects, probe reached 0×, no rule spoke
+    end to end scripts/deep-session-endtoend-ab.ts    baseline .ok TRUE → treatment .ok FALSE
+
+The end-to-end arm is the only one that counts: the REAL `runFinalIntegrationGate`
+twice over mx5@`348af86`, differing only in which `deep-render-check` module the
+probe comes from. Treatment's rank-0 failure reads
+
+> boot check: `bun run dev` listens on :43631 but `POST /api/api/auth/login` → 404:
+> the client sent this to a path the server does not route. …
+
+**A DRIVER change came with it, and it is not cosmetic.** mx5's login page ends on a
+success card and never routes onward, so the session issued ZERO requests after the
+login POST — every "post-auth data" fact was a fact about the login form, and
+`mut-one-of-eight` was unobservable. The driver now re-enters the landing URL ONCE
+with the session cookie and settles (`RE_NAV_CAP_MS = 6s`), gated on a sign-in the
+server accepted that left the wall — so every session that SKIPs or FAILs without it
+takes exactly the path it took before. It does raise `postAuthDataAttempted` on apps
+that previously reported UNOBSERVED, which is the pre-existing all-or-nothing rule
+getting evidence it never had.
+
+**Honesty, all of it:**
+
+> Corpus is one real served tree (mx5) plus eight mutations of it. Both rules are
+> mutation-confirmed, not observed in the wild on any second project.
+
+- `mut-badpass` and `mut-db-down` are built on `mut-fixed`, not on the base tree. On
+  the base tree the login 404s before any credential or query is evaluated, so
+  neither entry could test the rejection it exists to test — and under rule A both
+  would have been FAILs, not the SKIPs the check must protect.
+- The stored fixture TRIMS identical requests beyond 5 per class: mx5's marketplace
+  re-fetches `/api/listings` in a render loop (~3000 times in six seconds) and the
+  fixture would otherwise be megabytes of one line. The counts the verdict reads
+  were computed over the WHOLE log before trimming.
+- The FP sweep covers 12 projects, not 13: `~/hub/aiz-docker` has root-owned files
+  and could not be copied. It is a docker-compose tree with no served app of its own.
+- Its exit is gated on `probe reached 0×` and `no rule signature`, NOT on "0 gate
+  failures". `gofer` FAILs its gate here for its own reasons, with the recorder in
+  place and `judgeDeepSession` never called — identical with and without the lever.
+- The end-to-end harness needs **two disclosed environment adjustments** in the
+  worktree, both measured and neither touching routing: mx5's
+  `defaults to newest first (sort=new)` test inserts two rows inside one millisecond
+  on this box, ties on `created_at` and fails 5/5 (a 5ms wait → 96/96); and 24 of 44
+  component tests are screenshot comparisons this box does not render identically
+  (re-capture in the clone → 44/44). Without them the SHIPPED gate FAILs mx5 here,
+  on two of mx5's own commands, and the flip is unreadable. The same CT adjustment
+  is already recorded for `scripts/boot-skip-corpus.ts`.
+- Rule A has never fired on a healthy app here — but the only healthy served app in
+  the corpus is `mut-fixed`, one tree. The STEP 6 narrowing (a 404 whose path shares
+  its first two segments with a 2xx) was never needed and is NOT implemented.
+
+---
+
 ## SHIPPED — 0d. Gate DEAD AIR: the frozen screen after the implementation turn (2026-08-06)
 
 **The report.** "/task-auto finishes implementing, then nothing happens — like the
