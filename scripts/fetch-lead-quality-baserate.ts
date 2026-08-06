@@ -343,11 +343,22 @@ function main(): void {
         `wasted_fetches                   ${pct(r.wastedFetches, r.totalFetches)}  `
             + `(yielded nothing AND the same episode later succeeded on another URL)`
     )
-    const blind = projects.filter(p => !loadPackageHosts(`${process.env.HOME}/hub/${p}`).available)
+    const blind = projects
+        .map(p => ({p, root: `${process.env.HOME}/hub/${p}`}))
+        .filter(x => !loadPackageHosts(x.root).available)
+        .map(x =>
+            fs.existsSync(path.join(x.root, 'package.json')) ?
+                `${x.p} (npm project, node_modules not installed here)`
+            :   `${x.p} (no package.json — not an npm project, so "official" has no manifest to read)`
+        )
+    const measurable = loadCorpus().filter(
+        l => l.kind === 'search' && !blind.some(b => b.startsWith(l.project))
+    ).length
     console.log(
-        `rank1_is_official_docs           ${r.rank1Official}`
-            + (blind.length ? `   [BLIND on ${blind.join(', ')} — no node_modules on this box]` : '')
+        `rank1_is_official_docs           ${r.rank1Official} of ${measurable} MEASURABLE searches `
+            + `(of ${r.searches} total)`
     )
+    for (const b of blind) console.log(`    BLIND: ${b}`)
     console.log(`rank1_official_not_fetched       ${r.rank1OfficialNotFetched} distinct episodes`)
     for (const ep of r.rank1OfficialNotFetchedEpisodes) {
         console.log(`    ${ep.project}  "${ep.query.slice(0, 76)}"`)

@@ -18,6 +18,18 @@
  * `undefined`, never `false`.
  */
 import * as fs from 'node:fs'
+import * as path from 'node:path'
+
+/**
+ * A pinned copy of the caches, preferred over the live ones when present.
+ *
+ * Written because the corpus is NOT stable: ~/hub/gofer-pixel/.pi-tasks was emptied by
+ * something outside this work at 15:38 on 2026-08-06, mid-task, taking 18 entries (12
+ * fetches, 2 searches) with it. Numbers measured before that moment could no longer be
+ * reproduced from the live trees, which makes every result on this corpus unauditable.
+ * Rebuild with `bun run scripts/research-cache-corpus.ts --snapshot`.
+ */
+export const SNAPSHOT = path.join(import.meta.dir, 'fixtures', 'research-cache-corpus.json')
 
 export const CORPUS_PATHS: Array<{project: string; path: string}> = [
     {project: 'mx5', path: `${process.env.HOME}/hub/mx5/.pi-tasks/research-cache.json`},
@@ -64,8 +76,11 @@ function splitOnce(s: string): [string, string] {
     return i === -1 ? [s, ''] : [s.slice(0, i), s.slice(i + 2)]
 }
 
-export function loadCorpus(paths = CORPUS_PATHS): Lookup[] {
-    const out: Lookup[] = []
+/** project -> the cache's `entries` map, as snapshotted. */
+type Snapshot = {snapshotAt: string; projects: Record<string, Record<string, RawEntry>>}
+
+function readSources(paths: Array<{project: string; path: string}>): Snapshot {
+    const projects: Record<string, Record<string, RawEntry>> = {}
     for (const {project, path: p} of paths) {
         let raw: string
         try {
@@ -73,8 +88,26 @@ export function loadCorpus(paths = CORPUS_PATHS): Lookup[] {
         } catch {
             continue
         }
-        const parsed = JSON.parse(raw) as {entries?: Record<string, RawEntry>}
-        for (const [key, entry] of Object.entries(parsed.entries ?? {})) {
+        projects[project] = (JSON.parse(raw) as {entries?: Record<string, RawEntry>}).entries ?? {}
+    }
+    return {snapshotAt: new Date().toISOString(), projects}
+}
+
+export function writeSnapshot(paths = CORPUS_PATHS): Snapshot {
+    const snap = readSources(paths)
+    fs.mkdirSync(path.dirname(SNAPSHOT), {recursive: true})
+    fs.writeFileSync(SNAPSHOT, JSON.stringify(snap), 'utf8')
+    return snap
+}
+
+export function loadCorpus(paths = CORPUS_PATHS): Lookup[] {
+    const out: Lookup[] = []
+    const snap: Snapshot =
+        fs.existsSync(SNAPSHOT) ?
+            (JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8')) as Snapshot)
+        :   readSources(paths)
+    for (const [project, entries] of Object.entries(snap.projects)) {
+        for (const [key, entry] of Object.entries(entries)) {
             const nul = key.indexOf('\0')
             if (nul === -1) continue
             const tool = key.slice(0, nul)
@@ -111,8 +144,10 @@ export function corpusCaveat(lookups: Lookup[]): string {
         .map(([p, n]) => `${p} ${n}`)
         .join(', ')
     return (
-        `corpus: 3 projects, one dominant (${parts}). A cache HIT writes no entry, so every `
-        + `count below is a LOWER BOUND on the lookups the runs issued.`
+        `corpus: ${byProject.size} project(s), one dominant (${parts}). A cache HIT writes no entry, `
+        + `so every count below is a LOWER BOUND on the lookups the runs issued. `
+        + `gofer-pixel (18 entries) was in this corpus until its tree was emptied at 15:38 on `
+        + `2026-08-06, outside this work; numbers taken before then covered 3 projects.`
     )
 }
 
@@ -136,6 +171,14 @@ export function parseSearchResults(text: string): SearchResult[] {
         out.push({rank: Number(m[1]), title: m[2], url: m[3], snippet: (m[4] ?? '').trim()})
     }
     return out
+}
+
+if (import.meta.main && process.argv.includes('--snapshot')) {
+    const snap = writeSnapshot()
+    const n = Object.values(snap.projects).reduce((a, e) => a + Object.keys(e).length, 0)
+    console.log(`wrote ${SNAPSHOT}`)
+    for (const [p, e] of Object.entries(snap.projects)) console.log(`  ${p}: ${Object.keys(e).length}`)
+    console.log(`  ${n} entries total, at ${snap.snapshotAt}`)
 }
 
 /** A fetch that produced no usable answer: the coverage channel, the unclear channel, or nothing. */
