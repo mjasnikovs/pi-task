@@ -6,7 +6,8 @@ import * as path from 'node:path'
 import {
     captureHealthOutput,
     discoverHealthCommands,
-    runRepoHealthCheck
+    runRepoHealthCheck,
+    runRepoHealthCheckAsync
 } from './repo-health-check.js'
 
 const cargoInstalled = spawnSync('cargo', ['--version']).error === undefined
@@ -164,4 +165,75 @@ describe('runRepoHealthCheck', () => {
             expect(runRepoHealthCheck(dir).ok).toBe(true)
         }
     )
+})
+
+describe('runRepoHealthCheckAsync', () => {
+    // The gate runs this immediately after the implementation turn, so it must not
+    // block the event loop — the sync runner delivered 0 of 686 expected 100ms timer
+    // ticks during a 69s aiz-client lint, which is why the screen froze.
+    test('does not block the event loop while the command runs', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'sleep 0.6'}})
+        })
+        let ticks = 0
+        const timer = setInterval(() => ticks++, 50)
+        try {
+            const out = await runRepoHealthCheckAsync(dir)
+            expect(out.ok).toBe(true)
+        } finally {
+            clearInterval(timer)
+        }
+        expect(ticks).toBeGreaterThan(3)
+    })
+
+    test('the SYNC runner starves those same timers (the defect this replaces)', async () => {
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'sleep 0.6'}})
+        })
+        let ticks = 0
+        const timer = setInterval(() => ticks++, 50)
+        try {
+            runRepoHealthCheck(dir)
+        } finally {
+            clearInterval(timer)
+        }
+        expect(ticks).toBe(0)
+    })
+
+    test('reports each command as it starts, so a caller can name it on screen', async () => {
+        const seen: string[] = []
+        const dir = tmpRepo({
+            'package.json': JSON.stringify({scripts: {lint: 'true', typecheck: 'true'}})
+        })
+        await runRepoHealthCheckAsync(dir, {onCommand: c => seen.push(c)})
+        expect(seen).toEqual(['bun run lint', 'bun run typecheck'])
+    })
+
+    // Verdict PARITY with the sync runner: the async version exists to stop blocking
+    // the loop, and any behaviour difference would be a silent gate change.
+    const parityCases: Array<[string, Record<string, string>]> = [
+        ['no tooling', {}],
+        ['pass', {lint: 'true'}],
+        ['fail exit 1', {lint: 'exit 1'}],
+        ['fail with output', {lint: 'echo "a.ts:1 error" && exit 1'}],
+        ['stderr crash exit 2', {lint: 'echo "Cannot find module eslint" 1>&2 && exit 2'}],
+        ['exit 127 → skipped', {lint: 'exit 127'}],
+        ['first failure short-circuits', {lint: 'exit 3', typecheck: 'true'}]
+    ]
+    for (const [label, scripts] of parityCases) {
+        test(`same verdict as the sync runner: ${label}`, async () => {
+            const files: Record<string, string> =
+                Object.keys(scripts).length === 0 ?
+                    {'index.html': '<h1>hi</h1>'}
+                :   {'package.json': JSON.stringify({scripts})}
+            const a = runRepoHealthCheck(tmpRepo(files))
+            const b = await runRepoHealthCheckAsync(tmpRepo(files))
+            expect({ok: b.ok, reason: b.reason, ecosystem: b.ecosystem, output: b.output}).toEqual({
+                ok: a.ok,
+                reason: a.reason,
+                ecosystem: a.ecosystem,
+                output: a.output
+            })
+        })
+    }
 })

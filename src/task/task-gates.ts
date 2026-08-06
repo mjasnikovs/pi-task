@@ -137,7 +137,15 @@ export interface GateDeps {
      * revert cycle. Checking before committing skips that cycle. Absent → the old
      * commit-then-differential path runs unchanged.
      */
-    repoHealth?: (cwd: string) => Promise<{ok: boolean; reason: string; output?: string}>
+    /** Deterministic whole-repo static check for the enforce pre-commit gate. Takes
+     *  the live ctx and a label so the implementation can render a status line while
+     *  it runs — it is as slow as the project's own lint (15–69s measured), and a
+     *  gate step that long with no widget is indistinguishable from a hang. */
+    repoHealth?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        label: string
+    ) => Promise<{ok: boolean; reason: string; output?: string}>
     /** Does the working tree hold changes (excluding .pi-tasks)? Lets the pre-commit
      *  health check run only when the enforce pass actually edited something. */
     dirty?: (cwd: string) => Promise<boolean>
@@ -781,7 +789,9 @@ export async function runGatesForTask(
         // makes no edits); the task's work is already committed so this reflects the
         // committed state the pass is about to build on.
         const healthBefore =
-            mode === 'edit' && deps.repoHealth ? await deps.repoHealth(p.cwd) : undefined
+            mode === 'edit' && deps.repoHealth ?
+                await deps.repoHealth(active, p.cwd, p.title)
+            :   undefined
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
         // FROZEN-PATH WRITE-DENY (mechanical, not prompt — the "MUST NOT edit"
         // instruction is A/B-proven ~0–1/5 reliable on the weak model): the enforce
@@ -838,7 +848,7 @@ export async function runGatesForTask(
         // unreproducible precisely because only the exit code was recorded.
         let enforceEditsBlocked = false
         if (mode === 'edit' && deps.repoHealth && editsMade !== false) {
-            const after = await deps.repoHealth(p.cwd)
+            const after = await deps.repoHealth(active, p.cwd, p.title)
             // A regression needs a clean (or unknown) baseline turning to a fail. If
             // healthBefore is undefined (repoHealth was absent at baseline time) treat
             // the baseline as clean — the conservative absolute behavior.

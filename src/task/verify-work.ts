@@ -661,6 +661,14 @@ export interface VerificationDeps {
      * pure no-op for callers/tests that do not wire it. */
     repoHealth?: () => Promise<{ok: boolean; reason: string}>
     /**
+     * Progress hook for the DETERMINISTIC stage — the repo-health run plus the ten
+     * probes below, all of which run BEFORE the child (and therefore before the
+     * child's own status widget exists). Called with a short label as each step
+     * starts, so the caller can keep a live line on screen through what was
+     * otherwise the run's longest stretch of dead air (MEASURED at 15–69s per
+     * repo-health run). ABSENT → no progress reporting, same behaviour as before. */
+    onStage?: (stage: string) => void
+    /**
      * DETERMINISTIC substitution probe (see substitution-probe.ts): scans the task's
      * changed test files for test-the-copy shapes and returns finding lines to inject
      * into the child's prompt. A/B-proven load-bearing: the prompt rule alone caught
@@ -765,7 +773,15 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // 5/5 false-PASS live) — because it does not depend on that block. A fail is the
     // ordinary verify-FAIL outcome, so it flows into the existing resolution picker.
     // Absent dep, or a no-op result (no tooling to run), falls through to the model.
+    const stage = (label: string): void => {
+        try {
+            deps.onStage?.(label)
+        } catch {
+            // progress reporting must never break the gate
+        }
+    }
     if (deps.repoHealth) {
+        stage('repo health')
         const h = await deps.repoHealth()
         if (!h.ok) return {ok: false, reason: `repo health: ${h.reason}`}
     }
@@ -776,6 +792,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // verification (it is an optional sharpener, the gate still runs without it).
     let findings: string[] = []
     if (deps.probe) {
+        stage('substitution probe')
         try {
             findings = await deps.probe()
         } catch {
@@ -784,6 +801,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     }
     let prohibitions: string[] = []
     if (deps.prohibitionProbe) {
+        stage('prohibition probe')
         try {
             prohibitions = await deps.prohibitionProbe()
         } catch {
@@ -794,6 +812,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // block verification — it is an optional sharpener like the substitution probe.
     let testAssembly: string[] = []
     if (deps.testAssemblyProbe) {
+        stage('test-assembly probe')
         try {
             testAssembly = await deps.testAssemblyProbe()
         } catch {
@@ -804,6 +823,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // block verification — an optional sharpener like the other diff-shape probes.
     let probeGaming: string[] = []
     if (deps.probeGamingProbe) {
+        stage('probe-gaming probe')
         try {
             probeGaming = await deps.probeGamingProbe()
         } catch {
@@ -815,6 +835,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // failure must never block verification.
     let crossDeletions: CrossTaskDeletion[] = []
     if (deps.crossTaskDeletionProbe) {
+        stage('cross-task deletion probe')
         try {
             crossDeletions = await deps.crossTaskDeletionProbe()
         } catch {
@@ -825,6 +846,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // under rule 4e. A probe failure must never block verification.
     let foreignPaths: string[] = []
     if (deps.foreignPathProbe) {
+        stage('foreign-path probe')
         try {
             foreignPaths = await deps.foreignPathProbe()
         } catch {
@@ -835,6 +857,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // 4f. A probe failure must never block verification.
     let scriptEscapes: string[] = []
     if (deps.scriptEscapeProbe) {
+        stage('script-escape probe')
         try {
             scriptEscapes = await deps.scriptEscapeProbe()
         } catch {
@@ -845,6 +868,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     // never block verification.
     let runnerGlobs: string[] = []
     if (deps.runnerGlobProbe) {
+        stage('runner-glob probe')
         try {
             runnerGlobs = await deps.runnerGlobProbe()
         } catch {

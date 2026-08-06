@@ -29,7 +29,7 @@
  * environment gap, not a code fault, so that command is SKIPPED — only a command that
  * actually ran and returned non-zero fails the check.
  */
-import {spawnSync} from 'node:child_process'
+import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
@@ -134,6 +134,53 @@ export function discoverHealthCommands(cwd: string): {
     return {ecosystem: null, cmds: []}
 }
 
+/** One finished command run, in the shape both the sync and async runners produce. */
+interface HealthRun {
+    /** Spawn-level failure (ENOENT); the command never ran. */
+    failedToStart: boolean
+    /** Exit code, or null when the process was killed (timeout/signal). */
+    status: number | null
+    stdout: string
+    stderr: string
+}
+
+/**
+ * Verdict for ONE finished command: 'skip' (environment gap — cannot conclude),
+ * 'pass', or the FAIL outcome. Shared by the sync and async runners so their
+ * semantics cannot drift apart — the async runner exists only to stop blocking the
+ * event loop, and a behaviour difference between the two would be a silent gate
+ * change rather than a UI fix.
+ */
+function classifyHealthRun(
+    bin: string,
+    args: string[],
+    ecosystem: string,
+    r: HealthRun
+): HealthOutcome | 'skip' | 'pass' {
+    // Tool missing (ENOENT) or killed by timeout → cannot conclude; skip it.
+    if (r.failedToStart || r.status === null) return 'skip'
+    // "Command not found" INSIDE the script chain (e.g. `bun run lint` before
+    // node_modules exists — seen live failing TASK_0001's first verify). Same
+    // environment gap as ENOENT, just surfaced through the runner's shell —
+    // as exit 127 where a posix shell ran it, else by the runner's own wording
+    // (Windows bun reports the miss itself and exits 1).
+    if (isCommandNotFound(r.status, `${r.stdout ?? ''}\n${r.stderr ?? ''}`)) return 'skip'
+    if (r.status !== 0) {
+        return {
+            ok: false,
+            reason: `\`${bin} ${args.join(' ')}\` exited ${r.status}`,
+            ecosystem,
+            output: captureHealthOutput(r.stdout, r.stderr)
+        }
+    }
+    return 'pass'
+}
+
+/** The nothing-to-run outcome, shared by both runners. */
+function noCommandOutcome(ecosystem: string | null): HealthOutcome {
+    return {ok: true, reason: 'no repo-wide static-analysis command found', ecosystem, output: ''}
+}
+
 /**
  * Run the discovered static checks whole-repo and let the real exit codes decide.
  * Deterministic and synchronous under the hood (a wrapper keeps the caller async).
@@ -145,17 +192,15 @@ export function discoverHealthCommands(cwd: string): {
  *
  * A generous per-command timeout guards against a wedged tool; a timeout is treated
  * as an inconclusive skip, not a fault (it is an environment problem, not the code's).
+ *
+ * SYNCHRONOUS — it blocks the event loop for as long as the project's own lint takes
+ * (MEASURED: 15s on mx5, 69s on aiz-client), so nothing can render or animate while
+ * it runs. Gate callers must use {@link runRepoHealthCheckAsync} instead; this stays
+ * for callers that genuinely have no async seam.
  */
 export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutcome {
     const {ecosystem, cmds} = discoverHealthCommands(cwd)
-    if (!ecosystem || cmds.length === 0) {
-        return {
-            ok: true,
-            reason: 'no repo-wide static-analysis command found',
-            ecosystem,
-            output: ''
-        }
-    }
+    if (!ecosystem || cmds.length === 0) return noCommandOutcome(ecosystem)
     for (const [bin, args] of cmds) {
         // Runner resolution (mx5 run 16): a PATH-stripped environment must not
         // silently skip the statics when the runner sits at a known install
@@ -167,22 +212,89 @@ export function runRepoHealthCheck(cwd: string, timeoutMs = 600_000): HealthOutc
             timeout: timeoutMs,
             env: runnerEnv(runner)
         })
-        // Tool missing (ENOENT) or killed by timeout → cannot conclude; skip it.
-        if (r.error || r.status === null) continue
-        // "Command not found" INSIDE the script chain (e.g. `bun run lint` before
-        // node_modules exists — seen live failing TASK_0001's first verify). Same
-        // environment gap as ENOENT, just surfaced through the runner's shell —
-        // as exit 127 where a posix shell ran it, else by the runner's own wording
-        // (Windows bun reports the miss itself and exits 1).
-        if (isCommandNotFound(r.status, `${r.stdout ?? ''}\n${r.stderr ?? ''}`)) continue
-        if (r.status !== 0) {
-            return {
-                ok: false,
-                reason: `\`${bin} ${args.join(' ')}\` exited ${r.status}`,
-                ecosystem,
-                output: captureHealthOutput(r.stdout, r.stderr)
+        const verdict = classifyHealthRun(bin, args, ecosystem, {
+            failedToStart: r.error !== undefined,
+            status: r.status,
+            stdout: r.stdout ?? '',
+            stderr: r.stderr ?? ''
+        })
+        if (verdict === 'skip' || verdict === 'pass') continue
+        return verdict
+    }
+    return {ok: true, reason: `${ecosystem}: static checks passed`, ecosystem, output: ''}
+}
+
+/** Progress hook: called with each command's label as it STARTS, so a caller can
+ *  keep a live status line naming what is currently running. */
+export type HealthProgress = (command: string) => void
+
+/** Spawn one health command without blocking the event loop. Mirrors spawnSync's
+ *  result shape (status null when killed, failedToStart on ENOENT). */
+function spawnHealthCommand(
+    bin: string,
+    args: string[],
+    cwd: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+): Promise<HealthRun> {
+    return new Promise<HealthRun>(resolve => {
+        const runner = resolveRunner(bin)
+        let stdout = ''
+        let stderr = ''
+        let settled = false
+        const child = spawn(runner.bin, args, {cwd, env: runnerEnv(runner)})
+        const done = (r: HealthRun): void => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            signal?.removeEventListener('abort', onAbort)
+            resolve(r)
+        }
+        const kill = (): void => {
+            try {
+                child.kill('SIGKILL')
+            } catch {
+                /* already gone */
             }
         }
+        const timer = setTimeout(kill, timeoutMs)
+        ;(timer as unknown as {unref?: () => void}).unref?.()
+        const onAbort = (): void => kill()
+        signal?.addEventListener('abort', onAbort, {once: true})
+        child.stdout?.on('data', (d: Buffer) => {
+            stdout += d.toString()
+        })
+        child.stderr?.on('data', (d: Buffer) => {
+            stderr += d.toString()
+        })
+        child.on('error', () => done({failedToStart: true, status: null, stdout, stderr}))
+        child.on('close', (code: number | null) =>
+            done({failedToStart: false, status: code, stdout, stderr})
+        )
+    })
+}
+
+/**
+ * Same check, same verdicts, without blocking the event loop.
+ *
+ * The gate runs this immediately after the implementation turn ends, when the impl
+ * widget has just been cleared — the sync version froze the whole TUI there for the
+ * duration of the project's lint (MEASURED: 0 of 686 expected 100ms timer ticks
+ * fired during a 69s aiz-client run), so no spinner, clock or queued notify could
+ * paint. `onCommand` lets the caller name the running command in a live status line.
+ */
+export async function runRepoHealthCheckAsync(
+    cwd: string,
+    opts: {timeoutMs?: number; signal?: AbortSignal; onCommand?: HealthProgress} = {}
+): Promise<HealthOutcome> {
+    const {ecosystem, cmds} = discoverHealthCommands(cwd)
+    if (!ecosystem || cmds.length === 0) return noCommandOutcome(ecosystem)
+    for (const [bin, args] of cmds) {
+        opts.onCommand?.(`${bin} ${args.join(' ')}`)
+        const r = await spawnHealthCommand(bin, args, cwd, opts.timeoutMs ?? 600_000, opts.signal)
+        const verdict = classifyHealthRun(bin, args, ecosystem, r)
+        if (verdict === 'skip' || verdict === 'pass') continue
+        return verdict
     }
     return {ok: true, reason: `${ecosystem}: static checks passed`, ecosystem, output: ''}
 }

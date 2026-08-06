@@ -34,7 +34,7 @@ import {
     recordRootCauseDebt
 } from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
-import {runRepoHealthCheck} from './repo-health-check.js'
+import {runRepoHealthCheck, runRepoHealthCheckAsync} from './repo-health-check.js'
 import {
     runFinalIntegrationGate,
     discoverGateCommandLabels,
@@ -250,7 +250,10 @@ const MANIFEST_RE = /(^|\/)package\.json$/
  *
  * Failures degrade to no findings — a sharpener, never a blocker.
  */
-async function collectScriptEscapeFindings(cwd: string, signal?: AbortSignal): Promise<string[]> {
+export async function collectScriptEscapeFindings(
+    cwd: string,
+    signal?: AbortSignal
+): Promise<string[]> {
     const changed = await collectChangedFiles(cwd, signal)
     const manifests = changed.map(f => f.path).filter(p => MANIFEST_RE.test(p))
     const findings: ScriptEscapeFinding[] = []
@@ -296,7 +299,7 @@ async function readOrNull(cwd: string, rel: string): Promise<string | null> {
  * and silent unless both runners are actually declared. Failures degrade to no
  * findings — a sharpener, never a blocker.
  */
-async function collectRunnerGlobFindings(cwd: string): Promise<string[]> {
+export async function collectRunnerGlobFindings(cwd: string): Promise<string[]> {
     const manifestText = await readOrNull(cwd, 'package.json')
     if (manifestText === null) return []
     let scripts: Record<string, string>
@@ -514,7 +517,7 @@ async function readRepoFile(cwd: string, rel: string): Promise<RepoFile | null> 
  * never a blocker). `changed` is the already-collected task diff, reused so the probe
  * costs one extra tracked-file listing, not a second diff.
  */
-async function collectTestAssemblyFindings(
+export async function collectTestAssemblyFindings(
     cwd: string,
     changed: ChangedFile[],
     signal?: AbortSignal
@@ -553,6 +556,11 @@ export function buildGateDeps(params: {
     runTask: RunTaskFn
 }): GateDeps & {finalGateFix: FinalGateFixFn} {
     const {signal, parentContextWindow, runTask} = params
+    // A/B seam (scripts/verify-deadair-ab.ts), same shape as CANCEL_AB_ARM in
+    // cancel-points.ts: reproduce the pre-fix gate — blocking sync repo health, no
+    // loader across the deterministic stage — so the dead air can be measured in the
+    // SAME binary rather than against a remembered baseline. Unset in every real run.
+    const deadAirBaseline = process.env.DEADAIR_AB_ARM === 'baseline'
     // Captured by each gate child's loader so the widget mirrors the child's latest
     // output line and context usage, exactly like the single-task phase widget.
     let lastLine: string | undefined
@@ -582,7 +590,11 @@ export function buildGateDeps(params: {
             cwd2: string,
             taskTitle: string,
             kind: 'verify' | 'recommend' | 'lint-fix' | 'final-fix',
-            logFile: string
+            logFile: string,
+            /** `loader: false` when the CALLER already renders a loader that spans
+             *  this child (the verify gate does — see its dead-air note). Two
+             *  loaders on one widget key only fight each other. */
+            opts: {loader?: boolean} = {}
         ) =>
         async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
             lastLine = undefined
@@ -603,16 +615,19 @@ export function buildGateDeps(params: {
             // because editing is its job (it carries its own revert guard).
             const guardSnapshot =
                 kind === 'verify' || kind === 'recommend' ? await captureGitState(cwd2, sig) : null
-            const stopLoader = startAutoLoader(gateCtx, () => ({
-                title: taskTitle,
-                kind,
-                step: kind,
-                stepNum: 1,
-                stepTotal: 1,
-                startedAt,
-                lastLine,
-                contextUsage
-            }))
+            const stopLoader =
+                opts.loader === false ?
+                    () => {}
+                :   startAutoLoader(gateCtx, () => ({
+                        title: taskTitle,
+                        kind,
+                        step: kind,
+                        stepNum: 1,
+                        stepTotal: 1,
+                        startedAt,
+                        lastLine,
+                        contextUsage
+                    }))
             try {
                 let r
                 try {
@@ -951,108 +966,168 @@ export function buildGateDeps(params: {
             } catch {
                 spec = null
             }
-            return runWorkVerification({
-                cwd: cwd2,
-                signal,
-                spec,
-                runChild: makeGateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log'),
-                // Deterministic whole-repo static-analysis gate — runs the project's
-                // own lint/typecheck and fails on a real non-zero exit, independent of
-                // the model-authored VERIFY block (which may not lint at all).
-                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2)),
-                // Deterministic self-verification probe: test files the task itself
-                // authored/changed become prompt-level findings mandating the child
-                // to drive the real artifact before trusting their green result.
-                probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
-                // Deterministic test-assembly probe (F4): authored test files that
-                // rebuild production wiring — importing the leaf modules the shipped
-                // entry composes and assembling their own copy — become rule-3f
-                // findings so the child drives the REAL assembly, not the copy.
-                testAssemblyProbe: () =>
-                    collectChangedFiles(cwd2, signal).then(changed =>
-                        collectTestAssemblyFindings(cwd2, changed, signal)
-                    ),
-                // Deterministic probe-gaming probe (F6): added lines whose stated
-                // purpose is to make a check pass rather than meet the requirement
-                // ("return 401 so the verification test passes") become rule-4c
-                // findings so the child verifies the real requirement, not the check.
-                probeGamingProbe: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
-                // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
-                // tracked files this task's diff DELETES whose introducing commit
-                // belongs to a DIFFERENT task — a sibling's committed deliverable
-                // destroyed (typically to green a check). Injected under rule 4d and
-                // carried on a FAIL so an ACCEPT records durable debts.
-                crossTaskDeletionProbe: () =>
-                    collectTaskTreeChanges(cwd2, signal).then(changes =>
-                        findCrossTaskDeletions(changes, taskId, rel =>
-                            taskThatIntroduced(cwd2, rel)
-                        )
-                    ),
-                // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
-                // 1): absolute paths committed from the authoring child's own
-                // environment (`/workspace/src/shared`) that resolve nowhere here.
-                // Repaired deterministically where the relative form provably
-                // resolves; the remainder is injected under rule 4e, whose point is
-                // that such a path breaks the BUILD — so the checks that would have
-                // caught it report nothing rather than failing.
-                foreignPathProbe: () =>
-                    collectForeignPathFindings(
+            // DEAD AIR (the reason this loader exists). The gate's DETERMINISTIC
+            // stage — repo health plus ten probes — runs before the verify child,
+            // and the child's own loader only starts once the child does. The impl
+            // widget was cleared at `agent_end`, so until now the screen simply
+            // stopped: no spinner, no clock, no line (the `verifying…` notify cannot
+            // even paint, since pi-tui schedules renders on process.nextTick and the
+            // health check used to block the loop outright). MEASURED on real repos:
+            // 15s (mx5) to 69s (aiz-client) per health run, 0 of 686 expected 100ms
+            // timer ticks delivered. One loader now spans the WHOLE gate — the
+            // deterministic stage and the child — so the run is never silent.
+            const gateStartedAt = Date.now()
+            let stageLine: string | undefined
+            // Clear the PREVIOUS child's trailer before the loader goes up: the
+            // deterministic stage has no child of its own, so a stale `↳` line from
+            // the last task's enforce pass would otherwise sit under the new
+            // status block as if it were live.
+            lastLine = undefined
+            contextUsage = undefined
+            const stopGateLoader =
+                deadAirBaseline ?
+                    () => {}
+                :   startAutoLoader(verifyCtx, () => ({
+                        title: taskTitle,
+                        kind: 'verify',
+                        step: 'verify',
+                        stepNum: 1,
+                        stepTotal: 1,
+                        startedAt: gateStartedAt,
+                        lastLine: lastLine ?? stageLine,
+                        contextUsage
+                    }))
+            try {
+                return await runWorkVerification({
+                    cwd: cwd2,
+                    signal,
+                    spec,
+                    // The child renders no loader of its own: the gate-wide one above is
+                    // already live and reads the same `lastLine`/`contextUsage` the child
+                    // feeds, so a second widget on the same key would only fight it.
+                    runChild: makeGateChild(
+                        verifyCtx,
                         cwd2,
-                        signal,
-                        makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
+                        taskTitle,
+                        'verify',
+                        'verify-debug.log',
+                        {
+                            loader: deadAirBaseline
+                        }
                     ),
-                // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
-                // item 4): a check script this task authored that cannot fail
-                // (`… || true`, an inverted-grep launder). Injected under rule 4f,
-                // because the child provably cannot find this by running the
-                // script — it passes, which IS the defect.
-                scriptEscapeProbe: () => collectScriptEscapeFindings(cwd2, signal),
-                // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
-                // PROMPT 4 item 2): both `bun test` and `playwright test` declared
-                // with no proof their file sets are disjoint. Injected under rule
-                // 4g — the collision kills the suite during COLLECTION, which does
-                // not look like a test failure.
-                runnerGlobProbe: () => collectRunnerGlobFindings(cwd2),
-                // Deterministic prohibition probe: paths the spec forbids modifying
-                // that the task's diff modified anyway become prompt-level findings
-                // under the no-waiver rule — the child otherwise rarely runs `git
-                // diff` and cannot even see the violation.
-                prohibitionProbe: () => {
-                    const banned = spec ? extractProhibitions(spec) : []
-                    if (banned.length === 0) return Promise.resolve([])
-                    return collectChangedFiles(cwd2, signal).then(files =>
-                        findProhibitionViolations(banned, files)
-                    )
-                },
-                // Git-state guard result of the most recent child run: a verdict
-                // computed on a tree the child itself mutated is discarded — but ONLY
-                // when the mutation touched graded state (verdictTainted). A child
-                // that merely left test-runner output behind (test-results/,
-                // playwright-report/ …) judged an equivalent tree; its verdict stands
-                // and the artifacts were still cleaned (mx5 run 9 lost 7 verdicts this
-                // way — see git-state-guard.ts).
-                mutationCheck: () =>
-                    lastGuardReconcile?.verdictTainted ?
-                        {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
-                    :   {mutated: false, detail: ''},
-                // Per-run environment-facts cache under .pi-tasks/ (survives
-                // discardEdits): earlier children's discoveries save this child
-                // the re-archaeology; its own ENV-NOTE lines are stored for the
-                // next one, stamped with this task's id as their origin so a
-                // later child sees a cited fact is second-hand and must
-                // re-validate before excusing a failure (F7). Facts only —
-                // verdict rules unaffected.
-                envNotes: {
-                    read: () => readEnvNotes(cwd2),
-                    append: notes => appendEnvNotes(cwd2, notes, taskId)
-                },
-                // Per-run cross-slice contract registry under .pi-tasks/ (F3): the
-                // verbatim interface facts the design pins that multiple slices
-                // share, so the verify child checks this slice's boundary against
-                // them. Empty on single-`/task` runs or a design with no shared
-                // boundary → no block.
-                contracts: () => readContracts(cwd2)
-            })
+                    // Names the deterministic step in the live status line.
+                    onStage: label => {
+                        stageLine = label
+                    },
+                    // Deterministic whole-repo static-analysis gate — runs the project's
+                    // own lint/typecheck and fails on a real non-zero exit, independent of
+                    // the model-authored VERIFY block (which may not lint at all). ASYNC:
+                    // the sync runner froze the event loop for the whole lint (see above).
+                    repoHealth: () =>
+                        deadAirBaseline ?
+                            Promise.resolve(runRepoHealthCheck(cwd2))
+                        :   runRepoHealthCheckAsync(cwd2, {
+                                signal,
+                                onCommand: c => {
+                                    stageLine = `repo health · ${c}`
+                                }
+                            }),
+                    // Deterministic self-verification probe: test files the task itself
+                    // authored/changed become prompt-level findings mandating the child
+                    // to drive the real artifact before trusting their green result.
+                    probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
+                    // Deterministic test-assembly probe (F4): authored test files that
+                    // rebuild production wiring — importing the leaf modules the shipped
+                    // entry composes and assembling their own copy — become rule-3f
+                    // findings so the child drives the REAL assembly, not the copy.
+                    testAssemblyProbe: () =>
+                        collectChangedFiles(cwd2, signal).then(changed =>
+                            collectTestAssemblyFindings(cwd2, changed, signal)
+                        ),
+                    // Deterministic probe-gaming probe (F6): added lines whose stated
+                    // purpose is to make a check pass rather than meet the requirement
+                    // ("return 401 so the verification test passes") become rule-4c
+                    // findings so the child verifies the real requirement, not the check.
+                    probeGamingProbe: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
+                    // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
+                    // tracked files this task's diff DELETES whose introducing commit
+                    // belongs to a DIFFERENT task — a sibling's committed deliverable
+                    // destroyed (typically to green a check). Injected under rule 4d and
+                    // carried on a FAIL so an ACCEPT records durable debts.
+                    crossTaskDeletionProbe: () =>
+                        collectTaskTreeChanges(cwd2, signal).then(changes =>
+                            findCrossTaskDeletions(changes, taskId, rel =>
+                                taskThatIntroduced(cwd2, rel)
+                            )
+                        ),
+                    // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
+                    // 1): absolute paths committed from the authoring child's own
+                    // environment (`/workspace/src/shared`) that resolve nowhere here.
+                    // Repaired deterministically where the relative form provably
+                    // resolves; the remainder is injected under rule 4e, whose point is
+                    // that such a path breaks the BUILD — so the checks that would have
+                    // caught it report nothing rather than failing.
+                    foreignPathProbe: () =>
+                        collectForeignPathFindings(
+                            cwd2,
+                            signal,
+                            makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
+                        ),
+                    // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
+                    // item 4): a check script this task authored that cannot fail
+                    // (`… || true`, an inverted-grep launder). Injected under rule 4f,
+                    // because the child provably cannot find this by running the
+                    // script — it passes, which IS the defect.
+                    scriptEscapeProbe: () => collectScriptEscapeFindings(cwd2, signal),
+                    // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
+                    // PROMPT 4 item 2): both `bun test` and `playwright test` declared
+                    // with no proof their file sets are disjoint. Injected under rule
+                    // 4g — the collision kills the suite during COLLECTION, which does
+                    // not look like a test failure.
+                    runnerGlobProbe: () => collectRunnerGlobFindings(cwd2),
+                    // Deterministic prohibition probe: paths the spec forbids modifying
+                    // that the task's diff modified anyway become prompt-level findings
+                    // under the no-waiver rule — the child otherwise rarely runs `git
+                    // diff` and cannot even see the violation.
+                    prohibitionProbe: () => {
+                        const banned = spec ? extractProhibitions(spec) : []
+                        if (banned.length === 0) return Promise.resolve([])
+                        return collectChangedFiles(cwd2, signal).then(files =>
+                            findProhibitionViolations(banned, files)
+                        )
+                    },
+                    // Git-state guard result of the most recent child run: a verdict
+                    // computed on a tree the child itself mutated is discarded — but ONLY
+                    // when the mutation touched graded state (verdictTainted). A child
+                    // that merely left test-runner output behind (test-results/,
+                    // playwright-report/ …) judged an equivalent tree; its verdict stands
+                    // and the artifacts were still cleaned (mx5 run 9 lost 7 verdicts this
+                    // way — see git-state-guard.ts).
+                    mutationCheck: () =>
+                        lastGuardReconcile?.verdictTainted ?
+                            {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
+                        :   {mutated: false, detail: ''},
+                    // Per-run environment-facts cache under .pi-tasks/ (survives
+                    // discardEdits): earlier children's discoveries save this child
+                    // the re-archaeology; its own ENV-NOTE lines are stored for the
+                    // next one, stamped with this task's id as their origin so a
+                    // later child sees a cited fact is second-hand and must
+                    // re-validate before excusing a failure (F7). Facts only —
+                    // verdict rules unaffected.
+                    envNotes: {
+                        read: () => readEnvNotes(cwd2),
+                        append: notes => appendEnvNotes(cwd2, notes, taskId)
+                    },
+                    // Per-run cross-slice contract registry under .pi-tasks/ (F3): the
+                    // verbatim interface facts the design pins that multiple slices
+                    // share, so the verify child checks this slice's boundary against
+                    // them. Empty on single-`/task` runs or a design with no shared
+                    // boundary → no block.
+                    contracts: () => readContracts(cwd2)
+                })
+            } finally {
+                stopGateLoader()
+            }
         },
         lintFix: async (fixCtx, cwd2, taskTitle, taskId, failReason) => {
             // Same frozen extraction the enforce guard and the verify rule-4b
@@ -1072,7 +1147,7 @@ export function buildGateDeps(params: {
                 signal,
                 failReason,
                 runChild: makeGateChild(fixCtx, cwd2, taskTitle, 'lint-fix', 'verify-debug.log'),
-                repoHealth: () => Promise.resolve(runRepoHealthCheck(cwd2)),
+                repoHealth: () => runRepoHealthCheckAsync(cwd2, {signal}),
                 git: async args => {
                     const r = await git(cwd2, args, signal)
                     return {exitCode: r.exitCode, stdout: r.stdout}
@@ -1088,7 +1163,29 @@ export function buildGateDeps(params: {
             })
         },
         // Deterministic static check + tree helpers for the enforce pre-commit gate.
-        repoHealth: cwd2 => Promise.resolve(runRepoHealthCheck(cwd2)),
+        // Runs TWICE per task there (a baseline before the edit pass, a differential
+        // check after it), each one as long as the project's own lint — so it gets
+        // the same treatment as the verify-side run: async, and under a live loader
+        // naming the command, instead of a frozen screen.
+        repoHealth: (healthCtx, cwd2, label) => {
+            const startedAt = Date.now()
+            let running: string | undefined
+            const stop = startAutoLoader(healthCtx, () => ({
+                title: label,
+                kind: 'enforce',
+                step: 'repo health',
+                stepNum: 1,
+                stepTotal: 1,
+                startedAt,
+                lastLine: running ? `repo health · ${running}` : 'repo health'
+            }))
+            return runRepoHealthCheckAsync(cwd2, {
+                signal,
+                onCommand: c => {
+                    running = c
+                }
+            }).finally(stop)
+        },
         dirty: async cwd2 => {
             const r = await git(
                 cwd2,

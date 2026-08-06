@@ -7,7 +7,7 @@ need. It is not a to-do list — the entries that cost the most are the dead end
 
 Formerly `nexttask.txt`; code comments citing "nexttask TASK n" mean this file.
 Details of anything shipped live in git history and in each script's own header,
-not here. Last updated 2026-08-05.
+not here. Last updated 2026-08-06.
 
 ---
 
@@ -232,6 +232,56 @@ obligations, which mx5's list under-represents.
 A toolchain pool already exists at `.measure/extraction-pool-toolchain.json`.
 The harness **abstains** when the cap engages in under half the runs — below 40
 entries nothing is contested and a selection rule cannot be measured at all.
+
+---
+
+## SHIPPED — 0d. Gate DEAD AIR: the frozen screen after the implementation turn (2026-08-06)
+
+**The report.** "/task-auto finishes implementing, then nothing happens — like the
+model stopped, the scrolling stops — and then the validation gate pops up and it
+works."
+
+**STEP 0, measured, not guessed** (`scripts/verify-deadair-step0.ts`). The window
+between the impl turn's `agent_end` (which CLEARS the impl widget) and the verify
+child's loader was silent by construction and FROZEN in fact:
+
+    repo                health      loop ticks fired   probes   gitstate
+    mx5                 15,121ms    0 / 151            ~50ms    ~2ms
+    aiz-client          68,628ms    0 / 686             68ms     33ms
+
+`runRepoHealthCheck` was `spawnSync`, so the event loop got **zero** turns for the
+whole run of the project's own lint. pi-tui schedules renders on `process.nextTick`
+(`dist/tui.js` `requestRender`), so even the `verifying "…"` notify issued one line
+earlier could not paint: the screen was byte-identical for 15–69 SECONDS. The same
+call runs again TWICE per task on the enforce path (`task-gates.ts` — a baseline
+before the edit pass and a differential check after it), and once more per verify
+re-attempt.
+
+**The fix (wired).** `runRepoHealthCheckAsync` (same verdicts — parity tests in
+`repo-health-check.test.ts`), plus ONE loader spanning the WHOLE verify gate that
+names the deterministic step it is on (`onStage` through `runWorkVerification`),
+plus a loader around each enforce-side health run.
+
+**A/B PASS twice** (`scripts/verify-deadair-ab.ts`, arms in the same binary via
+`DEADAIR_AB_ARM`, real gate deps, real lint, stub `PI_BIN` child):
+
+    mx5,        12 reps/arm   silent windows >=3s   baseline 12/12  treatment 0/12
+    aiz-client,  5 reps/arm   silent windows >=3s   baseline  5/5   treatment  0/5
+
+Max UI gap fell from 13.7s / 64.7s (mean = the entire window) to **~0.5s**, i.e.
+the loader's own refresh interval. Invariants: the gate's verdict is byte-identical
+in every trial, the event loop is never frozen >=3s under treatment (baseline 17/17
+frozen), and the gate is not slower (+2.8% mx5, +4.8% aiz-client, arm order
+alternated because the lint's own wall time drifts ~15% run to run).
+
+**STILL OPEN — the same defect at the RUN level.** `runFinalIntegrationGate` is
+synchronous end to end: it opens with the sync `runRepoHealthCheck` and every
+command goes through `runGateCommand` → `spawnSync` (default ceiling 900s each),
+with no loader anywhere and a single `running final integration gate…` notify that
+cannot paint for the same nextTick reason. That is a frozen TUI for the whole
+final gate — measured lower bound 15–69s (statics alone), realistically minutes.
+Fixing it means making the gate's command runner async, which is a larger change
+than the per-task path and was deliberately NOT attempted here.
 
 ---
 
