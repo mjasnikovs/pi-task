@@ -18,9 +18,47 @@ const TRUNCATION_MARKER = '\n\n[...page continues, truncated...]\n\n'
 /** The exact non-answers the child is instructed to emit, matched at the tool layer. */
 export const UNCLEAR_ANSWER = 'unclear from this page'
 export const NOT_COVERED_ANSWER = 'not covered by this page'
-const NOT_COVERED_RE = /not covered by this page/i
+/**
+ * Rule 6 asks the child to write the sentinel and NOTHING else, so the sentinel is the whole
+ * answer — anchored, not a substring search. A substring search misreads the opposite case:
+ * rule 5 tells the child to answer partially and say what is missing, and it says it in the
+ * prompt's own words ("… `obs_add_raw_audio_callback` and `obs_remove_raw_audio_callback`
+ * are not covered by this page"). That is a sourced answer, and the loose match filed it as
+ * a coverage miss. Observed twice in 5 reps of scripts/fetch-url-normalise-ab.ts once the
+ * rewrite started delivering pages that could half-answer; never in the 84 recorded corpus
+ * fetches, where 11 of 11 sentinel answers are the bare sentinel — so tightening it changes
+ * no recorded verdict.
+ */
+const NOT_COVERED_RE = /^not covered by this page[.\s]*$/i
 
 const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
+
+/**
+ * `github.com/{owner}/{repo}/blob/{ref}/{path}` renders the file through a client-side
+ * viewer, so the HTML we clean carries GitHub chrome ("Sign in", "Appearance settings")
+ * and none of the file. Every one of the 8 blob URLs in the three-project research-cache
+ * corpus came back a non-answer for that reason. `raw.githubusercontent.com` serves the
+ * same bytes as text/plain.
+ *
+ * Only the URL handed to the fetcher is rewritten — the caller's URL still keys the cache
+ * and still supplies the #fragment — so a worker that retries the raw URL by hand hits the
+ * cache, and a run's own recorded URLs stay what the run asked for.
+ *
+ * The query string is dropped: every blob query param (`?plain=1`, `?w=1`, …) is a viewer
+ * setting with no meaning on raw. The #fragment is dropped from the request too (it never
+ * reaches a server) but is preserved for {@link selectContent} via the original URL.
+ */
+const GH_BLOB_RE =
+    /^https?:\/\/(?:www\.)?github\.com\/([^/?#]+)\/([^/?#]+)\/blob\/([^?#]+?)\/*(?:[?#].*)?$/i
+
+export function normaliseSourceUrl(url: string): string {
+    const m = GH_BLOB_RE.exec(url.trim())
+    if (!m) return url
+    const [, owner, repo, refAndPath] = m
+    // `/blob/{ref}/{path}` — a bare `/blob/{ref}` with no path names no file.
+    if (!refAndPath.includes('/')) return url
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${refAndPath}`
+}
 
 export interface FetchRawInput {
     url: string
@@ -36,7 +74,9 @@ export interface FetchRawResult {
 
 export async function fetchRaw(input: FetchRawInput): Promise<FetchRawResult> {
     const fetchAndCleanFn = input.fetchAndClean ?? defaultFetchAndClean
-    const cleaned: CleanResult = await fetchAndCleanFn(input.url, {signal: input.signal})
+    const cleaned: CleanResult = await fetchAndCleanFn(normaliseSourceUrl(input.url), {
+        signal: input.signal
+    })
     return {markdown: cleaned.markdown, finalUrl: cleaned.finalUrl, title: cleaned.title}
 }
 
@@ -95,7 +135,7 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
     const spawnFn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const strategy = input.strategy ?? shippedStrategy
 
-    const cleaned = await fetchAndCleanFn(input.url, {signal: input.signal})
+    const cleaned = await fetchAndCleanFn(normaliseSourceUrl(input.url), {signal: input.signal})
 
     // The #fragment is a client-side concern the server never sees, so anchor from the
     // ORIGINALLY REQUESTED url, not the post-redirect finalUrl (which will have dropped it).
@@ -148,7 +188,7 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         excerpt: parsed.excerpt,
         excerptVerified: check?.verified,
         excerptCheck: check,
-        coverageMiss: NOT_COVERED_RE.test(parsed.answer),
+        coverageMiss: NOT_COVERED_RE.test(parsed.answer.trim()),
         childExitCode: 0,
         aborted: false,
         ...base

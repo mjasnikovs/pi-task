@@ -4,6 +4,7 @@ import {
     fetchFocused,
     selectContent,
     shippedStrategy,
+    normaliseSourceUrl,
     NOT_COVERED_ANSWER,
     UNCLEAR_ANSWER
 } from './fetch-core.js'
@@ -34,6 +35,58 @@ describe('fetchRaw', () => {
                 }
             })
         ).rejects.toBeInstanceOf(FetchAndCleanError)
+    })
+})
+
+describe('normaliseSourceUrl', () => {
+    test('rewrites a github blob URL to raw.githubusercontent.com', () => {
+        expect(
+            normaliseSourceUrl(
+                'https://github.com/shadcn-ui/ui/blob/main/apps/v4/registry/new-york-v4/ui/button.tsx'
+            )
+        ).toBe(
+            'https://raw.githubusercontent.com/shadcn-ui/ui/main/apps/v4/registry/new-york-v4/ui/button.tsx'
+        )
+    })
+
+    test('keeps a ref that contains slashes, and drops viewer-only query params', () => {
+        expect(normaliseSourceUrl('https://github.com/o/r/blob/release/1.x/src/a.ts?plain=1')).toBe(
+            'https://raw.githubusercontent.com/o/r/release/1.x/src/a.ts'
+        )
+    })
+
+    test('leaves every non-blob URL byte-identical', () => {
+        for (const u of [
+            'https://raw.githubusercontent.com/o/r/main/a.ts',
+            'https://github.com/honojs/hono/issues/3148',
+            'https://github.com/o/r/tree/main/src',
+            'https://github.com/o/r',
+            'https://gist.github.com/o/deadbeef',
+            'https://hono.dev/docs/guides/rpc',
+            'https://example.com/blob/main/x.ts',
+            // `/blob/{ref}` with no file path names no file — nothing to rewrite.
+            'https://github.com/o/r/blob/main'
+        ]) {
+            expect(normaliseSourceUrl(u)).toBe(u)
+        }
+    })
+
+    test('the rewritten URL is what gets fetched, while the caller keeps the original', async () => {
+        let requested = ''
+        const r = await fetchFocused({
+            url: 'https://github.com/o/r/blob/main/a.ts',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async (url: string) => {
+                requested = url
+                return {markdown: 'export const a = 1', finalUrl: url, title: 'a.ts'}
+            },
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>a is 1</answer>\n<excerpt>export const a = 1</excerpt>'
+            }))
+        })
+        expect(requested).toBe('https://raw.githubusercontent.com/o/r/main/a.ts')
+        expect(r.excerptVerified).toBe(true)
     })
 })
 
@@ -91,6 +144,26 @@ describe('fetchFocused', () => {
         expect(r.coverageMiss).toBe(true)
         // A coverage miss is a distinct outcome, NOT the ambiguity fallback.
         expect(r.answer.includes(UNCLEAR_ANSWER)).toBe(false)
+    })
+
+    test('coverageMiss is false when a sourced answer merely mentions the sentinel wording', async () => {
+        const answer =
+            'The `audio_convert_info` struct contains four fields. The functions '
+            + '`obs_add_raw_audio_callback` and `obs_remove_raw_audio_callback` are not covered by this page.'
+        const r = await fetchFocused({
+            url: 'https://example.com/',
+            query: 'q',
+            cwd: '/tmp',
+            fetchAndClean: async () => ({
+                markdown: 'struct audio_convert_info',
+                finalUrl: 'https://example.com/',
+                title: 't'
+            }),
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: `<answer>${answer}</answer>\n<excerpt>struct audio_convert_info</excerpt>`
+            }))
+        })
+        expect(r.coverageMiss).toBe(false)
     })
 
     test('coverageMiss is false for an ordinary sourced answer', async () => {
