@@ -1,0 +1,947 @@
+[
+  {
+    "name": "real-run20",
+    "expected": "fail",
+    "why": "the shipped tree: every client call addresses /api/api/… and 404s",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/api/auth/login` → 404) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/api/auth/login",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/api/auth/login",
+        "status": 404,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:34501/login",
+      "urlAfter": "http://127.0.0.1:34501/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-fixed",
+    "expected": "pass",
+    "why": "the base URL repaired — the healthy control",
+    "shippedOutcome": "pass — signed in (`POST /api/auth/login` → 200), left the wall for http://127.0.0.1:45311/login, 2854/2855 same-origin data requests returned 2xx",
+    "requestsRecorded": 2864,
+    "requestsStored": 17,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/login",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        },
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": null,
+          "mimeType": null,
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "status": 200,
+        "failed": false
+      },
+      "postAuthDataAttempted": 2855,
+      "postAuthData2xx": 2854,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": true,
+      "urlBefore": "http://127.0.0.1:45311/login",
+      "urlAfter": "http://127.0.0.1:45311/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Login successful. ID e12db452-2e1d-4253-af0c-dc214486a\")"
+    }
+  },
+  {
+    "name": "mut-badpass",
+    "expected": "skip",
+    "why": "a password the server REJECTS is a config gap, never an app defect. Built on mut-fixed: on the base tree the login 404s before any credential is read, so this entry could not test a rejection at all",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/auth/login` → 401) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/login",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "status": 401,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:42345/login",
+      "urlAfter": "http://127.0.0.1:42345/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-auth-unmounted",
+    "expected": "fail",
+    "why": "the sign-in route is not mounted",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/api/auth/login` → 404) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/api/auth/login",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/api/auth/login",
+        "status": 404,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:38489/login",
+      "urlAfter": "http://127.0.0.1:38489/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-auth-wrong-method",
+    "expected": "fail",
+    "why": "the sign-in path exists for another verb only",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/api/auth/login` → 404) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/api/auth/login",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/api/auth/login",
+        "status": 404,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:35031/login",
+      "urlAfter": "http://127.0.0.1:35031/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-listings-unmounted",
+    "expected": "fail",
+    "why": "a data route is gone while auth and the catch-all stay",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/api/auth/login` → 404) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/api/auth/login",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/api/auth/login",
+        "status": 404,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:32931/login",
+      "urlAfter": "http://127.0.0.1:32931/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-one-of-eight",
+    "expected": "fail",
+    "why": "THE decisive entry: sign-in and /api/auth/me are healthy 2xx and only the listings route is gone, so the shipped two-integer rule (attempted>0 && 2xx===0) PASSES it",
+    "shippedOutcome": "pass — signed in (`POST /api/auth/login` → 200), left the wall for http://127.0.0.1:36051/login, 3779/3780 same-origin data requests returned 2xx",
+    "requestsRecorded": 3789,
+    "requestsStored": 17,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/login",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        },
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 200,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        },
+        {
+          "method": "GET",
+          "path": "/api/listings",
+          "status": null,
+          "mimeType": null,
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "post"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "status": 200,
+        "failed": false
+      },
+      "postAuthDataAttempted": 3780,
+      "postAuthData2xx": 3779,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": true,
+      "urlBefore": "http://127.0.0.1:36051/login",
+      "urlAfter": "http://127.0.0.1:36051/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Login successful. ID e12db452-2e1d-4253-af0c-dc214486a\")"
+    }
+  },
+  {
+    "name": "mut-no-catchall",
+    "expected": "fail",
+    "why": "the same missing route with nothing to disguise it — the status alone is enough here",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/api/auth/login` → 404) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/api/auth/me",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/api/auth/login",
+          "status": 404,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/api/auth/login",
+        "status": 404,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:46079/login",
+      "urlAfter": "http://127.0.0.1:46079/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  },
+  {
+    "name": "mut-db-down",
+    "expected": "skip",
+    "why": "infrastructure down, not a client defect. Built on mut-fixed for the same reason as mut-badpass",
+    "shippedOutcome": "skip — the server did not accept the declared credentials (`POST /api/auth/login` → 500) — with no authenticated session there is nothing to assert; the authenticated half of the app was NOT observed",
+    "requestsRecorded": 6,
+    "requestsStored": 6,
+    "facts": {
+      "sessionRequests": [
+        {
+          "method": "GET",
+          "path": "/",
+          "status": 200,
+          "mimeType": "text/html",
+          "failed": false,
+          "initiator": "document",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/app.css",
+          "status": 200,
+          "mimeType": "text/css",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/main.js",
+          "status": 200,
+          "mimeType": "text/javascript",
+          "failed": false,
+          "initiator": "other",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/me",
+          "status": 401,
+          "mimeType": "application/json",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "pre"
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/login",
+          "status": 500,
+          "mimeType": "text/plain",
+          "failed": false,
+          "initiator": "xhr",
+          "phase": "auth"
+        }
+      ],
+      "authRequest": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "status": 500,
+        "failed": false
+      },
+      "postAuthDataAttempted": 0,
+      "postAuthData2xx": 0,
+      "landingHadAuthWall": true,
+      "credentialsFound": true,
+      "submitted": true,
+      "foreignOriginFailures": [],
+      "leftAuthWall": false,
+      "urlBefore": "http://127.0.0.1:32841/login",
+      "urlAfter": "http://127.0.0.1:32841/login",
+      "postAuthDomOk": true,
+      "postAuthDomDetail": "rendered visible text (\"MX-5 Private MX-5 Private Member access only. If you haven't received an invitat\")"
+    }
+  }
+]

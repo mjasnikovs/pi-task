@@ -213,17 +213,44 @@ export function pinnedLocalPort(vars: Record<string, string>): number | null {
 
 // ── verdict (pure, unit-tested against recorded sessions) ────────────────────
 
+/**
+ * One same-origin request the session issued, as the wire saw it. This is the whole
+ * evidence base: `authRequest`, `postAuthDataAttempted` and `postAuthData2xx` below
+ * are DERIVED from this list (deriveLegacyFacts), never recorded separately.
+ *
+ * `mimeType` is here because status alone cannot see a misrouted GET: an SPA
+ * catch-all answers every unmatched GET with index.html at 200, so a dead API call
+ * looks healthy to any status rule and only the content type gives it away.
+ */
+export interface SessionRequest {
+    method: string
+    path: string
+    status: number | null
+    mimeType: string | null
+    failed: boolean
+    /** CDP resource type, collapsed: what ISSUED this request. */
+    initiator: 'xhr' | 'document' | 'other'
+    /** Relative to the sign-in request: before it, it, or after it. */
+    phase: 'pre' | 'auth' | 'post'
+}
+
 export interface DeepSessionFacts {
+    /** Every same-origin request of the whole session, in order. Optional only so
+     *  that a hand-written or pre-existing recorded session stays valid: absent
+     *  means "not recorded", and the request-log rules simply do not fire. The live
+     *  driver always populates it. */
+    sessionRequests?: SessionRequest[]
     /** The landing page presented a sign-in wall (a visible password input). */
     landingHadAuthWall: boolean
     /** A credential pair was declared by the project. */
     credentialsFound: boolean
     /** The form could be filled and submitted. */
     submitted: boolean
-    /** The sign-in request the SUBMIT issued, when one was issued at all. */
+    /** The sign-in request the SUBMIT issued, when one was issued at all.
+     *  Derived: the `sessionRequests` entry in phase 'auth'. */
     authRequest: {method: string; path: string; status: number | null; failed: boolean} | null
     /** Same-origin XHR/fetch requests issued AFTER the sign-in response, excluding
-     *  the sign-in request itself. */
+     *  the sign-in request itself. Derived: `sessionRequests` in phase 'post'. */
     postAuthDataAttempted: number
     postAuthData2xx: number
     /** Origins the client called that are not the app's own, whose requests failed
@@ -236,6 +263,29 @@ export interface DeepSessionFacts {
     /** judgeRenderedDom over the post-sign-in DOM. */
     postAuthDomOk: boolean
     postAuthDomDetail: string
+}
+
+/**
+ * The three request-shaped facts, computed from the log and from nothing else. The
+ * driver records `sessionRequests` and calls this; the values are exactly what the
+ * pre-log driver computed by filtering the same map (the sign-in request is the
+ * first same-origin non-GET after submit; the data requests are the same-origin
+ * XHR/fetch issued at or after it, itself excluded).
+ */
+export function deriveLegacyFacts(
+    log: SessionRequest[]
+): Pick<DeepSessionFacts, 'authRequest' | 'postAuthDataAttempted' | 'postAuthData2xx'> {
+    const auth = log.find(r => r.phase === 'auth') ?? null
+    const data = log.filter(r => r.phase === 'post' && r.initiator === 'xhr')
+    return {
+        authRequest:
+            auth === null ? null : (
+                {method: auth.method, path: auth.path, status: auth.status, failed: auth.failed}
+            ),
+        postAuthDataAttempted: data.length,
+        postAuthData2xx: data.filter(r => r.status !== null && r.status >= 200 && r.status < 300)
+            .length
+    }
 }
 
 /**
@@ -345,6 +395,9 @@ const QUIET_MS = 1_200
 /** Caps for the two settle windows (initial load, post-submit). */
 const SETTLE_CAP_MS = 8_000
 const POST_SUBMIT_CAP_MS = 12_000
+/** Cap for the one authenticated re-entry into the landing URL (see `drive`). Kept
+ *  small so the three settle windows together stay inside DEEP_RENDER_TIMEOUT_MS. */
+const RE_NAV_CAP_MS = 6_000
 
 interface CdpMessage {
     id?: number
@@ -360,6 +413,7 @@ interface TrackedRequest {
     method: string
     type: string
     status: number | null
+    mimeType: string | null
     failed: boolean
     at: number
 }
@@ -506,6 +560,9 @@ export async function runDeepRenderCheck(
         credentials?: LoginCredentials | null
         timeoutMs?: number
         env?: NodeJS.ProcessEnv
+        /** Recorder hook: receives the facts the verdict was made on. Used by the
+         *  corpus builder; the gate itself never passes it. */
+        onFacts?: (f: DeepSessionFacts) => void
     } = {}
 ): Promise<DeepRenderOutcome> {
     const credentials =
@@ -552,7 +609,8 @@ export async function runDeepRenderCheck(
                 },
                 s => {
                     socket = s
-                }
+                },
+                opts.onFacts
             ),
             budget
         )
@@ -590,9 +648,16 @@ async function drive(
     userDataDir: string,
     credentials: LoginCredentials | null,
     holdChild: (c: ReturnType<typeof spawn>) => void,
-    holdSocket: (s: WebSocket) => void
+    holdSocket: (s: WebSocket) => void,
+    onFacts: ((f: DeepSessionFacts) => void) | undefined
 ): Promise<DeepRenderOutcome> {
     const origin = new URL(url).origin
+    /** Every verdict goes through here, so a recorder sees the same facts the judge
+     *  does — the corpus is what the gate itself read, not a reconstruction. */
+    const judge = (f: DeepSessionFacts): DeepRenderOutcome => {
+        onFacts?.(f)
+        return judgeDeepSession(f)
+    }
     const child = spawn(
         bin,
         [
@@ -640,6 +705,7 @@ async function drive(
             method: String(req?.method ?? 'GET'),
             type: String(p.type ?? ''),
             status: null,
+            mimeType: null,
             failed: false,
             at: Date.now()
         })
@@ -647,9 +713,12 @@ async function drive(
     })
     cdp.on('Network.responseReceived', p => {
         const r = requests.get(String(p.requestId))
-        const res = p.response as {status?: number} | undefined
+        const res = p.response as {status?: number; mimeType?: string} | undefined
         if (r) {
             r.status = typeof res?.status === 'number' ? res.status : r.status
+            if (typeof res?.mimeType === 'string' && res.mimeType.length > 0) {
+                r.mimeType = res.mimeType
+            }
             if (p.type) r.type = String(p.type)
         }
         lastActivity = Date.now()
@@ -704,13 +773,37 @@ async function drive(
         }
         return [...out]
     }
-    const facts = (over: Partial<DeepSessionFacts>): DeepSessionFacts => ({
+    const initiatorOf = (r: TrackedRequest): SessionRequest['initiator'] =>
+        isData(r) ? 'xhr'
+        : r.type === 'Document' ? 'document'
+        : 'other'
+    /** The same-origin request log, phased against the sign-in request. `authAt` is
+     *  Infinity before the submit, so every request so far is 'pre'. */
+    const sessionLog = (authId: string | null, authAt: number): SessionRequest[] => {
+        const out: SessionRequest[] = []
+        for (const [id, r] of requests) {
+            if (!sameOrigin(r)) continue
+            out.push({
+                method: r.method,
+                path: pathOf(r.url),
+                status: r.status,
+                mimeType: r.mimeType,
+                failed: r.failed,
+                initiator: initiatorOf(r),
+                phase:
+                    id === authId ? 'auth'
+                    : r.at >= authAt ? 'post'
+                    : 'pre'
+            })
+        }
+        return out
+    }
+    const facts = (log: SessionRequest[], over: Partial<DeepSessionFacts>): DeepSessionFacts => ({
+        sessionRequests: log,
+        ...deriveLegacyFacts(log),
         landingHadAuthWall: before.hasPassword,
         credentialsFound: credentials !== null,
         submitted: false,
-        authRequest: null,
-        postAuthDataAttempted: 0,
-        postAuthData2xx: 0,
         foreignOriginFailures: foreignOriginFailures(),
         leftAuthWall: false,
         urlBefore: before.url,
@@ -719,19 +812,21 @@ async function drive(
         postAuthDomDetail: '',
         ...over
     })
+    const unsubmitted = (over: Partial<DeepSessionFacts>): DeepSessionFacts =>
+        facts(sessionLog(null, Number.POSITIVE_INFINITY), over)
 
-    if (!before.hasPassword || credentials === null) return judgeDeepSession(facts({}))
+    if (!before.hasPassword || credentials === null) return judge(unsubmitted({}))
 
     const submitMark = Date.now()
     const filled = await evaluate<{ok: boolean; reason?: string}>(
         fillExpr(credentials.identifier, credentials.password)
     )
-    if (!filled?.ok) return judgeDeepSession(facts({submitted: false}))
+    if (!filled?.ok) return judge(unsubmitted({submitted: false}))
     // Separate turn: the fill's input events schedule framework state updates that
     // the submit handler must already see.
     await sleep(300)
     const submitted = await evaluate<{ok: boolean; reason?: string}>(SUBMIT_EXPR)
-    if (!submitted?.ok) return judgeDeepSession(facts({submitted: false}))
+    if (!submitted?.ok) return judge(unsubmitted({submitted: false}))
     lastActivity = Date.now()
     await settle(() => lastActivity, POST_SUBMIT_CAP_MS)
 
@@ -749,31 +844,35 @@ async function drive(
     }
     const authReq = authId !== null ? after.get(authId)! : null
     const authAt = authReq?.at ?? submitMark
-    const postAuthData = [...after]
-        .filter(([id, r]) => id !== authId && sameOrigin(r) && isData(r) && r.at >= authAt)
-        .map(([, r]) => r)
     const now = await evaluate<{hasPassword: boolean; url: string; pathname: string; html: string}>(
         INSPECT_EXPR
     )
     const domJudgment = judgeRenderedDom(now?.html ?? '')
-    return judgeDeepSession(
-        facts({
+    const leftAuthWall = !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname
+
+    // Exercise the authenticated app once. A sign-in page that ends on a success
+    // card — mx5's does — issues NOTHING after the login POST, so the authenticated
+    // data path is never observed at all and every request-shaped fact below is a
+    // fact about the login form. Re-entering the landing URL with the session cookie
+    // is the cheapest way to make the app fetch its own data. Deliberately gated on
+    // an accepted sign-in that left the wall: every session that SKIPs or FAILs
+    // without it takes exactly the path it took before, request logs included.
+    const authAccepted =
+        authReq !== null
+        && !authReq.failed
+        && authReq.status !== null
+        && authReq.status >= 200
+        && authReq.status < 300
+    if (authAccepted && leftAuthWall) {
+        await cdp.send('Page.navigate', {url}, sessionId)
+        lastActivity = Date.now()
+        await settle(() => lastActivity, RE_NAV_CAP_MS)
+    }
+    return judge(
+        facts(sessionLog(authId, authAt), {
             submitted: true,
-            authRequest:
-                authReq ?
-                    {
-                        method: authReq.method,
-                        path: pathOf(authReq.url),
-                        status: authReq.status,
-                        failed: authReq.failed
-                    }
-                :   null,
-            postAuthDataAttempted: postAuthData.length,
-            postAuthData2xx: postAuthData.filter(
-                r => r.status !== null && r.status >= 200 && r.status < 300
-            ).length,
             foreignOriginFailures: foreignOriginFailures(),
-            leftAuthWall: !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname,
+            leftAuthWall,
             urlAfter: now?.url ?? before.url,
             postAuthDomOk: domJudgment.ok,
             postAuthDomDetail: domJudgment.detail
