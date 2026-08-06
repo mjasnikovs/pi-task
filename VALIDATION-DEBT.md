@@ -13,6 +13,36 @@ not here. Last updated 2026-08-06.
 
 ## RULED OUT — do not re-propose
 
+- **Routing a behaviour question to the fetch channel and preferring the official-docs
+  result** (nexttask 14C). Closed 2026-08-06 at STEP 4, on its own pre-registered gate,
+  before any lever was written. `scripts/fetch-lead-quality-baserate.ts`, over the
+  research-cache corpus:
+
+      rank1_official_not_fetched        1 distinct episode        gate needed >= 5
+      behaviour_answered_by_signature   7/14 = 50.0%              gate needed >= 50%  (alive)
+      issue-tracker/forum non-answer    42.9% / 100% vs docs 23.8% (alive)
+
+  Two of the three gates are alive; the count of episodes the lever could act on is not.
+  **One episode is the mx5 `hc` case the lead was written from** — search returns
+  `hono.dev/docs/guides/rpc` at rank 1 with `hc<typeof routes>('/')` in the snippet, the
+  run fetches three hono issues and a reddit thread instead, and fifteen minutes later
+  writes `hc('/api')`. A rule tuned to make that episode come out right would be fitted
+  to a sample of one, which is exactly what closed nexttask 7.
+
+  **The denominator is also partly blind, and the blindness is structural.** "Official"
+  means the host the package declares in its installed `package.json`, and only mx5 has
+  one: IAR1 is a C++/OBS project with no manifest at all, so 22 of the corpus's 30
+  searches cannot be classified even in principle. The measured number is therefore
+  1 unfetched of 2 official-rank-1 results across the **8 searches that are measurable**.
+  Re-open only with a corpus of npm-project runs large enough to put ≥ 5 episodes in the
+  numerator — not by relaxing the threshold.
+
+  Note what this does NOT close: the fetch channel's verbatim-quote grounding
+  (`excerptVerified`) is still the only grounding in the system that can discriminate a
+  PROSE claim, which symbol-grounding provably cannot (nexttask 5B STAGE 3, held-out
+  precision 0/16). The lead's reasoning about the channel stands; the workload to spend
+  it on does not exist in this corpus.
+
 - **A deterministic veto over a grill auto-answer that NARROWS a design-enumerated
   set** (nexttask 7). Refuted 2026-08-05 at STEP 0, over every recorded run —
   14,561 task files, 733 run-revisions, **24,522 `(auto)` answers / 220 distinct
@@ -306,6 +336,75 @@ obligations, which mx5's list under-represents.
 A toolchain pool already exists at `.measure/extraction-pool-toolchain.json`.
 The harness **abstains** when the cap engages in under half the runs — below 40
 entries nothing is contested and a selection rule cannot be measured at all.
+
+---
+
+## SHIPPED — 0f. The fetch channel stops throwing away answers it already had (nexttask 14A/14B, 2026-08-06)
+
+**14A — a GitHub blob URL is fetched from `raw.githubusercontent.com`.** A blob page
+renders the file through a client-side viewer, so `fetchAndClean` gets breadcrumbs and
+chrome: 295–968 characters where the file is 2 KB–107 KB. All **8** blob URLs in the
+corpus came back a non-answer for that reason — 2 as `not covered by this page` (mx5,
+which had the coverage channel) and 6 as `unclear from this page` (IAR1, which predates
+it), with excerpts reading "Sign in" and "Appearance settings". Two were followed within
+12 seconds by a hand-written raw retry that worked. `normaliseSourceUrl` rewrites only
+the URL handed to the fetcher; the caller's URL still keys the cache (so the worker's own
+manual retry is a cache hit) and still supplies the `#fragment`.
+
+`scripts/fetch-url-normalise-ab.ts`, replayed from `scripts/fixtures/fetch-normalise-corpus.json`,
+3 reps per arm: **baseline 15/15 non-answers → treatment 0/15**, and all **30** non-blob
+controls byte-identical in both arms (requested URL *and* assembled prompt, compared
+through the real code path with no child).
+
+**Three of the eight are not scored, and they are printed by name with the reason.** Two
+`obs.h` refs whose queried symbol sits at byte 30,177 of a 107 KB file — past the 25 KB
+head window, so the child was never shown it at either URL — and one `obs-internal.h`
+that contains neither queried symbol anywhere: the run asked the wrong file. Neither is
+reachable by changing which URL is fetched. The exclusion rule was added **after** the
+first scored run (which read 6/8 and FAILED), computed from the recording rather than
+from the model's answers: every identifier-shaped query token that occurs in the raw file
+must also occur in the content the strategy selected.
+
+**Two production defects fell out of building it, both committed separately.**
+
+    the coverage sentinel was a SUBSTRING test    fixed, anchored
+    coverageMiss was computed and read NOWHERE    fixed, 14B
+
+The first: rule 6 asks the child to write `not covered by this page` and nothing else,
+but `coverageMiss` tested for that phrase anywhere in the answer — while rule 5 tells the
+child to answer partially and name what is missing, in the prompt's own words. A sourced
+answer ending "…are not covered by this page" was filed as a coverage miss. Seen twice in
+5 reps once the rewrite started delivering pages that could half-answer; never in the 84
+recorded corpus fetches, where 11 of 11 sentinel answers are the bare sentinel, so
+anchoring it changes no recorded verdict.
+
+**14B — the miss now says what to do next.** `coverageMiss` was computed in
+`fetch-core.ts`, stored in `pi-worker-fetch.ts`'s details, and read nowhere, so all the
+worker ever saw was the bare sentence — which reads as "ask again, differently". It did:
+**9 of the 84 corpus fetches re-read a URL that had already returned a non-answer**, one
+obs release-notes page three times with near-identical questions. The miss now names the
+page that was ACTUALLY read (after 14A the requested and fetched URLs differ, and a
+worker that cannot see that would "retry" the raw URL it already got) and states that
+re-reading with a reworded question returns the same result. It deliberately does not
+suggest which other URL: nothing at that layer knows one, and naming a guess turns one
+dead end into two.
+
+**The number that justified building 14B**, from `scripts/fetch-lead-quality-baserate.ts`
+(read-only; refuses to print a rate unless it first reproduces the mx5 hand-count on all
+7 numbers — 33 fetches, 9 coverage misses, 5 unverified excerpts, 2 of 2 blob misses, 8
+searches, 1 rank-1-official-not-fetched):
+
+    wasted_fetches    10/72 = 13.9%    >= the 0.10 threshold
+                      (yielded nothing AND the same episode later succeeded on another URL)
+
+**Corpus caveat, and it is not boilerplate.** Two projects, mx5 dominant (190 of 251
+entries). A cache HIT writes no entry, so every count is a LOWER BOUND on the lookups the
+runs issued. The corpus was three projects until `~/hub/gofer-pixel/.pi-tasks` was emptied
+at 15:38 on 2026-08-06, mid-task and outside this work, taking 18 entries; the pre-14A
+numbers in this entry (8 blob URLs, 84 fetches, 9 re-reads) were taken while it still
+existed. The two survivors are now pinned in
+`scripts/fixtures/research-cache-corpus.json` so nothing here becomes unauditable the
+same way twice.
 
 ---
 
