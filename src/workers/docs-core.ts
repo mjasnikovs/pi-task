@@ -267,6 +267,32 @@ export function buildVersionBanner(
     // further along the chain (`@types/<name>`) — it did not pin THIS install, so
     // the banner reports it as provenance, not as a pin.
     const decl = findDeclaration(declarationChain(asked, resolved), cwd)
+    // Declared, but as a dist-tag or a non-registry protocol. That is NOT the
+    // same fact as undeclared: the project did say what it wants, `latest` is
+    // exactly what this answer is grounded in, and so there is no other major to
+    // confirm and nothing to hold as unverified. Only the SENTENCE splits —
+    // `isUsableRange` still rejects the value and the install path still cannot
+    // use it as an `install <pkg>@<range>` target.
+    if (decl && !decl.usable) {
+        const where = decl.pkg === asked ? '' : ` only through ${decl.pkg},`
+        return (
+            `[VERSION] "${asked}" is declared in this project's package.json${where} as `
+            + `\`${decl.value}\` — a moving tag, not a pinned range — so this answer is based `
+            + `on npm latest (v${version}), which is what that declaration resolves to `
+            + `today.${grounded}\n\n`
+        )
+    }
+    // A usable range on the ASKED name with an npm-latest pin means package.json
+    // gained the declaration between the install and this sentence. Rare, but the
+    // alternative wording would flatly contradict itself.
+    if (decl?.usable === true && decl.pkg === asked) {
+        return (
+            `[VERSION — verify] "${asked}" is declared as ${decl.value}, but this answer is `
+            + `based on npm latest (v${version}) — the install was not pinned to that range. `
+            + `Confirm the version you intend before relying on an API that differs across `
+            + `majors.${grounded}\n\n`
+        )
+    }
     const via =
         decl?.usable === true ? ` — only its types are, as ${decl.pkg} ${decl.value} —` : ','
     return (

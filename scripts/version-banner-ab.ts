@@ -140,6 +140,15 @@ const INVARIANTS: Invariant[] = [
         holds: r => r.treatment === r.row.bannerText
     },
     {
+        name: '17B — a dist-tag/protocol declaration is reported as declared, not as missing',
+        population: r => r.row.kind !== 'none' && r.declared !== undefined && !r.declared.usable,
+        holds: r =>
+            r.treatment.includes(`is declared in this project's package.json`)
+            && r.treatment.includes(`\`${r.declared?.value}\``)
+            && !r.treatment.includes('is not declared')
+            && !r.treatment.includes('different MAJOR')
+    },
+    {
         name: 'no entry gains a banner it did not have',
         population: r => r.row.kind === 'none',
         holds: r => r.treatment === ''

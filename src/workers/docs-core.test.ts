@@ -201,6 +201,30 @@ describe('buildVersionBanner', () => {
         expect(b).toContain('The types this answer reads come from bun-types.')
     })
 
+    test('declared as a dist-tag is reported as declared, not as missing', () => {
+        const dir = makeProjectDir({devDependencies: {'@types/bun': 'latest'}})
+        const b = buildVersionBanner(
+            {source: 'npm-latest', asked: 'bun'},
+            'bun-types',
+            '1.3.14',
+            dir
+        )
+        expect(b).toContain(
+            '"bun" is declared in this project\'s package.json only through @types/bun, as `latest`'
+        )
+        expect(b).not.toContain('is not declared')
+        expect(b).not.toMatch(/different MAJOR/i)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('a protocol declaration on the package itself is also declared', () => {
+        const dir = makeProjectDir({dependencies: {'a-pkg': 'workspace:*'}})
+        const b = buildVersionBanner({source: 'npm-latest', asked: 'a-pkg'}, 'a-pkg', '2.0.0', dir)
+        expect(b).toContain('"a-pkg" is declared in this project\'s package.json as `workspace:*`')
+        expect(b).not.toContain('is not declared')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
     test('a usable declaration off the chain is provenance, not a pin', () => {
         const dir = makeProjectDir({devDependencies: {'@types/bun': '^1.2.0'}})
         const b = buildVersionBanner(
