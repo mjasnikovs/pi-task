@@ -56,6 +56,39 @@ not here. Last updated 2026-08-07.
   construction proof alone: a lever that changes what the gate DOES needs an A/B,
   and 16A's inertness exemption does not extend to it.
 
+- **Checking the launch contract mid-run instead of at the end** (nexttask 16C).
+  Closed 2026-08-07 at STEP 5, on its own pre-registered gate (`>= 3` episodes
+  needed). Episodes where a launch-contract miss existed mid-run and was first
+  reported by the final gate, over every run artifact under `~/hub`, `~/tmp`,
+  `~/.cache`, `~/.pi` **plus all 108 commits of mx5's history**
+  (`git grep "launch contract: the design" $(git rev-list --all) -- .pi-tasks/*`):
+
+      trees carrying a final-gate debug log            33   (all mx5-derived)
+      DISTINCT episodes                                 2   ← gate needed >= 3
+        2026-07-30 (run 18)  missing `migrate`
+        2026-08-07 (run 20)  missing `build`, `seed`
+
+  The lead expected 1; there are 2, both mx5, and both are real — the miss existed
+  from plan time in each case, because the contract is extracted at plan time and
+  the manifest never gained the script.
+
+  **Closing is right for a second reason the lead only guessed at, and the tasks
+  say it outright.** STEP 6's lever assigns each declared script to the task whose
+  title grounds it and puts an existence check in that task's VERIFY. Run 20's
+  owner for `seed` is TASK_0004 ("Implement `src/server/seed.ts`…") — and
+  TASK_0004's own body says, twice: **"Do NOT create or modify `package.json`,
+  `tsconfig.json`, `eslint.config.js`, or any other config file."** The owning task
+  was spec-frozen out of the only file that could satisfy the check, so the lever
+  would have failed a task for obeying its own spec. TASK_0014 (the `build` owner)
+  was allowed to edit the manifest and even raised the question in its own clarify
+  block — and still shipped without a `build` script. That is a coverage-map and
+  freeze-conflict problem, not a gate-timing problem; see
+  `memory/owned-freeze-detach-claim-shipped.md` (the reassign-at-detach target rule
+  is blind in production) and `memory/frozen-conflict-compose-probe.md`.
+
+  Re-open only with >= 3 episodes AND a deterministic owner rule that survives the
+  frozen-path constraints the plan writes into the owning task.
+
 - **Carrying the previous attempt's guard-rejection reason into the autofix retry
   prompt** (nexttask 15D). Closed 2026-08-07 at STEP 7, on its own pre-registered
   gate (`>= 3` episodes needed), before any lever was written.
