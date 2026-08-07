@@ -15,7 +15,9 @@
  * exactly the unit-test seam, so both arms exercise identical inputs.
  *
  * Arms:
- *   baseline  — final-gate.ts as of git HEAD (pre-aggregation), imported from a
+ *   baseline  — final-gate.ts as of the commit BEFORE the aggregation landed
+ *               (f905a5a^, resolved by baselineRef — NOT `HEAD`; see below),
+ *               imported from a
  *               throwaway worktree: expect FAIL showing ONLY the test failure.
  *   treatment — the working tree's final-gate.ts: expect FAIL with BOTH
  *               failures, the boot/render failure ranked FIRST.
@@ -89,14 +91,38 @@ async function runArm(label: string, modulePath: string): Promise<Outcome> {
     }
 }
 
+/**
+ * The commit BEFORE the aggregation landed, located by when `failures?: string[]`
+ * was added to FinalGateOutcome — so the ref stays correct as history grows.
+ */
+function baselineRef(): string {
+    const out = execFileSync(
+        'git',
+        ['log', '--format=%H', '-S', 'failures?: string[]', '--', 'src/task/final-gate.ts'],
+        {cwd: REPO, encoding: 'utf8'}
+    )
+    const sha = out.trim().split('\n').filter(Boolean).pop()
+    if (!sha) throw new Error('cannot locate the commit that added the aggregated failures field')
+    return `${sha}^`
+}
+
 async function main(): Promise<void> {
     fs.mkdirSync(TMP_ROOT, {recursive: true})
-    // Baseline: HEAD's final-gate in a throwaway worktree (relative imports
-    // resolve inside it, so the whole pre-change module graph is exercised).
+    // Baseline: the PRE-AGGREGATION final-gate in a throwaway worktree (relative
+    // imports resolve inside it, so the whole pre-change module graph is
+    // exercised).
+    //
+    // NOT `HEAD`. This script originally checked out HEAD, which was correct only
+    // while the aggregation fix was uncommitted: the moment it landed, HEAD became
+    // the fix, the baseline arm started reporting BOTH failures, and
+    // "baseline shadows the boot/render failure" has been false ever since —
+    // verified by running this script unchanged at 5a01246, before nexttask 15
+    // touched anything. A baseline ref that moves with the fix is not a baseline.
+    const ref = baselineRef()
     const wt = fs.mkdtempSync(path.join(TMP_ROOT, 'run13-baseline-wt-'))
-    execFileSync('git', ['worktree', 'add', '--detach', wt, 'HEAD'], {cwd: REPO, stdio: 'pipe'})
+    execFileSync('git', ['worktree', 'add', '--detach', wt, ref], {cwd: REPO, stdio: 'pipe'})
     try {
-        const base = await runArm('BASELINE (git HEAD)', path.join(wt, 'src/task/final-gate.ts'))
+        const base = await runArm(`BASELINE (${ref})`, path.join(wt, 'src/task/final-gate.ts'))
         const treat = await runArm('TREATMENT (working tree)', path.join(REPO, 'src/task/final-gate.ts'))
 
         const baseShowsBoot = /boot check/.test(base.reason)
