@@ -7,7 +7,7 @@ need. It is not a to-do list — the entries that cost the most are the dead end
 
 Formerly `nexttask.txt`; code comments citing "nexttask TASK n" mean this file.
 Details of anything shipped live in git history and in each script's own header,
-not here. Last updated 2026-08-06.
+not here. Last updated 2026-08-07.
 
 ---
 
@@ -336,6 +336,85 @@ obligations, which mx5's list under-represents.
 A toolchain pool already exists at `.measure/extraction-pool-toolchain.json`.
 The harness **abstains** when the cap engages in under half the runs — below 40
 entries nothing is contested and a selection rule cannot be measured at all.
+
+---
+
+## SHIPPED — 0g. The final gate could not converge: two guards over three screenshots, and a config gap graded as a code fault (nexttask 15A/15B/15C, 2026-08-07)
+
+mx5 run 20 spent 8m16s, all three autofix attempts, and ended `left failed` — on
+nothing that was wrong with the shipped product.
+
+**15A — regenerable test output stops rejecting a fix, and stops being tracked.**
+Three Playwright FAILURE screenshots (`*-actual.png`, written only when a
+screenshot assertion fails) were tracked because TASK_0027's own `git add -A`
+swept them in. Attempts 1 and 2 deleted them and were rejected whole, each losing
+a real `src/client/api.test.tsx` repair. Then the stranded-fix commit (mx5
+5d4147e) committed those exact three deletions anyway — the guard did not even
+preserve what it rejected two attempts to protect. One shared constant
+(`src/task/regenerable-artifacts.ts`) now serves `write-guard.ts`,
+`auto-commit.ts` and `git-state-guard.ts`; three private copies of that list is
+how the bug happened.
+
+**The pre-registered STEP-1 numbers did not reproduce, and the split was
+re-derived** (`scripts/tracked-artifact-baserate.ts`, 269 work trees). 33 trees
+track an artifact path, all 33 with `.pi-tasks`. But `test-results/` and
+`.last-run.json` are not two findings — every tracked `test-results/` path IS
+`test-results/.last-run.json`, one file per tree. And **`dist/` is tracked by ZERO
+trees, not the 15 the lead claimed** (verified independently over all 273 `.git`
+dirs). So the reason not to exempt `dist/` is now the opposite of the lead's and
+stronger: with no tracked instances the exemption would never fire, so it buys
+nothing while carrying real destructive risk — a published package's `dist/` IS
+the shipped artifact, which is the one property `coverage/`, `.nyc_output/`,
+`playwright-report/` and `*.tsbuildinfo` do not have. Those four are exempt **by
+construction, on zero corpus evidence either way**, and are labelled that way in
+the module. 32 of the 33 trees are one A/B harness's delivery trees of a single
+mx5 spec: 32 RUNS of one project shape, i.e. reproducibility, not breadth.
+Failure screenshots: 0 of 269 at HEAD, and over full history exactly **one** tree
+(mx5, 3 files) — n=1, the lead's own run. **Quote no rate off it.**
+
+**15B — a config gap is an environment gap, not a code fault.** Attempt 3 passed
+every guard, fixed the test, and still lost the run on `bun run seed` exiting 1
+because `ADMIN_PHONE` — which the project's own `.env.example` DECLARES — is
+absent from this box, and the only way to supply it is a gitignored `.env`
+nexttask 4 correctly refuses to credit. Four static conditions, plus a fifth that
+is dynamic and is what makes the rule honest: the four cannot tell "exited BECAUSE
+the variable is absent" from "exited for its own reasons and also reads an absent
+variable", so the script is re-run once with synthetic placeholder values and the
+exit code decides. The probe is a DIAGNOSTIC, never an observation — the verdict
+is UNOBSERVED with debt, never PASS. **The `--partial` control is what the fifth
+condition exists for**: four static conditions alone would have excused a script
+that throws on line 1 and reads `ADMIN_PHONE` on line 3.
+
+**15C — the stranded-fix commit stops reporting a success it never checked.**
+`auto-orchestrator.ts` bound the `CommitResult` to `sha` and interpolated it, so
+run 20's trail reads `committed 5 stranded fix-pass change(s) as [object
+Object]`. Worse than cosmetic: `committed` was never read, and `gitCommitAll`
+returns `{committed:false}` **without throwing** on an unmerged index, so the
+`catch` never fired and the trail claimed a commit over changes still sitting in
+the working tree.
+
+**NO A/B APPLIES TO 15C, and here is why so nobody asks for one later.** The
+change has no behavioural arm: the commit succeeded or failed identically before
+and after; only the sentence written about it changes. Two unit tests over the two
+`CommitResult` shapes, plus a replay asserting the run-20 trail line no longer
+contains `[object Object]`, are the complete proof available.
+
+**Gates.** `scripts/artifact-deletion-guard-ab.ts` (A/B + an FP suite where five
+real deliverable deletions still reject), `scripts/artifact-commit-replay.ts`
+(with a tracked-path control), `scripts/launch-config-gap-ab.ts` (four arms,
+three of them controls), `scripts/replay-run20-final-gate.ts` — the only place
+both levers are tested together, where run 20 now converges on attempt 1.
+
+**METHODOLOGY, and it cost three separate scripts: a baseline ref that moves with
+the fix is not a baseline.** All three A/Bs loaded their baseline arm from
+`git archive HEAD`, which is correct only while the fix is uncommitted. The moment
+it lands, HEAD *is* the fix, both arms become the treatment, and the A/B silently
+stops measuring while still looking like it ran. `artifact-deletion-guard-ab.ts`
+exited 1 the instant 15A was committed for exactly this reason. It also means
+`scripts/replay-run13-final-gate.ts` had been **failing since f905a5a shipped**,
+long before nexttask 15 — verified by running it unchanged at 5a01246. All three
+now resolve their baseline as "the commit that ADDED this lever's module, minus
+one".
 
 ---
 

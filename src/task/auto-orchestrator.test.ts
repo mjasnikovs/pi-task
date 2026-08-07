@@ -15,6 +15,7 @@ import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
 import {readAcceptDebts, type AcceptDebt} from './accept-debt.js'
+import type {CommitResult} from './auto-commit.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {spawnSync} from 'node:child_process'
@@ -2567,18 +2568,22 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
 // `bun run test` pass 116/116, was still uncommitted when the user accepted the
 // FAIL, leaving HEAD broken and the repair invisible.
 
-/** Deps for a run whose single autofix attempt does not converge but edits the tree. */
+/** Deps for a run whose single autofix attempt does not converge but edits the tree.
+ *  `commitResult` is what `deps.commit` reports back — a CommitResult and nothing
+ *  else. It carries NO sha: `gitCommitAll` never returned one, and the trail line
+ *  that interpolated this value printed `as [object Object]` in mx5 run 20. */
 function strandedDeps(
     commits: string[],
     pending: string[] = ['bunfig.toml'],
-    trail: string[] = []
+    trail: string[] = [],
+    commitResult: CommitResult = {committed: true}
 ): AutoDeps {
     return {
         runChild: () => Promise.resolve(''),
         runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
         commit: (_cwd, message) => {
             commits.push(message)
-            return Promise.resolve({committed: true, sha: 'abc1234'})
+            return Promise.resolve(commitResult)
         },
         record: (_c, _id, line) => {
             trail.push(line)
@@ -3221,5 +3226,77 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
 
         expect(known[0]).toEqual([])
         expect(known[1]).toEqual(['.env']) // attempt 2 judges its PASS against it
+    })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE STRANDED-FIX COMMIT REPORTS WHAT ACTUALLY HAPPENED (mx5 run 20).
+//
+//   grep -o 'as \[object Object\]' ~/hub/mx5/.pi-tasks/TASK_AUTO_0001.md → 1 hit
+//
+// The call bound the CommitResult to `sha` and interpolated it. Worse than
+// cosmetic: `committed` was never read, and `gitCommitAll` returns
+// {committed:false} WITHOUT throwing on an unmerged index, so the catch could not
+// fire and the trail claimed a commit over changes still sitting in the tree.
+//
+// No A/B applies and this is why, recorded so nobody asks for one later: the
+// change has no behavioural arm. The commit succeeded or failed identically
+// before and after; only the sentence written about it changes. These two shapes
+// plus the run-20 line below are the complete proof available.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('runAutoLoop: a stranded commit that did NOT happen is reported as not committed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Leave failed — I will fix and /task-auto-resume')
+        // The exact non-throwing refusal auto-commit.ts returns on an unmerged index.
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            strandedDeps(commits, ['bunfig.toml'], trail, {
+                committed: false,
+                reason: 'git commit blocked: unresolved merge conflict (src/a.ts)'
+            })
+        )
+        expect(trail.some(l => /committed 1 stranded fix-pass change\(s\)/.test(l))).toBe(false)
+        const line = trail.find(l => /could NOT commit 1 stranded fix-pass change\(s\)/.test(l))
+        expect(line).toBeDefined()
+        expect(line).toContain('unresolved merge conflict')
+        expect(line).toContain('they remain UNCOMMITTED in the working tree')
+        expect(line).toContain('bunfig.toml')
+    })
+})
+
+test('runAutoLoop: a stranded commit that DID happen never prints `[object Object]`', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const {ctx} = handle
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const commits: string[] = []
+        const trail: string[] = []
+        handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
+        handle.queueSelect('Leave failed — I will fix and /task-auto-resume')
+        await runAutoLoop(
+            ctx,
+            dir,
+            'TASK_AUTO_0001',
+            strandedDeps(commits, ['bunfig.toml'], trail, {
+                committed: true,
+                note: 'no git identity configured — used pi-task fallback'
+            })
+        )
+        const line = trail.find(l => /committed 1 stranded fix-pass change\(s\)/.test(l))
+        expect(line).toBeDefined()
+        // The run-20 trail line, reproduced under replay: it must not come back.
+        expect(line).not.toContain('[object Object]')
+        expect(line).not.toMatch(/ as /)
+        // The fallback identity is worth saying, and it is a thing commit DOES return.
+        expect(line).toContain('used pi-task fallback')
     })
 })

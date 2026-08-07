@@ -1814,20 +1814,37 @@ export async function runAutoLoop(
                             )
                             return
                         }
-                        try {
-                            const sha = await deps.commit(cwd, STRANDED_FIX_COMMIT(id, outcome))
+                        // REPORT WHAT ACTUALLY HAPPENED (mx5 run 20). This bound the
+                        // CommitResult to `sha` and interpolated it, so the trail
+                        // read "committed 5 stranded fix-pass change(s) as
+                        // [object Object]". Worse than cosmetic: `commit` returns
+                        // {committed, reason?, note?} and NEVER a sha, the
+                        // `committed` field was never read, and gitCommitAll
+                        // returns {committed:false} WITHOUT throwing on an unmerged
+                        // index — so on that path the catch below never fires and
+                        // the trail claimed a commit over changes that were still
+                        // sitting in the working tree.
+                        const notCommitted = async (why: string): Promise<void> => {
                             await recGate(
-                                `final-gate: committed ${stranded.length} stranded fix-pass change(s)`
-                                    + `${sha ? ` as ${sha}` : ''} — ${stranded.slice(0, 8).join(', ')}`
+                                `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
+                                    + `change(s) (${why}) — they remain UNCOMMITTED in the working `
+                                    + `tree: ${stranded.slice(0, 8).join(', ')}`
                             )
+                        }
+                        try {
+                            const res = await deps.commit(cwd, STRANDED_FIX_COMMIT(id, outcome))
+                            if (res.committed) {
+                                await recGate(
+                                    `final-gate: committed ${stranded.length} stranded fix-pass change(s)`
+                                        + `${res.note ? ` (${res.note})` : ''} — ${stranded.slice(0, 8).join(', ')}`
+                                )
+                            } else {
+                                await notCommitted(res.reason ?? 'unknown')
+                            }
                         } catch (err) {
                             // Never break the terminal path over this — but say so, so
                             // the changes are not silently lost.
-                            await recGate(
-                                `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
-                                    + `change(s) (${err instanceof Error ? err.message : String(err)}) — `
-                                    + `they remain UNCOMMITTED in the working tree: ${stranded.slice(0, 8).join(', ')}`
-                            )
+                            await notCommitted(err instanceof Error ? err.message : String(err))
                         }
                     }
                     while (!fin.ok) {
