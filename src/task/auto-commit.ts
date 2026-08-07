@@ -9,6 +9,7 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {isDeletionExemptArtifact} from './regenerable-artifacts.js'
 
 /** The gate machinery's own state/forensic dir — the trail, debug logs, and per-run
  *  ledgers. Preserved verbatim across a revert (see gitDropLastCommit). */
@@ -20,6 +21,11 @@ export interface CommitResult {
     reason?: string
     /** Set when the commit needed a fallback (e.g. self-supplied identity). */
     note?: string
+    /** UNTRACKED regenerable test-runner output this commit deliberately left out
+     *  of the index (see `stagePathspec`). Empty/absent when nothing was excluded.
+     *  Present so the caller can TRAIL it: a silent exclusion is the same failure
+     *  class as the silent ignored-path write nexttask 4 closed. */
+    excluded?: string[]
 }
 
 /**
@@ -53,6 +59,48 @@ export async function git(
 ): Promise<{stdout: string; stderr: string; exitCode: number; aborted: boolean}> {
     const r = await runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
     return {stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode, aborted: r.aborted}
+}
+
+/**
+ * The UNTRACKED files a per-task snapshot must not sweep into the index: Playwright
+ * `test-results/`, `playwright-report/`, `coverage/`, `.nyc_output/`,
+ * `.last-run.json`, `*.tsbuildinfo`.
+ *
+ * This is the other half of mx5 run 20. TASK_0027's snapshot ran a bare
+ * `git add -A` over a tree the test run had just littered with three Playwright
+ * FAILURE screenshots (`*-actual.png` — written only when a screenshot assertion
+ * fails), committed them, and thereby made them tracked deliverables. Two whole
+ * final-gate fix attempts were then rejected for deleting them. The deletion guard
+ * fix (write-guard.ts) stops the rejection; this stops the tracking.
+ *
+ * ONLY UNTRACKED PATHS ARE EXCLUDED, and that is load-bearing rather than tidy.
+ * `git ls-files --others` lists untracked, non-ignored files and nothing else, so a
+ * path git ALREADY tracks can never appear here — meaning a project that
+ * deliberately commits, say, a `coverage/` badge keeps having its edits to it
+ * committed. Excluding by directory pathspec instead (`:(exclude)coverage/`) would
+ * silently stop committing those.
+ *
+ * Best-effort: any git failure yields an empty list, i.e. today's `git add -A`.
+ */
+export async function untrackedArtifacts(
+    cwd: string,
+    signal?: AbortSignal,
+    spawnFn?: SpawnFn
+): Promise<string[]> {
+    const r = await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'], signal, spawnFn)
+    if (r.aborted || r.exitCode !== 0) return []
+    return r.stdout
+        .split('\0')
+        .map(p => p.trim())
+        .filter(p => p.length > 0 && isDeletionExemptArtifact(p))
+        .sort()
+}
+
+/** `:(exclude)` pathspecs for `git add -A`; empty when nothing is excluded, so the
+ *  common case is byte-identical to the previous bare `git add -A`. */
+export function stagePathspec(excluded: readonly string[]): string[] {
+    if (excluded.length === 0) return []
+    return ['--', '.', ...excluded.map(p => `:(exclude)${p}`)]
 }
 
 /**
@@ -127,8 +175,10 @@ export async function gitCommitAll(
         }
     }
 
-    // 3. Stage all working-tree changes (new, modified, deleted).
-    const add = await git(cwd, ['add', '-A'], signal, spawnFn)
+    // 3. Stage all working-tree changes (new, modified, deleted) EXCEPT untracked
+    //    regenerable test-runner output — see stagePathspec.
+    const excluded = await untrackedArtifacts(cwd, signal, spawnFn)
+    const add = await git(cwd, ['add', '-A', ...stagePathspec(excluded)], signal, spawnFn)
     if (add.aborted) return {committed: false, reason: 'cancelled'}
     if (add.exitCode !== 0) {
         return {committed: false, reason: `git add failed: ${firstLine(add.stderr)}`}
@@ -155,7 +205,11 @@ export async function gitCommitAll(
             )
             if (retry.aborted) return {committed: false, reason: 'cancelled'}
             if (retry.exitCode === 0) {
-                return {committed: true, note: 'no git identity configured — used pi-task fallback'}
+                return {
+                    committed: true,
+                    note: 'no git identity configured — used pi-task fallback',
+                    ...(excluded.length > 0 ? {excluded} : {})
+                }
             }
             return {
                 committed: false,
@@ -167,7 +221,7 @@ export async function gitCommitAll(
             reason: `git commit failed: ${firstLine(commit.stderr || commit.stdout)}`
         }
     }
-    return {committed: true}
+    return {committed: true, ...(excluded.length > 0 ? {excluded} : {})}
 }
 
 /**

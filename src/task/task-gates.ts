@@ -758,6 +758,19 @@ export async function runGatesForTask(
     const commit = await deps.commit(p.cwd, `task: ${p.title} (${p.taskId})`)
     if (commit.committed) {
         await rec(`commit: task snapshot committed${commit.note ? ` (${commit.note})` : ''}`)
+        // SAY WHAT WAS LEFT OUT. The stage skips untracked regenerable test-runner
+        // output (mx5 run 20: TASK_0027's `git add -A` swept in three Playwright
+        // failure screenshots and two later fix attempts were rejected for deleting
+        // them). A SILENT exclusion is the same failure class as the silent
+        // ignored-path write nexttask 4 closed, so it gets its own trail line.
+        if (commit.excluded && commit.excluded.length > 0) {
+            await rec(
+                `commit: left ${commit.excluded.length} untracked test-runner artifact(s) out of the `
+                    + `snapshot — regenerable output, not deliverables: `
+                    + `${commit.excluded.slice(0, 8).join(', ')}`
+                    + `${commit.excluded.length > 8 ? `, +${commit.excluded.length - 8} more` : ''}`
+            )
+        }
         active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
     } else {
         await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)

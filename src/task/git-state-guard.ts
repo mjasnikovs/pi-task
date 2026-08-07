@@ -43,6 +43,7 @@ import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import {isRegenerableArtifact} from './regenerable-artifacts.js'
 
 /** Keep the gate machinery's own artifacts out of the snapshot and the restore. */
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
@@ -88,17 +89,12 @@ export interface ReconcileResult {
  * `test-results/` and `playwright-report/` above all, the exact churn that discarded
  * verify verdicts across mx5 run 9. Kept deliberately narrow: anything not matched
  * here that a child modifies/deletes is treated as graded state (verdict-tainting).
+ *
+ * The list itself now lives in `regenerable-artifacts.ts` — the deletion guard and
+ * the per-task commit need the same knowledge, and three private copies of it is
+ * how mx5 run 20 spent two thirds of its repair budget on three screenshots.
  */
-const ARTIFACT_PATTERNS: readonly RegExp[] = [
-    /^(?:test-results|playwright-report|coverage|\.nyc_output|dist|build|\.next|\.turbo|\.svelte-kit)\//,
-    /(?:^|\/)\.last-run\.json$/,
-    /\.tsbuildinfo$/
-]
-
-function isBenignArtifact(relPath: string): boolean {
-    const p = relPath.replace(/\\/g, '/')
-    return ARTIFACT_PATTERNS.some(re => re.test(p))
-}
+const isBenignArtifact = isRegenerableArtifact
 
 /**
  * Regenerable machine state that is benign EVEN WHEN TRACKED — a project that

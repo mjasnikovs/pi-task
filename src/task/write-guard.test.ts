@@ -77,6 +77,50 @@ describe('findForbiddenDeletions', () => {
     test('no deletions → nothing forbidden', () => {
         expect(findForbiddenDeletions(parseTreeChanges(' M src/a.ts\n?? src/b.ts'))).toEqual([])
     })
+
+    // mx5 run 20. Three Playwright FAILURE screenshots that TASK_0027's own
+    // `git add -A` had swept in read as deliverables, and two consecutive fix
+    // attempts were discarded whole over them — each losing a real
+    // `src/client/api.test.tsx` repair. The exempt list is a strict subset of the
+    // verdict-level artifact list; build output stays out of it.
+    test('run-20 shape: deleting tracked test-runner output is NOT forbidden', () => {
+        const s = parseTreeChanges(
+            ' M package.json\n M src/client/api.test.tsx\n'
+                + ' D test-results/client-pages-JoinPage-JoinPage-screenshot-baseline/JoinPage-screenshot-baseline-1-actual.png\n'
+                + ' D test-results/.last-run.json'
+        )
+        expect(findForbiddenDeletions(s)).toEqual([])
+    })
+
+    test('the other regenerable outputs are exempt too', () => {
+        const s = parseTreeChanges(
+            ' D playwright-report/index.html\n D coverage/lcov.info\n'
+                + ' D .nyc_output/out.json\n D tsconfig.tsbuildinfo'
+        )
+        expect(findForbiddenDeletions(s)).toEqual([])
+    })
+
+    test('BUILD OUTPUT is NOT exempt — a committed dist/ can be the shipped artifact', () => {
+        const s = parseTreeChanges(' D dist/app.css\n D build/main.js\n D .next/server.js')
+        expect(findForbiddenDeletions(s)).toEqual([
+            'dist/app.css',
+            'build/main.js',
+            '.next/server.js'
+        ])
+    })
+
+    test('an exemption does not excuse a real deliverable deleted alongside it', () => {
+        const s = parseTreeChanges(' D test-results/x-actual.png\n D src/client/pages/admin.tsx')
+        expect(findForbiddenDeletions(s)).toEqual(['src/client/pages/admin.tsx'])
+    })
+
+    test('a path merely NAMED like one is not exempt — the prefix must be the root', () => {
+        const s = parseTreeChanges(' D src/test-results/helper.ts\n D src/coverage-report.ts')
+        expect(findForbiddenDeletions(s)).toEqual([
+            'src/test-results/helper.ts',
+            'src/coverage-report.ts'
+        ])
+    })
 })
 
 describe('formatTreeChanges', () => {

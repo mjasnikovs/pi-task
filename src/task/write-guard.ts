@@ -19,6 +19,7 @@
  * glob — the legitimate fix shape from run 7). Pure text/path analysis; no git
  * execution, no stack assumptions.
  */
+import {isDeletionExemptArtifact} from './regenerable-artifacts.js'
 
 /** What a write-capable pass changed, from `git status --porcelain`. */
 export interface TreeChangeSummary {
@@ -136,11 +137,26 @@ const basename = (p: string): string => {
  * name, somewhere in the tree). Anything returned here rejects the whole fix
  * attempt — run 11's `rm src/client/pages/admin.tsx` had no corresponding add and
  * destroyed a sibling task's verified deliverable.
+ *
+ * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT (mx5 run 20). The guard is pure git: no
+ * ecosystem, no exemption list, so three Playwright FAILURE screenshots that
+ * TASK_0027's own `git add -A` had swept into a commit read as deliverables. Two
+ * consecutive attempts were discarded whole over them — each taking a real
+ * `src/client/api.test.tsx` repair with it, which attempt 3 then re-did and kept.
+ * 6m14s of an 8m16s gate. And the pipeline committed those same three deletions at
+ * the end anyway, in the stranded-fix commit (mx5 5d4147e), so the guard did not
+ * even preserve what it rejected two attempts to protect.
+ *
+ * The exempt list is a strict SUBSET of the verdict-level artifact list and lives
+ * in `regenerable-artifacts.ts`. `dist/`, `build/`, `.next/`, `.turbo/` and
+ * `.svelte-kit/` are NOT in it: a committed build output can be the shipped
+ * artifact, so deleting one is destructive in a way deleting a failure screenshot
+ * is not.
  */
 export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
     if (changes.deleted.length === 0) return []
     const addedNames = new Set(changes.added.map(basename))
-    return changes.deleted.filter(p => !addedNames.has(basename(p)))
+    return changes.deleted.filter(p => !addedNames.has(basename(p)) && !isDeletionExemptArtifact(p))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
