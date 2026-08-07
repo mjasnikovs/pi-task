@@ -13,6 +13,49 @@ not here. Last updated 2026-08-07.
 
 ## RULED OUT — do not re-propose
 
+- **Refusing to EXECUTE a declared launch script whose body is outward-facing**
+  (nexttask 16B). Closed 2026-08-07 at STEP 3, on its own pre-registered gate
+  (`>= 1` outward-facing script needed), before any lever was written.
+  `scripts/launch-script-exec-baserate.ts` (read-only), over `~/hub`, `~/tmp`,
+  `~/.cache`, `~/.pi`, `~/.local/share`:
+
+      launch-contract.md files                      645
+      DISTINCT declared-script lists                  2   (the same 7 names, two orders)
+      DISTINCT project shapes (contract + manifest)   8   (all of them mx5)
+      declared_total (recorded + hypothetical)      232
+      would_execute (non-boot, uncovered)           201
+      …actually spawned (also present in manifest)   21
+        local-only                                   10
+        state-mutating                               11   (migrate, seed)
+        outward-facing                                0   ← gate needed >= 1
+
+  **The hazard is real by construction.** `runnableDeclaredScripts` filters on one
+  regex — `dev|start|serve|preview|watch` — and hands everything else to a 180s
+  `bun run`. A declared `deploy`, `publish`, `release` or `docker:push` would be
+  executed. It has no instance to gate on: one project on this box ever recorded a
+  launch contract, it declares `migrate` and `seed`, and both are state-mutating,
+  not outward-facing.
+
+  **CLASSIFICATION IS BY RESOLVED BODY** (npm `scripts`, else Makefile recipes,
+  with `bun run X` / `make X` expanded one hop) — never by name, which is the
+  nexttask-3 lesson. Two of the 15 pre-registered classifier controls are exactly
+  that: `echo "deploy: nothing to do" && tsc --noEmit` is local-only, and
+  `bun build ./src --outdir dist && npm publish` is outward-facing.
+
+  **A zero is only evidence if the detector fires**, so the script self-checks
+  against those 15 controls and refuses to report a branch if any fails (it caught
+  a real alternation bug in the `mvn|gradle` pattern that made every body
+  containing "deploy" outward-facing). Population sweep, same run: **23 project
+  manifests / 164 scripts → 0 outward-facing**, while **167 vendored packages /
+  1294 scripts → 23** (`npm publish`, `git push --follow-tags`, `firebase-tools
+  deploy`). The verbs exist in the world and the detector sees them; they do not
+  exist in anything a run has ever built here.
+
+  Re-open with a corpus containing a project that ships a deploy/publish script AND
+  declares it in a design — not by relaxing the classifier, and not on the
+  construction proof alone: a lever that changes what the gate DOES needs an A/B,
+  and 16A's inertness exemption does not extend to it.
+
 - **Carrying the previous attempt's guard-rejection reason into the autofix retry
   prompt** (nexttask 15D). Closed 2026-08-07 at STEP 7, on its own pre-registered
   gate (`>= 3` episodes needed), before any lever was written.
