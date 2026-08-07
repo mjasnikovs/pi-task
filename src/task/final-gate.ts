@@ -68,6 +68,7 @@ import {
     missingDeclaredScripts,
     runnableDeclaredScripts
 } from './launch-contract.js'
+import {readLaunchManifest, inertLaunchContractNote} from './launch-manifest.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
 import {runRenderCheck, type RenderOutcome} from './render-check.js'
 import {
@@ -1668,13 +1669,29 @@ export async function runFinalIntegrationGate(
     // scripts that fell through decompose and shipped missing, unchecked. Diff the
     // plan-time-extracted declared scripts against the manifest; a missing one is a
     // launch-surface defect. FP-safe: empty declared list (nothing grounded) → no check.
+    //
+    // THE DIFF IS INERT WITHOUT A MANIFEST (nexttask 16A). It used to diff against
+    // `Object.keys(packageScripts(cwd))`, whose catch returns {} — so a project with
+    // NO package.json was indistinguishable from one with no scripts, and every
+    // declared script was reported missing in wording naming a file the project was
+    // never meant to have. Nothing upstream is npm-shaped (the extractor scrapes any
+    // design that says "script"), and this text seeds the autofix child's prompt, so
+    // on a CMake/cargo project the likely repair was to write a package.json.
+    // readLaunchManifest resolves package.json, else a Makefile's targets, else
+    // nothing — and nothing means no failure plus a note, never a silent pass.
     const declared = await readDeclaredScripts(cwd)
+    const contractNotes: string[] = []
     if (declared.length > 0) {
-        const missing = missingDeclaredScripts(declared, Object.keys(packageScripts(cwd)))
-        if (missing.length > 0) {
-            fail(
-                `launch contract: the design declares script(s) the shipped package.json does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
-            )
+        const manifest = readLaunchManifest(cwd)
+        if (manifest.kind === 'none') {
+            contractNotes.push(inertLaunchContractNote(declared, manifest))
+        } else {
+            const missing = missingDeclaredScripts(declared, manifest.names)
+            if (missing.length > 0) {
+                fail(
+                    `launch contract: the design declares script(s) the shipped ${manifest.file} does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
+                )
+            }
         }
     }
     // Serve-entry closure (mx5 run 18, nexttask 2B): the tree builds a server app,
@@ -1706,7 +1723,12 @@ export async function runFinalIntegrationGate(
     // harvest lever refuted at discoverIntegrationCommands it cannot inject a fabricated
     // failure.
     if (lockCmds.length === 0 && cmds.length === 0 && !boot && failures.length === 0) {
-        const note = unobservedVerdict({discovered: 0, observed: 0}) ?? ''
+        // The inert-contract note rides here too: a non-npm project carrying a launch
+        // contract usually discovers no command either, and that is exactly the run
+        // whose silence must not read as "the contract was checked and was fine".
+        const note = [unobservedVerdict({discovered: 0, observed: 0}) ?? '', ...contractNotes]
+            .filter(n => n !== '')
+            .join(' ')
         return withDebts({ok: true, unobserved: note, reason: note})
     }
     const ran: string[] = []
@@ -1762,6 +1784,11 @@ export async function runFinalIntegrationGate(
         // A declared script the manifest doesn't expose is already a launch-contract
         // failure above; executing it too would double-report (pre-aggregation the
         // contract diff early-returned, so this loop could assume presence).
+        // EXECUTION STAYS npm-ONLY. The diff above now also speaks Makefile (16A),
+        // but the runner below is literally `bun run <name>`; on a Makefile project
+        // `present` is empty, so every declared target is skipped rather than run
+        // through the wrong tool. Widening the RUNNER is a separate lever with its
+        // own A/B, not a free rider on an inertness fix.
         const present = new Set(Object.keys(packageScripts(cwd)).map(s => s.toLowerCase()))
         const scripts = packageScripts(cwd)
         // CONFIG-GAP INPUTS (mx5 run 20), read once: the tracked file list and the
@@ -1997,7 +2024,8 @@ export async function runFinalIntegrationGate(
     const unobserved = [
         bootUnobserved,
         unobservedVerdict({discovered: dynAttempted, observed: dynObserved}),
-        ...configGapNotes
+        ...configGapNotes,
+        ...contractNotes
     ]
         .filter(n => n !== null)
         .join(' ')

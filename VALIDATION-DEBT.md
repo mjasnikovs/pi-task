@@ -375,6 +375,51 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## SHIPPED — 0h. The launch-contract diff stops reporting misses against a manifest the project does not have (nexttask 16A, 2026-08-07)
+
+The extraction end of the launch contract has **no ecosystem test anywhere in it**:
+`enumerateScriptCandidates` scrapes every backticked, script-name-shaped token out
+of any design paragraph containing the word "script", and `keepGroundedScripts` can
+only DROP a candidate, never add one. The diff end hardcoded npm anyway —
+`packageScripts`' `catch` returns `{}`, so **"this project has no package.json" and
+"its package.json declares no scripts" were the same input**. A CMake/cargo/poetry
+design saying *"the Makefile must expose `build`, `test`, `migrate`"* therefore got
+all three reported missing, at rank 1, in wording naming a file the project was
+never meant to have — and that text seeds the autofix child's prompt, whose likeliest
+repair is to write a `package.json`.
+
+`src/task/launch-manifest.ts` resolves what may be diffed: `package.json` (unchanged
+behaviour, unchanged wording), else a **Makefile's targets** (the capability was
+already in `final-gate.ts` as `makeHasTarget`; the diff simply never called it), else
+**INERT** — no failure, and one UNOBSERVED note saying the contract was recorded and
+NOT checked here, so the silence is not read later as a pass. Execution stays
+npm-only: the runner is literally `bun run <name>`, so a Makefile project's targets
+are skipped rather than run through the wrong tool. An unparseable `package.json` is
+inert too — you cannot diff against a manifest you could not read.
+
+**no rate claim — 0 observed occurrences.** 1 non-npm project reached extraction
+(IAR1, `plan-debug.log:10`: "launch-contract extraction: 0 grounded script(s) kept
+from 3 emitted"); it emitted 3 candidates and the host grounding dropped all 3. The
+defect is proven **by construction** (`scripts/launch-contract-inert-ab.ts` fixture
+(a)), not by frequency. `launch-contract.md` exists in exactly ONE tree on this box.
+
+**Why a construction proof is enough HERE and nowhere else in nexttask 16.** The fix
+is INERTNESS — the strictly smaller behaviour, which cannot invent a failure. A lever
+that changes what the gate *does* (16B's refusal to execute, 16C's per-task check)
+does not get this exemption and did not ship on one.
+
+**Gate.** `scripts/launch-contract-inert-ab.ts`, three fixtures, real
+`runFinalIntegrationGate` in both arms, baseline pinned to the lever module's
+add-commit^: (a) CMake — baseline FAILS naming all three against a package.json that
+does not exist, treatment is inert and notes it; (b) Makefile exposing `build`+`test`
+— treatment FAILS naming `migrate` only, and says "Makefile"; (c) **the FP suite** —
+mx5's REAL `package.json` and REAL `.pi-tasks/launch-contract.md` at `3e87014`
+(`git show`n, never transcribed), where the run-20 miss of `build`/`seed` is a TRUE
+positive and both arms must produce a **byte-identical 7-item ranked failure list**.
+They do. If that fixture ever diverges, the change scoped nothing and broke the check.
+
+---
+
 ## SHIPPED — 0g. The final gate could not converge: two guards over three screenshots, and a config gap graded as a code fault (nexttask 15A/15B/15C, 2026-08-07)
 
 mx5 run 20 spent 8m16s, all three autofix attempts, and ended `left failed` — on
