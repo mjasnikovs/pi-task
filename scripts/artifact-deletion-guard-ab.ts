@@ -21,8 +21,9 @@
  *
  * Deterministic: no model. The fix child is a fake that performs the recorded
  * edits on disk; git, `parseTreeChanges` and the real `runFinalGateAutofix` seam
- * are all live in BOTH arms. The baseline arm runs against a `git archive HEAD`
- * export of `src/` — the whole shipped module graph, imported from a temp dir —
+ * are all live in BOTH arms. The baseline arm runs against a `git archive` export
+ * of `src/` at the commit BEFORE 15A (see baselineRef) — the whole shipped module
+ * graph, imported from a temp dir —
  * so the comparison is shipped code vs working tree, not a re-implementation of
  * one against the other. An earlier version of this script injected the arm's
  * guard through `treeChanges` instead; that was wrong, because the guard call
@@ -103,16 +104,36 @@ interface GateModules {
 }
 
 /**
- * The whole shipped `src/` tree as of git HEAD, exported with `git archive` and
- * imported from a temp dir. Exporting the tree rather than a single file matters:
+ * The commit BEFORE 15A landed, located by when the shared constant module was
+ * first added. Resolving this rather than using `HEAD` is not fussiness: the first
+ * run of this script used HEAD, and the moment 15A was committed the "baseline"
+ * arm started loading the FIXED code — both arms became the treatment and the A/B
+ * silently stopped measuring anything. A baseline ref that moves with the fix is
+ * not a baseline.
+ */
+function baselineRef(): string {
+    const r = spawnSync(
+        'git',
+        ['log', '--diff-filter=A', '--format=%H', '--', 'src/task/regenerable-artifacts.ts'],
+        {encoding: 'utf8'}
+    )
+    const sha = (r.stdout ?? '').trim().split('\n').filter(Boolean).pop()
+    if (!sha) throw new Error('cannot locate the commit that added src/task/regenerable-artifacts.ts')
+    return `${sha}^`
+}
+
+/**
+ * The whole shipped `src/` tree at `ref`, exported with `git archive` and imported
+ * from a temp dir. Exporting the tree rather than a single file matters:
  * `final-gate-fix.ts` calls `findForbiddenDeletions` through a relative import, so
  * swapping only `write-guard.ts` would leave the guard inside the seam untouched.
  */
 async function headModules(): Promise<GateModules> {
     const dir = path.join(ROOT, '_head')
     fs.mkdirSync(dir, {recursive: true})
-    const tar = spawnSync('git', ['archive', 'HEAD', 'src'], {encoding: 'buffer', maxBuffer: 256 * 1024 * 1024})
-    if (tar.status !== 0) throw new Error('git archive HEAD src failed')
+    const ref = baselineRef()
+    const tar = spawnSync('git', ['archive', ref, 'src'], {encoding: 'buffer', maxBuffer: 256 * 1024 * 1024})
+    if (tar.status !== 0) throw new Error(`git archive ${ref} src failed`)
     const tarPath = path.join(dir, 'head.tar')
     fs.writeFileSync(tarPath, tar.stdout)
     const untar = spawnSync('tar', ['-xf', tarPath, '-C', dir])
@@ -252,7 +273,7 @@ async function main(): Promise<void> {
 
     console.log('A/B — mx5 run 20 attempt 1, replayed through runFinalGateAutofix')
     console.log('')
-    console.log(`  baseline  (src/ @ git HEAD)`)
+    console.log(`  baseline  (src/ @ ${baselineRef()})`)
     console.log(`      ok=${baseline.ok}  reason=${baseline.reason.slice(0, 110)}`)
     console.log(`      api.test.tsx repair kept: ${baseline.apiTestRepaired}   package.json edit kept: ${baseline.packageJsonEdited}`)
     console.log(`  treatment (working tree)`)

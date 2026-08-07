@@ -77,9 +77,16 @@ import {
     type DeepRenderOutcome
 } from './deep-render-check.js'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
+import {findLaunchConfigGap, probeEnv, configGapUnobservedNote} from './launch-config-gap.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
-import {findMissingEnvDeclarations, envGateFailureText} from './env-template-closure.js'
+import {
+    findMissingEnvDeclarations,
+    envGateFailureText,
+    scanEnvTemplateClosure,
+    inertClosure,
+    trackedFiles
+} from './env-template-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 import {makefileRecipe} from './command-shrink.js'
 
@@ -1216,7 +1223,10 @@ function runGateCommand(
     cwd: string,
     [bin, args]: HealthCommand,
     timeoutMs: number,
-    extraGapRe?: RegExp
+    extraGapRe?: RegExp,
+    /** Replaces the child's environment wholesale (config-gap probe re-run only —
+     *  see launch-config-gap.ts). Absent ⇒ `runnerEnv(runner)`, i.e. unchanged. */
+    envOverride?: Record<string, string | undefined>
 ):
     | {
           outcome: 'skip'
@@ -1240,7 +1250,7 @@ function runGateCommand(
         cwd,
         encoding: 'utf8',
         timeout: timeoutMs,
-        env: runnerEnv(runner)
+        env: envOverride ?? runnerEnv(runner)
     })
     if (r.error) return {outcome: 'skip', spawnFailed: true}
     if (r.status === null) return {outcome: 'skip', spawnFailed: false}
@@ -1740,6 +1750,10 @@ export async function runFinalIntegrationGate(
     // real defect the gate could not reach here (run 11's "pre-existing .rows
     // bug" note excused the exact scripts that shipped broken).
     const warnings: string[] = []
+    /** UNOBSERVED notes for launch scripts reclassified as CONFIG GAPS (run 20).
+     *  They ride in `unobserved`, not `warnings`, so the caller's existing
+     *  recordFinalGateUnobservedDebt writes the debt — never a PASS. */
+    const configGapNotes: string[] = []
     if (declared.length > 0) {
         const covered = cmds.flatMap(([bin, args]) =>
             (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
@@ -1749,13 +1763,27 @@ export async function runFinalIntegrationGate(
         // failure above; executing it too would double-report (pre-aggregation the
         // contract diff early-returned, so this loop could assume presence).
         const present = new Set(Object.keys(packageScripts(cwd)).map(s => s.toLowerCase()))
+        const scripts = packageScripts(cwd)
+        // CONFIG-GAP INPUTS (mx5 run 20), read once: the tracked file list and the
+        // union of every tracked env template's declared variables. Both empty on a
+        // non-git tree or a tree with no template, which makes the whole check inert
+        // — a project with no template gains no excuse. See launch-config-gap.ts.
+        const closure = (() => {
+            try {
+                return scanEnvTemplateClosure(cwd)
+            } catch {
+                return inertClosure()
+            }
+        })()
+        const trackedForGap = closure.templates.length > 0 ? (trackedFiles(cwd) ?? []) : []
+        const launchTimeout = Math.min(timeoutMs, 180_000)
         for (const name of runnableDeclaredScripts(declared, covered)) {
             if (!present.has(name.toLowerCase())) continue
             const cmd: HealthCommand = ['bun', ['run', name]]
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             dynAttempted += 1
             dynBins.add(cmd[0])
-            const r = runGateCommand(cwd, cmd, Math.min(timeoutMs, 180_000), INFRA_GAP_OUTPUT_RE)
+            const r = runGateCommand(cwd, cmd, launchTimeout, INFRA_GAP_OUTPUT_RE)
             if (r.outcome === 'skip') {
                 if (r.spawnFailed) dynSpawnFailures += 1
                 skippedLaunch.push(name)
@@ -1763,6 +1791,43 @@ export async function runFinalIntegrationGate(
             }
             dynObserved += 1
             if (r.outcome === 'fail') {
+                // A CONFIG GAP IS NOT A CODE FAULT (mx5 run 20). The run died on
+                // `bun run seed` exiting 1 because ADMIN_PHONE — which the project's
+                // own `.env.example` DECLARES — is absent from this box, and the only
+                // way to supply it is a gitignored `.env` the commit cannot contain.
+                // Four static conditions (findLaunchConfigGap) plus one dynamic one:
+                // re-run with the variables supplied as synthetic placeholders, and
+                // reclassify ONLY if that exits 0. A script that fails for its own
+                // reasons fails again with the values present and stays a FAIL — an
+                // absent variable is not a licence to ignore an exit code the code
+                // caused. Nothing is parsed from the child's stderr: the wording is
+                // the project's, not the harness's.
+                const gap = findLaunchConfigGap({
+                    cwd,
+                    script: name,
+                    body: scripts[name] ?? null,
+                    tracked: trackedForGap,
+                    declared: closure.declared,
+                    env: process.env
+                })
+                if (gap) {
+                    const probe = runGateCommand(
+                        cwd,
+                        cmd,
+                        launchTimeout,
+                        INFRA_GAP_OUTPUT_RE,
+                        probeEnv(runnerEnv(resolveRunner(cmd[0])), gap)
+                    )
+                    if (probe.outcome === 'pass') {
+                        // Nothing about this script was OBSERVED: the real run could
+                        // not reach it and the probe run is a diagnostic, never an
+                        // observation. So it un-counts, exactly like a skip.
+                        dynObserved -= 1
+                        skippedLaunch.push(name)
+                        configGapNotes.push(configGapUnobservedNote(gap))
+                        continue
+                    }
+                }
                 fail(
                     `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
                 )
@@ -1931,7 +1996,8 @@ export async function runFinalIntegrationGate(
     // because it names a concrete command and the trail line is sliced at 300 chars.
     const unobserved = [
         bootUnobserved,
-        unobservedVerdict({discovered: dynAttempted, observed: dynObserved})
+        unobservedVerdict({discovered: dynAttempted, observed: dynObserved}),
+        ...configGapNotes
     ]
         .filter(n => n !== null)
         .join(' ')
