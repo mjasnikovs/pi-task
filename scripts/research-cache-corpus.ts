@@ -101,11 +101,29 @@ export function writeSnapshot(paths = CORPUS_PATHS): Snapshot {
 }
 
 export function loadCorpus(paths = CORPUS_PATHS): Lookup[] {
-    const out: Lookup[] = []
     const snap: Snapshot =
         fs.existsSync(SNAPSHOT) ?
             (JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8')) as Snapshot)
         :   readSources(paths)
+    return toLookups(snap)
+}
+
+/**
+ * The caches as they are ON DISK RIGHT NOW, ignoring the snapshot.
+ *
+ * The snapshot is the right corpus for anything measured against it (it is pinned,
+ * and the trees are not). It is the WRONG corpus for a channel whose entries the
+ * runs themselves keep invalidating: the 2026-08-06 snapshot holds 149 mx5 docs
+ * entries, the live cache 120, because per-package invalidation dropped the rest
+ * when run 20 installed things. A count that has to reproduce a hand count taken
+ * off the live tree must read the live tree.
+ */
+export function loadLiveCorpus(paths = CORPUS_PATHS): Lookup[] {
+    return toLookups(readSources(paths))
+}
+
+function toLookups(snap: Snapshot): Lookup[] {
+    const out: Lookup[] = []
     for (const [project, entries] of Object.entries(snap.projects)) {
         for (const [key, entry] of Object.entries(entries)) {
             const nul = key.indexOf('\0')

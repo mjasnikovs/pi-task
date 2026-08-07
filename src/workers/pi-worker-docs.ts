@@ -334,7 +334,8 @@ export function registerPiWorkerDocs(
                 const banner = buildVersionBanner(
                     rawResult.autoInstallPin,
                     rawResult.pkg.name,
-                    rawResult.pkg.version
+                    rawResult.pkg.version,
+                    ctx.cwd
                 )
                 return {
                     text:
@@ -358,7 +359,8 @@ export function registerPiWorkerDocs(
             const versionBanner = buildVersionBanner(
                 rawResult.autoInstallPin,
                 pkg.name,
-                pkg.version
+                pkg.version,
+                ctx.cwd
             )
             const baseDetails: DocsDetails = {
                 version: pkg.version,

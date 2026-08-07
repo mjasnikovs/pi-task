@@ -2,7 +2,14 @@ import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {docsRaw, docsFocused, findDeclaredRange, buildVersionBanner} from './docs-core.js'
+import {
+    docsRaw,
+    docsFocused,
+    findDeclaredRange,
+    findDeclaration,
+    declarationChain,
+    buildVersionBanner
+} from './docs-core.js'
 import {resolvePackage as realResolvePackage, ResolveError} from './docs-resolve.js'
 import {fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {openCache} from './docs-cache.js'
@@ -114,23 +121,98 @@ describe('findDeclaredRange', () => {
     })
 })
 
+describe('declarationChain', () => {
+    test('asked, its @types package, then the terminal — deduped', () => {
+        expect(declarationChain('bun', 'bun-types')).toEqual(['bun', '@types/bun', 'bun-types'])
+        expect(declarationChain('@radix-ui/react-dialog')).toEqual([
+            '@radix-ui/react-dialog',
+            '@types/radix-ui__react-dialog'
+        ])
+        expect(declarationChain('@types/bun', '@types/bun')).toEqual(['@types/bun'])
+    })
+})
+
+describe('findDeclaration', () => {
+    test('a usable declaration anywhere on the chain beats an unusable earlier one', () => {
+        const dir = makeProjectDir({
+            dependencies: {'a-pkg': 'latest'},
+            devDependencies: {'@types/a-pkg': '^2.0.0'}
+        })
+        expect(findDeclaration(['a-pkg', '@types/a-pkg'], dir)).toEqual({
+            pkg: '@types/a-pkg',
+            value: '^2.0.0',
+            usable: true
+        })
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('reports an unpinned declaration when the chain has nothing usable', () => {
+        const dir = makeProjectDir({devDependencies: {'@types/bun': 'latest'}})
+        expect(findDeclaration(['bun', '@types/bun', 'bun-types'], dir)).toEqual({
+            pkg: '@types/bun',
+            value: 'latest',
+            usable: false
+        })
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('null when no name on the chain appears at all', () => {
+        const dir = makeProjectDir({dependencies: {other: '^1'}})
+        expect(findDeclaration(['a-pkg', '@types/a-pkg'], dir)).toBeNull()
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+})
+
 describe('buildVersionBanner', () => {
+    const NONE = makeProjectDir({dependencies: {other: '^1'}})
+
     test('returns empty string when there was no auto-install', () => {
-        expect(buildVersionBanner(undefined, 'left-pad', '1.3.0')).toBe('')
+        expect(buildVersionBanner(undefined, 'left-pad', '1.3.0', NONE)).toBe('')
     })
 
     test('declared-range banner names the range + version, no verify warning', () => {
-        const b = buildVersionBanner({source: 'declared-range', range: '^3.4.0'}, 'thing', '3.4.19')
+        const b = buildVersionBanner(
+            {source: 'declared-range', range: '^3.4.0'},
+            'thing',
+            '3.4.19',
+            NONE
+        )
         expect(b).toContain('^3.4.0')
         expect(b).toContain('3.4.19')
         expect(b).not.toMatch(/different MAJOR/i)
     })
 
     test('npm-latest banner warns about a possibly-different major + names version', () => {
-        const b = buildVersionBanner({source: 'npm-latest'}, 'thing', '4.1.0')
+        const b = buildVersionBanner({source: 'npm-latest'}, 'thing', '4.1.0', NONE)
         expect(b).toContain('4.1.0')
         expect(b).toMatch(/different MAJOR/i)
         expect(b).toMatch(/verify/i)
+    })
+
+    test('names the package ASKED about, not the terminal of the redirect chain', () => {
+        const b = buildVersionBanner(
+            {source: 'npm-latest', asked: 'bun'},
+            'bun-types',
+            '1.3.14',
+            NONE
+        )
+        expect(b).toContain('"bun"')
+        expect(b).not.toContain('"bun-types"')
+        expect(b).toContain('The types this answer reads come from bun-types.')
+    })
+
+    test('a usable declaration off the chain is provenance, not a pin', () => {
+        const dir = makeProjectDir({devDependencies: {'@types/bun': '^1.2.0'}})
+        const b = buildVersionBanner(
+            {source: 'npm-latest', asked: 'bun'},
+            'bun-types',
+            '1.3.14',
+            dir
+        )
+        expect(b).toContain('"bun" is not declared in this project\'s package.json')
+        expect(b).toContain('only its types are, as @types/bun ^1.2.0')
+        expect(b).toContain('npm latest (v1.3.14)')
+        fs.rmSync(dir, {recursive: true, force: true})
     })
 })
 
@@ -177,7 +259,11 @@ describe('docsRaw auto-install version pinning', () => {
         expect(npmInstall).not.toContain('left-pad')
         expect(r.kind).toBe('ok')
         if (r.kind === 'ok') {
-            expect(r.autoInstallPin).toEqual({source: 'declared-range', range: '^1.0.0'})
+            expect(r.autoInstallPin).toEqual({
+                source: 'declared-range',
+                range: '^1.0.0',
+                asked: 'left-pad'
+            })
         }
         cache.close()
         fs.rmSync(dir, {recursive: true, force: true})
@@ -202,7 +288,7 @@ describe('docsRaw auto-install version pinning', () => {
         expect(npmInstall!.some(a => a.startsWith('left-pad@'))).toBe(false)
         expect(r.kind).toBe('ok')
         if (r.kind === 'ok') {
-            expect(r.autoInstallPin).toEqual({source: 'npm-latest'})
+            expect(r.autoInstallPin).toEqual({source: 'npm-latest', asked: 'left-pad'})
         }
         cache.close()
         fs.rmSync(dir, {recursive: true, force: true})

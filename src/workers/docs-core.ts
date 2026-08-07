@@ -47,6 +47,13 @@ const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 export interface AutoInstallPin {
     source: 'declared-range' | 'npm-latest'
     range?: string
+    /**
+     * The package the CALLER asked about — the HEAD of the resolution chain, not
+     * its terminal. `bun -> @types/bun -> bun-types` resolves correctly and must
+     * keep doing so, but the sentence a banner writes is about `bun`: the project
+     * cannot declare `bun-types`, and was never asked about it.
+     */
+    asked?: string
 }
 
 export type DocsRawResult =
@@ -146,16 +153,43 @@ function isUsableRange(range: string): boolean {
     return true
 }
 
+/** What a project's package.json says about one package, whether or not the
+ *  value is something the install path could use. */
+export interface Declaration {
+    /** The dependency-map KEY the declaration was found under. */
+    pkg: string
+    /** Its value, trimmed — `^1.2.0`, `latest`, `workspace:*`. */
+    value: string
+    /** False for dist-tags, wildcards and non-registry protocols. */
+    usable: boolean
+}
+
 /**
- * The version range a project DECLARES for `parentPkg` in its package.json under
- * `cwd`. Lets a not-yet-installed scaffolding dependency be documented against
- * the major the project intends, instead of whatever npm currently tags
- * `latest`. Scans the four standard dependency maps in priority order. Returns
- * null — caller falls back to latest — when the dep is undeclared, the
- * package.json is missing/unreadable, or the declared value is not a usable
- * range. Best-effort; never throws.
+ * The names a declaration for `asked` can honestly live under, nearest first:
+ * the package itself, its DefinitelyTyped package, and the terminal the type
+ * resolution chain landed on. A project that uses Bun declares `@types/bun`, not
+ * `bun`; asking only about the terminal `bun-types` finds nothing at all, which
+ * is how 35 of run 20's 48 banners came to report on a package nobody asked
+ * about.
  */
-export function findDeclaredRange(parentPkg: string, cwd: string): string | null {
+export function declarationChain(asked: string, resolved?: string): string[] {
+    const out = [asked]
+    const types = typesPackageName(asked)
+    if (types && !out.includes(types)) out.push(types)
+    if (resolved && !out.includes(resolved)) out.push(resolved)
+    return out
+}
+
+/**
+ * The first declaration for any name in `names`, searching the four standard
+ * dependency maps of `cwd`'s package.json. A USABLE declaration always wins;
+ * only if none of the names has one does an unusable declaration (a dist-tag or
+ * a non-registry protocol) come back, so the caller can tell "declared as
+ * `latest`" apart from "not declared at all" — two different facts that used to
+ * produce the same sentence. Returns null when no name appears anywhere, or the
+ * package.json is missing or unparseable. Best-effort; never throws.
+ */
+export function findDeclaration(names: string[], cwd: string): Declaration | null {
     let json: Record<string, unknown>
     try {
         json = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')) as Record<
@@ -165,13 +199,38 @@ export function findDeclaredRange(parentPkg: string, cwd: string): string | null
     } catch {
         return null
     }
-    for (const field of DEP_FIELDS) {
-        const map = json[field]
-        if (!map || typeof map !== 'object') continue
-        const range = (map as Record<string, unknown>)[parentPkg]
-        if (typeof range === 'string' && isUsableRange(range)) return range.trim()
+    let unusable: Declaration | null = null
+    for (const name of names) {
+        for (const field of DEP_FIELDS) {
+            const map = json[field]
+            if (!map || typeof map !== 'object') continue
+            const range = (map as Record<string, unknown>)[name]
+            if (typeof range !== 'string') continue
+            const value = range.trim()
+            if (isUsableRange(value)) return {pkg: name, value, usable: true}
+            unusable ??= {pkg: name, value, usable: false}
+        }
     }
-    return null
+    return unusable
+}
+
+/**
+ * The version range a project DECLARES for `parentPkg` in its package.json under
+ * `cwd`. Lets a not-yet-installed scaffolding dependency be documented against
+ * the major the project intends, instead of whatever npm currently tags
+ * `latest`. Returns null — caller falls back to latest — when the dep is
+ * undeclared, the package.json is missing/unreadable, or the declared value is
+ * not a usable range.
+ *
+ * This is the INSTALL target and takes one name deliberately: `npm install
+ * <parentPkg>@<range>` must use the range declared for `parentPkg` itself.
+ * `@types/bun`'s range is not `bun`'s. The banner's wider, chain-aware question
+ * is `findDeclaration`; keeping them apart is what stops a wording fix from
+ * silently changing what gets installed.
+ */
+export function findDeclaredRange(parentPkg: string, cwd: string): string | null {
+    const found = findDeclaration([parentPkg], cwd)
+    return found?.usable === true ? found.value : null
 }
 
 /**
@@ -181,24 +240,40 @@ export function findDeclaredRange(parentPkg: string, cwd: string): string | null
  * the prose the impl model reads, rather than burying it in tool `details`.
  * Empty string when there was no auto-install (already-installed packages need
  * no banner — their version is the project's own).
+ *
+ * `resolved` is the package the types were finally read from — the TERMINAL of
+ * the redirect chain. The banner names `pin.asked`, the package the caller asked
+ * about, and mentions the terminal only as provenance: a project can declare
+ * `bun`, and cannot declare `bun-types`, so a sentence about what package.json
+ * does or does not say has to be a sentence about `bun`.
  */
 export function buildVersionBanner(
     pin: AutoInstallPin | undefined,
-    pkgName: string,
-    version: string
+    resolved: string,
+    version: string,
+    cwd: string
 ): string {
     if (!pin) return ''
+    const asked = pin.asked ?? resolved
+    const grounded = resolved !== asked ? ` The types this answer reads come from ${resolved}.` : ''
     if (pin.source === 'declared-range') {
         return (
-            `[VERSION] "${pkgName}" resolved to this project's declared range `
-            + `${pin.range} (installed v${version}); the answer below is pinned to that version.\n\n`
+            `[VERSION] "${asked}" resolved to this project's declared range `
+            + `${pin.range} (installed v${version}); the answer below is pinned to that `
+            + `version.${grounded}\n\n`
         )
     }
+    // The install fell back to npm latest. A usable declaration can still exist
+    // further along the chain (`@types/<name>`) — it did not pin THIS install, so
+    // the banner reports it as provenance, not as a pin.
+    const decl = findDeclaration(declarationChain(asked, resolved), cwd)
+    const via =
+        decl?.usable === true ? ` — only its types are, as ${decl.pkg} ${decl.value} —` : ','
     return (
-        `[VERSION — verify] "${pkgName}" is not declared in this project's package.json, `
+        `[VERSION — verify] "${asked}" is not declared in this project's package.json${via} `
         + `so this answer is based on npm latest (v${version}). Your project may target a `
         + `different MAJOR — confirm the version you intend to install and treat any API that `
-        + `differs across majors as unverified until you check it against that version.\n\n`
+        + `differs across majors as unverified until you check it against that version.${grounded}\n\n`
     )
 }
 
@@ -344,8 +419,8 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             const declaredRange = findDeclaredRange(parentPkg, input.cwd)
             autoInstallPin =
                 declaredRange ?
-                    {source: 'declared-range', range: declaredRange}
-                :   {source: 'npm-latest'}
+                    {source: 'declared-range', range: declaredRange, asked: parentPkg}
+                :   {source: 'npm-latest', asked: parentPkg}
             const installResult = await runAutoInstall(
                 spawn,
                 parentPkg,
