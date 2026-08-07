@@ -13,6 +13,42 @@ not here. Last updated 2026-08-07.
 
 ## RULED OUT — do not re-propose
 
+- **Carrying the previous attempt's guard-rejection reason into the autofix retry
+  prompt** (nexttask 15D). Closed 2026-08-07 at STEP 7, on its own pre-registered
+  gate (`>= 3` episodes needed), before any lever was written.
+  `scripts/guard-rejection-repeat-baserate.ts`, over every `final-gate-debug.log`
+  and `TASK_AUTO_*.md` under `~/hub`, `~/tmp`, `~/.cache`:
+
+      final-gate-debug.log files                     33
+      fix-pass attempts across all of them           35
+      attempts REJECTED by a write-guard              2   (both mx5, both the
+                                                          deletion guard, both the
+                                                          same three screenshots)
+      consecutive-attempt PAIRS available             2
+      episodes: rejected AND next attempt repeated    1   ← gate needed >= 3
+
+  **The defect is real and the diagnosis holds.** `seed = fin.reason`
+  (`auto-orchestrator.ts`) passes the ORIGINAL gate outcome; a guard rejection
+  never updates it, so run 20's attempt 2 received a byte-identical prompt to
+  attempt 1 with no mention that its edits were discarded or why — and repeated
+  the same deletion. The non-progress classifier below it is blind here too: a
+  rejected attempt never re-runs the gate, so `fix.gateReason` is undefined and no
+  demotion is considered.
+
+  **What closes it is the corpus, not the diagnosis.** The lead expected one tree
+  with a gate log; there are 33 — but **32 of them took exactly ONE fix attempt**,
+  so they cannot exhibit a repeat by construction. They enlarge the denominator of
+  "how often is an attempt rejected" (2 of 35) and contribute nothing to the
+  numerator of the thing 15D targets. The single episode is mx5 run 20 attempts
+  1→2, i.e. the lead's own run.
+
+  **Record the reason as "not measurable on this corpus", NOT "does not happen".**
+  15A removes this episode's cause, which says nothing about the other guards
+  (frozen-path, shrink, scope-shrink, probe-gaming) whose rejections travel the
+  same silent path. Re-open with a corpus containing >= 3 multi-attempt runs whose
+  first attempt was guard-rejected — not by relaxing the threshold, and not by
+  counting single-attempt runs.
+
 - **Routing a behaviour question to the fetch channel and preferring the official-docs
   result** (nexttask 14C). Closed 2026-08-06 at STEP 4, on its own pre-registered gate,
   before any lever was written. `scripts/fetch-lead-quality-baserate.ts`, over the
