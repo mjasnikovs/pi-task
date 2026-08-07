@@ -55,6 +55,15 @@ describe('readLaunchManifest', () => {
         expect(m.names).toEqual(['build', 'test'])
     })
 
+    test('the named file is the one the DIRECTORY has, on any filesystem', () => {
+        for (const spelling of ['Makefile', 'makefile', 'GNUmakefile']) {
+            const dir = tree({[spelling]: 'build:\n\ttrue\n'})
+            const m = readLaunchManifest(dir)
+            expect(m.kind).toBe('make')
+            expect(fs.readdirSync(dir)).toContain(m.file)
+        }
+    })
+
     test('package.json WINS over a Makefile — the npm diff is unchanged where it applied', () => {
         const m = readLaunchManifest(
             tree({

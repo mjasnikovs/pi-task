@@ -39,7 +39,7 @@
  * project that ever recorded a launch contract (mx5, npm) and one non-npm project
  * that reached extraction (IAR1, CMake). A third ecosystem would be a guess.
  */
-import {existsSync, readFileSync} from 'node:fs'
+import {existsSync, readFileSync, readdirSync} from 'node:fs'
 import * as path from 'node:path'
 
 /** Which manifest kind the diff resolved for a tree. `none` ⇒ the diff is INERT. */
@@ -100,6 +100,27 @@ export function makeTargets(src: string): string[] {
 }
 
 /**
+ * The makefiles that really exist in `cwd`, in GNU make's lookup order, named as
+ * the DIRECTORY spells them. `existsSync` cannot do this job: on a case-insensitive
+ * filesystem (Windows, macOS) `existsSync('makefile')` is true for a `Makefile`, and
+ * the failure text would then name a file the project does not have.
+ */
+function makefilesOnDisk(cwd: string): string[] {
+    let entries: string[]
+    try {
+        entries = readdirSync(cwd)
+    } catch {
+        return []
+    }
+    const out: string[] = []
+    for (const want of MAKEFILE_NAMES) {
+        const hit = entries.find(e => e.toLowerCase() === want.toLowerCase())
+        if (hit && !out.includes(hit)) out.push(hit)
+    }
+    return out
+}
+
+/**
  * Resolve the manifest the launch contract may be diffed against.
  *
  * A package.json that exists but does not parse resolves to `none`, not to "zero
@@ -116,11 +137,13 @@ export function readLaunchManifest(cwd: string): LaunchManifest {
             return {kind: 'none', file: '', names: [], why: 'its package.json could not be parsed'}
         }
     }
-    for (const name of MAKEFILE_NAMES) {
-        const mk = path.join(cwd, name)
-        if (!existsSync(mk)) continue
+    for (const name of makefilesOnDisk(cwd)) {
         try {
-            return {kind: 'make', file: name, names: makeTargets(readFileSync(mk, 'utf8'))}
+            return {
+                kind: 'make',
+                file: name,
+                names: makeTargets(readFileSync(path.join(cwd, name), 'utf8'))
+            }
         } catch {
             break
         }
