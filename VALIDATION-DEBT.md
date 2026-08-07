@@ -451,6 +451,85 @@ entries nothing is contested and a selection rule cannot be measured at all.
 
 ---
 
+## SHIPPED — 0i. The docs version banner reported on a package nobody asked about (nexttask 17A/17B, 2026-08-07); 17C CLOSED at 2 episodes
+
+**The defect.** 35 of run 20's 120 docs lookups — every Bun API question it asked —
+led with `[VERSION — verify] "bun-types" is not declared in this project's
+package.json … treat any API that differs across majors as unverified`. `bun-types`
+is the TERMINAL of the redirect chain `bun → @types/bun → bun-types`: no package.json
+can declare it and nobody asked about it. The chain is correct and stayed untouched;
+only the declaration lookup and the sentence moved. Two independent causes, both live:
+the banner named the terminal, and `isUsableRange` (correctly, for an install target)
+rejects `latest`, so mx5's real `"@types/bun": "latest"` counted as silence.
+
+**17A** — `buildVersionBanner(pin, pkgName, version)` →
+`buildVersionBanner(pin, resolved, version, cwd)`, naming `pin.asked` and citing the
+terminal as provenance. The declaration question became chain-aware
+(`findDeclaration` over asked → `@types/<name>` → terminal); the INSTALL question did
+not — `findDeclaredRange` still takes one name, because `@types/bun`'s range is not
+`bun`'s and this lever must not change what gets installed.
+
+**17B** — declared-as-a-dist-tag is not the same fact as undeclared. `latest` is
+exactly what the answer is grounded in, so there is no other major to confirm and
+nothing to hold unverified; the sentence splits, `isUsableRange` does not.
+
+**Base rate** (`scripts/version-banner-baserate.ts`, calibrated against the hand
+count in nexttask17.md, matching on all six counters): 120 lookups, 72 with no
+banner, 48 not-declared, **35 naming the wrong package**, 13 correct. Also:
+`pin.source === 'declared-range'` fires **0 times in 120 lookups** — the good branch
+of the banner is a claim nobody has ever checked. And 5 lookups (all `react`) record
+a `details.version` outside the declared range, all of them banner-less: that is the
+resolved package's version leaking into the header, a different defect, untouched.
+
+**Why an offline proof ships this.** The lever only ever makes the claim strictly
+SMALLER — it deletes a false sentence and replaces it with a true or narrower one. It
+cannot invent a fact for the impl model to act on. Same exemption 16A gets and 16B/16C
+are denied.
+
+**Gate.** `scripts/version-banner-ab.ts` — both arms the shipped function, baseline
+resolved to the lever symbol's add-commit^ (never `HEAD`), each entry replayed against
+mx5's `package.json` AT ITS OWN TIMESTAMP because a banner is a claim about the tree
+at lookup time. Five invariants, none with an empty population: replay fidelity
+(baseline reproduces all 48 recorded banners BYTE-FOR-BYTE), 35/35 renamed, 13/13
+correct banners byte-identical, 35/35 dist-tag cases reworded, 72/72 banner-less
+lookups unchanged. Plus `scripts/version-banner-fp-suite.ts` (38 checks), which is
+where the rest of the class lives — the corpus only ever exercises ONE shape.
+
+**Two things the FP suite found, recorded not patched.** `latest` is the only
+dist-tag `isUsableRange` rejects; `next`/`beta` are accepted and become
+`npm install bun@next`. Moving that line changes what gets INSTALLED, so it is now an
+asserted scope boundary. And a usable range on the asked name with an npm-latest pin
+(package.json changed under the lookup) used to produce a self-contradicting sentence.
+
+### 17C CLOSED — 2 episodes, gate needed 3
+
+`scripts/version-banner-hedge-baserate.ts`. Over the 48 banner-carrying lookups,
+episodes where the implementation then hedged: **2**, against a pre-registered gate
+of 3. They are (1) `sharp` — banner said npm latest v0.35.3, the scaffold commit
+declared `^0.33.0`, and note the spec said 0.35.3 too, so the pin deviated from BOTH;
+(2) one chain of three lookups in 103 seconds restating "is `sql` a named export of
+`bun`, or must you use `new sql()`?". No version guard was added anywhere after a
+banner.
+
+The delivery A/B is NOT built. The banner's downstream effect is not measurable on a
+one-project corpus; 17A/17B ship on correctness, not on delivery.
+
+**Two instrument corrections, both made before the count was believed.** The first
+GUARD pattern flagged a `bun.lock` line as a version check — generated dependency
+files are now excluded before matching. The first RE-ASK channel was unbounded in
+time and reported 2 episodes two hours and four commits after their banners: those
+are the next task needing the same API, not a hedge, so the channel is now bounded to
+the window between the banner and the next commit. The similarity threshold is a knob
+and the script prints its own sensitivity curve: 0/1/1/3 episodes at 0.6/0.5/0.4/0.3.
+The verdict does not turn on it — the count only reaches the gate at 0.3, where the
+pairs are plainly different questions (`file`, `glob`) wearing one phrasing.
+
+**Report every number here as ONE PROJECT.** IAR1 is CMake, has no npm manifest, and
+made zero docs lookups; this channel is npm-shaped and mx5 run 20 is all of it. A
+cache HIT writes no entry, so 120 is a lower bound.
+
+---
+
 ## SHIPPED — 0h. The launch-contract diff stops reporting misses against a manifest the project does not have (nexttask 16A, 2026-08-07)
 
 The extraction end of the launch contract has **no ecosystem test anywhere in it**:
