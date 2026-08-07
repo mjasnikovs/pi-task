@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-2077%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-3025%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -72,7 +72,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume [--unattended]` | Resume the active `/task-auto` run at the next unfinished task. `--unattended` is the boot-hook form: in-flight runs only. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote control, compress thinking, auto-commit, verify work, enforce guidelines, project tour, command timeout, stuck reply retry, debug logs, and one `ext:` toggle per installed host extension. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote control, compress thinking, auto-commit, verify work, enforce guidelines, project tour, parallel research, research cache, search engine, command timeout, stuck reply retry, yolo mode, debug logs, one `watch:` toggle per live tool, and one `ext:` toggle per installed host extension. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -186,6 +186,7 @@ Runs a web search and returns a compact markdown list (title · URL · snippet).
 Fetches a URL, cleans HTML to markdown ([Readability](https://github.com/mozilla/readability) + [Turndown](https://github.com/mixmark-io/turndown)), then hands it to an isolated child that extracts **only** the content answering your `query`. The parent never sees the raw page.
 
 - HTML is cleaned; text formats (plain text, markdown, JSON, XML/feeds, `llms.txt`, …) pass through verbatim. Binary responses — PDFs, images, octet-streams — return a clear error.
+- A GitHub `/blob/` URL is rewritten to `raw.githubusercontent.com` before fetching. The blob page renders the file client-side, so a plain fetch returns the chrome and none of the code.
 - Bodies over 2 MB are rejected.
 - The extraction child runs with `--no-tools` to mitigate visible-text prompt injection.
 
@@ -229,6 +230,8 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | `PI_REMOTE_PUSH_DEBUG` | remote push | When set (e.g. `1`), logs push delivery and push-service HTTP status. Off by default. |
 | `PI_REMOTE_PUSH_LOG` | remote push | Path for the debug log (defaults to `/tmp/pi-task-push.log`). |
 | `PI_TASK_DEBUG_LOG` | task trail | Overrides the **debug logs** setting for one session: `off`, `events`, or `full`. For reproducing a report without walking someone through `/task-config`. An unrecognised value is ignored, not treated as `off`. |
+| `CHROME_BIN` | verify-work render check | Explicit headless Chrome-family binary. Tried before the Playwright cache and a browser on `PATH`. No browser found ⇒ the render check SKIPs; it never installs one. |
+| `PLAYWRIGHT_BROWSERS_PATH` | verify-work render check | Where to look for a cached Playwright Chromium (defaults to `~/.cache/ms-playwright`, or `~/Library/Caches/ms-playwright` on macOS). |
 
 Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your `.gitignore` if you don't want them checked in.
 
@@ -236,7 +239,7 @@ Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your 
 
 ```sh
 bun install
-bun run test       # 2078 tests across 129 files
+bun run test       # 3028 tests across 173 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
