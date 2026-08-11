@@ -103,6 +103,42 @@ export type DebtOrigin =
     | 'final-gate'
     | 'root-cause'
 
+/**
+ * Origin → the one-line provenance label the surfaced report prints for it
+ * (describeDebt). This table IS the origin registry: `Record<DebtOrigin, string>`
+ * makes a new union member a compile error until it has a label, and both the
+ * describe side and the parse side read it, so adding an origin is one union member
+ * plus one line here — not the six edit sites the per-origin recorder functions used
+ * to cost. The label text is user-facing (it lands in the final gate's report and in
+ * the FAIL picker), so these strings are byte-frozen.
+ */
+const DEBT_LABELS: Record<DebtOrigin, string> = {
+    accepted: 'accepted despite verify-FAIL',
+    'enforce-revert':
+        'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)',
+    'enforce-kept':
+        'enforce re-verify FAILED on a check the enforce diff cannot reach — the guideline edits were KEPT (reverting them could not fix it) and the defect indicts the ORIGINAL work, still shipped',
+    'frozen-blocked':
+        'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)',
+    'cross-task-deletion':
+        "a sibling task's committed deliverable was DELETED by this task's work and the deletion was accepted (still missing from the tree)",
+    'yolo-accepted':
+        'auto-ACCEPTED by YOLO mode despite verify-FAIL (unattended — no human weighed this)',
+    'final-gate':
+        'final-gate check DEMOTED to UNOBSERVED (identical failure across two tree-changing fix attempts — unfalsifiable in that environment, never proven passing)',
+    'root-cause':
+        "verify FAILed on a PRE-EXISTING defect in another task's file that this task never touched (this task's work was kept; a scoped repair task was queued for the root cause)"
+}
+
+/**
+ * A stored origin field is honoured only when it is a REGISTERED origin — anything
+ * else (a hand-edited line, a field from a newer build) falls back to the 'accepted'
+ * class rather than being trusted or dropped.
+ */
+function isKnownOrigin(origin: string | undefined): origin is DebtOrigin {
+    return origin !== undefined && Object.hasOwn(DEBT_LABELS, origin)
+}
+
 /** One recorded defect: the task, why its VERIFY failed, and how it was recorded. */
 export interface AcceptDebt {
     taskId: string
@@ -170,17 +206,10 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
         out.push({
             taskId: parts[0]!.trim(),
             reason: parts[1]!.trim(),
-            ...((
-                origin === 'enforce-revert'
-                || origin === 'enforce-kept'
-                || origin === 'frozen-blocked'
-                || origin === 'cross-task-deletion'
-                || origin === 'yolo-accepted'
-                || origin === 'final-gate'
-                || origin === 'root-cause'
-            ) ?
-                {origin: origin as DebtOrigin}
-            :   {}),
+            // 'accepted' is deliberately NOT carried: it is the legacy 2-field shape's
+            // implicit class, so an absent origin and a spelled-out 'accepted' must
+            // parse to the same record.
+            ...(isKnownOrigin(origin) && origin !== 'accepted' ? {origin} : {}),
             ...(verifyCommand !== undefined && verifyCommand.length > 0 ? {verifyCommand} : {})
         })
     }
@@ -244,150 +273,44 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
     }
 }
 
-/** Record a user-ACCEPTED-despite-verify-FAIL debt. */
-export async function recordAcceptDebt(cwd: string, taskId: string, reason: string): Promise<void> {
-    await appendDebt(cwd, {taskId: taskId.trim(), reason: normaliseReason(reason)})
+/**
+ * Record one durable defect against the run ledger, stamped with the DebtOrigin that
+ * says how it was reached (see DebtOrigin's doc for what each class asserts).
+ *
+ * This was eight exported wrappers that differed only in that one string literal, so
+ * a new class cost six edit sites. The origin is not cosmetic: the final gate
+ * re-checks and reports BY class, and an unattended auto-pick may never be recorded
+ * as the 'accepted' class — that one asserts a human weighed the failing artifact.
+ *
+ * Best-effort by construction (appendDebt swallows its own faults): the ledger is an
+ * auditing aid and must never break the gate sequence that calls it. `origin`
+ * defaults to 'accepted', which is the legacy 2-field on-disk shape.
+ */
+export async function recordDebt(
+    cwd: string,
+    taskId: string,
+    reason: string,
+    origin: DebtOrigin = 'accepted'
+): Promise<void> {
+    await appendDebt(cwd, {taskId: taskId.trim(), reason: normaliseReason(reason), origin})
 }
 
 /**
- * Record an ENFORCE-REVERT debt (mx5 run 10 item 3): an enforce re-verify FAILED and
- * the enforce edits were reverted, but the FAIL indicted the ORIGINAL work — so the
- * defect is still in the shipped tree. Durable so the final gate re-checks/surfaces it
- * rather than letting it die with the revert.
+ * The reason text a CROSS-TASK DELETION debt stores (mx5 run 12 PROMPT 2): the task's
+ * work deleted a file a DIFFERENT task's commit introduced, verify FAILed, and the
+ * user ACCEPTed — so the deletion survives into the next commit. The shape is fixed
+ * and machine-parseable so the final gate's re-check can extract the path and prove
+ * the debt resolved iff the file is back in the tree; it lives here, next to
+ * extractDeletedDebtPath, because the writer and the reader of that shape have to
+ * move together.
  */
-export async function recordEnforceRevertDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'enforce-revert'
-    })
-}
-
-/**
- * Record an ENFORCE-KEPT debt (mx5 run 18 / nexttask 4): an enforce re-verify FAILED
- * on a check whose named files are DISJOINT from the enforce commit's own diff, so
- * the edits were kept — discarding them could not have repaired a failure they cannot
- * reach. The defect is real and still in the shipped tree, so it is recorded with the
- * same durability as an enforce-revert; only the disposition of the edits differs.
- */
-export async function recordEnforceKeptDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'enforce-kept'
-    })
-}
-
-/**
- * Record a FROZEN-BLOCKED debt (mx5 run 12 / PROMPT 1 layer B): a repo-health FAIL
- * whose static findings can only be fixed by editing a path this task's spec froze —
- * a cross-task contradiction no unattended re-run may resolve. Recorded when the gate
- * loop routes to the picker (regardless of what the human then picks), so the final
- * gate re-checks it at run end. Static-class by reason prefix (`repo health: …`), so
- * it auto-closes iff the final gate's own static check passes.
- */
-export async function recordFrozenBlockedDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'frozen-blocked'
-    })
-}
-
-/**
- * Record a CROSS-TASK DELETION debt (mx5 run 12 PROMPT 2): the task's work deleted a
- * file a DIFFERENT task's commit introduced, verify FAILed, and the user ACCEPTed —
- * so the deletion survives into the next commit. The reason is a fixed machine-
- * parseable shape (`deleted \`<path>\` …`) so the final gate's re-check can extract
- * the path and prove the debt resolved iff the file is back in the tree.
- */
-export async function recordCrossTaskDeletionDebt(
-    cwd: string,
-    taskId: string,
-    deletion: {path: string; owner: string}
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(
-            `deleted \`${deletion.path}\` — ${deletion.owner}'s committed deliverable, removed by this task's work`
-        ),
-        origin: 'cross-task-deletion'
-    })
-}
-
-/**
- * Record a YOLO-ACCEPTED debt: unattended auto-pick took the verify-FAIL picker's
- * ACCEPT branch because there was nobody to ask (yolo.ts). Its own origin — and
- * therefore its own line in the final gate's surfaced report — so a later audit
- * reading only the artifacts can never read it as "a human decided this".
- */
-export async function recordYoloAcceptDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'yolo-accepted'
-    })
-}
-
-/**
- * Record a FINAL-GATE UNOBSERVED debt (mx5 run 14): the final gate demoted one of its
- * OWN checks after two tree-changing fix attempts returned an identical ranked-first
- * failure — unfalsifiable in this environment, so the gate stopped paying for it and
- * converged on the remaining checks. Durable so the NEXT run's gate re-checks it: it
- * is model-/environment-judged, so the re-check surfaces it (never auto-closes it).
- * The taskId is the run's parent id — the demotion is a run-level decision.
- */
-export async function recordFinalGateUnobservedDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'final-gate'
-    })
-}
-
-/**
- * Record a ROOT-CAUSE debt (mx5 run 14 / PROMPT item 5): this task's verify FAILed
- * on a pre-existing defect in a file ANOTHER task created and this task never
- * touched. The current task is not at fault — its work (and, at the enforce site,
- * the enforce pass's edits) is KEPT — but the defect is real and still in the tree,
- * so it is recorded here and a scoped repair task is queued (root-cause-repair.ts).
- * Behavioral/model-judged, so the final gate surfaces it rather than auto-closing it.
- */
-export async function recordRootCauseDebt(
-    cwd: string,
-    taskId: string,
-    reason: string
-): Promise<void> {
-    await appendDebt(cwd, {
-        taskId: taskId.trim(),
-        reason: normaliseReason(reason),
-        origin: 'root-cause'
-    })
+export function crossTaskDeletionReason(deletion: {path: string; owner: string}): string {
+    return `deleted \`${deletion.path}\` — ${deletion.owner}'s committed deliverable, removed by this task's work`
 }
 
 /**
  * The deleted path a cross-task-deletion debt names (the fixed shape
- * recordCrossTaskDeletionDebt writes). Null on any other reason text — an
+ * crossTaskDeletionReason builds). Null on any other reason text — an
  * unextractable path means the re-check cannot prove anything, so the debt
  * stays open (surface, never re-hide).
  */
@@ -693,28 +616,11 @@ export function buildAcceptDebtNote(open: AcceptDebt[]): string {
     )
 }
 
-/** One-line provenance label for a debt, for the surfaced report. */
+/**
+ * One-line provenance label for a debt, for the surfaced report. Straight off
+ * DEBT_LABELS, so a new origin cannot ship without one; an absent or unregistered
+ * origin falls back to the 'accepted' class exactly as the branch chain did.
+ */
 export function describeDebt(d: AcceptDebt): string {
-    if (d.origin === 'enforce-revert') {
-        return 'enforce re-verify FAILED then the edits were reverted (defect indicts the ORIGINAL work, still shipped)'
-    }
-    if (d.origin === 'enforce-kept') {
-        return 'enforce re-verify FAILED on a check the enforce diff cannot reach — the guideline edits were KEPT (reverting them could not fix it) and the defect indicts the ORIGINAL work, still shipped'
-    }
-    if (d.origin === 'frozen-blocked') {
-        return 'repo health blocked by a spec-frozen path (cross-task contradiction — no task may perform the fixing edit)'
-    }
-    if (d.origin === 'cross-task-deletion') {
-        return "a sibling task's committed deliverable was DELETED by this task's work and the deletion was accepted (still missing from the tree)"
-    }
-    if (d.origin === 'yolo-accepted') {
-        return 'auto-ACCEPTED by YOLO mode despite verify-FAIL (unattended — no human weighed this)'
-    }
-    if (d.origin === 'root-cause') {
-        return "verify FAILed on a PRE-EXISTING defect in another task's file that this task never touched (this task's work was kept; a scoped repair task was queued for the root cause)"
-    }
-    if (d.origin === 'final-gate') {
-        return 'final-gate check DEMOTED to UNOBSERVED (identical failure across two tree-changing fix attempts — unfalsifiable in that environment, never proven passing)'
-    }
-    return 'accepted despite verify-FAIL'
+    return isKnownOrigin(d.origin) ? DEBT_LABELS[d.origin] : DEBT_LABELS.accepted
 }

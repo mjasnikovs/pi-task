@@ -141,13 +141,15 @@ describe('buildVerifyPrompt', () => {
             'src/test/auth.test.ts (+712 lines) — a test file this task authored or changed itself…',
             'src/test/request.ts (+941 lines) — a test file this task authored or changed itself…'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', findings)
+        const p = buildVerifyPrompt('GOAL\nx', {substitution: findings})
         expect(p).toContain('SELF-VERIFICATION NOTICE')
         expect(p).toContain('- src/test/auth.test.ts (+712 lines)')
         expect(p).toContain('- src/test/request.ts (+941 lines)')
         expect(p).toContain('you MUST confirm these tests exercise the REAL shipped artifact')
         // No findings → no probe block at all (empty array and undefined alike).
-        expect(buildVerifyPrompt('GOAL\nx', [])).not.toContain('SELF-VERIFICATION NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx', {substitution: []})).not.toContain(
+            'SELF-VERIFICATION NOTICE'
+        )
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
@@ -167,13 +169,13 @@ describe('buildVerifyPrompt', () => {
         const findings = [
             'smoke.spec.js || echo "skipping (uismoke not installed)" — its `||` fallback…'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], findings)
+        const p = buildVerifyPrompt('GOAL\nx', {skipEscape: findings})
         expect(p).toContain('SKIP-ESCAPE NOTICE')
         expect(p).toContain('- smoke.spec.js || echo')
         expect(p).toMatch(/UNOBSERVED \(rule 5c\)/)
         expect(p).toMatch(/Do NOT accept a skipped check as a passed check/)
         // No findings → no block at all.
-        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [])).not.toContain('SKIP-ESCAPE NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx', {skipEscape: []})).not.toContain('SKIP-ESCAPE NOTICE')
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SKIP-ESCAPE NOTICE')
     })
 
@@ -181,9 +183,7 @@ describe('buildVerifyPrompt', () => {
         const findings = [
             'playwright-ct.config.ts — committed the absolute path `/workspace/src/shared`…'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
-            foreignPaths: findings
-        })
+        const p = buildVerifyPrompt('GOAL\nx', {foreignPath: findings})
         expect(p).toContain('SANDBOX PATH LEAK NOTICE')
         expect(p).toContain('- playwright-ct.config.ts — committed the absolute path')
         // The verdict-gating mandate, and the distinctive "green means nothing"
@@ -195,17 +195,15 @@ describe('buildVerifyPrompt', () => {
             '4e. AN ABSOLUTE PATH TO PROJECT FILES IS A DEFECT'
         )
         // ...but the NOTICE block only appears with findings.
-        expect(
-            buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {foreignPaths: []})
-        ).not.toContain('SANDBOX PATH LEAK NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx', {foreignPath: []})).not.toContain(
+            'SANDBOX PATH LEAK NOTICE'
+        )
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('SANDBOX PATH LEAK NOTICE')
     })
 
     test('injects neutered-check-script findings tied to rule 4f', () => {
         const findings = ['`lint`: tsc --noEmit || true — it ends in `|| true`, so the script…']
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
-            scriptEscapes: findings
-        })
+        const p = buildVerifyPrompt('GOAL\nx', {scriptEscape: findings})
         expect(p).toContain('NEUTERED CHECK SCRIPT NOTICE')
         expect(p).toContain('- `lint`: tsc --noEmit || true')
         // The key instruction: running the script cannot reveal the defect.
@@ -219,9 +217,7 @@ describe('buildVerifyPrompt', () => {
 
     test('injects runner glob-collision findings tied to rule 4g', () => {
         const findings = ['`test` runs bun test, which scans the whole project…']
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
-            runnerGlobs: findings
-        })
+        const p = buildVerifyPrompt('GOAL\nx', {runnerGlob: findings})
         expect(p).toContain('TEST-RUNNER GLOB COLLISION NOTICE')
         expect(p).toContain('- `test` runs bun test')
         // The distinctive mandate: collection-time death, so count what RAN.
@@ -231,18 +227,16 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('the three project-surface findings are independent', () => {
-        const all = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
-            foreignPaths: ['fp'],
-            scriptEscapes: ['se'],
-            runnerGlobs: ['rg']
+        const all = buildVerifyPrompt('GOAL\nx', {
+            foreignPath: ['fp'],
+            scriptEscape: ['se'],
+            runnerGlob: ['rg']
         })
         expect(all).toContain('SANDBOX PATH LEAK NOTICE')
         expect(all).toContain('NEUTERED CHECK SCRIPT NOTICE')
         expect(all).toContain('TEST-RUNNER GLOB COLLISION NOTICE')
         // One present does not drag the others in.
-        const one = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [], [], {
-            scriptEscapes: ['se']
-        })
+        const one = buildVerifyPrompt('GOAL\nx', {scriptEscape: ['se']})
         expect(one).toContain('NEUTERED CHECK SCRIPT NOTICE')
         expect(one).not.toContain('SANDBOX PATH LEAK NOTICE')
         expect(one).not.toContain('TEST-RUNNER GLOB COLLISION NOTICE')
@@ -251,12 +245,12 @@ describe('buildVerifyPrompt', () => {
     test('injects the cross-slice contracts block mandating a boundary check', () => {
         const contracts =
             '"POST /api/listings/:id/photos" [anchor: Photos API]\n"GET /api/photos/:id"'
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], contracts)
+        const p = buildVerifyPrompt('GOAL\nx', {}, {contracts})
         expect(p).toContain('CROSS-SLICE CONTRACTS')
         expect(p).toContain('- "POST /api/listings/:id/photos" [anchor: Photos API]')
         expect(p).toMatch(/SEAM BUG — report FAIL/)
         // Absent/empty contracts → no block.
-        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '')).not.toContain(
+        expect(buildVerifyPrompt('GOAL\nx', {}, {contracts: ''})).not.toContain(
             'CROSS-SLICE CONTRACTS'
         )
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CROSS-SLICE CONTRACTS')
@@ -268,14 +262,14 @@ describe('buildVerifyPrompt', () => {
                 + '(src/server/routes/auth, src/server/routes/photos) that src/server/index.ts '
                 + 'is the ONLY production file to compose, yet it never imports src/server/index.ts'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', findings)
+        const p = buildVerifyPrompt('GOAL\nx', {testAssembly: findings})
         expect(p).toContain('TEST-ASSEMBLY NOTICE')
         expect(p).toContain('- test/photos.test.ts imports and re-composes 2 leaf module(s)')
         expect(p).toContain('rule 3f')
         // The rule text itself is always present (naming the class); the notice block
         // only when a finding is supplied.
         expect(p).toContain('TEST-REBUILT ASSEMBLY')
-        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [])).not.toContain(
+        expect(buildVerifyPrompt('GOAL\nx', {testAssembly: []})).not.toContain(
             'TEST-ASSEMBLY NOTICE'
         )
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('TEST-ASSEMBLY NOTICE')
@@ -286,14 +280,14 @@ describe('buildVerifyPrompt', () => {
             'src/server/index.ts: this task added a line stating its purpose is to make a '
                 + 'check pass, not to meet the requirement — "// Return 401 so the verification test passes"'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], findings)
+        const p = buildVerifyPrompt('GOAL\nx', {probeGaming: findings})
         expect(p).toContain('CHECK-GAMING NOTICE (deterministic')
         expect(p).toContain('- src/server/index.ts: this task added a line')
         expect(p).toContain('rule 4c')
         // The rule text itself is always present (and mentions the notice by name); the
         // deterministic notice BLOCK only appears when a finding is supplied.
         expect(p).toContain('THE CHECK IS THE MESSENGER, NOT THE REQUIREMENT')
-        expect(buildVerifyPrompt('GOAL\nx', [], '', [], [], '', [], [])).not.toContain(
+        expect(buildVerifyPrompt('GOAL\nx', {probeGaming: []})).not.toContain(
             'CHECK-GAMING NOTICE (deterministic'
         )
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CHECK-GAMING NOTICE (deterministic')
@@ -303,12 +297,12 @@ describe('buildVerifyPrompt', () => {
         const findings = [
             'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
         ]
-        const p = buildVerifyPrompt('GOAL\nx', [], '', findings)
+        const p = buildVerifyPrompt('GOAL\nx', {prohibition: findings})
         expect(p).toContain('PROHIBITION NOTICE')
         expect(p).toContain('- src/server/index.ts — modified by this task')
         expect(p).toContain('rule 4b applies')
         // No findings → no block at all (empty array and undefined alike).
-        expect(buildVerifyPrompt('GOAL\nx', [], '', [])).not.toContain('PROHIBITION NOTICE')
+        expect(buildVerifyPrompt('GOAL\nx', {prohibition: []})).not.toContain('PROHIBITION NOTICE')
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('PROHIBITION NOTICE')
     })
 
@@ -403,6 +397,55 @@ describe('buildVerifyPrompt', () => {
     })
 })
 
+describe('buildVerifyPrompt — the probe table preserves the measured layout', () => {
+    // The prompt is A/B-tested wording (VALIDATION-DEBT.md), and the table drives two
+    // DIFFERENT orders: notice blocks come out in table order, the hand-numbered rules
+    // come out in rule-number order. Nothing else pins either, so these hold them.
+    test('the 4b…4g rule band stays in ascending rule-number order, each rule once', () => {
+        const p = buildVerifyPrompt('GOAL\nx')
+        const band = ['4b.', '4c.', '4d.', '4e.', '4f.', '4g.']
+        const positions = band.map(id => {
+            const starts = p.split('\n').filter(l => l.startsWith(id))
+            expect(starts.length).toBe(1)
+            return p.indexOf(`\n${id}`)
+        })
+        expect(positions.every(i => i > 0)).toBe(true)
+        expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+        // The band sits between rule 4 and rule 5, where it was hand-written.
+        expect(p.indexOf('\n4. Treat the ACCEPTANCE')).toBeLessThan(positions[0])
+        expect(p.indexOf('\n5. The ONLY thing')).toBeGreaterThan(positions[5])
+    })
+
+    test('notice blocks are emitted in table order, not findings order', () => {
+        const p = buildVerifyPrompt('GOAL\nx', {
+            testAssembly: ['ta'],
+            runnerGlob: ['rg'],
+            skipEscape: ['se'],
+            crossTaskDeletion: ['xtd'],
+            substitution: ['sub'],
+            prohibition: ['proh'],
+            probeGaming: ['pg'],
+            foreignPath: ['fp'],
+            scriptEscape: ['sce']
+        })
+        const order = [
+            'SELF-VERIFICATION NOTICE',
+            'PROHIBITION NOTICE',
+            'CROSS-TASK DELETION NOTICE',
+            'CHECK-GAMING NOTICE',
+            'SKIP-ESCAPE NOTICE',
+            'SANDBOX PATH LEAK NOTICE',
+            'NEUTERED CHECK SCRIPT NOTICE',
+            'TEST-RUNNER GLOB COLLISION NOTICE',
+            'TEST-ASSEMBLY NOTICE'
+        ].map(h => p.indexOf(h))
+        expect(order.every(i => i >= 0)).toBe(true)
+        expect([...order].sort((a, b) => a - b)).toEqual(order)
+        // …and they all sit above the "How to verify" instructions.
+        expect(order[8]).toBeLessThan(p.indexOf('How to verify'))
+    })
+})
+
 describe('buildVerifyPrompt — cross-task deletion (rule 4d, mx5 run 12 PROMPT 2)', () => {
     test('rule 4d is always present and gates the verdict', () => {
         const p = buildVerifyPrompt('GOAL\nx')
@@ -413,19 +456,11 @@ describe('buildVerifyPrompt — cross-task deletion (rule 4d, mx5 run 12 PROMPT 
         expect(p).toContain('relocation')
     })
     test('findings become a MANDATORY notice naming file and owner', () => {
-        const p = buildVerifyPrompt(
-            'GOAL\nx',
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            [
+        const p = buildVerifyPrompt('GOAL\nx', {
+            crossTaskDeletion: [
                 "`playwright/index.ts` — introduced and committed by TASK_0020, DELETED by this task's work"
             ]
-        )
+        })
         expect(p).toContain('CROSS-TASK DELETION NOTICE')
         expect(p).toContain('`playwright/index.ts`')
         expect(p).toContain('TASK_0020')

@@ -7,17 +7,14 @@ import {fileURLToPath} from 'node:url'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
-import {formatNpmVersionSection} from '../workers/npm-version.js'
 import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
 import {
     findPhantomImports,
     formatApiCorrections,
     rewritePhantomSpecifiers
 } from '../workers/phantom-imports.js'
-import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import type {SearchProvider} from '../workers/search-types.js'
-import {extractEnrichTargets} from './enrichment.js'
 import {
     fanoutTimeoutPolicy,
     workerCarryForward,
@@ -38,8 +35,11 @@ import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
 import {readFile} from 'node:fs/promises'
 import {resolve} from 'node:path'
-import {formatServiceBlock, formatFreshnessSkippedBlock} from './service-blocks.js'
-import {gatherExternalContext, type ExternalContextDeps} from './external-context.js'
+import {
+    buildExternalContext,
+    gatherExternalContext,
+    type ExternalContextDeps
+} from './external-context.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -1355,93 +1355,48 @@ export async function phaseAutoAnswer(
     const docsFocusedFn = autoDeps.docsFocused ?? docsFocused
     const fetchFocusedFn = autoDeps.fetchFocused ?? fetchFocused
     try {
-        const enrichTargets = extractEnrichTargets(question)
-        const allTargets: Array<{kind: 'pkg'; pkg: string} | {kind: 'url'; url: string}> = [
-            ...enrichTargets.packages.slice(0, 2).map(pkg => ({kind: 'pkg' as const, pkg})),
-            ...enrichTargets.urls
-                .slice(0, 2 - Math.min(enrichTargets.packages.length, 2))
-                .map(url => ({kind: 'url' as const, url}))
-        ]
-        const cappedTargets = allTargets.slice(0, 2)
-
-        const npmSections: string[] = []
-        const docSections: string[] = []
-
-        const searchFn = autoDeps.searchFn ?? defaultSearch
-        const cappedServices = enrichTargets.services.slice(0, 2)
-
-        // Fan out doc/url focused workers and service searches in parallel —
-        // otherwise the user waits for max(docs, fetch) + search instead of
-        // max(docs, fetch, search) on every grill auto-answer with at least
-        // one service plus a package or url. Mirrors phaseResearch's pattern.
-        const [, serviceResults] = await Promise.all([
-            Promise.all(
-                cappedTargets.map(async (t, idx) => {
-                    if (t.kind === 'pkg') {
-                        const r = await docsFocusedFn({
-                            pkg: t.pkg,
-                            query: question,
-                            cwd: deps.cwd,
-                            signal: deps.signal
-                        }).catch(() => null)
-                        if (r?.npmVersion) {
-                            npmSections[idx] = formatNpmVersionSection(r.npmVersion)
-                        }
-                        if (r?.answer) {
-                            docSections[idx] = `### docs: ${t.pkg}\n${r.answer}`
-                        }
-                    } else {
-                        const r = await fetchFocusedFn({
-                            url: t.url,
-                            query: question,
-                            cwd: deps.cwd,
-                            signal: deps.signal
-                        }).catch(() => null)
-                        if (r?.answer) {
-                            docSections[idx] = `### url: ${t.url}\n${r.answer}`
-                        }
-                    }
-                })
-            ),
-            Promise.all(
-                cappedServices.map(s =>
-                    searchFn({
-                        query: `${s.name} ${s.query}`,
-                        count: 3,
+        // Same assembly as the research phase (see external-context.ts); what
+        // differs is POLICY and the worker variant, and both are arguments now.
+        // The caps exist because this runs per grill question in front of a
+        // waiting user; there is deliberately no version-lookup fan-out, no body
+        // truncation (the focused child already answers in a paragraph) and no
+        // timing sub-step here.
+        //
+        // `groundingBodies` counts the doc/url bodies that made it into the block:
+        // the surviving-unknown routing below asks "did any doc/fetch worker
+        // produce a grounding section?", which is exactly this and nothing about
+        // npm-version or service blocks.
+        let groundingBodies = 0
+        const countBody = (body: string | undefined): string | undefined => {
+            if (body !== undefined) groundingBodies += 1
+            return body
+        }
+        const externalContext = await buildExternalContext(
+            question,
+            deps,
+            {
+                docs: async pkg => {
+                    const r = await docsFocusedFn({
+                        pkg,
+                        query: question,
+                        cwd: deps.cwd,
                         signal: deps.signal
-                    }).catch(() => null)
-                )
-            )
-        ])
-
-        const serviceSections: string[] = []
-        const skipped: string[] = []
-        for (let i = 0; i < cappedServices.length; i++) {
-            const s = cappedServices[i]
-            const r = serviceResults[i]
-            if (r === null) continue
-            if (r.kind === 'no_key') {
-                skipped.push(s.name)
-                continue
-            }
-            if (r.kind === 'error') continue
-            serviceSections.push(formatServiceBlock(s.name, `${s.name} ${s.query}`, r.results))
-        }
-        if (skipped.length > 0) {
-            serviceSections.push(formatFreshnessSkippedBlock(skipped))
-        }
-
-        // npm blocks lead so the model anchors on live version data first.
-        const contextSections = [
-            ...npmSections.filter(Boolean),
-            ...docSections.filter(Boolean),
-            ...serviceSections
-        ]
-
-        const externalContext =
-            contextSections.length > 0 ?
-                `EXTERNAL CONTEXT\n${contextSections.join('\n\n')}\n\n`
-            :   ''
+                    })
+                    return {npmVersion: r.npmVersion, body: countBody(r.answer || undefined)}
+                },
+                url: async url => {
+                    const r = await fetchFocusedFn({
+                        url,
+                        query: question,
+                        cwd: deps.cwd,
+                        signal: deps.signal
+                    })
+                    return {body: countBody(r.answer || undefined)}
+                },
+                search: autoDeps.searchFn
+            },
+            {targetCap: 2, serviceCap: 2}
+        )
 
         const basePrompt = externalContext + GRILL_AUTO_ANSWER_PROMPT(refined, research, question)
         let text = await runPhaseChild(deps, 'grill-auto', 'read', basePrompt)
@@ -1519,7 +1474,7 @@ export async function phaseAutoAnswer(
         // refuse the guess and surface it to the user — carrying the model's
         // best-effort answer as the pre-filled recommendation so the user accepts
         // it with one keystroke or overrides it. Benign unknowns are untouched.
-        const docResolved = docSections.filter(Boolean).length > 0
+        const docResolved = groundingBodies > 0
         if (parsed.kind === 'answered' && !docResolved && isIntegrationUnknown(question)) {
             deps.logDebug?.(
                 `grill-auto: integration unknown unresolved by fetch — surfacing to user `

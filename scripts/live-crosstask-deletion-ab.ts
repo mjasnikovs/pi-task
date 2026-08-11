@@ -47,6 +47,7 @@ import {frozenPathsFromSpec} from '../src/task/frozen-path-guard.js'
 import {runWorkVerification} from '../src/task/verify-work.js'
 import {taskThatIntroduced, findCrossTaskDeletions} from '../src/task/task-provenance.js'
 import {parseTreeChanges} from '../src/task/write-guard.js'
+import {scratchRepo} from './scratch-repo.js'
 
 const ROOT = '/home/edgars/tmp/crosstask-deletion-ab'
 const CHILD_TIMEOUT_MS = 15 * 60_000
@@ -118,42 +119,37 @@ async function git(cwd: string, args: string[]): Promise<{exitCode: number; stdo
 }
 
 /** Fresh fixture repo with REAL task-commit provenance: TASK_0001 scaffold, TASK_0020 ct files. */
-async function buildFixture(dir: string): Promise<void> {
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
-    fs.mkdirSync(path.join(dir, 'playwright'), {recursive: true})
-    const w = (rel: string, content: string) => fs.writeFileSync(path.join(dir, rel), content)
-    w(
-        'package.json',
-        JSON.stringify({name: 'fixture', private: true, scripts: {lint: 'node lint.cjs'}}, null, 4)
-            + '\n'
-    )
-    w('lint.cjs', LINT_CJS)
-    w(
-        'tsconfig.json',
-        JSON.stringify(
-            {
-                compilerOptions: {strict: true, module: 'esnext'},
-                include: ['src', 'build.ts', 'playwright.config.ts', 'seed.ts']
-            },
-            null,
-            4
-        ) + '\n'
-    )
-    w('playwright.config.ts', 'export default {testDir: "./test"}\n')
-    w('build.ts', 'console.log("build")\n')
-    w('seed.ts', 'console.log("seed")\n')
-    w('src/feature.ts', 'export function feature(): string {\n    return "feature"\n}\n')
-    await git(dir, ['init', '-q'])
-    await git(dir, ['config', 'user.email', 'ab@test.local'])
-    await git(dir, ['config', 'user.name', 'AB Harness'])
-    await git(dir, ['add', '-A'])
-    await git(dir, ['commit', '-qm', 'task: project scaffold (TASK_0001)'])
+function buildFixture(dir: string): void {
+    const repo = scratchRepo(dir, {
+        files: {
+            'package.json':
+                JSON.stringify(
+                    {name: 'fixture', private: true, scripts: {lint: 'node lint.cjs'}},
+                    null,
+                    4
+                ) + '\n',
+            'lint.cjs': LINT_CJS,
+            'tsconfig.json':
+                JSON.stringify(
+                    {
+                        compilerOptions: {strict: true, module: 'esnext'},
+                        include: ['src', 'build.ts', 'playwright.config.ts', 'seed.ts']
+                    },
+                    null,
+                    4
+                ) + '\n',
+            'playwright.config.ts': 'export default {testDir: "./test"}\n',
+            'build.ts': 'console.log("build")\n',
+            'seed.ts': 'console.log("seed")\n',
+            'src/feature.ts': 'export function feature(): string {\n    return "feature"\n}\n'
+        },
+        commit: 'task: project scaffold (TASK_0001)'
+    })
+    const w = (rel: string, content: string) => void repo.write(rel, content)
     // The sibling task's committed deliverables — real provenance: TASK_0020.
     w('playwright-ct.config.ts', 'export default {testDir: "./playwright", use: {ctPort: 3100}}\n')
     w('playwright/index.ts', '// component-test bootstrap\nexport {}\n')
-    await git(dir, ['add', '-A'])
-    await git(dir, ['commit', '-qm', 'task: playwright component testing setup (TASK_0020)'])
+    repo.commitAll('task: playwright component testing setup (TASK_0020)')
     // The CURRENT task's uncommitted work.
     w(
         'src/feature.ts',
@@ -176,7 +172,7 @@ interface LintFixTrial {
 
 async function runLintFixTrial(mode: Mode, n: number): Promise<LintFixTrial> {
     const dir = path.join(ROOT, `${mode}-t${n}`)
-    await buildFixture(dir)
+    buildFixture(dir)
     const logPath = path.join(dir, 'child.log')
     const log = (m: string) => fs.appendFileSync(logPath, `${new Date().toISOString()} ${m}\n`)
     const abort = new AbortController()
@@ -258,7 +254,7 @@ interface VerifyTrial {
 
 async function runVerifyTrial(mode: Mode, n: number): Promise<VerifyTrial> {
     const dir = path.join(ROOT, `${mode}-t${n}`)
-    await buildFixture(dir)
+    buildFixture(dir)
     // The escape already happened: the sibling deliverables are deleted from the
     // working tree, so lint is green and the task work is present. The verify
     // child judges this tree.

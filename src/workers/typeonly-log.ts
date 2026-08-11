@@ -37,6 +37,7 @@
  * reconstruct later.
  */
 import * as fs from 'node:fs'
+import type {ExcerptVerification} from '../shared/child-output.js'
 
 /** Env var naming the JSONL sink. Unset (or empty) ⇒ instrumentation is entirely off. */
 export const TYPEONLY_LOG_ENV = 'PI_TASK_TYPEONLY_LOG'
@@ -59,6 +60,18 @@ export interface TypeOnlyLogRecord {
     unclear: boolean
     /** child-output's excerpt check; undefined when the child cited no excerpt. */
     excerptVerified?: boolean
+    /**
+     * The FULL verification record behind `excerptVerified` — the normalised excerpt that was
+     * searched for, plus a sha256 + length of the normalised content it was searched in.
+     *
+     * This is the other half of the F-3(f) hole described above: retaining the answer text
+     * says WHAT was claimed, and this says what it was checked against, so a false verdict can
+     * be attributed to fabrication (the excerpt is nowhere near the content) rather than a
+     * normaliser gap (a markdown-escape variant of text that IS present) without re-running
+     * the lookup. Only fetch's extractor used to keep it; all four focused-extractor call
+     * sites now can (workers/focused-extractor.ts). Optional — records predating it parse.
+     */
+    excerptCheck?: ExcerptVerification
     /**
      * The tool's ENTIRE return text — version banner, npm header, the answer prose, the cited
      * excerpt, and (when it fires) the type-only banner. Optional so logs written before this

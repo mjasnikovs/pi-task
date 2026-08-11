@@ -35,13 +35,13 @@
  */
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {runFinalIntegrationGate, type FinalGateOutcome} from '../src/task/final-gate.js'
 import {runFinalGateAutofix, type FinalFixDeps, type FinalFixResult} from '../src/task/final-gate-fix.js'
 import {parseTreeChanges, type TreeChangeSummary} from '../src/task/write-guard.js'
+import {scratchGit as git, scratchRoot, writeFile} from './scratch-repo.js'
 
-const ROOT = path.join(os.tmpdir(), `replay-run20-${process.pid}`)
+const ROOT = scratchRoot('replay-run20-final-gate')
 
 /** The three run-20 screenshots, verbatim from final-gate-debug.log. */
 const SCREENSHOTS = [
@@ -67,21 +67,6 @@ if (!password) {
 console.log('Admin user created successfully');
 `
 
-function git(cwd: string, args: string[]): string {
-    const r = spawnSync('git', ['-c', 'user.name=replay', '-c', 'user.email=replay@local', ...args], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`)
-    return r.stdout
-}
-
-function write(dir: string, rel: string, body: string): void {
-    const p = path.join(dir, rel)
-    fs.mkdirSync(path.dirname(p), {recursive: true})
-    fs.writeFileSync(p, body)
-}
-
 const readPkg = (dir: string): {scripts: Record<string, string>} =>
     JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as {scripts: Record<string, string>}
 
@@ -93,54 +78,42 @@ const readPkg = (dir: string): {scripts: Record<string, string>} =>
  * `git add -A` had just made tracked.
  */
 function makeFixture(name: string): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(
-        dir,
-        'package.json',
-        JSON.stringify(
-            {
-                name: 'mx5-private',
-                private: true,
-                type: 'module',
-                scripts: {
-                    dev: 'bun run src/server/dev.ts',
-                    migrate: 'bun run src/server/migrate.ts',
-                    lint: "bun -e \"console.log('lint ok')\"",
-                    test: 'bun run src/client/api.test.tsx',
-                    'test:ct': "bun -e \"console.log('ct ok')\""
-                }
-            },
-            null,
-            4
-        ) + '\n'
-    )
-    // The failing client test run 20's attempt 1 repaired.
-    write(dir, 'src/client/api.test.tsx', "console.error('api.test.tsx: expected 1, got 2');\nprocess.exit(1);\n")
-    write(dir, 'src/server/seed.ts', SEED)
-    write(dir, 'src/server/migrate.ts', "console.log('migrations up to date');\n")
-    // Boot-class: stays alive past the grace window without listening (the fixture
-    // declares no server framework dep and the replay passes no plan text, so
-    // detectsServedApp is false and no listener is required).
-    write(dir, 'src/server/dev.ts', 'setTimeout(() => {}, 60_000);\n')
-    write(
-        dir,
-        '.env.example',
-        '# Database connection string\nDATABASE_URL=postgres://mx5:mx5@localhost:5432/mx5_dev\n'
-            + '\n# Admin user credentials for initial seed / auth\nADMIN_PHONE=+12345678900\nADMIN_PASSWORD=change-me\n'
-    )
-    write(dir, '.pi-tasks/launch-contract.md', LAUNCH_CONTRACT)
-    for (const s of SCREENSHOTS) write(dir, s, 'PNGDATA')
-    git(dir, ['add', '-A'])
-    git(dir, [
-        'commit',
-        '-q',
-        '-m',
-        'task: Polish — empty/error/loading states across all pages … (TASK_0027)'
-    ])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            'package.json':
+                JSON.stringify(
+                    {
+                        name: 'mx5-private',
+                        private: true,
+                        type: 'module',
+                        scripts: {
+                            dev: 'bun run src/server/dev.ts',
+                            migrate: 'bun run src/server/migrate.ts',
+                            lint: "bun -e \"console.log('lint ok')\"",
+                            test: 'bun run src/client/api.test.tsx',
+                            'test:ct': "bun -e \"console.log('ct ok')\""
+                        }
+                    },
+                    null,
+                    4
+                ) + '\n',
+            // The failing client test run 20's attempt 1 repaired.
+            'src/client/api.test.tsx':
+                "console.error('api.test.tsx: expected 1, got 2');\nprocess.exit(1);\n",
+            'src/server/seed.ts': SEED,
+            'src/server/migrate.ts': "console.log('migrations up to date');\n",
+            // Boot-class: stays alive past the grace window without listening (the
+            // fixture declares no server framework dep and the replay passes no plan
+            // text, so detectsServedApp is false and no listener is required).
+            'src/server/dev.ts': 'setTimeout(() => {}, 60_000);\n',
+            '.env.example':
+                '# Database connection string\nDATABASE_URL=postgres://mx5:mx5@localhost:5432/mx5_dev\n'
+                + '\n# Admin user credentials for initial seed / auth\nADMIN_PHONE=+12345678900\nADMIN_PASSWORD=change-me\n',
+            '.pi-tasks/launch-contract.md': LAUNCH_CONTRACT,
+            ...Object.fromEntries(SCREENSHOTS.map(s => [s, 'PNGDATA']))
+        },
+        commit: 'task: Polish — empty/error/loading states across all pages … (TASK_0027)'
+    }).dir
 }
 
 interface ArmModules {
@@ -162,7 +135,7 @@ function baselineRef(): string {
 }
 
 async function baselineModules(): Promise<ArmModules> {
-    const dir = path.join(ROOT, '_baseline')
+    const dir = ROOT.path('_baseline')
     fs.mkdirSync(dir, {recursive: true})
     const ref = baselineRef()
     const tar = spawnSync('git', ['archive', ref, 'src'], {encoding: 'buffer', maxBuffer: 256 * 1024 * 1024})
@@ -211,12 +184,12 @@ async function runArm(name: string, mods: ArmModules): Promise<ArmResult> {
 
         // ATTEMPT 1, scripted to do exactly what run 20's attempts did.
         const runChild = (): Promise<string> => {
-            write(dir, 'src/client/api.test.tsx', "console.log('api.test.tsx ok');\n")
+            writeFile(dir, 'src/client/api.test.tsx', "console.log('api.test.tsx ok');\n")
             const pkg = readPkg(dir)
             pkg.scripts.build = 'bun run build.ts'
             pkg.scripts.seed = 'bun run src/server/seed.ts'
-            write(dir, 'package.json', JSON.stringify(pkg, null, 4) + '\n')
-            write(dir, 'build.ts', "console.log('build ok');\n")
+            writeFile(dir, 'package.json', JSON.stringify(pkg, null, 4) + '\n')
+            writeFile(dir, 'build.ts', "console.log('build ok');\n")
             for (const s of SCREENSHOTS) fs.rmSync(path.join(dir, s))
             return Promise.resolve('repaired the failing assertion and added the missing scripts')
         }
@@ -252,9 +225,6 @@ function show(label: string, r: ArmResult): void {
 }
 
 async function main(): Promise<void> {
-    fs.rmSync(ROOT, {recursive: true, force: true})
-    fs.mkdirSync(ROOT, {recursive: true})
-
     console.log('REPLAY — mx5 run 20 (3e87014), the whole final-gate loop')
     console.log('')
     const base = await runArm('baseline', await baselineModules())
@@ -294,7 +264,7 @@ async function main(): Promise<void> {
 
     console.log('')
     for (const [label, ok] of checks) console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${label}`)
-    fs.rmSync(ROOT, {recursive: true, force: true})
+    ROOT.remove()
     const verdict = checks.every(([, ok]) => ok)
     console.log('')
     console.log(`REPLAY: ${verdict ? 'PASS' : 'FAIL'}`)

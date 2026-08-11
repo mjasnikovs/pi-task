@@ -42,12 +42,12 @@
  */
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {runFinalGateAutofix, type FinalFixDeps} from '../src/task/final-gate-fix.js'
 import {parseTreeChanges, findForbiddenDeletions, type TreeChangeSummary} from '../src/task/write-guard.js'
+import {scratchGit as git, scratchRoot, writeFile} from './scratch-repo.js'
 
-const ROOT = path.join(os.tmpdir(), `artifact-deletion-guard-ab-${process.pid}`)
+const ROOT = scratchRoot('artifact-deletion-guard-ab')
 
 /** The three run-20 screenshots, verbatim from the debug log. */
 const SCREENSHOTS = [
@@ -56,41 +56,25 @@ const SCREENSHOTS = [
     'test-results/client-pages-LoginPage-LoginPage-screenshot-baseline/LoginPage-screenshot-baseline-1-actual.png'
 ]
 
-function git(cwd: string, args: string[]): string {
-    const r = spawnSync('git', ['-c', 'user.name=ab', '-c', 'user.email=ab@local', ...args], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`)
-    return r.stdout
-}
-
-function write(dir: string, rel: string, body: string): void {
-    const p = path.join(dir, rel)
-    fs.mkdirSync(path.dirname(p), {recursive: true})
-    fs.writeFileSync(p, body)
-}
-
 /**
  * The run-20 repository as of TASK_0027 (3e87014): the two files the fix pass
  * modifies, plus the three screenshots the task's `git add -A` swept in, all
  * committed under a real task-commit subject.
  */
 function makeFixture(name: string): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(dir, 'package.json', JSON.stringify({name: 'mx5', scripts: {test: 'bun test'}}, null, 2) + '\n')
-    write(dir, 'src/client/api.test.tsx', "test('api', () => { expect(1).toBe(2) })\n")
-    write(dir, 'src/client/pages/admin.tsx', 'export const Admin = () => null\n')
-    write(dir, 'playwright-ct.config.ts', 'export default {}\n')
-    write(dir, 'playwright/index.ts', 'export {}\n')
-    write(dir, 'dist/app.css', 'body{}\n')
-    for (const s of SCREENSHOTS) write(dir, s, 'PNGDATA')
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'task: Polish — … (TASK_0027)'])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            'package.json':
+                JSON.stringify({name: 'mx5', scripts: {test: 'bun test'}}, null, 2) + '\n',
+            'src/client/api.test.tsx': "test('api', () => { expect(1).toBe(2) })\n",
+            'src/client/pages/admin.tsx': 'export const Admin = () => null\n',
+            'playwright-ct.config.ts': 'export default {}\n',
+            'playwright/index.ts': 'export {}\n',
+            'dist/app.css': 'body{}\n',
+            ...Object.fromEntries(SCREENSHOTS.map(s => [s, 'PNGDATA']))
+        },
+        commit: 'task: Polish — … (TASK_0027)'
+    }).dir
 }
 
 /** Same invocation gate-deps.ts:337 uses, so the arms see the pipeline's own view. */
@@ -129,7 +113,7 @@ function baselineRef(): string {
  * swapping only `write-guard.ts` would leave the guard inside the seam untouched.
  */
 async function headModules(): Promise<GateModules> {
-    const dir = path.join(ROOT, '_head')
+    const dir = ROOT.path('_head')
     fs.mkdirSync(dir, {recursive: true})
     const ref = baselineRef()
     const tar = spawnSync('git', ['archive', ref, 'src'], {encoding: 'buffer', maxBuffer: 256 * 1024 * 1024})
@@ -166,8 +150,8 @@ async function runArm(name: string, mods: GateModules): Promise<ArmResult> {
     // The fake fix child: the two real repairs, plus `rm` on the three
     // screenshots — byte-for-byte what run 20's attempt 1 did.
     const runChild = (): Promise<string> => {
-        write(dir, 'src/client/api.test.tsx', "test('api', () => { expect(1).toBe(1) })\n")
-        write(
+        writeFile(dir, 'src/client/api.test.tsx', "test('api', () => { expect(1).toBe(1) })\n")
+        writeFile(
             dir,
             'package.json',
             JSON.stringify({name: 'mx5', scripts: {test: 'bun test', seed: 'bun run src/server/seed.ts'}}, null, 2)
@@ -248,7 +232,7 @@ function runFp(): {pass: boolean; lines: string[]} {
         const dir = makeFixture(`fp-${c.label.replace(/[^a-z0-9]+/gi, '-')}`)
         for (const m of c.add ?? []) {
             const body = fs.readFileSync(path.join(dir, m.from), 'utf8')
-            write(dir, m.to, body)
+            writeFile(dir, m.to, body)
         }
         for (const p of c.delete) fs.rmSync(path.join(dir, p))
         const gone = findForbiddenDeletions(porcelain(dir))
@@ -264,9 +248,6 @@ function runFp(): {pass: boolean; lines: string[]} {
 }
 
 async function main(): Promise<void> {
-    fs.rmSync(ROOT, {recursive: true, force: true})
-    fs.mkdirSync(ROOT, {recursive: true})
-
     const head = await headModules()
     const baseline = await runArm('baseline', head)
     const treatment = await runArm('treatment', {runFinalGateAutofix, parseTreeChanges, findForbiddenDeletions})
@@ -299,7 +280,7 @@ async function main(): Promise<void> {
     console.log('')
     console.log(`  FP: ${fp.pass ? 'PASS' : 'FAIL'}`)
 
-    fs.rmSync(ROOT, {recursive: true, force: true})
+    ROOT.remove()
 
     const verdict = abPass && fp.pass
     console.log('')

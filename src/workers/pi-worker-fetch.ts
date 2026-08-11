@@ -4,7 +4,7 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-clean.js'
 import {fetchFocused, formatResultText} from './fetch-core.js'
-import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {makeWorkerTool} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
 
 const RENDER_QUERY_MAX = 100
@@ -81,16 +81,11 @@ export function registerPiWorkerFetch(
                     spawn: internals.spawn as Parameters<typeof fetchFocused>[0]['spawn']
                 })
 
-                const failure = formatChildFailure(
-                    {
-                        aborted: result.aborted,
-                        exitCode: result.childExitCode,
-                        stderr: result.stderr
-                    },
-                    'Fetch aborted.'
-                )
-                if (failure !== null) {
-                    return {text: failure, details: {childExitCode: result.childExitCode}}
+                // Child failure is decided and formatted once, inside the focused extractor
+                // (workers/focused-extractor.ts) — this used to re-map the result back into a
+                // ChildOutcome just to ask formatChildFailure the same question.
+                if (result.failure !== undefined) {
+                    return {text: result.failure, details: {childExitCode: result.childExitCode}}
                 }
 
                 const body =

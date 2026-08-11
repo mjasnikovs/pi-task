@@ -1,22 +1,205 @@
 /**
- * External-context enrichment — extract packages / URLs / services from the
- * refined spec, fan out to docs / fetch / search workers, and assemble the
- * `EXTERNAL CONTEXT` block the research phase prepends to every worker prompt.
+ * External-context enrichment — extract packages / URLs / services from a piece
+ * of text, fan out to docs / fetch / search workers, and assemble the
+ * `EXTERNAL CONTEXT` block that gets prepended to a worker prompt.
  *
  * Split out of phases.ts so the research phase reads as "gather context → run
  * probes → assemble", and so this fan-out has its own test surface separate
  * from the four research workers. `enrichment.ts` stays a pure parser; the I/O
  * lives here.
+ *
+ * There were TWO copies of this assembly: {@link gatherExternalContext} (the
+ * research phase, raw workers) and an 87-line inline block in `phaseAutoAnswer`
+ * (the grill auto-answer, focused workers). They agreed on everything that
+ * shows up in the output — the 8-step shape, the "npm blocks lead" ordering,
+ * the `### docs:` / `### url:` headings, the service loop's `no_key` / `error`
+ * handling, the block terminator — and disagreed only on POLICY. So the shape
+ * is {@link buildExternalContext} once, the disagreements are
+ * {@link ExternalContextPolicy}, and the worker variant is
+ * {@link ExternalContextLookups} — an adapter, expressible only since the
+ * focused-extractor seam landed.
  */
 
 import {docsRaw} from '../workers/docs-core.js'
 import {fetchRaw} from '../workers/fetch-core.js'
-import {formatNpmVersionSection, npmVersionLookup} from '../workers/npm-version.js'
+import {
+    formatNpmVersionSection,
+    npmVersionLookup,
+    type NpmVersionInfo
+} from '../workers/npm-version.js'
 import {search as defaultSearch} from '../workers/search-core.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 import {extractEnrichTargets} from './enrichment.js'
 import {formatServiceBlock, formatFreshnessSkippedBlock} from './service-blocks.js'
 import type {PhaseDeps} from './child-runner.js'
+
+/** How much of a docs/url body survives into the block, for the raw-worker lookups. */
+const RAW_BODY_LIMIT = 4000
+
+type GatherDeps = Pick<PhaseDeps, 'cwd' | 'signal' | 'recordSubStep'>
+
+/** One docs (`pkg`) or url target, in the order it will appear in the block. */
+interface ExternalTarget {
+    kind: 'pkg' | 'url'
+    /** The package name or the URL — also the `### docs:` / `### url:` heading. */
+    name: string
+}
+
+/** What a target lookup contributes to the block. */
+export interface ExternalTargetResult {
+    /** Emitted as an `### npm:` block ahead of every body. Absent for url targets. */
+    npmVersion?: NpmVersionInfo | null
+    /**
+     * The `### docs:`/`### url:` body. `undefined` means "this target contributes no
+     * body block" — and the two call paths draw that line differently ON PURPOSE:
+     * the raw lookups emit a (possibly empty) body whenever the docs call returned
+     * chunks, the focused ones emit one only when the child produced a non-empty
+     * answer. Both keep any `npmVersion` regardless.
+     */
+    body?: string
+}
+
+/**
+ * The worker variant. This is the adapter the focused-extractor seam made
+ * expressible: `gatherExternalContext` binds the RAW workers (whole doc chunks /
+ * whole page markdown, truncated), `phaseAutoAnswer` binds the FOCUSED ones (a
+ * child's one-question answer). Everything else about the block is identical.
+ *
+ * A rejected lookup is caught by the builder and yields no blocks for that
+ * target, so adapters may throw freely.
+ */
+export interface ExternalContextLookups {
+    docs(pkg: string): Promise<ExternalTargetResult | null>
+    url(url: string): Promise<ExternalTargetResult | null>
+    /** Defaults to the real search worker. */
+    search?: (input: SearchCoreInput) => Promise<SearchCoreResult>
+}
+
+/**
+ * The six places the two call paths genuinely disagreed. Each is a knob rather
+ * than a default, because every one of them is a deliberate, measured choice on
+ * at least one path — the auto-answer block is capped and records nothing
+ * because it runs per grill question, in front of a waiting user.
+ */
+export interface ExternalContextPolicy {
+    /**
+     * Max combined docs+url targets fanned out, packages first. Omit for uncapped
+     * (research); the auto-answer path caps at 2.
+     */
+    targetCap?: number
+    /** Max services fanned out. Omit for uncapped; the auto-answer path caps at 2. */
+    serviceCap?: number
+    /**
+     * A cheap live version lookup for every named dep that did NOT get a docs
+     * target, so a version block exists for ALL of them. Omit to disable, as the
+     * auto-answer path does. Without this on the research path, deps past the
+     * docs cap had no live version and a "which version?" question fell back to
+     * the model's stale training data — how tailwindcss got pinned to an old major.
+     */
+    versionLookup?: (pkg: string) => Promise<NpmVersionInfo | null>
+    /** Sub-step label recorded via `deps.recordSubStep`. Omit to record nothing. */
+    subStepLabel?: string
+    /**
+     * Return `''` before any fan-out when there is nothing to look up. Only the
+     * research path does this today; on the auto-answer path the empty fan-out is
+     * a no-op that produces the same `''`.
+     */
+    earlyReturnOnNoTargets?: boolean
+}
+
+/**
+ * Assemble the `EXTERNAL CONTEXT\n…\n\n` block for `source`, or `''` when there
+ * is nothing to enrich (no targets, or every lookup failed).
+ */
+export async function buildExternalContext(
+    source: string,
+    deps: GatherDeps,
+    lookups: ExternalContextLookups,
+    policy: ExternalContextPolicy = {}
+): Promise<string> {
+    const searchFn = lookups.search ?? defaultSearch
+    const enrichTargets = extractEnrichTargets(source)
+
+    // Packages lead urls, then the combined cap applies — so a capped run spends
+    // its budget on named deps first. Uncapped, this is just "packages, then urls".
+    const targets: ExternalTarget[] = [
+        ...enrichTargets.packages.map(name => ({kind: 'pkg' as const, name})),
+        ...enrichTargets.urls.map(name => ({kind: 'url' as const, name}))
+    ].slice(0, policy.targetCap ?? Number.POSITIVE_INFINITY)
+    const services = enrichTargets.services.slice(0, policy.serviceCap ?? Number.POSITIVE_INFINITY)
+
+    const versionLookup = policy.versionLookup
+    const docsTargets = new Set(targets.filter(t => t.kind === 'pkg').map(t => t.name))
+    const extraVersionPkgs =
+        versionLookup ? enrichTargets.versionPackages.filter(p => !docsTargets.has(p)) : []
+
+    if (policy.earlyReturnOnNoTargets && targets.length === 0 && services.length === 0) return ''
+
+    const startedAt = Date.now()
+    const [targetResults, serviceResults, extraVersionResults] = await Promise.all([
+        Promise.all(
+            targets.map(t =>
+                (t.kind === 'pkg' ? lookups.docs(t.name) : lookups.url(t.name)).catch(() => null)
+            )
+        ),
+        Promise.all(
+            services.map(s =>
+                searchFn({
+                    query: `${s.name} ${s.query}`,
+                    count: 3,
+                    signal: deps.signal
+                }).catch(() => null)
+            )
+        ),
+        Promise.all(
+            versionLookup ? extraVersionPkgs.map(pkg => versionLookup(pkg).catch(() => null)) : []
+        )
+    ])
+
+    const sections: string[] = []
+
+    // npm version blocks lead the section so the model anchors on live version
+    // data before reading any docs body. The docs-fetched packages carry their
+    // version in the lookup's own bundled result; the remaining named deps get
+    // theirs from the cheap standalone lookup above. Together they cover EVERY
+    // named dep.
+    for (const r of targetResults) {
+        if (r?.npmVersion) sections.push(formatNpmVersionSection(r.npmVersion))
+    }
+    for (const v of extraVersionResults) {
+        if (v) sections.push(formatNpmVersionSection(v))
+    }
+
+    for (let i = 0; i < targets.length; i++) {
+        const body = targetResults[i]?.body
+        if (body === undefined) continue
+        const heading = targets[i].kind === 'pkg' ? 'docs' : 'url'
+        sections.push(`### ${heading}: ${targets[i].name}\n${body}`)
+    }
+
+    const skipped: string[] = []
+    for (let i = 0; i < services.length; i++) {
+        const s = services[i]
+        const r = serviceResults[i]
+        if (r === null) continue
+        if (r.kind === 'no_key') {
+            skipped.push(s.name)
+            continue
+        }
+        if (r.kind === 'error') continue
+        // kind === 'ok'
+        sections.push(formatServiceBlock(s.name, `${s.name} ${s.query}`, r.results))
+    }
+
+    if (skipped.length > 0) {
+        sections.push(formatFreshnessSkippedBlock(skipped))
+    }
+
+    if (policy.subStepLabel) deps.recordSubStep?.(policy.subStepLabel, Date.now() - startedAt)
+
+    if (sections.length === 0) return ''
+    return `EXTERNAL CONTEXT\n${sections.join('\n\n')}\n\n`
+}
 
 /** Injectable workers so enrichment is testable without spawning real lookups. */
 export interface ExternalContextDeps {
@@ -26,11 +209,12 @@ export interface ExternalContextDeps {
     npmVersionLookup?: typeof npmVersionLookup
 }
 
-type GatherDeps = Pick<PhaseDeps, 'cwd' | 'signal' | 'recordSubStep'>
-
 /**
- * Returns the `EXTERNAL CONTEXT\n…\n\n` block for the refined spec, or `''` when
- * there is nothing to enrich (no targets, or every lookup failed).
+ * The RESEARCH-phase binding: raw workers, no caps, live versions for every
+ * named dep, truncated bodies, timed, and short-circuited when there is nothing
+ * to look up.
+ *
+ * Returns the `EXTERNAL CONTEXT\n…\n\n` block for the refined spec, or `''`.
  */
 export async function gatherExternalContext(
     refined: string,
@@ -39,106 +223,41 @@ export async function gatherExternalContext(
 ): Promise<string> {
     const docsRawFn = researchDeps.docsRaw ?? docsRaw
     const fetchRawFn = researchDeps.fetchRaw ?? fetchRaw
-    const searchFn = researchDeps.searchFn ?? defaultSearch
     const npmVersionFn = researchDeps.npmVersionLookup ?? npmVersionLookup
-    const enrichTargets = extractEnrichTargets(refined)
+    const docsQuery = refined.split('\n').find(l => l.trim()) ?? refined
 
-    // Every named dep past the heavy-docs cap still gets a cheap live version
-    // lookup, so a version block exists for ALL of them (the docs-fetched ones
-    // emit their version below from the bundled lookup). Without this, deps 4..N
-    // had no live version and a "which version?" question fell back to the model's
-    // stale training data — how tailwindcss got pinned to an old major.
-    const docsPkgs = new Set(enrichTargets.packages)
-    const extraVersionPkgs = enrichTargets.versionPackages.filter(p => !docsPkgs.has(p))
-
-    if (
-        enrichTargets.packages.length === 0
-        && enrichTargets.urls.length === 0
-        && enrichTargets.services.length === 0
-    ) {
-        return ''
-    }
-
-    const enrichSections: string[] = []
-    const tEnrichStart = Date.now()
-    const [docsResults, fetchResults, serviceResults, extraVersionResults] = await Promise.all([
-        Promise.all(
-            enrichTargets.packages.map(pkg =>
-                docsRawFn({
+    return buildExternalContext(
+        refined,
+        deps,
+        {
+            docs: async pkg => {
+                const r = await docsRawFn({
                     pkg,
-                    query: refined.split('\n').find(l => l.trim()) ?? refined,
+                    query: docsQuery,
                     cwd: deps.cwd,
                     signal: deps.signal
-                }).catch(() => null)
-            )
-        ),
-        Promise.all(
-            enrichTargets.urls.map(url => fetchRawFn({url, signal: deps.signal}).catch(() => null))
-        ),
-        Promise.all(
-            enrichTargets.services.map(s =>
-                searchFn({
-                    query: `${s.name} ${s.query}`,
-                    count: 3,
-                    signal: deps.signal
-                }).catch(() => null)
-            )
-        ),
-        Promise.all(
-            extraVersionPkgs.map(pkg => npmVersionFn(pkg, {signal: deps.signal}).catch(() => null))
-        )
-    ])
-
-    // npm version blocks lead the section so the model anchors on live version
-    // data before reading any docs body. The docs-fetched packages carry their
-    // version in docsRaw's bundled lookup; the remaining named deps get theirs
-    // from the cheap standalone lookup above. Together they cover EVERY named dep.
-    for (let i = 0; i < enrichTargets.packages.length; i++) {
-        const v = docsResults[i]?.npmVersion
-        if (v) enrichSections.push(formatNpmVersionSection(v))
-    }
-    for (const v of extraVersionResults) {
-        if (v) enrichSections.push(formatNpmVersionSection(v))
-    }
-
-    for (let i = 0; i < enrichTargets.packages.length; i++) {
-        const r = docsResults[i]
-        if (r?.kind === 'ok' && r.chunks.length > 0) {
-            const body = r.chunks
-                .map(c => c.content)
-                .join('\n\n')
-                .slice(0, 4000)
-            enrichSections.push(`### docs: ${enrichTargets.packages[i]}\n${body}`)
+                })
+                return {
+                    npmVersion: r.npmVersion,
+                    body:
+                        r.kind === 'ok' && r.chunks.length > 0 ?
+                            r.chunks
+                                .map(c => c.content)
+                                .join('\n\n')
+                                .slice(0, RAW_BODY_LIMIT)
+                        :   undefined
+                }
+            },
+            url: async url => {
+                const r = await fetchRawFn({url, signal: deps.signal})
+                return {body: r.markdown.slice(0, RAW_BODY_LIMIT)}
+            },
+            search: researchDeps.searchFn
+        },
+        {
+            versionLookup: pkg => npmVersionFn(pkg, {signal: deps.signal}),
+            subStepLabel: 'enrichment',
+            earlyReturnOnNoTargets: true
         }
-    }
-
-    for (let i = 0; i < enrichTargets.urls.length; i++) {
-        const r = fetchResults[i]
-        if (r) {
-            enrichSections.push(`### url: ${enrichTargets.urls[i]}\n${r.markdown.slice(0, 4000)}`)
-        }
-    }
-
-    const skipped: string[] = []
-    for (let i = 0; i < enrichTargets.services.length; i++) {
-        const s = enrichTargets.services[i]
-        const r = serviceResults[i]
-        if (r === null) continue
-        if (r.kind === 'no_key') {
-            skipped.push(s.name)
-            continue
-        }
-        if (r.kind === 'error') continue
-        // kind === 'ok'
-        enrichSections.push(formatServiceBlock(s.name, `${s.name} ${s.query}`, r.results))
-    }
-
-    if (skipped.length > 0) {
-        enrichSections.push(formatFreshnessSkippedBlock(skipped))
-    }
-
-    deps.recordSubStep?.('enrichment', Date.now() - tEnrichStart)
-
-    if (enrichSections.length === 0) return ''
-    return `EXTERNAL CONTEXT\n${enrichSections.join('\n\n')}\n\n`
+    )
 }

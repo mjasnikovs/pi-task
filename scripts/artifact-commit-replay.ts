@@ -31,13 +31,10 @@
  * regression: a project that ALREADY tracks a path under one of these names must
  * still have its edits to that path committed.
  */
-import {spawnSync} from 'node:child_process'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 import {gitCommitAll} from '../src/task/auto-commit.js'
+import {scratchGit as git, scratchRoot} from './scratch-repo.js'
 
-const ROOT = path.join(os.tmpdir(), `artifact-commit-replay-${process.pid}`)
+const ROOT = scratchRoot('artifact-commit-replay')
 
 const SCREENSHOTS = [
     'test-results/client-pages-AdminPage-Adm-89eae-nel-with-users-and-listings/admin-panel-default-actual.png',
@@ -45,45 +42,29 @@ const SCREENSHOTS = [
     'test-results/client-pages-LoginPage-LoginPage-screenshot-baseline/LoginPage-screenshot-baseline-1-actual.png'
 ]
 
-function git(cwd: string, args: string[]): string {
-    const r = spawnSync('git', ['-c', 'user.name=replay', '-c', 'user.email=replay@local', ...args], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`)
-    return r.stdout
-}
-
-function write(dir: string, rel: string, body: string): void {
-    const p = path.join(dir, rel)
-    fs.mkdirSync(path.dirname(p), {recursive: true})
-    fs.writeFileSync(p, body)
-}
-
 /**
  * mx5 at 3e87014^ — the pre-task state — then the task's own work applied on top:
  * a real src/ edit plus the litter the Playwright run left behind.
  * `trackedArtifact` seeds an ALREADY-TRACKED `coverage/badge.svg`, for the control.
  */
 function makeFixture(name: string, opts: {trackedArtifact: boolean}): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(dir, 'package.json', '{"name":"mx5"}\n')
-    write(dir, 'src/client/pages/admin.tsx', 'export const Admin = () => null\n')
-    if (opts.trackedArtifact) write(dir, 'coverage/badge.svg', '<svg>old</svg>\n')
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'chore: checkpoint before "Polish"'])
+    const repo = ROOT.repo(name, {
+        files: {
+            'package.json': '{"name":"mx5"}\n',
+            'src/client/pages/admin.tsx': 'export const Admin = () => null\n',
+            ...(opts.trackedArtifact ? {'coverage/badge.svg': '<svg>old</svg>\n'} : {})
+        },
+        commit: 'chore: checkpoint before "Polish"'
+    })
 
     // The task's work: a real source edit …
-    write(dir, 'src/client/pages/admin.tsx', 'export const Admin = () => <div>polished</div>\n')
+    repo.write('src/client/pages/admin.tsx', 'export const Admin = () => <div>polished</div>\n')
     // … and what the failing Playwright run wrote, untracked.
-    for (const s of SCREENSHOTS) write(dir, s, 'PNGDATA')
-    write(dir, 'test-results/.last-run.json', '{"status":"failed"}\n')
+    for (const s of SCREENSHOTS) repo.write(s, 'PNGDATA')
+    repo.write('test-results/.last-run.json', '{"status":"failed"}\n')
     // … and, in the control, an edit to a path the project already tracks.
-    if (opts.trackedArtifact) write(dir, 'coverage/badge.svg', '<svg>new</svg>\n')
-    return dir
+    if (opts.trackedArtifact) repo.write('coverage/badge.svg', '<svg>new</svg>\n')
+    return repo.dir
 }
 
 interface Arm {
@@ -122,9 +103,6 @@ async function runArm(dir: string, mode: 'baseline' | 'treatment'): Promise<Arm>
 const hasTestResults = (files: string[]): boolean => files.some(f => f.startsWith('test-results/'))
 
 async function main(): Promise<void> {
-    fs.rmSync(ROOT, {recursive: true, force: true})
-    fs.mkdirSync(ROOT, {recursive: true})
-
     const base = await runArm(makeFixture('baseline', {trackedArtifact: false}), 'baseline')
     const treat = await runArm(makeFixture('treatment', {trackedArtifact: false}), 'treatment')
     const control = await runArm(makeFixture('control', {trackedArtifact: true}), 'treatment')
@@ -165,7 +143,7 @@ async function main(): Promise<void> {
     console.log('')
     for (const [label, ok] of checks) console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${label}`)
 
-    fs.rmSync(ROOT, {recursive: true, force: true})
+    ROOT.remove()
     const verdict = checks.every(([, ok]) => ok)
     console.log('')
     console.log(`VERDICT: ${verdict ? 'PASS' : 'FAIL'}`)

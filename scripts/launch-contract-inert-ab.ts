@@ -52,12 +52,13 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {runFinalIntegrationGate, type FinalGateOutcome} from '../src/task/final-gate.js'
+import {scratchRoot} from './scratch-repo.js'
 
 const REPO = path.resolve(import.meta.dir, '..')
 const MX5 = path.join(os.homedir(), 'hub', 'mx5')
 /** The mx5 commit whose manifest is missing `build` and `seed` (run 20, TASK_0027). */
 const MX5_REF = '3e87014'
-const ROOT = path.join(os.tmpdir(), `launch-contract-inert-ab-${process.pid}`)
+const ROOT = scratchRoot('launch-contract-inert-ab')
 
 type GateFn = (
     cwd: string,
@@ -66,21 +67,6 @@ type GateFn = (
     bootDeps?: Record<string, unknown>,
     planText?: string
 ) => Promise<FinalGateOutcome>
-
-function git(cwd: string, args: string[]): string {
-    const r = spawnSync('git', ['-c', 'user.name=ab', '-c', 'user.email=ab@local', ...args], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`)
-    return r.stdout
-}
-
-function write(dir: string, rel: string, body: string): void {
-    const p = path.join(dir, rel)
-    fs.mkdirSync(path.dirname(p), {recursive: true})
-    fs.writeFileSync(p, body)
-}
 
 /**
  * The commit BEFORE the lever landed, located by when its module was ADDED — not
@@ -100,7 +86,7 @@ function baselineRef(): {ref: string; pinned: boolean} {
 
 /** `src/` at a ref, whole module graph, imported from a temp dir. */
 async function gateAt(ref: string): Promise<GateFn> {
-    const dir = path.join(ROOT, '_baseline')
+    const dir = ROOT.path('_baseline')
     fs.mkdirSync(dir, {recursive: true})
     const tar = spawnSync('git', ['archive', ref, 'src'], {
         cwd: REPO,
@@ -124,34 +110,27 @@ const CONTRACT_ABC = 'build\ntest\nmigrate\n'
 
 /** (a) IAR1's shape: a CMake project that recorded a contract. No manifest at all. */
 function makeCmake(name: string): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(dir, 'CMakeLists.txt', 'cmake_minimum_required(VERSION 3.20)\nproject(iar1 CXX)\n')
-    write(dir, 'src/main.cpp', 'int main() { return 0; }\n')
-    write(dir, '.pi-tasks/launch-contract.md', CONTRACT_ABC)
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'fixture: cmake project with a launch contract'])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            'CMakeLists.txt': 'cmake_minimum_required(VERSION 3.20)\nproject(iar1 CXX)\n',
+            'src/main.cpp': 'int main() { return 0; }\n',
+            '.pi-tasks/launch-contract.md': CONTRACT_ABC
+        },
+        commit: 'fixture: cmake project with a launch contract'
+    }).dir
 }
 
 /** (b) The same contract against a Makefile that exposes two of the three. */
 function makeMakefile(name: string): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(
-        dir,
-        'Makefile',
-        'CC := gcc\n\n.PHONY: build test\n\nbuild:\n\t$(CC) -o app src/main.c\n\ntest:\n\t./app --selftest\n'
-    )
-    write(dir, 'src/main.c', 'int main(void) { return 0; }\n')
-    write(dir, '.pi-tasks/launch-contract.md', CONTRACT_ABC)
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'fixture: makefile project with a launch contract'])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            Makefile:
+                'CC := gcc\n\n.PHONY: build test\n\nbuild:\n\t$(CC) -o app src/main.c\n\ntest:\n\t./app --selftest\n',
+            'src/main.c': 'int main(void) { return 0; }\n',
+            '.pi-tasks/launch-contract.md': CONTRACT_ABC
+        },
+        commit: 'fixture: makefile project with a launch contract'
+    }).dir
 }
 
 /** mx5's REAL file at MX5_REF — never a transcription. */
@@ -163,15 +142,13 @@ function mx5File(rel: string): string {
 
 /** (c) The FP suite: mx5's real manifest + real contract, the true positive. */
 function makeMx5(name: string): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-    write(dir, 'package.json', mx5File('package.json'))
-    write(dir, '.pi-tasks/launch-contract.md', mx5File('.pi-tasks/launch-contract.md'))
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'fixture: mx5 manifest + launch contract at ' + MX5_REF])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            'package.json': mx5File('package.json'),
+            '.pi-tasks/launch-contract.md': mx5File('.pi-tasks/launch-contract.md')
+        },
+        commit: 'fixture: mx5 manifest + launch contract at ' + MX5_REF
+    }).dir
 }
 
 // ── run ───────────────────────────────────────────────────────────────────────
@@ -214,8 +191,6 @@ const contractLine = (r: {failures: string[]}): string =>
     r.failures.find(f => CONTRACT_RE.test(f)) ?? ''
 
 async function main(): Promise<void> {
-    fs.rmSync(ROOT, {recursive: true, force: true})
-    fs.mkdirSync(ROOT, {recursive: true})
     const {ref, pinned} = baselineRef()
     const baseline = await gateAt(ref)
     const checks: Array<[string, boolean]> = []
@@ -290,7 +265,7 @@ async function main(): Promise<void> {
     const verdict = checks.every(([, ok]) => ok)
     console.log('')
     console.log(`VERDICT: ${verdict ? 'PASS' : 'FAIL'}   (no rate claim — 0 observed occurrences; construction proof)`)
-    fs.rmSync(ROOT, {recursive: true, force: true})
+    ROOT.remove()
     process.exit(verdict ? 0 : 1)
 }
 

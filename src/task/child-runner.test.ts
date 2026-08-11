@@ -916,3 +916,152 @@ describe('runWithEmphasisRetry', () => {
         ).rejects.toThrow(/compose_invalid: still bad/)
     })
 })
+
+// ─── Shared error-triage ladder ──────────────────────────────────────────────
+
+/** Serve a queue of SpawnResponses in order while capturing the PROMPT each
+ *  spawn was fed on stdin — so a test can assert what the re-prompt carried
+ *  (a correction hint, or the bare original prompt). */
+function ladderSpawn(responses: ReadonlyArray<SpawnResponse>): {
+    spawn: SpawnFn
+    prompts: string[]
+} {
+    const prompts: string[] = []
+    let i = 0
+    const spawn = fakeSpawnByPrompt(args => {
+        prompts.push(String(args[args.length - 1]))
+        const r = responses[Math.min(i, responses.length - 1)]!
+        i++
+        return r
+    })
+    return {spawn, prompts}
+}
+
+/**
+ * The two wrappers that share the ladder, driven identically. Both are handed
+ * the SAME literal prompt and the same queued child responses, so any rung that
+ * behaved differently between them would show up as a diff in `prompts` or in
+ * the thrown error. `verb` is the wrapper's own word in the debug log — the
+ * single externally visible difference the collapse deliberately preserved.
+ */
+const LADDER_CALL_SITES = [
+    {
+        label: 'runPhaseChild',
+        verb: 'retry',
+        otherVerb: 'restart',
+        run: (deps: Parameters<typeof runPhaseChild>[0], name: string) =>
+            runPhaseChild(deps, name, 'read', 'ORIGINAL PROMPT')
+    },
+    {
+        label: 'runPhaseWithLoopGuard',
+        verb: 'restart',
+        otherVerb: 'retry',
+        run: (deps: Parameters<typeof runPhaseWithLoopGuard>[0], name: string) =>
+            runPhaseWithLoopGuard(deps, name, 'read', hint => prependHint(hint, 'ORIGINAL PROMPT'))
+    }
+] as const
+
+describe('shared error-triage ladder', () => {
+    // runPhaseChild and runPhaseWithLoopGuard used to carry two byte-identical
+    // copies of this ladder 166 lines apart, so a fix to one silently missed the
+    // other. They now share one implementation; these tests run all four rungs
+    // through BOTH call sites so the sharing stays proven.
+    for (const site of LADDER_CALL_SITES) {
+        describe(site.label, () => {
+            const depsFor = (spawn: SpawnFn, debug?: string[]) => ({
+                cwd: '/tmp',
+                taskId: 'TASK_TEST',
+                signal: new AbortController().signal,
+                spawn,
+                sleepFor: async () => {},
+                logDebug: debug ? (msg: string) => void debug.push(msg) : undefined
+            })
+
+            test('rung 1: a non-zero exit throws immediately, without re-spawning', async () => {
+                const {spawn, prompts} = ladderSpawn([
+                    {...agentEndResponse('', 3), stderr: 'kaboom'},
+                    agentEndResponse('should not be reached')
+                ])
+                await expect(site.run(depsFor(spawn), 'refine')).rejects.toThrow(
+                    /refine child failed.*kaboom/
+                )
+                // A dead child is not transient — no budget is spent on it.
+                expect(prompts.length).toBe(1)
+            })
+
+            test('rung 2: a connection-class model error backs off, re-sends the bare prompt, and logs its own verb', async () => {
+                const debug: string[] = []
+                const {spawn, prompts} = ladderSpawn([
+                    agentErrorResponse('Connection error.'),
+                    agentEndResponse('recovered output')
+                ])
+                const out = await site.run(depsFor(spawn, debug), 'grill-gen')
+                expect(out).toBe('recovered output')
+                expect(prompts.length).toBe(2)
+                // Nothing to correct: the re-spawn gets the untouched prompt.
+                expect(prompts[1]).toBe('ORIGINAL PROMPT')
+                // The verb is the only way to tell from a debug log WHICH wrapper
+                // ran the ladder — it must survive the collapse, per call site.
+                const line = debug.find(l => l.includes('connection error'))
+                expect(line).toContain(`— ${site.verb} 1/2`)
+                expect(line).not.toContain(site.otherVerb)
+            })
+
+            test('rung 2: a NON-connection model error fails fast with ModelError', async () => {
+                const {spawn, prompts} = ladderSpawn([
+                    agentErrorResponse('400 context length exceeded'),
+                    agentEndResponse('should not be reached')
+                ])
+                const p = site.run(depsFor(spawn), 'refine')
+                await expect(p).rejects.toBeInstanceOf(ModelError)
+                await expect(p).rejects.toThrow(/model error — 400 context length exceeded/)
+                expect(prompts.length).toBe(1)
+            })
+
+            test('rung 3: an empty completion re-spawns with the bare prompt', async () => {
+                const {spawn, prompts} = ladderSpawn([
+                    agentEndResponse(''),
+                    agentEndResponse('recovered output')
+                ])
+                expect(await site.run(depsFor(spawn), 'refine')).toBe('recovered output')
+                expect(prompts.length).toBe(2)
+                expect(prompts[1]).toBe('ORIGINAL PROMPT')
+            })
+
+            test('rung 4: a leaked tool call re-spawns with a correction hint prepended', async () => {
+                const {spawn, prompts} = ladderSpawn([
+                    agentEndResponse(LEAKED),
+                    agentEndResponse('clean output')
+                ])
+                expect(await site.run(depsFor(spawn), 'verify-tooling')).toBe('clean output')
+                expect(prompts.length).toBe(2)
+                expect(prompts[0]).toBe('ORIGINAL PROMPT')
+                expect(prompts[1]).toContain('SYSTEM NOTE')
+                expect(prompts[1]).toContain('ORIGINAL PROMPT')
+            })
+
+            test('spends the same budget — 3 attempts — before giving up', async () => {
+                // MAX_LEAK_RETRIES and MAX_LOOP_RESTARTS are separate policies that
+                // happen to agree at 2 today. Both wrappers therefore run 3 attempts
+                // total; this pins the arithmetic (budget+1) on both sides.
+                const empty = ladderSpawn([agentEndResponse('')])
+                await expect(site.run(depsFor(empty.spawn), 'refine')).rejects.toThrow(
+                    /refine child produced no output/
+                )
+                expect(empty.prompts.length).toBe(3)
+
+                const leak = ladderSpawn([agentEndResponse(LEAKED)])
+                await expect(
+                    site.run(depsFor(leak.spawn), 'verify-tooling')
+                ).rejects.toBeInstanceOf(LeakedToolCallError)
+                expect(leak.prompts.length).toBe(3)
+
+                const conn = ladderSpawn([agentErrorResponse('socket hang up')])
+                await expect(site.run(depsFor(conn.spawn), 'grill-gen')).rejects.toBeInstanceOf(
+                    ModelError
+                )
+                expect(conn.prompts.length).toBe(3)
+            })
+        })
+    }
+})

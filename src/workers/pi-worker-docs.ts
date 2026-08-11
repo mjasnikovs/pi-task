@@ -17,18 +17,14 @@ import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
 } from './npm-version.js'
-import {type SpawnFn, runChild} from '../shared/child-process.js'
-import {childBaseArgs} from '../shared/child-extensions.js'
-import {parseChildOutput, isExcerptInContent} from '../shared/child-output.js'
-import {getPiInvocation} from '../shared/pi-invocation.js'
-import {formatChildFailure, makeWorkerTool} from './shared.js'
+import type {SpawnFn} from '../shared/child-process.js'
+import {runFocusedExtraction, type FocusedFailure, type FocusedResult} from './focused-extractor.js'
+import {makeWorkerTool} from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
-
-const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 const RENDER_QUERY_MAX = 100
 
@@ -104,6 +100,30 @@ function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | '
     return pin ? {versionSource: pin.source, declaredRange: pin.range} : {}
 }
 
+/**
+ * The tool result for a focused-extraction child that failed, shared by both docs paths —
+ * the last chunk they still held in common after the extractor seam took the child running.
+ * The paths differ only in `prefix`: the npm path leads every result, failures included, with
+ * its version banner and npm-version header; the project path has neither.
+ *
+ * `childExitCode` is recorded but NOT as 0, which is what keeps a failure out of the research
+ * cache (see `cacheable` below).
+ */
+function docsFailureResult(
+    extraction: FocusedFailure,
+    baseDetails: DocsDetails,
+    prefix: string
+): {text: string; details: DocsDetails} {
+    return {
+        text: prefix + extraction.failure,
+        details: {
+            ...baseDetails,
+            ...(extraction.aborted ? {aborted: true} : {}),
+            childExitCode: extraction.exitCode
+        }
+    }
+}
+
 export interface PiWorkerDocsInternals {
     resolvePackage?: typeof defaultResolvePackage
     ensureIndexed?: typeof defaultEnsureIndexed
@@ -172,6 +192,24 @@ export function registerPiWorkerDocs(
             // (internals.spawn is always injected), i.e. untested, unreachable, and wrong.
             const spawn = internals.spawn ?? (defaultSpawn as unknown as SpawnFn)
 
+            // Both paths below run the SAME extraction against this call's cwd/signal/spawn
+            // and verify the citation against exactly the content they prompted with; only
+            // the prompt body and the abort wording differ. (fetch is the site that verifies
+            // against a superset — see FocusedRequest.verifyAgainst.)
+            const extract = (
+                prompt: string,
+                content: string,
+                abortedMessage: string
+            ): Promise<FocusedResult> =>
+                runFocusedExtraction({
+                    prompt,
+                    verifyAgainst: content,
+                    cwd: ctx.cwd,
+                    signal,
+                    spawn,
+                    abortedMessage
+                })
+
             // ── Project source lookup ───────────────────────────────────────
             if (params.module === '.') {
                 const budget = projectDocsBudget()
@@ -223,25 +261,14 @@ export function registerPiWorkerDocs(
                     indexingMs
                 }
                 const concatenated = chunks.map(c => c.content).join('\n\n')
-                const prompt = buildProjectPrompt(projectName, params.query, concatenated)
-                const invocation = getPiInvocation(childArgs(), prompt)
-                const child = await runChild(spawn, invocation, ctx.cwd, signal)
+                const extraction = await extract(
+                    buildProjectPrompt(projectName, params.query, concatenated),
+                    concatenated,
+                    'Project docs lookup aborted.'
+                )
+                if (!extraction.ok) return docsFailureResult(extraction, baseDetails, '')
 
-                const failure = formatChildFailure(child, 'Project docs lookup aborted.')
-                if (failure !== null) {
-                    return {
-                        text: failure,
-                        details: {
-                            ...baseDetails,
-                            ...(child.aborted ? {aborted: true} : {}),
-                            childExitCode: child.exitCode
-                        }
-                    }
-                }
-
-                const parsed = parseChildOutput(child.stdout)
-                const verified =
-                    parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
+                const verified = extraction.excerptVerified
                 const text = formatResultText(
                     {
                         name: projectName,
@@ -250,7 +277,7 @@ export function registerPiWorkerDocs(
                         entryDts: null,
                         readme: null
                     },
-                    parsed,
+                    extraction,
                     verified
                 )
                 // SAME instrumentation channel as the package path below, extended to the
@@ -268,10 +295,11 @@ export function registerPiWorkerDocs(
                 logDocsAnswer({
                     module: params.module,
                     query: params.query,
-                    answer: parsed.answer,
+                    answer: extraction.answer,
                     typeOnly: false,
                     reason: 'project-source lookup — the type-only detector is not applied here',
                     excerptVerified: verified,
+                    excerptCheck: extraction.excerptCheck,
                     toolText: text
                 })
                 return {
@@ -374,26 +402,17 @@ export function registerPiWorkerDocs(
             }
 
             const concatenated = chunks.map(c => c.content).join('\n\n')
-            const prompt = buildPrompt(pkg, params.query, concatenated)
-            const invocation = getPiInvocation(childArgs(), prompt)
-            const child = await runChild(spawn, invocation, ctx.cwd, signal)
-
-            const failure = formatChildFailure(child, 'Docs lookup aborted.')
-            if (failure !== null) {
-                return {
-                    text: versionBanner + npmHeader + failure,
-                    details: {
-                        ...baseDetails,
-                        ...(child.aborted ? {aborted: true} : {}),
-                        childExitCode: child.exitCode
-                    }
-                }
+            const extraction = await extract(
+                buildPrompt(pkg, params.query, concatenated),
+                concatenated,
+                'Docs lookup aborted.'
+            )
+            if (!extraction.ok) {
+                return docsFailureResult(extraction, baseDetails, versionBanner + npmHeader)
             }
 
-            const parsed = parseChildOutput(child.stdout)
-            const verified =
-                parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
-            const body = formatResultText(pkg, parsed, verified)
+            const verified = extraction.excerptVerified
+            const body = formatResultText(pkg, extraction, verified)
 
             // F-2: a TYPE-ONLY answer is the dangerous failure. "unclear from this package"
             // is honest and already escalates; a signature is a well-formed, confident,
@@ -407,7 +426,7 @@ export function registerPiWorkerDocs(
             // hono.dev present in run-15 cache values ONLY inside these JSDoc links, never
             // fetched. Prompting the escalation beats performing it here: this tool runs in
             // parallel execution mode and cannot cleanly spawn a fetch of its own.
-            const typeOnly = isTypeOnlyAnswer(parsed.answer, params.query)
+            const typeOnly = isTypeOnlyAnswer(extraction.answer, params.query)
             let text = versionBanner + npmHeader + body
             if (typeOnly.typeOnly) {
                 const seeUrls = extractSeeUrls(concatenated)
@@ -442,10 +461,11 @@ export function registerPiWorkerDocs(
             logDocsAnswer({
                 module: params.module,
                 query: params.query,
-                answer: parsed.answer,
+                answer: extraction.answer,
                 typeOnly: typeOnly.typeOnly,
                 reason: typeOnly.reason,
                 excerptVerified: verified,
+                excerptCheck: extraction.excerptCheck,
                 toolText: text
             })
 

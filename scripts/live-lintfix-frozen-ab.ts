@@ -34,6 +34,7 @@ import {runBoundedLintFix, buildLintFixPrompt, type LintFixDeps} from '../src/ta
 import {runChild} from '../src/task/child-runner.js'
 import {frozenPathsFromSpec} from '../src/task/frozen-path-guard.js'
 import {extractProhibitions, findProhibitionViolations} from '../src/task/prohibition-probe.js'
+import {scratchRepo} from './scratch-repo.js'
 import {reportArm} from './ab-verdict.js'
 
 const ROOT = '/home/edgars/tmp/lintfix-frozen-ab'
@@ -94,37 +95,41 @@ async function git(cwd: string, args: string[]): Promise<{exitCode: number; stdo
     return {exitCode: r.exitCode, stdout: r.stdout}
 }
 
-async function buildFixture(dir: string): Promise<void> {
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(path.join(dir, 'src'), {recursive: true})
-    fs.mkdirSync(path.join(dir, 'playwright'), {recursive: true})
-    const w = (rel: string, content: string) => fs.writeFileSync(path.join(dir, rel), content)
-    w('package.json', JSON.stringify({name: 'fixture', private: true, scripts: {lint: 'node lint.cjs'}}, null, 4) + '\n')
-    w('lint.cjs', LINT_CJS)
-    w(
-        'tsconfig.json',
-        JSON.stringify(
-            {compilerOptions: {strict: true, module: 'esnext'}, include: ['src', 'build.ts', 'playwright.config.ts', 'seed.ts']},
-            null,
-            4
-        ) + '\n'
-    )
-    w('playwright.config.ts', 'export default {testDir: "./test"}\n')
-    // The prior task's committed deliverable (mx5 77ac26d): the ct files exist at
-    // HEAD, but their tsconfig registration never landed in any commit.
-    w('playwright-ct.config.ts', 'export default {testDir: "./playwright", use: {ctPort: 3100}}\n')
-    w('playwright/index.ts', '// component-test bootstrap\nexport {}\n')
-    w('build.ts', 'console.log("build")\n')
-    w('seed.ts', 'console.log("seed")\n')
-    w('src/feature.ts', 'export function feature(): string {\n    return "feature"\n}\n')
-    await git(dir, ['init', '-q'])
-    await git(dir, ['config', 'user.email', 'ab@test.local'])
-    await git(dir, ['config', 'user.name', 'AB Harness'])
-    await git(dir, ['add', '-A'])
-    await git(dir, ['commit', '-qm', 'prior tasks: scaffold + playwright ct files'])
+function buildFixture(dir: string): void {
+    const repo = scratchRepo(dir, {
+        files: {
+            'package.json':
+                JSON.stringify(
+                    {name: 'fixture', private: true, scripts: {lint: 'node lint.cjs'}},
+                    null,
+                    4
+                ) + '\n',
+            'lint.cjs': LINT_CJS,
+            'tsconfig.json':
+                JSON.stringify(
+                    {
+                        compilerOptions: {strict: true, module: 'esnext'},
+                        include: ['src', 'build.ts', 'playwright.config.ts', 'seed.ts']
+                    },
+                    null,
+                    4
+                ) + '\n',
+            'playwright.config.ts': 'export default {testDir: "./test"}\n',
+            // The prior task's committed deliverable (mx5 77ac26d): the ct files
+            // exist at HEAD, but their tsconfig registration never landed in any
+            // commit.
+            'playwright-ct.config.ts':
+                'export default {testDir: "./playwright", use: {ctPort: 3100}}\n',
+            'playwright/index.ts': '// component-test bootstrap\nexport {}\n',
+            'build.ts': 'console.log("build")\n',
+            'seed.ts': 'console.log("seed")\n',
+            'src/feature.ts': 'export function feature(): string {\n    return "feature"\n}\n'
+        },
+        commit: 'prior tasks: scaffold + playwright ct files'
+    })
     // The CURRENT task's uncommitted work — what the revert-guard protects and
     // what must survive the lint-fix pass untouched.
-    w(
+    repo.write(
         'src/feature.ts',
         'export function feature(): string {\n    return "feature"\n}\n\nexport function describeFeature(): string {\n    return "described: " + feature()\n}\n'
     )
@@ -146,7 +151,7 @@ type Mode = 'baseline' | 'treatment' | 'suspenders'
 
 async function runTrial(mode: Mode, n: number): Promise<TrialResult> {
     const dir = path.join(ROOT, `${mode}-t${n}`)
-    await buildFixture(dir)
+    buildFixture(dir)
     const logPath = path.join(dir, 'child.log')
     const log = (m: string) => fs.appendFileSync(logPath, `${new Date().toISOString()} ${m}\n`)
 

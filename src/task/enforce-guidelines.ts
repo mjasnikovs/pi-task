@@ -23,7 +23,8 @@
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
-import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import type {SpawnFn} from '../shared/child-process.js'
+import {makeGit} from '../shared/git-runner.js'
 import {USER_CANCELLED} from './child-runner.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 import {findProbeGamingInDiff} from './probe-gaming.js'
@@ -331,8 +332,7 @@ export async function captureCommitDiff(
     // `:(exclude)<dir>` is a git pathspec that drops everything under the tasks
     // directory from the result, leaving only real source changes to verify.
     const excludeTasks = `:(exclude)${TASKS_DIR_NAME}`
-    const run = (args: string[]) =>
-        runChildDefault({command: 'git', args}, cwd, signal, {mode: 'text'}, spawnFn)
+    const run = makeGit(cwd, signal, spawnFn)
 
     // Diff the last commit against its parent. On a root commit there is no
     // HEAD~1 (rev-parse exits non-zero), so fall back to the empty tree.

@@ -42,11 +42,11 @@
  */
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
 import * as path from 'node:path'
 import {runFinalIntegrationGate, type FinalGateOutcome} from '../src/task/final-gate.js'
+import {scratchRoot} from './scratch-repo.js'
 
-const ROOT = path.join(os.tmpdir(), `launch-config-gap-ab-${process.pid}`)
+const ROOT = scratchRoot('launch-config-gap-ab')
 
 type GateFn = (
     cwd: string,
@@ -55,21 +55,6 @@ type GateFn = (
     bootDeps?: Record<string, unknown>,
     planText?: string
 ) => Promise<FinalGateOutcome>
-
-function git(cwd: string, args: string[]): string {
-    const r = spawnSync('git', ['-c', 'user.name=ab', '-c', 'user.email=ab@local', ...args], {
-        cwd,
-        encoding: 'utf8'
-    })
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`)
-    return r.stdout
-}
-
-function write(dir: string, rel: string, body: string): void {
-    const p = path.join(dir, rel)
-    fs.mkdirSync(path.dirname(p), {recursive: true})
-    fs.writeFileSync(p, body)
-}
 
 type Variant = 'main' | 'undeclared' | 'real-fault' | 'partial'
 
@@ -109,54 +94,42 @@ if (!phone) {
  * green static surface so `seed` is the only thing that can fail.
  */
 function makeFixture(name: string, variant: Variant): string {
-    const dir = path.join(ROOT, name)
-    fs.rmSync(dir, {recursive: true, force: true})
-    fs.mkdirSync(dir, {recursive: true})
-    git(dir, ['init', '-q'])
-
-    write(
-        dir,
-        'package.json',
-        JSON.stringify(
-            {
-                name: 'mx5-private',
-                private: true,
-                type: 'module',
-                scripts: {
-                    // A discoverable, passing integration command. Without one the
-                    // gate takes its zero-discovery early return and never reaches
-                    // the launch-contract loop at all.
-                    test: 'bun run src/passing.test.ts',
-                    seed: 'bun run src/server/seed.ts'
-                }
-            },
-            null,
-            4
-        ) + '\n'
-    )
-    write(
-        dir,
-        'src/server/seed.ts',
-        variant === 'real-fault' ? SEED_THROWS
-        : variant === 'partial' ? SEED_PARTIAL
-        : SEED_OK
-    )
-    // The tracked template. `--undeclared` removes ADMIN_PHONE from it, which is
-    // what makes findMissingEnvDeclarations fail the gate statically instead.
-    write(
-        dir,
-        '.env.example',
-        variant === 'undeclared' ?
-            '# Admin user credentials for initial seed / auth\nADMIN_PASSWORD=change-me\n'
-        :   '# Admin user credentials for initial seed / auth\nADMIN_PHONE=+12345678900\nADMIN_PASSWORD=change-me\n'
-    )
-    write(dir, 'src/passing.test.ts', "console.log('suite ok')\n")
-    // The declared launch contract the gate diffs against: one bare script name
-    // per line, the shape readDeclaredScripts reads.
-    write(dir, '.pi-tasks/launch-contract.md', 'seed\n')
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-q', '-m', 'task: seed script (TASK_0027)'])
-    return dir
+    return ROOT.repo(name, {
+        files: {
+            'package.json':
+                JSON.stringify(
+                    {
+                        name: 'mx5-private',
+                        private: true,
+                        type: 'module',
+                        scripts: {
+                            // A discoverable, passing integration command. Without one
+                            // the gate takes its zero-discovery early return and never
+                            // reaches the launch-contract loop at all.
+                            test: 'bun run src/passing.test.ts',
+                            seed: 'bun run src/server/seed.ts'
+                        }
+                    },
+                    null,
+                    4
+                ) + '\n',
+            'src/server/seed.ts':
+                variant === 'real-fault' ? SEED_THROWS
+                : variant === 'partial' ? SEED_PARTIAL
+                : SEED_OK,
+            // The tracked template. `--undeclared` removes ADMIN_PHONE from it, which
+            // is what makes findMissingEnvDeclarations fail the gate statically instead.
+            '.env.example':
+                variant === 'undeclared' ?
+                    '# Admin user credentials for initial seed / auth\nADMIN_PASSWORD=change-me\n'
+                :   '# Admin user credentials for initial seed / auth\nADMIN_PHONE=+12345678900\nADMIN_PASSWORD=change-me\n',
+            'src/passing.test.ts': "console.log('suite ok')\n",
+            // The declared launch contract the gate diffs against: one bare script
+            // name per line, the shape readDeclaredScripts reads.
+            '.pi-tasks/launch-contract.md': 'seed\n'
+        },
+        commit: 'task: seed script (TASK_0027)'
+    }).dir
 }
 
 /**
@@ -179,7 +152,7 @@ function baselineRef(): string {
 
 /** `src/` at `baselineRef()`, whole module graph, imported from a temp dir. */
 async function headGate(): Promise<GateFn> {
-    const dir = path.join(ROOT, '_head')
+    const dir = ROOT.path('_head')
     fs.mkdirSync(dir, {recursive: true})
     const ref = baselineRef()
     const tar = spawnSync('git', ['archive', ref, 'src'], {encoding: 'buffer', maxBuffer: 256 * 1024 * 1024})
@@ -226,8 +199,6 @@ function show(label: string, o: FinalGateOutcome): void {
 }
 
 async function main(): Promise<void> {
-    fs.rmSync(ROOT, {recursive: true, force: true})
-    fs.mkdirSync(ROOT, {recursive: true})
     const head = await headGate()
     const checks: Array<[string, boolean]> = []
 
@@ -278,7 +249,7 @@ async function main(): Promise<void> {
 
     console.log('')
     for (const [label, ok] of checks) console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${label}`)
-    fs.rmSync(ROOT, {recursive: true, force: true})
+    ROOT.remove()
     const verdict = checks.every(([, ok]) => ok)
     console.log('')
     console.log(`VERDICT: ${verdict ? 'PASS' : 'FAIL'}`)

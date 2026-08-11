@@ -356,12 +356,8 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
             trial.trail.push(line)
             return Promise.resolve()
         },
-        recordYoloAcceptDebt: (_c, _id, reason) => {
-            trial.debts.push(`yolo-accepted: ${reason}`)
-            return Promise.resolve()
-        },
-        recordAcceptDebt: (_c, _id, reason) => {
-            trial.debts.push(`accepted: ${reason}`)
+        recordDebt: (_c, _id, reason, origin) => {
+            trial.debts.push(`${origin}: ${reason}`)
             return Promise.resolve()
         }
     }
@@ -429,11 +425,10 @@ async function probeNoAttempt(
                 :   {ok: false, reason: 'repo health: `bun run lint` exited 2'}
             ),
         ...(kind === 'frozen' && {
-            lintFix: () => Promise.resolve({ok: false, reason: 'frozen-path: tsconfig.json'}),
-            recordFrozenBlockedDebt: () => Promise.resolve()
+            lintFix: () => Promise.resolve({ok: false, reason: 'frozen-path: tsconfig.json'})
         }),
         recommend: () => Promise.resolve({recommend: 'accept', rationale: 'x'}),
-        recordYoloAcceptDebt: () => Promise.resolve()
+        recordDebt: () => Promise.resolve()
     }
     const cfg = getConfig()
     const prev = cfg.yoloMode

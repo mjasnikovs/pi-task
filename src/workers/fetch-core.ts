@@ -1,11 +1,7 @@
-import {spawn as defaultSpawn} from 'node:child_process'
 import {fetchAndClean as defaultFetchAndClean, type CleanResult} from './html-clean.js'
-import {getPiInvocation} from '../shared/pi-invocation.js'
-import {runChild, type SpawnFn} from '../shared/child-process.js'
-import {childBaseArgs} from '../shared/child-extensions.js'
+import type {SpawnFn} from '../shared/child-process.js'
+import {runFocusedExtraction} from './focused-extractor.js'
 import {
-    parseChildOutput,
-    verifyExcerpt,
     type ExcerptVerification,
     formatResultText as formatResultTextShared
 } from '../shared/child-output.js'
@@ -30,8 +26,6 @@ export const NOT_COVERED_ANSWER = 'not covered by this page'
  * no recorded verdict.
  */
 const NOT_COVERED_RE = /^not covered by this page[.\s]*$/i
-
-const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 /**
  * `github.com/{owner}/{repo}/blob/{ref}/{path}` renders the file through a client-side
@@ -133,6 +127,11 @@ export interface FetchFocusedResult {
     excerptCheck?: ExcerptVerification
     /** The prompt actually handed to the child — the A/B asserts surgery against this per rep. */
     assembledPrompt: string
+    /**
+     * Set exactly when the child failed (aborted, or non-zero exit): the standard
+     * child-failure message, already formatted. Present ⇒ `answer` is empty and means nothing.
+     */
+    failure?: string
     childExitCode: number
     aborted: boolean
     stderr: string
@@ -141,7 +140,6 @@ export interface FetchFocusedResult {
 
 export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocusedResult> {
     const fetchAndCleanFn = input.fetchAndClean ?? defaultFetchAndClean
-    const spawnFn = input.spawn ?? (defaultSpawn as unknown as SpawnFn)
     const strategy = input.strategy ?? shippedStrategy
 
     const fetchedUrl = normaliseSourceUrl(input.url)
@@ -158,47 +156,45 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         section: selected.section
     })
 
-    const invocation = getPiInvocation(childArgs(), prompt)
-    const childResult = await runChild(spawnFn, invocation, input.cwd, input.signal)
+    const extraction = await runFocusedExtraction({
+        prompt,
+        // Verify against the FULL page, not the anchored slice we prompted with: the slice is
+        // a substring of it, so a genuine excerpt still verifies, and an excerpt the child
+        // pulled from memory still fails — the detector's discrimination is unchanged by
+        // fragment anchoring. This is the one call site that verifies against a SUPERSET of
+        // the prompt content, which is why the extractor takes the target by name.
+        verifyAgainst: cleaned.markdown,
+        cwd: input.cwd,
+        signal: input.signal,
+        spawn: input.spawn,
+        abortedMessage: 'Fetch aborted.'
+    })
 
     const base = {
         anchoredSection: selected.section,
         assembledPrompt: prompt,
-        stderr: childResult.stderr,
-        stdout: childResult.stdout
+        stderr: extraction.stderr,
+        stdout: extraction.stdout
     }
 
-    if (childResult.aborted) {
+    if (!extraction.ok) {
         return {
             answer: '',
             coverageMiss: false,
-            childExitCode: childResult.exitCode,
-            aborted: true,
-            ...base
-        }
-    }
-    if (childResult.exitCode !== 0) {
-        return {
-            answer: '',
-            coverageMiss: false,
-            childExitCode: childResult.exitCode,
-            aborted: false,
+            failure: extraction.failure,
+            childExitCode: extraction.exitCode,
+            aborted: extraction.aborted,
             ...base
         }
     }
 
-    const parsed = parseChildOutput(childResult.stdout)
-    const coverageMiss = NOT_COVERED_RE.test(parsed.answer.trim())
-    // Verify against the FULL page, not the anchored slice: the slice is a substring of it,
-    // so a genuine excerpt still verifies, and an excerpt the child pulled from memory still
-    // fails — the detector's discrimination is unchanged by fragment anchoring.
-    const check = parsed.excerpt ? verifyExcerpt(parsed.excerpt, cleaned.markdown) : undefined
+    const coverageMiss = NOT_COVERED_RE.test(extraction.answer.trim())
 
     return {
-        answer: parsed.answer,
-        excerpt: parsed.excerpt,
-        excerptVerified: check?.verified,
-        excerptCheck: check,
+        answer: extraction.answer,
+        excerpt: extraction.excerpt,
+        excerptVerified: extraction.excerptVerified,
+        excerptCheck: extraction.excerptCheck,
         coverageMiss,
         nextStep: coverageMiss ? coverageMissNextStep(input.url, fetchedUrl) : undefined,
         childExitCode: 0,

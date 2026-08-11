@@ -60,7 +60,7 @@ import {
     parseAcceptDebts,
     readAcceptDebts,
     recheckAcceptDebts,
-    recordYoloAcceptDebt,
+    recordDebt,
     verifyCommandFromReason,
     writeAcceptDebts,
     type AcceptDebt,
@@ -419,16 +419,16 @@ async function main(): Promise<void> {
     // ── end-to-end through the SHIPPED seam, in the clone ────────────────────
     //
     // Everything above drives recheckAcceptDebts directly. This drives the two
-    // functions a real run actually calls — recordYoloAcceptDebt (record side, which
+    // functions a real run actually calls — recordDebt (record side, which
     // classifies against the task spec on disk) and deriveOpenDebts (close side,
     // which re-runs and PRUNES the ledger) — so the wiring is measured, not assumed.
     // Runs last: it rewrites the clone's ledger, which is a tracked file in mx5.
     console.log('')
-    console.log('── end-to-end: recordYoloAcceptDebt → deriveOpenDebts, in the clone')
+    console.log('── end-to-end: recordDebt → deriveOpenDebts, in the clone')
     {
         await writeAcceptDebts(clone, [])
         for (const d of mx5Run19.debts) {
-            await recordYoloAcceptDebt(clone, d.taskId, d.reason)
+            await recordDebt(clone, d.taskId, d.reason, 'yolo-accepted')
         }
         const stored = await readAcceptDebts(clone)
         const storedCmds = stored.filter(d => d.verifyCommand !== undefined)

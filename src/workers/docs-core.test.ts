@@ -360,6 +360,71 @@ describe('docsFocused', () => {
         cache.close()
     })
 
+    test('a FAILED child yields no answer — its stdout is not read as documentation', async () => {
+        // Regression: docsFocused was the one focused-extractor site that never asked
+        // formatChildFailure anything. parseChildOutput returns the whole trimmed stdout when
+        // there is no <answer> tag, so a child that died mid-answer had its error dump
+        // returned as `answer` — and phaseAutoAnswer (task/phases.ts, `if (r?.answer)`) pasted
+        // it into the spec as "### docs: <pkg>".
+        const cache = openCache(':memory:')
+        const r = await docsFocused({
+            pkg: 'tiny-pkg',
+            query: 'greet',
+            cwd: FIXTURES,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: 'error: model endpoint unreachable',
+                exitCode: 1,
+                stderr: 'connect ECONNREFUSED 127.0.0.1:8080'
+            }))
+        })
+        expect(r.answer).toBe('')
+        expect(r.failure).toContain('Worker exited 1')
+        expect(r.failure).toContain('ECONNREFUSED')
+        expect(r.exitCode).toBe(1)
+        expect(r.excerptVerified).toBeUndefined()
+        // The package metadata a caller reports alongside the failure is still there.
+        expect(r.pkg.name).toBe('tiny-pkg')
+        cache.close()
+    })
+
+    test('an ABORTED child yields no answer either', async () => {
+        const cache = openCache(':memory:')
+        const r = await docsFocused({
+            pkg: 'tiny-pkg',
+            query: 'greet',
+            cwd: FIXTURES,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            signal: AbortSignal.abort(),
+            spawn: fakeSpawnByPrompt(() => ({stdout: '<answer>half an answer</answer>'}))
+        })
+        expect(r.answer).toBe('')
+        expect(r.aborted).toBe(true)
+        expect(r.failure).toBe('Docs lookup aborted.')
+        cache.close()
+    })
+
+    test('a verified excerpt carries the full verification record, not just a verdict', async () => {
+        const cache = openCache(':memory:')
+        const r = await docsFocused({
+            pkg: 'tiny-pkg',
+            query: 'greet',
+            cwd: FIXTURES,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            spawn: fakeSpawnByPrompt(() => ({
+                stdout: '<answer>a</answer>\n<excerpt>not in the package at all</excerpt>'
+            }))
+        })
+        expect(r.excerptVerified).toBe(false)
+        expect(r.failure).toBeUndefined()
+        expect(r.excerptCheck?.normalisedExcerpt).toBe('not in the package at all')
+        expect(r.excerptCheck?.contentSha256).toMatch(/^[0-9a-f]{64}$/)
+        cache.close()
+    })
+
     test('throws on docsRaw error (not_installed package)', async () => {
         const cache = openCache(':memory:')
         await expect(

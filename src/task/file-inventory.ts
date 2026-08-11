@@ -5,7 +5,7 @@
  * timeout) so callers can fall back to the pre-inventory behavior.
  */
 
-import {spawn} from 'node:child_process'
+import {makeGit} from '../shared/git-runner.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 
 const DEFAULT_MAX_LINES = 2000
@@ -27,41 +27,26 @@ export function stripTasksDir(raw: string): string {
         .join('\n')
 }
 
-function runGitLsFiles(cwd: string, signal?: AbortSignal): Promise<string> {
-    return new Promise(resolve => {
-        let stdout = ''
-        let proc: ReturnType<typeof spawn>
-        try {
-            proc = spawn('git', ['ls-files'], {cwd, stdio: ['ignore', 'pipe', 'pipe']})
-        } catch {
-            resolve('')
-            return
-        }
-        proc.stdout?.on('data', (d: Buffer) => {
-            stdout += d.toString()
-        })
-        // Same detach discipline as runChild (GitHub issue #9): `signal` is the
-        // run-long orchestrator signal, so a listener left behind by a normally
-        // finished `git ls-files` would retain that child for the whole run.
-        const onAbort = (): void => {
-            if (!proc.killed) proc.kill('SIGTERM')
-        }
-        let settled = false
-        const settle = (value: string): void => {
-            signal?.removeEventListener('abort', onAbort)
-            if (settled) return
-            settled = true
-            resolve(value)
-        }
-        proc.once('error', () => settle(''))
-        proc.once('close', code => settle(code === 0 ? stdout : ''))
-        if (signal) {
-            // An already-aborted signal never emits 'abort', so without this check
-            // a run cancelled before this point would let the child run to term.
-            if (signal.aborted) onAbort()
-            else signal.addEventListener('abort', onAbort, {once: true})
-        }
-    })
+/**
+ * `git ls-files`, or '' on ANY failure — non-git tree, missing git, cancelled run.
+ * The empty string is the caller's fall-back-to-pre-inventory signal, so every
+ * unhappy path has to collapse to it.
+ *
+ * Runs on the shared GitRunner (`shared/git-runner.ts`), which brings the abort
+ * discipline this used to hand-roll: the listener is detached when the child
+ * settles normally, so a run-long orchestrator signal does not accumulate one
+ * retained child per invocation (GitHub issue #9).
+ *
+ * The `signal.aborted` check is what preserves this function's OWN contract on
+ * cancellation. A killed child closes with a null exit code, which the runner
+ * reports as 0 — so without it a cancelled run would hand back a truncated
+ * inventory as if it were complete, where the hand-rolled version returned ''.
+ */
+async function runGitLsFiles(cwd: string, signal?: AbortSignal): Promise<string> {
+    const git = makeGit(cwd, signal)
+    const r = await git(['ls-files'])
+    if (r.exitCode !== 0 || signal?.aborted) return ''
+    return r.stdout
 }
 
 /** Cap output to maxLines real (non-blank) paths; tag truncation when cut. */

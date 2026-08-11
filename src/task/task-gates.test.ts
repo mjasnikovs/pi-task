@@ -9,6 +9,7 @@ import {
     type GateParams
 } from './task-gates.js'
 import {ACCEPT_LABEL} from './verify-resolution.js'
+import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
 import {getConfig} from '../config/config.js'
 import {YOLO_STAMP} from './yolo.js'
 
@@ -18,6 +19,23 @@ function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
         runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
         commit: () => Promise.resolve({committed: true}),
         ...over
+    }
+}
+
+/**
+ * Route the collapsed `recordDebt` dep to per-ORIGIN sinks. The gate used to take one
+ * dep per debt class, and the tests used that to assert PROVENANCE — that an
+ * unattended auto-pick records 'yolo-accepted' and never the 'accepted' class a human
+ * decision earns. Filtering on the origin argument keeps exactly that discrimination:
+ * a wrongly stamped origin lands in no sink (or the wrong one) and the test fails.
+ * An origin with no sink is ignored, matching an absent per-class dep.
+ */
+function debtSinks(
+    sinks: Partial<Record<DebtOrigin, (taskId: string, reason: string) => void>>
+): NonNullable<GateDeps['recordDebt']> {
+    return (_cwd, taskId, reason, origin) => {
+        sinks[origin]?.(taskId, reason)
+        return Promise.resolve()
     }
 }
 
@@ -235,10 +253,9 @@ test('runGatesForTask: verify FAIL + ACCEPT records a durable ACCEPT-debt (run 8
         const deps = makeDeps({
             verify: () => Promise.resolve({ok: false, reason: 'modified frozen path src/main.tsx'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'user call'}),
-            recordAcceptDebt: (_c, taskId, reason) => {
-                debts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                accepted: (taskId, reason) => debts.push({taskId, reason})
+            })
         })
         handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -252,7 +269,7 @@ test('runGatesForTask: ACCEPT with cross-task deletions records one debt per del
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx} = handle
-        const deletionDebts: Array<{taskId: string; path: string; owner: string}> = []
+        const deletionDebts: Array<{taskId: string; reason: string}> = []
         const deps = makeDeps({
             verify: () =>
                 Promise.resolve({
@@ -264,17 +281,27 @@ test('runGatesForTask: ACCEPT with cross-task deletions records one debt per del
                     ]
                 }),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'user call'}),
-            recordCrossTaskDeletionDebt: (_c, taskId, del) => {
-                deletionDebts.push({taskId, ...del})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'cross-task-deletion': (taskId, reason) => deletionDebts.push({taskId, reason})
+            })
         })
         handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
+        // One debt per deletion, each carrying the machine-parseable reason the final
+        // gate's re-check reads back (path + owning task).
         expect(deletionDebts).toEqual([
-            {taskId: 'TASK_0006', path: 'playwright-ct.config.ts', owner: 'TASK_0020'},
-            {taskId: 'TASK_0006', path: 'playwright/index.ts', owner: 'TASK_0020'}
+            {
+                taskId: 'TASK_0006',
+                reason: crossTaskDeletionReason({
+                    path: 'playwright-ct.config.ts',
+                    owner: 'TASK_0020'
+                })
+            },
+            {
+                taskId: 'TASK_0006',
+                reason: crossTaskDeletionReason({path: 'playwright/index.ts', owner: 'TASK_0020'})
+            }
         ])
     })
 })
@@ -290,10 +317,9 @@ test('runGatesForTask: an AUTOFIX that converges records NO accept-debt', async 
                 return Promise.resolve(verifyCalls === 1 ? {ok: false, reason: 'x'} : {ok: true})
             },
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real bug'}),
-            recordAcceptDebt: (_c, taskId, reason) => {
-                debts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                accepted: (taskId, reason) => debts.push({taskId, reason})
+            })
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
@@ -579,10 +605,9 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
                 reverted.push(c)
                 return Promise.resolve()
             },
-            recordEnforceRevertDebt: (_c, taskId, reason) => {
-                debts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'enforce-revert': (taskId, reason) => debts.push({taskId, reason})
+            })
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir, taskId: 'TASK_0004'}))
         expect(r.kind).toBe('done')
@@ -639,14 +664,10 @@ function rootCauseDeps(over: Partial<GateDeps> = {}): {
             reverted.push(c)
             return Promise.resolve()
         },
-        recordEnforceRevertDebt: (_c, _id, reason) => {
-            revertDebts.push(reason)
-            return Promise.resolve()
-        },
-        recordRootCauseDebt: (_c, _id, reason) => {
-            rootDebts.push(reason)
-            return Promise.resolve()
-        },
+        recordDebt: debtSinks({
+            'enforce-revert': (_id, reason) => revertDebts.push(reason),
+            'root-cause': (_id, reason) => rootDebts.push(reason)
+        }),
         recordRepairCandidate: (_c, candidate) => {
             queued.push({
                 file: candidate.file,
@@ -768,14 +789,10 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
             reverted.push(c)
             return Promise.resolve()
         },
-        recordEnforceRevertDebt: (_c, _id, reason) => {
-            revertDebts.push(reason)
-            return Promise.resolve()
-        },
-        recordEnforceKeptDebt: (_c, _id, reason) => {
-            keptDebts.push(reason)
-            return Promise.resolve()
-        },
+        recordDebt: debtSinks({
+            'enforce-revert': (_id, reason) => revertDebts.push(reason),
+            'enforce-kept': (_id, reason) => keptDebts.push(reason)
+        }),
         recordRepairCandidate: (_c, candidate) => {
             queued.push({file: candidate.file, owner: candidate.owner})
             return Promise.resolve()
@@ -885,15 +902,11 @@ test('verify ACCEPT: a root-caused FAIL queues the repair alongside the accept-d
             record: () => Promise.resolve(),
             verify: () => Promise.resolve({ok: false, reason: RUN14_TEARDOWN_FAIL}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'pre-existing'}),
-            recordAcceptDebt: (_c, _id, reason) => {
-                accepted.push(reason)
-                return Promise.resolve()
-            },
+            recordDebt: debtSinks({accepted: (_id, reason) => accepted.push(reason)}),
             recordRepairCandidate: (_c, candidate) => {
                 queued.push(candidate.file)
                 return Promise.resolve()
             },
-            recordRootCauseDebt: () => Promise.resolve(),
             touchedFiles: () => Promise.resolve(['test/photos.test.ts']),
             introducedBy: (_c, rel) =>
                 Promise.resolve(rel === 'test/teardown.ts' ? 'TASK_0007' : null)
@@ -1345,14 +1358,12 @@ test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, 
             // The deterministic rejection already proved the contradiction — the
             // recommendation research must be skipped entirely.
             recommend: () => Promise.reject(new Error('recommend must not run')),
-            recordFrozenBlockedDebt: (_c, taskId, reason) => {
-                debts.push({taskId, reason})
-                return Promise.resolve()
-            },
-            recordAcceptDebt: () => {
-                acceptDebts++
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'frozen-blocked': (taskId, reason) => debts.push({taskId, reason}),
+                accepted: () => {
+                    acceptDebts++
+                }
+            })
         })
         handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1385,10 +1396,7 @@ test('frozen-blocked: picker dismissed → paused, debt still recorded (the cont
                     reason: "frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json) — did not converge (`bun run lint` exited 1); a fix under this task's constraints cannot converge"
                 }),
             recommend: () => Promise.reject(new Error('recommend must not run')),
-            recordFrozenBlockedDebt: (_c, _t, reason) => {
-                debts.push(reason)
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({'frozen-blocked': (_t, reason) => debts.push(reason)})
         })
         // No queueSelect → picker dismissed → paused.
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1419,10 +1427,11 @@ test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUT
             lintFix: () =>
                 Promise.resolve({ok: false, reason: 'did not converge: `bun run lint` exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'fixable statics'}),
-            recordFrozenBlockedDebt: () => {
-                frozenDebts++
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'frozen-blocked': () => {
+                    frozenDebts++
+                }
+            })
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
@@ -1457,14 +1466,10 @@ test('runGatesForTask: YOLO auto-ACCEPTS a verify FAIL the picker would show —
         const deps = makeDeps({
             verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
-            recordAcceptDebt: (_c, taskId, reason) => {
-                humanDebts.push({taskId, reason})
-                return Promise.resolve()
-            },
-            recordYoloAcceptDebt: (_c, taskId, reason) => {
-                yoloDebts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                accepted: (taskId, reason) => humanDebts.push({taskId, reason}),
+                'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
+            })
         })
         // No queueSelect: reaching the picker would return undefined ⇒ 'cancel' ⇒ paused.
         await withYolo(async () => {
@@ -1487,10 +1492,9 @@ test('runGatesForTask: without the flag the SAME FAIL still shows the picker', a
         const deps = makeDeps({
             verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
-            recordYoloAcceptDebt: (_c, taskId, reason) => {
-                yoloDebts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
+            })
         })
         handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1517,10 +1521,9 @@ test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never
             // Never converges: every verify FAILs, and the research keeps saying AUTOFIX.
             verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'real defect'}),
-            recordYoloAcceptDebt: (_c, taskId, reason) => {
-                yoloDebts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
+            })
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1629,10 +1632,7 @@ test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed 
                 trail.push(line)
                 return Promise.resolve()
             },
-            recordYoloAcceptDebt: () => {
-                yoloDebts.push(1)
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({'yolo-accepted': () => yoloDebts.push(1)})
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1668,10 +1668,9 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
                 trail.push(line)
                 return Promise.resolve()
             },
-            recordYoloAcceptDebt: (_c, taskId, reason) => {
-                yoloDebts.push({taskId, reason})
-                return Promise.resolve()
-            }
+            recordDebt: debtSinks({
+                'yolo-accepted': (taskId, reason) => yoloDebts.push({taskId, reason})
+            })
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1704,7 +1703,7 @@ test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the bu
             verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
             recommend: () =>
                 Promise.resolve({recommend: recommends[Math.min(recIdx++, 3)], rationale: 'r'}),
-            recordYoloAcceptDebt: () => Promise.resolve()
+            recordDebt: () => Promise.resolve()
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1738,7 +1737,7 @@ test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () =
                 trail.push(line)
                 return Promise.resolve()
             },
-            recordYoloAcceptDebt: () => Promise.resolve()
+            recordDebt: () => Promise.resolve()
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1770,8 +1769,7 @@ test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the resc
                 trail.push(line)
                 return Promise.resolve()
             },
-            recordFrozenBlockedDebt: () => Promise.resolve(),
-            recordYoloAcceptDebt: () => Promise.resolve()
+            recordDebt: () => Promise.resolve()
         })
         await withYolo(async () => {
             const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
@@ -1794,7 +1792,7 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
             },
             verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
-            recordAcceptDebt: () => Promise.resolve()
+            recordDebt: () => Promise.resolve()
         })
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         // No queued answer ⇒ the picker was reached and dismissed.

@@ -9,20 +9,17 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-    recordYoloAcceptDebt,
     acceptDebtFile,
     annotateDebtConflicts,
     buildAcceptDebtNote,
+    crossTaskDeletionReason,
     describeDebt,
     extractExistenceClaims,
     isStaticClassDebt,
     parseAcceptDebts,
     readAcceptDebts,
     recheckAcceptDebts,
-    recordAcceptDebt,
-    recordEnforceRevertDebt,
-    recordFrozenBlockedDebt,
-    recordCrossTaskDeletionDebt,
+    recordDebt,
     extractDeletedDebtPath,
     writeAcceptDebts,
     classifyVerifyCommand,
@@ -59,10 +56,10 @@ describe('parseAcceptDebts', () => {
     })
 })
 
-describe('recordAcceptDebt / readAcceptDebts', () => {
+describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
     test('appends a durable record under .pi-tasks/', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'TASK_0012', 'modified src/main.tsx which the spec froze')
+        await recordDebt(cwd, 'TASK_0012', 'modified src/main.tsx which the spec froze')
         expect(fs.existsSync(acceptDebtFile(cwd))).toBe(true)
         expect(await readAcceptDebts(cwd)).toEqual([
             {taskId: 'TASK_0012', reason: 'modified src/main.tsx which the spec froze'}
@@ -71,7 +68,7 @@ describe('recordAcceptDebt / readAcceptDebts', () => {
 
     test('flattens newlines/tabs and caps the reason length', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', `line one\n\tline two   with    spaces`)
+        await recordDebt(cwd, 'T1', `line one\n\tline two   with    spaces`)
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.reason).toBe('line one line two with spaces')
         // A tab in the stored reason would corrupt the id/reason split — none survives.
@@ -82,16 +79,16 @@ describe('recordAcceptDebt / readAcceptDebts', () => {
 
     test('caps very long reasons to 300 chars', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', 'x'.repeat(500))
+        await recordDebt(cwd, 'T1', 'x'.repeat(500))
         expect((await readAcceptDebts(cwd))[0].reason.length).toBe(300)
     })
 
     test('dedups the same task+reason but keeps distinct ones', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', 'same reason')
-        await recordAcceptDebt(cwd, 'T1', 'same reason')
-        await recordAcceptDebt(cwd, 'T1', 'other reason')
-        await recordAcceptDebt(cwd, 'T2', 'same reason')
+        await recordDebt(cwd, 'T1', 'same reason')
+        await recordDebt(cwd, 'T1', 'same reason')
+        await recordDebt(cwd, 'T1', 'other reason')
+        await recordDebt(cwd, 'T2', 'same reason')
         expect(await readAcceptDebts(cwd)).toEqual([
             {taskId: 'T1', reason: 'same reason'},
             {taskId: 'T1', reason: 'other reason'},
@@ -101,7 +98,7 @@ describe('recordAcceptDebt / readAcceptDebts', () => {
 
     test('an empty reason records nothing', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', '   \n  ')
+        await recordDebt(cwd, 'T1', '   \n  ')
         expect(await readAcceptDebts(cwd)).toEqual([])
     })
 
@@ -113,15 +110,15 @@ describe('recordAcceptDebt / readAcceptDebts', () => {
 describe('writeAcceptDebts (prune)', () => {
     test('overwrites with exactly the given records', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', 'a')
-        await recordAcceptDebt(cwd, 'T2', 'b')
+        await recordDebt(cwd, 'T1', 'a')
+        await recordDebt(cwd, 'T2', 'b')
         await writeAcceptDebts(cwd, [{taskId: 'T2', reason: 'b'}])
         expect(await readAcceptDebts(cwd)).toEqual([{taskId: 'T2', reason: 'b'}])
     })
 
     test('empty list clears the ledger', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'T1', 'a')
+        await recordDebt(cwd, 'T1', 'a')
         await writeAcceptDebts(cwd, [])
         expect(await readAcceptDebts(cwd)).toEqual([])
     })
@@ -190,10 +187,10 @@ describe('buildAcceptDebtNote', () => {
 
 // mx5 run 10 item 3: an enforce re-verify FAIL that indicts the ORIGINAL work must
 // survive the revert as a durable, gate-re-checked defect.
-describe('recordEnforceRevertDebt / origin round-trip', () => {
+describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
     test('records a 3-field origin-tagged row that reads back with origin set', async () => {
         const cwd = makeCwd()
-        await recordEnforceRevertDebt(cwd, 'TASK_0004', TASK_0004_DIAGNOSIS)
+        await recordDebt(cwd, 'TASK_0004', TASK_0004_DIAGNOSIS, 'enforce-revert')
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.taskId).toBe('TASK_0004')
         expect(debt.origin).toBe('enforce-revert')
@@ -212,8 +209,8 @@ describe('recordEnforceRevertDebt / origin round-trip', () => {
 
     test('an accepted debt and an enforce-revert debt with the same id/reason coexist', async () => {
         const cwd = makeCwd()
-        await recordAcceptDebt(cwd, 'TASK_0004', 'the server cannot start')
-        await recordEnforceRevertDebt(cwd, 'TASK_0004', 'the server cannot start')
+        await recordDebt(cwd, 'TASK_0004', 'the server cannot start')
+        await recordDebt(cwd, 'TASK_0004', 'the server cannot start', 'enforce-revert')
         const debts = await readAcceptDebts(cwd)
         expect(debts).toHaveLength(2)
         expect(debts.map(d => d.origin ?? 'accepted').sort()).toEqual([
@@ -325,13 +322,13 @@ describe('buildAcceptDebtNote — conflicting claims', () => {
 
 // mx5 run 12 / PROMPT 1 layer B: a repo-health FAIL whose only fix is an edit to a
 // path this task's spec froze — recorded when the gate loop routes to the picker.
-describe('recordFrozenBlockedDebt / origin round-trip', () => {
+describe("recordDebt origin 'frozen-blocked' / origin round-trip", () => {
     const REASON =
         'repo health: `bun run lint` exited 1 — frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json)'
 
     test('records a 3-field origin-tagged row that reads back with origin set', async () => {
         const cwd = makeCwd()
-        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        await recordDebt(cwd, 'TASK_0021', REASON, 'frozen-blocked')
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.taskId).toBe('TASK_0021')
         expect(debt.origin).toBe('frozen-blocked')
@@ -342,7 +339,7 @@ describe('recordFrozenBlockedDebt / origin round-trip', () => {
 
     test('is static-class: auto-closes when the run-end static check passes', async () => {
         const cwd = makeCwd()
-        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        await recordDebt(cwd, 'TASK_0021', REASON, 'frozen-blocked')
         const debts = await readAcceptDebts(cwd)
         expect(recheckAcceptDebts(debts, {staticOk: true}).resolved).toHaveLength(1)
         expect(recheckAcceptDebts(debts, {staticOk: false}).open).toHaveLength(1)
@@ -356,19 +353,21 @@ describe('recordFrozenBlockedDebt / origin round-trip', () => {
 
     test('dedup: routing the same contradiction twice records one row', async () => {
         const cwd = makeCwd()
-        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
-        await recordFrozenBlockedDebt(cwd, 'TASK_0021', REASON)
+        await recordDebt(cwd, 'TASK_0021', REASON, 'frozen-blocked')
+        await recordDebt(cwd, 'TASK_0021', REASON, 'frozen-blocked')
         expect(await readAcceptDebts(cwd)).toHaveLength(1)
     })
 })
 
-describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 PROMPT 2)', () => {
+describe("recordDebt origin 'cross-task-deletion' / re-check by file existence (mx5 run 12 PROMPT 2)", () => {
     test('records a machine-parseable origin-tagged row naming path and owner', async () => {
         const cwd = makeCwd()
-        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {
-            path: 'playwright/index.ts',
-            owner: 'TASK_0020'
-        })
+        await recordDebt(
+            cwd,
+            'TASK_0021',
+            crossTaskDeletionReason({path: 'playwright/index.ts', owner: 'TASK_0020'}),
+            'cross-task-deletion'
+        )
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.taskId).toBe('TASK_0021')
         expect(debt.origin).toBe('cross-task-deletion')
@@ -386,10 +385,12 @@ describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 P
 
     test('resolved iff the deleted file is back in the tree; never closed by staticOk', async () => {
         const cwd = makeCwd()
-        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {
-            path: 'playwright/index.ts',
-            owner: 'TASK_0020'
-        })
+        await recordDebt(
+            cwd,
+            'TASK_0021',
+            crossTaskDeletionReason({path: 'playwright/index.ts', owner: 'TASK_0020'}),
+            'cross-task-deletion'
+        )
         const debts = await readAcceptDebts(cwd)
         // Still missing: stays open even when statics pass (not a static-class debt).
         const still = recheckAcceptDebts(debts, {staticOk: true, fileExists: () => false})
@@ -409,7 +410,12 @@ describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 P
 
     test('a throwing fileExists is inconclusive — the debt stays open', async () => {
         const cwd = makeCwd()
-        await recordCrossTaskDeletionDebt(cwd, 'TASK_0021', {path: 'a/b.ts', owner: 'TASK_0002'})
+        await recordDebt(
+            cwd,
+            'TASK_0021',
+            crossTaskDeletionReason({path: 'a/b.ts', owner: 'TASK_0002'}),
+            'cross-task-deletion'
+        )
         const debts = await readAcceptDebts(cwd)
         const out = recheckAcceptDebts(debts, {
             staticOk: true,
@@ -421,10 +427,10 @@ describe('recordCrossTaskDeletionDebt / re-check by file existence (mx5 run 12 P
     })
 })
 
-describe('recordYoloAcceptDebt — an auto-pick never masquerades as a human call', () => {
+describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades as a human call", () => {
     test("round-trips through parseAcceptDebts as 'yolo-accepted', NOT 'accepted'", async () => {
         const cwd = makeCwd()
-        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'boot check: GET / returned 404')
+        await recordDebt(cwd, 'TASK_0007', 'boot check: GET / returned 404', 'yolo-accepted')
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.taskId).toBe('TASK_0007')
         expect(debt.origin).toBe('yolo-accepted')
@@ -438,7 +444,7 @@ describe('recordYoloAcceptDebt — an auto-pick never masquerades as a human cal
 
     test('the surfaced report says plainly that nobody weighed it', async () => {
         const cwd = makeCwd()
-        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1')
+        await recordDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1', 'yolo-accepted')
         const [debt] = await readAcceptDebts(cwd)
         expect(describeDebt(debt)).toMatch(/YOLO/)
         expect(describeDebt(debt)).toMatch(/unattended|no human/i)
@@ -447,8 +453,8 @@ describe('recordYoloAcceptDebt — an auto-pick never masquerades as a human cal
 
     test('re-checked like any other debt: static-class closes on a clean tree, others stay open', async () => {
         const cwd = makeCwd()
-        await recordYoloAcceptDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1')
-        await recordYoloAcceptDebt(cwd, 'TASK_0008', 'the edit listing page renders blank')
+        await recordDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1', 'yolo-accepted')
+        await recordDebt(cwd, 'TASK_0008', 'the edit listing page renders blank', 'yolo-accepted')
         const debts = await readAcceptDebts(cwd)
         const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved.map(d => d.taskId)).toEqual(['TASK_0007'])
@@ -509,7 +515,7 @@ describe('verify-command debt class', () => {
 
     test('records the command, and it round-trips through the ledger', async () => {
         const cwd = await withSpec('TASK_0009', SPEC)
-        await recordYoloAcceptDebt(cwd, 'TASK_0009', REASON)
+        await recordDebt(cwd, 'TASK_0009', REASON, 'yolo-accepted')
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.verifyCommand).toBe('AGENT=1 bun test test/listings.test.ts')
         expect(debt.origin).toBe('yolo-accepted')

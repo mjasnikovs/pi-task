@@ -11,6 +11,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
     bootSkipVerdict,
+    CLOSURE_SCANS,
+    runClosureScans,
     detectsServedApp,
     discoverBootCommand,
     discoverIntegrationCommands,
@@ -28,7 +30,8 @@ import {
     runFinalIntegrationGate,
     taskThatIntroduced
 } from './final-gate.js'
-import {readAcceptDebts, recordAcceptDebt} from './accept-debt.js'
+import type {ClosureScan} from './final-gate.js'
+import {readAcceptDebts, recordDebt} from './accept-debt.js'
 import {appendDeclaredScripts} from './launch-contract.js'
 import {appendEnvNotes} from './env-notes.js'
 import {clearRunnerCache} from './runner-resolve.js'
@@ -1501,10 +1504,130 @@ describe('runFinalIntegrationGate — serve-entry closure (run 18, nexttask 2B)'
     })
 })
 
+describe('CLOSURE_SCANS — the run-level closure scan table and its driver', () => {
+    /** Collect what the driver feeds the gate's `fail`, rank included. */
+    function drive(
+        stage: 'pre-discovery' | 'post-boot',
+        scans: ClosureScan[]
+    ): Array<{rank: number; text: string}> {
+        const out: Array<{rank: number; text: string}> = []
+        runClosureScans(stage, {cwd: '/nonexistent'}, (text, rank) => out.push({rank, text}), scans)
+        return out
+    }
+
+    const row = (id: string, run: ClosureScan['run'], rank = 0): ClosureScan => ({
+        id,
+        stage: 'post-boot',
+        rank,
+        run
+    })
+
+    test('the table holds exactly the three checks that share this shape', () => {
+        expect(CLOSURE_SCANS.map(s => s.id)).toEqual([
+            'serve-entry',
+            'dangling-artifact',
+            'env-template'
+        ])
+        // All three say some form of "the app cannot be started / cannot serve what
+        // it references / cannot be configured", which is rank 0 by construction.
+        expect(CLOSURE_SCANS.every(s => s.rank === 0)).toBe(true)
+    })
+
+    test('serve-entry is pre-discovery — a static check must survive the zero-discovery door', () => {
+        const byId = new Map(CLOSURE_SCANS.map(s => [s.id, s.stage]))
+        expect(byId.get('serve-entry')).toBe('pre-discovery')
+        expect(byId.get('dangling-artifact')).toBe('post-boot')
+        expect(byId.get('env-template')).toBe('post-boot')
+    })
+
+    test('a scanner that THROWS does not stop the scans after it (fault isolation is per row)', () => {
+        const got = drive('post-boot', [
+            row('first', function* () {
+                yield 'first finding'
+            }),
+            // Throws on CALL — the realistic shape (the scan faults reading the tree).
+            row('boom', () => {
+                throw new Error('scanner fault')
+            }),
+            row('third', function* () {
+                yield 'third finding'
+            })
+        ])
+        expect(got.map(f => f.text)).toEqual(['first finding', 'third finding'])
+    })
+
+    test('a scan that throws MID-list keeps the findings it already emitted', () => {
+        // The pre-table code formatted and failed one finding at a time inside the
+        // try, so a partial scan kept its partial output. Rows are generators for
+        // exactly this reason — an eager `.map()` would have lost the first finding.
+        const got = drive('post-boot', [
+            row('partial', function* () {
+                yield 'kept'
+                throw new Error('fault after the first finding')
+            }),
+            row('after', function* () {
+                yield 'still ran'
+            })
+        ])
+        expect(got.map(f => f.text)).toEqual(['kept', 'still ran'])
+    })
+
+    test('the driver runs only its own stage, in table order', () => {
+        const scans: ClosureScan[] = [
+            {
+                id: 'early',
+                stage: 'pre-discovery',
+                rank: 0,
+                *run() {
+                    yield 'early'
+                }
+            },
+            row('late-a', function* () {
+                yield 'late-a'
+            }),
+            row('late-b', function* () {
+                yield 'late-b'
+            })
+        ]
+        expect(drive('pre-discovery', scans).map(f => f.text)).toEqual(['early'])
+        expect(drive('post-boot', scans).map(f => f.text)).toEqual(['late-a', 'late-b'])
+    })
+
+    test("the rank is the ROW's, not a hand-typed argument at a call site", () => {
+        const got = drive('post-boot', [
+            row(
+                'ordinary',
+                function* () {
+                    yield 'rank one finding'
+                },
+                1
+            ),
+            row('load-bearing', function* () {
+                yield 'rank zero finding'
+            })
+        ])
+        expect(got).toEqual([
+            {rank: 1, text: 'rank one finding'},
+            {rank: 0, text: 'rank zero finding'}
+        ])
+    })
+
+    test('a row sees cwd and planText — the serve-entry scan needs the plan', () => {
+        const seen: Array<{cwd: string; planText?: string}> = []
+        runClosureScans('post-boot', {cwd: '/tmp/x', planText: 'the app serves'}, () => {}, [
+            row('spy', input => {
+                seen.push(input)
+                return []
+            })
+        ])
+        expect(seen).toEqual([{cwd: '/tmp/x', planText: 'the app serves'}])
+    })
+})
+
 describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TASK_0012)', () => {
     test('a non-static (frozen-path) debt is SURFACED on a PASS and kept in the ledger', async () => {
         const dir = makeDir() // no manifest → statics + integration trivially pass
-        await recordAcceptDebt(dir, 'TASK_0012', 'modified frozen path src/main.tsx')
+        await recordDebt(dir, 'TASK_0012', 'modified frozen path src/main.tsx')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([
@@ -1521,7 +1644,7 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('a static-class debt is RESOLVED and PRUNED when the gate statics now pass', async () => {
         const dir = makeDir({scripts: {lint: 'exit 0'}}) // static check passes
-        await recordAcceptDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        await recordDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([])
@@ -1532,7 +1655,7 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('a static-class debt stays OPEN and surfaces when the gate statics still fail', async () => {
         const dir = makeDir({scripts: {lint: 'exit 1'}}) // static check fails
-        await recordAcceptDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        await recordDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
@@ -1544,8 +1667,8 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('mixed: static debt pruned, behavioral debt surfaced (only the provable one closes)', async () => {
         const dir = makeDir({scripts: {lint: 'exit 0'}})
-        await recordAcceptDebt(dir, 'T9', 'repo health: lint exited 1')
-        await recordAcceptDebt(dir, 'T12', 'upload endpoint returned HTML not JSON')
+        await recordDebt(dir, 'T9', 'repo health: lint exited 1')
+        await recordDebt(dir, 'T12', 'upload endpoint returned HTML not JSON')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([
@@ -1607,7 +1730,7 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
 
     test('gate outcome: T9-shaped debt is annotated CONFLICTING; reason stays mechanical', async () => {
         const dir = makeRepoWithTaskCommits()
-        await recordAcceptDebt(
+        await recordDebt(
             dir,
             'TASK_0009',
             'Verification check #7 fails: src/client/pages/admin.tsx exists (introduced by '

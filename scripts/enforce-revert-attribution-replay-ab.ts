@@ -237,16 +237,8 @@ async function replay(runGates: RunGates, inc: Incident): Promise<Observation> {
                 obs.reverted = true
                 return Promise.resolve()
             },
-            recordEnforceRevertDebt: (_c, _id, reason) => {
-                obs.debts.push(`enforce-revert: ${reason}`)
-                return Promise.resolve()
-            },
-            recordEnforceKeptDebt: (_c, _id, reason) => {
-                obs.debts.push(`enforce-kept: ${reason}`)
-                return Promise.resolve()
-            },
-            recordRootCauseDebt: (_c, _id, reason) => {
-                obs.debts.push(`root-cause: ${reason}`)
+            recordDebt: (_c, _id, reason, origin) => {
+                obs.debts.push(`${origin}: ${reason}`)
                 return Promise.resolve()
             },
             recordRepairCandidate: (_c, candidate) => {

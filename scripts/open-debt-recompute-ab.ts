@@ -74,6 +74,7 @@ import {deriveOpenDebts} from '../src/task/final-gate.js'
 import {FINAL_AUTOFIX_LABEL} from '../src/task/final-gate-fix.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
 import type {TaskFrontMatter} from '../src/task/task-types.js'
+import {tempRepo} from './scratch-repo.js'
 
 /** `--trace` prints every gate-trail line of every arm (debugging the harness). */
 const TRACE = process.argv.includes('--trace')
@@ -311,22 +312,18 @@ async function replay(params: {
 
 /** A throwaway git repo seeded with a ledger and the synthetic tree state. */
 function makeSyntheticTree(debts: SyntheticDebt[]): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'open-debt-ab-'))
-    git(dir, ['init', '-q'])
-    git(dir, ['config', 'user.email', 'ab@test'])
-    git(dir, ['config', 'user.name', 'ab'])
-    fs.mkdirSync(path.join(dir, '.pi-tasks'), {recursive: true})
-    fs.writeFileSync(
-        path.join(dir, '.pi-tasks', 'accept-debt.md'),
-        debts.map(d => `${d.taskId}\t${d.reason}\t${d.origin}`).join('\n') + '\n',
-        'utf8'
-    )
-    // The cross-task-deletion debt's file starts DELETED (that is the defect).
-    fs.mkdirSync(path.join(dir, 'src', 'client', 'pages'), {recursive: true})
-    fs.writeFileSync(path.join(dir, 'README.md'), 'seed\n', 'utf8')
-    git(dir, ['add', '-A'])
-    git(dir, ['commit', '-qm', 'seed'])
-    return dir
+    const repo = tempRepo('open-debt-ab-', {
+        files: {
+            '.pi-tasks/accept-debt.md':
+                debts.map(d => `${d.taskId}\t${d.reason}\t${d.origin}`).join('\n') + '\n',
+            'README.md': 'seed\n'
+        },
+        commit: 'seed'
+    })
+    // The cross-task-deletion debt's file starts DELETED (that is the defect), so
+    // only its parent directory exists — no file is seeded under it.
+    fs.mkdirSync(path.join(repo.dir, 'src', 'client', 'pages'), {recursive: true})
+    return repo.dir
 }
 
 // ─── scenarios ───────────────────────────────────────────────────────────────

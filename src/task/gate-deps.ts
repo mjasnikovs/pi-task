@@ -24,15 +24,7 @@ import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-gu
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
-import {
-    recordAcceptDebt,
-    recordEnforceKeptDebt,
-    recordEnforceRevertDebt,
-    recordFrozenBlockedDebt,
-    recordCrossTaskDeletionDebt,
-    recordYoloAcceptDebt,
-    recordRootCauseDebt
-} from './accept-debt.js'
+import {recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
 import {runRepoHealthCheck, runRepoHealthCheckAsync} from './repo-health-check.js'
 import {
@@ -744,32 +736,11 @@ export function buildGateDeps(params: {
         // Durable per-task gate trail: every verdict/decision lands in the task
         // file's `## gates` section so gate behavior is auditable from artifacts.
         record: (cwd2, taskId, line) => appendGateRecord(cwd2, taskId, line),
-        // Durable ACCEPT-despite-verify-FAIL ledger under .pi-tasks/ (survives
-        // discardEdits): the final integration gate re-checks each debt at run end.
-        recordAcceptDebt: (cwd2, taskId, reason) => recordAcceptDebt(cwd2, taskId, reason),
-        recordYoloAcceptDebt: (cwd2, taskId, reason) => recordYoloAcceptDebt(cwd2, taskId, reason),
-        recordEnforceRevertDebt: (cwd2, taskId, reason) =>
-            recordEnforceRevertDebt(cwd2, taskId, reason),
-        // Same ledger, the KEPT disposition (mx5 run 18 / nexttask 4): the enforce
-        // re-verify FAILed on a check the enforce diff cannot reach, so the edits
-        // stayed and only the defect was recorded.
-        recordEnforceKeptDebt: (cwd2, taskId, reason) =>
-            recordEnforceKeptDebt(cwd2, taskId, reason),
-        // Durable cross-task-contradiction ledger (PROMPT 1 layer B): a repo-health
-        // FAIL whose only fix is an edit to a path this task's spec froze — recorded
-        // when the gate loop routes it to the picker, re-checked by the final gate.
-        recordFrozenBlockedDebt: (cwd2, taskId, reason) =>
-            recordFrozenBlockedDebt(cwd2, taskId, reason),
-        // Durable cross-task-deletion ledger (PROMPT 2): a sibling's committed
-        // deliverable this task's diff deletes, ACCEPTed into a commit anyway —
-        // the final gate re-checks it (resolved iff the file is back in the tree).
-        recordCrossTaskDeletionDebt: (cwd2, taskId, deletion) =>
-            recordCrossTaskDeletionDebt(cwd2, taskId, deletion),
-        // ROOT-CAUSE channel (mx5 run 14 item 5): a FAIL another task's untouched
-        // file caused is recorded as its own debt class and queued as a scoped
-        // repair task, instead of being blamed on — and reverted out of — the task
-        // that merely tripped over it.
-        recordRootCauseDebt: (cwd2, taskId, reason) => recordRootCauseDebt(cwd2, taskId, reason),
+        // Durable defect ledger under .pi-tasks/ (survives discardEdits): every
+        // recorded class — accepted, yolo-accepted, enforce-revert, enforce-kept,
+        // frozen-blocked, cross-task-deletion, root-cause — lands here with its
+        // origin, and the final integration gate re-checks each one at run end.
+        recordDebt,
         recordRepairCandidate: (cwd2, candidate) => recordRepairCandidate(cwd2, candidate),
         // file → introducing task, the provenance half of the discriminator.
         introducedBy: (cwd2, rel) => Promise.resolve(taskThatIntroduced(cwd2, rel)),

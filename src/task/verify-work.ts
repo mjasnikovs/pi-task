@@ -140,211 +140,497 @@ export function extractSpecForVerification(taskBody: string): string | null {
 }
 
 /**
+ * ─────────────────────────── THE PROBE TABLE ───────────────────────────
+ *
+ * Every deterministic probe that sharpens this prompt used to cost the same
+ * ritual in four places: a `let x = []` + try/catch in runWorkVerification, a
+ * positional parameter on buildVerifyPrompt, a `const xBlock =` ternary, and a
+ * spread into the assembled prompt — plus its hand-numbered rule. Adding one
+ * meant editing all of them and hoping none was missed; the ninth would not
+ * even fit the signature (hence the `projectSurface` bag that used to group
+ * three of them).
+ *
+ * Each probe is now an ADAPTER: one row carrying only what is specific to it —
+ * the dep field it reads, the empty value it degrades to, how its raw result
+ * becomes finding lines, the notice block those lines produce, and the numbered
+ * rule the notice routes the child to. The loop owns the ritual. (Same shape as
+ * LOCKFILE_CHECKS in final-gate.ts, where a whole package ecosystem is one row.)
+ *
+ * THIS PROMPT IS A MEASURED ARTIFACT — its wording is A/B-tested on the live
+ * local model and the verdicts are recorded in VALIDATION-DEBT.md, so the table
+ * must emit BYTE-IDENTICAL text for the same findings. Two orders are
+ * load-bearing and they are NOT the same order:
+ *   - NOTICE BLOCKS are emitted in TABLE order (the order the rows appear below).
+ *   - RULES are emitted sorted by `ruleId`, because the 4b…4g band was
+ *     hand-numbered long before this table existed and its numbering is what the
+ *     notices cite ("rule 4b applies").
+ * A row whose rule is woven into the numbered narrative elsewhere (3b inside the
+ * substitution rules, 3f, 5c) carries `ruleId` for the reader and no `rule` text.
+ */
+
+/** Stable identity of one probe channel: table row ↔ findings-bag key. */
+export type ProbeKey =
+    | 'substitution'
+    | 'prohibition'
+    | 'crossTaskDeletion'
+    | 'probeGaming'
+    | 'skipEscape'
+    | 'foreignPath'
+    | 'scriptEscape'
+    | 'runnerGlob'
+    | 'testAssembly'
+
+/** The finding lines each probe channel contributed. Absent/empty ⇒ no block. */
+export type ProbeFindings = Partial<Record<ProbeKey, string[]>>
+
+/** What one row's probe produced: the raw dep value plus its finding lines. */
+interface ProbeResult {
+    /** The probe's own return value (only the cross-task-deletion row's caller
+     *  needs it — it rides on a FAIL outcome as structured debt input). */
+    raw: unknown
+    findings: string[]
+}
+
+/**
+ * A probe adapter with its element type erased: the generic lives inside
+ * `probeAdapter` below, so the table can hold rows whose probes return different
+ * shapes (`string[]`, `CrossTaskDeletion[]`) without leaking type parameters.
+ */
+interface ProbeAdapter {
+    key: ProbeKey
+    /** Progress label for the deterministic stage. Absent ⇒ the row costs
+     *  nothing observable (the skip-escape row is pure text analysis of the
+     *  spec, not a git/fs call, and never had a stage of its own). */
+    stage?: string
+    /** Run this row against the deps: skipped when its dep field is absent,
+     *  degraded to the row's empty value when the probe throws. Never throws. */
+    run: (deps: VerificationDeps, onStage: (label: string) => void) => Promise<ProbeResult>
+    /** The notice block these findings produce. Called only when non-empty. */
+    block: (findings: string[]) => string[]
+    /** The numbered rule this row's notice cites. */
+    ruleId: string
+    /** The rule's body, emitted (sorted by ruleId) into the 4b…4g band. Absent
+     *  when the rule lives elsewhere in the numbered narrative. */
+    rule?: string[]
+}
+
+/**
+ * Build one row. Generic in the probe's return type so `empty`/`findings` stay
+ * type-checked against the dep's real signature; the result is the erased
+ * `ProbeAdapter` the table stores.
+ */
+function probeAdapter<Raw>(row: {
+    key: ProbeKey
+    stage?: string
+    /** The dep field this row reads. Absent ⇒ the probe is skipped. */
+    dep: (deps: VerificationDeps) => (() => Promise<Raw>) | undefined
+    /** Value used when the dep is absent OR the probe throws. */
+    empty: Raw
+    /** Raw probe value → prompt finding lines. */
+    findings: (raw: Raw) => string[]
+    block: (findings: string[]) => string[]
+    ruleId: string
+    rule?: string[]
+}): ProbeAdapter {
+    const {key, stage, block, ruleId, rule} = row
+    return {
+        key,
+        stage,
+        block,
+        ruleId,
+        rule,
+        run: async (deps, onStage) => {
+            const probe = row.dep(deps)
+            // Probes are INDEPENDENTLY OPTIONAL: an absent dep is "skipped", and a
+            // probe that throws degrades to its own empty value — it is a sharpener,
+            // never a blocker, so a fault in one can neither block the gate nor
+            // leak into another row.
+            if (!probe) return {raw: row.empty, findings: row.findings(row.empty)}
+            if (stage) onStage(stage)
+            try {
+                const raw = await probe()
+                return {raw, findings: row.findings(raw)}
+            } catch {
+                return {raw: row.empty, findings: row.findings(row.empty)}
+            }
+        }
+    }
+}
+
+/** Identity transform for the rows whose probe already returns finding lines. */
+const asLines = (raw: string[]): string[] => raw
+
+/**
+ * The table. ROW ORDER IS THE NOTICE-BLOCK ORDER IN THE PROMPT — do not reorder
+ * without re-running the byte-identity check.
+ */
+const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
+    /**
+     * Deterministic self-verification probe (see substitution-probe.ts): the
+     * TEST-THE-COPY class is caught 5/5 only when the prompt carries both the rule
+     * (3b) AND a concrete finding naming the suspect file — the rule alone got 2/5
+     * attention on the local model. The findings are pure git shape (test files the
+     * task itself changed), so the mandate is language- and framework-agnostic.
+     */
+    probeAdapter<string[]>({
+        key: 'substitution',
+        stage: 'substitution probe',
+        dep: deps => deps.probe,
+        empty: [],
+        findings: asLines,
+        ruleId: '3b',
+        block: findings => [
+            'SELF-VERIFICATION NOTICE (deterministic, computed by the orchestrator from the diff):',
+            'this task wrote or changed the very tests whose green result would bless it:',
+            ...findings.map(f => `- ${f}`),
+            'A green run of self-authored tests is NOT sufficient verification. Before any PASS',
+            'you MUST confirm these tests exercise the REAL shipped artifact: drive 1-2 tested',
+            'behaviors directly against the real app / module / entry point and judge what IT',
+            'returns. Tests that intercept, re-implement, or stub the artifact prove only the',
+            'copy (rule 3b below).',
+            ''
+        ]
+    }),
+    /**
+     * Deterministic prohibition probe (see prohibition-probe.ts): spec-forbidden
+     * paths the task's diff modified anyway. Same probe+rule design, same reason:
+     * the VIOLATION-EXCUSAL class (mx5 run 7: child saw "Do NOT modify server-side
+     * code" violated, waived it as "additive, tests pass", PASSed) needs both the
+     * no-waiver rule (4b) AND the concrete diff fact — the baseline child usually
+     * never runs `git diff` at all, so without the finding it cannot even SEE the
+     * violation. A/B on the live local model (violated-but-working fixture,
+     * everything green, forbidden file modified additively): old prompt 5/5
+     * false-PASS (several runs affirmatively claimed the forbidden file was
+     * untouched); rule+finding 5/5 FAIL naming the constraint. Guard: honest-clean
+     * fixture (prohibition in spec, probe silent) 5/5 PASS — no paranoia.
+     * Reverted-violation ≡ clean at the diff level (no entry → no finding).
+     */
+    probeAdapter<string[]>({
+        key: 'prohibition',
+        stage: 'prohibition probe',
+        dep: deps => deps.prohibitionProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '4b',
+        block: findings => [
+            'PROHIBITION NOTICE (deterministic, computed by the orchestrator from the',
+            "spec's own constraint lines and the task's diff): this task MODIFIED paths",
+            'the spec explicitly forbids modifying:',
+            ...findings.map(f => `- ${f}`),
+            'Read the exact constraint wording in the spec. Unless that wording itself',
+            'states an exception that covers this change, this is a violated prohibition:',
+            'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
+            'every test passes and the change looks harmless.',
+            ''
+        ],
+        rule: [
+            '4b. SPEC PROHIBITIONS ARE PART OF THE BAR — YOU HAVE NO WAIVER AUTHORITY: when the',
+            '   spec explicitly forbids something ("Do NOT modify X", "MUST NOT touch Y") and the',
+            '   shipped work does it anyway, that is a FAIL naming the violated constraint. You',
+            '   may not excuse a violation because it is additive, small, harmless, an improvement,',
+            '   or because every test still passes — "it works anyway" is exactly the waiver you do',
+            "   not have; relaxing a constraint is the spec owner's call, not yours. Check the",
+            "   task's own diff (git) against the spec's prohibitions — a forbidden file can be",
+            '   modified without any test noticing. Only two outcomes are not a FAIL: the',
+            '   violation was fully REVERTED (the shipped tree no longer violates), or the',
+            '   prohibition\'s own wording states an exception ("except…", "beyond what is needed',
+            '   for…") that covers the change — judged against that stated exception, not against',
+            '   your view of harmlessness.'
+        ]
+    }),
+    /**
+     * Deterministic cross-task deletion probe (see task-provenance.ts, mx5 run 12
+     * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
+     * provenance) differs from the current task. The only row whose probe does NOT
+     * return finding lines — the structured value also rides on a FAIL outcome so
+     * an ACCEPT records each deletion as a durable debt.
+     */
+    probeAdapter<CrossTaskDeletion[]>({
+        key: 'crossTaskDeletion',
+        stage: 'cross-task deletion probe',
+        dep: deps => deps.crossTaskDeletionProbe,
+        empty: [],
+        findings: crossTaskDeletionVerifyFindings,
+        ruleId: '4d',
+        block: findings => [
+            'CROSS-TASK DELETION NOTICE (deterministic, computed by the orchestrator from',
+            "git provenance over the task's diff): this task's work DELETED committed",
+            'deliverable(s) that a DIFFERENT, already-completed task introduced:',
+            ...findings.map(f => `- ${f}`),
+            "A sibling task's verified, committed deliverable is not this task's to remove.",
+            'Deleting the file a checker complains about is the cheapest way to turn a red',
+            'check green — the finding vanishes with the file — and it destroys finished',
+            'work (rule 4d). A green check suite on the shrunken tree is NOT a waiver.',
+            "Unless THIS task's spec explicitly REQUIRES removing exactly that file, the",
+            'verdict is FAIL naming the deleted file and its owning task — even if every',
+            'check passes and the deletion made them pass.',
+            ''
+        ],
+        rule: [
+            "4d. A SIBLING TASK'S COMMITTED DELIVERABLE IS NOT THIS TASK'S TO DELETE — check the",
+            "   task's own diff (git) for DELETED tracked files. A file that a DIFFERENT completed",
+            "   task introduced and committed, deleted by this task's work, is finished work",
+            '   destroyed — usually to make a red check go green (the file the checker complains',
+            '   about simply disappears; that is quieting the messenger, rule 4c, not fixing the',
+            '   defect). A passing check suite on the shrunken tree is not a waiver. Only two',
+            "   outcomes are not a FAIL: THIS task's spec explicitly requires that removal, or",
+            '   the deletion is a genuine relocation (the same file lives on elsewhere in the',
+            '   tree). Otherwise the verdict is FAIL naming the deleted file and the task that',
+            '   owns it.'
+        ]
+    }),
+    /**
+     * Deterministic probe-gaming probe (see probe-gaming.ts, run-8 F6): added lines
+     * whose stated purpose is to make a CHECK pass instead of meeting the
+     * requirement it stands for ("return 401 so the verification test passes").
+     */
+    probeAdapter<string[]>({
+        key: 'probeGaming',
+        stage: 'probe-gaming probe',
+        dep: deps => deps.probeGamingProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '4c',
+        block: findings => [
+            'CHECK-GAMING NOTICE (deterministic, computed by the orchestrator from the',
+            "task's diff): these added lines state their own purpose is to make a CHECK",
+            'pass (a test / verification / lint / gate), not to meet the requirement the',
+            'check stands for:',
+            ...findings.map(f => `- ${f}`),
+            'A check is a MESSENGER for a requirement. Code written to quiet the messenger',
+            'instead of meeting the requirement is a defect even when the check is green',
+            '(run-8 F6: a handler returned 401 "so the verification test passes" while the',
+            'real route stayed dead). Do NOT accept the passing check as proof. Read each',
+            "line's surrounding code and confirm the UNDERLYING requirement is genuinely",
+            'met — drive the real behavior directly (rule 4c). If the code only exists to',
+            'satisfy the check while the requirement is unmet, that is a FAIL naming the',
+            'gamed check and the unmet requirement.',
+            ''
+        ],
+        rule: [
+            '4c. THE CHECK IS THE MESSENGER, NOT THE REQUIREMENT — code (or a comment) whose',
+            '   stated purpose is to make a check PASS, rather than to satisfy the requirement the',
+            '   check stands for, is a defect even when the check is green. The tell is the intent',
+            '   written down: "return X so the test passes", "hardcode this to satisfy the linter",',
+            '   "stub it out to appease CI". When you see such a line — or the CHECK-GAMING NOTICE',
+            '   above names one — do NOT treat the passing check as proof the requirement is met.',
+            '   Find the actual requirement the check was meant to prove and verify THAT directly',
+            '   against the real artifact (rule 3e negative control is the sharpest tool: a handler',
+            '   that answers the check-shaped request the same way for a WRONG input is gaming the',
+            '   check, not implementing the behavior). If the requirement is genuinely unmet while',
+            '   the check passes, the verdict is FAIL naming the gamed check and the real gap.'
+        ]
+    }),
+    /**
+     * DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
+     * block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
+     * fallback. Injected so rule 5c fires reliably — the model does not self-discover
+     * a graceful skip-escape (A/B: rule alone ~1-3/5), but acts on a finding naming
+     * the exact line, per the proven probe+rule pattern. Pure text analysis over
+     * `deps.spec`, so this row needs no dep and reports no stage: it is the one probe
+     * that is never absent and never costs a git call.
+     */
+    probeAdapter<string[]>({
+        key: 'skipEscape',
+        dep: deps => () =>
+            Promise.resolve(skipEscapeVerifyFindings(findSkipEscapes(deps.spec ?? ''))),
+        empty: [],
+        findings: asLines,
+        ruleId: '5c',
+        block: findings => [
+            "SKIP-ESCAPE NOTICE (deterministic, computed by the orchestrator from the spec's",
+            'OWN VERIFY block): these VERIFY commands wrap a required check in a fallback that',
+            'ANNOUNCES skipping it when a tool is absent — so the check can "pass" while never',
+            'actually running:',
+            ...findings.map(f => `- ${f}`),
+            'Do NOT accept a skipped check as a passed check. For each, determine whether it',
+            'ACTUALLY ran and observed the real behavior. If its tool is absent so the required',
+            'behavior was never observed, that area is UNOBSERVED (rule 5c) — verdict UNOBSERVED,',
+            'not PASS. Only if you observe the required behavior another way (running the real',
+            'artifact directly) may it count as verified.',
+            ''
+        ]
+    }),
+    /**
+     * Deterministic sandbox-path-leak probe (see foreign-path.ts, mx5 run 13 PROMPT
+     * 4 item 1): absolute paths this task committed that exist only inside the
+     * authoring child's own environment — `/workspace/src/shared` in a vite alias —
+     * while the real file sits at `src/shared` here.
+     */
+    probeAdapter<string[]>({
+        key: 'foreignPath',
+        stage: 'foreign-path probe',
+        dep: deps => deps.foreignPathProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '4e',
+        block: findings => [
+            'SANDBOX PATH LEAK NOTICE (deterministic, computed by the orchestrator by',
+            "resolving every absolute path in the task's diff against THIS machine): this",
+            'task committed absolute paths that do not exist here, while the real file they',
+            'name sits inside this repo:',
+            ...findings.map(f => `- ${f}`),
+            "These are paths from the authoring agent's OWN environment, baked into a file",
+            'that ships. The command that reads such a path does not fail a check — it fails',
+            'to BUILD, so the checks that would have caught it never run and report nothing',
+            '(mx5 run 13: a leaked `/workspace` vite alias made `test:ct` collect 63 tests',
+            'and run 0, and the suite stayed dead for the rest of the run). A green or',
+            'EMPTY result from any command that reads these files is therefore NOT evidence.',
+            'Run the affected command yourself and confirm it actually EXECUTES work — count',
+            'the tests/steps that ran, not the exit code. Unless the leaked path resolves on',
+            'this machine, the verdict is FAIL naming the file and the path (rule 4e).',
+            ''
+        ],
+        rule: [
+            '4e. AN ABSOLUTE PATH TO PROJECT FILES IS A DEFECT — a committed path like',
+            "   `/workspace/src/shared` or `/home/<someone>/proj/src` names the authoring agent's",
+            '   OWN machine, not this one. Its distinctive damage is that it breaks the run BEFORE',
+            '   any check reports: a bad alias/config path makes the tool fail to RESOLVE or BUILD,',
+            '   so a suite "passes" having executed nothing. Treat a command that reports no',
+            '   failures but also no WORK — 0 tests run, 0 files emitted, an empty report — as',
+            '   unverified, never as green. Confirm the count of things that actually ran. A path',
+            '   to project-internal files must be relative to the file that carries it, or computed',
+            '   at runtime; if one does not resolve here, the verdict is FAIL naming file and path.'
+        ]
+    }),
+    /**
+     * Deterministic neutered-check-script probe (see script-escape.ts, mx5 run 13
+     * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
+     * exit status cannot be non-zero (`… || true`, an inverted-grep launder). The
+     * damage is second-order — the script still "passes" — which is exactly why the
+     * child cannot discover it by running the check.
+     */
+    probeAdapter<string[]>({
+        key: 'scriptEscape',
+        stage: 'script-escape probe',
+        dep: deps => deps.scriptEscapeProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '4f',
+        block: findings => [
+            'NEUTERED CHECK SCRIPT NOTICE (deterministic, computed by the orchestrator from',
+            'the manifest THIS task changed): these check scripts cannot report failure —',
+            'their exit status is 0 no matter what the checker finds:',
+            ...findings.map(f => `- ${f}`),
+            'You CANNOT discover this by running the script: it passes, which is the whole',
+            'defect (mx5 run 13 shipped a `lint` whose typecheck was disarmed by an inverted',
+            'grep and a `|| true` tail; every gate that ran it reported success without',
+            'measuring anything). A green result from one of these scripts is NOT evidence',
+            'for any acceptance criterion. To judge the area it claims to cover, run the',
+            'underlying checker DIRECTLY and unmodified (e.g. `tsc --noEmit` rather than',
+            '`npm run lint`) and judge THAT output. Unless the task spec explicitly requires',
+            'the script to tolerate failure, the verdict is FAIL naming the script (rule 4f).',
+            ''
+        ],
+        rule: [
+            '4f. A CHECK THAT CANNOT FAIL PROVES NOTHING — before you cite a check script',
+            "   (`npm run lint`, `bun run test`) as evidence, read its DEFINITION in the project's",
+            '   manifest. A script ending in `|| true`, `; exit 0`, or piping a checker into an',
+            '   inverted grep exits 0 unconditionally: its green result is a constant, not a',
+            '   measurement, and running it again only reproduces the constant. When a script is',
+            '   built that way, run the underlying checker directly and judge its real output; and',
+            '   unless the spec required that tolerance, the script itself is a defect — the',
+            '   verdict is FAIL naming it.'
+        ]
+    }),
+    /**
+     * Deterministic test-runner glob-collision probe (see runner-globs.ts, mx5 runs
+     * 7 AND 13, PROMPT 4 item 2): the manifest declares two runners whose file sets
+     * are not provably disjoint, so the scanning one imports the other's specs and
+     * dies during COLLECTION.
+     */
+    probeAdapter<string[]>({
+        key: 'runnerGlob',
+        stage: 'runner-glob probe',
+        dep: deps => deps.runnerGlobProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '4g',
+        block: findings => [
+            'TEST-RUNNER GLOB COLLISION NOTICE (deterministic, computed by the orchestrator',
+            "from the manifest's declared runners and their config): two test runners claim",
+            'the same files:',
+            ...findings.map(f => `- ${f}`),
+            "The scanning runner will import the other's spec files and abort on a module",
+            'loaded outside its own runner — so the suite dies WHOLESALE rather than',
+            'reporting failures (this is the THIRD occurrence: mx5 runs 7 and 13). Run both',
+            'test commands yourself and confirm each collects and runs its own files and only',
+            'its own. A run that errors during collection has verified nothing, whatever its',
+            'exit code says (rule 4g).',
+            ''
+        ],
+        rule: [
+            '4g. TWO RUNNERS, ONE FILE SET, NO RESULTS — when a project declares more than one',
+            '   test runner, check that each collects only its own files. A runner that scans for',
+            "   `*.test.*` / `*.spec.*` project-wide will import another runner's specs and abort",
+            '   during COLLECTION. That failure mode looks nothing like a test failure: you get an',
+            '   import error, or a suite that reports zero tests. Always read how many tests each',
+            '   command actually COLLECTED and RAN; zero collected is never a pass.'
+        ]
+    }),
+    /**
+     * Deterministic test-assembly probe (see test-assembly.ts): authored test files
+     * that rebuild production WIRING — importing the leaf modules the shipped entry
+     * composes and assembling their own copy instead of the real assembly — under
+     * rule 3f (F4 test-the-copy, 3rd recurrence). Pure import-graph shape.
+     */
+    probeAdapter<string[]>({
+        key: 'testAssembly',
+        stage: 'test-assembly probe',
+        dep: deps => deps.testAssemblyProbe,
+        empty: [],
+        findings: asLines,
+        ruleId: '3f',
+        block: findings => [
+            'TEST-ASSEMBLY NOTICE (deterministic, computed by the orchestrator from pure',
+            'import-graph shape): these test files rebuild production WIRING — they import the',
+            'same leaf modules the shipped entry composes and assemble their OWN copy of it,',
+            'instead of importing the production assembly:',
+            ...findings.map(f => `- ${f}`),
+            'A green result on such a test proves that PRIVATE re-assembly, NOT the shipped',
+            'wiring — the copy can be wired differently (a different mount prefix, order, or',
+            'middleware) and pass while production is broken exactly at the seam the test was',
+            'meant to cover (rule 3f below). Before you count the covered area verified, drive',
+            'the behavior against the REAL shipped assembly/entry named above (start or invoke',
+            "the production entry point, not the test's hand-built app). If the real assembly",
+            'fails where the test passes, report FAIL and name the wiring seam.',
+            ''
+        ]
+    })
+]
+
+/**
  * Build the verification child's prompt. Kept pure so the wording is unit-tested
  * without spawning pi. The contract: run the spec's own verification in the real
  * workspace, judge against ACCEPTANCE, and end on exactly one verdict line.
  *
- * `probeFindings` are the deterministic self-verification probe results (see
- * substitution-probe.ts): the TEST-THE-COPY class is caught 5/5 only when the
- * prompt carries both the rule (3b) AND a concrete finding naming the suspect
- * file — the rule alone got 2/5 attention on the local model. The findings are
- * pure git shape (test files the task itself changed), so the mandate is
- * language- and framework-agnostic.
- *
- * `prohibitionFindings` are the deterministic prohibition probe results (see
- * prohibition-probe.ts): spec-forbidden paths the task's diff modified anyway.
- * Same probe+rule design, same reason: the VIOLATION-EXCUSAL class (mx5 run 7:
- * child saw "Do NOT modify server-side code" violated, waived it as "additive,
- * tests pass", PASSed) needs both the no-waiver rule (4b) AND the concrete diff
- * fact — the baseline child usually never runs `git diff` at all, so without the
- * finding it cannot even SEE the violation. A/B on the live local model
- * (violated-but-working fixture, everything green, forbidden file modified
- * additively): old prompt 5/5 false-PASS (several runs affirmatively claimed the
- * forbidden file was untouched); rule+finding 5/5 FAIL naming the constraint.
- * Guard: honest-clean fixture (prohibition in spec, probe silent) 5/5 PASS — no
- * paranoia. Reverted-violation ≡ clean at the diff level (no entry → no finding).
+ * `findings` is the probe bag: one key per PROBE_ADAPTERS row (see the table
+ * above for what each channel means and the A/B evidence behind it). A key that
+ * is absent or empty emits no block — the probes are independently optional.
  */
 export function buildVerifyPrompt(
     spec: string,
-    probeFindings?: string[],
-    envNotes?: string,
-    prohibitionFindings?: string[],
-    skipEscapeFindings?: string[],
-    contracts?: string,
-    testAssemblyFindings?: string[],
-    probeGamingFindings?: string[],
-    crossTaskDeletionFindings?: string[],
-    /**
-     * The mx5 run-13 (PROMPT 4) probes, grouped rather than appended as three more
-     * positional parameters — this signature was already at its limit. Each key is
-     * an independent finding list; absent/empty emits no block.
-     */
-    projectSurface: {
-        /** Sandbox-leaked absolute paths (rule 4e) — see foreign-path.ts. */
-        foreignPaths?: string[]
-        /** Check scripts that cannot fail (rule 4f) — see script-escape.ts. */
-        scriptEscapes?: string[]
-        /** Colliding test-runner globs (rule 4g) — see runner-globs.ts. */
-        runnerGlobs?: string[]
+    findings: ProbeFindings = {},
+    context: {
+        /** Environment facts earlier gate children discovered — see env-notes.ts. */
+        envNotes?: string
+        /** Cross-slice interface facts the design pins — see contracts.ts. */
+        contracts?: string
     } = {}
 ): string {
-    const {
-        foreignPaths: foreignPathFindings,
-        scriptEscapes: scriptEscapeFindings,
-        runnerGlobs: runnerGlobFindings
-    } = projectSurface
-    const probeBlock =
-        probeFindings && probeFindings.length > 0 ?
-            [
-                'SELF-VERIFICATION NOTICE (deterministic, computed by the orchestrator from the diff):',
-                'this task wrote or changed the very tests whose green result would bless it:',
-                ...probeFindings.map(f => `- ${f}`),
-                'A green run of self-authored tests is NOT sufficient verification. Before any PASS',
-                'you MUST confirm these tests exercise the REAL shipped artifact: drive 1-2 tested',
-                'behaviors directly against the real app / module / entry point and judge what IT',
-                'returns. Tests that intercept, re-implement, or stub the artifact prove only the',
-                'copy (rule 3b below).',
-                ''
-            ]
-        :   []
-    const prohibitionBlock =
-        prohibitionFindings && prohibitionFindings.length > 0 ?
-            [
-                'PROHIBITION NOTICE (deterministic, computed by the orchestrator from the',
-                "spec's own constraint lines and the task's diff): this task MODIFIED paths",
-                'the spec explicitly forbids modifying:',
-                ...prohibitionFindings.map(f => `- ${f}`),
-                'Read the exact constraint wording in the spec. Unless that wording itself',
-                'states an exception that covers this change, this is a violated prohibition:',
-                'rule 4b applies and the verdict is FAIL naming the forbidden path — even if',
-                'every test passes and the change looks harmless.',
-                ''
-            ]
-        :   []
-    const crossTaskDeletionBlock =
-        crossTaskDeletionFindings && crossTaskDeletionFindings.length > 0 ?
-            [
-                'CROSS-TASK DELETION NOTICE (deterministic, computed by the orchestrator from',
-                "git provenance over the task's diff): this task's work DELETED committed",
-                'deliverable(s) that a DIFFERENT, already-completed task introduced:',
-                ...crossTaskDeletionFindings.map(f => `- ${f}`),
-                "A sibling task's verified, committed deliverable is not this task's to remove.",
-                'Deleting the file a checker complains about is the cheapest way to turn a red',
-                'check green — the finding vanishes with the file — and it destroys finished',
-                'work (rule 4d). A green check suite on the shrunken tree is NOT a waiver.',
-                "Unless THIS task's spec explicitly REQUIRES removing exactly that file, the",
-                'verdict is FAIL naming the deleted file and its owning task — even if every',
-                'check passes and the deletion made them pass.',
-                ''
-            ]
-        :   []
-    const probeGamingBlock =
-        probeGamingFindings && probeGamingFindings.length > 0 ?
-            [
-                'CHECK-GAMING NOTICE (deterministic, computed by the orchestrator from the',
-                "task's diff): these added lines state their own purpose is to make a CHECK",
-                'pass (a test / verification / lint / gate), not to meet the requirement the',
-                'check stands for:',
-                ...probeGamingFindings.map(f => `- ${f}`),
-                'A check is a MESSENGER for a requirement. Code written to quiet the messenger',
-                'instead of meeting the requirement is a defect even when the check is green',
-                '(run-8 F6: a handler returned 401 "so the verification test passes" while the',
-                'real route stayed dead). Do NOT accept the passing check as proof. Read each',
-                "line's surrounding code and confirm the UNDERLYING requirement is genuinely",
-                'met — drive the real behavior directly (rule 4c). If the code only exists to',
-                'satisfy the check while the requirement is unmet, that is a FAIL naming the',
-                'gamed check and the unmet requirement.',
-                ''
-            ]
-        :   []
-    const skipEscapeBlock =
-        skipEscapeFindings && skipEscapeFindings.length > 0 ?
-            [
-                "SKIP-ESCAPE NOTICE (deterministic, computed by the orchestrator from the spec's",
-                'OWN VERIFY block): these VERIFY commands wrap a required check in a fallback that',
-                'ANNOUNCES skipping it when a tool is absent — so the check can "pass" while never',
-                'actually running:',
-                ...skipEscapeFindings.map(f => `- ${f}`),
-                'Do NOT accept a skipped check as a passed check. For each, determine whether it',
-                'ACTUALLY ran and observed the real behavior. If its tool is absent so the required',
-                'behavior was never observed, that area is UNOBSERVED (rule 5c) — verdict UNOBSERVED,',
-                'not PASS. Only if you observe the required behavior another way (running the real',
-                'artifact directly) may it count as verified.',
-                ''
-            ]
-        :   []
-    const foreignPathBlock =
-        foreignPathFindings && foreignPathFindings.length > 0 ?
-            [
-                'SANDBOX PATH LEAK NOTICE (deterministic, computed by the orchestrator by',
-                "resolving every absolute path in the task's diff against THIS machine): this",
-                'task committed absolute paths that do not exist here, while the real file they',
-                'name sits inside this repo:',
-                ...foreignPathFindings.map(f => `- ${f}`),
-                "These are paths from the authoring agent's OWN environment, baked into a file",
-                'that ships. The command that reads such a path does not fail a check — it fails',
-                'to BUILD, so the checks that would have caught it never run and report nothing',
-                '(mx5 run 13: a leaked `/workspace` vite alias made `test:ct` collect 63 tests',
-                'and run 0, and the suite stayed dead for the rest of the run). A green or',
-                'EMPTY result from any command that reads these files is therefore NOT evidence.',
-                'Run the affected command yourself and confirm it actually EXECUTES work — count',
-                'the tests/steps that ran, not the exit code. Unless the leaked path resolves on',
-                'this machine, the verdict is FAIL naming the file and the path (rule 4e).',
-                ''
-            ]
-        :   []
-    const scriptEscapeBlock =
-        scriptEscapeFindings && scriptEscapeFindings.length > 0 ?
-            [
-                'NEUTERED CHECK SCRIPT NOTICE (deterministic, computed by the orchestrator from',
-                'the manifest THIS task changed): these check scripts cannot report failure —',
-                'their exit status is 0 no matter what the checker finds:',
-                ...scriptEscapeFindings.map(f => `- ${f}`),
-                'You CANNOT discover this by running the script: it passes, which is the whole',
-                'defect (mx5 run 13 shipped a `lint` whose typecheck was disarmed by an inverted',
-                'grep and a `|| true` tail; every gate that ran it reported success without',
-                'measuring anything). A green result from one of these scripts is NOT evidence',
-                'for any acceptance criterion. To judge the area it claims to cover, run the',
-                'underlying checker DIRECTLY and unmodified (e.g. `tsc --noEmit` rather than',
-                '`npm run lint`) and judge THAT output. Unless the task spec explicitly requires',
-                'the script to tolerate failure, the verdict is FAIL naming the script (rule 4f).',
-                ''
-            ]
-        :   []
-    const runnerGlobBlock =
-        runnerGlobFindings && runnerGlobFindings.length > 0 ?
-            [
-                'TEST-RUNNER GLOB COLLISION NOTICE (deterministic, computed by the orchestrator',
-                "from the manifest's declared runners and their config): two test runners claim",
-                'the same files:',
-                ...runnerGlobFindings.map(f => `- ${f}`),
-                "The scanning runner will import the other's spec files and abort on a module",
-                'loaded outside its own runner — so the suite dies WHOLESALE rather than',
-                'reporting failures (this is the THIRD occurrence: mx5 runs 7 and 13). Run both',
-                'test commands yourself and confirm each collects and runs its own files and only',
-                'its own. A run that errors during collection has verified nothing, whatever its',
-                'exit code says (rule 4g).',
-                ''
-            ]
-        :   []
-    const testAssemblyBlock =
-        testAssemblyFindings && testAssemblyFindings.length > 0 ?
-            [
-                'TEST-ASSEMBLY NOTICE (deterministic, computed by the orchestrator from pure',
-                'import-graph shape): these test files rebuild production WIRING — they import the',
-                'same leaf modules the shipped entry composes and assemble their OWN copy of it,',
-                'instead of importing the production assembly:',
-                ...testAssemblyFindings.map(f => `- ${f}`),
-                'A green result on such a test proves that PRIVATE re-assembly, NOT the shipped',
-                'wiring — the copy can be wired differently (a different mount prefix, order, or',
-                'middleware) and pass while production is broken exactly at the seam the test was',
-                'meant to cover (rule 3f below). Before you count the covered area verified, drive',
-                'the behavior against the REAL shipped assembly/entry named above (start or invoke',
-                "the production entry point, not the test's hand-built app). If the real assembly",
-                'fails where the test passes, report FAIL and name the wiring seam.',
-                ''
-            ]
-        :   []
+    const {envNotes, contracts} = context
+    // NOTICE BLOCKS in table order; RULES sorted by their hand-assigned number.
+    const noticeBlocks = PROBE_ADAPTERS.flatMap(adapter => {
+        const lines = findings[adapter.key]
+        return lines && lines.length > 0 ? adapter.block(lines) : []
+    })
+    const probeRules = PROBE_ADAPTERS.filter(a => a.rule)
+        .sort((a, b) =>
+            a.ruleId < b.ruleId ? -1
+            : a.ruleId > b.ruleId ? 1
+            : 0
+        )
+        .flatMap(a => [...(a.rule ?? []), ''])
     const envBlock = envNotes && envNotes.trim().length > 0 ? [buildEnvNotesBlock(envNotes)] : []
     const contractsBlock =
         contracts && contracts.trim().length > 0 ? [buildContractsVerifyBlock(contracts)] : []
@@ -363,15 +649,7 @@ export function buildVerifyPrompt(
         '',
         ...envBlock,
         ...contractsBlock,
-        ...probeBlock,
-        ...prohibitionBlock,
-        ...crossTaskDeletionBlock,
-        ...probeGamingBlock,
-        ...skipEscapeBlock,
-        ...foreignPathBlock,
-        ...scriptEscapeBlock,
-        ...runnerGlobBlock,
-        ...testAssemblyBlock,
+        ...noticeBlocks,
         'How to verify — verify the REAL, shipped deliverable exactly as an unaided fresh',
         'checkout (or CI run) would experience it:',
         '',
@@ -468,68 +746,9 @@ export function buildVerifyPrompt(
         '4. Treat the ACCEPTANCE criteria as the bar. If a command fails, or its real output',
         '   contradicts an ACCEPTANCE criterion, the work has NOT verified.',
         '',
-        '4b. SPEC PROHIBITIONS ARE PART OF THE BAR — YOU HAVE NO WAIVER AUTHORITY: when the',
-        '   spec explicitly forbids something ("Do NOT modify X", "MUST NOT touch Y") and the',
-        '   shipped work does it anyway, that is a FAIL naming the violated constraint. You',
-        '   may not excuse a violation because it is additive, small, harmless, an improvement,',
-        '   or because every test still passes — "it works anyway" is exactly the waiver you do',
-        "   not have; relaxing a constraint is the spec owner's call, not yours. Check the",
-        "   task's own diff (git) against the spec's prohibitions — a forbidden file can be",
-        '   modified without any test noticing. Only two outcomes are not a FAIL: the',
-        '   violation was fully REVERTED (the shipped tree no longer violates), or the',
-        '   prohibition\'s own wording states an exception ("except…", "beyond what is needed',
-        '   for…") that covers the change — judged against that stated exception, not against',
-        '   your view of harmlessness.',
-        '',
-        '4c. THE CHECK IS THE MESSENGER, NOT THE REQUIREMENT — code (or a comment) whose',
-        '   stated purpose is to make a check PASS, rather than to satisfy the requirement the',
-        '   check stands for, is a defect even when the check is green. The tell is the intent',
-        '   written down: "return X so the test passes", "hardcode this to satisfy the linter",',
-        '   "stub it out to appease CI". When you see such a line — or the CHECK-GAMING NOTICE',
-        '   above names one — do NOT treat the passing check as proof the requirement is met.',
-        '   Find the actual requirement the check was meant to prove and verify THAT directly',
-        '   against the real artifact (rule 3e negative control is the sharpest tool: a handler',
-        '   that answers the check-shaped request the same way for a WRONG input is gaming the',
-        '   check, not implementing the behavior). If the requirement is genuinely unmet while',
-        '   the check passes, the verdict is FAIL naming the gamed check and the real gap.',
-        '',
-        "4d. A SIBLING TASK'S COMMITTED DELIVERABLE IS NOT THIS TASK'S TO DELETE — check the",
-        "   task's own diff (git) for DELETED tracked files. A file that a DIFFERENT completed",
-        "   task introduced and committed, deleted by this task's work, is finished work",
-        '   destroyed — usually to make a red check go green (the file the checker complains',
-        '   about simply disappears; that is quieting the messenger, rule 4c, not fixing the',
-        '   defect). A passing check suite on the shrunken tree is not a waiver. Only two',
-        "   outcomes are not a FAIL: THIS task's spec explicitly requires that removal, or",
-        '   the deletion is a genuine relocation (the same file lives on elsewhere in the',
-        '   tree). Otherwise the verdict is FAIL naming the deleted file and the task that',
-        '   owns it.',
-        '',
-        '4e. AN ABSOLUTE PATH TO PROJECT FILES IS A DEFECT — a committed path like',
-        "   `/workspace/src/shared` or `/home/<someone>/proj/src` names the authoring agent's",
-        '   OWN machine, not this one. Its distinctive damage is that it breaks the run BEFORE',
-        '   any check reports: a bad alias/config path makes the tool fail to RESOLVE or BUILD,',
-        '   so a suite "passes" having executed nothing. Treat a command that reports no',
-        '   failures but also no WORK — 0 tests run, 0 files emitted, an empty report — as',
-        '   unverified, never as green. Confirm the count of things that actually ran. A path',
-        '   to project-internal files must be relative to the file that carries it, or computed',
-        '   at runtime; if one does not resolve here, the verdict is FAIL naming file and path.',
-        '',
-        '4f. A CHECK THAT CANNOT FAIL PROVES NOTHING — before you cite a check script',
-        "   (`npm run lint`, `bun run test`) as evidence, read its DEFINITION in the project's",
-        '   manifest. A script ending in `|| true`, `; exit 0`, or piping a checker into an',
-        '   inverted grep exits 0 unconditionally: its green result is a constant, not a',
-        '   measurement, and running it again only reproduces the constant. When a script is',
-        '   built that way, run the underlying checker directly and judge its real output; and',
-        '   unless the spec required that tolerance, the script itself is a defect — the',
-        '   verdict is FAIL naming it.',
-        '',
-        '4g. TWO RUNNERS, ONE FILE SET, NO RESULTS — when a project declares more than one',
-        '   test runner, check that each collects only its own files. A runner that scans for',
-        "   `*.test.*` / `*.spec.*` project-wide will import another runner's specs and abort",
-        '   during COLLECTION. That failure mode looks nothing like a test failure: you get an',
-        '   import error, or a suite that reports zero tests. Always read how many tests each',
-        '   command actually COLLECTED and RAN; zero collected is never a pass.',
-        '',
+        // The 4b…4g band: one rule per probe row that owns a numbered rule, emitted
+        // in rule-number order (see the table above — NOT the notice-block order).
+        ...probeRules,
         '5. The ONLY thing you may assume is already provided is a genuinely EXTERNAL running',
         '   service or network resource (a database server, an API host) that the project',
         '   documents as a prerequisite. Before you rely on that assumption, PROBE for the',
@@ -788,93 +1007,21 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify'}
     }
-    // Substitution probe findings feed the prompt; a probe failure must never block
-    // verification (it is an optional sharpener, the gate still runs without it).
-    let findings: string[] = []
-    if (deps.probe) {
-        stage('substitution probe')
-        try {
-            findings = await deps.probe()
-        } catch {
-            findings = []
-        }
+    // Every deterministic probe, one table row each (see PROBE_ADAPTERS): the row
+    // knows which dep it reads, what it degrades to, and which notice block its
+    // findings become. Each is an optional SHARPENER — an absent dep is skipped and
+    // a throwing probe degrades to its empty value, so no probe can block the gate.
+    const findings: ProbeFindings = {}
+    const rawResults = new Map<ProbeKey, unknown>()
+    for (const adapter of PROBE_ADAPTERS) {
+        const result = await adapter.run(deps, stage)
+        findings[adapter.key] = result.findings
+        rawResults.set(adapter.key, result.raw)
     }
-    let prohibitions: string[] = []
-    if (deps.prohibitionProbe) {
-        stage('prohibition probe')
-        try {
-            prohibitions = await deps.prohibitionProbe()
-        } catch {
-            prohibitions = []
-        }
-    }
-    // Test-assembly findings feed the prompt (rule 3f); a probe failure must never
-    // block verification — it is an optional sharpener like the substitution probe.
-    let testAssembly: string[] = []
-    if (deps.testAssemblyProbe) {
-        stage('test-assembly probe')
-        try {
-            testAssembly = await deps.testAssemblyProbe()
-        } catch {
-            testAssembly = []
-        }
-    }
-    // Probe-gaming findings feed the prompt (rule 4c, F6); a probe failure must never
-    // block verification — an optional sharpener like the other diff-shape probes.
-    let probeGaming: string[] = []
-    if (deps.probeGamingProbe) {
-        stage('probe-gaming probe')
-        try {
-            probeGaming = await deps.probeGamingProbe()
-        } catch {
-            probeGaming = []
-        }
-    }
-    // Cross-task deletion findings feed the prompt (rule 4d) AND ride on a FAIL
-    // outcome (structured) so an ACCEPT can record them as durable debts. A probe
-    // failure must never block verification.
-    let crossDeletions: CrossTaskDeletion[] = []
-    if (deps.crossTaskDeletionProbe) {
-        stage('cross-task deletion probe')
-        try {
-            crossDeletions = await deps.crossTaskDeletionProbe()
-        } catch {
-            crossDeletions = []
-        }
-    }
-    // Sandbox-path-leak findings the deterministic repair could NOT fix, injected
-    // under rule 4e. A probe failure must never block verification.
-    let foreignPaths: string[] = []
-    if (deps.foreignPathProbe) {
-        stage('foreign-path probe')
-        try {
-            foreignPaths = await deps.foreignPathProbe()
-        } catch {
-            foreignPaths = []
-        }
-    }
-    // Neutered check scripts in a manifest this task changed, injected under rule
-    // 4f. A probe failure must never block verification.
-    let scriptEscapes: string[] = []
-    if (deps.scriptEscapeProbe) {
-        stage('script-escape probe')
-        try {
-            scriptEscapes = await deps.scriptEscapeProbe()
-        } catch {
-            scriptEscapes = []
-        }
-    }
-    // Colliding test-runner globs, injected under rule 4g. A probe failure must
-    // never block verification.
-    let runnerGlobs: string[] = []
-    if (deps.runnerGlobProbe) {
-        stage('runner-glob probe')
-        try {
-            runnerGlobs = await deps.runnerGlobProbe()
-        } catch {
-            runnerGlobs = []
-        }
-    }
+    // The one probe whose RAW value is needed beyond the prompt: cross-task deletion
+    // findings ride on a FAIL outcome (structured) so an ACCEPT can record them as
+    // durable debts. The row's `empty` is `[]`, so this is always an array.
+    const crossDeletions = (rawResults.get('crossTaskDeletion') ?? []) as CrossTaskDeletion[]
     // Environment facts from earlier gate children (best-effort; a cache failure
     // must never block verification).
     let envNotes = ''
@@ -895,12 +1042,6 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             contracts = ''
         }
     }
-    // DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
-    // block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
-    // fallback. Injected so rule 5c fires reliably — the model does not self-discover a
-    // graceful skip-escape (A/B: rule alone ~1-3/5), but acts on a finding naming the
-    // exact line, per the proven probe+rule pattern. Pure text analysis, no dep needed.
-    const skipEscapes = skipEscapeVerifyFindings(findSkipEscapes(deps.spec))
     // A child that emits NO verdict never judged the work (budget/context death mid-
     // investigation — seen live: an 11-minute verify wandered, died verdict-less, and
     // the resulting FAIL burned a full implementation re-run on an unjudged artifact).
@@ -910,22 +1051,7 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         try {
             text = await deps.runChild(
                 VERIFY_TOOLS,
-                buildVerifyPrompt(
-                    deps.spec,
-                    findings,
-                    envNotes,
-                    prohibitions,
-                    skipEscapes,
-                    contracts,
-                    testAssembly,
-                    probeGaming,
-                    crossTaskDeletionVerifyFindings(crossDeletions),
-                    {
-                        foreignPaths,
-                        scriptEscapes,
-                        runnerGlobs
-                    }
-                ),
+                buildVerifyPrompt(deps.spec, findings, {envNotes, contracts}),
                 deps.signal
             )
         } catch (err) {

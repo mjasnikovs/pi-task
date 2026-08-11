@@ -22,11 +22,26 @@ export function normaliseWhitespace(s: string): string {
     return s.replace(/\s+/g, ' ').trim()
 }
 
-/** Check whether an excerpt appears verbatim in the source content
- *  (whitespace-normalised). Returns false for empty excerpts. */
+/**
+ * THE excerpt predicate: does this excerpt appear verbatim in the source content
+ * (whitespace-normalised)? {@link verifyExcerpt} delegates to it, so there is exactly one
+ * definition of "verified" in the codebase.
+ *
+ * False for an excerpt that is empty OR whitespace-only. The emptiness test is applied to
+ * the NORMALISED excerpt, not the raw one: `"   "` is a non-empty string that normalises to
+ * `""`, and `content.includes('')` is true for every content — so the raw-string guard let a
+ * whitespace-only excerpt "verify" against anything, while `verifyExcerpt` (which tested the
+ * normalised length) called the same input unverified. A citation with no characters in it is
+ * not evidence, so both now answer false.
+ *
+ * Unreachable from the shipped extractors — `parseChildOutput` already maps a whitespace-only
+ * `<excerpt>` to `undefined` via `.trim() || undefined`, and every call site guards on that —
+ * so this is a latent-disagreement fix, not a behaviour change to any recorded verdict.
+ */
 export function isExcerptInContent(excerpt: string, content: string): boolean {
-    if (!excerpt) return false
-    return normaliseWhitespace(content).includes(normaliseWhitespace(excerpt))
+    const ne = normaliseWhitespace(excerpt)
+    if (ne.length === 0) return false
+    return normaliseWhitespace(content).includes(ne)
 }
 
 /**
@@ -36,7 +51,9 @@ export function isExcerptInContent(excerpt: string, content: string): boolean {
  * DIAGNOSABLE after the fact, so it can be attributed to fabrication (the excerpt is nowhere
  * near the content) versus a normaliser gap (it is a markdown-escape or entity variant of
  * text that IS present) WITHOUT re-fetching. It deliberately does NOT loosen the verifier:
- * `.verified` is identical to `isExcerptInContent`. F-3(f) — whether the normaliser needs
+ * `.verified` IS `isExcerptInContent` — delegated, not re-implemented, so the two cannot
+ * drift apart again (they had: a whitespace-only excerpt verified there and failed here).
+ * F-3(f) — whether the normaliser needs
  * markdown-escape handling — is left unproven on purpose; you decide that from the retained
  * evidence, not by weakening the one working hallucination detector first.
  */
@@ -54,7 +71,8 @@ export function verifyExcerpt(excerpt: string, content: string): ExcerptVerifica
     const nc = normaliseWhitespace(content)
     const ne = normaliseWhitespace(excerpt)
     return {
-        verified: ne.length > 0 && nc.includes(ne),
+        // Delegated on purpose: this struct adds EVIDENCE, never a second opinion.
+        verified: isExcerptInContent(excerpt, content),
         contentSha256: createHash('sha256').update(nc).digest('hex'),
         contentLength: nc.length,
         normalisedExcerpt: ne

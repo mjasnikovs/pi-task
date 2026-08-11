@@ -48,6 +48,11 @@ import {
     type RepairCandidate
 } from './root-cause-repair.js'
 import {attributeEnforceFailure} from './enforce-attribution.js'
+// The debt ledger is reached through the injected `recordDebt` dep (so it stays
+// absent-in-tests); only the origin TYPE and the cross-task-deletion reason SHAPE
+// come from accept-debt.ts directly — the latter because its writer and its
+// re-check-side parser (extractDeletedDebtPath) have to move together.
+import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -163,69 +168,30 @@ export interface GateDeps {
      */
     record?: (cwd: string, taskId: string, line: string) => Promise<void>
     /**
-     * Record a durable ACCEPT-despite-verify-FAIL debt (task id + FAIL reason) to the
-     * run-level ledger (`.pi-tasks/accept-debt.md`, see accept-debt.ts). Called only on
-     * the picker's ACCEPT branch — the human blessed a failing artifact as-is, so the
-     * defect is real and recorded; the final integration gate re-checks it at run end
-     * and surfaces it if still open. Best-effort; absent in tests → no ledger written.
+     * Record ONE durable defect to the run-level ledger (`.pi-tasks/accept-debt.md`,
+     * see accept-debt.ts), stamped with the DebtOrigin that says how it was reached.
+     * The final integration gate re-checks every recorded debt at run end and surfaces
+     * the ones still open, so a defect the gate found is never lost by whatever the
+     * loop then did with the WORK — accepted by a human ('accepted'), auto-picked
+     * unattended by yolo mode ('yolo-accepted'), reverted with the enforce commit
+     * ('enforce-revert'), kept because the enforce diff could not have caused it
+     * ('enforce-kept'), blocked by a spec-frozen path ('frozen-blocked'), a sibling's
+     * deliverable deleted and accepted ('cross-task-deletion'), or another task's
+     * pre-existing bug this one merely tripped over ('root-cause').
+     *
+     * The ORIGIN is load-bearing, not a label: the final gate reports by class, and
+     * an unattended auto-pick may never be recorded as the 'accepted' class, which
+     * asserts a human weighed the failing artifact. Best-effort; absent in tests →
+     * no ledger written.
      */
-    recordAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
-    /**
-     * Record a durable YOLO-ACCEPTED debt: the same ACCEPT branch, but reached by an
-     * unattended auto-pick (yolo mode) rather than a human. Separate dep — and
-     * separate ledger origin — because collapsing the two would let an auto-pick
-     * read as "a human blessed this" in the final gate's run-end report. Best-effort;
-     * absent in tests → no ledger written.
-     */
-    recordYoloAcceptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
-    /**
-     * Record a durable ENFORCE-REVERT debt (mx5 run 10 item 3): the enforce re-verify
-     * FAILED and the enforce edits were reverted, but the FAIL indicts the ORIGINAL
-     * work (run 10 TASK_0004: "Missing server entry point … the Hono server cannot be
-     * started"). Without this the diagnosis dies with the revert; recorded, the final
-     * gate re-checks and surfaces it like an accept-debt. Best-effort; absent in tests.
-     */
-    recordEnforceRevertDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
-    /**
-     * Record a durable FROZEN-BLOCKED debt (mx5 run 12 / PROMPT 1 layer B): a
-     * repo-health FAIL whose only fix is an edit to a path THIS task's spec froze —
-     * a cross-task contradiction. Recorded when the loop routes such a FAIL to the
-     * picker (whatever the human then picks, the defect is real and no task may fix
-     * it), so the final gate re-checks it at run end. Best-effort; absent in tests.
-     */
-    recordFrozenBlockedDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
-    /**
-     * Record a durable CROSS-TASK DELETION debt (mx5 run 12 PROMPT 2): the task's
-     * work deleted a file a DIFFERENT task's commit introduced, verify FAILed with
-     * the deterministic finding attached, and the user ACCEPTed anyway — the
-     * deletion ships in the next commit, so the final gate must re-check it
-     * (resolved iff the file is back in the tree). Best-effort; absent in tests.
-     */
-    recordCrossTaskDeletionDebt?: (
-        cwd: string,
-        taskId: string,
-        deletion: {path: string; owner: string}
-    ) => Promise<void>
-    /**
-     * Record a durable ROOT-CAUSE debt (mx5 run 14 item 5): this task's verify
-     * FAILed on a pre-existing defect in a file ANOTHER task created and this task
-     * never touched. Its work is kept (it is not at fault) but the defect is real,
-     * so the final gate must re-check and surface it. Best-effort; absent in tests.
-     */
-    recordRootCauseDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
-    /**
-     * Record a durable ENFORCE-KEPT debt (mx5 run 18 / nexttask 4): the enforce
-     * re-verify FAILED but the failing check names only files the ENFORCE COMMIT
-     * does not touch, so the edits were KEPT. The defect is still real and still in
-     * the shipped tree — keeping the work must not lose the finding.
-     */
-    recordEnforceKeptDebt?: (cwd: string, taskId: string, reason: string) => Promise<void>
+    recordDebt?: (cwd: string, taskId: string, reason: string, origin: DebtOrigin) => Promise<void>
     /**
      * Queue a scoped repair task for a root-caused defect. The gate DETECTS the
      * cause; only the /task-auto loop may mutate the plan, so the two are decoupled
      * through the durable `.pi-tasks/repair-queue.md` ledger this writes (see
-     * root-cause-repair.ts). Absent (bare `/task`, tests) → detection still records
-     * the debt, nothing is scheduled.
+     * root-cause-repair.ts). Absent (tests) → detection still records the debt,
+     * nothing is scheduled. buildGateDeps always supplies it, so a bare `/task`
+     * queues repairs exactly like /task-auto — only the plan mutation is the loop's.
      */
     recordRepairCandidate?: (cwd: string, candidate: RepairCandidate) => Promise<void>
     /**
@@ -447,10 +413,11 @@ export async function runGatesForTask(
                 introducedBy: rel => deps.introducedBy!(p.cwd, rel)
             })
             if (!candidate) return null
-            await deps.recordRootCauseDebt?.(
+            await deps.recordDebt?.(
                 p.cwd,
                 p.taskId,
-                `${failReason} — ROOT CAUSE: \`${candidate.file}\` (introduced by ${candidate.owner}, not touched by this task)`
+                `${failReason} — ROOT CAUSE: \`${candidate.file}\` (introduced by ${candidate.owner}, not touched by this task)`,
+                'root-cause'
             )
             await deps.recordRepairCandidate?.(p.cwd, candidate)
             await rec(
@@ -573,10 +540,11 @@ export async function runGatesForTask(
                 // final gate must surface it at run end (static-class: it auto-closes
                 // iff the run-end static check passes).
                 try {
-                    await deps.recordFrozenBlockedDebt?.(
+                    await deps.recordDebt?.(
                         p.cwd,
                         p.taskId,
-                        `${failReason} — ${frozenContradiction}`
+                        `${failReason} — ${frozenContradiction}`,
+                        'frozen-blocked'
                     )
                 } catch {
                     // recording must never break the gate sequence
@@ -671,11 +639,12 @@ export async function runGatesForTask(
                         // Provenance splits here, mandatorily: an auto-pick writes the
                         // 'yolo-accepted' origin, never the plain 'accepted' one that
                         // asserts a human weighed the failing artifact.
-                        if (byYolo) {
-                            await deps.recordYoloAcceptDebt?.(p.cwd, p.taskId, failReason)
-                        } else {
-                            await deps.recordAcceptDebt?.(p.cwd, p.taskId, failReason)
-                        }
+                        await deps.recordDebt?.(
+                            p.cwd,
+                            p.taskId,
+                            failReason,
+                            byYolo ? 'yolo-accepted' : 'accepted'
+                        )
                     } catch {
                         // recording must never break the gate sequence
                     }
@@ -690,7 +659,12 @@ export async function runGatesForTask(
                 // the final gate re-checks them (mx5 run 12 PROMPT 2). Best-effort.
                 for (const del of verified.crossTaskDeletions ?? []) {
                     try {
-                        await deps.recordCrossTaskDeletionDebt?.(p.cwd, p.taskId, del)
+                        await deps.recordDebt?.(
+                            p.cwd,
+                            p.taskId,
+                            crossTaskDeletionReason(del),
+                            'cross-task-deletion'
+                        )
                         await rec(
                             `accept-debt: cross-task deletion recorded — ${del.path} (${del.owner}'s deliverable)`
                         )
@@ -982,7 +956,7 @@ export async function runGatesForTask(
                     // Keeping the edits must NOT lose the finding — that was mx5 run
                     // 5's mistake. Same durability as the revert path; only the
                     // disposition of the edits differs.
-                    await deps.recordEnforceKeptDebt?.(p.cwd, p.taskId, afterReason)
+                    await deps.recordDebt?.(p.cwd, p.taskId, afterReason, 'enforce-kept')
                     // …and, when the named file is somebody else's committed work,
                     // queue the scoped repair so something actually FIXES it.
                     if (attribution.file && deps.introducedBy && deps.recordRepairCandidate) {
@@ -1029,10 +1003,11 @@ export async function runGatesForTask(
                     // erasing it with the enforce edits buried the terminal fault 8.5h
                     // before run end. The final gate re-checks/surfaces it (static-class
                     // auto-closes if a later task fixed the statics; else stays open).
-                    await deps.recordEnforceRevertDebt?.(
+                    await deps.recordDebt?.(
                         p.cwd,
                         p.taskId,
-                        after.reason ?? 'enforce re-verify failed'
+                        after.reason ?? 'enforce re-verify failed',
+                        'enforce-revert'
                     )
                     active.ui.notify(
                         `${p.tag}: guideline fixes regressed verification on "${p.title}" (${(after.reason ?? 'now fails').slice(0, 120)}) — ${deps.revert ? 'reverted them, kept the verified work' : 'left in place (no revert available)'}.`,

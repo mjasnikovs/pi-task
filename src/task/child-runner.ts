@@ -213,12 +213,96 @@ interface PhaseDeps {
 
 export type {PhaseDeps}
 
+// ─── Shared error-triage ladder ──────────────────────────────────────────────
+
+/**
+ * What the caller should do next after `triageChildResult` has looked at a
+ * finished child. Either the run is good (`done`, carrying the assistant text)
+ * or the caller must spend another attempt.
+ *
+ * On a retry, `hint` is the correction to prepend to the next prompt. It is
+ * OMITTED (not null) when this rung has nothing to correct — the caller then
+ * keeps whatever hint it was already carrying, exactly as the two hand-written
+ * ladders did by falling through to `continue` without touching it.
+ */
+type LadderStep = {done: true; text: string} | {done: false; hint?: string}
+
+/**
+ * The error-triage ladder both phase wrappers run over a finished child, in
+ * this fixed order: non-zero exit → model error → empty completion → leaked
+ * tool call. Callers own the loop, the prompt and the hint; this owns the
+ * verdict, so a fix to any rung lands in every caller at once.
+ *
+ * `attempt` is the caller's 0-based counter (its attempt/strike), `budget` the
+ * matching restart allowance (MAX_LEAK_RETRIES for runPhaseChild's leak budget,
+ * MAX_LOOP_RESTARTS for runPhaseWithLoopGuard's strike budget) — so both run
+ * `budget + 1` attempts in total before a rung gives up and throws.
+ *
+ * `verb` names the caller's restart in the debug log ("retry" for runPhaseChild,
+ * "restart" for runPhaseWithLoopGuard). It is the only externally visible thing
+ * that differs between the two, and the only way to tell from a debug log which
+ * wrapper produced a given line — so it is passed in rather than hardcoded.
+ *
+ * A loop kill (`r.loopHit`) is NOT handled here: only runPhaseWithLoopGuard
+ * detects loops, and it must consume the hit before calling this.
+ */
+async function triageChildResult(
+    deps: PhaseDeps,
+    name: string,
+    r: PhaseRunResult,
+    attempt: number,
+    budget: number,
+    verb: 'retry' | 'restart'
+): Promise<LadderStep> {
+    if (r.exitCode !== 0) {
+        throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+    }
+    if (r.modelError) {
+        // The model/provider failed (pi exited 0 with a stopReason "error"
+        // turn). A connection-class cause is transient — re-spawn within the
+        // caller's budget after a backoff; anything else fails fast (pi already
+        // retried, and re-spawning won't fix a real fault).
+        if (isConnectionError(r.modelError) && attempt < budget) {
+            deps.logDebug?.(
+                `${name}: connection error "${r.modelError}" — ${verb} `
+                    + `${attempt + 1}/${budget}`
+            )
+            await (deps.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(attempt))
+            return {done: false}
+        }
+        throw new ModelError(name, r.modelError)
+    }
+    if (r.text.trim().length === 0) {
+        // An empty completion (exit 0, no assistant text, no stderr) is almost
+        // always transient — a model/API error swallowed inside --mode json,
+        // not a repeatable mistake — so re-spawn rather than fail the phase.
+        // There's nothing to correct, so we carry no hint (and leave any hint
+        // the caller already has alone). Shares the caller's budget: budget+1
+        // attempts, then surface the error.
+        if (attempt === budget) {
+            throw new Error(
+                `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
+            )
+        }
+        return {done: false}
+    }
+    if (r.leakedToolCall) {
+        if (attempt === budget) {
+            throw new LeakedToolCallError(name, r.leakedToolCall)
+        }
+        return {done: false, hint: leakedToolCallHint(r.leakedToolCall)}
+    }
+    return {done: true, text: r.text}
+}
+
 /**
  * Run a child pi and return its assistant text. Throws if exit code != 0.
  *
  * If the child leaks a tool call as plain text (wrong dialect — never executed),
  * re-prompt with a correction hint up to MAX_LEAK_RETRIES times; if it keeps
  * leaking, throw LeakedToolCallError rather than returning the unexecuted call.
+ * Empty completions and connection-class model errors share that same budget —
+ * see triageChildResult, which decides every one of those cases.
  */
 export async function runPhaseChild(
     deps: PhaseDeps,
@@ -238,45 +322,9 @@ export async function runPhaseChild(
             undefined,
             deps.spawn
         )
-        if (r.exitCode !== 0) {
-            throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
-        }
-        if (r.modelError) {
-            // The model/provider failed (pi exited 0 with a stopReason "error"
-            // turn). A connection-class cause is transient — retry within the
-            // leak budget after a backoff; anything else fails fast (pi already
-            // retried, and re-spawning won't fix a real fault).
-            if (isConnectionError(r.modelError) && attempt < MAX_LEAK_RETRIES) {
-                deps.logDebug?.(
-                    `${name}: connection error "${r.modelError}" — retry `
-                        + `${attempt + 1}/${MAX_LEAK_RETRIES}`
-                )
-                await (deps.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(attempt))
-                continue
-            }
-            throw new ModelError(name, r.modelError)
-        }
-        if (r.text.trim().length === 0) {
-            // An empty completion (exit 0, no assistant text, no stderr) is almost
-            // always transient — a model/API error swallowed inside --mode json,
-            // not a repeatable mistake — so re-spawn rather than fail the phase.
-            // There's nothing to correct, so we carry no hint. Reuses the leak
-            // retry budget: MAX_LEAK_RETRIES+1 attempts, then surface the error.
-            if (attempt === MAX_LEAK_RETRIES) {
-                throw new Error(
-                    `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
-                )
-            }
-            continue
-        }
-        if (r.leakedToolCall) {
-            if (attempt === MAX_LEAK_RETRIES) {
-                throw new LeakedToolCallError(name, r.leakedToolCall)
-            }
-            hint = leakedToolCallHint(r.leakedToolCall)
-            continue
-        }
-        return r.text
+        const step = await triageChildResult(deps, name, r, attempt, MAX_LEAK_RETRIES, 'retry')
+        if (step.done) return step.text
+        if (step.hint !== undefined) hint = step.hint
     }
     // Unreachable: the loop returns clean text or throws on the final leak.
     throw new LeakedToolCallError(name, '(unknown)')
@@ -404,45 +452,15 @@ export async function runPhaseWithLoopGuard(
             nextHint = formatLoopHint(r.loopHit)
             continue
         }
-        if (r.exitCode !== 0) {
-            throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
-        }
-        if (r.modelError) {
-            // The model/provider failed (pi exited 0 with a stopReason "error"
-            // turn). A connection-class cause is transient — restart within the
-            // strike budget after a backoff; anything else fails fast (pi already
-            // retried, and re-spawning won't fix a real fault).
-            if (isConnectionError(r.modelError) && strike < MAX_LOOP_RESTARTS) {
-                deps.logDebug?.(
-                    `${name}: connection error "${r.modelError}" — restart `
-                        + `${strike + 1}/${MAX_LOOP_RESTARTS}`
-                )
-                await (deps.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(strike))
-                continue
-            }
-            throw new ModelError(name, r.modelError)
-        }
-        if (r.text.trim().length === 0) {
-            // An empty completion (exit 0, no assistant text, no stderr) is almost
-            // always transient — a model/API error swallowed inside --mode json,
-            // not a repeatable mistake — so re-spawn rather than fail the phase.
-            // Nothing to correct, so leave nextHint as-is. Reuses the strike
-            // budget shared with loop/leak restarts: MAX_LOOP_RESTARTS+1 attempts.
-            if (strike === MAX_LOOP_RESTARTS) {
-                throw new Error(
-                    `${name} child produced no output${r.stderr ? ' — stderr: ' + r.stderr : ''}`
-                )
-            }
-            continue
-        }
-        if (r.leakedToolCall) {
-            if (strike === MAX_LOOP_RESTARTS) {
-                throw new LeakedToolCallError(name, r.leakedToolCall)
-            }
-            nextHint = leakedToolCallHint(r.leakedToolCall)
-            continue
-        }
-        return r.text
+        // Everything past the loop kill is the shared ladder: exit code, model
+        // error (connection-class restarts within the strike budget), empty
+        // completion, leaked tool call. The strike budget is shared with the
+        // loop restarts above — MAX_LOOP_RESTARTS+1 attempts across all causes.
+        const step = await triageChildResult(deps, name, r, strike, MAX_LOOP_RESTARTS, 'restart')
+        if (step.done) return step.text
+        // Only a leak produces a new correction hint; the other rungs have
+        // nothing to correct and leave any loop hint already in flight alone.
+        if (step.hint !== undefined) nextHint = step.hint
     }
     throw new LoopExhaustedError(name, loopHistory)
 }

@@ -48,7 +48,7 @@ import {
     collectTreeChanges
 } from '../src/task/gate-deps.js'
 import {ignoredWriteTrailLine, ignoredWriteDebtReason} from '../src/task/write-guard.js'
-import {recordFinalGateUnobservedDebt, readAcceptDebts} from '../src/task/accept-debt.js'
+import {recordDebt, readAcceptDebts} from '../src/task/accept-debt.js'
 
 const HUB = path.join(os.homedir(), 'hub')
 const WORK = path.join(os.homedir(), '.cache', 'pi-task-ignored-ab')
@@ -254,7 +254,7 @@ async function runArm(entry: Entry, arm: Arm, degrade = false): Promise<Metric> 
     if (fix.ignoredWrites && fix.ignoredWrites.length > 0) {
         gateRecord.push(ignoredWriteTrailLine(fix.ignoredWrites))
         if (fix.ignoredDependent !== false) {
-            await recordFinalGateUnobservedDebt(
+            await recordDebt(
                 dir,
                 'AB',
                 ignoredWriteDebtReason(fix.ignoredWrites, fix.ignoredDependent)
@@ -262,7 +262,7 @@ async function runArm(entry: Entry, arm: Arm, degrade = false): Promise<Metric> 
         }
     }
     if (fix.ok && fix.unobserved) {
-        await recordFinalGateUnobservedDebt(dir, 'AB', fix.unobserved)
+        await recordDebt(dir, 'AB', fix.unobserved, 'final-gate')
     }
     const debts = (await readAcceptDebts(dir)).map(d => d.reason)
 

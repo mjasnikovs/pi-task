@@ -108,6 +108,7 @@ import {
     type EnvRead,
     type StepAside
 } from '../src/task/env-template-closure.js'
+import {removeTree, scratchRepo} from './scratch-repo.js'
 
 const HOME = os.homedir()
 const ROOTS = [path.join(HOME, 'hub'), path.join(HOME, 'tmp'), path.join(HOME, '.cache')]
@@ -290,16 +291,10 @@ const FIXTURES: Fixture[] = [
 ]
 
 function buildFixture(f: Fixture, root: string): string {
-    const dir = path.join(root, f.label.replace(/[^a-z0-9]+/gi, '-'))
-    fs.mkdirSync(dir, {recursive: true})
-    for (const [p, text] of Object.entries(f.files)) {
-        fs.mkdirSync(path.dirname(path.join(dir, p)), {recursive: true})
-        fs.writeFileSync(path.join(dir, p), text)
-    }
-    spawnSync('git', ['init', '-q'], {cwd: dir})
-    spawnSync('git', ['add', '-A'], {cwd: dir})
-    spawnSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=a', 'commit', '-qm', 'x'], {cwd: dir})
-    return dir
+    return scratchRepo(path.join(root, f.label.replace(/[^a-z0-9]+/gi, '-')), {
+        files: f.files,
+        commit: 'x'
+    }).dir
 }
 
 // ── report ────────────────────────────────────────────────────────────────────
@@ -440,7 +435,7 @@ function main(): void {
         if (!ok) fxOk = false
         console.log(`${ok ? 'ok  ' : 'FAIL'} ${f.label}  expected [${want}]  got [${got}]`)
     }
-    fs.rmSync(fxRoot, {recursive: true, force: true})
+    removeTree(fxRoot)
 
     console.log(`\n## git history of the long-lived repos\n`)
     const hub = path.join(HOME, 'hub')

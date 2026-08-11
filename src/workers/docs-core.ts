@@ -16,12 +16,10 @@ import {
 } from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './docs-retrieve.js'
 import {npmVersionLookup as defaultNpmVersionLookup, type NpmVersionInfo} from './npm-version.js'
-import {getPiInvocation} from '../shared/pi-invocation.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
-import {childBaseArgs} from '../shared/child-extensions.js'
+import {runFocusedExtraction} from './focused-extractor.js'
 import {
-    parseChildOutput,
-    isExcerptInContent,
+    type ExcerptVerification,
     formatResultText as formatResultTextShared
 } from '../shared/child-output.js'
 
@@ -32,8 +30,6 @@ const NO_CACHE_HEAD = 25_000
 const NO_CACHE_TAIL = 5_000
 const NO_CACHE_TOTAL = NO_CACHE_HEAD + NO_CACHE_TAIL
 const NO_CACHE_MARKER = '\n\n[...content continues, truncated...]\n\n'
-
-const childArgs = (): string[] => [...childBaseArgs(), '--no-tools']
 
 /**
  * Provenance of an auto-installed package's version, so the answer can state
@@ -109,9 +105,22 @@ export interface DocsRawInput {
 }
 
 export interface DocsFocusedResult {
+    /**
+     * The child's answer — EMPTY when `failure` is set. A failed child's stdout is never
+     * parsed as an answer (it used to be: `parseChildOutput` returns the whole trimmed
+     * stdout when there is no `<answer>` tag, so a crashed child's error dump was handed
+     * to phaseAutoAnswer as if it were package documentation).
+     */
     answer: string
     excerpt?: string
     excerptVerified?: boolean
+    /** Retained evidence for a false `excerptVerified`, diagnosable without re-running. */
+    excerptCheck?: ExcerptVerification
+    /**
+     * Set exactly when the child failed (aborted, or non-zero exit): the standard
+     * child-failure message. Callers must treat `answer` as absent when this is present.
+     */
+    failure?: string
     pkg: ResolvedPackage
     version: string
     exitCode: number
@@ -698,28 +707,41 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
 
     const {pkg, chunks, hitCache, indexingMs} = rawResult
     const concatenated = chunks.map(c => c.content).join('\n\n')
-    const prompt = buildPrompt(pkg, input.query, concatenated)
-    const invocation = getPiInvocation(childArgs(), prompt)
-    const child = await runChild(spawn, invocation, input.cwd, input.signal)
+    const extraction = await runFocusedExtraction({
+        prompt: buildPrompt(pkg, input.query, concatenated),
+        // Exactly what went into the prompt — this path prompts with the whole concatenation,
+        // so the verify target and the prompt content are the same text.
+        verifyAgainst: concatenated,
+        cwd: input.cwd,
+        signal: input.signal,
+        spawn,
+        abortedMessage: 'Docs lookup aborted.'
+    })
 
-    const parsed = parseChildOutput(child.stdout)
-    const excerptVerified =
-        parsed.excerpt ? isExcerptInContent(parsed.excerpt, concatenated) : undefined
-
-    return {
-        answer: parsed.answer,
-        excerpt: parsed.excerpt,
-        excerptVerified,
+    const base = {
         pkg,
         version: pkg.version,
-        exitCode: child.exitCode,
-        aborted: child.aborted,
-        stderr: child.stderr,
+        exitCode: extraction.exitCode,
+        aborted: extraction.aborted,
+        stderr: extraction.stderr,
         hitCache,
         indexingMs,
         chunksRetrieved: chunks.length,
         autoInstalled: rawResult.autoInstalled,
         npmVersion: rawResult.npmVersion
+    }
+
+    // A failed child yields NO answer. The caller (phaseAutoAnswer) gates on `answer` being
+    // non-empty, so an empty one keeps a dead child's output out of the spec entirely;
+    // `failure` carries the reason for anyone who wants to report it.
+    if (!extraction.ok) return {answer: '', failure: extraction.failure, ...base}
+
+    return {
+        answer: extraction.answer,
+        excerpt: extraction.excerpt,
+        excerptVerified: extraction.excerptVerified,
+        excerptCheck: extraction.excerptCheck,
+        ...base
     }
 }
 

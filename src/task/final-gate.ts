@@ -1625,6 +1625,158 @@ export function rerunDebtVerifyCommand(cwd: string, command: string): VerifyReru
 }
 
 /**
+ * Where in the gate a closure scan runs. The two stages are NOT interchangeable
+ * and neither is a scheduling preference:
+ *
+ *   - `pre-discovery` runs before the zero-discovery early return, so a project
+ *     with no runnable command at all still FAILS the scan instead of returning
+ *     UNOBSERVED. A static check needs no runner; that is the whole point of
+ *     deciding it in exactly the environment where every dynamic probe went blind.
+ *   - `post-boot` runs after the dynamic sections, which is where these scans'
+ *     failures have always landed relative to command/launch/boot failures.
+ *     Execution order is the aggregate's tiebreak within a rank, so moving a row
+ *     between stages MOVES it in the user-visible failure list.
+ */
+type ClosureScanStage = 'pre-discovery' | 'post-boot'
+
+/** Everything a closure scan may look at. Static and synchronous by construction:
+ *  a check that had to spawn something would belong in the dynamic sections
+ *  above, not here — these run on trees where nothing is runnable. */
+interface ClosureScanInput {
+    cwd: string
+    planText?: string
+}
+
+/**
+ * One run-level closure scan: "the shipped tree references/requires something it
+ * does not contain". Each row owns its scan, its formatting, its rank and its
+ * position; the driver owns the fault isolation.
+ */
+interface ClosureScan {
+    /** Stable identity — how the driver and its tests address a row. */
+    id: string
+    stage: ClosureScanStage
+    /**
+     * Rank in the aggregated failure list. All three rows are 0 because all three
+     * say some form of "the app cannot be started / cannot serve what it
+     * references / cannot be configured at all", which is the same load-bearing
+     * class as boot/render. It is a per-row FIELD rather than a shared constant
+     * so that a future scan whose finding is NOT of that class can say so in the
+     * table instead of by getting a hand-typed argument right at a call site.
+     */
+    rank: number
+    /**
+     * Scan and format in one pass, yielding one ready-to-emit failure text per
+     * finding.
+     *
+     * A GENERATOR rather than a function returning an array, for two reasons.
+     * First, the driver's try/catch wraps the ITERATION, so a scan that produces
+     * two findings and then faults still emits those two — precisely what the
+     * three hand-written `for (… ) fail(…)` loops inside try blocks did. Second,
+     * the three scans do not share a result shape (one nullable finding; a list;
+     * a list plus the template set its formatter also needs), and folding scan
+     * and format together lets each row keep its own arity instead of forcing a
+     * lowest-common-denominator result type on all of them.
+     */
+    run: (input: ClosureScanInput) => Iterable<string>
+}
+
+/**
+ * The run-level closure scans, in emission order within their stage.
+ *
+ * ONLY checks of this shape belong here. Four other checks in this gate are
+ * deliberately NOT rows: repo-health returns {ok, reason} and formats inline;
+ * the launch-contract diff branches on manifest kind and can emit a NOTE instead
+ * of a failure; the launch config-gap produces neither a failure nor a note but
+ * UN-COUNTS a dynamic observation; and the boot check is an async, stateful,
+ * port-binding exercise. Squeezing any of those in would mean a row type with
+ * more escape hatches than content.
+ */
+const CLOSURE_SCANS: ClosureScan[] = [
+    {
+        // Serve-entry closure (mx5 run 18, nexttask 2B): the tree builds a server
+        // app, expects to serve (SPA fallback / static read / a design clause), and
+        // NOTHING anywhere starts a listener — `src/server/index.ts` ended at
+        // `export {app}`, so the product could not be started at all while every
+        // dynamic probe went blind on a docker-less box. Static, deterministic,
+        // milliseconds, and — unlike the boot check — decidable in exactly the
+        // environment where the boot skipped. Hence `pre-discovery`: a project with
+        // no runnable command at all must still fail this, not report UNOBSERVED.
+        id: 'serve-entry',
+        stage: 'pre-discovery',
+        rank: 0,
+        *run({cwd, planText}) {
+            const found = findMissingServeEntry(cwd, planText)
+            if (found) yield serveEntryGateFailureText(found)
+        }
+    },
+    {
+        // Artifact-production closure (mx5 run 13, PROMPT 2): a runtime file
+        // reference with NO producer anywhere ships silently — the server read
+        // `Bun.file('dist/index.html')` while the build emitted only app.css +
+        // main.js, so every non-API GET 404'd behind 32/32 green checkoffs.
+        // Deterministic scan of the shipped tree (literal refs only, positive
+        // producer evidence required — see artifact-closure.ts); each dangle names
+        // referencer + missing path.
+        id: 'dangling-artifact',
+        stage: 'post-boot',
+        rank: 0,
+        *run({cwd}) {
+            for (const d of findDanglingArtifacts(cwd)) yield danglingGateFailureText(d)
+        }
+    },
+    {
+        // Env-template closure (mx5 run 19, nexttask 10): a shipped source file
+        // requires an env var the shipped template never mentions. `seed.ts` read
+        // `process.env.ADMIN_PHONE`/`ADMIN_PASSWORD`, `.env.example` declared
+        // neither, `bun run seed` exited 1, and the autofix "fixed" it by writing
+        // the GITIGNORED `.env` — so the committed tree still cannot seed and
+        // nothing at run end said why. Same shape and rank as the dangling-artifact
+        // scan above: naming the ARTIFACT that is wrong, statically, instead of only
+        // the command that failed. The formatter needs the template set as well as
+        // the finding, which is why scan and format are folded into one row.
+        // Inert on any tree with no tracked template (ENOENT = pass).
+        id: 'env-template',
+        stage: 'post-boot',
+        rank: 0,
+        *run({cwd}) {
+            const env = findMissingEnvDeclarations(cwd)
+            for (const m of env.missing) yield envGateFailureText(m, env.templates)
+        }
+    }
+]
+
+/**
+ * Run every closure scan belonging to `stage`, in table order, feeding each
+ * finding to `fail` at the row's own rank.
+ *
+ * FAULT ISOLATION IS PER ROW, not per stage: each row gets its own try/catch, so
+ * a scanner that throws contributes nothing and every LATER row still runs. One
+ * shared try would silently turn a fault in the first scan into blanket silence
+ * from the rest — the gate would keep working and keep missing defects it can
+ * decide. `scans` is injectable so that property can be tested with a row built
+ * to throw, without mocking the real scanners.
+ */
+function runClosureScans(
+    stage: ClosureScanStage,
+    input: ClosureScanInput,
+    fail: (text: string, rank: number) => void,
+    scans: readonly ClosureScan[] = CLOSURE_SCANS
+): void {
+    for (const scan of scans) {
+        if (scan.stage !== stage) continue
+        try {
+            for (const text of scan.run(input)) fail(text, scan.rank)
+        } catch {
+            // best-effort scan — a scanner fault must never break the gate
+        }
+    }
+}
+
+export {CLOSURE_SCANS, runClosureScans}
+export type {ClosureScan, ClosureScanInput, ClosureScanStage}
+
+/**
  * Run the final gate: static analysis first, then the lockfile consistency
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
@@ -1694,21 +1846,9 @@ export async function runFinalIntegrationGate(
             }
         }
     }
-    // Serve-entry closure (mx5 run 18, nexttask 2B): the tree builds a server app,
-    // expects to serve (SPA fallback / static read / a design clause), and NOTHING
-    // anywhere starts a listener — `src/server/index.ts` ended at `export {app}`, so
-    // the product could not be started at all while every dynamic probe went blind on
-    // a docker-less box. Static, deterministic, milliseconds, and — unlike the boot
-    // check — decidable in exactly the environment where the boot skipped. Rank 0:
-    // "the app cannot be started" is the same load-bearing class as boot/render.
-    // Placed BEFORE the zero-discovery early return on purpose: a project with no
-    // runnable command at all must still fail this, not report UNOBSERVED.
-    try {
-        const noServeEntry = findMissingServeEntry(cwd, planText)
-        if (noServeEntry) fail(serveEntryGateFailureText(noServeEntry), 0)
-    } catch {
-        // best-effort scan — a scanner fault must never break the gate
-    }
+    // Run-level closure scans that must be decided BEFORE the zero-discovery early
+    // return below — a static check needs no runner (CLOSURE_SCANS: 'pre-discovery').
+    runClosureScans('pre-discovery', {cwd, planText}, fail)
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
@@ -1774,7 +1914,8 @@ export async function runFinalIntegrationGate(
     const warnings: string[] = []
     /** UNOBSERVED notes for launch scripts reclassified as CONFIG GAPS (run 20).
      *  They ride in `unobserved`, not `warnings`, so the caller's existing
-     *  recordFinalGateUnobservedDebt writes the debt — never a PASS. */
+     *  `recordDebt(cwd, id, fin.unobserved, 'final-gate')` writes the debt —
+     *  never a PASS. */
     const configGapNotes: string[] = []
     if (declared.length > 0) {
         const covered = cmds.flatMap(([bin, args]) =>
@@ -1967,33 +2108,11 @@ export async function runFinalIntegrationGate(
         runnerResolvable: b => resolveRunner(b).ok
     })
     if (gap) fail(gap, 0)
-    // Artifact-production closure (mx5 run 13, PROMPT 2): a runtime file
-    // reference with NO producer anywhere ships silently — the server read
-    // `Bun.file('dist/index.html')` while the build emitted only app.css +
-    // main.js, so every non-API GET 404'd behind 32/32 green checkoffs.
-    // Deterministic scan of the shipped tree (literal refs only, positive
-    // producer evidence required — see artifact-closure.ts); each dangle is a
-    // ranked failure naming referencer + missing path. Rank 0: "the app cannot
-    // serve what it references" is the same load-bearing class as boot/render.
-    try {
-        for (const d of findDanglingArtifacts(cwd)) fail(danglingGateFailureText(d), 0)
-    } catch {
-        // best-effort scan — a scanner fault must never break the gate
-    }
-    // Env-template closure (mx5 run 19, nexttask 10): a shipped source file
-    // requires an env var the shipped template never mentions. `seed.ts` read
-    // `process.env.ADMIN_PHONE`/`ADMIN_PASSWORD`, `.env.example` declared neither,
-    // `bun run seed` exited 1, and the autofix "fixed" it by writing the GITIGNORED
-    // `.env` — so the committed tree still cannot seed and nothing at run end said
-    // why. Same shape and rank as the dangling-artifact scan one layer up: naming
-    // the ARTIFACT that is wrong, statically, instead of only the command that
-    // failed. Inert on any tree with no tracked template (ENOENT = pass).
-    try {
-        const env = findMissingEnvDeclarations(cwd)
-        for (const m of env.missing) fail(envGateFailureText(m, env.templates), 0)
-    } catch {
-        // best-effort scan — a scanner fault must never break the gate
-    }
+    // The remaining run-level closure scans — "the shipped tree references or
+    // requires something it does not contain" — after every dynamic section, so
+    // their failures keep their historical place in the aggregate (CLOSURE_SCANS:
+    // 'post-boot').
+    runClosureScans('post-boot', {cwd, planText}, fail)
     if (failures.length > 0) {
         // Stable sort: boot/render (rank 0) leads, everything else keeps execution
         // order. One failure keeps the exact single-failure wording; several become

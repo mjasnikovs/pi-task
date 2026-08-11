@@ -42,7 +42,8 @@ import {readFileSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {runChildDefault, type SpawnFn} from '../shared/child-process.js'
+import type {SpawnFn} from '../shared/child-process.js'
+import {makeGit, type GitRunner} from '../shared/git-runner.js'
 import {isRegenerableArtifact} from './regenerable-artifacts.js'
 
 /** Keep the gate machinery's own artifacts out of the snapshot and the restore. */
@@ -145,29 +146,6 @@ function isAlwaysRegenerable(relPath: string, ctCacheDirs: readonly string[]): b
     const p = relPath.replace(/\\/g, '/')
     if (ALWAYS_REGENERABLE_PATTERNS.some(re => re.test(p))) return true
     return ctCacheDirs.some(d => p === d || p.startsWith(d + '/'))
-}
-
-interface GitRunner {
-    (
-        args: string[],
-        env?: Record<string, string>
-    ): Promise<{
-        stdout: string
-        exitCode: number
-    }>
-}
-
-function makeGit(cwd: string, signal?: AbortSignal, spawnFn?: SpawnFn): GitRunner {
-    return async (args, env) => {
-        const r = await runChildDefault(
-            {command: 'git', args, ...(env ? {env: {...process.env, ...env}} : {})},
-            cwd,
-            signal,
-            {mode: 'text'},
-            spawnFn
-        )
-        return {stdout: r.stdout, exitCode: r.exitCode}
-    }
 }
 
 /**
