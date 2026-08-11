@@ -59,7 +59,7 @@ describe('parseAcceptDebts', () => {
 describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
     test('appends a durable record under .pi-tasks/', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'TASK_0012', 'modified src/main.tsx which the spec froze')
+        await recordDebt(cwd, 'TASK_0012', 'modified src/main.tsx which the spec froze', 'accepted')
         expect(fs.existsSync(acceptDebtFile(cwd))).toBe(true)
         expect(await readAcceptDebts(cwd)).toEqual([
             {taskId: 'TASK_0012', reason: 'modified src/main.tsx which the spec froze'}
@@ -68,7 +68,7 @@ describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
 
     test('flattens newlines/tabs and caps the reason length', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', `line one\n\tline two   with    spaces`)
+        await recordDebt(cwd, 'T1', `line one\n\tline two   with    spaces`, 'accepted')
         const [debt] = await readAcceptDebts(cwd)
         expect(debt.reason).toBe('line one line two with spaces')
         // A tab in the stored reason would corrupt the id/reason split — none survives.
@@ -79,16 +79,16 @@ describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
 
     test('caps very long reasons to 300 chars', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', 'x'.repeat(500))
+        await recordDebt(cwd, 'T1', 'x'.repeat(500), 'accepted')
         expect((await readAcceptDebts(cwd))[0].reason.length).toBe(300)
     })
 
     test('dedups the same task+reason but keeps distinct ones', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', 'same reason')
-        await recordDebt(cwd, 'T1', 'same reason')
-        await recordDebt(cwd, 'T1', 'other reason')
-        await recordDebt(cwd, 'T2', 'same reason')
+        await recordDebt(cwd, 'T1', 'same reason', 'accepted')
+        await recordDebt(cwd, 'T1', 'same reason', 'accepted')
+        await recordDebt(cwd, 'T1', 'other reason', 'accepted')
+        await recordDebt(cwd, 'T2', 'same reason', 'accepted')
         expect(await readAcceptDebts(cwd)).toEqual([
             {taskId: 'T1', reason: 'same reason'},
             {taskId: 'T1', reason: 'other reason'},
@@ -98,7 +98,7 @@ describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
 
     test('an empty reason records nothing', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', '   \n  ')
+        await recordDebt(cwd, 'T1', '   \n  ', 'accepted')
         expect(await readAcceptDebts(cwd)).toEqual([])
     })
 
@@ -110,15 +110,15 @@ describe("recordDebt (origin 'accepted') / readAcceptDebts", () => {
 describe('writeAcceptDebts (prune)', () => {
     test('overwrites with exactly the given records', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', 'a')
-        await recordDebt(cwd, 'T2', 'b')
+        await recordDebt(cwd, 'T1', 'a', 'accepted')
+        await recordDebt(cwd, 'T2', 'b', 'accepted')
         await writeAcceptDebts(cwd, [{taskId: 'T2', reason: 'b'}])
         expect(await readAcceptDebts(cwd)).toEqual([{taskId: 'T2', reason: 'b'}])
     })
 
     test('empty list clears the ledger', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'T1', 'a')
+        await recordDebt(cwd, 'T1', 'a', 'accepted')
         await writeAcceptDebts(cwd, [])
         expect(await readAcceptDebts(cwd)).toEqual([])
     })
@@ -209,7 +209,7 @@ describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
 
     test('an accepted debt and an enforce-revert debt with the same id/reason coexist', async () => {
         const cwd = makeCwd()
-        await recordDebt(cwd, 'TASK_0004', 'the server cannot start')
+        await recordDebt(cwd, 'TASK_0004', 'the server cannot start', 'accepted')
         await recordDebt(cwd, 'TASK_0004', 'the server cannot start', 'enforce-revert')
         const debts = await readAcceptDebts(cwd)
         expect(debts).toHaveLength(2)
@@ -226,6 +226,42 @@ describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
         const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved).toHaveLength(0)
         expect(open).toHaveLength(1)
+    })
+})
+
+// The eight per-origin recorders (recordFinalGateUnobservedDebt, recordAcceptDebt, …)
+// carried their class in the NAME, so collapsing them into one recordDebt moved that
+// class into a parameter — and the parameter defaulted to 'accepted'. One migrated
+// call in scripts/ignored-writes-ab.ts lost its argument and the default absorbed it
+// silently: a run-level 'final-gate' demotion was written to the ledger as a human
+// 'accepted'. The two classes assert opposite things — 'accepted' says a person
+// weighed the failing artifact and shipped it anyway; 'final-gate' says the gate gave
+// up after two tree-changing fix attempts failed identically. describeDebt prints a
+// different one-liner for each and the final gate re-checks BY class, so the swap
+// rewrites the audit trail of what actually happened.
+//
+// `origin` is now a required parameter — the compiler is the real guard, and these
+// tests pin the behaviour it protects.
+describe("recordDebt origin 'final-gate' (the class a default must never absorb)", () => {
+    test('a final-gate demotion reads back as final-gate, not accepted', async () => {
+        const cwd = makeCwd()
+        await recordDebt(cwd, 'AB', 'gate PASS depended on an ignored path: .env', 'final-gate')
+        const [debt] = await readAcceptDebts(cwd)
+        expect(debt.origin).toBe('final-gate')
+        // The distinction is not internal: the two classes surface as different text.
+        expect(describeDebt(debt)).not.toBe(describeDebt({...debt, origin: 'accepted'}))
+    })
+
+    test('the same id/reason under both origins stays two rows, never deduped into one', async () => {
+        const cwd = makeCwd()
+        const reason = 'gate PASS depended on an ignored path: .env'
+        await recordDebt(cwd, 'AB', reason, 'final-gate')
+        await recordDebt(cwd, 'AB', reason, 'accepted')
+        // 'accepted' serialises as the legacy 2-field row, so it reads back undefined.
+        expect((await readAcceptDebts(cwd)).map(d => d.origin ?? 'accepted').sort()).toEqual([
+            'accepted',
+            'final-gate'
+        ])
     })
 })
 

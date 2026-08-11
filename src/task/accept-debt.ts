@@ -283,14 +283,21 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
  * as the 'accepted' class — that one asserts a human weighed the failing artifact.
  *
  * Best-effort by construction (appendDebt swallows its own faults): the ledger is an
- * auditing aid and must never break the gate sequence that calls it. `origin`
- * defaults to 'accepted', which is the legacy 2-field on-disk shape.
+ * auditing aid and must never break the gate sequence that calls it.
+ *
+ * `origin` is REQUIRED and deliberately has no default. It used to default to
+ * 'accepted' (the legacy 2-field on-disk shape), and that default silently absorbed
+ * a dropped argument: the eight-recorder collapse migrated one call in
+ * scripts/ignored-writes-ab.ts without its origin, so a run-level 'final-gate'
+ * demotion was stamped as a human 'accepted'. The wrappers each carried their class
+ * in the NAME, so no migration of them could lose it; a defaulted parameter can.
+ * Making it explicit turns that whole class of slip into a compile error.
  */
 export async function recordDebt(
     cwd: string,
     taskId: string,
     reason: string,
-    origin: DebtOrigin = 'accepted'
+    origin: DebtOrigin
 ): Promise<void> {
     await appendDebt(cwd, {taskId: taskId.trim(), reason: normaliseReason(reason), origin})
 }

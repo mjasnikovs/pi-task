@@ -257,7 +257,8 @@ async function runArm(entry: Entry, arm: Arm, degrade = false): Promise<Metric> 
             await recordDebt(
                 dir,
                 'AB',
-                ignoredWriteDebtReason(fix.ignoredWrites, fix.ignoredDependent)
+                ignoredWriteDebtReason(fix.ignoredWrites, fix.ignoredDependent),
+                'final-gate'
             )
         }
     }

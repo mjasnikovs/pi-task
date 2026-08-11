@@ -1627,7 +1627,7 @@ describe('CLOSURE_SCANS — the run-level closure scan table and its driver', ()
 describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TASK_0012)', () => {
     test('a non-static (frozen-path) debt is SURFACED on a PASS and kept in the ledger', async () => {
         const dir = makeDir() // no manifest → statics + integration trivially pass
-        await recordDebt(dir, 'TASK_0012', 'modified frozen path src/main.tsx')
+        await recordDebt(dir, 'TASK_0012', 'modified frozen path src/main.tsx', 'accepted')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([
@@ -1644,7 +1644,12 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('a static-class debt is RESOLVED and PRUNED when the gate statics now pass', async () => {
         const dir = makeDir({scripts: {lint: 'exit 0'}}) // static check passes
-        await recordDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        await recordDebt(
+            dir,
+            'TASK_0009',
+            'repo health: bun run lint exited 1 — 3 errors',
+            'accepted'
+        )
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([])
@@ -1655,7 +1660,12 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('a static-class debt stays OPEN and surfaces when the gate statics still fail', async () => {
         const dir = makeDir({scripts: {lint: 'exit 1'}}) // static check fails
-        await recordDebt(dir, 'TASK_0009', 'repo health: bun run lint exited 1 — 3 errors')
+        await recordDebt(
+            dir,
+            'TASK_0009',
+            'repo health: bun run lint exited 1 — 3 errors',
+            'accepted'
+        )
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(false)
         expect(out.reason).toContain('static checks:')
@@ -1667,8 +1677,8 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
 
     test('mixed: static debt pruned, behavioral debt surfaced (only the provable one closes)', async () => {
         const dir = makeDir({scripts: {lint: 'exit 0'}})
-        await recordDebt(dir, 'T9', 'repo health: lint exited 1')
-        await recordDebt(dir, 'T12', 'upload endpoint returned HTML not JSON')
+        await recordDebt(dir, 'T9', 'repo health: lint exited 1', 'accepted')
+        await recordDebt(dir, 'T12', 'upload endpoint returned HTML not JSON', 'accepted')
         const out = await runFinalIntegrationGate(dir)
         expect(out.ok).toBe(true)
         expect(out.openDebts).toEqual([
@@ -1734,7 +1744,8 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
             dir,
             'TASK_0009',
             'Verification check #7 fails: src/client/pages/admin.tsx exists (introduced by '
-                + 'prior TASK_0008, not this task).'
+                + 'prior TASK_0008, not this task).',
+            'accepted'
         )
         const out = await runFinalIntegrationGate(dir)
         expect(out.openDebts).toHaveLength(1)
