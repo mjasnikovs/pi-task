@@ -78,16 +78,25 @@ describe('makeGit', () => {
     })
 
     test('env entries MERGE over process.env rather than replacing it', async () => {
-        const calls: SpawnCall[] = []
-        const git = makeGit('/work/repo', undefined, recordingSpawn(calls))
-        await git(['write-tree'], {GIT_INDEX_FILE: '/tmp/throwaway-index'})
+        // A sentinel we own, rather than PATH: on Windows `process.env` is
+        // case-insensitive, so it answers to `PATH` while spreading it yields a
+        // key cased `Path`. Asserting on PATH would test that quirk, not the merge.
+        const sentinel = 'PI_TASK_GIT_RUNNER_MERGE_PROBE'
+        process.env[sentinel] = 'inherited'
+        try {
+            const calls: SpawnCall[] = []
+            const git = makeGit('/work/repo', undefined, recordingSpawn(calls))
+            await git(['write-tree'], {GIT_INDEX_FILE: '/tmp/throwaway-index'})
 
-        const env = calls[0].env
-        expect(env).toBeDefined()
-        expect(env!.GIT_INDEX_FILE).toBe('/tmp/throwaway-index')
-        // A representative inherited var survives the merge — substituting the env
-        // would strip PATH and git would not resolve at all.
-        expect(env!.PATH).toBe(process.env.PATH)
+            const env = calls[0].env
+            expect(env).toBeDefined()
+            expect(env!.GIT_INDEX_FILE).toBe('/tmp/throwaway-index')
+            // The inherited entry survives the merge — substituting the env
+            // wholesale would strip PATH and git would not resolve at all.
+            expect(env![sentinel]).toBe('inherited')
+        } finally {
+            delete process.env[sentinel]
+        }
     })
 
     test('each call is independent — one runner serves many invocations', async () => {
