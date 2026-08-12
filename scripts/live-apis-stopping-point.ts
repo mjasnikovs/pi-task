@@ -101,6 +101,7 @@ import {
     type Channel,
     type GroundingCorpus
 } from './apis-trajectory.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS_PER_FIXTURE = Number(process.argv[2] ?? '8')
 /**
@@ -140,14 +141,7 @@ const pct = (a: number, b: number): string => (b === 0 ? '  n/a' : `${((100 * a)
 // ─── running ─────────────────────────────────────────────────────────────────
 
 async function runReps(): Promise<Rep[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error(
-            'FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.'
-        )
-        process.exit(1)
-    }
+    await requirePreconditions('live-apis-stopping-point', {model: {}, piBin: true, cacheOff: true})
     // ONE observation-only edit, asserted exactly-once by buildPatchedDist. Without the
     // assertion a silently-missed anchor would leave every rep with an empty prompt and every
     // symbol scored ungrounded — a fabricated finding, which is worse than no finding.
@@ -644,20 +638,6 @@ function main(reps: Rep[]): void {
 if (process.env.STOP_DIR) {
     main(loadReps())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-                + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
-    if (process.env[RESEARCH_RUN_ID_ENV]) {
-        console.error(
-            `REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — every rep after the first would `
-                + 'replay the first rep answers from the research cache.'
-        )
-        process.exit(1)
-    }
     runReps()
         .then(main)
         .catch(e => {

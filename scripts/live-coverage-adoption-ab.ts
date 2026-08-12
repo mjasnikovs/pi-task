@@ -65,6 +65,7 @@ import {
     type CoveragePlan
 } from '../src/task/coverage-loop.js'
 import {reportAb} from './ab-verdict.js'
+import {fisherTwoSided} from './ab-stats.js'
 
 const MAX_COVERAGE_ROUNDS = 2
 /**
@@ -297,25 +298,7 @@ async function runBothArms(
 }
 
 /** Two-sided Fisher exact for the 2x2 hit table, the run's decision statistic. */
-function fisherTwoSided(a: number, b: number, cc: number, d: number): number {
-    const lf: number[] = [0]
-    for (let i = 1; i <= a + b + cc + d; i++) lf.push(lf[i - 1] + Math.log(i))
-    const n = a + b + cc + d
-    const p = (x: number): number =>
-        Math.exp(
-            lf[a + b] + lf[cc + d] + lf[a + cc] + lf[b + d]
-                - lf[n] - lf[x] - lf[a + b - x] - lf[a + cc - x] - lf[d - a + x]
-        )
-    const obs = p(a)
-    let total = 0
-    const lo = Math.max(0, a - d)
-    const hi = Math.min(a + b, a + cc)
-    for (let x = lo; x <= hi; x++) {
-        const px = p(x)
-        if (px <= obs * (1 + 1e-9)) total += px
-    }
-    return Math.min(1, total)
-}
+
 
 async function main() {
     const reps = parseInt(process.argv[2] ?? '10', 10)

@@ -31,27 +31,16 @@ interface Run {
     hits: number
 }
 
-function lnFact(n: number): number {
-    let s = 0
-    for (let i = 2; i <= n; i++) s += Math.log(i)
-    return s
-}
-function lnC(n: number, k: number): number {
-    if (k < 0 || k > n) return -Infinity
-    return lnFact(n) - lnFact(k) - lnFact(n - k)
-}
-/** One-tailed Fisher: P(baseline hits >= observed | margins fixed) — treatment no better by chance. */
-export function fisherOneTail(a: number, b: number, c: number, d: number): number {
-    const r1 = a + b
-    const r2 = c + d
-    const n = r1 + r2
-    const k = a + c
-    let p = 0
-    for (let x = a; x <= Math.min(r1, k); x++) {
-        p += Math.exp(lnC(r1, x) + lnC(r2, k - x) - lnC(n, k))
-    }
-    return p
-}
+/**
+ * One-tailed Fisher: P(baseline hits >= observed | margins fixed) — treatment no
+ * better by chance.
+ *
+ * Re-exported under its original name so the six harnesses importing it here keep
+ * working. The implementation moved to `ab-stats.ts`, where it is tested against
+ * exact BigInt references; this file had a private copy, like six others did.
+ */
+export {fisherOneSided as fisherOneTail} from './ab-stats.js'
+import {fisherOneSided} from './ab-stats.js'
 
 export function summarise(runs: Run[]): {
     baseHits: number
@@ -79,8 +68,8 @@ export function summarise(runs: Run[]): {
         treatHits,
         treatReps,
         treatProd,
-        pAll: fisherOneTail(baseHits, baseReps - baseHits, treatHits, treatReps - treatHits),
-        pProductive: fisherOneTail(
+        pAll: fisherOneSided(baseHits, baseReps - baseHits, treatHits, treatReps - treatHits),
+        pProductive: fisherOneSided(
             baseHits,
             baseProd - baseHits,
             treatHits,

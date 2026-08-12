@@ -67,6 +67,7 @@ import {findFrozenPathConflicts, frozenConflictProbeText} from '../src/task/froz
 import {findSynthesizedApis} from '../src/task/api-synthesis.js'
 import {reportArm} from './ab-verdict.js'
 import {findGrepOnlyVerify} from '../src/task/verify-quality.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const ROOT = '/home/edgars/tmp/api-synthesis-ab'
 const TRIAL_TIMEOUT_MS = 30 * 60_000
@@ -473,10 +474,7 @@ async function runVerifyTrial(mode: Mode, n: number, tally: TrialTally): Promise
 }
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN) {
-        console.error('FATAL: PI_BIN is not set — refusing to run (self-spawn fork-bomb guard).')
-        process.exit(1)
-    }
+    await requirePreconditions('live-api-synthesis-ab', {model: {}, piBin: true, cacheOff: true})
     const mode = process.argv[2] as Mode
     const modes: Mode[] = [
         'answer-baseline',
@@ -489,12 +487,6 @@ async function main(): Promise<void> {
             'usage: PI_BIN=$(command -v pi) bun run scripts/live-api-synthesis-ab.ts '
                 + '<answer-baseline|answer-treatment|verify-baseline|verify-treatment> [TRIALS]'
         )
-        process.exit(1)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
         process.exit(1)
     }
     const trials = parseInt(process.argv[3] ?? '5', 10)

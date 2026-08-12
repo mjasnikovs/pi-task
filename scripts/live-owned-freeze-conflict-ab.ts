@@ -84,6 +84,8 @@ import {
 } from '../src/task/owned-freeze-conflict.js'
 import {classifyVerifyCommands} from '../src/task/verify-quality.js'
 import {parseOwnedRequirements, ownedForTitle} from '../src/task/requirements.js'
+import {requirePreconditions} from './ab-preflight.js'
+import {readSection} from './ab-corpus.js'
 
 const MX5 = process.env.MX5_DIR ?? path.join(os.homedir(), 'hub', 'mx5')
 const ROOT = path.join(os.homedir(), 'tmp', 'owned-freeze-ab')
@@ -114,13 +116,16 @@ function git(args: string[], cwd: string): {stdout: string; exitCode: number} {
     return {stdout: r.stdout ?? '', exitCode: r.status ?? 1}
 }
 
-function section(md: string, name: string): string {
-    const re = new RegExp(String.raw`^##\s+${name}\s*$`, 'im')
-    const m = re.exec(md)
-    if (!m) throw new Error(`section "${name}" not found`)
-    const rest = md.slice(m.index + m[0].length)
-    const next = /^##\s+/m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+function section(doc: string, name: string): string {
+    const s = readSection(doc, name)
+    if (s === undefined) throw new Error(`section "${name}" not found`)
+    return s
 }
 
 // ─── The recorded incident inputs ────────────────────────────────────────────
@@ -360,10 +365,7 @@ async function main(): Promise<void> {
         compare()
         return
     }
-    if (!process.env.PI_BIN) {
-        console.error('FATAL: PI_BIN is not set — refusing to run (self-spawn fork-bomb guard).')
-        process.exit(1)
-    }
+    await requirePreconditions('live-owned-freeze-conflict-ab', {model: {}, piBin: true, cacheOff: true})
     const mode = process.argv[2] as Mode
     if (!MODES.includes(mode)) {
         console.error(
@@ -389,12 +391,6 @@ async function main(): Promise<void> {
     if (OWNED.length === 0) {
         console.error('ABSTAIN: the run-18 owned ledger has no entry for this task title.')
         process.exit(2)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
     }
 
     const trials = parseInt(process.argv[3] ?? '20', 10)

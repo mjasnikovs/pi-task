@@ -96,13 +96,16 @@ const PROHIBITION =
 const NOT_NEEDED =
     /\bno\s+external\b|\bnot\s+needed\b|\bnot\s+required\b|\bno\s+need\b|\bunnecessary\b|\bnot\s+a\s+dependency\b|\bdoes\s+not\s+require\b|\bbuilt-?in\b|\bdoes\s+not\s+exist\b|\bnot\s+an?\s+npm\s+package\b|\bno\s+.{0,40}?\s+package\s+exists\b/i
 
-function section(md: string, name: string): string {
-    const re = new RegExp(`^## ${name}\\s*$`, 'm')
-    const m = re.exec(md)
-    if (!m) throw new Error(`section "${name}" not found`)
-    const rest = md.slice(m.index + m[0].length)
-    const next = /^## /m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+function section(doc: string, name: string): string {
+    const s = readSection(doc, name)
+    if (s === undefined) throw new Error(`section "${name}" not found`)
+    return s
 }
 
 /** The CONSTRAINTS → end-of-spec span: CONSTRAINTS, ACCEPTANCE and VERIFY. */
@@ -170,42 +173,18 @@ export function forbidsMandatedApi(spec: string): string[] {
 }
 
 /** Two-sided Fisher exact on the 2x2 [hits, misses] x [baseline, treatment]. */
-export function fisherExact(a: number, b: number, c: number, d: number): number {
-    const logFact: number[] = [0]
-    const n = a + b + c + d
-    for (let i = 1; i <= n; i++) logFact[i] = logFact[i - 1] + Math.log(i)
-    const lp = (x: number, y: number, z: number, w: number) =>
-        logFact[x + y]
-        + logFact[z + w]
-        + logFact[x + z]
-        + logFact[y + w]
-        - logFact[n]
-        - logFact[x]
-        - logFact[y]
-        - logFact[z]
-        - logFact[w]
-    const observed = lp(a, b, c, d)
-    let p = 0
-    const r1 = a + b
-    const c1 = a + c
-    for (let x = Math.max(0, c1 - (c + d)); x <= Math.min(r1, c1); x++) {
-        const cur = lp(x, r1 - x, c1 - x, n - r1 - c1 + x)
-        if (cur <= observed + 1e-9) p += Math.exp(cur)
-    }
-    return Math.min(1, p)
-}
+/**
+ * Two-sided Fisher exact. Re-exported under its original name so
+ * `refuted-constraint-rescore.ts` keeps working; the implementation moved to
+ * `ab-stats.ts`, where it is tested against exact BigInt references.
+ */
+export {fisherTwoSided as fisherExact} from './ab-stats.js'
+import {fisherTwoSided} from './ab-stats.js'
+import {requirePreconditions} from './ab-preflight.js'
+import {readSection} from './ab-corpus.js'
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error('REFUSING TO RUN: PI_BIN is unset (fork-bomb guard).')
-        process.exit(1)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('refuted-constraint-delivered-ab', {model: {}, piBin: true, cacheOff: true})
 
     const md = fs.readFileSync(path.join(MX5, '.pi-tasks', TASK_FILE), 'utf8')
     const refined = section(md, 'refined prompt')
@@ -329,7 +308,7 @@ async function main(): Promise<void> {
 
     const b = counts.get('baseline')!
     const t = counts.get('treatment')!
-    const p = fisherExact(b.either, REPS - b.either, t.either, REPS - t.either)
+    const p = fisherTwoSided(b.either, REPS - b.either, t.either, REPS - t.either)
 
     console.log(`\nPROPORTIONS (both reported whatever the verdict)`)
     console.log(`  REQUIRES-UNNEEDED-DEP   baseline ${b.dep}/${REPS}   treatment ${t.dep}/${REPS}`)

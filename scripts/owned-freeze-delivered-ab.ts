@@ -97,13 +97,16 @@ function git(args: string[], cwd: string): {stdout: string; exitCode: number} {
     return {stdout: r.stdout ?? '', exitCode: r.status ?? 1}
 }
 
-function section(md: string, name: string): string {
-    const re = new RegExp(String.raw`^##\s+${name}\s*$`, 'im')
-    const m = re.exec(md)
-    if (!m) throw new Error(`section "${name}" not found`)
-    const rest = md.slice(m.index + m[0].length)
-    const next = /^##\s+/m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+function section(doc: string, name: string): string {
+    const s = readSection(doc, name)
+    if (s === undefined) throw new Error(`section "${name}" not found`)
+    return s
 }
 
 const taskDoc = (id: string): string =>
@@ -335,32 +338,22 @@ function readArm(mode: Mode): Row[] {
         .filter(r => !r.error)
 }
 
-/** One-sided Fisher exact: P(treatment >= observed | same rate). */
-function fisherOneSided(a: number, b: number, c: number, d: number): number {
-    const lg = (n: number): number => {
-        let s = 0
-        for (let i = 2; i <= n; i++) s += Math.log(i)
-        return s
-    }
-    const p = (x: number): number =>
-        Math.exp(
-            lg(x + b) + lg(c + d) + lg(x + c) + lg(b + d)
-                - lg(x + b + c + d) - lg(x) - lg(b) - lg(c) - lg(d)
-        )
-    // Hypergeometric tail over tables at least as extreme as (a,b,c,d).
-    const n = a + b + c + d
-    const row1 = a + b
-    const col1 = a + c
-    let tail = 0
-    for (let x = a; x <= Math.min(row1, col1); x++) {
-        const bb = row1 - x
-        const cc = col1 - x
-        const dd = n - x - bb - cc
-        if (bb < 0 || cc < 0 || dd < 0) continue
-        tail += p(x)
-    }
-    return Math.min(1, tail)
-}
+/**
+ * The one-sided Fisher exact this harness reports its p-value from.
+ *
+ * It used to be a private copy here, and it was WRONG: it let the 2×2 margins move
+ * with the summation index, making it exact only at the first term of the tail.
+ * At 15/20 vs 8/20 it returned 0.0759 where the true value is 0.0268 — opposite
+ * sides of alpha. The error was conservative, so it could only ever have produced
+ * a false REFUTED, and it did not touch this harness's recorded verdict, whose
+ * rows sit at the extremes where the two agree. See VALIDATION-DEBT.md section 0a.
+ *
+ * It now lives in `ab-stats.ts`, tested against exact BigInt references.
+ */
+export {fisherOneSided} from './ab-stats.js'
+import {fisherOneSided} from './ab-stats.js'
+import {requirePreconditions} from './ab-preflight.js'
+import {readSection} from './ab-corpus.js'
 
 function compare(): boolean {
     const b = readArm('baseline')
@@ -405,10 +398,7 @@ async function main(): Promise<void> {
     if (process.argv[2] === 'compare') {
         process.exit(compare() ? 0 : 1)
     }
-    if (!process.env.PI_BIN) {
-        console.error('FATAL: PI_BIN is not set — refusing to run (self-spawn fork-bomb guard).')
-        process.exit(1)
-    }
+    await requirePreconditions('owned-freeze-delivered-ab', {model: {}, piBin: true, cacheOff: true})
     const mode = process.argv[2] as Mode
     if (!MODES.includes(mode)) {
         console.error(
@@ -429,12 +419,6 @@ async function main(): Promise<void> {
     if (!mineTreat.some(o => o.quote.includes(TARGET_QUOTE))) {
         console.error('ABSTAIN: the treatment ledger does not give the clause to this task.')
         process.exit(2)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
     }
 
     const trials = parseInt(process.argv[3] ?? '20', 10)

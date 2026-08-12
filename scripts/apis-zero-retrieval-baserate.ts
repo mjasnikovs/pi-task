@@ -36,6 +36,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {isGroundingRetrieval} from '../src/workers/pi-worker-core.js'
 import {parseApisEntries, type Step} from './apis-trajectory.js'
+import {wilson} from './ab-stats.js'
 
 const ROOT = path.resolve(
     process.env.STOP_DIR || path.join(os.homedir(), 'tmp', 'apis-stopping-point')
@@ -52,14 +53,7 @@ interface Rep {
 }
 
 /** Wilson score interval for a binomial proportion — honest at small n and near 0. */
-function wilson(k: number, n: number, z = 1.96): [number, number] {
-    if (n === 0) return [0, 0]
-    const p = k / n
-    const d = 1 + (z * z) / n
-    const centre = (p + (z * z) / (2 * n)) / d
-    const half = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d
-    return [Math.max(0, centre - half), Math.min(1, centre + half)]
-}
+
 
 const pct = (x: number): string => `${(100 * x).toFixed(1)}%`
 

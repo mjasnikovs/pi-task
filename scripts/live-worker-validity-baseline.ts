@@ -60,27 +60,12 @@ import {registerPiWorkerDocs} from '../src/workers/pi-worker-docs.js'
 import type {SpawnFn} from '../src/shared/child-process.js'
 import {RESEARCH_RUN_ID_ENV} from '../src/workers/research-cache.js'
 import {reportArm, type Invariant} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 // ─── guards ──────────────────────────────────────────────────────────────────
 
-if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-    console.error(
-        'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke '
-            + 'this harness instead of pi — a fork bomb that has crashed this machine twice.\n'
-            + 'Run as: PI_BIN=$(command -v pi) bun run scripts/live-worker-validity-baseline.ts'
-    )
-    process.exit(1)
-}
+await requirePreconditions('live-worker-validity-baseline', {model: {}, piBin: true, cacheOff: true})
 
-// The cache must be off, or every rep after the first is a replay of the first.
-if (process.env[RESEARCH_RUN_ID_ENV]) {
-    console.error(
-        `REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set (${process.env[RESEARCH_RUN_ID_ENV]}). `
-            + 'The research cache would serve every repeat of a question from the first '
-            + 'answer, so the run would report perfect stability and measure nothing.'
-    )
-    process.exit(1)
-}
 
 const REPS = Number(process.argv[2] ?? '8')
 const LIMIT = process.argv[3] ? Number(process.argv[3]) : undefined
@@ -210,15 +195,6 @@ const pct = (a: number, b: number): string => (b === 0 ? '  n/a' : `${((100 * a)
 // ─── run ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error(
-            'FATAL: llama-server @ 127.0.0.1:8080 not reachable. '
-                + 'Start it with ~/hub/qwen/run-Q3.6-27B.sh.'
-        )
-        process.exit(1)
-    }
 
     const cwd = buildFixtureTree()
     const execute = captureDocsTool()

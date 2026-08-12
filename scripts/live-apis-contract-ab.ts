@@ -92,6 +92,7 @@ import {
 } from './apis-trajectory.js'
 import {countSemantics, isBehaviourPackageQuery, packageQueryKinds, semanticsSymbols} from './apis-semantics.js'
 import {CONTRACT_MARKER, STRIP_CONTRACT, assertContractInPrompt} from './apis-contract-surgery.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '10')
 const WHICH = process.argv[3] ?? 'all'
@@ -268,12 +269,7 @@ const PROMPT_DUMP: Surgery = {
 }
 
 async function runAll(): Promise<RepResult[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-apis-contract-ab', {model: {}, piBin: true, cacheOff: true})
     fs.mkdirSync(ROOT, {recursive: true})
     const stubSurgery = stubSearchExtension(writeStubExtension(ROOT))
     const treatmentDist = buildPatchedDist('apis-contract-treatment', [stubSurgery, PROMPT_DUMP])
@@ -609,17 +605,6 @@ function main(rows: RepResult[]): void {
 if (process.env.AB_DIR) {
     main(loadRows())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-                + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
-    if (process.env[RESEARCH_RUN_ID_ENV]) {
-        console.error(`REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — reps would replay.`)
-        process.exit(1)
-    }
     runAll()
         .then(main)
         .catch(e => {

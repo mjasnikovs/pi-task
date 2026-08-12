@@ -80,6 +80,7 @@ import {
 } from '../src/workers/typeonly-log.js'
 import {reportArm, type Invariant} from './ab-verdict.js'
 import {REFINED_27, buildPreTask27Tree} from './run15-fixture-tree.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '12')
 const ROOT = process.env.DIAG_DIR ?? path.join(os.homedir(), 'tmp', 'apis-termination-diagnostic')
@@ -183,14 +184,7 @@ function distRow(label: string, d: Record<AnswerClass, number>, n: number): stri
 }
 
 async function runReps(): Promise<Rep[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error(
-            'FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.'
-        )
-        process.exit(1)
-    }
+    await requirePreconditions('live-apis-termination-diagnostic', {model: {}, piBin: true, cacheOff: true})
     console.log(
         `live-apis-termination-diagnostic — model Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080\n`
             + `real phaseResearch, NOTHING stubbed, ${REPS} reps on the pre-TASK_0027 tree\n`
@@ -488,20 +482,6 @@ function main(reps: Rep[]): void {
 if (process.env.DIAG_DIR) {
     main(loadReps())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-                + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
-    if (process.env[RESEARCH_RUN_ID_ENV]) {
-        console.error(
-            `REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — every rep after the first would `
-                + 'replay the first rep answers from the research cache.'
-        )
-        process.exit(1)
-    }
     runReps()
         .then(main)
         .catch(e => {

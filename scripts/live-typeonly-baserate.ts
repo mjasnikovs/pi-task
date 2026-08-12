@@ -63,27 +63,13 @@ import type {SpawnFn} from '../src/shared/child-process.js'
 import {RESEARCH_RUN_ID_ENV} from '../src/workers/research-cache.js'
 import {TYPEONLY_LOG_ENV, readTypeOnlyLog} from '../src/workers/typeonly-log.js'
 import {reportArm, type Invariant} from './ab-verdict.js'
+import {wilson} from './ab-stats.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 // ─── guards ──────────────────────────────────────────────────────────────────
 
-if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-    console.error(
-        'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke '
-            + 'this harness instead of pi — a fork bomb that has crashed this machine twice.\n'
-            + 'Run as: PI_BIN=$(command -v pi) bun run scripts/live-typeonly-baserate.ts'
-    )
-    process.exit(1)
-}
+await requirePreconditions('live-typeonly-baserate', {model: {}, piBin: true, cacheOff: true})
 
-// With the research cache on, every rep after the first replays the first rep's answers and
-// this harness would report perfect stability while measuring nothing.
-if (process.env[RESEARCH_RUN_ID_ENV]) {
-    console.error(
-        `REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set (${process.env[RESEARCH_RUN_ID_ENV]}). `
-            + 'Every repeat of a question would be served from the first answer.'
-    )
-    process.exit(1)
-}
 
 const REPS = Number(process.argv[2] ?? '8')
 const LIMIT = process.argv[3] ? Number(process.argv[3]) : undefined
@@ -168,28 +154,11 @@ const pct = (a: number, b: number): string => (b === 0 ? '  n/a' : `${((100 * a)
 
 /** Wilson 95% interval — a 1-in-200 rate quoted without one invites the same overreach the
  *  static 0.7% produced. */
-function wilson(hits: number, n: number): [number, number] {
-    if (n === 0) return [0, 0]
-    const z = 1.96
-    const p = hits / n
-    const d = 1 + (z * z) / n
-    const c = p + (z * z) / (2 * n)
-    const s = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))
-    return [Math.max(0, (c - s) / d), Math.min(1, (c + s) / d)]
-}
+
 
 // ─── run ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error(
-            'FATAL: llama-server @ 127.0.0.1:8080 not reachable. '
-                + 'Start it with ~/hub/qwen/run-Q3.6-27B.sh.'
-        )
-        process.exit(1)
-    }
 
     const cwd = buildFixtureTree()
     // Second, independent channel: the tool writes here from inside itself. Cross-checked

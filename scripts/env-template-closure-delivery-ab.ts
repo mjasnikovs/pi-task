@@ -100,6 +100,7 @@ import {
 } from '../src/task/final-gate.js'
 import {findMissingEnvDeclarations, envGateFailureText} from '../src/task/env-template-closure.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
+import {fisherOneSided} from './ab-stats.js'
 
 const HUB = path.join(os.homedir(), 'hub')
 const MX5 = path.join(HUB, 'mx5')
@@ -302,34 +303,9 @@ async function runTrial(arm: Arm, n: number): Promise<Trial> {
 
 // ── Fisher exact (one-sided), same helper shape the other harnesses use ───────
 
-function logFactorial(n: number): number {
-    let s = 0
-    for (let i = 2; i <= n; i++) s += Math.log(i)
-    return s
-}
 
-function fisherOneSided(a: number, b: number, c: number, d: number): number {
-    // P(X >= a) for the 2×2 table [[a,b],[c,d]]
-    const n = a + b + c + d
-    const rowsCols = (x: number, y: number, z: number, w: number): number =>
-        Math.exp(
-            logFactorial(x + y)
-                + logFactorial(z + w)
-                + logFactorial(x + z)
-                + logFactorial(y + w)
-                - logFactorial(n)
-                - logFactorial(x)
-                - logFactorial(y)
-                - logFactorial(z)
-                - logFactorial(w)
-        )
-    let p = 0
-    const maxA = Math.min(a + b, a + c)
-    for (let i = a; i <= maxA; i++) {
-        p += rowsCols(i, a + b - i, a + c - i, d - (i - a))
-    }
-    return p
-}
+
+
 
 async function main(): Promise<void> {
     const trials = Number(process.argv[2] ?? 12)

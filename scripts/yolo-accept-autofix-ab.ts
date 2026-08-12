@@ -103,6 +103,7 @@ import {getConfig} from '../src/config/config.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
 import type {GateDeps, GateParams, GateResult} from '../src/task/task-gates.js'
 import {runGatesForTask as treatmentGates, MAX_AUTO_AUTOFIX} from '../src/task/task-gates.js'
+import {fisherOneSided} from './ab-stats.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.dirname(HERE)
@@ -443,24 +444,10 @@ async function probeNoAttempt(
 
 // ─── statistics ──────────────────────────────────────────────────────────────
 
-function logChoose(n: number, k: number): number {
-    let s = 0
-    for (let i = 0; i < k; i++) s += Math.log(n - i) - Math.log(i + 1)
-    return s
-}
+
 
 /** One-sided Fisher exact: P(treatment ≥ observed | same rate in both arms). */
-function fisherOneSided(a: number, b: number, c: number, d: number): number {
-    // a = treatment converged, b = treatment not; c = baseline converged, d = baseline not.
-    const n = a + b + c + d
-    const row1 = a + b
-    const col1 = a + c
-    let p = 0
-    for (let x = a; x <= Math.min(row1, col1); x++) {
-        p += Math.exp(logChoose(col1, x) + logChoose(n - col1, row1 - x) - logChoose(n, row1))
-    }
-    return Math.min(1, p)
-}
+
 
 // ─── the fixcheck replayability probe (narrowing 4) ──────────────────────────
 

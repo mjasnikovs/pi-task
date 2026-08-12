@@ -38,6 +38,7 @@ import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
 import {getConfig} from '../src/config/config.js'
 import {YOLO_STAMP} from '../src/task/yolo.js'
 import type {WidgetState} from '../src/task/widget.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const ROOT = '/home/edgars/tmp/yolo-ab'
 const TRIAL_TIMEOUT_MS = 45 * 60_000
@@ -233,19 +234,10 @@ async function runTrial(mode: Mode, fixture: Fixture, trial: number): Promise<Tr
 }
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN) {
-        console.error('FATAL: PI_BIN is not set — refusing to run (self-spawn fork-bomb guard).')
-        process.exit(1)
-    }
+    await requirePreconditions('live-yolo-ab', {model: {}, piBin: true, cacheOff: true})
     const mode = process.argv[2] as Mode
     if (mode !== 'baseline' && mode !== 'treatment') {
         console.error('usage: PI_BIN=$(command -v pi) bun run scripts/live-yolo-ab.ts <baseline|treatment> [api|wiring] [TRIALS]')
-        process.exit(1)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
         process.exit(1)
     }
     const fixture = (process.argv[3] ?? 'wiring') as Fixture

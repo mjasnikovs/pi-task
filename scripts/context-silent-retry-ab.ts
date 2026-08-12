@@ -37,14 +37,10 @@ import {findUnsourcedAttributions} from '../dist/task/context-attribution.js'
 import {classifyContextSilence, countBullets, wilsonInterval} from '../dist/task/context-silence.js'
 import {REFINED_27, PRE_TASK_0027, buildPreTask27Tree} from './run15-fixture-tree.js'
 import {reportAb, type Invariant} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
+import {readSection} from './ab-corpus.js'
 
-if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-    console.error(
-        'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke '
-            + 'this harness instead of pi — a fork bomb that has crashed this machine twice.'
-    )
-    process.exit(1)
-}
+await requirePreconditions('context-silent-retry-ab', {model: {}, piBin: true, cacheOff: true})
 
 const REPS = Number(process.argv[2] ?? '48')
 const ROOT = path.join(os.homedir(), 'tmp', 'context-silent-retry-ab')
@@ -68,22 +64,15 @@ function packagesOf(dir: string): string[] {
     }
 }
 
-function section(research: string, name: string): string {
-    const re = new RegExp(`^${name}\\s*$`, 'm')
-    const m = re.exec(research)
-    if (!m) return ''
-    const rest = research.slice(m.index + m[0].length)
-    const next = /^(FILES|APIS|CONTEXT|TOOLING|VERIFIED-TOOLING)\s*$/m.exec(rest)
-    return next ? rest.slice(0, next.index) : rest
-}
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+const section = (doc: string, name: string): string => readSection(doc, name) ?? ''
 
 async function main(): Promise<void> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
 
     console.log(
         `context-silent-retry-ab — PHASE 1, ${REPS} reps\n`

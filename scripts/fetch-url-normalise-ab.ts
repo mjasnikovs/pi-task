@@ -64,6 +64,7 @@ import {
 import {fetchAndClean} from '../src/workers/html-clean.js'
 import {loadCorpus, corpusCaveat, type Lookup} from './research-cache-corpus.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const FIXTURE = path.join(import.meta.dir, 'fixtures', 'fetch-normalise-corpus.json')
 const CONTROLS = 30
@@ -343,12 +344,7 @@ async function main(): Promise<void> {
     // ── POSITIVE CONTROL: a real child reaches the fetch path and parses an answer. Without
     // it, a broken child returns an empty answer for every rep and the harness prints that
     // as "the treatment recovered nothing" — a FAIL that measured the harness, not the fix. ─
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('fetch-url-normalise-ab', {model: {}, piBin: true, cacheOff: true})
     if (scored.length === 0) {
         report({
             outcome: 'ABSTAIN',
@@ -479,10 +475,6 @@ async function main(): Promise<void> {
 
 // Unconditional: --record also runs the scored blob set, and an unset PI_BIN makes every
 // child exit empty, which reads as "the treatment recovered nothing" rather than as an error.
-if (!process.env.PI_BIN || !process.env.PI_BIN.trim()) {
-    console.error('REFUSING TO RUN: PI_BIN is unset (an unset PI_BIN forks the harness into itself).')
-    process.exit(1)
-}
 main().catch(e => {
     console.error(e)
     process.exit(1)

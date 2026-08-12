@@ -61,6 +61,7 @@ import {findSkipEscapes, skipEscapeDefectText} from '../src/task/skip-escape.js'
 import {findAbsenceConflicts, absenceProbeText} from '../src/task/verify-reconcile.js'
 import {findFrozenPathConflicts} from '../src/task/frozen-conflict.js'
 import {extractProhibitions} from '../src/task/prohibition-probe.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const ROOT = '/home/edgars/tmp/frozen-conflict-ab'
 const TRIAL_TIMEOUT_MS = 30 * 60_000
@@ -379,10 +380,7 @@ async function runTrial(mode: Mode, n: number): Promise<TrialResult> {
 }
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN) {
-        console.error('FATAL: PI_BIN is not set — refusing to run (self-spawn fork-bomb guard).')
-        process.exit(1)
-    }
+    await requirePreconditions('live-frozen-conflict-ab', {model: {}, piBin: true, cacheOff: true})
     const mode = process.argv[2] as Mode
     const modes: Mode[] = ['baseline', 'treatment', 'critique-baseline', 'critique-treatment']
     if (!modes.includes(mode)) {
@@ -393,12 +391,6 @@ async function main(): Promise<void> {
         process.exit(1)
     }
     // llama-server must be up — a dead endpoint burns the trial budget on retries.
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
     const trials = parseInt(process.argv[3] ?? '5', 10)
     let draftHadPair = 0
     let finalHadPair = 0

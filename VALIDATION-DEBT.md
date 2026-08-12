@@ -539,8 +539,9 @@ mx5's `package.json` AT ITS OWN TIMESTAMP because a banner is a claim about the 
 at lookup time. Five invariants, none with an empty population: replay fidelity
 (baseline reproduces all 48 recorded banners BYTE-FOR-BYTE), 35/35 renamed, 13/13
 correct banners byte-identical, 35/35 dist-tag cases reworded, 72/72 banner-less
-lookups unchanged. Plus `scripts/version-banner-fp-suite.ts` (38 checks), which is
-where the rest of the class lives — the corpus only ever exercises ONE shape.
+lookups unchanged. Plus `scripts/version-banner-fp-suite.test.ts` (42 tests), which
+is where the rest of the class lives — the corpus only ever exercises ONE shape.
+It runs in `bun test`; it used to be a hand-run script nothing invoked.
 
 **Two things the FP suite found, recorded not patched.** `latest` is the only
 dist-tag `isUsableRange` rejects; `next`/`beta` are accepted and become
@@ -1051,6 +1052,21 @@ real TASK_0017 inputs, arms differing only in `requirements-owned.md`):
         baseline 0/20   treatment 0/20      (pre-registered PASS was >= 14/20)
     the clause delivered VERBATIM and AUTHORITATIVE
         baseline 0/20   treatment 20/20
+
+**The verdict above stands, but the instrument that produced its p-value was
+wrong** (found 2026-08-12, fixed in the same pass). This harness's private
+`fisherOneSided` let the 2×2 margins move with the summation index — it computed
+each term's `bb, cc, dd` and then never passed them in, dividing by the observed
+`b, c, d` instead — so it was exact only at the first term of the tail. The error
+is conservative and crosses alpha in the middle of the range: 15/20 vs 8/20
+returned 0.0759 against a true 0.0268, and 16/20 vs 9/20 returned 0.0661 against
+0.0242. It could only ever have manufactured a false REFUTED, never a false
+SHIPPED. It did not touch THIS result: both recorded rows are at the extremes
+(0/20 vs 0/20 and 20/20 vs 0/20) where the two implementations agree exactly, and
+M1 FAILs on its pre-registered >= 14/20 bar rather than on a p-value. The fault
+was loaded and never fired. It is now the only Fisher in `scripts/` with a test
+(`scripts/owned-freeze-delivered-ab.test.ts`, exact BigInt reference table); the
+other six copies are still unpinned.
 
 So the pass does exactly what it claims — the authoritative clause reaches the
 spec of the task that writes the file, and no quote is ever lost — and that

@@ -55,18 +55,18 @@ import {
     parseOwnedRequirements,
     type OwnedRequirement
 } from '../src/task/requirements.js'
+import {readSection} from './ab-corpus.js'
 
 const HUB = path.join(os.homedir(), 'hub')
 const STAMP_RE = /owned\s+requirement\s+from\s+the\s+source\s+design/i
 
-function section(doc: string, name: string): string {
-    const re = new RegExp(String.raw`^##\s+${name}\s*$`, 'im')
-    const m = re.exec(doc)
-    if (!m) return ''
-    const rest = doc.slice(m.index + m[0].length)
-    const next = /^##\s+/m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
-}
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+const section = (doc: string, name: string): string => readSection(doc, name) ?? ''
 
 interface Rec {
     id: string

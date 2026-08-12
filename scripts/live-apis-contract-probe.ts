@@ -71,6 +71,7 @@ import {
 import {extractSection, parseTrajectory} from './apis-trajectory.js'
 import {countSemantics, isBehaviourPackageQuery, packageQueryKinds} from './apis-semantics.js'
 import {CONTRACT_MARKER, SPLICE_CONTRACT, assertContractInPrompt} from './apis-contract-surgery.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS_PER_FIXTURE = Number(process.argv[2] ?? '2')
 /** `||`, not `??`, and absolute: a set-but-empty PROBE_DIR is not nullish, and the sink path
@@ -107,12 +108,7 @@ const pct = (a: number, b: number): string => (b === 0 ? 'n/a' : `${((100 * a) /
 const PROMPT_DUMP_ENV = 'PI_TASK_PROMPT_DUMP'
 
 async function runReps(): Promise<Rep[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-apis-contract-probe', {model: {}, piBin: true, cacheOff: true})
     fs.mkdirSync(ROOT, {recursive: true})
     const stub = writeStubExtension(ROOT)
     const dist = buildPatchedDist('apis-contract-probe', [
@@ -360,17 +356,6 @@ function main(reps: Rep[]): void {
 if (process.env.PROBE_DIR) {
     main(loadReps())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-                + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
-    if (process.env[RESEARCH_RUN_ID_ENV]) {
-        console.error(`REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — reps would replay.`)
-        process.exit(1)
-    }
     runReps()
         .then(main)
         .catch(e => {

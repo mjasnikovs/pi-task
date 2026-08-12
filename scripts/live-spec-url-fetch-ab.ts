@@ -72,6 +72,7 @@ import {
 import {buildPatchedDist, stubSearchExtension, type Surgery} from './spec-url-dist.js'
 import {fisherOneTail} from './prompt1-combined-verdict.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '10')
 const WHICH = process.argv[3] ?? 'all'
@@ -219,12 +220,7 @@ async function verifySurgery(baselineDist: string, treatmentDist: string): Promi
 }
 
 async function main(): Promise<void> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-spec-url-fetch-ab', {model: {}, piBin: true, cacheOff: true})
     fs.mkdirSync(ROOT, {recursive: true})
     const stub = writeStubExtension(ROOT)
     const stubSurgery = stubSearchExtension(stub)
@@ -478,17 +474,6 @@ async function main(): Promise<void> {
     report({outcome, lines})
 }
 
-if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-    console.error(
-        'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-            + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-    )
-    process.exit(1)
-}
-if (process.env[RESEARCH_RUN_ID_ENV]) {
-    console.error(`REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — reps would replay.`)
-    process.exit(1)
-}
 main().catch(e => {
     console.error(e)
     process.exit(1)

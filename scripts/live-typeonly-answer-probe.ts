@@ -63,6 +63,7 @@ import {phaseResearch} from '../dist/task/phases.js'
 import type {PhaseDeps} from '../dist/task/child-runner.js'
 import {reportArm, type Invariant} from './ab-verdict.js'
 import {REFINED_27, buildPreTask27Tree} from './run15-fixture-tree.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '8')
 const ROOT = path.join(os.homedir(), 'tmp', 'typeonly-answer-probe')
@@ -88,13 +89,7 @@ export function countToolCalls(log: string): TrialCounts {
 }
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke '
-                + 'this harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
+        await requirePreconditions('live-typeonly-answer-probe', {model: {}, piBin: true, cacheOff: true})
 
     const scoreOnly = process.env.PROBE_DIR
     const counts: TrialCounts[] = []
@@ -118,12 +113,6 @@ async function main(): Promise<void> {
             )
         }
     } else {
-        try {
-            await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-        } catch {
-            console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-            process.exit(1)
-        }
         console.log(
             `live-typeonly-answer-probe — model Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080\n`
                 + `real phaseResearch, NOTHING stubbed, ${REPS} reps on the pre-TASK_0027 tree`

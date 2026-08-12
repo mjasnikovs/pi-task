@@ -71,6 +71,7 @@ import {
     type OwnedRequirement
 } from '../src/task/requirements.js'
 import {writeIntent} from '../src/task/owned-freeze-reassign.js'
+import {readSection} from './ab-corpus.js'
 
 const HUB = path.join(os.homedir(), 'hub')
 
@@ -83,15 +84,13 @@ function pools(): string[] {
         .sort()
 }
 
-/** The `## <name>` section of a recorded task file. */
-function section(doc: string, name: string): string {
-    const re = new RegExp(String.raw`^##\s+${name}\s*$`, 'im')
-    const m = re.exec(doc)
-    if (!m) return ''
-    const rest = doc.slice(m.index + m[0].length)
-    const next = /^##\s+/m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
-}
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+const section = (doc: string, name: string): string => readSection(doc, name) ?? ''
 
 function frontMatter(doc: string, key: string): string {
     const m = new RegExp(String.raw`^${key}:\s*(.*)$`, 'm').exec(doc)

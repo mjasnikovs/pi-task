@@ -70,6 +70,8 @@ import {buildContractsBlock, normalise, readContracts} from '../src/task/contrac
 import {stripSpecPreamble, validateSpecShape} from '../src/task/spec-validation.js'
 import {runChild} from '../src/task/child-runner.js'
 import {reportAb, type Invariant} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
+import {readSection} from './ab-corpus.js'
 
 const MX5 = process.env.MX5_DIR ?? path.join(os.homedir(), 'hub', 'mx5')
 const OUT_DIR = path.join(os.homedir(), 'tmp', 'owned-req-compose-ab')
@@ -123,13 +125,16 @@ const FIXTURES: Fixture[] = [
     }
 ]
 
-function section(md: string, name: string): string {
-    const re = new RegExp(`^## ${name}\\s*$`, 'm')
-    const m = re.exec(md)
-    if (!m) throw new Error(`section "${name}" not found`)
-    const rest = md.slice(m.index + m[0].length)
-    const next = /^## /m.exec(rest)
-    return (next ? rest.slice(0, next.index) : rest).trim()
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+function section(doc: string, name: string): string {
+    const s = readSection(doc, name)
+    if (s === undefined) throw new Error(`section "${name}" not found`)
+    return s
 }
 
 /** The CONSTRAINTS+ACCEPTANCE span of a composed spec ('' when absent). */
@@ -149,16 +154,7 @@ export function scoreClause(spec: string, fx: Fixture): boolean {
 }
 
 async function main(): Promise<void> {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error('REFUSING TO RUN: PI_BIN is unset (fork-bomb guard).')
-        process.exit(1)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-owned-requirement-compose-ab', {model: {}, piBin: true, cacheOff: true})
     await fsp.mkdir(OUT_DIR, {recursive: true})
     const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'owned-req-ab-'))
 

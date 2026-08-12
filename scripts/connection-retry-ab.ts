@@ -68,6 +68,7 @@ import * as path from 'node:path'
 import {spawn, type ChildProcess} from 'node:child_process'
 import {runWorker} from '../dist/workers/pi-worker-core.js'
 import {MAX_LOOP_RESTARTS} from '../dist/task/child-runner.js'
+import {fisherTwoSided} from './ab-stats.js'
 
 // A pi child with PI_BIN unset re-invokes THIS script instead of pi — a fork bomb
 // that has taken the machine down twice. Refuse rather than find out again.
@@ -225,29 +226,7 @@ async function probe(): Promise<void> {
 }
 
 /** Two-sided Fisher exact on the 2×2 success/failure table. */
-function fisher(a: number, b: number, c: number, d: number): number {
-    const lf = (n: number): number => {
-        let s = 0
-        for (let i = 2; i <= n; i++) s += Math.log(i)
-        return s
-    }
-    const n = a + b + c + d
-    const p = (x: number, y: number, z: number, w: number): number =>
-        Math.exp(
-            lf(x + y) + lf(z + w) + lf(x + z) + lf(y + w) - lf(n) - lf(x) - lf(y) - lf(z) - lf(w)
-        )
-    const obs = p(a, b, c, d)
-    let sum = 0
-    for (let i = 0; i <= a + b; i++) {
-        const j = a + b - i
-        const k = a + c - i
-        const l = c + d - k
-        if (k < 0 || l < 0) continue
-        const q = p(i, j, k, l)
-        if (q <= obs * 1.0000001) sum += q
-    }
-    return Math.min(1, sum)
-}
+
 
 const args = process.argv.slice(2)
 if (args[0] === '--probe') {
@@ -291,7 +270,7 @@ for (const T of OUTAGES) {
 
 console.log('\n--- successes / reps ---')
 for (const {T, b, t} of table) {
-    const p = fisher(t, REPS - t, b, REPS - b)
+    const p = fisherTwoSided(t, REPS - t, b, REPS - b)
     console.log(
         `outage ${String(T).padStart(6)}ms:  baseline ${b}/${REPS}   treatment ${t}/${REPS}   `
             + `Fisher p=${p.toFixed(5)}`

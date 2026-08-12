@@ -72,15 +72,11 @@ const designByFixture = new Map<string, Set<string>>()
 const normUrl = (u: string): string => u.replace(/\/+$/, '')
 
 /** Wilson 95% — a rate quoted without one is how ">= 8 reps" got treated as sufficient. */
-export function wilson(hits: number, n: number): [number, number] {
-    if (n === 0) return [0, 0]
-    const z = 1.96
-    const p = hits / n
-    const d = 1 + (z * z) / n
-    const c = p + (z * z) / (2 * n)
-    const s = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))
-    return [Math.max(0, (c - s) / d), Math.min(1, (c + s) / d)]
-}
+/** Re-exported from `ab-stats.ts`, the one tested home for this. */
+export {wilson} from './ab-stats.js'
+import {wilson} from './ab-stats.js'
+import {requirePreconditions} from './ab-preflight.js'
+
 
 /**
  * Reps per arm so a DO-NOTHING treatment scores zero by chance with probability <= `alpha`.
@@ -178,12 +174,7 @@ async function runFixture(
 }
 
 async function main(): Promise<void> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-spec-url-baseline', {model: {}, piBin: true, cacheOff: true})
     // THE ORDERING GUARD, mechanical rather than remembered. "Measure the baseline first" is
     // the rule PROMPT 3 broke by starting its implementation before its baseline existed, and
     // the way it would be broken here is trivial: build once with the lever in dist/ and this
@@ -398,17 +389,6 @@ function rescore(dir: string): void {
 if (process.env.BASELINE_DIR) {
     rescore(process.env.BASELINE_DIR)
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error(
-            'REFUSING TO RUN: PI_BIN is unset. An unset PI_BIN makes the child re-invoke this '
-                + 'harness instead of pi — a fork bomb that has crashed this machine twice.'
-        )
-        process.exit(1)
-    }
-    if (process.env[RESEARCH_RUN_ID_ENV]) {
-        console.error(`REFUSING TO RUN: ${RESEARCH_RUN_ID_ENV} is set — reps would replay.`)
-        process.exit(1)
-    }
     main().catch(e => {
         console.error(e)
         process.exit(1)

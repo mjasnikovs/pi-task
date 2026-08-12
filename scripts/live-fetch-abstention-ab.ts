@@ -78,6 +78,7 @@ import {
 } from '../src/workers/fetch-core.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
 import {fisherOneTail} from './prompt1-combined-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '8')
 /** `||` not `??`, absolute path: a set-but-empty env var is not nullish, and the child's cwd
@@ -200,12 +201,7 @@ interface Obs {
 const UNCLEAR = new RegExp(UNCLEAR_ANSWER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
 
 async function runAll(): Promise<Obs[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-fetch-abstention-ab', {model: {}, piBin: true, cacheOff: true})
     fs.mkdirSync(ROOT, {recursive: true})
     const pages = loadPages()
     const sets: Array<['failures' | 'regression', Pair[]]> = [
@@ -534,10 +530,6 @@ function main(obs: Obs[]): void {
 if (process.env.FETCHAB_DIR) {
     main(loadObs())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error('REFUSING TO RUN: PI_BIN is unset (an unset PI_BIN forks the harness into itself).')
-        process.exit(1)
-    }
     runAll()
         .then(main)
         .catch(e => {

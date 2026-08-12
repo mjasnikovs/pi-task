@@ -52,6 +52,7 @@ import {
     type RequirementEntry
 } from '../src/task/requirements.js'
 import {prependHint, runChild} from '../src/task/child-runner.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const MX5 = process.env.MX5_DIR ?? path.join(os.homedir(), 'hub', 'mx5')
 const OUT_DIR = path.join(os.homedir(), 'tmp', 'extraction-recall-step0')
@@ -178,16 +179,7 @@ interface LiveRep {
 }
 
 async function live(design: string): Promise<void> {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error('REFUSING TO RUN LIVE: PI_BIN is unset (fork-bomb guard).')
-        process.exit(1)
-    }
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable.')
-        process.exit(1)
-    }
+    await requirePreconditions('extraction-recall-step0', {model: {}, piBin: true, cacheOff: true})
     await fsp.mkdir(OUT_DIR, {recursive: true})
     const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'extract-recall-'))
     const passages = enumerateObligationPassages(design)

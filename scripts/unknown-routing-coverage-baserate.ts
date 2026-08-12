@@ -43,6 +43,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {isIntegrationUnknown} from '../src/task/unknown-routing.js'
+import {readSection} from './ab-corpus.js'
 
 const HOME = os.homedir()
 const SPLIT = process.argv.includes('--split')
@@ -184,15 +185,13 @@ function collect(): TaskDoc[] {
     return docs
 }
 
-function section(text: string, name: string): string {
-    const i = text.indexOf(`\n## ${name}`)
-    if (i < 0) return ''
-    const rest = text.slice(i + 1)
-    const nl = rest.indexOf('\n')
-    const body = nl < 0 ? '' : rest.slice(nl + 1)
-    const end = body.indexOf('\n## ')
-    return end < 0 ? body : body.slice(0, end)
-}
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+const section = (doc: string, name: string): string => readSection(doc, name) ?? ''
 
 /** Every `(auto)`-answered grill question in one task file. */
 function autoQuestions(text: string): string[] {

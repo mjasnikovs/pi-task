@@ -48,6 +48,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {fetchFocused} from '../src/workers/fetch-core.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
+import {requirePreconditions} from './ab-preflight.js'
 
 const REPS = Number(process.argv[2] ?? '8')
 const ROOT = path.resolve(
@@ -98,12 +99,7 @@ interface Obs {
 const UNCLEAR = /unclear from this page/i
 
 async function runAll(): Promise<Obs[]> {
-    try {
-        await fetch('http://127.0.0.1:8080/health', {signal: AbortSignal.timeout(3000)})
-    } catch {
-        console.error('FATAL: llama-server @ 127.0.0.1:8080 not reachable. Start ~/hub/qwen/run-Q3.6-27B.sh.')
-        process.exit(1)
-    }
+    await requirePreconditions('live-fetch-abstention-baseline', {model: {}, piBin: true, cacheOff: true})
     fs.mkdirSync(ROOT, {recursive: true})
     const pages = loadPages()
     const sets: Array<['failures' | 'regression', Pair[]]> = [
@@ -275,10 +271,6 @@ function main(obs: Obs[]): void {
 if (process.env.FETCHBASE_DIR) {
     main(loadObs())
 } else {
-    if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
-        console.error('REFUSING TO RUN: PI_BIN is unset (an unset PI_BIN forks the harness into itself).')
-        process.exit(1)
-    }
     runAll()
         .then(main)
         .catch(e => {

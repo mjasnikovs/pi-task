@@ -53,6 +53,7 @@ import {
     type NarrowingClass,
     type NarrowingResult
 } from './answer-narrowing.js'
+import {readSection} from './ab-corpus.js'
 
 const HOME = os.homedir()
 const DUMP = process.argv.includes('--dump')
@@ -175,15 +176,13 @@ function collect(): TaskDoc[] {
 
 // ─── task-file parsing ───────────────────────────────────────────────────────
 
-function section(text: string, name: string): string {
-    const i = text.indexOf(`\n## ${name}`)
-    if (i < 0) return ''
-    const rest = text.slice(i + 1)
-    const nl = rest.indexOf('\n')
-    const body = nl < 0 ? '' : rest.slice(nl + 1)
-    const end = body.indexOf('\n## ')
-    return end < 0 ? body : body.slice(0, end)
-}
+/**
+ * The one section grammar (`ab-corpus.ts`), with this harness's existing
+ * missing-section contract made explicit at the call site instead of hidden in a
+ * private regex. Seventeen copies of this function disagreed on case-sensitivity
+ * and on whether a missing section returned '' or threw.
+ */
+const section = (doc: string, name: string): string => readSection(doc, name) ?? ''
 
 interface Pair {
     q: string
