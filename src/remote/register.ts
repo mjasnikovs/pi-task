@@ -11,7 +11,7 @@ import {
     publishNotify
 } from './bridge.js'
 import {setupEvents} from './events.js'
-import {reset, addUserTurn, setHeld} from './session-state.js'
+import {reset, addUserTurn, setHeld, getState} from './session-state.js'
 import {html} from './ui.js'
 import {qrLines} from './qr.js'
 import {startServer, formatAddresses} from './server.js'
@@ -22,7 +22,6 @@ import {
     hostFromResult
 } from './tailscale.js'
 import type {ServeResult} from './tailscale.js'
-import {isAgentIdle} from './state.js'
 import {
     holdInput,
     isRunActive,
@@ -55,7 +54,17 @@ export function routePlainLine(
     send: (text: string, opts?: {deliverAs: 'steer' | 'followUp'}) => void
 ): void {
     addUserTurn(plain)
-    if (!isAgentIdle()) {
+    // Read the run flag from SessionState, which is the only thing that owns it.
+    // There used to be a mirror of it here (remote/state.ts: a module-level `let`
+    // plus a getter/setter, set alongside agentStart/agentEnd in events.ts). Two
+    // sources of truth for one boolean, and they disagreed twice over: SessionState
+    // also clears agentRunning in addError and reset, neither of which touched the
+    // mirror — so an errored turn or a /new left this branch steering into a turn
+    // SessionState already considered finished. And the mirror was a plain module
+    // `let` while every other piece of remote state deliberately lives on
+    // globalThis to survive jiti re-evaluation, so it silently reset on session
+    // switch. Deleting it removed complexity rather than moving it.
+    if (getState().agentRunning) {
         // A live turn: steer it (inject into the current generation) so the
         // nudge lands immediately.
         send(plain, {deliverAs: 'steer'})

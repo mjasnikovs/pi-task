@@ -18,6 +18,7 @@ import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './do
 import {npmVersionLookup as defaultNpmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction} from './focused-extractor.js'
+import {buildExtractionPrompt} from './abstention.js'
 import {
     type ExcerptVerification,
     formatResultText as formatResultTextShared
@@ -746,34 +747,35 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
 }
 
 export function buildPrompt(pkg: ResolvedPackage, query: string, content: string): string {
-    return (
-        `You answer one question about an npm package, using only the provided content.\n`
-        + `\n`
-        + `Rules:\n`
-        + `1. Output ONLY two tags, in this order, with NO text outside them:\n`
-        + `   <answer>...your answer...</answer>\n`
-        + `   <excerpt>...verbatim quote from <package-content>...</excerpt>\n`
-        + `2. The <excerpt> MUST be copied character-for-character from <package-content>.\n`
-        + `   Do not paraphrase, translate, or summarise inside <excerpt>.\n`
-        + `3. Prefer type signatures, function declarations, and code blocks as evidence over prose.\n`
-        + `4. If the answer is unclear, ambiguous, or absent from <package-content>, write exactly:\n`
-        + `   <answer>unclear from this package</answer> and put the closest related text in <excerpt>.\n`
-        + `   Do not guess.\n`
-        + `5. Be terse. One short paragraph in <answer> max.\n`
-        + `\n`
-        + `<package>${pkg.name}@${pkg.version}</package>\n`
-        + `<question>${query}</question>\n`
-        + `<package-content>\n${content}\n</package-content>\n`
-    )
+    return buildExtractionPrompt({
+        kind: 'package',
+        subject: 'an npm package',
+        tag: 'package',
+        identity: `${pkg.name}@${pkg.version}`,
+        query,
+        content
+    })
 }
 
 // ─── Backward-compatible wrappers (thin — delegates to shared/) ─────────────
 
 /** Thin wrapper so existing callers using the pkg-based signature still work. */
+/**
+ * The provenance header a docs answer carries. Takes the HEADER, not a package:
+ * the whole body is one string, and the project-source path — which has no
+ * package — used to fabricate a `ResolvedPackage`
+ * (`{name, version: 'local', root, entryDts: null, readme: null}`) purely to make
+ * this call compile, with three of the five fields existing only for that.
+ */
 export function formatResultText(
-    pkg: ResolvedPackage,
+    header: string,
     parsed: {answer: string; excerpt?: string},
     verified: boolean | undefined
 ): string {
-    return formatResultTextShared(`Per ${pkg.name}@${pkg.version}:`, parsed, verified)
+    return formatResultTextShared(header, parsed, verified)
+}
+
+/** The header for an npm package answer. */
+export function packageHeader(pkg: ResolvedPackage): string {
+    return `Per ${pkg.name}@${pkg.version}:`
 }

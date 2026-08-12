@@ -4,6 +4,7 @@ import {registerPiWorkerFetch, type PiWorkerFetchInternals} from './pi-worker-fe
 import {FetchAndCleanError} from './html-clean.js'
 import type {CleanResult} from './html-clean.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
+import {isAbstention} from './abstention.js'
 
 interface RegisteredTool {
     execute: (
@@ -253,4 +254,44 @@ test('pi-worker-fetch description is trigger-framed toward integration/wiring in
     expect(desc).toMatch(/configured|wired|integrated/i)
     expect(desc).toMatch(/do not cover it|installed-package docs/i)
     expect(desc).toMatch(/do NOT guess/i)
+})
+
+// ─── cacheable — the F-2(e) non-answer rule, on the fetch channel ─────────────
+
+/**
+ * Mirrors `cacheable` in pi-worker-fetch.ts. The sentinel half is the REAL
+ * predicate (isAbstention), not a copy of its regex — copying it is how the
+ * package/project/page matchers drifted apart in the first place.
+ */
+const fetchCacheable = (d: {childExitCode?: number}, text: string): boolean =>
+    d.childExitCode === 0 && !isAbstention(text)
+
+test('fetch cacheable: a real answer is cached', () => {
+    expect(fetchCacheable({childExitCode: 0}, 'The endpoint accepts POST with a JSON body.')).toBe(
+        true
+    )
+})
+
+test('fetch cacheable: "unclear from this page" is NOT cached, though the child exited 0', () => {
+    // pi-worker-docs documents this failure (F-2e) and closed it for PACKAGES:
+    // a non-answer exits 0, so it was memoised and re-served to every sibling task
+    // — one dead end paid for many times, with escalation unable to re-fire
+    // because the miss never recurred. The fetch channel cached on childExitCode
+    // alone and reproduced it exactly, for pages.
+    expect(fetchCacheable({childExitCode: 0}, 'unclear from this page')).toBe(false)
+    expect(fetchCacheable({childExitCode: 0}, '<answer>Unclear from this page.</answer>')).toBe(
+        false
+    )
+})
+
+test('fetch cacheable: a partial "not covered by this page" answer IS still cached', () => {
+    // The sibling sentinel is a COVERAGE miss inside a sourced answer, not a
+    // refusal — it must not be swallowed by the abstention rule.
+    expect(
+        fetchCacheable(
+            {childExitCode: 0},
+            'Audio callbacks are registered via obs_add_raw_audio_callback; the remove '
+                + 'variant is not covered by this page.'
+        )
+    ).toBe(true)
 })

@@ -1,5 +1,6 @@
 import {test, expect, describe} from 'bun:test'
 import {extractSeeUrls} from './pi-worker-docs.js'
+import {isAbstention} from './abstention.js'
 
 /**
  * PROMPT 2, DO items 2 and 4 at the docs-tool seam.
@@ -61,7 +62,7 @@ const cacheable = (
     d.childExitCode === 0
     && d.typeOnly !== true
     && d.excerptVerified !== false
-    && !/unclear from this package/i.test(text)
+    && !isAbstention(text)
 
 describe('cacheable — a non-answer must never be memoised (F-2e)', () => {
     test('a real answer is cached', () => {

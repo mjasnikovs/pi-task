@@ -9,6 +9,7 @@ import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
 import {
     docsRaw,
     formatResultText,
+    packageHeader,
     buildPrompt,
     buildVersionBanner,
     type AutoInstallPin
@@ -25,6 +26,7 @@ import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
+import {isAbstention} from './abstention.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -270,13 +272,7 @@ export function registerPiWorkerDocs(
 
                 const verified = extraction.excerptVerified
                 const text = formatResultText(
-                    {
-                        name: projectName,
-                        version: 'local',
-                        root: ctx.cwd,
-                        entryDts: null,
-                        readme: null
-                    },
+                    `Per ${projectName} (project source):`,
                     extraction,
                     verified
                 )
@@ -412,7 +408,7 @@ export function registerPiWorkerDocs(
             }
 
             const verified = extraction.excerptVerified
-            const body = formatResultText(pkg, extraction, verified)
+            const body = formatResultText(packageHeader(pkg), extraction, verified)
 
             // F-2: a TYPE-ONLY answer is the dangerous failure. "unclear from this package"
             // is honest and already escalates; a signature is a well-formed, confident,
@@ -522,6 +518,6 @@ export function registerPiWorkerDocs(
             d.childExitCode === 0
             && d.typeOnly !== true
             && d.excerptVerified !== false
-            && !/unclear from this package/i.test(text)
+            && !isAbstention(text)
     })
 }

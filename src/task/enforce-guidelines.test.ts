@@ -366,6 +366,21 @@ test('classifyEnforceChildFailure: aborted with no specific cause → user-cance
     expect(classifyEnforceChildFailure(childResult({aborted: true}))).toBe(USER_CANCELLED)
 })
 
+test('classifyEnforceChildFailure: stream-stall kill (also aborted) names the hung stream, NOT a cancel', () => {
+    // REGRESSION. streamStalled was added to the worker result and to
+    // finalAttemptFailed but never to this ladder, so a child killed for a model
+    // stream that went silent fell past every arm to `aborted → USER_CANCELLED`
+    // and a dead backend was reported to the user as their own cancel. The ladder
+    // is now one exhaustive switch over classifyWorkerFailure, so the next cause
+    // added to the union is a compile error here instead of a silent mislabel.
+    const failure = classifyEnforceChildFailure(
+        childResult({aborted: true, exitCode: 143, streamStalled: {idleMs: 120_000}})
+    )
+    expect(failure).not.toBe(USER_CANCELLED)
+    expect(failure).toContain('120s')
+    expect(failure).toContain('stream')
+})
+
 test('classifyEnforceChildFailure: stall-kill (also aborted) names the dead backend, NOT a cancel', () => {
     const failure = classifyEnforceChildFailure(childResult({aborted: true, stalled: true}))
     expect(failure).toContain('model server unreachable')

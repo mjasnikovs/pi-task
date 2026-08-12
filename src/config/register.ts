@@ -88,71 +88,113 @@ class BorderedBox implements Component {
 }
 
 /**
- * Every setting rendered by /task-config. Boolean settings omit `values` and
- * toggle on/off; enum settings list their values and cycle through them.
+ * One /task-config setting, and BOTH directions of its value.
+ *
+ * `format` renders the stored value for the panel; `apply` parses the chosen
+ * label back into it. They are per-row because the two used to be hand-written
+ * ladders — a `displayValue` arm to format, a matching `onChange` arm to parse,
+ * and three different idioms for the same parse across the four enum settings.
+ * Adding one enum setting meant four coordinated edits (row, format arm, parse
+ * arm, sanitizer) and NONE of them failed to compile if you forgot it: a missed
+ * format arm rendered `String(cfg[id])`, and a missed parse arm let the generic
+ * `else` write the boolean `newValue === 'on'` into an enum field. The comment
+ * that used to sit in that `else` — explaining why `debugLogs` must not fall
+ * into it — was the interface saying it was too shallow.
+ *
+ * With both directions on the row, `format(apply(cfg, v)) === v` is a property
+ * over the whole table, and the panel and the non-TUI listing cannot disagree
+ * because both read `format`.
  */
-const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values?: string[]}[] = [
-    {
-        id: 'remote',
-        label: 'remote control',
-        description:
-            'Serve the task UI on your local network so you can follow and steer a run from '
+export interface ConfigItem {
+    id: keyof PiTaskConfig
+    label: string
+    description: string
+    /** Offered values. Omitted for a boolean, which is always on/off. */
+    values?: string[]
+    /** What the panel shows for the current value. */
+    format: (cfg: PiTaskConfig) => string
+    /** Write the chosen label back. A value it does not recognise is ignored. */
+    apply: (cfg: PiTaskConfig, chosen: string) => void
+}
+
+/**
+ * The shared pair for a boolean setting: shown as on/off, stored as a boolean.
+ * Every non-enum row uses this, so a boolean cannot be given a bespoke parser by
+ * accident.
+ */
+function booleanItem(id: keyof PiTaskConfig, label: string, description: string): ConfigItem {
+    return {
+        id,
+        label,
+        description,
+        format: cfg => (cfg[id] ? 'on' : 'off'),
+        apply: (cfg, chosen) => {
+            ;(cfg as unknown as Record<string, boolean>)[id] = chosen === 'on'
+        }
+    }
+}
+
+/**
+ * Every setting rendered by /task-config, in display order.
+ *
+ * Exported so the round-trip property below can be asserted over the WHOLE table
+ * rather than per setting — the check that would have caught a forgotten arm in
+ * either of the two ladders this replaced.
+ */
+export const ITEMS: ConfigItem[] = [
+    booleanItem(
+        'remote',
+        'remote control',
+        'Serve the task UI on your local network so you can follow and steer a run from '
             + 'your phone. Prints a QR code to scan when it starts'
-    },
-    {
-        id: 'compressReasoning',
-        label: 'compress thinking',
-        description:
-            "Shrink the model's thinking blocks once it has moved on, so a long run keeps more "
+    ),
+    booleanItem(
+        'compressReasoning',
+        'compress thinking',
+        "Shrink the model's thinking blocks once it has moved on, so a long run keeps more "
             + 'room for the work itself'
-    },
-    {
-        id: 'autoCommit',
-        label: 'auto-commit',
-        description:
-            'Make a git commit before and after every sub-task, so each step is a checkpoint '
+    ),
+    booleanItem(
+        'autoCommit',
+        'auto-commit',
+        'Make a git commit before and after every sub-task, so each step is a checkpoint '
             + 'you can read back or roll back to'
-    },
-    {
-        id: 'verifyWork',
-        label: 'verify work',
-        description:
-            'When a task says it is done, actually run the checks its spec asks for and report '
+    ),
+    booleanItem(
+        'verifyWork',
+        'verify work',
+        'When a task says it is done, actually run the checks its spec asks for and report '
             + "PASS or FAIL instead of taking the model's word for it. This is also what lets "
             + '"enforce guidelines" fix things safely. /task waits for the work to finish'
-    },
-    {
-        id: 'enforceGuidelines',
-        label: 'enforce guidelines',
-        description:
-            'Check what each task committed against your AGENTS.md / CLAUDE.md rules. With '
+    ),
+    booleanItem(
+        'enforceGuidelines',
+        'enforce guidelines',
+        'Check what each task committed against your AGENTS.md / CLAUDE.md rules. With '
             + '"verify work" on it also fixes what it finds, undoing any fix that breaks the '
             + 'checks; on its own it only reports. /task waits for the work to finish'
-    },
-    {
-        id: 'orientation',
-        label: 'project tour',
-        description:
-            'Show the research workers the shape of the project first — package manifest, '
+    ),
+    booleanItem(
+        'orientation',
+        'project tour',
+        'Show the research workers the shape of the project first — package manifest, '
             + 'types, schema — so they spend their steps on the question instead of on finding '
             + 'their way around'
-    },
-    {
-        id: 'parallelResearchWorkers',
-        label: 'parallel research',
-        description:
-            'Run the 4 research workers at once instead of one after another. Only faster if '
+    ),
+    booleanItem(
+        'parallelResearchWorkers',
+        'parallel research',
+        'Run the 4 research workers at once instead of one after another. Only faster if '
             + 'your model backend can answer several requests at the same time — on a single '
             + 'local GPU it is measurably slower, so leave it off there'
-    },
-    {
-        id: 'researchCache',
-        label: 'research cache',
-        description:
-            'Remember docs and web pages for the length of one run, so later tasks reuse what '
+    ),
+    booleanItem(
+        'researchCache',
+        'research cache',
+        'Remember docs and web pages for the length of one run, so later tasks reuse what '
             + 'the first one already fetched instead of downloading it again. Only external '
             + 'sources, only successful fetches, and it is dropped when the run ends'
-    },
+    ),
     {
         id: 'searchProvider',
         label: 'search engine',
@@ -160,7 +202,12 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             'Which engine backs web search. Exa and DuckDuckGo work with no setup; Brave needs '
             + 'a BRAVE_SEARCH_API_KEY in your environment',
         // Display full engine names; the stored config value stays the short id.
-        values: SEARCH_PROVIDERS.map(p => SEARCH_PROVIDER_LABELS[p])
+        values: SEARCH_PROVIDERS.map(p => SEARCH_PROVIDER_LABELS[p]),
+        format: cfg => SEARCH_PROVIDER_LABELS[cfg.searchProvider],
+        apply: (cfg, chosen) => {
+            const provider = providerForLabel(chosen)
+            if (provider) cfg.searchProvider = provider
+        }
     },
     {
         id: 'requestTimeoutMs',
@@ -171,7 +218,14 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             + 'hung build. Covers the main session and the checking steps; "off" lets a stuck '
             + 'command hang the run until you notice',
         // Display human labels; the stored config value stays the ms number.
-        values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label)
+        values: COMMAND_TIMEOUT_OPTIONS.map(o => o.label),
+        format: cfg =>
+            COMMAND_TIMEOUT_OPTIONS.find(o => o.ms === cfg.requestTimeoutMs)?.label
+            ?? `${cfg.requestTimeoutMs}ms`,
+        apply: (cfg, chosen) => {
+            const opt = COMMAND_TIMEOUT_OPTIONS.find(o => o.label === chosen)
+            if (opt) cfg.requestTimeoutMs = opt.ms
+        }
     },
     {
         id: 'streamInactivityMs',
@@ -183,17 +237,23 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             + 'pauses while a command runs — local models go quiet for minutes on long prompts, '
             + 'so leave room',
         // Display human labels; the stored config value stays the ms number.
-        values: STREAM_INACTIVITY_OPTIONS.map(o => o.label)
+        values: STREAM_INACTIVITY_OPTIONS.map(o => o.label),
+        format: cfg =>
+            STREAM_INACTIVITY_OPTIONS.find(o => o.ms === cfg.streamInactivityMs)?.label
+            ?? `${cfg.streamInactivityMs}ms`,
+        apply: (cfg, chosen) => {
+            const opt = STREAM_INACTIVITY_OPTIONS.find(o => o.label === chosen)
+            if (opt) cfg.streamInactivityMs = opt.ms
+        }
     },
-    {
-        id: 'yoloMode',
-        label: 'yolo mode',
-        description:
-            'Stop asking you anything: every question takes the option pi recommends, a failed '
+    booleanItem(
+        'yoloMode',
+        'yolo mode',
+        'Stop asking you anything: every question takes the option pi recommends, a failed '
             + 'check is accepted and written down as debt, and a failed final check is retried '
             + 'until the budget runs out. Each auto-answer is marked (YOLO) in the task file. '
             + 'For throwaway projects you are not watching'
-    },
+    ),
     {
         id: 'debugLogs',
         label: 'debug logs',
@@ -203,28 +263,15 @@ const ITEMS: {id: keyof PiTaskConfig; label: string; description: string; values
             + 'failed — a few lines per task. "full" adds everything the model said and every '
             + 'command it ran, which is most of the size and only useful while you are digging '
             + 'into a problem. "off" writes nothing, and nothing can be reconstructed later',
-        values: [...DEBUG_LOG_OPTIONS]
+        values: [...DEBUG_LOG_OPTIONS],
+        // The stored value IS the label here, but it still goes through the
+        // sanitizer rather than being written raw.
+        format: cfg => String(cfg.debugLogs),
+        apply: (cfg, chosen) => {
+            cfg.debugLogs = sanitizeDebugLogs(chosen)
+        }
     }
 ]
-
-/** Human label for the stored command-timeout ms (falls back to the raw ms). */
-function timeoutLabel(ms: number): string {
-    return COMMAND_TIMEOUT_OPTIONS.find(o => o.ms === ms)?.label ?? `${ms}ms`
-}
-
-/** Human label for the stored stream-inactivity ms (falls back to the raw ms). */
-function streamTimeoutLabel(ms: number): string {
-    return STREAM_INACTIVITY_OPTIONS.find(o => o.ms === ms)?.label ?? `${ms}ms`
-}
-
-/** What /task-config shows for a setting's current value. */
-function displayValue(cfg: PiTaskConfig, id: keyof PiTaskConfig, isEnum: boolean): string {
-    if (id === 'searchProvider') return SEARCH_PROVIDER_LABELS[cfg.searchProvider]
-    if (id === 'requestTimeoutMs') return timeoutLabel(cfg.requestTimeoutMs)
-    if (id === 'streamInactivityMs') return streamTimeoutLabel(cfg.streamInactivityMs)
-    if (isEnum) return String(cfg[id])
-    return cfg[id] ? 'on' : 'off'
-}
 
 /**
  * One /task-config toggle per installed host extension (GitHub issue #4).
@@ -384,11 +431,11 @@ export function panelItems(
     tools: readonly GuardableTool[] = []
 ): PanelItem[] {
     return [
-        ...ITEMS.map(({id, label, description, values}) => ({
+        ...ITEMS.map(({id, label, description, values, format}) => ({
             id: id as string,
             label,
             description,
-            currentValue: displayValue(cfg, id, Boolean(values)),
+            currentValue: format(cfg),
             values: values ?? ['on', 'off']
         })),
         ...toolItems(tools, cfg.commandTimeoutExemptTools),
@@ -417,9 +464,9 @@ async function handleTaskConfig(
     const tools = getTools()
 
     if (ctx.mode !== 'tui') {
-        const lines = ITEMS.map(
-            ({id, label, values}) => `${label.padEnd(22)} ${displayValue(cfg, id, Boolean(values))}`
-        )
+        // Reads the SAME `format` the panel does, so the two renderings cannot
+        // disagree about what a setting currently says.
+        const lines = ITEMS.map(({label, format}) => `${label.padEnd(22)} ${format(cfg)}`)
         for (const t of tools) {
             const state = cfg.commandTimeoutExemptTools.includes(t.name) ? 'off' : 'on'
             lines.push(`${('watch: ' + t.name).padEnd(22)} ${state}`)
@@ -450,22 +497,13 @@ async function handleTaskConfig(
                             id.slice(TOOL_ID_PREFIX.length),
                             newValue === 'on'
                         )
-                    } else if (id === 'searchProvider') {
-                        const provider = providerForLabel(newValue)
-                        if (provider) cfg.searchProvider = provider
-                    } else if (id === 'requestTimeoutMs') {
-                        const opt = COMMAND_TIMEOUT_OPTIONS.find(o => o.label === newValue)
-                        if (opt) cfg.requestTimeoutMs = opt.ms
-                    } else if (id === 'streamInactivityMs') {
-                        const opt = STREAM_INACTIVITY_OPTIONS.find(o => o.label === newValue)
-                        if (opt) cfg.streamInactivityMs = opt.ms
-                    } else if (id === 'debugLogs') {
-                        // The stored value IS the label here, but it must still go
-                        // through the sanitizer — the generic `else` below would
-                        // write the boolean `newValue === 'on'` into an enum field.
-                        cfg.debugLogs = sanitizeDebugLogs(newValue)
                     } else {
-                        ;(cfg as unknown as Record<string, boolean>)[id] = newValue === 'on'
+                        // Every setting parses its own value. There is no generic
+                        // fallback: the ladder this replaces ended in one that
+                        // wrote `newValue === 'on'` into whatever field it was
+                        // handed, so a new enum setting silently became a boolean
+                        // until someone noticed.
+                        ITEMS.find(item => item.id === id)?.apply(cfg, newValue)
                     }
                     saveConfig(cfg).catch(() => {})
                 },

@@ -3,13 +3,9 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
 import {isDtsFile, type ResolvedPackage} from './docs-resolve.js'
+import {chunkDeclarations, chunkReadme} from './docs-chunk.js'
 
-const MAX_CHUNK_BYTES = 8 * 1024
 const ZERO_SEP = Buffer.from([0])
-
-const DECL_SPLIT_RE =
-    /^(?:export\s+|declare\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
-const README_SPLIT_RE = /^#{1,2} /m
 
 export interface IndexResult {
     hitCache: boolean
@@ -89,67 +85,6 @@ function collectFiles(pkg: ResolvedPackage): CollectedFiles {
     }
 }
 
-function chunkDts(content: string, relPath: string): string[] {
-    const splits = splitAtMatches(content, new RegExp(DECL_SPLIT_RE.source, 'gm'))
-    const chunks: string[] = []
-    for (const part of splits) {
-        const trimmed = part.trim()
-        if (!trimmed) continue
-        const prefixed = `// ${relPath}\n${trimmed}`
-        if (Buffer.byteLength(prefixed, 'utf8') > MAX_CHUNK_BYTES) {
-            for (const slice of sliceBytes(prefixed, MAX_CHUNK_BYTES)) {
-                chunks.push(slice)
-            }
-        } else {
-            chunks.push(prefixed)
-        }
-    }
-    return chunks
-}
-
-function chunkReadme(content: string): string[] {
-    const splits = splitAtMatches(content, new RegExp(README_SPLIT_RE.source, 'gm'))
-    const chunks: string[] = []
-    for (const part of splits) {
-        const trimmed = part.replace(/\s+$/, '')
-        if (!trimmed) continue
-        const headingMatch = /^(#{1,2}) (.+)$/m.exec(trimmed)
-        const heading = headingMatch ? headingMatch[2] : '(intro)'
-        const prefixed = `<!-- README: ${heading} -->\n${trimmed}`
-        if (Buffer.byteLength(prefixed, 'utf8') > MAX_CHUNK_BYTES) {
-            for (const slice of sliceBytes(prefixed, MAX_CHUNK_BYTES)) chunks.push(slice)
-        } else {
-            chunks.push(prefixed)
-        }
-    }
-    return chunks
-}
-
-function splitAtMatches(text: string, re: RegExp): string[] {
-    const parts: string[] = []
-    let lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = re.exec(text))) {
-        if (m.index > lastIndex) parts.push(text.slice(lastIndex, m.index))
-        lastIndex = m.index
-        re.lastIndex = m.index + 1
-    }
-    if (lastIndex < text.length) parts.push(text.slice(lastIndex))
-    return parts.length ? parts : [text]
-}
-
-function sliceBytes(s: string, maxBytes: number): string[] {
-    const out: string[] = []
-    let buf = Buffer.from(s, 'utf8')
-    while (buf.length > maxBytes) {
-        const slice = buf.subarray(0, maxBytes).toString('utf8')
-        out.push(slice)
-        buf = buf.subarray(Buffer.byteLength(slice, 'utf8'))
-    }
-    if (buf.length) out.push(buf.toString('utf8'))
-    return out
-}
-
 function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: string): IngestResult {
     const inside = cache.db
         .prepare('SELECT content_hash FROM packages WHERE name = ? AND version = ?')
@@ -175,7 +110,7 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         } catch {
             continue
         }
-        const chunks = chunkDts(raw, rel)
+        const chunks = chunkDeclarations(raw, rel)
         if (!chunks.length) continue
         filesIngested++
         for (const c of chunks) {

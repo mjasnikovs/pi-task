@@ -78,6 +78,13 @@ import {
     type DeepRenderOutcome
 } from './deep-render-check.js'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
+import {
+    classifyCommandRun,
+    spawnCommand,
+    outputTail,
+    INFRA_GAP_OUTPUT_RE,
+    type CommandRunner
+} from './command-run.js'
 import {findLaunchConfigGap, probeEnv, configGapUnobservedNote} from './launch-config-gap.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {findDanglingArtifacts, danglingGateFailureText} from './artifact-closure.js'
@@ -1184,34 +1191,6 @@ function resolveCommandBody(
     return null
 }
 
-/** Last ~`limit` chars of the command's combined output, one line, for the reason. */
-function outputTail(stdout: string, stderr: string, limit = 400): string {
-    const combined = `${stdout}\n${stderr}`.trim()
-    if (combined.length === 0) return ''
-    const tail = combined.slice(-limit).replace(/\s+/g, ' ').trim()
-    return combined.length > limit ? `…${tail}` : tail
-}
-
-/**
- * A non-zero exit whose output shows an EXTERNAL runtime dependency is missing, not
- * a code fault: a browser suite (Playwright/Cypress) whose browser binaries or system
- * libraries were never installed here (mx5 run 10 item 2: `test:ct` must run in the
- * gate, but on a box with no Playwright browsers it is an environment gap, not a FAIL).
- * These exit non-zero (not 127), so they need output-shape recognition to skip.
- */
-const ENV_GAP_OUTPUT_RE =
-    /Executable doesn't exist|playwright install|browserType\.\w+: Executable|(?:wasn't|weren't) installed|Host system is missing dependencies|No usable sandbox|Cypress verification|Cypress executable (?:not found|was not found)|browser(?:s)? (?:is|are)? ?not installed/i
-
-/**
- * A non-zero exit whose output shows the EXTERNAL INFRASTRUCTURE a launch script
- * talks to is absent HERE — a database/daemon that is not running or not
- * installed — rather than a fault in the script itself. Applied ONLY to
- * launch-contract scripts (a migrate/seed against no DB is an environment gap on
- * this box; the same wording in a `test` run is a real failure the suite must own).
- */
-export const INFRA_GAP_OUTPUT_RE =
-    /ECONNREFUSED|connection refused|ENOTFOUND|EAI_AGAIN|is the server running|could not connect|cannot connect to the docker daemon|connect: connection|no such host/i
-
 /**
  * Run one gate command with the env-gap contract: tool missing, timeout, or
  * command-not-found inside the script chain (127) → environment gap, not a code
@@ -1227,7 +1206,9 @@ function runGateCommand(
     extraGapRe?: RegExp,
     /** Replaces the child's environment wholesale (config-gap probe re-run only —
      *  see launch-config-gap.ts). Absent ⇒ `runnerEnv(runner)`, i.e. unchanged. */
-    envOverride?: Record<string, string | undefined>
+    envOverride?: Record<string, string | undefined>,
+    /** The spawner. Injected so the gate's own tests can script a verdict. */
+    run: CommandRunner = spawnCommand
 ):
     | {
           outcome: 'skip'
@@ -1244,25 +1225,15 @@ function runGateCommand(
     // resolved binary is spawned, and its directory rides on the child's PATH so
     // the SCRIPT CHAIN can re-invoke the runner (`bun run test` runs `bun test`
     // inside — a bare 127 there is the same blindness one level down).
-    // env passed explicitly: bun's spawnSync resolves the binary against a
-    // startup snapshot of the environment, not the live process.env.
     const runner = resolveRunner(bin)
-    const r = spawnSync(runner.bin, args, {
-        cwd,
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        env: envOverride ?? runnerEnv(runner)
-    })
-    if (r.error) return {outcome: 'skip', spawnFailed: true}
-    if (r.status === null) return {outcome: 'skip', spawnFailed: false}
-    if (r.status !== 0) {
-        const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
-        if (isCommandNotFound(r.status, output)) return {outcome: 'skip', spawnFailed: false}
-        if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'skip', spawnFailed: false}
-        if (extraGapRe?.test(output)) return {outcome: 'skip', spawnFailed: false}
-        return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
+    const verdict = classifyCommandRun(
+        run({cwd, bin: runner.bin, args, timeoutMs, env: envOverride ?? runnerEnv(runner)}),
+        extraGapRe ? [extraGapRe] : []
+    )
+    if (verdict.outcome === 'gap') {
+        return {outcome: 'skip', spawnFailed: verdict.gap === 'spawn-failed'}
     }
-    return {outcome: 'pass'}
+    return verdict
 }
 
 /**
@@ -1306,28 +1277,30 @@ export function runVerifyCommandLine(
     cwd: string,
     line: string,
     timeoutMs: number,
-    extraGapRe?: RegExp
+    extraGapRe?: RegExp,
+    /** The spawner. Injected so a re-run's outcome can be tested without one. */
+    run: CommandRunner = spawnCommand
 ): VerifyRerunOutcome {
     const bin = leadingBin(line)
     const runner = bin === null ? null : resolveRunner(bin)
-    const r = spawnSync('sh', ['-c', line], {
-        cwd,
-        encoding: 'utf8',
-        timeout: timeoutMs,
-        env: runner ? runnerEnv(runner) : {...process.env}
-    })
-    if (r.error) return {outcome: 'gap', detail: `shell did not spawn (${r.error.message})`}
-    if (r.status === null) return {outcome: 'gap', detail: 'killed (timeout or signal)'}
-    const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`
-    if (r.status === 0) return {outcome: 'pass'}
-    if (isCommandNotFound(r.status, output)) {
-        return {outcome: 'gap', detail: 'command not found (127)'}
-    }
-    if (ENV_GAP_OUTPUT_RE.test(output)) return {outcome: 'gap', detail: 'missing browser/runtime'}
-    if (INFRA_GAP_OUTPUT_RE.test(output) || extraGapRe?.test(output) === true) {
-        return {outcome: 'gap', detail: 'external infrastructure unreachable'}
-    }
-    return {outcome: 'fail', status: r.status, tail: outputTail(r.stdout ?? '', r.stderr ?? '')}
+    // A VERIFY line is a SHELL line, not an argv — env prefixes, `&&` and
+    // redirects are all ordinary there — so the runner spawns `sh -c`.
+    const verdict = classifyCommandRun(
+        run({
+            cwd,
+            bin: 'sh',
+            args: ['-c', line],
+            timeoutMs,
+            env: runner ? runnerEnv(runner) : {...process.env}
+        }),
+        // Infrastructure counts as a gap on EVERY debt re-run, not only on
+        // request: an unreachable database cannot tell us whether the code is
+        // fixed, and the asymmetry below means an inconclusive re-run simply
+        // leaves the debt as open as it was.
+        extraGapRe ? [INFRA_GAP_OUTPUT_RE, extraGapRe] : [INFRA_GAP_OUTPUT_RE]
+    )
+    if (verdict.outcome === 'gap') return {outcome: 'gap', detail: verdict.detail}
+    return verdict
 }
 
 /**
@@ -1598,17 +1571,24 @@ const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|E
  * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
  * assumption rather than an observation.
  */
-export function rerunDebtVerifyCommand(cwd: string, command: string): VerifyRerunResult {
+export function rerunDebtVerifyCommand(
+    cwd: string,
+    command: string,
+    /** The spawner, for BOTH the command and the tracked-state reads. Injected so
+     *  the guard's four outcomes are testable without a repo or a real command. */
+    run: CommandRunner = spawnCommand
+): VerifyRerunResult {
     const tracked = (): string | null => {
-        const r = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], {
+        const r = run({
             cwd,
-            encoding: 'utf8',
-            timeout: 60_000
+            bin: 'git',
+            args: ['status', '--porcelain', '--untracked-files=no'],
+            timeoutMs: 60_000
         })
-        return r.error || r.status !== 0 ? null : (r.stdout ?? '')
+        return r.failedToStart || r.status !== 0 ? null : r.stdout
     }
     const before = tracked()
-    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE)
+    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE, run)
     if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
     if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
     const after = tracked()

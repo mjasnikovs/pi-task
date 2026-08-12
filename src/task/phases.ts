@@ -8,6 +8,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
 import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
+import {classifyWorkerFailure} from '../workers/worker-failure.js'
 import {
     findPhantomImports,
     formatApiCorrections,
@@ -84,22 +85,10 @@ import {
     stripSpecPreamble,
     isCritiqueClean
 } from './spec-validation.js'
-import {findSkipEscapes, skipEscapeDefectText} from './skip-escape.js'
-import {findScriptEscapesInText, scriptEscapeDefectText} from './script-escape.js'
-import {findSynthesizedWiring, wiringProbeText, readReferencedDocs} from './wiring-claims.js'
-import {
-    findAbsenceConflicts,
-    absenceProbeText,
-    siblingTitlesFromPlanContext
-} from './verify-reconcile.js'
-import {findFrozenPathConflicts, frozenConflictProbeText} from './frozen-conflict.js'
+import {collectCritiqueDefects} from './critique-probes.js'
+import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
 import {findSynthesizedApis, synthesizedApiReaskHint} from './api-synthesis.js'
-import {
-    findGrepOnlyVerify,
-    grepOnlyVerifyDefectText,
-    GREP_THEATER_RETRY_HINT
-} from './verify-quality.js'
-import {existsSync} from 'node:fs'
+import {GREP_THEATER_RETRY_HINT} from './verify-quality.js'
 import {readContracts, buildContractsBlock, buildContractsVerifyBlock} from './contracts.js'
 import {
     readRequirements,
@@ -572,25 +561,62 @@ function classifyResearchWorker(
     name: string,
     result: RunWorkerResult
 ): {kind: 'runaway'; reason: string} | {kind: 'fatal'; error: Error} | {kind: 'empty'} | null {
-    if (result.loopHit) {
-        const argsStr = JSON.stringify(result.loopHit.call.args)
-        return {
-            kind: 'runaway',
-            reason:
-                `stuck in a loop — called ${result.loopHit.call.name}(${argsStr}) `
-                + `×${result.loopHit.count} in the last ${result.loopHit.windowSize} calls `
-                + `and still looped after restarts`
-        }
-    }
-    if (result.timedOut) {
-        return {kind: 'runaway', reason: 'timed out after restarts'}
-    }
-    if (result.exitCode !== 0) {
-        return {
-            kind: 'fatal',
-            error: new Error(
-                `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
-            )
+    // What KILLED the child, if anything — classified once, in the ladder that
+    // owns the precedence (workers/worker-failure.ts), because every kill path
+    // also sets `aborted` and a non-zero exit. This switch says only what each
+    // cause means to RESEARCH; being exhaustive, a new cause is a compile error
+    // here instead of falling through to the generic "exit N".
+    const failure = classifyWorkerFailure(result)
+    if (failure) {
+        switch (failure.kind) {
+            case 'loop': {
+                const argsStr = JSON.stringify(failure.hit.call.args)
+                return {
+                    kind: 'runaway',
+                    reason:
+                        `stuck in a loop — called ${failure.hit.call.name}(${argsStr}) `
+                        + `×${failure.hit.count} in the last ${failure.hit.windowSize} calls `
+                        + `and still looped after restarts`
+                }
+            }
+            case 'worker-timeout':
+                return {kind: 'runaway', reason: 'timed out after restarts'}
+            case 'command-timeout':
+                return {
+                    kind: 'runaway',
+                    reason:
+                        `ran a \`${failure.toolName}\` command that never returned and was killed `
+                        + 'after restarts'
+                }
+            case 'stream-stall':
+                return {
+                    kind: 'runaway',
+                    reason: `model stream went silent for ${failure.idleMs}ms after restarts`
+                }
+            case 'stalled':
+                return {
+                    kind: 'fatal',
+                    error: new Error(
+                        `Research ${name} worker: model server unreachable — the child produced no `
+                            + 'output and the model endpoint did not respond'
+                    )
+                }
+            case 'leaked-tool-call':
+                return {
+                    kind: 'fatal',
+                    error: new Error(
+                        `Research ${name} worker wrote a tool call as text instead of invoking it `
+                            + `(${failure.text.trim()}) — it never ran`
+                    )
+                }
+            case 'aborted':
+            case 'exit':
+                return {
+                    kind: 'fatal',
+                    error: new Error(
+                        `Research ${name} worker failed (exit ${result.exitCode}): ${result.stderr.slice(-500)}`
+                    )
+                }
         }
     }
     if (result.text.trim().length === 0) {
@@ -625,15 +651,6 @@ function classifyResearchWorker(
             }
         }
         return {kind: 'empty'}
-    }
-    if (result.leakedToolCall) {
-        return {
-            kind: 'fatal',
-            error: new Error(
-                `Research ${name} worker wrote a tool call as text instead of invoking it `
-                    + `(${result.leakedToolCall.trim()}) — it never ran`
-            )
-        }
     }
     return null
 }
@@ -1560,10 +1577,6 @@ export async function phaseGrill(
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
             const plainAlt = auto.alt === undefined ? undefined : stripInlineMarkdown(auto.alt)
-            // A recommendation (or suggested+alt fork) becomes the boxed picker
-            // locally — each answer in its own bounding box, the recommended one
-            // tinted green; an open question shows the bare text prompt.
-            const twoOption = plainSuggested !== undefined && plainAlt !== undefined
             // YOLO: take the recommended option and never build the prompt (which
             // is also what suppresses its notification — see yolo.ts). An answer the
             // anti-synthesis guard demoted, or a question with no recommendation at
@@ -1579,18 +1592,22 @@ export async function phaseGrill(
                 qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer} ${YOLO_STAMP}`)
                 continue
             }
-            const options =
-                twoOption ?
-                    [
-                        {
-                            label: `A: ${renderInlineMarkdown(auto.suggested!, theme)}`,
-                            value: plainSuggested!
-                        },
-                        {label: `B: ${renderInlineMarkdown(auto.alt!, theme)}`, value: plainAlt!}
-                    ]
-                : plainSuggested !== undefined ?
-                    [{label: renderInlineMarkdown(auto.suggested!, theme), value: plainSuggested}]
-                :   undefined
+            // The picker cards and the reply mapping are shared with /task-auto's
+            // clarify loop and the plan session (question-dialog.ts) — all three
+            // used to write them out, and had drifted.
+            const pending: PendingQuestion = {
+                plain: plainQ,
+                shown: shownQ,
+                ...(plainSuggested !== undefined && {
+                    suggested: plainSuggested,
+                    shownSuggested: renderInlineMarkdown(auto.suggested!, theme)
+                }),
+                ...(plainAlt !== undefined && {
+                    alt: plainAlt,
+                    shownAlt: renderInlineMarkdown(auto.alt!, theme)
+                })
+            }
+            const options = buildOptionCards(pending)
             widgetState.lastLine = `awaiting Q${n + 1}`
             const a = await ui.ask({
                 localTitle: shownQ,
@@ -1602,23 +1619,10 @@ export async function phaseGrill(
                 ...(options && {options})
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
-            const typed = a.trim()
-            // The local picker resolves to the chosen option's full value, but a
-            // remote user (or the picker's free-text fallback) may still type a
-            // bare "A"/"B" — map those back to the option's full text, since
-            // storing the literal letter leaves the next grill-gen call a
-            // dangling reference it can't decode.
-            if (typed.length === 0 && plainSuggested) {
-                answer = plainSuggested
-            } else if (typed.length === 0) {
-                answer = '(skipped)'
-            } else if (twoOption && /^a[.)]?$/i.test(typed)) {
-                answer = plainSuggested!
-            } else if (twoOption && /^b[.)]?$/i.test(typed)) {
-                answer = plainAlt!
-            } else {
-                answer = typed
-            }
+            // No provenance stamp here, unlike clarify's transcript: this string is
+            // fed back VERBATIM into the next grill-gen prompt, so a
+            // "(accepted recommendation)" suffix would become model input.
+            answer = resolveAnswer(pending, a).answer
             out.push(`A${n + 1}: ${answer}`)
         }
         qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer}`)
@@ -1730,105 +1734,32 @@ export async function phaseCritique(
     // When the draft is structurally sound and triage says CLEAN, return it as
     // is. Otherwise fall through to the rewrite, feeding the triage defects in
     // as a focus list. Triage failures are non-fatal — we just do the rewrite.
-    // DETERMINISTIC skip-escape gate (run-8 F2): a required VERIFY check wrapped in a
-    // skip-announcing `||` fallback (`… || echo "skipping (tool absent)"`) lets the
-    // check pass while never running. FP-measured 0/20 on the historical specs. When
-    // present, force the rewrite to strip it — never let the triage CLEAN short-circuit
-    // ship a self-waiving VERIFY block — and feed the offending lines in as defects.
-    const skipEscapes = findSkipEscapes(spec)
-    const skipDefects = skipEscapes.length > 0 ? skipEscapeDefectText(skipEscapes) : null
-    // The cross-slice contract registry (run-8 F3): the design's pinned interface
-    // facts, quoted verbatim, that more than one slice touches. Threading them into
-    // critique lets the triage/rewrite RECONCILE a synthesized wiring specific (a
-    // fabricated uniform mount table) against the facts it must reproduce — the
-    // generation-side complement of the verify-side boundary check. Empty (single
-    // /task, or a design that pins no shared boundary) ⇒ no-op.
+    // The DETERMINISTIC half of critique: six scanners, each finding a defect the
+    // model does not self-discover reliably, each forced into the rewrite and each
+    // overriding a CLEAN triage. They live as rows in CRITIQUE_PROBES
+    // (critique-probes.ts) so the override and the merge below are DERIVED from
+    // the table rather than retyped — a probe used to be listed by hand in three
+    // places, and forgetting the override term shipped the very defect it was
+    // added to catch.
+    //
+    // The contract registry is read here rather than inside the table because the
+    // critique PROMPT needs it too (run-8 F3): threading the design's pinned
+    // interface facts into the rewrite lets it RECONCILE a synthesized wiring
+    // specific against the facts it must reproduce — the generation-side
+    // complement of the verify-side boundary check.
     const registryRaw = await readContracts(deps.cwd).catch(() => '')
     const contractsBlock = buildContractsVerifyBlock(registryRaw)
-    // DETERMINISTIC synthesized-wiring probe (run-8 F3, generation side). The registry
-    // alone is a WEAK catcher (live A/B: prompt+registry ~1/8) — the model's attention
-    // goes to the obvious VERIFY weakness and it rarely does the path-composition
-    // reasoning. The scanner NAMES the inferred mount mappings and juxtaposes the
-    // verbatim pinned facts, forcing focused reconciliation (probe+rule pattern, same
-    // lever as skip-escape / substitution-probe). FP-clean (1/18 files on the run-8
-    // trees). Grounding = the registry ∪ any design doc the spec/refined @-reference.
-    const wiring =
-        registryRaw.trim().length > 0 ?
-            findSynthesizedWiring(
-                spec,
-                registryRaw + '\n' + readReferencedDocs(deps.cwd, refined, spec),
-                registryRaw
-            )
-        :   []
-    const wiringProbe = wiring.length > 0 ? wiringProbeText(wiring, registryRaw) : null
-    if (wiringProbe) {
-        deps.logDebug?.(
-            `synthesized wiring flagged in spec: ${wiring.map(w => w.line).join(' | ')}`
-        )
-    }
-    // DETERMINISTIC plan-contradiction probe (mx5 run 11, goal D): a VERIFY line
-    // asserting the ABSENCE of an artifact the plan pins elsewhere — a path a prior
-    // task already shipped to disk, a sibling title's deliverable, a contract-pinned
-    // boundary. Run 11: the scope fence leaked into TASK_0009's verify as "the admin
-    // page must NOT exist" (TASK_0008's deliverable); the guaranteed FAIL became an
-    // accepted debt that the final-gate autofix then "fixed" by deleting the sibling's
-    // work. The conflict must die here, at spec time — forced into the rewrite like
-    // the skip-escape finding; delete-tasks keep their check by declaring the delete.
-    const absenceConflicts = findAbsenceConflicts(spec, {
-        fileExists: p => existsSync(resolve(deps.cwd, p)),
-        siblingTitles: siblingTitlesFromPlanContext(planContext),
-        contracts: registryRaw
-    })
-    const absenceProbe = absenceConflicts.length > 0 ? absenceProbeText(absenceConflicts) : null
-    if (absenceProbe) {
-        deps.logDebug?.(
-            'plan-contradiction flagged in VERIFY: '
-                + absenceConflicts.map(c => `${c.assertion.target} (${c.against})`).join(' | ')
-        )
-    }
-    // DETERMINISTIC unsatisfiable-pair probe (mx5 run 12 root cause): a blanket
-    // frozen path ("Do NOT modify `tsconfig.json` … handled in steps 1–2") whose
-    // registration edit the spec's OWN body — or the task's RESEARCH the spec was
-    // composed from (live drafts sometimes drop the nuance while shipping the
-    // freeze and the creation) — says the deliverable requires ("must also be
-    // included …"). Shipped as-is, the created files turn the repo-wide static
-    // check permanently red and no task is allowed to fix it — every later task
-    // burns its AUTOFIX rounds on it. Forced into the rewrite like the other
-    // probes: the rewrite must grant scoped ownership or drop the creation.
-    const frozenConflicts = findFrozenPathConflicts(spec, research)
-    const frozenProbe = frozenConflicts.length > 0 ? frozenConflictProbeText(frozenConflicts) : null
-    if (frozenProbe) {
-        deps.logDebug?.(
-            'unsatisfiable freeze/requires-edit pair flagged in spec: '
-                + frozenConflicts.map(c => c.path).join(' | ')
-        )
-    }
-    // DETERMINISTIC grep-theater probe (mx5 run 13, Bug B): a VERIFY block that
-    // grep-asserts the SOURCE of a runnable deliverable while every command in
-    // the block is static inspection — the build script "verified" by three
-    // greps that was never run, shipping broken for 14 tasks. Forced into the
-    // rewrite like the skip-escape finding: VERIFY must EXECUTE the artifact
-    // and assert an observable outcome of that run.
-    const grepOnly = findGrepOnlyVerify(spec)
-    const grepOnlyProbe = grepOnly.length > 0 ? grepOnlyVerifyDefectText(grepOnly) : null
-    if (grepOnlyProbe) {
-        deps.logDebug?.(
-            'grep-theater VERIFY flagged in spec: ' + grepOnly.map(f => f.target).join(' | ')
-        )
-    }
-    // DETERMINISTIC neutered-check-script probe (mx5 run 13, PROMPT 4 item 4): a
-    // spec that DICTATES a check script which cannot fail — `"lint": "… || true"`,
-    // or a checker laundered through an inverted grep. Whatever task implements
-    // that spec writes the disarmed script into package.json, and from then on
-    // every gate that runs it (repo-health verify, the final integration gate)
-    // reads a constant. Cheapest to kill here, in the spec, before it is authored.
-    const scriptEscapes = findScriptEscapesInText(spec)
-    const scriptProbe = scriptEscapes.length > 0 ? scriptEscapeDefectText(scriptEscapes) : null
-    if (scriptProbe) {
-        deps.logDebug?.(
-            'neutered check script dictated by spec: ' + scriptEscapes.map(f => f.name).join(' | ')
-        )
-    }
+    const probes = collectCritiqueDefects(
+        {
+            spec,
+            refined,
+            ...(research === undefined ? {} : {research}),
+            cwd: deps.cwd,
+            registryRaw,
+            ...(planContext === undefined ? {} : {planContext})
+        },
+        deps.logDebug
+    )
     let triageDefects: string | null = null
     if (parseVerifyBlock(spec) !== null) {
         const tTriage = Date.now()
@@ -1849,21 +1780,12 @@ export async function phaseCritique(
         }
         deps.recordSubStep?.('triage', Date.now() - tTriage)
         if (verdict !== null) {
-            // A deterministic skip-escape, synthesized-wiring, plan-contradiction,
-            // unsatisfiable-pair, grep-theater, or neutered-check-script finding
-            // overrides a CLEAN triage: the draft must be rewritten to resolve it
-            // even if the model judged the rest clean (the model does not
-            // self-discover any of them reliably).
+            // ANY deterministic finding overrides a CLEAN triage: the draft must be
+            // rewritten to resolve it even if the model judged the rest clean (the
+            // model does not self-discover any of them reliably). Derived from the
+            // table, so a new probe joins this rule by existing.
             if (isCritiqueClean(verdict)) {
-                if (
-                    skipDefects === null
-                    && wiringProbe === null
-                    && absenceProbe === null
-                    && frozenProbe === null
-                    && grepOnlyProbe === null
-                    && scriptProbe === null
-                    && (extraDefects ?? null) === null
-                ) {
+                if (!probes.forced && (extraDefects ?? null) === null) {
                     return spec
                 }
             } else {
@@ -1871,22 +1793,10 @@ export async function phaseCritique(
             }
         }
     }
-    // Merge the deterministic skip-escape + synthesized-wiring + plan-contradiction
-    // + unsatisfiable-pair + grep-theater + neutered-script defects with any triage
-    // defects for the rewrite (all are forced FOCUS items).
+    // Merge every deterministic defect with any triage defects for the rewrite
+    // (all are forced FOCUS items).
     const rewriteDefects =
-        [
-            skipDefects,
-            wiringProbe,
-            absenceProbe,
-            frozenProbe,
-            grepOnlyProbe,
-            scriptProbe,
-            extraDefects ?? null,
-            triageDefects
-        ]
-            .filter(Boolean)
-            .join('\n\n') || null
+        [...probes.blocks, extraDefects ?? null, triageDefects].filter(Boolean).join('\n\n') || null
 
     const tRewrite = Date.now()
     try {
@@ -1918,13 +1828,14 @@ export async function phaseCritique(
                 if (parseVerifyBlock(stripped) === null) {
                     return {ok: false, problem: 'no_verify_block'}
                 }
-                // Detector-backed closure on the grep-theater defect: when the
-                // draft was flagged, the rewrite must actually resolve it (live
-                // A/B: 1/5 rewrites ignored the injected defect and re-shipped
-                // the grep-only block). One emphasis retry with a targeted hint;
+                // Detector-backed closure: a rewrite HANDED a defect and shipping
+                // it anyway is a failed rewrite. Only probes that actually fired
+                // are re-checked — a defect the draft never had is not the
+                // rewrite's to resolve. One emphasis retry with a targeted hint;
                 // a second miss falls back to the draft in critiqueWithFallback.
-                if (grepOnlyProbe !== null && findGrepOnlyVerify(stripped).length > 0) {
-                    return {ok: false, problem: 'verify_grep_theater'}
+                const unresolved = probes.unresolvedIn(stripped)
+                if (unresolved !== null) {
+                    return {ok: false, problem: unresolved}
                 }
                 return {ok: true, value: stripped}
             },

@@ -20,7 +20,7 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {GateDeps} from './task-gates.js'
 import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
-import {runGuidelineEnforcement, classifyEnforceChildFailure} from './enforce-guidelines.js'
+import {runGuidelineEnforcement} from './enforce-guidelines.js'
 import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
@@ -62,11 +62,11 @@ import {
 import {assessRunnerGlobs, runnerGlobVerifyFindings} from './runner-globs.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
-import {formatLoopHint} from './child-runner.js'
 import {getConfig} from '../config/config.js'
 import {makeDebugAppender} from './debug-log.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {resolveContextUsage} from './context-usage.js'
+import {makeGateChild, type GateChildKind} from './gate-child.js'
 
 /** A function that re-runs a task's implementation turn (AUTOFIX). Injected by the
  *  command so this module stays free of the orchestrators (avoids an import cycle). */
@@ -570,166 +570,60 @@ export function buildGateDeps(params: {
         await git(cwd2, ['clean', '-fd', '-e', '.pi-tasks'], signal)
     }
 
-    // Shared runner for the per-task GATE children (verify + post-FAIL recommend).
-    // Both are read-only passes of the same local model that must run to completion:
-    // unguarded (no wall-clock timeout, exact-match loop guard only, path-revisit
-    // disabled because re-running the same check is the job), with a status widget
-    // and a per-gate debug log. Returns the closure runWorkVerification /
-    // researchResolution expect as `runChild`.
-    const makeGateChild =
-        (
-            gateCtx: ExtensionCommandContext,
-            cwd2: string,
-            taskTitle: string,
-            kind: 'verify' | 'recommend' | 'lint-fix' | 'final-fix',
-            logFile: string,
-            /** `loader: false` when the CALLER already renders a loader that spans
-             *  this child (the verify gate does — see its dead-air note). Two
-             *  loaders on one widget key only fight each other. */
-            opts: {loader?: boolean} = {}
-        ) =>
-        async (tools: string, prompt: string, sig?: AbortSignal): Promise<string> => {
-            lastLine = undefined
-            contextUsage = undefined
-            lastGuardReconcile = null
-            const startedAt = Date.now()
-            // `kind` defaults to 'event': every marker below (start/end, the
-            // git-state guard's restore, the loop warning, a write-capable child's
-            // tree changes) is a guard record that survives at the default level.
-            // Only the child's own stdout and its tool results pass 'stream'.
-            const log = makeDebugAppender(path.join(tasksDir(cwd2), logFile))
-            log(`=== ${kind} start: ${taskTitle} ===`)
-            // GIT-STATE GUARD: these children are read-only BY CONTRACT, but the
-            // contract is prompt-level and the live model breaks it (mx5 run 6: the
-            // verify child `git stash`ed the task's uncommitted work and never popped
-            // — the impl was destroyed and the orphan stash detonated 2 days later).
-            // Snapshot before, deterministically restore after; lint-fix is excluded
-            // because editing is its job (it carries its own revert guard).
-            const guardSnapshot =
-                kind === 'verify' || kind === 'recommend' ? await captureGitState(cwd2, sig) : null
-            const stopLoader =
-                opts.loader === false ?
-                    () => {}
-                :   startAutoLoader(gateCtx, () => ({
-                        title: taskTitle,
-                        kind,
-                        step: kind,
-                        stepNum: 1,
-                        stepTotal: 1,
-                        startedAt,
-                        lastLine,
-                        contextUsage
-                    }))
-            try {
-                let r
-                try {
-                    r = await runWorker({
-                        prompt,
-                        cwd: cwd2,
-                        signal: sig,
-                        tools,
-                        timeoutMs: 0,
-                        // The gate child runs to completion (timeoutMs 0), but a
-                        // single command inside it must still be bounded: pi's bash
-                        // tool has no default timeout, so a `bun run dev` / hung
-                        // check the model forgot to bound wedges the gate forever.
-                        // The stall guard cannot see it — a reachable model endpoint
-                        // reads as proof of life while the command blocks. Same
-                        // ceiling the main session uses, so one /task-config knob
-                        // covers implementation and gates alike.
-                        commandTimeoutMs: getConfig().requestTimeoutMs,
-                        // Same reasoning one level up: a gate child with no
-                        // wall-clock cap also needs the HUNG-STREAM bound, which
-                        // the probe-based stall guard structurally cannot supply
-                        // (a healthy endpoint reads as proof of life).
-                        streamInactivityMs: getConfig().streamInactivityMs,
-                        loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                        // A discarded attempt is otherwise invisible here too: the
-                        // returned exitCode/text describe the FINAL attempt, so a
-                        // gate child that burned two attempts and its wall clock
-                        // reads exactly like one that ran clean.
-                        onRestart: rs =>
-                            log(
-                                `=== ${kind} RESTART (attempt ${rs.attempt} discarded)`
-                                    + ` reason=${rs.reason} wall=${rs.wallMs}ms`
-                                    + (rs.detail ? ` — ${rs.detail}` : '')
-                                    + ' ==='
-                            ),
-                        onLine: line => {
-                            // `lastLine` feeds the LIVE status widget and is not
-                            // logging — it stays outside the gate, or a quiet
-                            // trail would also blank the progress display.
-                            lastLine = line
-                            log(line, 'stream')
-                        },
-                        // Log tool OUTPUTS, not just the command (mx5 run 10 item 6):
-                        // without the result "verify claimed curl PASS on a server that
-                        // cannot serve" is undecidable from the log. Truncated, tail-kept
-                        // (a bind failure / status usually lands at the end), error-flagged.
-                        onToolResult: ({name, isError, text}) =>
-                            log(
-                                `↳ ${name} [${isError ? 'ERR' : 'ok'}]: ${truncateToolResult(text)}`,
-                                'stream'
-                            ),
-                        onContextUsage: snapshot => {
-                            contextUsage = resolveContextUsage(
-                                snapshot,
-                                contextUsage,
-                                parentContextWindow
-                            )
-                        }
-                    })
-                } finally {
-                    // Restore whatever the child moved BEFORE any verdict/failure is
-                    // acted on — a crashed child must not skip the restore either.
-                    if (guardSnapshot) {
-                        const rec = await reconcileGitState(cwd2, guardSnapshot, sig)
-                        lastGuardReconcile = rec
-                        if (rec.mutated) {
-                            // Distinguish the two outcomes in the trail: a tainting
-                            // mutation (graded work altered → verdict will be
-                            // discarded) vs benign cleanup (test-runner output the
-                            // child left behind → verdict stands).
-                            const label =
-                                rec.verdictTainted ?
-                                    'child mutated graded state (verdict discarded)'
-                                :   'cleaned child test-runner artifacts (verdict kept)'
-                            log(
-                                `=== ${kind} GIT-STATE GUARD — ${label}; restored: ${rec.actions.join('; ')} ===`
-                            )
-                            if (rec.verdictTainted) {
-                                gateCtx.ui.notify(
-                                    `${taskTitle}: ${kind} child mutated repo state — restored (${rec.actions.join('; ').slice(0, 140)}).`,
-                                    'warning'
-                                )
-                            }
-                        }
-                    }
-                }
-                if (r.loopHit) {
-                    log(`=== ${kind} LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`)
-                    gateCtx.ui.notify(
-                        `${taskTitle}: ${kind} worker looped past the nudges — continuing (not blocked).`,
-                        'warning'
-                    )
-                }
-                const failure = classifyEnforceChildFailure(r)
-                log(failure ? `=== ${kind} end: FAIL — ${failure} ===` : `=== ${kind} end: ok ===`)
-                if (failure) throw new Error(failure)
-                // CAPABILITY-LEVEL diff capture (mx5 run 11): any WRITE-capable
-                // child — decided by its tools, not by which phase spawned it —
-                // gets its tree changes logged, so a future write-capable kind
-                // cannot run invisibly the way the final-fix child's `rm` did.
-                if (/\b(?:edit|bash|write)\b/.test(tools)) {
-                    log(
-                        `=== ${kind} tree changes: ${formatTreeChanges(await collectTreeChanges(cwd2, sig))} ===`
-                    )
-                }
-                return r.text
-            } finally {
-                stopLoader()
+    // Adapter onto the shared gate-child runner (gate-child.ts). What survives
+    // here is WIRING — which context, which log file, which config knobs, and
+    // where the live-widget state lives; the ritual and the per-kind policy are
+    // the table's. The enforce child below goes through the same call.
+    const gateChild = (
+        gateCtx: ExtensionCommandContext,
+        cwd2: string,
+        taskTitle: string,
+        kind: GateChildKind,
+        logFile: string,
+        opts: {loader?: boolean} = {}
+    ): ((tools: string, prompt: string, sig?: AbortSignal) => Promise<string>) => {
+        // An accessor box, not a copy: the runner writes these fields and the
+        // loader snapshot reads them on every tick, so both must see the same
+        // closure state the rest of buildGateDeps already shares.
+        const widget = {
+            get lastLine(): string | undefined {
+                return lastLine
+            },
+            set lastLine(v: string | undefined) {
+                lastLine = v
+            },
+            get contextUsage(): ContextSnapshot | undefined {
+                return contextUsage
+            },
+            set contextUsage(v: ContextSnapshot | undefined) {
+                contextUsage = v
             }
         }
+        return makeGateChild({
+            ctx: gateCtx,
+            cwd: cwd2,
+            taskTitle,
+            kind,
+            logPath: path.join(tasksDir(cwd2), logFile),
+            ...(opts.loader === undefined ? {} : {loader: opts.loader}),
+            commandTimeoutMs: getConfig().requestTimeoutMs,
+            streamInactivityMs: getConfig().streamInactivityMs,
+            parentContextWindow,
+            runWorker,
+            makeDebugAppender,
+            startAutoLoader,
+            captureGitState,
+            reconcileGitState,
+            describeTreeChanges: async (c, sig) =>
+                formatTreeChanges(await collectTreeChanges(c, sig)),
+            resolveContextUsage,
+            truncateToolResult,
+            widget,
+            onReconcile: rec => {
+                lastGuardReconcile = rec
+            }
+        })
+    }
 
     return {
         runTask,
@@ -836,91 +730,14 @@ export function buildGateDeps(params: {
                 // research-worker guards mislabel that as a runaway and kill good work
                 // (proven on mx5 TASK_0002). classifyEnforceChildFailure still blocks
                 // on a real failure (non-zero exit, leaked tool call) or a user cancel.
-                runChild: async (tools, prompt, sig) => {
-                    lastLine = undefined
-                    contextUsage = undefined
-                    const startedAt = Date.now()
-                    // Per-pass debug log; the enforce child is otherwise unobservable.
-                    const logEnforce = makeDebugAppender(
-                        path.join(tasksDir(cwd2), 'enforce-debug.log')
-                    )
-                    logEnforce(`=== enforce start: ${taskTitle} ===`)
-                    const stopLoader = startAutoLoader(enforceCtx, () => ({
-                        title: taskTitle,
-                        kind: 'enforce',
-                        step: 'guidelines',
-                        stepNum: 1,
-                        stepTotal: 1,
-                        startedAt,
-                        lastLine,
-                        contextUsage
-                    }))
-                    try {
-                        const r = await runWorker({
-                            prompt,
-                            cwd: cwd2,
-                            signal: sig,
-                            tools,
-                            timeoutMs: 0, // no wall-clock timeout — run to completion
-                            // …but still bound any SINGLE command (see makeGateChild).
-                            // enforce is read,edit today, so nothing here can hang on
-                            // bash — wired anyway so a future tool grant can't quietly
-                            // re-open the hole.
-                            commandTimeoutMs: getConfig().requestTimeoutMs,
-                            // Unbounded wall clock here too — the hung-stream
-                            // bound is the only thing that ends a dead stream.
-                            streamInactivityMs: getConfig().streamInactivityMs,
-                            // Exact-match loop guard only: pathThreshold Infinity
-                            // disables the path-revisit heuristic, so revisiting one
-                            // file (which IS this pass's job) never trips — only a
-                            // literally-identical call repeated past threshold does.
-                            loop: {pathThreshold: Number.POSITIVE_INFINITY},
-                            // Same reasoning as the gate child: without this a
-                            // discarded attempt leaves no trace anywhere.
-                            onRestart: rs =>
-                                logEnforce(
-                                    `=== enforce RESTART (attempt ${rs.attempt} discarded)`
-                                        + ` reason=${rs.reason} wall=${rs.wallMs}ms`
-                                        + (rs.detail ? ` — ${rs.detail}` : '')
-                                        + ' ==='
-                                ),
-                            onLine: line => {
-                                // `lastLine` drives the live widget, not the trail.
-                                lastLine = line
-                                logEnforce(line, 'stream')
-                            },
-                            onContextUsage: snapshot => {
-                                contextUsage = resolveContextUsage(
-                                    snapshot,
-                                    contextUsage,
-                                    parentContextWindow
-                                )
-                            }
-                        })
-                        // A loop that survived the restart-with-hint nudges is a
-                        // warning, not a failure: log it and tell the user, but let the
-                        // verdict gate be the only thing that can block.
-                        if (r.loopHit) {
-                            logEnforce(
-                                `=== enforce LOOP WARNING — ${formatLoopHint(r.loopHit)} ===`
-                            )
-                            enforceCtx.ui.notify(
-                                `${taskTitle}: enforce worker looped past the nudges — continuing (not blocked).`,
-                                'warning'
-                            )
-                        }
-                        const failure = classifyEnforceChildFailure(r)
-                        logEnforce(
-                            failure ?
-                                `=== enforce end: FAIL — ${failure} ===`
-                            :   '=== enforce end: verdict captured ==='
-                        )
-                        if (failure) throw new Error(failure)
-                        return r.text
-                    } finally {
-                        stopLoader()
-                    }
-                }
+                //
+                // This used to be an inline ~85-line copy of the gate-child ritual,
+                // differing only in the four things GATE_CHILD_KINDS now carries as
+                // row data: no git-state guard (editing is this pass's job), no
+                // tool-result logging, no tree-change capture, and its own end
+                // marker. Its own debug log stays — the enforce child is otherwise
+                // unobservable.
+                runChild: gateChild(enforceCtx, cwd2, taskTitle, 'enforce', 'enforce-debug.log')
             })
         },
         verify: async (verifyCtx, cwd2, taskTitle, taskId) => {
@@ -976,16 +793,9 @@ export function buildGateDeps(params: {
                     // The child renders no loader of its own: the gate-wide one above is
                     // already live and reads the same `lastLine`/`contextUsage` the child
                     // feeds, so a second widget on the same key would only fight it.
-                    runChild: makeGateChild(
-                        verifyCtx,
-                        cwd2,
-                        taskTitle,
-                        'verify',
-                        'verify-debug.log',
-                        {
-                            loader: deadAirBaseline
-                        }
-                    ),
+                    runChild: gateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log', {
+                        loader: deadAirBaseline
+                    }),
                     // Names the deterministic step in the live status line.
                     onStage: label => {
                         stageLine = label
@@ -1117,7 +927,7 @@ export function buildGateDeps(params: {
                 cwd: cwd2,
                 signal,
                 failReason,
-                runChild: makeGateChild(fixCtx, cwd2, taskTitle, 'lint-fix', 'verify-debug.log'),
+                runChild: gateChild(fixCtx, cwd2, taskTitle, 'lint-fix', 'verify-debug.log'),
                 repoHealth: () => runRepoHealthCheckAsync(cwd2, {signal}),
                 git: async args => {
                     const r = await git(cwd2, args, signal)
@@ -1171,7 +981,7 @@ export function buildGateDeps(params: {
                 cwd: cwd2,
                 signal,
                 failReason,
-                runChild: makeGateChild(
+                runChild: gateChild(
                     fixCtx,
                     cwd2,
                     'final integration gate',
@@ -1232,7 +1042,7 @@ export function buildGateDeps(params: {
                 signal,
                 spec,
                 failReason,
-                runChild: makeGateChild(recCtx, cwd2, taskTitle, 'recommend', 'verify-debug.log')
+                runChild: gateChild(recCtx, cwd2, taskTitle, 'recommend', 'verify-debug.log')
             })
         }
     }

@@ -104,7 +104,9 @@ import {
     type RequirementEntry,
     type CoverageAccounting
 } from './requirements.js'
-import {decideAdoption, groundedCoverage, type CoveragePlan} from './coverage-loop.js'
+import {decideAdoption, groundedCoverage, type ScoredPlan} from './coverage-loop.js'
+import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
+import {TERMINAL_OUTCOMES, formatAt, formatWhy} from './terminal-outcome.js'
 import {
     findSpecDanglingArtifacts,
     titlesCoverArtifact,
@@ -745,11 +747,6 @@ export async function planAuto(
         }
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
         const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
-        // Identical to /task's grill dialog: a recommendation (or A/B fork)
-        // becomes the boxed picker locally — each answer in its own bounding box,
-        // the recommended one tinted green; an open question shows the bare text
-        // prompt. No verbose "Recommended:" / "press Enter to accept" scaffolding.
-        const twoOption = plainSuggested !== undefined && plainAlt !== undefined
         // YOLO: take the recommended option (index 0 / the green card) without ever
         // building the prompt. Clarify has no anti-synthesis channel — it runs before
         // any research — so the only step-aside here is a question that carries no
@@ -766,18 +763,22 @@ export async function planAuto(
             )
             continue
         }
-        const options =
-            twoOption ?
-                [
-                    {
-                        label: `A: ${renderInlineMarkdown(suggested!, theme)}`,
-                        value: plainSuggested!
-                    },
-                    {label: `B: ${renderInlineMarkdown(alt!, theme)}`, value: plainAlt!}
-                ]
-            : plainSuggested !== undefined ?
-                [{label: renderInlineMarkdown(suggested!, theme), value: plainSuggested}]
-            :   undefined
+        // The picker cards and the reply mapping are shared with /task's grill
+        // phase and the plan session (question-dialog.ts) — all three used to
+        // write them out, and had drifted.
+        const pending: PendingQuestion = {
+            plain: plainQ,
+            shown: shownQ,
+            ...(plainSuggested !== undefined && {
+                suggested: plainSuggested,
+                shownSuggested: renderInlineMarkdown(suggested!, theme)
+            }),
+            ...(plainAlt !== undefined && {
+                alt: plainAlt,
+                shownAlt: renderInlineMarkdown(alt!, theme)
+            })
+        }
+        const options = buildOptionCards(pending)
         const a = await ui.ask({
             localTitle: shownQ,
             displayQuestion: shownQ,
@@ -791,26 +792,16 @@ export async function planAuto(
             announceDone(ctx, '/task-auto cancelled.', 'warning')
             return null
         }
-        const typed = a.trim()
-        // The local picker resolves to the chosen option's full value, but a
-        // remote user (or the picker's free-text fallback) may still type a bare
-        // "A"/"B" — map those back to the option's full text. Mirrors phaseGrill.
-        let answer: string
-        if (typed.length === 0 && plainSuggested) {
-            answer = `${plainSuggested} (accepted recommendation)`
-        } else if (typed.length === 0) {
-            answer = '(skipped)'
-        } else if (twoOption && /^a[.)]?$/i.test(typed)) {
-            answer = plainSuggested!
-        } else if (twoOption && /^b[.)]?$/i.test(typed)) {
-            answer = plainAlt!
-        } else if (!twoOption && plainSuggested !== undefined && typed === plainSuggested) {
-            // Single recommendation accepted by picking its (green) card in the
-            // boxed picker — same provenance as an empty-submit accept.
-            answer = `${plainSuggested} (accepted recommendation)`
-        } else {
-            answer = typed
-        }
+        const resolved = resolveAnswer(pending, a)
+        // Clarify's transcript records PROVENANCE; grill's deliberately does not,
+        // because grill's is fed back verbatim into the next grill-gen prompt. That
+        // is now the only difference between the two dialogs, and it is one line.
+        // An accept covers both routes to it: submitting empty, and pressing the
+        // single green card.
+        const answer =
+            resolved.source === 'accepted' ?
+                `${resolved.answer} (accepted recommendation)`
+            :   resolved.answer
         answers.push(`Q${answers.length + 1}: ${plainQ}\nA${answers.length + 1}: ${answer}`)
     }
     if (answers.length === 0) {
@@ -996,18 +987,7 @@ export async function planAuto(
     // host-side per-requirement map (lever — every grounded requirement gets a
     // falsifiable TASK/CROSS/NONE verdict). Best-effort: a fault degrades a signal,
     // never blocks planning.
-    const scorePlan = async (
-        titles: string[]
-    ): Promise<{
-        plan: CoveragePlan
-        accounting: CoverageAccounting | null
-        suspect: boolean
-        // The holistic-judge missing areas alone (NOT the quoted unmapped entries,
-        // which the grounded accounting already carries). This is the belt-only
-        // channel — areas requirement-extraction never captured, so nothing durable
-        // sees them unless carried explicitly at exhaustion (see the carry below).
-        judgeMissing: string[]
-    }> => {
+    const scorePlan = async (titles: string[]): Promise<ScoredPlan> => {
         let verdict: CoverageVerdict | null
         try {
             verdict = parseCoverageVerdict(
@@ -1077,9 +1057,11 @@ export async function planAuto(
     const hasRequirements = reqEntries.length > 0
     // `best` is both the plan the next round reprompts FROM and the plan that
     // ships — kept identical because adoption is monotone (see coverage-loop.ts).
+    //
+    // It is also the ONLY handle on the accounting. There used to be a second,
+    // `let accounting`, carried alongside — see the ScoredPlan doc comment for the
+    // requirement-to-wrong-task bug that cost us.
     let best = await scorePlan(planTitles)
-    // The carried accounting (cross-cutting + unowned) for the plan that ships.
-    let accounting: CoverageAccounting | null = best.accounting
     let round = 0
     // #2: the round cap can be lifted ONCE. An adoption is a fresh whole-plan roll,
     // so the plan that gets adopted can expose an uncovered area the pre-adoption
@@ -1142,8 +1124,12 @@ export async function planAuto(
             // every round, so there is no trustworthy "grew"/"new" signal to gate on.
             const priorCovered = best.plan.covered.size
             const priorMissing = new Set(best.plan.missing.map(normMissingArea))
+            // The WHOLE scored plan is adopted, titles and accounting together.
+            // This used to be two assignments, and the second one kept the OLD
+            // plan's accounting whenever the new plan's coverage-map child faulted
+            // (`cand.accounting ?? accounting`) — binding requirements to titles
+            // they were never mapped against. See the ScoredPlan doc comment.
             best = cand
-            accounting = cand.accounting ?? accounting
             logPlanDebug(cwd, `decompose retry ADOPTED — ${decision.reason}`)
             if (
                 !bonusRoundUsed
@@ -1208,8 +1194,8 @@ export async function planAuto(
     // exactly the class that, having no carrier, was warned-about then dropped (mx5
     // 2026-07-16, §10 test-infra). Carried independent of `accounting` so a mapping
     // fault (accounting === null) can't strand them either.
-    const carriedCrossCutting = accounting?.crossCutting ?? []
-    const carriedUnmapped = accounting?.unmapped ?? []
+    const carriedCrossCutting = best.accounting?.crossCutting ?? []
+    const carriedUnmapped = best.accounting?.unmapped ?? []
     const carriedJudge = best.judgeMissing
     // Dangling artifacts still unclaimed by any title of the SHIPPING plan are a
     // fourth channel: the producing obligation travels verbatim into every task
@@ -1252,22 +1238,17 @@ export async function planAuto(
     // not a substring of the doc and is dropped, so a fabricated contract — exactly
     // the F3 bug — can never enter the registry. Best-effort: any fault here is
     // swallowed (the registry is a sharpener, never a planning blocker).
-    try {
-        const contractRaw = await deps.runChild(
-            'contract-extract',
-            '',
-            CONTRACT_EXTRACT_PROMPT(featureForModel, planTitles)
-        )
-        const grounded = keepGroundedContracts(parseContractLines(contractRaw), featureForModel)
-        logPlanDebug(
-            cwd,
-            `contract extraction: ${grounded.length} grounded contract(s) kept`
-                + ` from ${parseContractLines(contractRaw).length} emitted`
-        )
-        await appendContracts(cwd, grounded)
-    } catch {
-        // best-effort registry
-    }
+    await runGroundedExtraction({
+        cwd,
+        runChild: deps.runChild,
+        child: 'contract-extract',
+        noun: 'contract',
+        label: 'contract extraction',
+        prompt: CONTRACT_EXTRACT_PROMPT(featureForModel, planTitles),
+        parse: parseContractLines,
+        ground: emitted => keepGroundedContracts(emitted, featureForModel),
+        append: appendContracts
+    })
 
     // Launch contract (mx5 run 10 item 4): extract the package/build SCRIPTS the design
     // declares the project must expose (`migrate`/`seed` fell through decompose and
@@ -1279,22 +1260,17 @@ export async function planAuto(
     // far from the design's summary list (`test:ct` in §2 vs §9's five) can't be
     // missed by a weak model's recall — the child classifies, it no longer recalls.
     // Best-effort.
-    try {
-        const scriptRaw = await deps.runChild(
-            'launch-extract',
-            '',
-            LAUNCH_EXTRACT_PROMPT(featureForModel, enumerateScriptCandidates(featureForModel))
-        )
-        const grounded = keepGroundedScripts(parseScriptLines(scriptRaw), featureForModel)
-        logPlanDebug(
-            cwd,
-            `launch-contract extraction: ${grounded.length} grounded script(s) kept`
-                + ` from ${parseScriptLines(scriptRaw).length} emitted`
-        )
-        await appendDeclaredScripts(cwd, grounded)
-    } catch {
-        // best-effort artifact
-    }
+    await runGroundedExtraction({
+        cwd,
+        runChild: deps.runChild,
+        child: 'launch-extract',
+        noun: 'script',
+        label: 'launch-contract extraction',
+        prompt: LAUNCH_EXTRACT_PROMPT(featureForModel, enumerateScriptCandidates(featureForModel)),
+        parse: parseScriptLines,
+        ground: emitted => keepGroundedScripts(emitted, featureForModel),
+        append: appendDeclaredScripts
+    })
 
     // Thread the feature's spec doc(s) into every title so each per-task
     // pipeline — which only ever sees its title — reads the real spec instead of
@@ -1312,10 +1288,10 @@ export async function planAuto(
     // §9's "serves `/api` + static `dist/`" out of its spec with nothing to stop
     // it). Inert until the owned-requirements injection is wired into the phase
     // prompts; recorded regardless so the plan's mapping is auditable per run.
-    if (accounting && accounting.mapped.length > 0) {
+    if (best.accounting && best.accounting.mapped.length > 0) {
         await writeOwnedRequirements(
             cwd,
-            accounting.mapped
+            best.accounting.mapped
                 .filter(m => m.task >= 1 && m.task <= titles.length)
                 .map(m => ({quote: m.req.quote, anchor: m.req.anchor, title: titles[m.task - 1]}))
         )
@@ -1334,18 +1310,69 @@ export async function planAuto(
     }
     // Durable, user-visible coverage record (goal A(c)): what was carried and what
     // stayed unowned lives in the plan file itself, not only in a transient toast.
+    const shipped = best.accounting
     const coverageNote =
-        accounting === null ? '' : (
+        shipped === null ? '' : (
             [
-                `${reqEntries.length} grounded requirement(s): ${accounting.mapped.length} task-mapped, `
-                    + `${accounting.crossCutting.length} cross-cutting (carried into every task via `
-                    + `.pi-tasks/requirements.md), ${accounting.unmapped.length} unowned`,
-                ...accounting.crossCutting.map(e => `- carried: "${e.quote}"`),
-                ...accounting.unmapped.map(e => `- UNOWNED (no task covers this): "${e.quote}"`)
+                `${reqEntries.length} grounded requirement(s): ${shipped.mapped.length} task-mapped, `
+                    + `${shipped.crossCutting.length} cross-cutting (carried into every task via `
+                    + `.pi-tasks/requirements.md), ${shipped.unmapped.length} unowned`,
+                ...shipped.crossCutting.map(e => `- carried: "${e.quote}"`),
+                ...shipped.unmapped.map(e => `- UNOWNED (no task covers this): "${e.quote}"`)
             ].join('\n')
         )
     await writeTaskFile(cwd, fm, buildAutoBody(feature, clarifications, titles, coverageNote))
     return id
+}
+
+/**
+ * One best-effort, HOST-GROUNDED extraction: ask a child to emit lines, drop
+ * every line the design does not literally contain, log the kept/emitted split,
+ * and append what survives to a run-level artifact.
+ *
+ * The grounding step is the reason this shape exists rather than a plain child
+ * call. A child asked for interface facts will paraphrase and occasionally invent
+ * them (mx5 run 8, F3), and an invented fact in a run-level registry is read as
+ * authoritative by every downstream refine/compose/verify. So nothing the child
+ * says is trusted: `ground` re-checks each emitted line against the design text
+ * host-side, and only substrings survive.
+ *
+ * Best-effort by contract. These artifacts SHARPEN planning; none of them gates
+ * it, so a fault here is swallowed rather than failing a run that is otherwise
+ * fine — which is why the whole body sits in one `catch {}`.
+ *
+ * The two call sites (contracts, launch scripts) were byte-identical apart from
+ * the four values this row carries, and the contracts copy parsed its child's
+ * output twice — once for the artifact and once for the log count — because the
+ * duplication made the second parse easy to miss.
+ */
+async function runGroundedExtraction<T>(row: {
+    cwd: string
+    runChild: (name: string, tools: string, prompt: string) => Promise<string>
+    /** Child name — also the key AUTO_PLAN_STEPS renders in the loader. */
+    child: string
+    /** Singular noun for the log line ("contract", "script"). */
+    noun: string
+    /** Log prefix naming the step. */
+    label: string
+    prompt: string
+    parse: (raw: string) => T[]
+    /** Keep only what the design itself backs. Runs host-side, never the child. */
+    ground: (emitted: T[]) => T[]
+    append: (cwd: string, kept: T[]) => Promise<void>
+}): Promise<void> {
+    try {
+        const emitted = row.parse(await row.runChild(row.child, '', row.prompt))
+        const grounded = row.ground(emitted)
+        logPlanDebug(
+            row.cwd,
+            `${row.label}: ${grounded.length} grounded ${row.noun}(s) kept`
+                + ` from ${emitted.length} emitted`
+        )
+        await row.append(row.cwd, grounded)
+    } catch {
+        // best-effort artifact — never a planning blocker
+    }
 }
 
 /** The two feature-level planning children, shown as steps in the loader. */
@@ -1675,41 +1702,25 @@ export async function runAutoLoop(
                 onVerified: () => checkOffTask(cwd, id, next.index, res.taskId, next.title)
             })
             active = gate.ctx
-            if (gate.kind === 'paused') {
-                await markResumable(cwd, res.taskId)
-                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+            // Every terminal gate outcome — what to demote, what to fail, what to
+            // say — comes from TERMINAL_OUTCOMES, shared verbatim with /task's
+            // loop. `done` alone is not terminal here: it falls through to the
+            // next task.
+            if (gate.kind !== 'done') {
+                const outcome = TERMINAL_OUTCOMES[gate.kind]
+                if (outcome.markResumable) await markResumable(cwd, res.taskId)
+                if (outcome.failParent) {
+                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                }
                 announceDone(
                     active,
-                    `${id} paused at "${next.title}" — verification failed and you dismissed the choice; resume with /task-auto-resume.`,
-                    'warning'
-                )
-                return
-            }
-            if (gate.kind === 'session-cancelled') {
-                announceDone(
-                    active,
-                    `${id} paused — could not start a session for autofix. Run /task-auto-resume to retry.`,
-                    'warning'
-                )
-                return
-            }
-            if (gate.kind === 'interrupted') {
-                await markResumable(cwd, res.taskId)
-                announceDone(
-                    active,
-                    `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
-                    'warning'
-                )
-                return
-            }
-            if (gate.kind === 'failed') {
-                await markResumable(cwd, res.taskId)
-                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                const why = gate.reason ? ` — ${gate.reason.slice(0, 160)}` : ''
-                announceDone(
-                    active,
-                    `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
-                    'error'
+                    outcome.message({
+                        tag: id,
+                        at: formatAt(next.title),
+                        why: formatWhy(gate.kind === 'failed' ? gate.reason : undefined),
+                        resumeCmd: '/task-auto-resume'
+                    }),
+                    outcome.level
                 )
                 return
             }

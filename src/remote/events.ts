@@ -1,5 +1,4 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
-import {setAgentIdle} from './state.js'
 import {publishNotify} from './bridge.js'
 import type {ContextUsage} from './protocol.js'
 import {
@@ -21,7 +20,6 @@ import {
  *  drives a mutator, which updates the snapshot AND broadcasts the live delta. */
 export function setupEvents(pi: ExtensionAPI): void {
     pi.on('agent_start', (_event, ctx) => {
-        setAgentIdle(false)
         agentStart(ctx.model?.name)
     })
 
@@ -68,7 +66,6 @@ export function setupEvents(pi: ExtensionAPI): void {
     })
 
     pi.on('agent_end', (_event, ctx) => {
-        setAgentIdle(true)
         agentEnd(ctx.getContextUsage() as ContextUsage, ctx.model?.name)
         // Deliberately no push: agent_end fires on EVERY host turn — every chat
         // reply, every internal phase turn inside /task, and every internal /task

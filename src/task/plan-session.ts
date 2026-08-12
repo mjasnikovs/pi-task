@@ -35,7 +35,10 @@ import {parseClarifyList} from './parsers.js'
 import {stripInlineMarkdown} from './inline-markdown.js'
 import {isDuplicateQuestion, DUP_REPROMPT_HINT, MAX_DUP_STRIKES} from './question-dedup.js'
 import {yoloPickAnswer} from './yolo.js'
-import {formatPlanTranscript, type PlanEntry, type AnswerSource} from './plan-io.js'
+import {formatPlanTranscript, type PlanEntry} from './plan-io.js'
+import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
+export {resolveAnswer} from './question-dialog.js'
+export type {PendingQuestion} from './question-dialog.js'
 
 // ─── Control actions ─────────────────────────────────────────────────────────
 
@@ -236,17 +239,6 @@ export type PlanOutcome =
 
 // ─── Pending question ────────────────────────────────────────────────────────
 
-interface PendingQuestion {
-    /** Plain text — persisted, and fed back to the model. */
-    plain: string
-    /** Markdown-rendered — displayed. */
-    shown: string
-    suggested?: string
-    shownSuggested?: string
-    alt?: string
-    shownAlt?: string
-}
-
 /**
  * Build the picker for a pending model question: the recommendation first (index
  * 0 is the green RECOMMENDED card), the alternative second when the question is a
@@ -256,13 +248,7 @@ interface PendingQuestion {
  * trailing "proceed to execution" card so proceed stays last.
  */
 export function buildQuestionSpec(p: PendingQuestion): PlanAskSpec {
-    const options: {label: string; value: string}[] = []
-    if (p.suggested !== undefined && p.alt !== undefined) {
-        options.push({label: `A: ${p.shownSuggested ?? p.suggested}`, value: p.suggested})
-        options.push({label: `B: ${p.shownAlt ?? p.alt}`, value: p.alt})
-    } else if (p.suggested !== undefined) {
-        options.push({label: p.shownSuggested ?? p.suggested, value: p.suggested})
-    }
+    const options = buildOptionCards(p) ?? []
     const actions = [
         {label: PLAN_ASK_LABEL, value: PLAN_ASK},
         {label: PLAN_PROCEED_LABEL, value: PLAN_PROCEED}
@@ -312,31 +298,6 @@ export function buildIdleSpec(): PlanAskSpec {
         manualLabel: PLAN_STATE_LABEL,
         manualPosition: actions.length - 1
     }
-}
-
-/**
- * Map what the picker returned onto the answer that gets recorded. Mirrors the
- * identical mapping in phaseGrill and planAuto: an empty submit accepts the
- * recommendation, a bare "A"/"B" from a remote user or the free-text fallback maps
- * back to the option's full text, and anything else is taken verbatim.
- */
-export function resolveAnswer(
-    p: PendingQuestion,
-    raw: string
-): {answer: string; source: AnswerSource} {
-    const typed = raw.trim()
-    const twoOption = p.suggested !== undefined && p.alt !== undefined
-    if (typed.length === 0 && p.suggested !== undefined) {
-        return {answer: p.suggested, source: 'accepted'}
-    }
-    if (typed.length === 0) return {answer: '(skipped)', source: 'skipped'}
-    if (twoOption && /^a[.)]?$/i.test(typed)) return {answer: p.suggested!, source: 'chosen'}
-    if (twoOption && /^b[.)]?$/i.test(typed)) return {answer: p.alt!, source: 'chosen'}
-    if (p.suggested !== undefined && typed === p.suggested) {
-        return {answer: p.suggested, source: twoOption ? 'chosen' : 'accepted'}
-    }
-    if (p.alt !== undefined && typed === p.alt) return {answer: p.alt, source: 'chosen'}
-    return {answer: typed, source: 'typed'}
 }
 
 // ─── The loop ────────────────────────────────────────────────────────────────

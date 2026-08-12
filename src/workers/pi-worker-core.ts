@@ -586,6 +586,194 @@ export function commandCeilingForAttempt(baseMs: number, priorHangs: number): nu
     return Math.max(floor, Math.round(baseMs / 2 ** priorHangs))
 }
 
+/**
+ * Everything the restart ladder reads about one finished attempt, plus the
+ * budgets it draws on. Assembled once per attempt so the rules below can be
+ * module-level data instead of six `if` blocks welded into `runWorker`'s closure.
+ */
+interface RestartState {
+    loopHit?: LoopHit
+    commandKill?: CommandKill
+    streamStalled?: {idleMs: number}
+    timedOut: boolean
+    modelError?: string
+    leaked: string | null
+    /** The cap this attempt actually died against — the SCALE arm moves it. */
+    effectiveCapMs: number
+    /** The child's tool string, which decides whether its edits can persist. */
+    tools: string
+    restartBudgetSpent: number
+    connRetries: number
+    connectionRetries: number
+    leakRetries: number
+}
+
+/** What a rule does to the budgets when it fires. */
+interface RestartCounters {
+    /** Consume one of the shared loop/timeout/connection restarts. */
+    shared?: boolean
+    /** Consume one of the leaked-tool-call retries (a separate budget). */
+    leak?: boolean
+    /** Count a WATCHDOG kill specifically — drives the command-ceiling halving. */
+    hang?: boolean
+    /** Count a CONNECTION restart specifically — drives the backoff schedule. */
+    connection?: boolean
+}
+
+/**
+ * One restartable failure: how to spot it, what to tell the fresh child, which
+ * budget it spends, and how long to wait first.
+ */
+interface RestartRule {
+    reason: WorkerRestartReason
+    /**
+     * Does this rule apply to the attempt, and is its budget unspent? Returns
+     * the restart's detail line, or null to fall through to the next rule.
+     *
+     * Detection and budget are ONE test on purpose. An out-of-budget failure must
+     * fall through to the return path, not stop the ladder — a loop kill with the
+     * shared budget spent still has to let the plain-abort return happen.
+     */
+    detect: (s: RestartState) => {detail: string} | null
+    /**
+     * The corrective preamble prepended to the next attempt's prompt. Omitted by
+     * `connection-error` alone: nothing the model did caused a dropped socket, so
+     * there is nothing to correct — and any hint already in flight from an
+     * earlier restart must survive the retry rather than be cleared by it.
+     */
+    hint?: (s: RestartState) => string
+    counters: RestartCounters
+    /** Backoff before re-spawning, in ms. Only the connection rule waits. */
+    backoffMs?: (s: RestartState) => number
+}
+
+/**
+ * The restart ladder, in precedence order. FIRST MATCH WINS.
+ *
+ * Read the `!loopHit` guards as "a loop kill outranks me even when it has no
+ * budget left". They are not redundant with row order: when a loop is detected
+ * but the shared budget is spent, row 1 declines, and without those guards row 2
+ * or 4 would then restart the same runaway child under a hint that does not
+ * describe why it died.
+ *
+ * The whole ritual — check the budget, set the hint, spend the counters, record
+ * and announce the discarded attempt, sleep, re-spawn — belongs to the loop in
+ * `runWorker`, so a new failure mode is one row here and cannot be added without
+ * becoming visible in `restarts`.
+ */
+const RESTART_RULES: readonly RestartRule[] = [
+    {
+        // A loop-kill gets the same restart-with-hint treatment every other phase
+        // already gets (runPhaseWithLoopGuard) — name the offending call so the
+        // re-spawn avoids it. Bounded by the shared restart budget.
+        reason: 'loop',
+        detect: s =>
+            s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
+                {detail: `${s.loopHit.call.name} ×${s.loopHit.count}/${s.loopHit.windowSize}`}
+            :   null,
+        hint: s => formatLoopHint(s.loopHit!),
+        counters: {shared: true}
+    },
+    {
+        // A hung COMMAND is restartable too, on the same budget, but checked
+        // before the whole-worker timeout because its hint is the specific one:
+        // bound the command. (The two can't be confused — a watchdog kill leaves
+        // timeout.timedOut() false, since that flag tracks only its own timer.)
+        reason: 'command-timeout',
+        detect: s =>
+            s.commandKill && !s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
+                {
+                    detail:
+                        `${s.commandKill.toolName} > ${s.commandKill.timeoutMs}ms`
+                        + (s.commandKill.detail ? `: ${s.commandKill.detail}` : '')
+                }
+            :   null,
+        hint: s =>
+            commandTimeoutHint(s.commandKill!.toolName, s.commandKill!.timeoutMs, {
+                commandDetail: s.commandKill!.detail,
+                // Nothing reverts the tree between attempts, so a child that can
+                // mutate it (edit/write, or bash side effects) must not be told
+                // its previous attempt left no trace. Same capability test the
+                // gate logger uses — decided by tools, not by phase.
+                editsMayPersist: /\b(?:edit|bash|write)\b/.test(s.tools)
+            }),
+        counters: {shared: true, hang: true}
+    },
+    {
+        // A hung model stream is restartable on the same budget. Checked before
+        // the wall-clock timeout because it is the more specific diagnosis (and
+        // its hint does not blame the model: nothing it did caused the hang).
+        reason: 'stream-stall',
+        detect: s =>
+            s.streamStalled && !s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
+                {detail: `idle ${s.streamStalled.idleMs}ms`}
+            :   null,
+        hint: s => streamStallHint(s.streamStalled!.idleMs),
+        counters: {shared: true}
+    },
+    {
+        // A wall-clock timeout (the backstop for varied thrash the exact-match
+        // detector misses) is also restartable, sharing the same budget. Skip when
+        // a loop also tripped — the loop hint above is more specific.
+        reason: 'worker-timeout',
+        detect: s =>
+            s.timedOut && !s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
+                // The EFFECTIVE cap, which the SCALE arm moves — reporting the
+                // configured one would misname why this attempt died.
+                {detail: `cap ${s.effectiveCapMs}ms`}
+            :   null,
+        hint: () => WORKER_TIMEOUT_HINT,
+        counters: {shared: true}
+    },
+    {
+        // A connection-class model error is restartable on the same budget, exactly
+        // as runPhaseWithLoopGuard already treats it — a research worker had no such
+        // retry, so one dropped fetch failed the whole task at research while the
+        // identical blip in refine/compose was absorbed.
+        //
+        // What this can and cannot buy, measured (flaky proxy in front of the local
+        // llama-server, dropping every connection for a fixed outage window): pi
+        // retries a failed turn itself, 4 attempts over ~15s, and a run that
+        // recovers no longer reports modelError at all (see JsonEventSink). So a
+        // surfaced connection error means pi's own ~15s budget is already spent, and
+        // a re-spawn only helps when the outage outlasts it. It does: at a 20s
+        // outage the baseline never recovered and this policy always did, 0/8 → 8/8
+        // (Fisher p=0.00016), and the same at 35s. Below ~15s pi absorbs it alone —
+        // 8/8 both arms, so the retry neither helps nor costs there. Beyond ~46s
+        // (three spawns' combined budget) both arms fail. The price is paid only on
+        // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
+        // scripts/connection-retry-ab.ts.
+        //
+        // Connection class ONLY. Auth, bad request and context overflow still fail
+        // fast: re-issuing the same request cannot fix them, so spending the budget
+        // would only delay the report.
+        reason: 'connection-error',
+        detect: s =>
+            (
+                s.modelError !== undefined
+                && isConnectionError(s.modelError)
+                && s.restartBudgetSpent < MAX_LOOP_RESTARTS
+                && s.connRetries < s.connectionRetries
+            ) ?
+                {detail: s.modelError.slice(0, 120)}
+            :   null,
+        counters: {shared: true, connection: true},
+        backoffMs: s => connectionRetryBackoffMs(s.connRetries)
+    },
+    {
+        // Only reached on a clean, complete run — see how `leaked` is computed. A
+        // non-zero exit or abort yields partial text the caller already handles,
+        // and detecting there would just mislabel the real failure.
+        reason: 'leaked-tool-call',
+        detect: s =>
+            s.leaked && s.leakRetries < MAX_LEAK_RETRIES ?
+                {detail: s.leaked.trim().slice(0, 80)}
+            :   null,
+        hint: s => leakedToolCallHint(s.leaked!),
+        counters: {leak: true}
+    }
+]
+
 /** What the command watchdog recorded when it killed an attempt. */
 interface CommandKill {
     toolName: string
@@ -844,102 +1032,45 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const commandKill = cmdWatch?.killed()
         const streamStalled = result.streamStalled
 
-        // A loop-kill gets the same restart-with-hint treatment every other phase
-        // already gets (runPhaseWithLoopGuard) — name the offending call so the
-        // re-spawn avoids it. Bounded by the shared restart budget.
-        if (loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
-            hint = formatLoopHint(loopHit)
-            restartBudgetSpent++
-            noteRestart('loop', `${loopHit.call.name} ×${loopHit.count}/${loopHit.windowSize}`)
-            continue
-        }
-        // A hung COMMAND is restartable too, on the same budget, but checked
-        // before the whole-worker timeout because its hint is the specific one:
-        // bound the command. (The two can't be confused — a watchdog kill leaves
-        // timeout.timedOut() false, since that flag tracks only its own timer.)
-        if (commandKill && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
-            hint = commandTimeoutHint(commandKill.toolName, commandKill.timeoutMs, {
-                commandDetail: commandKill.detail,
-                // Nothing reverts the tree between attempts, so a child that can
-                // mutate it (edit/write, or bash side effects) must not be told
-                // its previous attempt left no trace. Same capability test the
-                // gate logger uses — decided by tools, not by phase.
-                editsMayPersist: /\b(?:edit|bash|write)\b/.test(tools)
-            })
-            restartBudgetSpent++
-            hangKills++
-            noteRestart(
-                'command-timeout',
-                `${commandKill.toolName} > ${commandKill.timeoutMs}ms`
-                    + (commandKill.detail ? `: ${commandKill.detail}` : '')
-            )
-            continue
-        }
-        // A hung model stream is restartable on the same budget. Checked before
-        // the wall-clock timeout because it is the more specific diagnosis (and
-        // its hint does not blame the model: nothing it did caused the hang).
-        if (streamStalled && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
-            hint = streamStallHint(streamStalled.idleMs)
-            restartBudgetSpent++
-            noteRestart('stream-stall', `idle ${streamStalled.idleMs}ms`)
-            continue
-        }
-        // A wall-clock timeout (the backstop for varied thrash the exact-match
-        // detector misses) is also restartable, sharing the same budget. Skip when
-        // a loop also tripped — the loop hint above is more specific.
-        if (timedOut && !loopHit && restartBudgetSpent < MAX_LOOP_RESTARTS) {
-            hint = WORKER_TIMEOUT_HINT
-            restartBudgetSpent++
-            // The EFFECTIVE cap, which the SCALE arm moves — reporting the
-            // configured one would misname why this attempt died.
-            noteRestart('worker-timeout', `cap ${effectiveCapMs}ms`)
-            continue
-        }
-        // A connection-class model error is restartable on the same budget, exactly
-        // as runPhaseWithLoopGuard already treats it — a research worker had no such
-        // retry, so one dropped fetch failed the whole task at research while the
-        // identical blip in refine/compose was absorbed.
-        //
-        // What this can and cannot buy, measured (flaky proxy in front of the local
-        // llama-server, dropping every connection for a fixed outage window): pi
-        // retries a failed turn itself, 4 attempts over ~15s, and a run that
-        // recovers no longer reports modelError at all (see JsonEventSink). So a
-        // surfaced connection error means pi's own ~15s budget is already spent, and
-        // a re-spawn only helps when the outage outlasts it. It does: at a 20s
-        // outage the baseline never recovered and this policy always did, 0/8 → 8/8
-        // (Fisher p=0.00016), and the same at 35s. Below ~15s pi absorbs it alone —
-        // 8/8 both arms, so the retry neither helps nor costs there. Beyond ~46s
-        // (three spawns' combined budget) both arms fail. The price is paid only on
-        // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
-        // scripts/connection-retry-ab.ts.
-        //
-        // Connection class ONLY. Auth, bad request and context overflow still fail
-        // fast: re-issuing the same request cannot fix them, so spending the budget
-        // would only delay the report.
-        if (
-            result.modelError
-            && isConnectionError(result.modelError)
-            && restartBudgetSpent < MAX_LOOP_RESTARTS
-            && connRetries < (input.connectionRetries ?? MAX_LOOP_RESTARTS)
-        ) {
-            // Noted BEFORE the backoff sleep, so the record's wallMs stays the
-            // attempt's own clock; the sleep lands in totalWallMs, where it belongs.
-            noteRestart('connection-error', result.modelError.slice(0, 120))
-            await (input.sleepFor ?? defaultSleep)(connectionRetryBackoffMs(connRetries))
-            restartBudgetSpent++
-            connRetries++
-            continue
-        }
         // Only treat output as a leak on a clean, complete run — a non-zero exit
         // or abort yields partial text the caller already handles, and detecting
         // there would just mislabel the real failure.
         const leaked = result.exitCode === 0 && !result.aborted ? detectLeakedToolCall(text) : null
-        if (leaked && leakRetries < MAX_LEAK_RETRIES) {
-            hint = leakedToolCallHint(leaked)
-            leakRetries++
-            noteRestart('leaked-tool-call', leaked.trim().slice(0, 80))
-            continue
+
+        // THE RESTART LADDER. Precedence is RESTART_RULES' row order; this loop
+        // owns the ritual every rule used to repeat: budget, hint, counters,
+        // record-and-announce, backoff, re-spawn.
+        const state: RestartState = {
+            ...(loopHit ? {loopHit} : {}),
+            ...(commandKill ? {commandKill} : {}),
+            ...(streamStalled ? {streamStalled} : {}),
+            timedOut,
+            ...(result.modelError !== undefined ? {modelError: result.modelError} : {}),
+            leaked,
+            effectiveCapMs,
+            tools,
+            restartBudgetSpent,
+            connRetries,
+            connectionRetries: input.connectionRetries ?? MAX_LOOP_RESTARTS,
+            leakRetries
         }
+        let restarted = false
+        for (const rule of RESTART_RULES) {
+            const hit = rule.detect(state)
+            if (!hit) continue
+            if (rule.hint) hint = rule.hint(state)
+            if (rule.counters.shared) restartBudgetSpent++
+            if (rule.counters.leak) leakRetries++
+            if (rule.counters.hang) hangKills++
+            if (rule.counters.connection) connRetries++
+            // Noted BEFORE any backoff sleep, so the record's wallMs stays the
+            // attempt's own clock; the sleep lands in totalWallMs, where it belongs.
+            noteRestart(rule.reason, hit.detail)
+            if (rule.backoffMs) await (input.sleepFor ?? defaultSleep)(rule.backoffMs(state))
+            restarted = true
+            break
+        }
+        if (restarted) continue
         // SALVAGE. The run used to return the LAST attempt's text unconditionally,
         // so a worker whose final attempt was killed early reported nothing at all
         // — even when a discarded attempt had produced a usable answer that was

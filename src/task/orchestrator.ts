@@ -68,6 +68,7 @@ import {reportDroppedInput} from './dropped-input.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
+import {TERMINAL_OUTCOMES, formatAt, formatWhy} from './terminal-outcome.js'
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 
@@ -1017,34 +1018,20 @@ async function runGatedTaskInner(
         // No sibling plan → no scope fence; no parent list → no check-off.
     })
     active = gate.ctx
-    switch (gate.kind) {
-        case 'paused':
-            await markResumable(cwd, res.taskId)
-            announce(
-                `${tag} paused — verification failed and you dismissed the choice; resume with /task-resume.`,
-                'warning'
-            )
-            return
-        case 'session-cancelled':
-            announce(
-                `${tag} paused — could not start a session for autofix. Run /task-resume to retry.`,
-                'warning'
-            )
-            return
-        case 'interrupted':
-            await markResumable(cwd, res.taskId)
-            announce(`${tag} paused — resume with /task-resume.`, 'warning')
-            return
-        case 'failed': {
-            await markResumable(cwd, res.taskId)
-            const why = gate.reason ? ` — ${gate.reason.slice(0, 160)}` : ''
-            announce(`${tag} stopped${why} — fix and run /task-resume.`, 'error')
-            return
-        }
-        case 'done':
-            announce(`${tag} complete — verified.`, 'info')
-            return
-    }
+    // What each outcome means for persistence and for the user is stated once, in
+    // TERMINAL_OUTCOMES, and shared with /task-auto's loop. `failParent` is
+    // ignored here: /task runs one task and has no parent run file to fail.
+    const outcome = TERMINAL_OUTCOMES[gate.kind]
+    if (outcome.markResumable) await markResumable(cwd, res.taskId)
+    announce(
+        outcome.message({
+            tag,
+            at: formatAt(),
+            why: formatWhy(gate.kind === 'failed' ? gate.reason : undefined),
+            resumeCmd: '/task-resume'
+        }),
+        outcome.level
+    )
 }
 
 // ─── Command handlers ────────────────────────────────────────────────────────

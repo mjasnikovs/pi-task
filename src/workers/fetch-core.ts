@@ -1,6 +1,7 @@
 import {fetchAndClean as defaultFetchAndClean, type CleanResult} from './html-clean.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction} from './focused-extractor.js'
+import {abstentionSentence} from './abstention.js'
 import {
     type ExcerptVerification,
     formatResultText as formatResultTextShared
@@ -12,7 +13,7 @@ const TAIL_CHARS = 5_000
 const TRUNCATION_MARKER = '\n\n[...page continues, truncated...]\n\n'
 
 /** The exact non-answers the child is instructed to emit, matched at the tool layer. */
-export const UNCLEAR_ANSWER = 'unclear from this page'
+export const UNCLEAR_ANSWER = abstentionSentence('page')
 export const NOT_COVERED_ANSWER = 'not covered by this page'
 /**
  * Rule 6 asks the child to write the sentinel and NOTHING else, so the sentinel is the whole

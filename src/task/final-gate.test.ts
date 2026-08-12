@@ -35,6 +35,8 @@ import {readAcceptDebts, recordDebt} from './accept-debt.js'
 import {appendDeclaredScripts} from './launch-contract.js'
 import {appendEnvNotes} from './env-notes.js'
 import {clearRunnerCache} from './runner-resolve.js'
+import {runVerifyCommandLine, rerunDebtVerifyCommand} from './final-gate.js'
+import type {CommandRun, CommandRunner} from './command-run.js'
 
 // Some cases exercise irreducibly-POSIX process/shell mechanics — death by a
 // Unix signal (no equivalent on Windows), or shadowing `npm` (a .cmd on Windows,
@@ -2176,4 +2178,126 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
             out.unobserved!.indexOf('skipped as environment gaps')
         )
     })
+})
+
+// ─── the debt-closing path (was untested) ────────────────────────────────────
+
+/**
+ * `runVerifyCommandLine` and `rerunDebtVerifyCommand` are the only things in the
+ * gate that can auto-CLOSE a recorded debt (`inv-no-false-clear`), and until the
+ * command runner became injectable they had no `bun test` coverage at all — their
+ * only callers were harness scripts. The tracked-state guard below, which decides
+ * whether "the command edited the tree into a pass", was entirely unexercised.
+ */
+function scriptedRunner(byBin: Record<string, CommandRun | CommandRun[]>): {
+    run: CommandRunner
+    seen: string[]
+} {
+    const seen: string[] = []
+    const counts: Record<string, number> = {}
+    const run: CommandRunner = spec => {
+        seen.push([spec.bin, ...spec.args].join(' '))
+        const entry = byBin[spec.bin]
+        if (entry === undefined) throw new Error(`no scripted result for ${spec.bin}`)
+        if (!Array.isArray(entry)) return entry
+        const i = counts[spec.bin] ?? 0
+        counts[spec.bin] = i + 1
+        return entry[Math.min(i, entry.length - 1)]
+    }
+    return {run, seen}
+}
+
+const ok = (stdout = ''): CommandRun => ({
+    failedToStart: false,
+    status: 0,
+    stdout,
+    stderr: ''
+})
+
+test('runVerifyCommandLine: a VERIFY line is run through sh -c, not as an argv', () => {
+    const {run, seen} = scriptedRunner({sh: ok()})
+    const r = runVerifyCommandLine('/repo', 'AGENT=1 bun test a.test.ts', 1000, undefined, run)
+    expect(r.outcome).toBe('pass')
+    // Env prefixes, && and redirects are ordinary in a VERIFY line, so it must
+    // reach a shell rather than being split into a binary and arguments.
+    expect(seen[0]).toBe('sh -c AGENT=1 bun test a.test.ts')
+})
+
+test('runVerifyCommandLine: only exit 0 is conclusive — everything else leaves the debt open', () => {
+    const cases: Array<[CommandRun, 'pass' | 'fail' | 'gap']> = [
+        [ok(), 'pass'],
+        [{failedToStart: false, status: 1, stdout: '', stderr: '2 failing'}, 'fail'],
+        [
+            {failedToStart: true, failureMessage: 'ENOENT', status: null, stdout: '', stderr: ''},
+            'gap'
+        ],
+        [{failedToStart: false, status: null, stdout: '', stderr: ''}, 'gap'],
+        [{failedToStart: false, status: 127, stdout: '', stderr: 'sh: bun: not found'}, 'gap'],
+        [
+            {
+                failedToStart: false,
+                status: 1,
+                stdout: '',
+                stderr: 'connect ECONNREFUSED 127.0.0.1:5432'
+            },
+            'gap'
+        ]
+    ]
+    for (const [result, expected] of cases) {
+        const {run} = scriptedRunner({sh: result})
+        expect(runVerifyCommandLine('/repo', 'bun test', 1000, undefined, run).outcome).toBe(
+            expected
+        )
+    }
+})
+
+test('rerunDebtVerifyCommand: a clean pass with an unchanged tree CLOSES the debt', () => {
+    const {run} = scriptedRunner({git: ok(''), sh: ok()})
+    expect(rerunDebtVerifyCommand('/repo', 'bun test', run)).toEqual({outcome: 'pass'})
+})
+
+test('rerunDebtVerifyCommand: a pass that CHANGED tracked files proves nothing', () => {
+    // inv-no-write. A re-run that edits the tree into a pass would have the run
+    // certifying its own side effect, so the pass is downgraded to INCONCLUSIVE.
+    const {run} = scriptedRunner({git: [ok(''), ok(' M src/app.ts\n')], sh: ok()})
+    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    expect(r.outcome).toBe('gap')
+    expect(r.detail).toContain('CHANGED tracked files')
+})
+
+test('rerunDebtVerifyCommand: untracked output does not trip the guard', () => {
+    // `git status --porcelain --untracked-files=no` is what the guard reads, so a
+    // build's own artifacts — which a repo with the usual ignores does not track —
+    // leave the before/after strings identical.
+    const {run} = scriptedRunner({git: ok(''), sh: ok()})
+    expect(rerunDebtVerifyCommand('/repo', 'bun run build && bun test', run).outcome).toBe('pass')
+})
+
+test('rerunDebtVerifyCommand: a repo the guard cannot READ is inconclusive, not a pass', () => {
+    // "Nothing changed" would be an assumption rather than an observation.
+    const gitGone: CommandRun = {
+        failedToStart: true,
+        failureMessage: 'ENOENT',
+        status: null,
+        stdout: '',
+        stderr: ''
+    }
+    const {run} = scriptedRunner({git: gitGone, sh: ok()})
+    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    expect(r.outcome).toBe('gap')
+    expect(r.detail).toContain('could not read git status')
+})
+
+test('rerunDebtVerifyCommand: a FAILING command never reaches the tracked-state guard', () => {
+    // Only the pass path needs the guard, and a failing re-run must report the
+    // failure rather than a git-read problem.
+    const {run, seen} = scriptedRunner({
+        git: ok(''),
+        sh: {failedToStart: false, status: 1, stdout: '', stderr: 'assertion failed'}
+    })
+    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    expect(r.outcome).toBe('fail')
+    expect(r.detail).toContain('exit 1')
+    // One git read (the "before"), never the second.
+    expect(seen.filter(c => c.startsWith('git')).length).toBe(1)
 })

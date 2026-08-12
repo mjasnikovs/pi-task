@@ -227,7 +227,13 @@ export function sanitizeStreamInactivityMs(value: unknown): number {
         :   DEFAULT_STREAM_INACTIVITY_MS
 }
 
-const DEFAULTS: PiTaskConfig = {
+/**
+ * The shipped defaults. Exported so tests can start from a KNOWN config instead
+ * of `getConfig()`, which reads whatever this machine happens to have on disk —
+ * a test that passes or fails depending on the developer's own settings is not
+ * testing the code.
+ */
+export const DEFAULT_CONFIG: PiTaskConfig = {
     remote: true,
     compressReasoning: true,
     autoCommit: true,
@@ -264,7 +270,7 @@ const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')
 type ConfigGlobal = {config: PiTaskConfig; loaded: boolean}
 const _g = globalThis as unknown as Record<string, ConfigGlobal | undefined>
 if (!_g.__piTaskConfig) {
-    _g.__piTaskConfig = {config: {...DEFAULTS}, loaded: false}
+    _g.__piTaskConfig = {config: {...DEFAULT_CONFIG}, loaded: false}
 }
 const G = _g.__piTaskConfig!
 
@@ -288,9 +294,9 @@ if (!G.loaded) {
         // boolean counts; anything else falls back to the OFF default.
         if (typeof parsed.yoloMode !== 'boolean') delete parsed.yoloMode
         parsed.debugLogs = sanitizeDebugLogs(parsed.debugLogs)
-        G.config = {...DEFAULTS, ...parsed}
+        G.config = {...DEFAULT_CONFIG, ...parsed}
     } catch {
-        G.config = {...DEFAULTS}
+        G.config = {...DEFAULT_CONFIG}
     }
     G.loaded = true
 }

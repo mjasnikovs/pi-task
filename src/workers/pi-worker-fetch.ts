@@ -6,6 +6,7 @@ import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-
 import {fetchFocused, formatResultText} from './fetch-core.js'
 import {makeWorkerTool} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
+import {isAbstention} from './abstention.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -136,6 +137,12 @@ export function registerPiWorkerFetch(
         cacheKey: params => `${params.url.trim()}::${normalizeQuery(params.query)}`,
         // Only a completed fetch (child exited 0) is a real answer; invalid-URL,
         // fetch failures, and aborts omit childExitCode:0 and fall through.
-        cacheable: d => d.childExitCode === 0
+        // F-2(e), on the fetch channel. A child that ran fine and answered
+        // "unclear from this page" exits 0, so caching on process health alone
+        // memoised the NON-ANSWER and re-served it to every later sibling task —
+        // the same dead-end-paid-many-times shape pi-worker-docs already closed
+        // for packages, with escalation unable to re-fire because the miss never
+        // recurred. One predicate now covers every corpus (workers/abstention.ts).
+        cacheable: (d, text) => d.childExitCode === 0 && !isAbstention(text)
     })
 }

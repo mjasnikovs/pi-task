@@ -59,6 +59,8 @@
  * Pure and side-effect free; unit-tested in type-only-answer.test.ts against real run-15 text.
  */
 
+import {isAbstention} from '../workers/abstention.js'
+
 /** The verdict, with a human-readable reason for logging and for the escalation channel. */
 export interface TypeOnlyVerdict {
     /** True iff the answer restates a signature for a usage question with no behaviour. */
@@ -176,9 +178,6 @@ const SIGNATURE: RegExp[] = [
     /declare\s+(const|function)/i
 ]
 
-/** Explicit non-answer the docs child emits when the package cannot answer. */
-const UNCLEAR = /\bunclear\s+from\s+this\s+(package|page)\b/i
-
 function firstMatch(text: string, patterns: RegExp[]): string | null {
     for (const p of patterns) {
         const m = p.exec(text)
@@ -228,7 +227,7 @@ export function isTypeOnlyAnswer(answer: string, question: string): TypeOnlyVerd
     if (a.length === 0) {
         return {typeOnly: false, reason: 'empty answer'}
     }
-    if (UNCLEAR.test(a)) {
+    if (isAbstention(a)) {
         return {
             typeOnly: false,
             reason: 'explicit "unclear" non-answer — routed through the existing unclear/escalation path, not type-only'

@@ -15,6 +15,7 @@ import {readTaskFile, writeTaskFile} from './task-io.js'
 import {parseTaskList, buildAutoBody} from './auto-io.js'
 import {ACCEPT_LABEL, AUTOFIX_LABEL} from './verify-resolution.js'
 import {readAcceptDebts, type AcceptDebt} from './accept-debt.js'
+import {readOwnedRequirements} from './requirements.js'
 import type {CommitResult} from './auto-commit.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
@@ -3298,5 +3299,79 @@ test('runAutoLoop: a stranded commit that DID happen never prints `[object Objec
         expect(line).not.toMatch(/ as /)
         // The fallback identity is worth saying, and it is a thing commit DOES return.
         expect(line).toContain('used pi-task fallback')
+    })
+})
+
+// ─── ScoredPlan: titles and accounting can never come from different rounds ───
+
+test("coverage loop: an adopted plan whose coverage-map FAULTS does not inherit the previous plan's mapping", async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        let decompose = 0
+        let map = 0
+        // Plan A covers 2 of the 3 grounded requirements and maps the --json one to
+        // its TASK 2. Plan B covers all 3 (so decideAdoption takes it) and its TASK 2
+        // is the SCAN task — so plan A's mapping, if it survives the adoption, binds
+        // the --json requirement to a task about scanning.
+        const PLAN_A =
+            '- [ ] Scan a directory tree for duplicate files\n'
+            + '- [ ] Add a --json machine-readable output flag'
+        const PLAN_B =
+            '- [ ] Add a --json machine-readable output flag\n'
+            + '- [ ] Scan a directory tree for duplicate files\n'
+            + '- [ ] Generate a summary report of reclaimed space'
+        const d: AutoDeps = {
+            runChild: name => {
+                if (name === 'auto-clarify') return Promise.resolve('NONE')
+                if (name === 'requirement-extract')
+                    return Promise.resolve(
+                        [
+                            'REQUIREMENT: "a --json flag emits machine-readable output"',
+                            'REQUIREMENT: "the CLI scans a directory tree for duplicate files"',
+                            'REQUIREMENT: "a summary report lists reclaimed space"'
+                        ].join('\n')
+                    )
+                if (name === 'auto-decompose')
+                    return Promise.resolve(++decompose === 1 ? PLAN_A : PLAN_B)
+                if (name === 'decompose-coverage') return Promise.resolve('COVERAGE: COMPLETE')
+                if (name === 'coverage-map') {
+                    // Plan A maps cleanly. Plan B's mapping child DIES — a fault that
+                    // is swallowed by design (the accounting is best-effort and the
+                    // monotonic guard runs on the grounded covered-set, not on it),
+                    // which is exactly why a stale mapping could survive the adoption.
+                    if (++map === 1)
+                        return Promise.resolve('MAP: 1 -> TASK 2\nMAP: 2 -> TASK 1\nMAP: 3 -> NONE')
+                    return Promise.reject(new Error('coverage-map child died'))
+                }
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, DEDUP_CLI_SPEC, d)
+        const titles = parseTaskList((await readTaskFile(dir, id!)).body).map(e => e.title)
+        // Preconditions, not the assertion: plan B was adopted, and its TASK 2 is the
+        // scan task — the slot plan A had mapped the --json requirement into.
+        expect(titles.length).toBe(3)
+        expect(titles[1]).toContain('Scan a directory tree')
+
+        // THE BUG. `accounting` used to be a variable of its own, updated on adoption
+        // as `cand.accounting ?? accounting`, so plan A's mapping outlived plan A.
+        // `ReqMapping.task` is a 1-based index into the titles that PRODUCED the
+        // mapping, so `task: 2` then addressed plan B and bound the --json obligation
+        // to the scan task. Nothing caught it: the write-site bounds filter checks
+        // only 1..titles.length, never identity. Downstream, ownedForTitle
+        // force-appends that obligation into the wrong task's CONSTRAINTS and the
+        // final gate reports it unclaimed.
+        //
+        // A round that loses its accounting now simply has none — never the previous
+        // round's.
+        const owned = await readOwnedRequirements(dir)
+        for (const o of owned) {
+            if (/--json/.test(o.quote)) expect(o.title).toContain('--json')
+            if (/scans a directory/i.test(o.quote)) expect(o.title).toContain('Scan')
+            if (/summary report/i.test(o.quote)) expect(o.title).toContain('summary report')
+        }
     })
 })

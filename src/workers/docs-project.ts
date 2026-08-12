@@ -5,13 +5,11 @@ import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
 import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
 import type {RetrievedChunk} from './docs-retrieve.js'
+import {buildExtractionPrompt} from './abstention.js'
+import {chunkDeclarations} from './docs-chunk.js'
 
-const MAX_CHUNK_BYTES = 8 * 1024
 const DEFAULT_LIMIT = 50
 const DEFAULT_BUDGET = 24_000
-
-const DECL_SPLIT_RE =
-    /^(?:export\s+|declare\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|namespace|module|const|let|var|enum)\s+/m
 
 export function getProjectName(cwd: string): string {
     try {
@@ -27,6 +25,18 @@ export function cwdKey(cwd: string): string {
     return createHash('sha256').update(cwd).digest('hex').slice(0, 8)
 }
 
+/**
+ * Which source files make up the project.
+ *
+ * `git ls-files` is the source of truth when there is one — it already knows
+ * what is tracked and what `.gitignore` excludes, which no hand-rolled walk gets
+ * right — and the walk is the fallback for a directory that is not a repo.
+ *
+ * Injectable through `projectDocsRaw` because it is the only unmockable
+ * dependency left in the docs cluster: without a seam, ANY test of the project
+ * path needs a real temp directory, real files on disk, and a machine where git
+ * is installed and the temp dir is not itself inside a repo.
+ */
 export function getProjectFiles(cwd: string): string[] {
     try {
         const result = spawnSync(
@@ -83,47 +93,6 @@ export function getMaxMtime(files: string[]): string {
     return String(Math.floor(max))
 }
 
-function chunkTs(content: string, relPath: string): string[] {
-    const splits = splitAtMatches(content, new RegExp(DECL_SPLIT_RE.source, 'gm'))
-    const chunks: string[] = []
-    for (const part of splits) {
-        const trimmed = part.trim()
-        if (!trimmed) continue
-        const prefixed = `// ${relPath}\n${trimmed}`
-        if (Buffer.byteLength(prefixed, 'utf8') > MAX_CHUNK_BYTES) {
-            for (const slice of sliceBytes(prefixed, MAX_CHUNK_BYTES)) chunks.push(slice)
-        } else {
-            chunks.push(prefixed)
-        }
-    }
-    return chunks
-}
-
-function splitAtMatches(text: string, re: RegExp): string[] {
-    const parts: string[] = []
-    let lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = re.exec(text))) {
-        if (m.index > lastIndex) parts.push(text.slice(lastIndex, m.index))
-        lastIndex = m.index
-        re.lastIndex = m.index + 1
-    }
-    if (lastIndex < text.length) parts.push(text.slice(lastIndex))
-    return parts.length ? parts : [text]
-}
-
-function sliceBytes(s: string, maxBytes: number): string[] {
-    const out: string[] = []
-    let buf = Buffer.from(s, 'utf8')
-    while (buf.length > maxBytes) {
-        const slice = buf.subarray(0, maxBytes).toString('utf8')
-        out.push(slice)
-        buf = buf.subarray(Buffer.byteLength(slice, 'utf8'))
-    }
-    if (buf.length) out.push(buf.toString('utf8'))
-    return out
-}
-
 interface PackageRow {
     content_hash: string
 }
@@ -168,7 +137,7 @@ export function ensureProjectIndexed(
                 continue
             }
             const rel = path.relative(cwd, abs)
-            const chunks = chunkTs(raw, rel)
+            const chunks = chunkDeclarations(raw, rel)
             if (!chunks.length) continue
             filesIngested++
             for (const c of chunks) {
@@ -217,12 +186,14 @@ export function projectDocsRaw(
     cache: CacheHandle,
     cwd: string,
     query: string,
-    retrieveChunksFn: typeof defaultRetrieveChunks = defaultRetrieveChunks
+    retrieveChunksFn: typeof defaultRetrieveChunks = defaultRetrieveChunks,
+    /** How to enumerate the project's sources. See getProjectFiles. */
+    listFiles: (cwd: string) => string[] = getProjectFiles
 ): ProjectDocsRawResult {
     const projectName = getProjectName(cwd)
     const cacheKey = `project:${cwdKey(cwd)}`
 
-    const files = getProjectFiles(cwd)
+    const files = listFiles(cwd)
     const version = getMaxMtime(files)
 
     let indexResult: ProjectIndexResult
@@ -296,23 +267,12 @@ export function projectDocsRaw(
 }
 
 export function buildProjectPrompt(projectName: string, query: string, content: string): string {
-    return (
-        `You answer one question about a local project's source code, using only the provided content.\n`
-        + `\n`
-        + `Rules:\n`
-        + `1. Output ONLY two tags, in this order, with NO text outside them:\n`
-        + `   <answer>...your answer...</answer>\n`
-        + `   <excerpt>...verbatim quote from <project-content>...</excerpt>\n`
-        + `2. The <excerpt> MUST be copied character-for-character from <project-content>.\n`
-        + `   Do not paraphrase, translate, or summarise inside <excerpt>.\n`
-        + `3. Prefer type signatures, function declarations, and code blocks as evidence over prose.\n`
-        + `4. If the answer is unclear, ambiguous, or absent from <project-content>, write exactly:\n`
-        + `   <answer>unclear from this project</answer> and put the closest related text in <excerpt>.\n`
-        + `   Do not guess.\n`
-        + `5. Be terse. One short paragraph in <answer> max.\n`
-        + `\n`
-        + `<project>${projectName}</project>\n`
-        + `<question>${query}</question>\n`
-        + `<project-content>\n${content}\n</project-content>\n`
-    )
+    return buildExtractionPrompt({
+        kind: 'project',
+        subject: "a local project's source code",
+        tag: 'project',
+        identity: projectName,
+        query,
+        content
+    })
 }

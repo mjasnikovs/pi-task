@@ -38,6 +38,7 @@
  */
 import * as fs from 'node:fs'
 import type {ExcerptVerification} from '../shared/child-output.js'
+import {isAbstention} from './abstention.js'
 
 /** Env var naming the JSONL sink. Unset (or empty) ⇒ instrumentation is entirely off. */
 export const TYPEONLY_LOG_ENV = 'PI_TASK_TYPEONLY_LOG'
@@ -90,16 +91,6 @@ export interface TypeOnlyLogRecord {
 }
 
 /**
- * The honest non-answer, in BOTH wordings the tool can emit. A package lookup is told to
- * write "unclear from this package" (docs-core.ts:622); a project-source lookup is told
- * "unclear from this project" (docs-project.ts:310). Matching only the first silently scored
- * every project-source abstention as a valid answer — and project-source is the MAJORITY of
- * what worker:apis asks (13 of 17 calls in run 15's fatal task), so that one missing word
- * would have put the wrong denominator under the whole termination diagnostic.
- */
-const UNCLEAR = /unclear from this (package|project)/i
-
-/**
  * Append one record to the JSONL sink named by `PI_TASK_TYPEONLY_LOG`, if set.
  *
  * @param rec everything but `at` and `unclear`, which are derived here so every call site
@@ -114,7 +105,7 @@ export function logDocsAnswer(
     const full: TypeOnlyLogRecord = {
         at: new Date().toISOString(),
         ...rec,
-        unclear: UNCLEAR.test(rec.answer)
+        unclear: isAbstention(rec.answer)
     }
     try {
         fs.appendFileSync(sink, `${JSON.stringify(full)}\n`, 'utf8')

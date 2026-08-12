@@ -8,9 +8,25 @@ import {afterEach, expect, test} from 'bun:test'
 import {routePlainLine} from './register.js'
 import {getBridge} from './bridge.js'
 import {broadcast as wsBroadcast} from './broadcast.js'
-import {setAgentIdle} from './state.js'
-import {_setSink, reset as resetSessionState} from './session-state.js'
+import {
+    _setSink,
+    reset as resetSessionState,
+    agentStart,
+    agentEnd,
+    addError
+} from './session-state.js'
 import {beginRun, endRun, heldInput, resetMidRunInput} from '../task/mid-run-input.js'
+
+/**
+ * Drive the run flag through the SAME mutators the pi events do. There used to be
+ * a `setAgentIdle` mirror to set here; it was a second source of truth for one
+ * boolean and is gone. Going through agentStart/agentEnd means these tests
+ * exercise the flag the shipped code actually reads.
+ */
+const setAgentIdle = (idle: boolean): void => {
+    if (idle) agentEnd({} as Parameters<typeof agentEnd>[0], undefined)
+    else agentStart(undefined)
+}
 
 afterEach(() => {
     const b = getBridge()
@@ -72,4 +88,35 @@ test('held lines still reach the transcript, so the user sees what they typed', 
     routePlainLine('also add retries', noop)
     expect(frames.some(f => f.type === 'user_message')).toBe(true)
     endRun()
+})
+
+// ─── the divergences the deleted mirror caused ───────────────────────────────
+
+/**
+ * SessionState clears `agentRunning` in THREE places — agentEnd, addError and
+ * reset — but the deleted remote/state.ts mirror was only ever set alongside
+ * agentEnd. So after an errored turn, or a /new that arrives without an
+ * agent_end, routePlainLine still believed a turn was live and steered into one
+ * SessionState had already finished. Reading the flag from its owner fixes both
+ * by construction; these pin it.
+ */
+test('a turn ended by an ERROR is no longer treated as live', () => {
+    _setSink(() => {})
+    agentStart(undefined)
+    addError('provider exploded')
+    const {sent, send} = collect()
+    routePlainLine('try again', send)
+    // Not steered — the turn is over. No run is active either, so it goes as an
+    // ordinary message rather than being held.
+    expect(sent).toEqual([{text: 'try again', opts: undefined}])
+})
+
+test('a session RESET is no longer treated as a live turn', () => {
+    _setSink(() => {})
+    agentStart(undefined)
+    resetSessionState()
+    _setSink(() => {})
+    const {sent, send} = collect()
+    routePlainLine('fresh start', send)
+    expect(sent).toEqual([{text: 'fresh start', opts: undefined}])
 })

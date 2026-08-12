@@ -26,6 +26,7 @@ import * as path from 'node:path'
 import type {SpawnFn} from '../shared/child-process.js'
 import {makeGit} from '../shared/git-runner.js'
 import {USER_CANCELLED} from './child-runner.js'
+import {classifyWorkerFailure, type WorkerFailureInput} from '../workers/worker-failure.js'
 import {TASKS_DIR_NAME} from './task-types.js'
 import {findProbeGamingInDiff} from './probe-gaming.js'
 
@@ -239,27 +240,26 @@ export function parseEnforceVerdict(text: string): {clean: boolean; detail: stri
 }
 
 /** The subset of a runWorker result the enforcement-child mapping reads. */
-export interface EnforceChildResult {
+export interface EnforceChildResult extends WorkerFailureInput {
     text: string
-    exitCode: number
-    aborted: boolean
-    timedOut?: boolean
-    loopHit?: unknown
-    leakedToolCall?: unknown
-    stalled?: boolean
-    commandTimedOut?: {toolName: string; timeoutMs: number}
 }
 
 /**
  * Map the enforcement child's runWorker result to a fatal error message, or null
  * when it finished cleanly enough to parse a verdict from its text.
  *
- * The order is load-bearing. A loop-kill AND a wall-clock timeout BOTH also set
- * `aborted` (and a non-zero exit) — killProc flips it on every kill path — so the
- * specific causes (timeout, loop, leaked tool call) must be handled BEFORE the
- * generic `aborted → user-cancel` and `exitCode` mappings. Checking `aborted`
- * first (as the original inline code did) mislabels a loop-killed enforcement
- * child as a user cancel.
+ * The ORDER is load-bearing and no longer lives here: every kill path also sets
+ * `aborted` and a non-zero exit, so the specific causes must be matched before
+ * the generic ones, and that precedence is stated once in `classifyWorkerFailure`
+ * (workers/worker-failure.ts). This function is now only the enforce-specific
+ * half — what each cause MEANS to guideline enforcement.
+ *
+ * Writing the ladder out by hand here is exactly what cost us the stream-stall
+ * bug: `streamStalled` was added to the worker result and to `finalAttemptFailed`
+ * but never to this ladder, so a child killed for a dead model stream fell
+ * through to `aborted → USER_CANCELLED` and a hung backend was reported to the
+ * user as their own cancel. The switch below is exhaustive, so the next cause
+ * added to the union is a compile error here rather than a silent mislabel.
  *
  * A loop is NOT fatal: enforce attaches the detector in nudge-then-warn mode, so a
  * loop that survived its restart-with-hint nudges returns null here (the caller
@@ -268,29 +268,41 @@ export interface EnforceChildResult {
  * effects don't get re-classified as a user cancel or a crash.
  */
 export function classifyEnforceChildFailure(r: EnforceChildResult): string | null {
-    // Stall-kill must be matched BEFORE `aborted`: the kill sets aborted too,
-    // and mislabeling a dead model backend as a user cancel hides the cause
-    // (mx5 run 7: 64 minutes of silence).
-    if (r.stalled) {
-        return 'model server unreachable — the child produced no output and the model endpoint did not respond'
+    const failure = classifyWorkerFailure(r)
+    if (!failure) return null
+    switch (failure.kind) {
+        case 'stalled':
+            // mx5 run 7: 64 minutes of silence reported as a user cancel.
+            return 'model server unreachable — the child produced no output and the model endpoint did not respond'
+        case 'command-timeout': {
+            // Its text is truncated mid-run — the verdict in it is partial and
+            // must never be parsed as a real one.
+            const mins = Math.max(1, Math.round(failure.timeoutMs / 60_000))
+            return (
+                `child ran a \`${failure.toolName}\` command that had not returned after `
+                + `${mins} minute${mins === 1 ? '' : 's'} and was killed — it never bounded the command`
+            )
+        }
+        case 'stream-stall': {
+            // The arm this ladder was missing. Same class as the two above: a
+            // watchdog, not the model, ended the run, and the text is partial.
+            const secs = Math.max(1, Math.round(failure.idleMs / 1000))
+            return (
+                `model stream went silent for ${secs}s with no tool running and the child was `
+                + 'killed — the backend stopped producing, the child did not stop working'
+            )
+        }
+        case 'worker-timeout':
+            return 'enforcement child timed out'
+        case 'loop':
+            return null // looped past the nudges → warning, handled by caller
+        case 'leaked-tool-call':
+            return 'enforcement child leaked a tool call'
+        case 'aborted':
+            return USER_CANCELLED
+        case 'exit':
+            return `enforcement child exited ${failure.code}`
     }
-    // Same rule, same reason: the command watchdog's kill sets `aborted` too, so
-    // a child killed for a command that never returned would otherwise report as
-    // a user cancel. Its text is truncated mid-run — the verdict in it is partial
-    // and must never be parsed as a real one.
-    if (r.commandTimedOut) {
-        const mins = Math.max(1, Math.round(r.commandTimedOut.timeoutMs / 60_000))
-        return (
-            `child ran a \`${r.commandTimedOut.toolName}\` command that had not returned after `
-            + `${mins} minute${mins === 1 ? '' : 's'} and was killed — it never bounded the command`
-        )
-    }
-    if (r.timedOut) return 'enforcement child timed out'
-    if (r.loopHit) return null // looped past the nudges → warning, handled by caller
-    if (r.leakedToolCall) return 'enforcement child leaked a tool call'
-    if (r.aborted) return USER_CANCELLED
-    if (r.exitCode !== 0) return `enforcement child exited ${r.exitCode}`
-    return null
 }
 
 /**

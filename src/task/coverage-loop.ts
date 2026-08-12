@@ -26,6 +26,8 @@
  */
 
 /** A scored plan candidate — the minimum the adoption rule needs. */
+import type {CoverageAccounting} from './requirements.js'
+
 export interface CoveragePlan {
     titles: string[]
     /**
@@ -326,4 +328,49 @@ export function decideAdoption(
         }
     }
     return {adopt: true, reason: 'count floor met, no coverage regression', dropped: []}
+}
+
+/**
+ * One scored plan: its titles, and every judgement made ABOUT those titles.
+ *
+ * The whole point of this type is that it is indivisible. `accounting.mapped[i].task`
+ * is a 1-BASED INDEX INTO `plan.titles` — it means nothing except against the exact
+ * title list the coverage-map child was prompted with. Hold the two apart and the
+ * index silently addresses the wrong plan.
+ *
+ * That is not hypothetical. The coverage loop used to keep `best` (the scored plan)
+ * and a separate `let accounting`, updated on adoption as
+ * `accounting = cand.accounting ?? accounting`. `cand.accounting` is null whenever
+ * the coverage-map child throws or its output fails to parse — a fault that is
+ * SWALLOWED, while `decideAdoption` still adopts, because the monotonic guard runs
+ * on the grounded covered-set and not on the accounting. So: round 1 maps
+ * requirement #3 to task 2 of plan A; round 2 is adopted but its coverage-map child
+ * returns nothing; `planTitles` becomes plan B's while `accounting` stays plan A's;
+ * and `writeOwnedRequirements` binds requirement #3 to plan B's title #2 — a
+ * different task. The bounds filter at the write site only checks `1..titles.length`,
+ * so nothing catches it. Downstream, `ownedForTitle` force-appends that obligation
+ * into the wrong task's CONSTRAINTS and the final gate reports it unclaimed.
+ *
+ * Keeping accounting INSIDE the scored plan makes that state unrepresentable rather
+ * than merely fixed: adopting a plan is one assignment, so titles and accounting
+ * cannot come from different rounds. If you find yourself lifting `accounting` back
+ * out into its own variable, this is the bug you are re-introducing.
+ */
+export interface ScoredPlan {
+    plan: CoveragePlan
+    /**
+     * The per-requirement map for `plan.titles`, or null when the mapping child
+     * faulted. Null means "no accounting for THIS plan" — never "reuse the last
+     * plan's". A round that loses its accounting loses it; the judge-missing
+     * channel below is carried independently so nothing is stranded.
+     */
+    accounting: CoverageAccounting | null
+    suspect: boolean
+    /**
+     * The holistic-judge missing areas alone (NOT the quoted unmapped entries,
+     * which the grounded accounting already carries). This is the belt-only
+     * channel — areas requirement-extraction never captured, so nothing durable
+     * sees them unless carried explicitly at exhaustion.
+     */
+    judgeMissing: string[]
 }
