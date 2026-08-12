@@ -7,11 +7,58 @@ need. It is not a to-do list — the entries that cost the most are the dead end
 
 Formerly `nexttask.txt`; code comments citing "nexttask TASK n" mean this file.
 Details of anything shipped live in git history and in each script's own header,
-not here. Last updated 2026-08-07.
+not here. Last updated 2026-08-11.
 
 ---
 
 ## RULED OUT — do not re-propose
+
+- **Gating the raw `### docs:` block on a non-empty BODY instead of a non-empty
+  chunk LIST** (external-context.ts:243). Closed 2026-08-11 at STEP 0, before any
+  lever was written. The lead: `r.kind === 'ok' && r.chunks.length > 0` tests chunk
+  COUNT, so a result whose every chunk `content` is empty would emit a heading
+  announcing documentation and carrying none. The focused path gates on `r.answer`,
+  so only the raw path could have the hole.
+
+  `scripts/docs-empty-body-baserate.ts`, two populations:
+
+      A. cache audit (177,266 chunk rows, the real 221 MB machine cache)
+         content = ''                                        0
+         trim(content) = ''                                  0
+
+      B. live sweep, shipped predicate vs candidate, 2,620 lookups
+         PRODUCTION  110 lookups (every real TASK_*.md spec through the shipped
+                     extractEnrichTargets, shipped query = first non-empty line)
+           ok 51 / no_chunks 7 / error 52   → blocks emitted  51
+         VOLUME      2,510 lookups (every package installed in every corpus tree,
+                     real queries round-robin + a token-free query per tree, the
+                     only route into retrieveChunks' fallback branch)
+           ok 2,467 / no_chunks 42 / error 1 → blocks emitted 2,467
+         EMPTY-BODIED BLOCKS, both arms                       0   (0.00% of 2,518)
+
+  **It is unreachable, not merely rare.** Both producers of an `ok` result exclude
+  an empty body by construction. The cached path serves chunks from the `chunks`
+  table, and the indexer (docs-index.ts `chunkDts`/`chunkReadme`) skips every part
+  whose trim is empty and prefixes what survives with `// <path>` or
+  `<!-- README: … -->`; the uncached path (docs-core.ts:642) returns `no_chunks`
+  when its joined body is empty. The 0/177,266 audit says no older indexer ever
+  wrote one either. The candidate predicate would therefore change no prompt, and
+  the raw/focused difference documented on `ExternalTargetResult` stays as it is.
+
+  The nearest real thing is a body that is SHORT, not empty: 23 of 2,467 (0.93%)
+  come in under 80 characters — `wrappy` at 59, `fbjs` at 28 — a heading over one
+  re-export line. That is a different lead (a MINIMUM-body threshold), it needs its
+  own value question, and a length cutoff picked without one would silently drop
+  real single-declaration packages.
+
+  Caveat on the sweep, recorded because it bounds the claim: `spawn` was rewritten
+  to a failing command so a model-invented package name could not fire a real `npm
+  install`, which blocked 993 install attempts (mostly best-effort `@types` hops
+  that fell back to the original resolution). A hop that had succeeded would have
+  fed the same indexer, so it cannot produce a body the indexer cannot write.
+
+  Re-open only if the indexer starts storing chunk content it did not trim and
+  prefix, or if a non-`docsRaw` producer is bound to `ExternalContextLookups.docs`.
 
 - **Refusing to EXECUTE a declared launch script whose body is outward-facing**
   (nexttask 16B). Closed 2026-08-07 at STEP 3, on its own pre-registered gate
