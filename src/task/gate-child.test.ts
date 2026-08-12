@@ -258,3 +258,112 @@ test('tool results are logged for verify and withheld for enforce', async () => 
     expect((await withResult('verify')).some(l => l.startsWith('↳ bash'))).toBe(true)
     expect((await withResult('enforce')).some(l => l.startsWith('↳ bash'))).toBe(false)
 })
+
+/**
+ * The four callbacks handed to runWorker and startAutoLoader. Each is a closure
+ * the harness above never invoked, and each one is the ONLY way a piece of
+ * live state reaches the user: the widget's step and trailer, the discarded
+ * attempts a restart otherwise hides, and the context gauge.
+ */
+describe('the live-state callbacks', () => {
+    /** A harness whose fake loader captures the state getter so the test can
+     *  render a frame at any point, exactly as the 100ms tick does. */
+    function loaderHarness(over: Partial<GateChildDeps> = {}) {
+        let snapshot: (() => unknown) | null = null
+        const h = harness({
+            startAutoLoader: (_ctx, getState) => {
+                snapshot = getState as () => unknown
+                return () => {}
+            },
+            ...over
+        })
+        return {...h, frame: () => (snapshot ? (snapshot() as Record<string, unknown>) : null)}
+    }
+
+    test('the loader frame names the kind, the step and the title', async () => {
+        const {deps, frame} = loaderHarness()
+        await makeGateChild(deps)('read', 'x')
+        expect(frame()).toMatchObject({
+            title: 'Add auth routes',
+            kind: 'verify',
+            step: GATE_CHILD_KINDS.verify.step,
+            stepNum: 1,
+            stepTotal: 1
+        })
+    })
+
+    test('onLine feeds the widget trailer AND the stream log', async () => {
+        const {deps, log, frame} = loaderHarness({
+            runWorker: input => {
+                input.onLine?.('reading src/server/index.ts')
+                return Promise.resolve(workerResult())
+            }
+        })
+        await makeGateChild(deps)('read', 'x')
+        expect(frame()?.lastLine).toBe('reading src/server/index.ts')
+        expect(log).toContain('reading src/server/index.ts')
+    })
+
+    test('the trailer is cleared before the next child, not carried over', async () => {
+        const {deps, frame} = loaderHarness({
+            widget: {lastLine: 'a line from the LAST task', contextUsage: {} as never}
+        })
+        let during: unknown
+        const withCapture = {
+            ...deps,
+            runWorker: () => {
+                during = frame()
+                return Promise.resolve(workerResult())
+            }
+        }
+        await makeGateChild(withCapture)('read', 'x')
+        expect((during as Record<string, unknown>).lastLine).toBeUndefined()
+        expect((during as Record<string, unknown>).contextUsage).toBeUndefined()
+    })
+
+    test('onContextUsage goes through resolveContextUsage with the parent window', async () => {
+        const seen: Array<{snapshot: unknown; prev: unknown; window: number}> = []
+        const {deps, frame} = loaderHarness({
+            parentContextWindow: 200_000,
+            resolveContextUsage: (snapshot, prev, window) => {
+                seen.push({snapshot, prev, window})
+                return {used: 4_000, total: window} as never
+            },
+            runWorker: input => {
+                input.onContextUsage?.({used: 4_000} as never)
+                return Promise.resolve(workerResult())
+            }
+        })
+        await makeGateChild(deps)('read', 'x')
+        expect(seen).toHaveLength(1)
+        expect(seen[0].window).toBe(200_000)
+        expect(seen[0].prev).toBeUndefined()
+        expect(frame()?.contextUsage).toEqual({used: 4_000, total: 200_000})
+    })
+
+    test('a discarded attempt is logged — otherwise a restart is invisible', async () => {
+        const {deps, log} = harness({
+            runWorker: input => {
+                input.onRestart?.({
+                    attempt: 1,
+                    reason: 'stall',
+                    wallMs: 42_000,
+                    detail: 'no output for 120s'
+                } as never)
+                input.onRestart?.({attempt: 2, reason: 'loop', wallMs: 9_000} as never)
+                return Promise.resolve(workerResult())
+            }
+        })
+        await makeGateChild(deps)('read', 'x')
+
+        const restarts = log.filter(l => l.includes('RESTART'))
+        expect(restarts).toHaveLength(2)
+        expect(restarts[0]).toContain('attempt 1 discarded')
+        expect(restarts[0]).toContain('reason=stall')
+        expect(restarts[0]).toContain('wall=42000ms')
+        expect(restarts[0]).toContain('no output for 120s')
+        // No detail → no trailing em-dash clause.
+        expect(restarts[1]).toContain('reason=loop')
+        expect(restarts[1]).not.toContain('—')
+    })
+})

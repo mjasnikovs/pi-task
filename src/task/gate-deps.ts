@@ -101,6 +101,19 @@ export type FinalGateFixFn = (
 /** Keep the gate machinery's own artifacts out of every git pathspec below. */
 const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
 
+/**
+ * Pin the diff header prefixes on any command whose output we PARSE for paths.
+ *
+ * `parseAddedLines` reads the file out of the `+++ b/…` header, but the prefix is
+ * user-configurable: `diff.mnemonicPrefix=true` emits `i/` and `w/` instead of
+ * `a/` and `b/`, and `diff.noprefix=true` emits none. Both are common developer
+ * settings, and under either one every added line was attributed to a path like
+ * `w/src/app.ts`, which exists nowhere — so the probe-gaming and sandbox-path
+ * probes silently read a diff of files that are not in the repo. Passing the
+ * prefixes explicitly makes the output independent of the host's git config.
+ */
+const DIFF_PREFIX_ARGS = ['--src-prefix=a/', '--dst-prefix=b/']
+
 const splitLines = (s: string): string[] =>
     s
         .split('\n')
@@ -168,7 +181,11 @@ export async function collectChangedFiles(
  * never a blocker. The `.pi-tasks/` bookkeeping is excluded from every git command.
  */
 export async function collectAddedLines(cwd: string, signal?: AbortSignal): Promise<AddedLine[]> {
-    const tracked = await git(cwd, ['diff', 'HEAD', '--', '.', EXCLUDE_TASKS_DIR], signal)
+    const tracked = await git(
+        cwd,
+        ['diff', ...DIFF_PREFIX_ARGS, 'HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+        signal
+    )
     const lines: AddedLine[] = tracked.exitCode === 0 ? parseAddedLines(tracked.stdout) : []
     const untracked = await git(
         cwd,
@@ -184,7 +201,11 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
         }
     }
     if (lines.length === 0) {
-        const last = await git(cwd, ['diff', 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR], signal)
+        const last = await git(
+            cwd,
+            ['diff', ...DIFF_PREFIX_ARGS, 'HEAD~1..HEAD', '--', '.', EXCLUDE_TASKS_DIR],
+            signal
+        )
         return last.exitCode === 0 ? parseAddedLines(last.stdout) : []
     }
     return lines
@@ -202,7 +223,7 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
  * cannot repair still reaches the child under rule 4e. Failures degrade to no
  * findings — a sharpener, never a blocker.
  */
-async function collectForeignPathFindings(
+export async function collectForeignPathFindings(
     cwd: string,
     signal?: AbortSignal,
     logDebug?: (m: string) => void

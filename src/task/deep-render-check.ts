@@ -460,8 +460,11 @@ interface TrackedRequest {
 }
 
 /** Minimal DevTools-protocol client: request/response ids over one socket, plus
- *  event fan-out. Everything the driver needs and nothing more. */
-class Cdp {
+ *  event fan-out. Everything the driver needs and nothing more.
+ *
+ *  @internal Exported for its own tests: the id/response matching and the
+ *  send-failure path are the parts of the driver that need no browser. */
+export class Cdp {
     private nextId = 1
     private readonly pending = new Map<
         number,
@@ -536,8 +539,11 @@ const INSPECT_EXPR = `(() => {
 
 /** Page-side fill: native value setters + input/change events, so a controlled
  *  React/Vue/Svelte input actually updates its state (a bare `el.value = …` does
- *  not, and the form then submits empty). */
-function fillExpr(identifier: string, password: string): string {
+ *  not, and the form then submits empty).
+ *
+ *  @internal Exported so the credential ESCAPING is testable: a password with a
+ *  quote or a backslash in it must not break out of the injected expression. */
+export function fillExpr(identifier: string, password: string): string {
     return `(() => {
     const setValue = (el, v) => {
         const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
@@ -577,8 +583,14 @@ const SUBMIT_EXPR = `(() => {
     return {ok: false, reason: 'no submit control'}
 })()`
 
-/** Wait until `ms` of silence pass with no new request, or `cap` elapses. */
-async function settle(lastActivity: () => number, cap: number, quiet = QUIET_MS): Promise<void> {
+/** Wait until `ms` of silence pass with no new request, or `cap` elapses.
+ *  @internal Exported for its own tests — the quiet/cap arithmetic decides
+ *  whether a slow page is judged half-loaded. */
+export async function settle(
+    lastActivity: () => number,
+    cap: number,
+    quiet = QUIET_MS
+): Promise<void> {
     const deadline = Date.now() + cap
     for (;;) {
         const idleFor = Date.now() - lastActivity()
@@ -604,6 +616,10 @@ export async function runDeepRenderCheck(
         /** Recorder hook: receives the facts the verdict was made on. Used by the
          *  corpus builder; the gate itself never passes it. */
         onFacts?: (f: DeepSessionFacts) => void
+        /** @internal Settle quiet window, for tests only. The three settle windows
+         *  cost QUIET_MS each against a fake browser that answers instantly, which
+         *  is the whole runtime of a driver test. The gate never passes it. */
+        quietMs?: number
     } = {}
 ): Promise<DeepRenderOutcome> {
     const credentials =
@@ -651,7 +667,8 @@ export async function runDeepRenderCheck(
                 s => {
                     socket = s
                 },
-                opts.onFacts
+                opts.onFacts,
+                opts.quietMs
             ),
             budget
         )
@@ -690,7 +707,8 @@ async function drive(
     credentials: LoginCredentials | null,
     holdChild: (c: ReturnType<typeof spawn>) => void,
     holdSocket: (s: WebSocket) => void,
-    onFacts: ((f: DeepSessionFacts) => void) | undefined
+    onFacts: ((f: DeepSessionFacts) => void) | undefined,
+    quietMs: number | undefined
 ): Promise<DeepRenderOutcome> {
     const origin = new URL(url).origin
     /** Every verdict goes through here, so a recorder sees the same facts the judge
@@ -790,7 +808,7 @@ async function drive(
     }
 
     await cdp.send('Page.navigate', {url}, sessionId)
-    await settle(() => lastActivity, SETTLE_CAP_MS)
+    await settle(() => lastActivity, SETTLE_CAP_MS, quietMs)
     const before = await evaluate<{
         hasPassword: boolean
         url: string
@@ -869,7 +887,7 @@ async function drive(
     const submitted = await evaluate<{ok: boolean; reason?: string}>(SUBMIT_EXPR)
     if (!submitted?.ok) return judge(unsubmitted({submitted: false}))
     lastActivity = Date.now()
-    await settle(() => lastActivity, POST_SUBMIT_CAP_MS)
+    await settle(() => lastActivity, POST_SUBMIT_CAP_MS, quietMs)
 
     // The sign-in request: the first same-origin non-GET issued by the submit. Its
     // own 2xx is the precondition for judging anything, and it is excluded from the
@@ -907,7 +925,7 @@ async function drive(
     if (authAccepted && leftAuthWall) {
         await cdp.send('Page.navigate', {url}, sessionId)
         lastActivity = Date.now()
-        await settle(() => lastActivity, RE_NAV_CAP_MS)
+        await settle(() => lastActivity, RE_NAV_CAP_MS, quietMs)
     }
     return judge(
         facts(sessionLog(authId, authAt), {

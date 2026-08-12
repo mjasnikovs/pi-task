@@ -5,7 +5,10 @@ import {
     judgeDeepSession,
     parseEnvFile,
     pinnedLocalPort,
+    Cdp,
+    fillExpr,
     runDeepRenderCheck,
+    settle,
     type DeepSessionFacts
 } from './deep-render-check'
 import {mkdtempSync, writeFileSync} from 'node:fs'
@@ -246,5 +249,164 @@ describe('runDeepRenderCheck env gaps', () => {
         })
         expect(r.outcome).toBe('skip')
         expect((r as {note: string}).note).toContain('NOT observed')
+    })
+})
+
+/**
+ * The driver internals that need no browser.
+ *
+ * `drive()` itself cannot be exercised without a real Chrome, but the three
+ * pieces below decide whether it works at all: whether a reply is matched to the
+ * request that asked for it, whether a password survives being embedded in an
+ * injected expression, and when a page counts as settled.
+ */
+describe('Cdp', () => {
+    /** A `ws`-shaped double: records what was sent, lets the test reply. */
+    function fakeSocket() {
+        const sent: Array<Record<string, unknown>> = []
+        let onMessage: ((data: string) => void) | null = null
+        let throwOnSend: Error | null = null
+        return {
+            sent,
+            reply: (msg: unknown) => onMessage?.(JSON.stringify(msg)),
+            raw: (text: string) => onMessage?.(text),
+            failNextSend: (e: Error) => {
+                throwOnSend = e
+            },
+            ws: {
+                on: (event: string, cb: (data: string) => void) => {
+                    if (event === 'message') onMessage = cb
+                },
+                send: (data: string) => {
+                    if (throwOnSend) throw throwOnSend
+                    sent.push(JSON.parse(data) as Record<string, unknown>)
+                }
+            } as never
+        }
+    }
+
+    test('matches each reply to the request that asked for it', async () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+
+        const first = cdp.send('Page.navigate', {url: 'http://x/'})
+        const second = cdp.send('Runtime.evaluate', {expression: '1'})
+
+        expect(s.sent.map(m => m.method)).toEqual(['Page.navigate', 'Runtime.evaluate'])
+        expect(s.sent[0].id).not.toBe(s.sent[1].id)
+
+        // Out of order, as a real browser answers.
+        s.reply({id: s.sent[1].id, result: {value: 1}})
+        s.reply({id: s.sent[0].id, result: {frameId: 'F'}})
+
+        expect(await first).toEqual({frameId: 'F'})
+        expect(await second).toEqual({value: 1})
+    })
+
+    test('a protocol error rejects that one call', async () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        const p = cdp.send('Runtime.evaluate')
+        s.reply({id: s.sent[0].id, error: {message: 'Cannot find context'}})
+        await expect(p).rejects.toThrow('Cannot find context')
+    })
+
+    test('an error with no message still rejects, with a usable one', async () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        const p = cdp.send('Runtime.evaluate')
+        s.reply({id: s.sent[0].id, error: {}})
+        await expect(p).rejects.toThrow('CDP error')
+    })
+
+    test('a reply with no result resolves empty rather than hanging', async () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        const p = cdp.send('Page.enable')
+        s.reply({id: s.sent[0].id})
+        expect(await p).toEqual({})
+    })
+
+    test('carries the sessionId when one is given, and omits it otherwise', () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        void cdp.send('Page.enable', {}, 'SESSION-1')
+        void cdp.send('Page.enable')
+        expect(s.sent[0].sessionId).toBe('SESSION-1')
+        expect('sessionId' in s.sent[1]).toBe(false)
+    })
+
+    test('a socket that refuses the write rejects instead of leaking a pending call', async () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        s.failNextSend(new Error('socket closed'))
+        await expect(cdp.send('Page.enable')).rejects.toThrow('socket closed')
+    })
+
+    test('fans events out to every handler, and survives junk on the wire', () => {
+        const s = fakeSocket()
+        const cdp = new Cdp(s.ws)
+        const a: unknown[] = []
+        const b: unknown[] = []
+        cdp.on('Network.requestWillBeSent', p => a.push(p))
+        cdp.on('Network.requestWillBeSent', p => b.push(p))
+
+        s.raw('not json at all')
+        s.reply({method: 'Network.requestWillBeSent', params: {requestId: '1'}})
+        s.reply({method: 'Network.somethingNobodyListensTo'})
+        s.reply({method: 'Network.requestWillBeSent'}) // no params → {}
+        s.reply({id: 999, result: {}}) // a reply to a call we never made
+
+        expect(a).toEqual([{requestId: '1'}, {}])
+        expect(b).toEqual(a)
+    })
+})
+
+describe('fillExpr', () => {
+    test('embeds both credentials as JSON literals', () => {
+        const expr = fillExpr('admin@example.com', 'hunter2')
+        expect(expr).toContain('"admin@example.com"')
+        expect(expr).toContain('"hunter2"')
+    })
+
+    test('a password full of quotes and backslashes cannot break out', () => {
+        const nasty = `a"b'c\\d\n</script>`
+        const expr = fillExpr('u', nasty)
+        // The literal is escaped, so the raw sequence never appears verbatim…
+        expect(expr).not.toContain(`a"b'c\\d\n`)
+        // …and evaluating the emitted literal gives the password back unchanged.
+        const literal = expr.slice(expr.lastIndexOf('setValue(pw, ') + 'setValue(pw, '.length)
+        expect(JSON.parse(literal.slice(0, literal.indexOf('\n')).replace(/\)$/, ''))).toBe(nasty)
+    })
+
+    test('drives the framework, not the raw value — a controlled input needs the events', () => {
+        const expr = fillExpr('u', 'p')
+        expect(expr).toContain("new Event('input', {bubbles: true})")
+        expect(expr).toContain("new Event('change', {bubbles: true})")
+        // The identifier field is picked by exclusion, never by name guessing.
+        expect(expr).toContain("'hidden', 'submit', 'button', 'checkbox'")
+    })
+})
+
+describe('settle', () => {
+    test('returns once the page has been quiet for the window', async () => {
+        const started = Date.now()
+        const lastActivity = Date.now()
+        await settle(() => lastActivity, 5_000, 60)
+        expect(Date.now() - started).toBeLessThan(1_000)
+    })
+
+    test('gives up at the cap when the page never goes quiet', async () => {
+        const started = Date.now()
+        await settle(() => Date.now(), 120, 10_000)
+        const spent = Date.now() - started
+        expect(spent).toBeGreaterThanOrEqual(100)
+        expect(spent).toBeLessThan(2_000)
+    })
+
+    test('an already-quiet page costs nothing', async () => {
+        const started = Date.now()
+        await settle(() => Date.now() - 10_000, 5_000, 1_200)
+        expect(Date.now() - started).toBeLessThan(50)
     })
 })

@@ -1,5 +1,13 @@
-import {describe, expect, test} from 'bun:test'
-import {CommandWatchdog, reminderMessage, type WatchdogDeps} from './command-watchdog.js'
+import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
+import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
+import {
+    CommandWatchdog,
+    consumeWatchdogAbort,
+    registerCommandWatchdog,
+    reminderMessage,
+    type WatchdogDeps
+} from './command-watchdog.js'
+import {getConfig} from '../config/config.js'
 import {realTimerDeps} from '../shared/command-watchdog.js'
 
 /**
@@ -189,4 +197,201 @@ describe('realTimerDeps', () => {
             realTimerDeps.cancel(h as never)
         }
     })
+})
+
+/**
+ * The MAIN-SESSION adapter — the wiring the state-machine tests above cannot
+ * reach: which pi events arm and disarm the timer, that the ctx aborted is the
+ * one that owns the stuck call, and that the abort is FLAGGED before it happens
+ * so the steer loop never mistakes it for a human ESC.
+ *
+ * Driven on the real clock with the ceiling turned down to a few milliseconds,
+ * because that is what the adapter actually installs (realTimerDeps); a fake
+ * scheduler here would test a wiring that does not ship.
+ */
+describe('registerCommandWatchdog', () => {
+    const CEILING_MS = 5
+    const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+    /** Long enough for a CEILING_MS timer to have fired on a loaded machine. */
+    const settle = (): Promise<void> => sleep(60)
+
+    interface FakePi {
+        pi: ExtensionAPI
+        handlers: Map<string, (...args: never[]) => unknown>
+        sent: Array<{msg: string; opts: unknown}>
+    }
+
+    function fakePi(): FakePi {
+        const handlers = new Map<string, (...args: never[]) => unknown>()
+        const sent: Array<{msg: string; opts: unknown}> = []
+        const pi = {
+            on: (name: string, handler: (...args: never[]) => unknown) => {
+                handlers.set(name, handler)
+            },
+            sendUserMessage: (msg: string, opts: unknown) => {
+                sent.push({msg, opts})
+            }
+        }
+        return {pi: pi as unknown as ExtensionAPI, handlers, sent}
+    }
+
+    function fakeCtx(): {ctx: unknown; aborts: number} {
+        const state = {aborts: 0}
+        return {
+            ctx: {
+                abort: () => {
+                    state.aborts++
+                }
+            },
+            get aborts() {
+                return state.aborts
+            }
+        }
+    }
+
+    let originalTimeout: number
+    let originalExempt: string[]
+
+    beforeEach(() => {
+        originalTimeout = getConfig().requestTimeoutMs
+        originalExempt = getConfig().commandTimeoutExemptTools
+        getConfig().requestTimeoutMs = CEILING_MS
+        getConfig().commandTimeoutExemptTools = []
+        consumeWatchdogAbort() // never inherit another test's one-shot flag
+    })
+    afterEach(() => {
+        getConfig().requestTimeoutMs = originalTimeout
+        getConfig().commandTimeoutExemptTools = originalExempt
+        consumeWatchdogAbort()
+    })
+
+    test('hooks the four events it needs and nothing else', () => {
+        const {pi, handlers} = fakePi()
+        registerCommandWatchdog(pi)
+        expect([...handlers.keys()].sort()).toEqual([
+            'session_shutdown',
+            'tool_execution_end',
+            'tool_execution_start',
+            'turn_end'
+        ])
+    })
+
+    test('an overrun aborts the owning ctx and follows up with the reminder', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const owner = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            owner.ctx as never
+        )
+        await settle()
+
+        expect(owner.aborts).toBe(1)
+        expect(sent).toHaveLength(1)
+        expect(sent[0].msg).toBe(reminderMessage('bash', CEILING_MS))
+        expect(sent[0].opts).toEqual({deliverAs: 'followUp'})
+    })
+
+    test('flags the abort as the watchdog’s, one shot only', async () => {
+        const {pi, handlers} = fakePi()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            fakeCtx().ctx as never
+        )
+        await settle()
+
+        expect(consumeWatchdogAbort()).toBe(true)
+        expect(consumeWatchdogAbort()).toBe(false)
+    })
+
+    test('aborts the ctx that owns the stuck call, not a later one', async () => {
+        const {pi, handlers} = fakePi()
+        const first = fakeCtx()
+        const second = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            first.ctx as never
+        )
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c2', toolName: 'read'} as never,
+            second.ctx as never
+        )
+        handlers.get('tool_execution_end')!({toolCallId: 'c2'} as never)
+        await settle()
+
+        expect(first.aborts).toBe(1)
+        expect(second.aborts).toBe(0)
+    })
+
+    test('a command that finishes in time is never touched', async () => {
+        const {pi, handlers, sent} = fakePi()
+        const owner = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            owner.ctx as never
+        )
+        handlers.get('tool_execution_end')!({toolCallId: 'c1'} as never)
+        await settle()
+
+        expect(owner.aborts).toBe(0)
+        expect(sent).toEqual([])
+        expect(consumeWatchdogAbort()).toBe(false)
+    })
+
+    test('an exempt tool never arms', async () => {
+        getConfig().commandTimeoutExemptTools = ['fable_loop']
+        const {pi, handlers, sent} = fakePi()
+        const owner = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'fable_loop'} as never,
+            owner.ctx as never
+        )
+        await settle()
+
+        expect(owner.aborts).toBe(0)
+        expect(sent).toEqual([])
+    })
+
+    test('a zero ceiling turns the guard off', async () => {
+        getConfig().requestTimeoutMs = 0
+        const {pi, handlers, sent} = fakePi()
+        const owner = fakeCtx()
+        registerCommandWatchdog(pi)
+
+        handlers.get('tool_execution_start')!(
+            {toolCallId: 'c1', toolName: 'bash'} as never,
+            owner.ctx as never
+        )
+        await settle()
+
+        expect(owner.aborts).toBe(0)
+        expect(sent).toEqual([])
+    })
+
+    for (const event of ['turn_end', 'session_shutdown'] as const) {
+        test(`${event} disarms a start that never got its end`, async () => {
+            const {pi, handlers, sent} = fakePi()
+            const owner = fakeCtx()
+            registerCommandWatchdog(pi)
+
+            handlers.get('tool_execution_start')!(
+                {toolCallId: 'c1', toolName: 'bash'} as never,
+                owner.ctx as never
+            )
+            handlers.get(event)!()
+            await settle()
+
+            expect(owner.aborts).toBe(0)
+            expect(sent).toEqual([])
+        })
+    }
 })
