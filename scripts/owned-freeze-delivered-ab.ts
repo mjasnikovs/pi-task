@@ -114,17 +114,44 @@ const taskDoc = (id: string): string =>
 
 // ─── Recorded run-19 inputs ─────────────────────────────────────────────────
 
-if (!fs.existsSync(path.join(MX5, '.pi-tasks', `${TASK}.md`))) {
-    console.error(`ABSTAIN: evidence tree missing (${MX5}); set MX5_DIR.`)
-    process.exit(2)
+type Recorded = {
+    rawPrompt: string
+    refined: string
+    research: string
+    qa: string
+    baseLedger: OwnedRequirement[]
 }
-const RECORDED = taskDoc(TASK)
-const RAW_PROMPT = section(RECORDED, 'raw prompt')
-const REFINED = section(RECORDED, 'refined prompt').replace(/^[\s\S]*?(?=^GOAL$)/m, '')
-const RESEARCH = section(RECORDED, 'research')
-const QA = section(RECORDED, 'grill Q&A')
-const LEDGER_TEXT = fs.readFileSync(path.join(MX5, '.pi-tasks', 'requirements-owned.md'), 'utf8')
-const BASE_LEDGER = parseOwnedRequirements(LEDGER_TEXT)
+
+let recordedCache: Recorded | null = null
+
+/**
+ * The recorded inputs, read on FIRST USE — never at import.
+ *
+ * These used to be top-level `const`s guarded by a top-level abstain. But this
+ * module also exports `scoreStaticObservation`, which the metric FP suite
+ * imports on every `bun test`; the abstain's `process.exit(2)` therefore killed
+ * the whole test process on any machine without the evidence tree — i.e. CI,
+ * always, which is what turned the suite red. The abstain still fires, but only
+ * for a caller that actually needs the tree.
+ */
+function recorded(): Recorded {
+    if (recordedCache) return recordedCache
+    if (!fs.existsSync(path.join(MX5, '.pi-tasks', `${TASK}.md`))) {
+        console.error(`ABSTAIN: evidence tree missing (${MX5}); set MX5_DIR.`)
+        process.exit(2)
+    }
+    const doc = taskDoc(TASK)
+    recordedCache = {
+        rawPrompt: section(doc, 'raw prompt'),
+        refined: section(doc, 'refined prompt').replace(/^[\s\S]*?(?=^GOAL$)/m, ''),
+        research: section(doc, 'research'),
+        qa: section(doc, 'grill Q&A'),
+        baseLedger: parseOwnedRequirements(
+            fs.readFileSync(path.join(MX5, '.pi-tasks', 'requirements-owned.md'), 'utf8')
+        )
+    }
+    return recordedCache
+}
 
 /**
  * The treatment ledger: the recorded one, run through BOTH halves of the pass —
@@ -132,21 +159,22 @@ const BASE_LEDGER = parseOwnedRequirements(LEDGER_TEXT)
  * task's own recorded refined prompt. Not hand-edited; the arm IS the mechanism.
  */
 function treatmentLedger(): OwnedRequirement[] {
+    const rec = recorded()
     const spec = section(taskDoc(CONFLICT_TASK), 'spec')
     const conflictTitle = section(taskDoc(CONFLICT_TASK), 'raw prompt')
     const isSource = trackedSourceOracle(q => git(['ls-files', '--', q], MX5))
     const detached = detachUnsatisfiableRequirements({
         spec,
         title: conflictTitle,
-        ledger: BASE_LEDGER,
+        ledger: rec.baseLedger,
         isSource
     })
     if (!detached.actions.some(a => a.kind === 'detach' && a.quote.includes(TARGET_QUOTE))) {
         throw new Error(`the pass did not detach the target clause from ${CONFLICT_TASK}`)
     }
     const claimed = claimPendingRequirements({
-        intent: REFINED,
-        title: RAW_PROMPT,
+        intent: rec.refined,
+        title: rec.rawPrompt,
         ledger: detached.ledger
     })
     if (!claimed.actions.some(a => a.kind === 'claim' && a.quote.includes(TARGET_QUOTE))) {
@@ -260,12 +288,12 @@ function buildFixture(dir: string, owned: OwnedRequirement[]): void {
             'phase: compose',
             'created_at: 2026-08-04T14:48:57.076Z',
             'updated_at: 2026-08-04T14:48:57.076Z',
-            `title: ${RAW_PROMPT.split('\n')[0]}`,
+            `title: ${recorded().rawPrompt.split('\n')[0]}`,
             '---',
             '',
             '## raw prompt',
             '',
-            RAW_PROMPT,
+            recorded().rawPrompt,
             ''
         ].join('\n')
     )
@@ -291,10 +319,19 @@ async function runTrial(mode: Mode, n: number, owned: OwnedRequirement[]): Promi
     }
     try {
         log(`=== compose start (${mode} t${n}) ===`)
-        const draft = await phaseCompose(deps, REFINED, RESEARCH, QA)
-        const critiqued = await phaseCritique(deps, draft, REFINED, QA, undefined, RESEARCH, null)
+        const rec = recorded()
+        const draft = await phaseCompose(deps, rec.refined, rec.research, rec.qa)
+        const critiqued = await phaseCritique(
+            deps,
+            draft,
+            rec.refined,
+            rec.qa,
+            undefined,
+            rec.research,
+            null
+        )
         // The BRACES, exactly as phases.ts applies them after critique.
-        const final = appendOwnedConstraints(critiqued, ownedForTitle(owned, RAW_PROMPT))
+        const final = appendOwnedConstraints(critiqued, ownedForTitle(owned, rec.rawPrompt))
         fs.writeFileSync(path.join(ROOT, `${mode}-t${n}.spec.md`), final)
         const obs = scoreStaticObservation(final)
         log(`=== done — static observation: ${obs.hit} ===`)
@@ -407,11 +444,12 @@ async function main(): Promise<void> {
         )
         process.exit(1)
     }
+    const rec = recorded()
     const treat = treatmentLedger()
-    const owned = mode === 'treatment' ? treat : BASE_LEDGER
+    const owned = mode === 'treatment' ? treat : rec.baseLedger
     // The arms must actually differ where it matters, or nothing is measured.
-    const mineBase = ownedForTitle(BASE_LEDGER, RAW_PROMPT)
-    const mineTreat = ownedForTitle(treat, RAW_PROMPT)
+    const mineBase = ownedForTitle(rec.baseLedger, rec.rawPrompt)
+    const mineTreat = ownedForTitle(treat, rec.rawPrompt)
     if (mineBase.some(o => o.quote.includes(TARGET_QUOTE))) {
         console.error('ABSTAIN: the baseline ledger already gives the clause to this task.')
         process.exit(2)

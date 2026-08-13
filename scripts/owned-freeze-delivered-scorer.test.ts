@@ -18,8 +18,11 @@
  * needs an evidence tree this machine may not have. Splitting them is the point:
  * the arms that CAN run unattended now do, on every `bun test`.
  *
- * `scoreStaticObservation` is imported from the harness, which is guarded by
- * `import.meta.main` — validating the metric spends no model time.
+ * `scoreStaticObservation` is imported from the harness, whose model-spending
+ * `main()` is guarded by `import.meta.main` and whose evidence-tree reads are
+ * lazy — validating the metric spends no model time and needs no corpus. That
+ * laziness is load-bearing: the reads were once top-level, so importing this
+ * scorer on a machine without `~/hub/mx5` exited the test process with code 2.
  */
 import {describe, expect, test} from 'bun:test'
 import {scoreStaticObservation} from './owned-freeze-delivered-ab.js'
