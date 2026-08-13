@@ -39,6 +39,12 @@ function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n
     git(dir, 'init', '-q')
     git(dir, 'config', 'user.email', 't@t')
     git(dir, 'config', 'user.name', 't')
+    // The Windows CI runner defaults to core.autocrlf=true, so every git
+    // restore below (revert, discardEdits, revertFrozenPaths) would hand back
+    // 'export const a = 1\r\n' against an LF expectation — a diff bun renders
+    // as zero changed lines. Repo-level, so the fixture reads the same on
+    // every platform.
+    git(dir, 'config', 'core.autocrlf', 'false')
     write(dir, files)
     git(dir, 'add', '-A')
     git(dir, 'commit', '-qm', 'task: initial deliverable (TASK_0020)')
