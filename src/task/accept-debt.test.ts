@@ -581,6 +581,67 @@ describe('verify-command debt class', () => {
         expect(await classifyVerifyCommand(cwd, '', REASON)).toBeNull()
     })
 
+    // ─── nexttask 19C ────────────────────────────────────────────────────────
+    //
+    // The auto-close rests entirely on a ZERO exit meaning "the check passed". A
+    // command whose exit status is destroyed by its own construction makes that
+    // meaningless. 16 of the 612 store-eligible VERIFY lines on this box are that
+    // shape — 12 of them in IAR1, a CMake/C++ OBS plugin with no database, no
+    // frontend and no HTTP server. Refusing to store one leaves the debt OPEN and
+    // surfaced, which is strictly the smaller claim.
+
+    const UNFAILABLE_SPEC = [
+        'GOAL',
+        'build the plugin',
+        '',
+        'VERIFY:',
+        '```sh',
+        'cmake --build build && ctest --test-dir build',
+        'test -f "$SO_LIB" && echo "PASS: lib exists" || echo "FAIL: not found"',
+        '```'
+    ].join('\n')
+
+    test('19C: a VERIFY command that cannot fail is NOT stored', async () => {
+        const cwd = await withSpec('TASK_0003', UNFAILABLE_SPEC)
+        const unfailable = 'test -f "$SO_LIB" && echo "PASS: lib exists" || echo "FAIL: not found"'
+        expect(
+            await classifyVerifyCommand(
+                cwd,
+                'TASK_0003',
+                `work did not verify: The VERIFY block command \`${unfailable}\` fails unaided`
+            )
+        ).toBeNull()
+    })
+
+    test('19C: a real command in the SAME block is still stored — the refusal is narrow', async () => {
+        const cwd = await withSpec('TASK_0003', UNFAILABLE_SPEC)
+        const real = 'cmake --build build && ctest --test-dir build'
+        expect(
+            await classifyVerifyCommand(
+                cwd,
+                'TASK_0003',
+                `work did not verify: The VERIFY block command \`${real}\` fails unaided`
+            )
+        ).toBe(real)
+    })
+
+    test('19C: a debt already carrying an unfailable command can never auto-close', () => {
+        const debt: AcceptDebt = {
+            taskId: 'TASK_0003',
+            reason: 'work did not verify: the shared library was not produced',
+            origin: 'yolo-accepted',
+            verifyCommand: 'test -f "$SO_LIB" && echo "PASS" || echo "FAIL"'
+        }
+        // The re-run seam says PASS — because the shell really does exit 0 here.
+        // That is the defect, and it must no longer be able to close anything.
+        const out = recheckAcceptDebts([debt], {
+            staticOk: true,
+            rerunVerify: () => ({outcome: 'pass'})
+        })
+        expect(out.resolved).toHaveLength(0)
+        expect(out.open.map(d => d.taskId)).toEqual(['TASK_0003'])
+    })
+
     test('inv-no-false-clear — only a ZERO exit closes; fail/gap/absent never do', () => {
         const debt: AcceptDebt = {
             taskId: 'TASK_0009',

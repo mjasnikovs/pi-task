@@ -29,6 +29,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {parseVerifyBlockStrict} from './spec-validation.js'
 import {taskFilePath, tasksDir} from './task-io.js'
+import {isUnfailableCommand} from './unfailable-command.js'
 
 const ACCEPT_DEBT_FILE = 'accept-debt.md'
 /** Cap kept records so a run that accepts many FAILs cannot grow the report unboundedly. */
@@ -377,9 +378,25 @@ export function isStaticClassDebt(reason: string): boolean {
  * would split it into two, and an over-long line is a heredoc/prose artefact rather
  * than a command. Any of those ⇒ not stored ⇒ the debt is simply unclassified, i.e.
  * exactly as un-closable as it is today.
+ *
+ * …and one more condition (nexttask 19C): a command whose EXIT STATUS IS DESTROYED
+ * BY ITS OWN CONSTRUCTION is not storable either. The whole auto-close rests on a
+ * ZERO exit meaning "the check passed" (see recheckAcceptDebts below), and 16 of
+ * the 612 store-eligible VERIFY lines on this box exit zero whatever the tree
+ * contains — 12 of them in IAR1, a CMake/C++ OBS plugin with no database, no
+ * frontend and no HTTP server, where one task is seven consecutive
+ * `test -f … && echo "PASS" || echo "FAIL"` lines standing in for a build check.
+ * Refusing to store one leaves the debt OPEN and surfaced, which is strictly the
+ * smaller claim. See unfailable-command.ts for what is and is not decidable, and
+ * why bare `|| true` stays out of scope.
  */
 function isStorableCommand(cmd: string): boolean {
-    return cmd.length > 0 && cmd.length <= MAX_REASON_LENGTH && !/[\t\n\r]/.test(cmd)
+    return (
+        cmd.length > 0
+        && cmd.length <= MAX_REASON_LENGTH
+        && !/[\t\n\r]/.test(cmd)
+        && !isUnfailableCommand(cmd)
+    )
 }
 
 /**
