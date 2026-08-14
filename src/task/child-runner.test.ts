@@ -9,7 +9,8 @@ import {
     ModelError,
     childArgs,
     isConnectionError,
-    connectionRetryBackoffMs
+    connectionRetryBackoffMs,
+    LOOP_THRESHOLD
 } from './child-runner.js'
 import {
     fakeSpawnSimple,
@@ -17,6 +18,8 @@ import {
     agentErrorResponse,
     fakeSpawnQueue,
     fakeSpawnByPrompt,
+    loopResponse,
+    makeProc,
     type SpawnResponse
 } from '../test-utils/fake-spawn.js'
 import type {ProcLike, SpawnFn} from '../shared/child-process.js'
@@ -1064,4 +1067,119 @@ describe('shared error-triage ladder', () => {
             })
         })
     }
+})
+
+// ─── Regression: unguarded planning children ─────────────────────────────────
+//
+// mx5-n, 2026-08-14. /task-auto's decompose child (the coverage-retry of round
+// 1) ran for 16m23s and never returned. Measured while it was still alive:
+//
+//   • the child PID had been up 16m23s, and .pi-tasks/plan-debug.log had not
+//     gained a line for that whole stretch — last entry "decompose-coverage
+//     round 1: INCOMPLETE" at 20:28:25Z.
+//   • the loader showed the child at 102k/120k, and the model server's slot
+//     reported n_prompt_tokens 117,370 against a 120,064-token window for the
+//     request it was serving.
+//   • polled over one minute, the child's context climbed 15k → 71k tokens —
+//     more tool output per minute than the whole DESIGN directory holds
+//     (64 KB across four files), so it was re-reading design files it had
+//     already read.
+//   • the last tool line on the loader was `read: DESIGN/marketplace.html`.
+//
+// Nothing in the host could end it. runPhaseChild is the runner EVERY
+// /task-auto planning child goes through — clarify, decompose, coverage,
+// contract-extract — and it passes `undefined` for runChild's `onToolCall`, so
+// no LoopDetector is ever constructed for them; only runPhaseWithLoopGuard
+// builds one, and the planning seam does not call it. There is no wall-clock
+// bound either: `streamInactivityMs` only fires on SILENCE, and a child
+// thrashing through reads is the opposite of silent. Research workers already
+// carry both guards (RESEARCH_WORKER_TIMEOUT_MS, workers/pi-worker-core.ts) for
+// exactly this failure; planning children carry neither.
+//
+// These two tests fail today. They are the contract the fix must satisfy.
+describe('runPhaseChild — planning-child runaway guards', () => {
+    test('restarts a planning child that repeats one identical tool call', async () => {
+        const {spawn, prompts} = ladderSpawn([
+            // A decompose child stuck on the same read, which then answers
+            // anyway — so the empty-completion rung of the ladder cannot be what
+            // rescues this. Only loop detection can.
+            loopResponse('read', {path: 'DESIGN/marketplace.html'}, LOOP_THRESHOLD, {
+                trailingText: 'thrashed answer'
+            }),
+            agentEndResponse('clean answer')
+        ])
+        const out = await runPhaseChild(depsWith(spawn), 'auto-decompose', 'read', 'DECOMPOSE')
+        expect(prompts.length).toBe(2)
+        expect(prompts[1]).toContain('SYSTEM NOTE')
+        expect(prompts[1]).toContain('read')
+        expect(out).toBe('clean answer')
+    })
+
+    test('kills a planning child that outlives its wall-clock budget', async () => {
+        const prompts: string[] = []
+        const procs: Array<ReturnType<typeof makeProc>> = []
+        let i = 0
+        // Attempt 1 thrashes with VARIED args — the shape an exact-match loop
+        // detector cannot see — and never closes on its own, which is what a
+        // child burning its context window on re-reads looks like from here.
+        // Attempt 2 answers. Only a wall-clock cap gets us from one to two.
+        const spawn = (() => {
+            const p = makeProc()
+            procs.push(p)
+            const first = i++ === 0
+            p.kill = () => {
+                if (p.killed) return true
+                p.killed = true
+                p.emit('close', 143)
+                return true
+            }
+            queueMicrotask(() => {
+                prompts.push(p.stdinData)
+                if (first) {
+                    for (let n = 0; n < 40; n++) {
+                        p.stdout!.emit(
+                            'data',
+                            Buffer.from(
+                                JSON.stringify({
+                                    type: 'tool_execution_start',
+                                    toolName: 'read',
+                                    args: {path: 'DESIGN/marketplace.html', offset: n * 50 + 1}
+                                }) + '\n'
+                            )
+                        )
+                    }
+                    return // deliberately no close: the child is still "working"
+                }
+                p.stdout!.emit(
+                    'data',
+                    Buffer.from(
+                        JSON.stringify({
+                            type: 'agent_end',
+                            messages: [
+                                {
+                                    role: 'assistant',
+                                    content: [{type: 'text', text: 'clean answer'}]
+                                }
+                            ]
+                        }) + '\n'
+                    )
+                )
+                p.emit('close', 0)
+            })
+            return p
+        }) as unknown as SpawnFn
+
+        const out = await runPhaseChild(
+            {...depsWith(spawn), timeoutMs: 100},
+            'auto-decompose',
+            'read',
+            'DECOMPOSE'
+        )
+        expect(procs[0]!.killed).toBe(true)
+        expect(prompts.length).toBe(2)
+        // A timeout must read as "you ran out of time", not as the bare
+        // "child failed" that SIGTERM's exit 143 would otherwise produce.
+        expect(prompts[1]).toContain('SYSTEM NOTE')
+        expect(out).toBe('clean answer')
+    }, 2000)
 })

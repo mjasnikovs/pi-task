@@ -197,6 +197,17 @@ interface PhaseDeps {
     recordSubStep?: (label: string, ms: number) => void
     spawn?: SpawnFn
     /**
+     * Wall-clock budget for ONE spawn of this child, in ms.
+     *
+     * NOT YET ENFORCED — declared here so the regression test that pins the
+     * missing guard can inject a short budget. See the "unguarded planning
+     * children" block in child-runner.test.ts for the measurement that
+     * motivates it (mx5-n 2026-08-14: a decompose child ran 16m23s and never
+     * returned). Mirrors runWorker's `timeoutMs` input, which is the same
+     * backstop one layer down (workers/pi-worker-core.ts).
+     */
+    timeoutMs?: number
+    /**
      * Write a timestamped line to the per-task debug log. Fire-and-forget, and
      * UNSET entirely when the trail is off — so a caller must keep the `?.` and
      * must not do work to build a message outside the call.
