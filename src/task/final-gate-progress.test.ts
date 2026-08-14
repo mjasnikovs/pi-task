@@ -88,3 +88,53 @@ test('unobservedDebtReason: names the check and says it was never proven passing
     expect(r).toMatch(/UNOBSERVED/)
     expect(r).toMatch(/unfalsifiable/)
 })
+
+// ─── nexttask 19A: a demotion may never overrule an observation ──────────────
+//
+// The demote rule was a blind compensator for a probe limitation the probes have
+// self-reported since ELEVEN MINUTES before it landed (`b0f90a7` 23:34:05,
+// `dd3b0c3` 23:45:09, both 2026-07-19). Its only reachable effect was to overrule
+// a probe that DID look. mx5 run 21 is the one recorded instance and it released a
+// blank-page product as a `completed` run.
+
+test('19A: a failure a PROBE observed is never non-progress, however identical', () => {
+    const detail =
+        'boot check: `bun run dev` listens on :3000 but the rendered body is EMPTY after client '
+        + 'JS executed — no visible text, no visual or interactive elements'
+    // Everything the old rule needed is present: an edit, a re-run, an identical
+    // failure. What is new is that a probe LOOKED and this is what it saw.
+    expect(
+        isNonProgress({
+            previousSignature: sig(detail),
+            currentDetail: detail,
+            edited: true,
+            observed: true
+        })
+    ).toBe(false)
+})
+
+test('19A: an UNobserved check with the same shape still demotes — run 14 is unbroken', () => {
+    const detail = 'static checks: `bun run lint` exited 1'
+    expect(
+        isNonProgress({
+            previousSignature: sig(detail),
+            currentDetail: detail,
+            edited: true,
+            observed: false
+        })
+    ).toBe(true)
+    // …and absent the flag entirely (a caller that never learned about it), the
+    // classifier behaves exactly as it did before 19A.
+    expect(
+        isNonProgress({previousSignature: sig(detail), currentDetail: detail, edited: true})
+    ).toBe(true)
+})
+
+test('19A: `observed` is checked BEFORE edited/signature — it is not a tie-breaker', () => {
+    // No previous signature and no edit: the old rule would return false anyway.
+    // The point is that `observed` short-circuits, so no future reordering of the
+    // other conditions can resurrect the overrule.
+    expect(
+        isNonProgress({previousSignature: null, currentDetail: 'x', edited: false, observed: true})
+    ).toBe(false)
+})

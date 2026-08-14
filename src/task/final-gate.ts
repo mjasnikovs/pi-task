@@ -122,6 +122,28 @@ export interface FinalGateOutcome {
      */
     failures?: string[]
     /**
+     * The SUBSET of `failures` that a PROBE returned after actually observing —
+     * entries whose evidence is "we looked, and what we saw was bad", as opposed to
+     * "we could not look" (nexttask 19A).
+     *
+     * The probes have always known this about themselves: `RenderOutcome` is
+     * `pass | fail | skip`, `f648f5b` (2026-07-14) turned a render `skip` into
+     * "render check UNOBSERVED: <reason>", and `b0f90a7` (2026-07-19) made an
+     * unenumerable boot return PASS-stamped-UNOBSERVED rather than FAIL. What was
+     * missing is that the outcome CLASS never travelled with the failure TEXT, so
+     * the non-progress classifier downstream had to guess — and guessed by string
+     * equality, which a deterministic un-fixed defect satisfies by definition.
+     *
+     * mx5 run 21: the render probe FAILED on a blank page, the same failure came
+     * back from two tree-changing fix attempts (because the defect was real and
+     * unfixed), the classifier read that as evidence against the INSTRUMENT, and
+     * the run shipped a product whose every page was blank as `completed`.
+     *
+     * Membership is by exact text identity with an entry of `failures` — never a
+     * pattern, never a re-derivation. Absent/empty on a pass.
+     */
+    observedFailures?: string[]
+    /**
      * Human-facing suffix listing the still-open accepted-defect claims (see
      * buildAcceptDebtNote) — for the picker question and the trail, NEVER for the
      * autofix seed. Absent when nothing is open.
@@ -1792,9 +1814,18 @@ export async function runFinalIntegrationGate(
     // Aggregated failures across ALL sections (mx5 run 13 — see the function doc).
     // rank 0 = boot/render ("does not serve/render" is the most load-bearing
     // signal); rank 1 = everything else, kept in execution order by stable sort.
-    const failures: Array<{rank: number; text: string}> = []
+    const failures: Array<{rank: number; text: string; observed?: boolean}> = []
     const fail = (text: string, rank = 1): void => {
         failures.push({rank, text})
+    }
+    /**
+     * A failure a PROBE returned after observing (nexttask 19A — see
+     * FinalGateOutcome.observedFailures). Used by exactly one caller: the boot
+     * section, whose `fail` outcome can only arise from a probe that looked. Every
+     * other `fail()` keeps today's class, so nothing else changes.
+     */
+    const failObserved = (text: string, rank = 1): void => {
+        failures.push({rank, text, observed: true})
     }
     if (!stat.ok) fail(`static checks: ${stat.reason}`)
     // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
@@ -2044,7 +2075,14 @@ export async function runFinalIntegrationGate(
             expectServer
         })
         if (b.outcome === 'fail') {
-            fail(`boot check: \`${label}\` ${b.detail}`, 0)
+            // OBSERVED (nexttask 19A). Every path that produces `fail` here is a
+            // probe that looked: the render judge saw an empty body, the deep
+            // session saw the authenticated half dead, the enumerator saw no
+            // listener, or the launch command itself exited non-zero. The one
+            // condition that means "we could not look" — no ss/netstat/lsof, mx5
+            // run 14 — returns PASS stamped UNOBSERVED and never reaches here
+            // (`b0f90a7`, final-gate.ts `if (!canEnumerate) return passAndKill(…)`).
+            failObserved(`boot check: \`${label}\` ${b.detail}`, 0)
         } else if (b.outcome === 'orphan-port') {
             // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
             // FAIL: name the port and (when known) the process squatting on it.
@@ -2098,7 +2136,12 @@ export async function runFinalIntegrationGate(
         // order. One failure keeps the exact single-failure wording; several become
         // a numbered list so the trail, the ACCEPT picker, and the autofix seed all
         // carry the complete ranked picture.
-        const texts = [...failures].sort((a, b) => a.rank - b.rank).map(f => f.text)
+        const ranked = [...failures].sort((a, b) => a.rank - b.rank)
+        const texts = ranked.map(f => f.text)
+        // The observed subset rides along by exact text identity (19A) — the demote
+        // decision downstream reads THIS, instead of re-deriving observability from
+        // the failure string.
+        const observed = ranked.filter(f => f.observed === true).map(f => f.text)
         return withDebts({
             ok: false,
             reason:
@@ -2107,7 +2150,8 @@ export async function runFinalIntegrationGate(
                 :   `${texts.length} failures (ranked, most load-bearing first):\n${texts
                         .map((t, i) => `${i + 1}. ${t}`)
                         .join('\n')}`,
-            failures: texts
+            failures: texts,
+            ...(observed.length > 0 ? {observedFailures: observed} : {})
         })
     }
     const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''

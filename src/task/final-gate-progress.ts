@@ -108,14 +108,42 @@ export interface NonProgressInput {
     /** Did this attempt actually change the tree AND survive the guards? Only an
      *  attempt that edited and re-tested says anything about falsifiability. */
     edited: boolean
+    /**
+     * Did a PROBE return this failure after OBSERVING? (nexttask 19A.) Read off
+     * `FinalGateOutcome.observedFailures` by exact text identity — never re-derived
+     * from the failure string.
+     *
+     * True ⇒ never non-progress. See the guard in `isNonProgress` for why.
+     */
+    observed?: boolean
 }
 
 /**
  * True when this attempt is evidence that the ranked-first check is unfalsifiable
  * here: it edited the tree, the gate re-ran, and returned the same first failure
  * as the previous attempt.
+ *
+ * …EXCEPT when the probe OBSERVED the failure (nexttask 19A). This rule was built
+ * as a blind compensator for a probe limitation — run 14's boot check "could not
+ * observe a listener in that sandbox at all" — and that limitation was fixed
+ * upstream ELEVEN MINUTES BEFORE this rule landed (`b0f90a7` 23:34:05, `dd3b0c3`
+ * 23:45:09, both 2026-07-19). Every probe now reports "I could not look" as its
+ * own outcome, with the reason. What was left was a second, blind judgment of the
+ * same question, made DOWNSTREAM from the evidence — and its only reachable effect
+ * was to overrule a probe that DID look.
+ *
+ * It has to be overruled, because a deterministic un-fixed defect emits an
+ * IDENTICAL failure by definition. String equality therefore reads reproducibility
+ * as evidence against the instrument, which is backwards for every project type: a
+ * CLI that exits 2 twice, a build that fails on the same symbol twice, a C++ plugin
+ * missing the same export twice. mx5 run 21 is the one recorded instance and it
+ * released a product whose every page was blank as a `completed` run.
+ *
+ * The fix is NOT a better string pattern — the bug is that the decision was made
+ * downstream from the evidence, not that the pattern was too coarse.
  */
 export function isNonProgress(input: NonProgressInput): boolean {
+    if (input.observed === true) return false
     if (!input.edited) return false
     if (input.previousSignature === null || input.currentDetail === null) return false
     return normalizeFailureDetail(input.currentDetail) === input.previousSignature

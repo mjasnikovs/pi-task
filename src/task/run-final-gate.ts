@@ -599,9 +599,18 @@ export async function runFinalGateStage(
                 failures: fix.gateFailures
             })
             const edited = fix.gateReason !== undefined && stranded.length > 0
+            // …and whether a PROBE OBSERVED this failure (nexttask 19A). Exact text
+            // identity against the gate's own observed subset — not a second string
+            // pattern, which is the mistake `isNonProgress` already made once.
+            const observed = fix.gateObservedFailures?.includes(detail ?? '') === true
             if (
                 detail !== null
-                && isNonProgress({previousSignature: prevFailSig, currentDetail: detail, edited})
+                && isNonProgress({
+                    previousSignature: prevFailSig,
+                    currentDetail: detail,
+                    edited,
+                    observed
+                })
             ) {
                 demoted.add(normalizeFailureDetail(detail))
                 prevFailSig = null

@@ -244,6 +244,12 @@ export interface FinalFixResult {
     /** The fresh gate's individual ranked failures (see FinalGateOutcome.failures),
      *  so the caller can trail each entry — never just the first. */
     gateFailures?: string[]
+    /** …and which of them a PROBE returned after OBSERVING (see
+     *  FinalGateOutcome.observedFailures). Carried so the caller's non-progress
+     *  classifier can ask the probe's own verdict instead of guessing from the
+     *  failure text — a check that was observed to FAIL is never demote-eligible
+     *  (nexttask 19A). */
+    gateObservedFailures?: string[]
     /** On a converged outcome: the re-run gate's UNOBSERVED note, if it observed
      *  nothing dynamic (see FinalGateOutcome.unobserved). Carried so the caller
      *  labels a converge-on-statics-alone the same way it labels a first-pass one —
@@ -281,6 +287,10 @@ export interface FinalFixDeps {
         ok: boolean
         reason: string
         failures?: string[]
+        /** Which of them a probe returned after OBSERVING (nexttask 19A) — carried
+         *  through so the caller's demote decision can ask the probe's own verdict
+         *  instead of re-deriving observability from the failure string. */
+        observedFailures?: string[]
         unobserved?: string
     }>
     /** Labels of every currently-discoverable gate command (static + integration),
@@ -481,7 +491,8 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
             ok: false,
             reason: `did not converge: ${fin.reason}`,
             gateReason: fin.reason,
-            gateFailures: fin.failures
+            gateFailures: fin.failures,
+            ...(fin.observedFailures ? {gateObservedFailures: fin.observedFailures} : {})
         })
     }
 
