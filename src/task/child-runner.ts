@@ -36,6 +36,93 @@ export const LOOP_THRESHOLD = 5
 export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 restarts)
 // MAX_LEAK_RETRIES lives in shared/leaked-tool-call.ts (imported above).
 
+// ─── Phase-child wall-clock cap ──────────────────────────────────────────────
+
+/**
+ * Hard wall-clock bound on ONE spawn of a phase child.
+ *
+ * The loop detector above only sees IDENTICAL repeated calls; a child that
+ * re-reads the same design file at varying offsets slips past it and, with pi
+ * compacting its context whenever the window fills, never exits on its own.
+ * mx5-n 2026-08-14 is the observed case: a decompose child ran 16m23s at
+ * 117,370 of a 120,064-token window, adding ~56k tokens of tool output per
+ * minute, and had to be killed by hand. `streamInactivityMs` cannot catch it —
+ * that guard fires on SILENCE and this child was the opposite of silent.
+ *
+ * Sized against measured HEALTHY planning children on the same local 27B
+ * backend, which is the slowest thing we run: requirement extraction 54s,
+ * artifact closure 47s, decompose 89s (22 titles), coverage 17s, and a whole
+ * plan phase (clarify + two extractions + decompose) 321s end to end. Ten
+ * minutes is 3-6x the slowest of those and well under the runaway, so it ends
+ * the pathology without ever trimming honest work. Deliberately far above
+ * RESEARCH_WORKER_TIMEOUT_MS (240s): a research worker answers one question,
+ * a planning child reasons over the whole design doc.
+ */
+export const PHASE_CHILD_TIMEOUT_MS = 600_000
+
+/**
+ * Restart hint after a phase child burns its whole wall-clock budget. It
+ * diagnoses over-exploration, which is what the cap actually catches — the same
+ * job WORKER_TIMEOUT_HINT does for research workers.
+ */
+export const PHASE_TIMEOUT_HINT =
+    '[SYSTEM NOTE: Your previous attempt ran out of time before answering — you '
+    + 'were re-reading source material you had already seen. Read each file AT '
+    + 'MOST ONCE, then write your answer from what you have. Do not re-open a '
+    + 'file you have already read.]'
+
+/**
+ * Combine the caller's abort signal with a wall-clock timer into one signal,
+ * keeping the two causes apart: `timedOut()` is true only when the timer fired,
+ * never when the user cancelled — so a cap can restart the child while a cancel
+ * still ends the run. `ms <= 0` disables the timer entirely.
+ *
+ * (workers/pi-worker-core.ts has the same shape for research workers. It is not
+ * shared because that module imports FROM this one; a common home for it would
+ * be worth it if a third caller ever appears.)
+ */
+function phaseTimeout(
+    external: AbortSignal,
+    ms: number
+): {signal: AbortSignal; timedOut: () => boolean; cleanup: () => void} {
+    const ctrl = new AbortController()
+    let firedByTimer = false
+    const armed = ms > 0 && Number.isFinite(ms)
+    const timer =
+        armed ?
+            setTimeout(() => {
+                firedByTimer = true
+                ctrl.abort()
+            }, ms)
+        :   undefined
+    const onExternal = (): void => ctrl.abort()
+    if (external.aborted) ctrl.abort()
+    else external.addEventListener('abort', onExternal, {once: true})
+    return {
+        signal: ctrl.signal,
+        timedOut: () => firedByTimer,
+        cleanup: () => {
+            if (timer) clearTimeout(timer)
+            external.removeEventListener('abort', onExternal)
+        }
+    }
+}
+
+/** Thrown when a phase child spends its whole restart budget hitting the cap. */
+export class PhaseTimeoutError extends Error {
+    constructor(
+        readonly childName: string,
+        readonly budgetMs: number,
+        readonly attempts: number
+    ) {
+        super(
+            `${childName} child exceeded its ${Math.round(budgetMs / 1000)}s budget on all `
+                + `${attempts} attempt(s) — it never stopped working long enough to answer`
+        )
+        this.name = 'PhaseTimeoutError'
+    }
+}
+
 // ─── Connection-error retry ──────────────────────────────────────────────────
 
 /**
@@ -197,14 +284,10 @@ interface PhaseDeps {
     recordSubStep?: (label: string, ms: number) => void
     spawn?: SpawnFn
     /**
-     * Wall-clock budget for ONE spawn of this child, in ms.
-     *
-     * NOT YET ENFORCED — declared here so the regression test that pins the
-     * missing guard can inject a short budget. See the "unguarded planning
-     * children" block in child-runner.test.ts for the measurement that
-     * motivates it (mx5-n 2026-08-14: a decompose child ran 16m23s and never
-     * returned). Mirrors runWorker's `timeoutMs` input, which is the same
-     * backstop one layer down (workers/pi-worker-core.ts).
+     * Wall-clock budget for ONE spawn of this child, in ms. Defaults to
+     * PHASE_CHILD_TIMEOUT_MS; `0` disables the cap. Mirrors runWorker's
+     * `timeoutMs` input, which is the same backstop one layer down
+     * (workers/pi-worker-core.ts). Tests inject a short budget.
      */
     timeoutMs?: number
     /**
@@ -314,6 +397,17 @@ async function triageChildResult(
  * leaking, throw LeakedToolCallError rather than returning the unexecuted call.
  * Empty completions and connection-class model errors share that same budget —
  * see triageChildResult, which decides every one of those cases.
+ *
+ * TWO RUNAWAY GUARDS ride the same budget, because this is the runner every
+ * /task-auto planning child goes through (clarify, decompose, coverage,
+ * contract-extract) and until mx5-n 2026-08-14 it had neither:
+ *   • a LoopDetector, so an identical repeated tool call is killed and
+ *     re-prompted instead of being allowed to fill the context window;
+ *   • PHASE_CHILD_TIMEOUT_MS, the backstop for the varied-args thrash the
+ *     detector cannot see — the shape that actually cost us a 16-minute
+ *     decompose child that was never going to return.
+ * Both are checked BEFORE the triage ladder: we killed the child, so its exit
+ * status describes our SIGTERM and says nothing about its verdict.
  */
 export async function runPhaseChild(
     deps: PhaseDeps,
@@ -322,17 +416,48 @@ export async function runPhaseChild(
     prompt: string
 ): Promise<string> {
     let hint: string | null = null
+    const loopHistory: LoopHit[] = []
+    const budgetMs = deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS
     for (let attempt = 0; attempt <= MAX_LEAK_RETRIES; attempt++) {
-        const r = await runChild(
-            deps.cwd,
-            tools,
-            prependHint(hint, prompt),
-            deps.signal,
-            deps.onChildOutput,
-            deps.onContextUsage,
-            undefined,
-            deps.spawn
-        )
+        const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
+        const clock = phaseTimeout(deps.signal, budgetMs)
+        let r: PhaseRunResult
+        try {
+            r = await runChild(
+                deps.cwd,
+                tools,
+                prependHint(hint, prompt),
+                clock.signal,
+                deps.onChildOutput,
+                deps.onContextUsage,
+                call => detector.record(call),
+                deps.spawn
+            )
+        } finally {
+            clock.cleanup()
+        }
+        // A user cancel must not be mistaken for either guard.
+        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
+        if (r.loopHit) {
+            loopHistory.push(r.loopHit)
+            if (attempt === MAX_LEAK_RETRIES) throw new LoopExhaustedError(name, loopHistory)
+            deps.logDebug?.(
+                `${name}: looped on ${r.loopHit.call.name} — retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+            )
+            hint = formatLoopHint(r.loopHit)
+            continue
+        }
+        if (clock.timedOut()) {
+            if (attempt === MAX_LEAK_RETRIES) {
+                throw new PhaseTimeoutError(name, budgetMs, MAX_LEAK_RETRIES + 1)
+            }
+            deps.logDebug?.(
+                `${name}: exceeded its ${Math.round(budgetMs / 1000)}s budget — `
+                    + `retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+            )
+            hint = PHASE_TIMEOUT_HINT
+            continue
+        }
         const step = await triageChildResult(deps, name, r, attempt, MAX_LEAK_RETRIES, 'retry')
         if (step.done) return step.text
         if (step.hint !== undefined) hint = step.hint
