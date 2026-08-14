@@ -56,7 +56,7 @@ import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from '.
 import {armCancelListener, disarmCancelListener} from './cancel-input.js'
 import {beginRun, endRun} from './mid-run-input.js'
 import {reportDroppedInput} from './dropped-input.js'
-import {refineExistingFilesBlock} from './phases.js'
+import {refineExistingFilesBlock, SINGLE_READ_EXTENSION_PATH} from './phases.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {startAutoLoader, type ContextSnapshot} from './widget.js'
@@ -1401,6 +1401,13 @@ function defaultDeps(
         cwd,
         taskId: '',
         signal,
+        // IN-RUN thrash guard for the planning children (mx5-n 2026-08-14: a
+        // decompose child re-read DESIGN/marketplace.html until it filled a
+        // 120k window, and ran 16m23s without returning). Every planning child
+        // gets its source doc INLINED in its prompt, so a second read of a file
+        // it has already opened can only be thrash — which makes the read-once
+        // block safe here in a way it is not for a phase that must explore.
+        childExtensions: [SINGLE_READ_EXTENSION_PATH],
         onChildOutput: (line: string) => {
             lastLine = line
         },

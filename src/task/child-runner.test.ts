@@ -1183,3 +1183,25 @@ describe('runPhaseChild — planning-child runaway guards', () => {
         expect(out).toBe('clean answer')
     }, 2000)
 })
+
+describe('childArgs in-run guard extensions', () => {
+    // The nudge beats the kill: pi turns a tool_call block into an error tool
+    // result, so the child keeps its context instead of being re-spawned from
+    // nothing. Planning children opt in via PhaseDeps.childExtensions
+    // (auto-orchestrator), which lands here.
+    test('loads each requested extension with -e, ahead of the base args', () => {
+        const args = childArgs('read', ['/x/single-read-extension.js'])
+        const i = args.indexOf('-e')
+        expect(i).toBeGreaterThanOrEqual(0)
+        expect(args[i + 1]).toBe('/x/single-read-extension.js')
+        expect(args).toContain('--no-extensions')
+    })
+
+    test('a no-tools child carries no guard extension — it cannot make a tool call', () => {
+        expect(childArgs('', ['/x/single-read-extension.js'])).not.toContain('-e')
+    })
+
+    test('no extensions requested leaves argv unchanged', () => {
+        expect(childArgs('read')).not.toContain('-e')
+    })
+})

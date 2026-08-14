@@ -170,7 +170,7 @@ export interface PhaseRunResult {
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
 
-export function childArgs(tools: string): string[] {
+export function childArgs(tools: string, extensions: readonly string[] = []): string[] {
     // `--mode json` puts the child into the structured event stream the
     // unified runner parses in `mode: 'json-events'`. Without it the child
     // emits plain text, every line fails JSON.parse, finalText stays empty,
@@ -185,8 +185,13 @@ export function childArgs(tools: string): string[] {
     // The prompt is NOT an argv element: it goes to the child over stdin (see
     // runChild below / getPiInvocation), so a large inlined-design prompt can't
     // overflow the OS command-line limit (Windows `spawn ENAMETOOLONG`).
+    //
+    // `extensions` are internal `-e` loads for in-run guards (the caller supplies
+    // the path). A no-tools child cannot make a tool call, so it never carries
+    // one — the guards all hang off pi's `tool_call` hook.
     const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
-    return [...childBaseArgs(), '--mode', 'json', ...toolFlags]
+    const internal = tools === '' ? [] : extensions
+    return [...childBaseArgs(internal), '--mode', 'json', ...toolFlags]
 }
 
 // Sentinel error thrown when the user dismisses a grill-me dialog.
@@ -208,9 +213,11 @@ export async function runChild(
     onLine?: (line: string) => void,
     onContextUsage?: (snapshot: ContextSnapshot) => void,
     onToolCall?: (call: ToolCall) => LoopHit | null,
-    spawnFn?: SpawnFn
+    spawnFn?: SpawnFn,
+    /** Internal `-e` extension paths for in-run guards (see childArgs). */
+    extensions?: readonly string[]
 ): Promise<PhaseRunResult> {
-    const invocation = getPiInvocation(childArgs(tools), prompt)
+    const invocation = getPiInvocation(childArgs(tools, extensions), prompt)
     let loopHit: LoopHit | undefined
 
     const result = await runChildUnified(
@@ -283,6 +290,17 @@ interface PhaseDeps {
      */
     recordSubStep?: (label: string, ms: number) => void
     spawn?: SpawnFn
+    /**
+     * Internal `-e` extension paths loaded into this child for IN-RUN guards.
+     *
+     * The point of a guard that runs inside the child is that it does not have
+     * to kill it: pi turns a `tool_call` handler's `{block, reason}` into an
+     * error tool result, so the model reads the reason as its own tool output
+     * and continues with its context intact. The host's only alternative is to
+     * kill and re-spawn from nothing, which just re-runs a model that
+     * deterministically re-thrashes (workers/single-read-guard.ts).
+     */
+    childExtensions?: readonly string[]
     /**
      * Wall-clock budget for ONE spawn of this child, in ms. Defaults to
      * PHASE_CHILD_TIMEOUT_MS; `0` disables the cap. Mirrors runWorker's
@@ -431,7 +449,8 @@ export async function runPhaseChild(
                 deps.onChildOutput,
                 deps.onContextUsage,
                 call => detector.record(call),
-                deps.spawn
+                deps.spawn,
+                deps.childExtensions
             )
         } finally {
             clock.cleanup()

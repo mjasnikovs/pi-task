@@ -484,7 +484,7 @@ export const RESEARCH_SEARCH_HINT =
  * healthy recorded run, so neither rule has a legitimate false positive here.
  * See single-read-guard.ts.
  */
-const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
+export const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
     new URL('../workers/single-read-extension.js', import.meta.url)
 )
 
