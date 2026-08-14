@@ -12,8 +12,10 @@ import * as path from 'node:path'
 import {
     findHeadlessBrowser,
     judgeRenderedDom,
+    parseConsoleLines,
     playwrightCachedChromium,
-    runRenderCheck
+    runRenderCheck,
+    withConsoleEvidence
 } from './render-check.js'
 
 describe('judgeRenderedDom', () => {
@@ -152,5 +154,94 @@ describe('runRenderCheck', () => {
         const r = runRenderCheck(`file://${page}`, realBrowser)
         expect(r.outcome).toBe('pass')
         expect((r as {detail: string}).detail).toContain('Mounted OK')
+    })
+})
+
+// ─── nexttask 19B: the probe carries the evidence it already had ─────────────
+//
+// mx5 run 21's fix child was told "the body is EMPTY" and nothing else. It burned
+// 45 minutes on tests, bundler config and static serving, read the offending line
+// twice, and moved on. The probe was holding the cause the whole time.
+//
+// MEASURED on this box (2026-08-14) against the shipped run-21 bundle: adding
+// `--enable-logging=stderr --v=0` leaves stdout BYTE-IDENTICAL at 318 bytes on
+// both discoverable binaries, and turns /usr/bin/chromium's 0 console lines into
+// 2 — one of them the cause.
+
+/** A real Chrome stderr capture from the run-21 bundle, verbatim. */
+const RUN21_STDERR =
+    'Fontconfig warning: We will not regenerate the cache because some cache files were generated '
+    + 'by a newer version (0x2012001) of Fontconfig.\n'
+    + '[11506:11506:0814/090315.684843:INFO:CONSOLE:226] "%cDownload the React DevTools for a better '
+    + 'development experience: https://react.dev/link/react-devtools font-weight:bold", source: '
+    + 'http://localhost:8791/main.js (226)\n'
+    + '[11506:11506:0814/090315.702981:INFO:CONSOLE:322] "Uncaught ReferenceError: process is not '
+    + 'defined", source: http://localhost:8791/main.js (322)\n'
+
+describe('parseConsoleLines', () => {
+    test('extracts the console messages and drops the fontconfig noise', () => {
+        const lines = parseConsoleLines(RUN21_STDERR)
+        expect(lines).toHaveLength(2)
+        expect(lines[1]).toContain('Uncaught ReferenceError: process is not defined')
+        expect(lines.join(' ')).not.toContain('Fontconfig')
+    })
+
+    test('the volatile pid/timestamp prefix is DROPPED — two runs must compare equal', () => {
+        const a = parseConsoleLines('[11506:11506:0814/090315.7:ERROR:CONSOLE:1] "boom"')
+        const b = parseConsoleLines('[99999:99999:0901/235959.1:ERROR:CONSOLE:1] "boom"')
+        expect(a).toEqual(b)
+        expect(a[0]).toBe('error: "boom"')
+    })
+
+    test('duplicate messages collapse, and the count is bounded', () => {
+        const many = Array.from(
+            {length: 50},
+            (_, i) => `[1:1:0814/1.1:ERROR:CONSOLE:${i}] "message ${i}"`
+        ).join('\n')
+        expect(parseConsoleLines(many).length).toBeLessThanOrEqual(12)
+        const dupes = Array.from({length: 5}, () => '[1:1:0814/1.1:ERROR:CONSOLE:1] "same"').join(
+            '\n'
+        )
+        expect(parseConsoleLines(dupes)).toHaveLength(1)
+    })
+
+    test('a stderr with no console lines yields none', () => {
+        expect(parseConsoleLines('Fontconfig warning: blah\n')).toEqual([])
+        expect(parseConsoleLines('')).toEqual([])
+    })
+})
+
+describe('withConsoleEvidence', () => {
+    const EMPTY = judgeRenderedDom('<html><body></body></html>').detail
+
+    test('a FAIL detail GAINS the cause, with the original text intact in front', () => {
+        const out = withConsoleEvidence(EMPTY, RUN21_STDERR)
+        expect(out.startsWith(EMPTY)).toBe(true)
+        expect(out).toContain('Uncaught ReferenceError: process is not defined')
+    })
+
+    test('a FAIL with no console output is BYTE-IDENTICAL', () => {
+        expect(withConsoleEvidence(EMPTY, 'Fontconfig warning: blah\n')).toBe(EMPTY)
+        expect(withConsoleEvidence(EMPTY, '')).toBe(EMPTY)
+    })
+
+    test('a wedged console is clamped, not embedded whole', () => {
+        // Distinct messages: identical ones collapse (see the dedup test above),
+        // so a degenerate flood would prove nothing about the clamp.
+        const flood = Array.from(
+            {length: 12},
+            (_, i) => `[1:1:0814/1.1:ERROR:CONSOLE:${i}] "msg ${i} ${'x'.repeat(400)}"`
+        ).join('\n')
+        const out = withConsoleEvidence(EMPTY, flood)
+        expect(out.length).toBeLessThan(EMPTY.length + 1400)
+        expect(out.endsWith('…')).toBe(true)
+    })
+
+    test('it never touches the verdict — judgeRenderedDom is not reached', () => {
+        // The PASS details this probe emits must be unreachable from here: the
+        // caller only ever hands a FAIL detail in, and the function only appends.
+        const pass = judgeRenderedDom('<html><body><h1>Listings</h1></body></html>')
+        expect(pass.ok).toBe(true)
+        expect(withConsoleEvidence(pass.detail, 'Fontconfig warning\n')).toBe(pass.detail)
     })
 })

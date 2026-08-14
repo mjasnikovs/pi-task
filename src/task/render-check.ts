@@ -29,6 +29,7 @@ import {spawnSync} from 'node:child_process'
 import {existsSync, readdirSync} from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import {clampOutput} from './clamp-output.js'
 
 export type RenderOutcome =
     | {outcome: 'pass'; detail: string}
@@ -155,6 +156,73 @@ const RENDER_TIMEOUT_MS = 30_000
 const VIRTUAL_TIME_BUDGET_MS = 8_000
 
 /**
+ * A Chrome console line on stderr:
+ *
+ *     [11506:11506:0814/090315.702981:INFO:CONSOLE:322] "Uncaught ReferenceError:
+ *         process is not defined", source: http://localhost:8791/main.js (322)
+ *
+ * Only the severity and the message survive. The bracketed pid/tid/timestamp
+ * prefix is DROPPED on purpose: it changes every run, and the failure detail is
+ * the string `normalizeFailureDetail` compares across autofix attempts. A volatile
+ * prefix in there would make two runs of the SAME defect look different, which is
+ * a change to the non-progress classifier's behaviour — and 19B may not change any
+ * verdict, only explain one.
+ */
+const CONSOLE_LINE_RE = /^\[[^\]]*:(INFO|WARNING|ERROR|VERBOSE\d*):CONSOLE:\d*\]\s*(.*)$/
+
+/** At most this many console lines ride along; the whole block is clamped again. */
+const MAX_CONSOLE_LINES = 12
+
+/**
+ * The page's console output, as captured while the DOM was being rendered.
+ *
+ * MEASURED on this box (2026-08-14) against the shipped mx5 run-21 bundle, both
+ * binaries the probe can discover:
+ *
+ *     /usr/bin/chromium              --dump-dom alone → 0 bytes of stderr
+ *                                    + --enable-logging=stderr --v=0 → 2 CONSOLE
+ *                                      lines, one of them the cause
+ *     playwright chrome-headless-shell
+ *                                    → the 2 CONSOLE lines either way
+ *
+ * and in ALL FOUR arms stdout was byte-identical at 318 bytes, so the DOM the
+ * judge reads is untouched by the flags.
+ */
+export function parseConsoleLines(stderr: string): string[] {
+    const out: string[] = []
+    for (const raw of stderr.split('\n')) {
+        const m = CONSOLE_LINE_RE.exec(raw.trim())
+        if (!m) continue
+        const text = m[2]!.trim()
+        if (text.length === 0) continue
+        const line = `${m[1]!.toLowerCase()}: ${text}`
+        if (!out.includes(line)) out.push(line)
+        if (out.length >= MAX_CONSOLE_LINES) break
+    }
+    return out
+}
+
+/**
+ * Append the console output to a FAIL detail — and to nothing else.
+ *
+ * WHY (nexttask 19B; the class 18A opened for repo-health). Run 21's fix child was
+ * told "the body is EMPTY" and nothing more. It spent 45 minutes on tests, bundler
+ * config and static serving, read the offending line twice, and moved on. The
+ * probe was holding the answer the whole time: `Uncaught ReferenceError: process
+ * is not defined`, at main.js:322.
+ *
+ * Strictly additive by construction: it takes an existing FAIL detail and returns
+ * it with text appended. It cannot turn a PASS into a FAIL, cannot reach
+ * `judgeRenderedDom`, and returns the detail unchanged when the page logged
+ * nothing.
+ */
+export function withConsoleEvidence(detail: string, stderr: string): string {
+    const lines = parseConsoleLines(stderr)
+    if (lines.length === 0) return detail
+    return `${detail} — console output during the load: ${clampOutput(lines.join(' | '))}`
+}
+
+/**
  * Load `url` once in a headless Chrome and judge the rendered DOM. Blocking
  * (spawnSync) by design — the caller holds the booted server alive exactly for
  * this window. `browser` is injectable for tests; the default is discovery.
@@ -175,6 +243,11 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
             '--no-sandbox',
             '--disable-dev-shm-usage',
             `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
+            // Route the page's console to stderr (nexttask 19B). stdout — the DOM
+            // the judge reads — is byte-identical with and without these; measured
+            // on both discoverable binaries, see withConsoleEvidence.
+            '--enable-logging=stderr',
+            '--v=0',
             '--dump-dom',
             url
         ],
@@ -194,7 +267,9 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
         }
     }
     const judged = judgeRenderedDom(dom)
+    // The verdict is the judge's, unchanged. Only a FAIL grows: it carries the
+    // console output the probe already had at the moment it judged (19B).
     return judged.ok ?
             {outcome: 'pass', detail: judged.detail}
-        :   {outcome: 'fail', detail: judged.detail}
+        :   {outcome: 'fail', detail: withConsoleEvidence(judged.detail, r.stderr ?? '')}
 }

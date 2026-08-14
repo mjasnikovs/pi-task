@@ -1,0 +1,5 @@
+[11506:11506:0814/090315.503784:WARNING:chrome/browser/signin/account_consistency_mode_manager.cc:74] Desktop Identity Consistency cannot be enabled as no OAuth client ID and client secret have been configured.
+[11506:11506:0814/090315.589464:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[11506:11506:0814/090315.684843:INFO:CONSOLE:226] "%cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold", source: http://localhost:8791/main.js (226)
+[11536:11536:0814/090315.685793:WARNING:sandbox/policy/linux/sandbox_linux.cc:405] InitializeSandbox() called with multiple threads in process gpu-process.
+[11506:11506:0814/090315.702981:INFO:CONSOLE:322] "Uncaught ReferenceError: process is not defined", source: http://localhost:8791/main.js (322)

@@ -53,6 +53,7 @@ import {attributeEnforceFailure} from './enforce-attribution.js'
 // come from accept-debt.ts directly — the latter because its writer and its
 // re-check-side parser (extractDeletedDebtPath) have to move together.
 import {crossTaskDeletionReason, type DebtOrigin} from './accept-debt.js'
+import {clampOutput} from './clamp-output.js'
 
 /**
  * The deps the gate sequence drives. A superset of these is built once per command
@@ -321,18 +322,8 @@ export function yoloAcceptReason(c: YoloAcceptContext): string {
         :   `judge recommended ACCEPT (autofix budget ${c.autoFixCount}/${MAX_AUTO_AUTOFIX} already spent)`
 }
 
-/**
- * Bound a captured health-check output before it is embedded in a gate-trail line.
- * appendGateRecord flattens newlines to spaces, so the trail stays one line per
- * entry; this just caps the volume (a wedged tool can emit megabytes). The health
- * check already trims to its own first-N lines — this is the trail-side ceiling.
- */
-const TRAIL_OUTPUT_MAX_CHARS = 1200
-function clampOutput(output: string): string {
-    return output.length > TRAIL_OUTPUT_MAX_CHARS ?
-            `${output.slice(0, TRAIL_OUTPUT_MAX_CHARS)}…`
-        :   output
-}
+// The trail-side output ceiling lives in clamp-output.ts, so the render probe's
+// evidence clamps identically (nexttask 19B) — one ceiling, one implementation.
 
 /**
  * Show the boxed two-choice picker after a verify FAIL and return what the user
