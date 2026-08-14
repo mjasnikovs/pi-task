@@ -13,6 +13,51 @@ not here. Last updated 2026-08-11.
 
 ## RULED OUT — do not re-propose
 
+- **A docs-worker output contract for SEMANTICS questions** ("a question about what
+  a parameter MEANS must be answered with a quoted behavioural sentence or an
+  explicit *not stated in the indexed docs*, never with a signature alone" —
+  nexttask 19D). Closed 2026-08-14 at STEP 0, before any lever was written.
+  `scripts/semantics-vs-signature-baserate.ts`, over every `research-cache.json`
+  on this box (651 caches, 86,879 entries):
+
+      corpus                            caches  entries  docs   semantics-Qs  episodes
+      mx5 (~/hub)                            1      194   147              0         0
+      bench-test (~/hub)                     4       74    18              0         0
+      IAR1 (~/hub)                           1       61     0              0         0
+      mx5-shaped A/B harness copies        645   86,550 77,531             56         0
+
+  The pre-registered gate was **>= 3 episodes on a SECOND corpus**. The best second
+  corpus has **0**, and so does mx5.
+
+  The defect nexttask 19D describes is REAL BY CONSTRUCTION: `prompts.ts:208`
+  requires an open question when EXTERNAL CONTEXT is silent about what an argument
+  MEANS, and mx5 run 21's `TASK_0017.md` CONTEXT shipped the base-URL semantics as
+  a FACT one bullet above the fact that refutes it — every client call in the
+  shipped product resolves to `/api/api/…`. That happened, and it cost the run.
+
+  What is NOT true is the mechanism the lever would have targeted. Run 21 never
+  ASKED what the base URL means. Its 21 `hc` lookups asked for the SIGNATURE
+  ("what is the exact signature of hc function?" — answered with a signature,
+  correctly) and for route-merging BEHAVIOUR (answered behaviourally, also
+  correctly). The rule's own worked example — *"does hc's base URL argument mean an
+  origin or a mount prefix?"* — was never posed by any worker in any corpus here.
+  So the failure is upstream of the docs channel's output contract: nobody asked.
+  A contract on the ANSWER cannot fix a question that was never asked.
+
+  Re-open only with a second project that genuinely asks a semantics question of an
+  unfamiliar library — and re-open it as a lever on what the CONTEXT worker is
+  allowed to assert, not on how the docs worker answers.
+
+- **Teaching compose/critique not to EMIT an unfailable VERIFY line** (the AUTHORING
+  half of nexttask 19C). Deferred 2026-08-14, exactly as 16B closed. The REFUSAL
+  half shipped: `isStorableCommand` will not store a command whose exit status is
+  destroyed by construction, so such a debt stays OPEN and surfaced.
+  `scripts/unfailable-verify-baserate.ts`: **16 unfailable lines of 612, in 2
+  projects (IAR1 12, mx5 4)** — but **0** debts on this box carry a stored
+  `verifyCommand` at all, so **0** false auto-closes have ever been observed. The
+  authoring half needs >= 1 observed false auto-close or a live A/B, and there is
+  neither. Do not fold a compose/critique prompt change into the refusal.
+
 - **Gating the raw `### docs:` block on a non-empty BODY instead of a non-empty
   chunk LIST** (external-context.ts:243). Closed 2026-08-11 at STEP 0, before any
   lever was written. The lead: `r.kind === 'ok' && r.chunks.length > 0` tests chunk
