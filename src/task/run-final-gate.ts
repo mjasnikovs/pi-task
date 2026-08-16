@@ -30,12 +30,12 @@ import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {CommitResult} from './auto-commit.js'
 import type {FinalGateOutcome} from './final-gate.js'
 import type {FinalGateFixFn} from './gate-deps.js'
-import {describeDebt, recordDebt, type AcceptDebt} from './accept-debt.js'
+import {describeDebt, recordDebt, type AcceptDebt, type DebtOrigin} from './accept-debt.js'
 import {cancelCheckpoint} from './cancel-points.js'
 import {SessionUI} from '../remote/bridge.js'
 import {isYoloMode, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
 import {ignoredWriteTrailLine, ignoredWriteDebtReason} from './write-guard.js'
-import {readOwnedRequirements} from './requirements.js'
+import {readOwnedRequirements, type OwnedRequirement} from './requirements.js'
 import {unclaimedPendingRequirements} from './owned-freeze-reassign.js'
 import {
     applyDemotions,
@@ -111,6 +111,20 @@ export interface FinalGateStageDeps {
      *  file) — the same auditability contract the per-task records carry. Best-effort:
      *  absent in tests → skipped; a failure never breaks the gate. */
     record?: (cwd: string, taskId: string, line: string) => Promise<void>
+    /**
+     * Write one ACCEPT debt to the ledger. The run-level twin of `GateDeps.recordDebt`,
+     * and injectable for the same reason: without it a test that only wants to observe
+     * WHICH debts a scenario carries has to write, and then read back, the real ledger
+     * on disk. Absent → the real `accept-debt.ts` writer, so production wiring and the
+     * prior behaviour are unchanged.
+     */
+    recordDebt?: (cwd: string, taskId: string, reason: string, origin: DebtOrigin) => Promise<void>
+    /**
+     * Read the owned-requirement ledger, to report obligations a task DETACHED and no
+     * later task claimed. Absent → the real `requirements.ts` reader (prior behaviour);
+     * injectable so that check is testable without seeding a real ledger file.
+     */
+    ownedRequirements?: (cwd: string) => Promise<OwnedRequirement[]>
 }
 
 /** Inputs that vary per caller. */
@@ -217,7 +231,8 @@ export async function runFinalGateStage(
      * What they no longer each restate is WHERE the debt goes: the run's own id, under
      * origin 'final-gate', which is what the next run's gate re-checks.
      */
-    const carryDebt = (reason: string): Promise<void> => recordDebt(cwd, id, reason, 'final-gate')
+    const carryDebt = (reason: string): Promise<void> =>
+        (deps.recordDebt ?? recordDebt)(cwd, id, reason, 'final-gate')
     // Set when the gate finished having observed NOTHING dynamic. Declared out here so
     // the run-completion announcement can say so.
     let unobservedNote: string | null = null
@@ -299,7 +314,9 @@ export async function runFinalGateStage(
     // satisfy it, nexttask 2) and no later task claimed. Detach never deletes the
     // quote, so the run ends holding it — say so, or the resolution would be a quieter
     // version of the deletion it exists to prevent.
-    const unclaimed = unclaimedPendingRequirements(await readOwnedRequirements(cwd).catch(() => []))
+    const unclaimed = unclaimedPendingRequirements(
+        await (deps.ownedRequirements ?? readOwnedRequirements)(cwd).catch(() => [])
+    )
     for (const o of unclaimed) {
         await recGate(
             `owned requirement UNCLAIMED — "${o.quote.slice(0, 200)}"`

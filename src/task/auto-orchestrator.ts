@@ -554,26 +554,36 @@ async function schedulePendingRepairs(
     }
 }
 
-/** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */
-export async function planAuto(
-    ctx: ExtensionCommandContext,
+/**
+ * What ORIENT establishes about the feature before anyone is asked anything: the
+ * spec text the planning children will actually read, and the requirement ledger
+ * derived from it. Every later stage reads these; none of them writes one.
+ */
+export interface OrientedFeature {
+    /** The inlined spec, with phantom runtime specifiers struck out. */
+    featureForModel: string
+    /** Manifest/config already on disk, fed to every triage call. '' when absent. */
+    existingFilesBlock: string
+    /** Grounded requirement units extracted from the spec. */
+    reqEntries: RequirementEntry[]
+    /** How many of those a single task could own (cross-cutting ones excluded). */
+    ownableRequirements: number
+    /** The task-count floor those ownable requirements imply. 0 ⇒ no channel. */
+    coarseFloor: number
+}
+
+/**
+ * ORIENT — read the feature, strike what must never reach a planning child, and
+ * derive the requirement ledger. Depends on nothing but the feature and the tree,
+ * which is why it runs before clarify: the plan-shape fork below needs a real
+ * count to judge with. Every fallible part is best-effort; a fault degrades the
+ * channel it belongs to and never fails planning.
+ */
+export async function orientFeature(
     cwd: string,
     feature: string,
     deps: AutoDeps
-): Promise<string | null> {
-    // clarify — sequential & adaptive: ask one question at a time, feeding every
-    // answer back into the next call so later questions react to earlier ones
-    // (e.g. a framework choice reshapes what gets asked). Each question is shown
-    // exactly like /task's grill dialog: a binary fork offers two options (A/B),
-    // otherwise the model's recommendation is shown as the input placeholder and
-    // in the title. Nothing is pre-filled into the editor — submitting an empty
-    // field is what accepts the recommendation (see the typed.length === 0 branch
-    // below); typing overrides it. Each generated question first runs the
-    // answer-side TRIAGE (triageClarifyQuestion): a question the inlined spec
-    // already settles is auto-resolved and never shown — only genuine open forks
-    // reach the user. The model emits NONE when nothing remains.
-    const theme = ctx.ui.theme
-    const ui = new SessionUI(ctx)
+): Promise<OrientedFeature> {
     // Inline any @file spec the user referenced so clarify/decompose reason over
     // the real content, not a one-line "Implement @file" that reads as trivial.
     const rawFeatureForModel = await expandFeatureMentions(cwd, feature)
@@ -610,12 +620,8 @@ export async function planAuto(
     // into the decompose prompt as a ledger (structure-mirroring can't discharge
     // them) and drive the per-requirement coverage accounting below.
     //
-    // Runs BEFORE clarify (it depends only on the inlined feature, never on the
-    // answers) so the plan-shape gate below has a real count to judge with: the
-    // host must not seize the granularity fork on a spec that has no breakdown to
-    // speak of. Best-effort:
-    // a fault leaves reqEntries empty and the whole channel degrades to the old
-    // behavior (one-liners / doc-less features naturally yield few or none).
+    // Best-effort: a fault leaves reqEntries empty and the whole channel degrades to
+    // the old behavior (one-liners / doc-less features naturally yield few or none).
     let reqEntries: RequirementEntry[] = []
     try {
         // Recall floor: the obligation-marked passages ride into the prompt as a
@@ -672,7 +678,34 @@ export async function planAuto(
                 + `${coarseFloor} task(s)`
         )
     }
+    return {featureForModel, existingFilesBlock, reqEntries, ownableRequirements, coarseFloor}
+}
 
+/**
+ * ELICIT — clarify, sequential & adaptive: ask one question at a time, feeding every
+ * answer back into the next call so later questions react to earlier ones (e.g. a
+ * framework choice reshapes what gets asked). Each question is shown exactly like
+ * /task's grill dialog: a binary fork offers two options (A/B), otherwise the model's
+ * recommendation is shown as the input placeholder and in the title. Nothing is
+ * pre-filled into the editor — submitting an empty field is what accepts the
+ * recommendation; typing overrides it. Each generated question first runs the
+ * answer-side TRIAGE (triageClarifyQuestion): a question the inlined spec already
+ * settles is auto-resolved and never shown — only genuine open forks reach the user.
+ * The model emits NONE when nothing remains.
+ *
+ * The ONLY stage that talks to the user, and so the only one that can be dismissed:
+ * `null` means the user cancelled and the cancellation has already been announced.
+ * Every other outcome is a transcript, possibly empty.
+ */
+export async function elicitClarifications(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    deps: AutoDeps,
+    oriented: OrientedFeature
+): Promise<string | null> {
+    const {featureForModel, existingFilesBlock, ownableRequirements} = oriented
+    const theme = ctx.ui.theme
+    const ui = new SessionUI(ctx)
     const answers: string[] = []
     // Plain text of every question already shown, for the duplicate backstop.
     const askedQuestions: string[] = []
@@ -807,32 +840,37 @@ export async function planAuto(
     if (answers.length === 0) {
         ctx.ui.notify('No clarifying questions needed — planning tasks…', 'info')
     }
-    const clarifications = answers.join('\n')
+    return answers.join('\n')
+}
 
-    // Artifact-production closure, plan side (mx5 run 13, PROMPT 2): runtime
-    // files the spec REFERENCES (server snippets, prose "serve the built
-    // index.html") that neither its file tree, its parsed build outputs, nor the
-    // existing scaffold produce. Sentence-grounded coverage credited the SERVING
-    // side and reported "0 unowned" while nothing ever CREATED the file — so
-    // these ride the coverage loop's `missing` list as unowned areas until some
-    // task title claims the artifact (grounded in titles, which the coverage-map
-    // model cannot fake — the run-12 lesson). Deterministic and best-effort.
-    let specDangling: DanglingRef[] = []
-    try {
-        specDangling = findSpecDanglingArtifacts(featureForModel, rel =>
-            existsSync(path.join(cwd, rel))
-        )
-        if (specDangling.length > 0) {
-            logPlanDebug(
-                cwd,
-                `artifact closure: ${specDangling.length} dangling runtime artifact(s) in the `
-                    + `spec: ${specDangling.map(d => d.path).join(', ')}`
-            )
-        }
-    } catch {
-        // best-effort channel
-    }
+/**
+ * What DECOMPOSE settles: the task list, plus the two things the coverage loop
+ * needs to ask for a better one. `decomposePrompt` and `parsePlan` are returned
+ * rather than rebuilt because COVER re-prompts with the identical prompt and must
+ * reconcile the reply identically — rebuilding either is how the two paths drift.
+ */
+export interface DecomposedPlan {
+    /** The reconciled, de-batched task titles. May be empty. */
+    planTitles: string[]
+    /** The exact prompt that produced them, for COVER's re-prompt. */
+    decomposePrompt: string
+    /** Parse + fidelity-reconcile + de-batch, applied to EVERY decompose output. */
+    parsePlan: (raw: string) => string[]
+}
 
+/**
+ * DECOMPOSE — turn the settled feature into a task list, then defend that list's
+ * SHAPE: a plan under the granularity floor is sent back once to be split, and a
+ * suspect (empty or tiny) plan is regenerated on its own separate budget. Neither
+ * guard can block planning — a plan that survives both falls through to the judge.
+ */
+export async function decomposePlan(
+    cwd: string,
+    deps: AutoDeps,
+    oriented: OrientedFeature,
+    clarifications: string
+): Promise<DecomposedPlan> {
+    const {featureForModel, reqEntries, ownableRequirements, coarseFloor} = oriented
     // Tests-in-the-same-change cadence (mx5 run 14, PROMPT item 6): when the
     // decisions mandate it, a whole-project batch test task contradicts them —
     // run 14 shipped one anyway (TASK_0037, 4.7h, yolo-accepted FAIL) because
@@ -960,6 +998,36 @@ export async function planAuto(
         logPlanDebug(cwd, `decompose suspect-retry produced ${retryTitles.length} title(s)`)
         if (retryTitles.length > planTitles.length) planTitles = retryTitles
     }
+    return {planTitles, decomposePrompt, parsePlan}
+}
+
+/** What COVER settles: the plan that ships, and the accounting behind it. */
+export interface CoveredPlan {
+    /** The best-covered plan seen across the rounds — adoption is monotone. */
+    best: ScoredPlan
+    /** That plan's titles, which is what everything downstream persists. */
+    planTitles: string[]
+}
+
+/**
+ * COVER — judge the plan against the feature and re-prompt for a better one, up to
+ * a bounded number of rounds. Adoption is MONOTONE: a retry that drops a
+ * requirement the current plan owns is rejected, so coverage can only hold or grow,
+ * and the plan at exhaustion is the best one seen rather than the last one drawn.
+ * Best-effort throughout — a fault degrades a signal, it never blocks planning.
+ */
+export async function coverPlan(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    deps: AutoDeps,
+    oriented: OrientedFeature,
+    clarifications: string,
+    decomposed: DecomposedPlan,
+    specDangling: DanglingRef[]
+): Promise<CoveredPlan> {
+    const {featureForModel, reqEntries} = oriented
+    const {decomposePrompt, parsePlan} = decomposed
+    let planTitles = decomposed.planTitles
     // Coverage gate: a stochastic degenerate completion (live mx5: ONE task +
     // natural EOS for an 18KB design doc) is nonempty, so the length guard below
     // never fires and the whole run "completes" after one task. Judge the list
@@ -1181,6 +1249,64 @@ export async function planAuto(
             'warning'
         )
     }
+    return {best, planTitles}
+}
+
+/** Plan phase: clarify → decompose → write AUTO file. Returns the new id, or null. */
+export async function planAuto(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    feature: string,
+    deps: AutoDeps
+): Promise<string | null> {
+    // ORIENT. Reads the feature and the tree, asks nobody anything.
+    const oriented = await orientFeature(cwd, feature, deps)
+    // The floor and the ownable count are DECOMPOSE's to enforce; what the tail of
+    // this function still reads is the spec text and the requirement ledger.
+    const {featureForModel, reqEntries} = oriented
+
+    // ELICIT. The only stage that talks to the user.
+    const clarifications = await elicitClarifications(ctx, cwd, deps, oriented)
+    if (clarifications === null) return null // dismissed; already announced
+
+    // Artifact-production closure, plan side (mx5 run 13, PROMPT 2): runtime
+    // files the spec REFERENCES (server snippets, prose "serve the built
+    // index.html") that neither its file tree, its parsed build outputs, nor the
+    // existing scaffold produce. Sentence-grounded coverage credited the SERVING
+    // side and reported "0 unowned" while nothing ever CREATED the file — so
+    // these ride the coverage loop's `missing` list as unowned areas until some
+    // task title claims the artifact (grounded in titles, which the coverage-map
+    // model cannot fake — the run-12 lesson). Deterministic and best-effort.
+    let specDangling: DanglingRef[] = []
+    try {
+        specDangling = findSpecDanglingArtifacts(featureForModel, rel =>
+            existsSync(path.join(cwd, rel))
+        )
+        if (specDangling.length > 0) {
+            logPlanDebug(
+                cwd,
+                `artifact closure: ${specDangling.length} dangling runtime artifact(s) in the `
+                    + `spec: ${specDangling.map(d => d.path).join(', ')}`
+            )
+        }
+    } catch {
+        // best-effort channel
+    }
+
+    // DECOMPOSE. Produces the task list and the means to ask for a better one.
+    const decomposedPlan = await decomposePlan(cwd, deps, oriented, clarifications)
+    // COVER. Judges the plan and re-prompts for a better one, monotonically.
+    const covered = await coverPlan(
+        ctx,
+        cwd,
+        deps,
+        oriented,
+        clarifications,
+        decomposedPlan,
+        specDangling
+    )
+    const best = covered.best
+    const planTitles = covered.planTitles
     // Carry what no single task owns (goal A(b)/(c)): cross-cutting requirements
     // become `.pi-tasks/requirements.md`, injected VERBATIM into every task's
     // refine/compose (run 11: §10's test-first cadence had no carrier — the "spec
@@ -1229,6 +1355,22 @@ export async function planAuto(
             'info'
         )
     }
+    // Thread the feature's spec doc(s) into every title so each per-task
+    // pipeline — which only ever sees its title — reads the real spec instead of
+    // a lossy one-line paraphrase of it.
+    const refs = await readableMentions(cwd, feature)
+    const titles = attachSpecRefs(planTitles, refs)
+    if (titles.length === 0) {
+        announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
+        return null
+    }
+
+    // The two grounded extractions below run AFTER the empty-plan guard on purpose.
+    // They each spawn a child and each APPEND to a run-level artifact; on the
+    // empty-plan path the plan is discarded one line later, so running them first
+    // burned two model calls and left contracts.md / launch-contract.md carrying
+    // facts for a run that never produced a task.
+
     // Cross-slice contract registry (mx5 run 8, F3): now that the plan is settled,
     // extract the interface facts MORE THAN ONE slice must agree on — endpoint paths,
     // exported signatures, file layouts, env var names the DESIGN pins — into a
@@ -1271,16 +1413,6 @@ export async function planAuto(
         ground: emitted => keepGroundedScripts(emitted, featureForModel),
         append: appendDeclaredScripts
     })
-
-    // Thread the feature's spec doc(s) into every title so each per-task
-    // pipeline — which only ever sees its title — reads the real spec instead of
-    // a lossy one-line paraphrase of it.
-    const refs = await readableMentions(cwd, feature)
-    const titles = attachSpecRefs(planTitles, refs)
-    if (titles.length === 0) {
-        announceDone(ctx, '/task-auto: no tasks produced from the feature.', 'warning')
-        return null
-    }
 
     // Persist the TASK-MAPPED requirements keyed by the (spec-ref-attached) title
     // each task will carry (mx5 run 16: only cross-cutting entries travelled;

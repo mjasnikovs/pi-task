@@ -390,6 +390,98 @@ describe('phaseResearch silent-retry gate (worker:context)', () => {
     })
 })
 
+/**
+ * The empty-section gate (issue #10) is the one research retry gate with no row field
+ * behind it: it runs for EVERY worker, and it is the only one of the three whose retry
+ * can change the phase's outcome from "section recorded" to "phase throws". These pin
+ * all three of its exits, so the crash-propagation branch stops being invisible.
+ */
+describe('phaseResearch empty-section gate (issue #10)', () => {
+    const TOOLING_MARKER = 'content of a TOOLING section'
+    // A substring unique to EMPTY_SECTION_PREAMBLE, so the fake can tell the ONE
+    // retry apart from the first attempt.
+    const RETRY_MARKER = 'returned an EMPTY answer'
+    const isTooling = (args: ReadonlyArray<string>): boolean =>
+        (args[args.length - 1] ?? '').includes(TOOLING_MARKER)
+    const isRetry = (args: ReadonlyArray<string>): boolean =>
+        (args[args.length - 1] ?? '').includes(RETRY_MARKER)
+
+    const runWith = async (
+        onTooling: (attempt: number) => SpawnResponseJsonEvents
+    ): Promise<{out: () => Promise<string>; attempts: () => number}> => {
+        let toolingAttempts = 0
+        let result: string | undefined
+        let thrown: unknown
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const spawn = fakeSpawnByPrompt(args => {
+                if (isApisPrompt(args)) return groundedResponse('- a real finding')
+                if (isTooling(args)) {
+                    toolingAttempts++
+                    return onTooling(isRetry(args) ? 2 : 1)
+                }
+                return agentEndResponse('- a real finding')
+            })
+            try {
+                result = await phaseResearch(
+                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                    'a refined goal with no mentions',
+                    {getFileInventory: async () => ''}
+                )
+            } catch (e) {
+                thrown = e
+            }
+        })
+        return {
+            out: async () => {
+                if (thrown !== undefined) throw thrown
+                return result ?? ''
+            },
+            attempts: () => toolingAttempts
+        }
+    }
+
+    test('an empty first attempt is retried once and a real answer replaces it', async () => {
+        const r = await runWith(attempt =>
+            attempt === 1 ? agentEndResponse('') : agentEndResponse('- bun test runs the suite')
+        )
+        expect(r.attempts()).toBe(2) // fired exactly once
+        expect(await r.out()).toContain('- bun test runs the suite')
+    })
+
+    test('empty TWICE is recorded as an empty section, and is NOT a phase failure', async () => {
+        const r = await runWith(() => agentEndResponse(''))
+        expect(r.attempts()).toBe(2)
+        // The worker ran twice and reported nothing both times. That is an answer, not
+        // a fault — the phase completes and the section says so.
+        expect(await r.out()).toContain(
+            'TOOLING\n(none — the TOOLING worker ran and reported no entries'
+        )
+    })
+
+    test('a retry that FAILS propagates as a phase failure, not as an empty section', async () => {
+        const r = await runWith(attempt =>
+            attempt === 1 ? agentEndResponse('') : agentErrorResponse('model died')
+        )
+        expect(r.attempts()).toBe(2)
+        // This is the branch that separates this gate from the other two: the
+        // zero-retrieval and silent-retry gates DISCARD a failed retry and ship the
+        // original, so they can never throw. Here the retry's fault is the outcome.
+        await expect(r.out()).rejects.toThrow(/TOOLING worker: model error/i)
+    })
+})
+
 describe('phaseResearch per-worker persistence', () => {
     // Marker strings each worker's prompt carries, used to route fake spawns and
     // to keep this suite honest if a prompt is renamed.

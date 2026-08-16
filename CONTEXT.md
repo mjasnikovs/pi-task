@@ -21,6 +21,26 @@ concept get that concept recorded here.
   > (runChild/runTask/commit) are deliberately different abstractions. Their one
   > real overlap — mirroring child context_usage into the widget — lives in
   > `task/context-usage.ts` (`getParentContextWindow`, `resolveContextUsage`).
+- **Plan stage** — one step of `planAuto`, the `/task-auto` planning pipeline:
+  ORIENT → ELICIT → DECOMPOSE → COVER → persist. Each is its own function in
+  `task/auto-orchestrator.ts`, taking what the earlier stages settled and
+  returning what the later ones read (`OrientedFeature`, `DecomposedPlan`,
+  `CoveredPlan`), so a stage can be driven on its own instead of through a whole
+  plan run. `orientFeature` asks nobody anything — it reads the feature and the
+  tree, so the plan-shape fork has a real requirement count to judge with before
+  clarify runs. `elicitClarifications` is the ONLY stage that talks to the user,
+  and so the only one that can be dismissed (`null` = cancelled, already
+  announced). `decomposePlan` returns its own prompt and parser because COVER
+  re-prompts with the identical prompt and must reconcile the reply identically —
+  rebuilding either is how the two paths drift. `coverPlan` returns the whole
+  `ScoredPlan`: `best.accounting` is read as late as the coverage note, and
+  splitting the plan from its accounting is a bug this codebase has already had.
+  > `planAuto`'s tail is deliberately NOT a stage. The two grounded extractions
+  > (contracts, launch scripts) and the four ledger writes are ordered against
+  > each other, not against the pipeline. What DID move is the empty-plan guard:
+  > it now runs BEFORE the extractions, which used to spend two children and
+  > append to two run-level artifacts for a plan that was discarded one line
+  > later.
 - **Plan session** — the interactive planning loop `/task-plan` runs before a task
   exists (`task/plan-session.ts`). Same adaptive one-question-at-a-time shape as
   grill and clarify, and it reuses their parser, duplicate backstop, picker and
@@ -69,6 +89,19 @@ concept get that concept recorded here.
   (`ExternalContextLookups`: *raw* workers for research, *focused* ones for
   auto-answer, expressible since the focused-extractor seam landed).
   `gatherExternalContext` is the research-phase binding.
+- **Research retry gate** — a deterministic handle inside `runSpec`
+  (`task/phases.ts`) that re-runs ONE worker once with a forced preamble and
+  keeps the retry only if a named measure improved. There are three, and they
+  stay three rather than becoming a row table, because they disagree on the
+  thing a table would have to unify: the ZERO-RETRIEVAL and SILENT gates
+  DISCARD a failed retry and ship the original, so neither can ever fail the
+  phase; the EMPTY-SECTION gate PROPAGATES it, and that is how a worker that
+  answers twice with silence becomes a loud failure instead of a quiet empty
+  section. The empty-section gate is also the only one with no row field — it
+  runs for every worker — and it produces `confirmedEmpty`, which the silent
+  gate reads as a precondition and the section body reads as its answer. The
+  shared body is five lines behind six varying parameters; a table over it
+  would be an interface wider than its implementation.
 
 ## Remote web view
 
@@ -129,6 +162,28 @@ concept get that concept recorded here.
   > writes a different artifact; `revert` and `discardEdits` close over the
   > abort signal; `introducedBy` would otherwise demand a real git history).
   > A field that only forwards to an import is not a seam — import it.
+  >
+  > `recordDebt` and `ownedRequirements` ARE seams by that test, and are now
+  > fields: both write or read a durable ledger, which is exactly what a
+  > scenario wants to observe. Each defaults to the real implementation when
+  > absent, so production wiring is untouched — the twin's "absent → documented
+  > earlier behaviour" contract, with the earlier behaviour being the import.
+  > They were the only reason all 25 of this stage's tests needed a real
+  > temp dir.
+
+- **The two resolution loops stay two.** `runGatesForTask` and
+  `runFinalGateStage` share a policy SHAPE — run a check, negotiate a FAIL
+  through a picker whose recommended card may be auto-taken, apply, loop — and
+  sharing their spine was examined and REJECTED. Of `GateDeps`' 18 fields only
+  `commit` is exactly shared; ~13 have no run-level counterpart at all.
+  `UNOBSERVED` has OPPOSITE polarity (a FAIL flag per task, a PASS variant per
+  run). `GateResult` carries `ctx` on every kind because a task autofix can
+  replace the live session; `FinalGateStageResult` structurally cannot. The
+  autofix bounds count different events (task: unattended invocations only, so
+  manual retries are unbounded; run: every attempt, and the card is withdrawn
+  when spent). Dismissing the picker is its own terminal state per task and is
+  folded into "leave" per run. A shared spine needs an altitude conditional at
+  each of those points — worse than the duplication it removes.
 
 ## Worker tools
 

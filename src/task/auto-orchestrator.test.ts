@@ -3,6 +3,8 @@ import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {
     planAuto,
+    orientFeature,
+    decomposePlan,
     runAutoLoop,
     requestAutoCancel,
     expandFeatureMentions,
@@ -19,6 +21,7 @@ import {readOwnedRequirements} from './requirements.js'
 import type {CommitResult} from './auto-commit.js'
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
+import {existsSync} from 'node:fs'
 import {spawnSync} from 'node:child_process'
 
 // Sequential clarify is adaptive: planAuto re-calls 'auto-clarify' after every
@@ -2241,6 +2244,115 @@ test('contract extraction: a child fault never blocks planning', async () => {
         }
         const id = await planAuto(ctx, dir, 'build the app', d)
         expect(id).not.toBeNull() // extraction fault is swallowed
+    })
+})
+
+// ─── The plan stages, driven directly ────────────────────────────────────────
+// planAuto is ORIENT → ELICIT → DECOMPOSE → COVER → persist. Each stage takes what
+// the ones before it settled and returns what the ones after it read, so a stage can
+// be driven on its own instead of through a whole plan run.
+
+test('orientFeature: the requirement ledger and the floor it implies', async () => {
+    await withTmpTaskDir(async dir => {
+        // Six ownable requirements ⇒ a floor of ceil(6/2) = 3 tasks.
+        const quotes = [
+            'upload accepts multipart form data',
+            'the listing detail page renders photos',
+            'thumbnails are generated on write',
+            'the photo API paginates results',
+            'deletion removes the stored blob',
+            'the gallery lazy-loads below the fold'
+        ]
+        const feature = `Photos feature.\n${quotes.map(q => `- ${q}.`).join('\n')}`
+        const d: AutoDeps = {
+            runChild: name =>
+                Promise.resolve(
+                    name === 'requirement-extract' ?
+                        quotes.map(q => `REQUIREMENT: "${q}" [anchor: Photos feature]`).join('\n')
+                    :   ''
+                ),
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const oriented = await orientFeature(dir, feature, d)
+        expect(oriented.reqEntries).toHaveLength(6)
+        expect(oriented.ownableRequirements).toBe(6)
+        expect(oriented.coarseFloor).toBe(3)
+        // The spec text the planning children read is the INLINED one.
+        expect(oriented.featureForModel).toContain('the photo API paginates results')
+    })
+})
+
+test('decomposePlan: a plan under the floor is split ONCE and the longer list wins', async () => {
+    await withTmpTaskDir(async dir => {
+        const quotes = [
+            'upload accepts multipart form data',
+            'the listing detail page renders photos',
+            'thumbnails are generated on write',
+            'the photo API paginates results',
+            'deletion removes the stored blob',
+            'the gallery lazy-loads below the fold'
+        ]
+        const feature = `Photos feature.\n${quotes.map(q => `- ${q}.`).join('\n')}`
+        const prompts: string[] = []
+        const d: AutoDeps = {
+            runChild: (name, _tools, prompt) => {
+                if (name === 'requirement-extract') {
+                    return Promise.resolve(
+                        quotes.map(q => `REQUIREMENT: "${q}" [anchor: Photos feature]`).join('\n')
+                    )
+                }
+                if (name !== 'auto-decompose') return Promise.resolve('')
+                prompts.push(prompt)
+                // First draw is one task — under the floor of 3. The split retry
+                // (the only prompt carrying the SYSTEM NOTE) answers with four.
+                return Promise.resolve(
+                    prompt.includes('is too coarse for the') ?
+                        '- [ ] Upload\n- [ ] Detail page\n- [ ] Thumbnails\n- [ ] Deletion'
+                    :   '- [ ] Everything'
+                )
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const oriented = await orientFeature(dir, feature, d)
+        expect(oriented.coarseFloor).toBe(3)
+        const plan = await decomposePlan(dir, d, oriented, '')
+        expect(plan.planTitles).toHaveLength(4)
+        // Exactly two decompose calls: the draw, and the ONE split retry.
+        expect(prompts).toHaveLength(2)
+        expect(prompts.filter(p => p.includes('is too coarse for the'))).toHaveLength(1)
+        // The prompt COVER re-prompts with is the one that produced the plan.
+        expect(plan.decomposePrompt).toContain('Photos feature')
+    })
+})
+
+test('an empty plan spends no extraction child and leaves no run-level artifact', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const spent: string[] = []
+        const d: AutoDeps = {
+            runChild: (name, _tools, _prompt) => {
+                spent.push(name)
+                if (name === 'auto-clarify') return Promise.resolve('NONE')
+                // Every decompose attempt comes back with no titles at all.
+                return Promise.resolve('')
+            },
+            runTask: () =>
+                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const id = await planAuto(ctx, dir, 'build the app', d)
+        expect(id).toBeNull()
+        // The plan is discarded, so the two grounded extractions must never run —
+        // they would each burn a child and append to an artifact for a run that
+        // produced no task.
+        expect(spent).not.toContain('contract-extract')
+        expect(spent).not.toContain('launch-extract')
+        expect(existsSync(path.join(dir, '.pi-tasks', 'contracts.md'))).toBe(false)
+        expect(existsSync(path.join(dir, '.pi-tasks', 'launch-contract.md'))).toBe(false)
     })
 })
 

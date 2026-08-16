@@ -442,6 +442,65 @@ test('every debt this stage writes lands on the RUN id under origin final-gate',
     })
 })
 
+test('the debt write is a seam: a fake sink observes it with no ledger on disk', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        // The run-level twin of GateDeps.recordDebt. Substituting it is what lets a
+        // scenario assert WHICH debts it carries without writing, then re-reading,
+        // the real ledger — the shape task-gates.test.ts has always had.
+        const written: Array<{taskId: string; reason: string; origin: string}> = []
+        handle.queueSelect(FINAL_AUTOFIX_LABEL)
+        await runFinalGateStage(
+            handle.ctx,
+            stageDeps([], [], {
+                recordDebt: (_cwd, taskId, reason, origin) => {
+                    written.push({taskId, reason, origin})
+                    return Promise.resolve()
+                },
+                finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
+                finalGateFix: () =>
+                    Promise.resolve({
+                        ok: true,
+                        reason: 'green',
+                        ignoredWrites: ['.env'],
+                        ignoredDependent: true,
+                        unobserved: 'UNOBSERVED — rests on an ignored file'
+                    })
+            }),
+            params(dir)
+        )
+        expect(written).toHaveLength(2)
+        expect(written.every(d => d.origin === 'final-gate')).toBe(true)
+        expect(written.every(d => d.taskId === RUN)).toBe(true)
+        // The real ledger was never touched — the substitution is total, not a mirror.
+        expect(await readAcceptDebts(dir)).toEqual([])
+    })
+})
+
+test('the owned-requirement read is a seam: no ledger file is seeded', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const trail: string[] = []
+        await runFinalGateStage(
+            handle.ctx,
+            stageDeps(trail, [], {
+                finalGate: () => Promise.resolve({ok: true, reason: 'green'}),
+                ownedRequirements: () =>
+                    Promise.resolve([
+                        {
+                            quote: 'serves /api and static dist/',
+                            anchor: 'App assembly',
+                            title: 'App assembly',
+                            pending: ['TASK_0002']
+                        }
+                    ])
+            }),
+            params(dir)
+        )
+        expect(trail.some(l => l.includes('owned requirement UNCLAIMED'))).toBe(true)
+    })
+})
+
 test('an INDEPENDENT ignored write is trailed and opens no debt', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
