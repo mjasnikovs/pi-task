@@ -86,7 +86,7 @@ async function main() {
     const deps: PhaseDeps = {cwd: repoArg, taskId: '', signal: new AbortController().signal}
 
     const raw = await expandFeatureMentions(repoArg, FEATURE)
-    const phantoms = findPhantomImports(raw, repoArg)
+    const phantoms = await findPhantomImports(raw, repoArg)
     const featureForModel = phantoms.length === 0 ? raw : rewritePhantomSpecifiers(raw, phantoms)
 
     /** planAuto's requirement channel, run once per spec and shared by both arms. */

@@ -33,7 +33,8 @@ import {
     preferredDeclaredPort,
     runFinalIntegrationGate,
     type BootDeps,
-    type FinalGateOutcome
+    type FinalGateOutcome,
+    type FinalGateOptions
 } from '../src/task/final-gate.js'
 import {runRenderCheck} from '../src/task/render-check.js'
 import {runDeepRenderCheck} from '../src/task/deep-render-check.js'
@@ -54,13 +55,7 @@ import {
 const BASELINE_REF = process.env.BOOT_SKIP_BASELINE_REF ?? '8425ae8'
 const BASELINE_FILE = path.join(REPO, 'src', 'task', 'final-gate.baseline.gen.ts')
 
-type GateFn = (
-    cwd: string,
-    timeoutMs?: number,
-    bootGraceMs?: number,
-    bootDeps?: BootDeps,
-    planText?: string
-) => Promise<FinalGateOutcome>
+type GateFn = (cwd: string, opts?: FinalGateOptions) => Promise<FinalGateOutcome>
 
 /** The shipped module, materialised next to its own dependencies so `./x.js`
  *  imports resolve exactly as they do for the real one. */
@@ -155,12 +150,12 @@ async function runTree(entry: CorpusEntry, baselineGate: GateFn): Promise<void> 
         }
         bootClass = (await runBootCheck(baseDir, boot, 10_000, {expectServer, deps})).outcome
     }
-    const baseOut = await baselineGate(baseDir, timeout)
+    const baseOut = await baselineGate(baseDir, {timeoutMs: timeout})
     rmSync(baseDir, {recursive: true, force: true})
 
     // Arm 2 — the working tree, on a clone made from the same pristine source.
     const treatDir = materialise(entry, path.join(work, `${slug}.treatment`))
-    const treatOut = await runFinalIntegrationGate(treatDir, timeout)
+    const treatOut = await runFinalIntegrationGate(treatDir, {timeoutMs: timeout})
     rmSync(treatDir, {recursive: true, force: true})
 
     const t: TreeResult = {

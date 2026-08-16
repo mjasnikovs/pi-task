@@ -595,7 +595,7 @@ export async function orientFeature(
     // same deterministic, no-LLM strike at the single point that feeds both planning
     // children. Silent + no-op when nothing is flagged or the runtime's types aren't
     // installed.
-    const planPhantoms = findPhantomImports(rawFeatureForModel, cwd)
+    const planPhantoms = await findPhantomImports(rawFeatureForModel, cwd)
     const featureForModel =
         planPhantoms.length === 0 ?
             rawFeatureForModel
@@ -1582,7 +1582,7 @@ function defaultDeps(
         // run-level half of the same verification story.
         finalGate: (cwd2, planText) =>
             getConfig().verifyWork ?
-                runFinalIntegrationGate(cwd2, undefined, undefined, undefined, planText)
+                runFinalIntegrationGate(cwd2, {planText})
             :   Promise.resolve({ok: true, reason: 'disabled'}),
         // Uncommitted paths, for the stranded-sub-fix handling around the final-gate
         // picker (mx5 run 13 PROMPT 4 item 3). Every task is committed by the time

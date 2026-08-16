@@ -91,7 +91,7 @@ for (const source of PROJECTS) {
     }
     let probeCalls = 0
     const started = Date.now()
-    const out = await runFinalIntegrationGate(dest, COMMAND_TIMEOUT_MS, 15_000, {
+    const out = await runFinalIntegrationGate(dest, {timeoutMs: COMMAND_TIMEOUT_MS, bootGraceMs: 15_000, bootDeps: {
         deepRenderProbe: () => {
             probeCalls += 1
             return Promise.resolve({
@@ -99,7 +99,7 @@ for (const source of PROJECTS) {
                 note: 'deep probe replaced by the FP-sweep recorder'
             })
         }
-    })
+    }})
     const signature = RULE_SIGNATURES.find(s => out.reason.includes(s)) ?? null
     rows.push({label, ok: out.ok, probeCalls, signature, reason: out.reason})
     console.log(

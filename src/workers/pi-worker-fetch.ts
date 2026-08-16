@@ -3,7 +3,8 @@ import type {EventEmitter} from 'node:events'
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-clean.js'
-import {fetchFocused, formatResultText} from './fetch-core.js'
+import {fetchFocused} from './fetch-core.js'
+import {formatResultText} from '../shared/child-output.js'
 import {makeWorkerTool} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
 import {isAbstention} from './abstention.js'
@@ -91,6 +92,7 @@ export function registerPiWorkerFetch(
 
                 const body =
                     formatResultText(
+                        '', // a fetched page answer carries no package header
                         {answer: result.answer, excerpt: result.excerpt},
                         result.excerptVerified
                     ) || '(no output)'
@@ -134,7 +136,7 @@ export function registerPiWorkerFetch(
         // otherwise). The URL is kept verbatim (path case can matter); the query is
         // normalised. Both parts key the entry — same page, different question is a
         // different answer.
-        cacheKey: params => `${params.url.trim()}::${normalizeQuery(params.query)}`,
+        cacheKey: fetchCacheKey,
         // Only a completed fetch (child exited 0) is a real answer; invalid-URL,
         // fetch failures, and aborts omit childExitCode:0 and fall through.
         // F-2(e), on the fetch channel. A child that ran fine and answered
@@ -143,6 +145,21 @@ export function registerPiWorkerFetch(
         // the same dead-end-paid-many-times shape pi-worker-docs already closed
         // for packages, with escalation unable to re-fire because the miss never
         // recurred. One predicate now covers every corpus (workers/abstention.ts).
-        cacheable: (d, text) => d.childExitCode === 0 && !isAbstention(text)
+        cacheable: fetchCacheable
     })
+}
+
+/**
+ * The F-2(e) cache rule for the fetch channel, named for the same reason as
+ * `docsCacheable`: pi-worker-fetch.test.ts carried a hand-retyped copy driving four
+ * tests, which a change to the shipped rule would leave green.
+ */
+export function fetchCacheable(d: Pick<FetchDetails, 'childExitCode'>, text: string): boolean {
+    return d.childExitCode === 0 && !isAbstention(text)
+}
+
+/** The fetch cache key. URL verbatim (path case can matter), question normalised —
+ *  same page, different question is a different answer. */
+export function fetchCacheKey(params: {url: string; query: string}): string {
+    return `${params.url.trim()}::${normalizeQuery(params.query)}`
 }

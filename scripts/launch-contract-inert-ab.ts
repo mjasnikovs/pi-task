@@ -51,7 +51,11 @@ import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {runFinalIntegrationGate, type FinalGateOutcome} from '../src/task/final-gate.js'
+import {
+    runFinalIntegrationGate,
+    type FinalGateOutcome,
+    type FinalGateOptions
+} from '../src/task/final-gate.js'
 import {scratchRoot} from './scratch-repo.js'
 
 const REPO = path.resolve(import.meta.dir, '..')
@@ -60,13 +64,7 @@ const MX5 = path.join(os.homedir(), 'hub', 'mx5')
 const MX5_REF = '3e87014'
 const ROOT = scratchRoot('launch-contract-inert-ab')
 
-type GateFn = (
-    cwd: string,
-    timeoutMs?: number,
-    bootGraceMs?: number,
-    bootDeps?: Record<string, unknown>,
-    planText?: string
-) => Promise<FinalGateOutcome>
+type GateFn = (cwd: string, opts?: FinalGateOptions) => Promise<FinalGateOutcome>
 
 /**
  * The commit BEFORE the lever landed, located by when its module was ADDED — not
@@ -173,7 +171,7 @@ function normalise(dir: string, s: string): string {
 }
 
 async function run(gate: GateFn, dir: string): Promise<{ok: boolean; failures: string[]; unobserved: string}> {
-    const o = await gate(dir, 120_000, 1_000, {}, '')
+    const o = await gate(dir, {timeoutMs: 120_000, bootGraceMs: 1_000, planText: ''})
     return {
         ok: o.ok,
         failures: listOf(o).map(f => normalise(dir, f)),

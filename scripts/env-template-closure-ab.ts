@@ -46,7 +46,7 @@
 import {spawnSync} from 'node:child_process'
 import {mkdirSync, rmSync, writeFileSync} from 'node:fs'
 import * as path from 'node:path'
-import type {FinalGateOutcome} from '../src/task/final-gate.js'
+import type {FinalGateOutcome, FinalGateOptions} from '../src/task/final-gate.js'
 import {scanEnvTemplateClosure} from '../src/task/env-template-closure.js'
 import {report, type Invariant, type Outcome} from './ab-verdict.js'
 import {HUB, REPO, makeWorkRoot, installDockerlessShim} from './boot-skip-corpus.js'
@@ -57,13 +57,7 @@ const BASELINE_FILE = path.join(REPO, 'src', 'task', 'final-gate.baseline.gen.ts
  *  tree's verdict but never the DIFFERENCE the A/B measures. */
 const GATE_TIMEOUT_MS = 600_000
 
-type GateFn = (
-    cwd: string,
-    timeoutMs?: number,
-    bootGraceMs?: number,
-    bootDeps?: Record<string, unknown>,
-    planText?: string
-) => Promise<FinalGateOutcome>
+type GateFn = (cwd: string, opts?: FinalGateOptions) => Promise<FinalGateOutcome>
 
 async function loadBaselineGate(): Promise<GateFn> {
     const show = spawnSync('git', ['show', `${BASELINE_REF}:src/task/final-gate.ts`], {
@@ -266,7 +260,7 @@ async function runArm(gate: GateFn, snap: string, tree: Tree, dest: string): Pro
     rmSync(dest, {recursive: true, force: true})
     const cp = spawnSync('cp', ['-a', '--reflink=auto', `${snap}/.`, dest], {encoding: 'utf8'})
     if (cp.status !== 0) throw new Error(`cp of snapshot failed for ${tree.label}: ${cp.stderr}`)
-    const o = await gate(dest, tree.timeoutMs ?? GATE_TIMEOUT_MS)
+    const o = await gate(dest, {timeoutMs: tree.timeoutMs ?? GATE_TIMEOUT_MS})
     return {ok: o.ok, failures: listOf(o).map(f => normalise(dest, f))}
 }
 

@@ -154,9 +154,9 @@ async function arm(name: string, probe: Probe): Promise<FinalGateOutcome> {
     try {
         normalise(dir)
         const started = Date.now()
-        const out = await runFinalIntegrationGate(dir, COMMAND_TIMEOUT_MS, 15_000, {
+        const out = await runFinalIntegrationGate(dir, {timeoutMs: COMMAND_TIMEOUT_MS, bootGraceMs: 15_000, bootDeps: {
             deepRenderProbe: url => probe(url, dir)
-        })
+        }})
         console.log(
             `  ${name.padEnd(9)} gate ${out.ok ? 'PASS' : 'FAIL'} in `
             + `${((Date.now() - started) / 1000).toFixed(0)}s`

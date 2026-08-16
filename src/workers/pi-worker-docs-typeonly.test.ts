@@ -1,6 +1,5 @@
 import {test, expect, describe} from 'bun:test'
-import {extractSeeUrls} from './pi-worker-docs.js'
-import {isAbstention} from './abstention.js'
+import {extractSeeUrls, docsCacheable} from './pi-worker-docs.js'
 
 /**
  * PROMPT 2, DO items 2 and 4 at the docs-tool seam.
@@ -51,18 +50,9 @@ export declare const hc: <T extends Hono>(baseUrl: string) => Client<T>
     })
 })
 
-/**
- * The shipped predicate, mirrored here so the RULE is pinned by a test rather than only
- * living inline. Keep in sync with `cacheable` in pi-worker-docs.ts.
- */
-const cacheable = (
-    d: {childExitCode?: number; typeOnly?: boolean; excerptVerified?: boolean},
-    text: string
-): boolean =>
-    d.childExitCode === 0
-    && d.typeOnly !== true
-    && d.excerptVerified !== false
-    && !isAbstention(text)
+// The SHIPPED predicate, imported. It used to be hand-retyped here under a
+// "keep in sync" comment, so a change to the real rule left these six tests green.
+const cacheable = docsCacheable
 
 describe('cacheable — a non-answer must never be memoised (F-2e)', () => {
     test('a real answer is cached', () => {

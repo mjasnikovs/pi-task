@@ -40,6 +40,7 @@ import {
     projectDocsBudgetNotice
 } from './research-fanout-budget.js'
 import type {SpawnFn} from '../shared/child-process.js'
+import type {RunWorkerResult} from '../workers/pi-worker-core.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {getConfig} from '../config/config.js'
 import {writeTaskFile} from './task-io.js'
@@ -3490,5 +3491,102 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
             expect(pc.refined).toBe(refinedText)
             expect(await readSection(cwd, 'TASK_0001', 'gates')).toBeNull()
         })
+    })
+})
+
+describe('PhaseResearchDeps.runWorker seam', () => {
+    // Every decision runSpec makes is a pure function of RunWorkerResult fields.
+    // Reaching one used to mean driving a fake process that emits JSON events —
+    // including a forged tool_execution_start, because otherwise the APIS
+    // zero-retrieval gate fired and broke the spawn counts of unrelated tests.
+    // With the seam the fields are stated directly, and workers are told apart by
+    // LABEL rather than by a marker sentence lifted out of prompts.ts.
+    const result = (over: Partial<RunWorkerResult> = {}): RunWorkerResult => ({
+        text: '- a real finding',
+        exitCode: 0,
+        stderr: '',
+        aborted: false,
+        sawOutput: true,
+        waitMs: 1,
+        workMs: 1,
+        attempts: 1,
+        totalWallMs: 2,
+        restarts: [],
+        salvagedFromDiscardedAttempt: false,
+        // Non-zero so the APIS zero-retrieval gate stays out of the way unless a
+        // test is about it.
+        groundingRetrievalCount: 3,
+        ...over
+    })
+
+    const noSpawn: SpawnFn = () => {
+        throw new Error('spawned a real child despite researchDeps.runWorker')
+    }
+
+    const runWithWorkers = async (
+        onWorker: (label: string, attempt: number) => RunWorkerResult
+    ): Promise<{out: string; calls: string[]}> => {
+        const calls: string[] = []
+        return withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'research',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            const seen: Record<string, number> = {}
+            const out = await phaseResearch(
+                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn: noSpawn},
+                'a refined goal with no mentions',
+                {
+                    getFileInventory: () => Promise.resolve(''),
+                    runWorker: (label: string) => {
+                        seen[label] = (seen[label] ?? 0) + 1
+                        calls.push(label)
+                        return Promise.resolve(onWorker(label, seen[label]))
+                    }
+                }
+            )
+            return {out, calls}
+        })
+    }
+
+    test('every worker runs through the seam, named', async () => {
+        const {calls} = await runWithWorkers(() => result())
+        expect(new Set(calls)).toEqual(
+            new Set(['worker:files', 'worker:apis', 'worker:context', 'worker:tooling'])
+        )
+    })
+
+    test('the empty-section gate retries ONE worker and accepts an empty section', async () => {
+        // Stated as a field, not as a forged agent_end with an empty text event.
+        const {out, calls} = await runWithWorkers((label, attempt) =>
+            label === 'worker:context' ?
+                result({text: '', groundingRetrievalCount: 0})
+            :   result({text: `- finding on attempt ${attempt}`})
+        )
+        // Retried once, then accepted — two calls for CONTEXT, one for the rest.
+        expect(calls.filter(l => l === 'worker:context').length).toBe(2)
+        expect(calls.filter(l => l === 'worker:files').length).toBe(1)
+        expect(out).toContain(emptySectionBody('CONTEXT'))
+    })
+
+    test('a worker that never spoke is a FAILURE, not an empty section', async () => {
+        // sawOutput:false means the child died at startup. One boolean; before the
+        // seam this needed a process that exits without writing a byte.
+        await expect(
+            runWithWorkers(
+                (label): RunWorkerResult =>
+                    label === 'worker:tooling' ?
+                        result({text: '', sawOutput: false, groundingRetrievalCount: 0})
+                    :   result()
+            )
+        ).rejects.toThrow(/TOOLING/i)
     })
 })

@@ -369,7 +369,7 @@ export class TaskRunner {
     }
 
     private async _deliverSpec(_ctx: ExtensionCommandContext): Promise<void> {
-        const spec = this._specForDelivery()
+        const spec = await this._specForDelivery()
         // Keep the rich status block alive across the implementation turn (the phase
         // widget was disposed at handoff). Awaited (/task-auto) stays armed across all
         // sub-turns and is disarmed here; fire-and-forget (/task) arms one-shot and its
@@ -408,8 +408,8 @@ export class TaskRunner {
      * deterministic check proves does not exist. No-op (returns the spec unchanged) when
      * nothing is flagged or the runtime's types aren't installed.
      */
-    private _specForDelivery(): string {
-        const phantoms = findDeliveryPhantoms(this._pc.spec, this._cwd)
+    private async _specForDelivery(): Promise<string> {
+        const phantoms = await findDeliveryPhantoms(this._pc.spec, this._cwd)
         const apiBanner = formatApiOverrideBanner(phantoms)
         if (apiBanner) {
             this._deps.logDebug?.(

@@ -15,8 +15,25 @@ export interface RetrieveOptions {
     contentBudget?: number
 }
 
-const DEFAULT_LIMIT = 50
-const DEFAULT_BUDGET = 24_000
+/**
+ * How many chunks a retrieval returns, per corpus.
+ *
+ * The two values differ and always have; this is the first place they sit side by
+ * side, and no comment in the history explains WHY an npm package gets 8 and
+ * project source gets 50. Recorded as-is rather than harmonised: changing either is
+ * a retrieval-policy change with its own A/B, not a tidy-up. Before this they were
+ * three declarations across three files, so the divergence was invisible.
+ */
+export const PACKAGE_RETRIEVE_LIMIT = 8
+export const PROJECT_RETRIEVE_LIMIT = 50
+
+/** Character budget for the assembled chunk text. The same for both corpora. */
+export const RETRIEVE_CONTENT_BUDGET = 24_000
+
+// Both callers always pass `limit`/`contentBudget` explicitly, so these defaults are
+// only a backstop for a third caller that does not.
+const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
+const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 const MIN_TOKEN_LEN = 2
 const FALLBACK_DTS_CHARS = 12_000
 const FALLBACK_README_CHARS = 4_000

@@ -2,10 +2,7 @@ import {fetchAndClean as defaultFetchAndClean, type CleanResult} from './html-cl
 import type {SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction} from './focused-extractor.js'
 import {abstentionSentence} from './abstention.js'
-import {
-    type ExcerptVerification,
-    formatResultText as formatResultTextShared
-} from '../shared/child-output.js'
+import {type ExcerptVerification} from '../shared/child-output.js'
 
 const CONTENT_BUDGET = 30_000
 const HEAD_CHARS = 25_000
@@ -359,11 +356,5 @@ function buildPrompt(args: {
 /** The shipped strategy: fragment-aware selection + the recalibrated prompt. */
 export const shippedStrategy: PromptStrategy = {selectContent, buildPrompt}
 
-// ─── Thin wrapper: fetch-core formatResultText (no header) ───────────────────
-
-export function formatResultText(
-    parsed: {answer: string; excerpt?: string},
-    verified: boolean | undefined
-): string {
-    return formatResultTextShared('', parsed, verified)
-}
+// A fetch answer carries no package header, so the shared formatter is bound with an
+// empty one at the single call site rather than behind a wrapper of its own.

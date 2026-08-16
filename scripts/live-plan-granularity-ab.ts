@@ -88,7 +88,7 @@ async function main() {
 
     // Exactly planAuto's inline + phantom strike.
     const raw = await expandFeatureMentions(repoArg, FEATURE)
-    const phantoms = findPhantomImports(raw, repoArg)
+    const phantoms = await findPhantomImports(raw, repoArg)
     const featureForModel = phantoms.length === 0 ? raw : rewritePhantomSpecifiers(raw, phantoms)
     console.log(`spec inlined: ${featureForModel.length} chars, ${phantoms.length} phantom(s) struck`)
 

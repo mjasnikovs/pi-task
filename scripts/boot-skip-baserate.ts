@@ -90,7 +90,7 @@ async function measure(entry: CorpusEntry, work: string): Promise<void> {
         const b = await runBootCheck(cwd, boot, 10_000, {expectServer, deps})
         bootClass = b.outcome
     }
-    const out = await runFinalIntegrationGate(cwd, entry.timeoutMs ?? 300_000)
+    const out = await runFinalIntegrationGate(cwd, {timeoutMs: entry.timeoutMs ?? 300_000})
     const verdict = verdictOf(out)
     const row: Row = {
         label: entry.label,

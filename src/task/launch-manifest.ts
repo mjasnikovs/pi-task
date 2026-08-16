@@ -163,3 +163,26 @@ export function inertLaunchContractNote(declared: string[], manifest: LaunchMani
         + 'The contract was NOT checked here.'
     )
 }
+
+/** The `scripts` map of this tree's package.json, or `{}` when there isn't one.
+ *  Shared by the gate and the boot probe — both ask the same manifest question. */
+export function packageScripts(cwd: string): Record<string, string> {
+    try {
+        const j = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
+            scripts?: Record<string, string>
+        }
+        return j.scripts ?? {}
+    } catch {
+        return {}
+    }
+}
+
+/** Does this tree's Makefile declare `target`? */
+export function makeHasTarget(cwd: string, target: string): boolean {
+    try {
+        const mk = readFileSync(path.join(cwd, 'Makefile'), 'utf8')
+        return new RegExp(`^${target}:`, 'm').test(mk)
+    } catch {
+        return false
+    }
+}

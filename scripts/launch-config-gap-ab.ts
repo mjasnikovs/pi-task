@@ -43,18 +43,16 @@
 import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import {runFinalIntegrationGate, type FinalGateOutcome} from '../src/task/final-gate.js'
+import {
+    runFinalIntegrationGate,
+    type FinalGateOutcome,
+    type FinalGateOptions
+} from '../src/task/final-gate.js'
 import {scratchRoot} from './scratch-repo.js'
 
 const ROOT = scratchRoot('launch-config-gap-ab')
 
-type GateFn = (
-    cwd: string,
-    timeoutMs?: number,
-    bootGraceMs?: number,
-    bootDeps?: Record<string, unknown>,
-    planText?: string
-) => Promise<FinalGateOutcome>
+type GateFn = (cwd: string, opts?: FinalGateOptions) => Promise<FinalGateOutcome>
 
 type Variant = 'main' | 'undeclared' | 'real-fault' | 'partial'
 
@@ -180,7 +178,7 @@ async function run(gate: GateFn, dir: string, variant: Variant): Promise<FinalGa
         delete process.env.ADMIN_PASSWORD
     }
     try {
-        return await gate(dir, 120_000, 1_000, {}, '')
+        return await gate(dir, {timeoutMs: 120_000, bootGraceMs: 1_000, planText: ''})
     } finally {
         if (saved.phone === undefined) delete process.env.ADMIN_PHONE
         else process.env.ADMIN_PHONE = saved.phone

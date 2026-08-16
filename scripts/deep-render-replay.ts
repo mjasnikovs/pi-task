@@ -30,7 +30,7 @@ const traceDeep = args.includes('--trace-deep')
 
 let deepCalls = 0
 const started = Date.now()
-const out = await runFinalIntegrationGate(projectDir, 900_000, 15_000, {
+const out = await runFinalIntegrationGate(projectDir, {timeoutMs: 900_000, bootGraceMs: 15_000, bootDeps: {
     ...(port !== null ? {pickPort: () => Promise.resolve(port)} : {}),
     ...(noDeep || traceDeep ?
         {
@@ -43,7 +43,7 @@ const out = await runFinalIntegrationGate(projectDir, 900_000, 15_000, {
             }
         }
     :   {})
-})
+}})
 const elapsed = ((Date.now() - started) / 1000).toFixed(1)
 console.log(`\n=== ${out.ok ? 'PASS' : 'FAIL'} in ${elapsed}s (deep probe ${noDeep ? 'OFF' : 'ON'})`)
 if (traceDeep) console.log(`deep probe reached: ${deepCalls} time(s)`)

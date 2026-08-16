@@ -45,9 +45,7 @@
  *   scripts/boot-skip-verdict-ab.ts    two-armed deterministic A/B + invariants
  *   scripts/boot-skip-fp-suite.ts      zero-FP arms over every local repo
  */
-import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
-import * as net from 'node:net'
 import * as path from 'node:path'
 import {
     runRepoHealthCheck,
@@ -68,20 +66,36 @@ import {
     missingDeclaredScripts,
     runnableDeclaredScripts
 } from './launch-contract.js'
-import {readLaunchManifest, inertLaunchContractNote} from './launch-manifest.js'
-import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
-import {runRenderCheck, type RenderOutcome} from './render-check.js'
 import {
-    collectProjectEnv,
-    pinnedLocalPort,
-    runDeepRenderCheck,
-    type DeepRenderOutcome
-} from './deep-render-check.js'
-import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
+    readLaunchManifest,
+    inertLaunchContractNote,
+    packageScripts,
+    makeHasTarget
+} from './launch-manifest.js'
+import {
+    discoverBootCommand,
+    detectsServedApp,
+    runBootCheck,
+    bootSkipVerdict,
+    nonLaunchScriptReason,
+    rejectedLaunchScript,
+    parseSsListeners,
+    parseNetstatListeners,
+    parseLsofListeners,
+    pickFreePort,
+    preferredDeclaredPort,
+    canEnumerateListeners,
+    recoverOrphanPort,
+    defaultFindPortHolder,
+    type BootDeps
+} from './boot-probe.js'
+import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
+import {runRenderCheck} from './render-check.js'
+import {runDeepRenderCheck} from './deep-render-check.js'
+import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
     spawnCommand,
-    outputTail,
     INFRA_GAP_OUTPUT_RE,
     type CommandRunner
 } from './command-run.js'
@@ -93,7 +107,8 @@ import {
     envGateFailureText,
     scanEnvTemplateClosure,
     inertClosure,
-    trackedFiles
+    trackedFiles,
+    type EnvClosure
 } from './env-template-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 import {makefileRecipe} from './command-shrink.js'
@@ -168,26 +183,6 @@ export interface FinalGateOutcome {
      * Absent ⇒ everything the gate meant to observe, it observed.
      */
     unobserved?: string
-}
-
-function packageScripts(cwd: string): Record<string, string> {
-    try {
-        const j = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
-            scripts?: Record<string, string>
-        }
-        return j.scripts ?? {}
-    } catch {
-        return {}
-    }
-}
-
-function makeHasTarget(cwd: string, target: string): boolean {
-    try {
-        const mk = readFileSync(path.join(cwd, 'Makefile'), 'utf8')
-        return new RegExp(`^${target}:`, 'm').test(mk)
-    } catch {
-        return false
-    }
 }
 
 /**
@@ -307,838 +302,6 @@ export function discoverLockfileChecks(cwd: string): HealthCommand[] {
         cmds.push(cmd)
     }
     return cmds
-}
-
-/** Leading `FOO=bar` env assignments and `sudo`/`exec` wrappers carry no verb. */
-function commandTokens(member: string): string[] {
-    const t = member.trim().split(/\s+/).filter(Boolean)
-    while (
-        t.length > 0
-        && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0]) || /^(?:sudo|exec|env)$/.test(t[0]))
-    ) {
-        t.shift()
-    }
-    return t
-}
-
-/** The chain members of a shell script body, in order (`&&`, `||`, `;`, `|`). */
-function chainMembers(body: string): string[] {
-    return body
-        .split(/&&|\|\||;|\|/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0)
-}
-
-/** Container/infra orchestration: `docker compose … up`, `docker-compose … up -d`,
- *  `podman-compose … up`, `docker run …`. The verb must be a bare token, so a
- *  filename like `docker-compose.dev.yml` never counts as one. */
-function isContainerOrchestration(member: string): boolean {
-    const t = commandTokens(member)
-    if (t.length === 0) return false
-    const bin = path.posix.basename(t[0])
-    if (!/^(?:docker|podman|nerdctl)(?:-compose)?$/.test(bin)) return false
-    const verbs = new Set(['up', 'start', 'run'])
-    return t.slice(1).some(tok => verbs.has(tok))
-}
-
-const MULTIPLEXER_RE = /^(?:concurrently|npm-run-all|run-p|run-s|turbo)$/
-/** A watcher that recompiles ASSETS and never listens: the tool is a
- *  bundler/compiler/preprocessor AND it is in watch mode. `bun run --watch x.ts`
- *  is deliberately NOT here — that re-executes an entrypoint, which may serve. */
-const ASSET_TOOL_RE =
-    /(?:^|[\s/@])(?:tailwindcss|postcss|sass|node-sass|less|stylus|esbuild|rollup|webpack|parcel|swc|babel|tsc|tsup|chokidar)(?:$|[\s"'])/
-const WATCH_FLAG_RE = /(?:^|\s)(?:--watch|-w|--watch=[^\s]*)(?:\s|$)/
-
-/** The quoted commands a multiplexer runs, or its bare script-name arguments
- *  resolved through the manifest (`run-p dev:css dev:js`). One level only. */
-function multiplexerChildren(member: string, scripts: Record<string, string>): string[] {
-    const quoted = [...member.matchAll(/"([^"]+)"|'([^']+)'/g)].map(m => m[1] ?? m[2])
-    if (quoted.length > 0) return quoted
-    const t = commandTokens(member)
-        .slice(1)
-        .filter(a => !a.startsWith('-'))
-    return t.flatMap(name => (scripts[name] !== undefined ? [scripts[name]] : []))
-}
-
-/** Every member of the chain that could plausibly stay up and serve. Members that
- *  are one-shot setup (`mkdir`, `sleep`, an `until … done` wait loop) are not
- *  themselves launches, but they are not disqualifying either — only the two
- *  shapes below are. */
-function isWatcherOnlyMultiplexer(member: string, scripts: Record<string, string>): boolean {
-    const t = commandTokens(member)
-    if (t.length === 0) return false
-    const bin = path.posix.basename(t[0])
-    const runner = /^(?:npx|bunx|pnpm|yarn|npm)$/.test(bin)
-    const head =
-        runner ?
-            (t.slice(1).find(a => !a.startsWith('-') && a !== 'exec' && a !== 'dlx' && a !== 'run')
-            ?? '')
-        :   bin
-    if (!MULTIPLEXER_RE.test(path.posix.basename(head))) return false
-    const children = multiplexerChildren(member, scripts)
-    if (children.length === 0) return false
-    // Every child is an ASSET watcher ⇒ nothing in here ever listens.
-    return children.every(c => ASSET_TOOL_RE.test(c) && WATCH_FLAG_RE.test(c))
-}
-
-/**
- * Why this script is NOT a launch of the shipped app, or null when it plausibly
- * is one (mx5 run 18, validated).
- *
- * Run 18's boot command resolved to `bun run dev`, whose body is
- * `docker compose -f docker-compose.dev.yml up -d && until docker compose … pg_isready
- * … && concurrently "bun run dev:css" "bun run dev:js" "bun run --watch
- * src/server/index.ts"`. The gate sandbox has no docker, so the chain died at 127 and
- * the boot SKIPPED as an environment gap — while the shipped app had no HTTP listener
- * at all. A script whose first act is `docker compose up` cannot distinguish "the app
- * is broken" from "this box has no docker", so it is not evidence either way: better
- * to discover NO boot command — reported as "nothing to boot" — and let the static
- * serve-entry check (serve-entry.ts) carry the signal, than to spend the grace window
- * producing an unfalsifiable skip.
- *
- * CONSERVATIVE AND LEXICAL BY CONSTRUCTION. Only two shapes are rejected, both
- * decidable from the script text alone:
- *   1. the chain OPENS with container orchestration (docker/podman/nerdctl … up|start|run);
- *   2. the whole body is a multiplexer (concurrently/npm-run-all/run-p/run-s/turbo)
- *      whose every child is an ASSET watcher in watch mode (tailwind/tsc/esbuild/…),
- *      i.e. nothing in it can ever listen.
- * Anything else — `vite`, `next dev`, `node dist/index.js`, `nodemon`, `bun --watch
- * src/index.ts`, and any multiplexer with one non-asset child — is accepted
- * unchanged. Deciding whether a watcher actually SERVES is not attempted here; that
- * is exactly what the static serve-entry check is for.
- */
-export function nonLaunchScriptReason(
-    body: string,
-    scripts: Record<string, string> = {}
-): string | null {
-    const members = chainMembers(body)
-    if (members.length === 0) return null
-    if (isContainerOrchestration(members[0])) {
-        return 'it opens with container orchestration, which starts infrastructure rather than the app'
-    }
-    if (members.every(m => isWatcherOnlyMultiplexer(m, scripts))) {
-        return 'its only long-running member multiplexes asset watchers, none of which serves'
-    }
-    return null
-}
-
-/**
- * The project's OWN launch command, if it declares one (package.json `start`,
- * else `dev`; Makefile `run`). null means the project has nothing to boot —
- * the boot check degrades to nothing-to-run.
- *
- * A script that is not a LAUNCH at all (nonLaunchScriptReason — mx5 run 18's
- * `docker compose up` orchestrator) is rejected here and falls through to the
- * next candidate, then to null. Discovering nothing is strictly better than
- * discovering something unfalsifiable: an env-gap skip of an orchestration script
- * says nothing about the app, and null is reported as "nothing to boot".
- */
-export function discoverBootCommand(cwd: string): HealthCommand | null {
-    if (existsSync(path.join(cwd, 'package.json'))) {
-        const s = packageScripts(cwd)
-        for (const name of ['start', 'dev']) {
-            if (s[name] && nonLaunchScriptReason(s[name], s) === null) return ['bun', ['run', name]]
-        }
-        return null
-    }
-    if (existsSync(path.join(cwd, 'Makefile')) && makeHasTarget(cwd, 'run')) {
-        return ['make', ['run']]
-    }
-    return null
-}
-
-/**
- * The launch script that EXISTS but was rejected as not-a-launch, if any. Without
- * this the rejection would trade run 18's unfalsifiable skip for pure silence: no
- * boot command means bootSkipVerdict has no label to name, and a project whose test
- * suite ran still reports `observed > 0`, so unobservedVerdict stays quiet too. A
- * served app whose only declared launch script cannot start it was not observed to
- * run, and must say so.
- */
-export function rejectedLaunchScript(cwd: string): {name: string; reason: string} | null {
-    if (!existsSync(path.join(cwd, 'package.json'))) return null
-    const s = packageScripts(cwd)
-    for (const name of ['start', 'dev']) {
-        if (!s[name]) continue
-        const reason = nonLaunchScriptReason(s[name], s)
-        if (reason === null) return null // this one IS a launch — it was chosen
-        return {name, reason}
-    }
-    return null
-}
-
-type BootOutcome =
-    | {
-          outcome: 'skip' | 'pass'
-          /** Set when the render check could not OBSERVE the served page (no browser,
-           *  undeterminable port) or its AUTHENTICATED half (no declared credentials,
-           *  an undrivable sign-in form, credentials the server rejected) — surfaced
-           *  by the gate as an UNOBSERVED warning. */
-          renderNote?: string
-          /** skip only: the boot command never spawned (ENOENT) — feeds the
-           *  full-blindness guard (mx5 run 16), unlike a 127 where the runner ran. */
-          spawnFailed?: boolean
-      }
-    | {outcome: 'fail'; detail: string}
-    // An address-already-in-use bind failure: the app code is fine, a process is
-    // sitting on the port (mx5 run 9: a gate child's orphaned `bun run dev` held
-    // :3000, so the final gate's own `bun run start` died with EADDRINUSE and got
-    // mislabeled an app FAIL). Handled distinctly from a real fail.
-    | {outcome: 'orphan-port'; detail: string; port: number | null}
-
-/** Recognise an "address already in use" bind failure across runtimes (Node
- *  EADDRINUSE, Bun "Is port N in use?", Go "address already in use", generic). */
-function isAddressInUse(text: string): boolean {
-    return /EADDRINUSE|address already in use|address in use|port \d+ (?:is |already )?in use/i.test(
-        text
-    )
-}
-
-/** Best-effort port number from a bind-failure message, for the diagnosis line. The
- *  digit run ends on any non-digit (a `(?!\d)` lookahead, NOT `\b`): runtimes often
- *  print ":3000" flush against the next token with no separating space/newline
- *  ("…:3000error: script exited"), where a trailing `\b` would never match. */
-function extractPort(text: string): number | null {
-    const m =
-        /(?:port|:)\s*(\d{2,5})(?!\d)/i.exec(text) ?? /\baddress[^0-9]*(\d{2,5})(?!\d)/i.exec(text)
-    if (!m) return null
-    const n = Number(m[1])
-    return n > 0 && n < 65536 ? n : null
-}
-
-/** Injectable environment probes for the boot check's orphan-port recovery, so the
- *  reap-and-retry path is deterministically testable without a real listener. */
-export interface BootDeps {
-    /** The pid + command line holding `port` in LISTEN, or null if none/unknown. */
-    findPortHolder?: (port: number) => {pid: number; command: string} | null
-    /** Terminate a pid we attribute to ourselves; returns whether it was signalled. */
-    reap?: (pid: number) => boolean
-    /**
-     * Does process group `pgid` currently own a LISTENing TCP socket? Drives the
-     * served-app boot check (mx5 run 10): a watcher (`dev` = tailwind/bundler
-     * --watch) stays alive forever without ever listening, so "still alive after the
-     * grace window = PASS" blessed a project that cannot serve a single request.
-     * Injected so the listener requirement is deterministically testable without a
-     * real socket; the default probes ss/lsof + pgid.
-     */
-    groupHasListener?: (pgid: number) => boolean
-    /**
-     * The (lowest) TCP port a listener owned by process group `pgid` is bound to,
-     * or null when it cannot be determined. Feeds the render check's URL; injected
-     * for tests, default probes ss/lsof + pgid.
-     */
-    groupListeningPort?: (pgid: number) => number | null
-    /**
-     * Load the served page once in a headless browser and judge the RENDERED DOM
-     * (mx5 runs 8/11: curl cannot execute JS, so a blank-mount app passed every
-     * gate). Runs only for a served app, against the live listener, before the
-     * boot child is killed. Absent → the boot check behaves exactly as before;
-     * the gate wires runRenderCheck by default for served apps.
-     */
-    renderProbe?: (url: string) => RenderOutcome
-    /**
-     * SIGN IN on the served page and judge the AUTHENTICATED half of the app (mx5
-     * run 17). Runs only after `renderProbe` PASSED — the shallow blank-page rule
-     * keeps its own RED/GREEN-proven verdict and is never shadowed by this one.
-     * Absent → the boot check behaves exactly as before; the gate wires
-     * runDeepRenderCheck by default for served apps. May only FAIL when the SERVER
-     * itself authenticated the session (see deep-render-check.judgeDeepSession);
-     * anything else — no browser, no declared credentials, an undrivable form,
-     * rejected credentials — is an env gap and skips with an UNOBSERVED note.
-     */
-    deepRenderProbe?: (url: string) => DeepRenderOutcome | Promise<DeepRenderOutcome>
-    /**
-     * Can this box enumerate listeners with pids AT ALL (ss/netstat/lsof)? False
-     * means the served-app requirement is UNOBSERVABLE here and must degrade to the
-     * survival rule rather than fail — see canEnumerateListeners.
-     */
-    enumerationCapable?: () => boolean
-    /**
-     * Reserve a free port to hand the boot child as PORT, so an HTTP answer on it is
-     * ownership evidence. null → no port could be reserved (the check then relies on
-     * pgid attribution alone). Injected for tests.
-     */
-    pickPort?: () => Promise<number | null>
-    /**
-     * The port the project's own client was BUILT to call, when it declares one and
-     * nothing is holding it — preferred over a freshly reserved port so the served
-     * origin and the origin the client calls are the same one (see pinnedLocalPort).
-     * null → use the reserved private port exactly as before.
-     */
-    preferredPort?: () => Promise<number | null>
-    /** Does anything answer HTTP on 127.0.0.1:`port`? Injected for tests. */
-    httpProbe?: (port: number) => boolean
-}
-
-/** Stamped on a PASS the boot check could not actually observe, so the trail says
- *  so out loud instead of implying the listener requirement was met. */
-const UNOBSERVED_LISTENER_NOTE =
-    'listener check UNOBSERVED: no socket-enumeration tool (ss/netstat/lsof) in this '
-    + 'environment and the app never answered on the port it was given — passed on the '
-    + 'survival rule (the process stayed up), NOT on observed serving'
-
-/** Package deps that mean "this project stands up an HTTP server" — the deterministic
- *  proxy for "the plan/spec promised a served app". Bare framework names plus the
- *  scoped families whose presence implies a listener at runtime. */
-function isServerFrameworkDep(name: string): boolean {
-    return (
-        /^(?:hono|express|fastify|koa|polka|restify|next|nuxt|http-server|serve|ws|socket\.io)$/.test(
-            name
-        ) || /^@(?:hono|fastify|koa|nestjs|sveltejs|remix-run)\//.test(name)
-    )
-}
-
-/** Spec/plan phrasings that promise a listening server, for the text signal. */
-const SERVE_TEXT_RE =
-    /\b(?:https?\s+server|web\s+server|serves?\b|listen(?:s|ing)?\b|Bun\.serve|app\.listen|createServer|serve\s+(?:static|the)|\/api\/|endpoints?\b)/i
-
-/**
- * Does the finished run stand up a listening HTTP server? Deterministic, from the
- * built manifest (a server-framework dependency is the plan's own artifact) OR, when
- * available, the plan/spec text. Used to decide whether the boot check must observe a
- * LISTENER (served app) or may pass on mere survival / quick exit (CLI project).
- */
-export function detectsServedApp(cwd: string, planText?: string): boolean {
-    try {
-        const j = JSON.parse(readFileSync(path.join(cwd, 'package.json'), 'utf8')) as {
-            dependencies?: Record<string, string>
-            devDependencies?: Record<string, string>
-        }
-        const all = {...(j.dependencies ?? {}), ...(j.devDependencies ?? {})}
-        if (Object.keys(all).some(isServerFrameworkDep)) return true
-    } catch {
-        // no/unreadable manifest → fall through to the text signal
-    }
-    return planText !== undefined && SERVE_TEXT_RE.test(planText)
-}
-
-/** `ss -tlnpH` rows → {pid, port}. Column 4 (0-based 3) is the local address; the
- *  port is its last `:`-suffixed number ("0.0.0.0:3000", "[::]:3000"). */
-export function parseSsListeners(stdout: string): Array<{pid: number; port: number}> {
-    const out: Array<{pid: number; port: number}> = []
-    for (const line of stdout.split('\n')) {
-        const pm = /pid=(\d+)/.exec(line)
-        if (!pm) continue
-        const local = line.trim().split(/\s+/)[3] ?? ''
-        const portm = /:(\d+)$/.exec(local)
-        if (!portm) continue
-        out.push({pid: Number(pm[1]), port: Number(portm[1])})
-    }
-    return out
-}
-
-/**
- * `netstat -tlnp` rows → {pid, port} (mx5 run 14, validated: the agent-sandbox
- * image ships NEITHER ss NOR lsof — only ps and netstat — so the served-app boot
- * check could never observe a listener and failed unfalsifiably). The pid rides
- * in the trailing "PID/Program name" column ("1234/bun"); rows the kernel will
- * not attribute to us print "-" there and are skipped.
- */
-export function parseNetstatListeners(stdout: string): Array<{pid: number; port: number}> {
-    const out: Array<{pid: number; port: number}> = []
-    for (const line of stdout.split('\n')) {
-        if (!/^\s*tcp/i.test(line)) continue
-        const cols = line.trim().split(/\s+/)
-        const local = cols[3] ?? ''
-        const portm = /:(\d+)$/.exec(local)
-        if (!portm) continue
-        const pidm = /^(\d+)\//.exec(cols[cols.length - 1] ?? '')
-        if (!pidm) continue
-        out.push({pid: Number(pidm[1]), port: Number(portm[1])})
-    }
-    return out
-}
-
-/** `lsof -iTCP -sTCP:LISTEN -n -P` rows → {pid, port}. */
-export function parseLsofListeners(stdout: string): Array<{pid: number; port: number}> {
-    const out: Array<{pid: number; port: number}> = []
-    for (const line of stdout.split('\n').slice(1)) {
-        const cols = line.trim().split(/\s+/)
-        const pid = Number(cols[1])
-        const name = cols.find(c => /:\d+$/.test(c)) ?? ''
-        const portm = /:(\d+)$/.exec(name)
-        if (Number.isInteger(pid) && pid > 0 && portm) {
-            out.push({pid, port: Number(portm[1])})
-        }
-    }
-    return out
-}
-
-/** The socket-enumeration tools we can attribute listeners with, in preference
- *  order: ss (richest), netstat (present where ss is not), lsof (BSD/macOS). */
-const LISTENER_TOOLS: Array<{
-    bin: string
-    args: string[]
-    parse: (stdout: string) => Array<{pid: number; port: number}>
-}> = [
-    {bin: 'ss', args: ['-tlnpH'], parse: parseSsListeners},
-    {bin: 'netstat', args: ['-tlnp'], parse: parseNetstatListeners},
-    {bin: 'lsof', args: ['-iTCP', '-sTCP:LISTEN', '-n', '-P'], parse: parseLsofListeners}
-]
-
-/** Listening TCP sockets as {pid, port} pairs (best-effort; ss, then netstat, then
- *  lsof). Empty on any failure — the caller then cannot attribute a listener to our
- *  group and the served-app check degrades to survival (never a false FAIL). */
-function listeningSockets(): Array<{pid: number; port: number}> {
-    for (const {bin, args, parse} of LISTENER_TOOLS) {
-        try {
-            const t = spawnSync(bin, args, {encoding: 'utf8', timeout: 4000})
-            if (t.error || !t.stdout) continue
-            const rows = parse(t.stdout)
-            if (rows.length > 0) return rows
-        } catch {
-            // tool missing/unusable — try the next one
-        }
-    }
-    return []
-}
-
-/**
- * Can ANY socket-enumeration tool run here at all? (mx5 run 14: the sandbox had
- * none, so `groupHasListener` returned false forever and the boot check emitted
- * "never opened a listening socket" no matter what the app did — an unfalsifiable
- * FAIL that failed a run whose app demonstrably served.) This is a CAPABILITY
- * question, deliberately separate from "did we see a listener": a tool that ran
- * and found nothing is an observation; no tool at all is blindness, and blindness
- * must degrade to the survival rule exactly like win32 — never a false FAIL on a
- * platform we cannot probe.
- *
- * "Ran" = spawned without ENOENT and either exited 0 or printed something (lsof
- * exits 1 on an empty match set; a netstat that rejects `-p` prints nothing).
- * Memoised: the answer is a property of the box, not of the run.
- */
-let listenerToolCapability: boolean | null = null
-
-export function canEnumerateListeners(): boolean {
-    if (listenerToolCapability !== null) return listenerToolCapability
-    listenerToolCapability = LISTENER_TOOLS.some(({bin, args}) => {
-        try {
-            const r = spawnSync(bin, args, {encoding: 'utf8', timeout: 4000})
-            if (r.error) return false
-            return r.status === 0 || (r.stdout ?? '').trim().length > 0
-        } catch {
-            return false
-        }
-    })
-    return listenerToolCapability
-}
-
-/** Test seam: forget the memoised capability answer. */
-export function resetListenerToolCapability(): void {
-    listenerToolCapability = null
-}
-
-/**
- * A free TCP port on the loopback interface, or null if one cannot be reserved.
- * The boot check hands this to the child as PORT so that a successful HTTP
- * request to it is OWNERSHIP evidence: nobody else knows the number (mx5 runs
- * 8/10/11 — orphaned servers from earlier checks answered curl on the
- * conventional :3000 and passed checks the app had not earned).
- */
-export function pickFreePort(): Promise<number | null> {
-    return new Promise(resolve => {
-        try {
-            const srv = net.createServer()
-            srv.once('error', () => resolve(null))
-            srv.listen(0, '127.0.0.1', () => {
-                const a = srv.address()
-                const port = typeof a === 'object' && a !== null ? a.port : null
-                srv.close(() => resolve(port))
-            })
-        } catch {
-            resolve(null)
-        }
-    })
-}
-
-/** Can we bind 127.0.0.1:`port` right now? (Free ⇒ the boot child can have it.) */
-export function isPortFree(port: number): Promise<boolean> {
-    return new Promise(resolve => {
-        try {
-            const srv = net.createServer()
-            srv.once('error', () => resolve(false))
-            srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)))
-        } catch {
-            resolve(false)
-        }
-    })
-}
-
-/**
- * The project's own declared local port, but only if nothing is holding it — the
- * default `preferredPort` for the gate. A declared port that is BUSY falls back to
- * a reserved one rather than colliding: a stranger's server on :3000 must never be
- * mistaken for the app we just booted.
- */
-export async function preferredDeclaredPort(cwd: string): Promise<number | null> {
-    const port = pinnedLocalPort(collectProjectEnv(cwd))
-    if (port === null) return null
-    return (await isPortFree(port)) ? port : null
-}
-
-/**
- * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all (404, 500 —
- * a status is a listener) counts; only a connection error or timeout is a no.
- * Runs in a throwaway child of our own runtime so it needs no curl on PATH and
- * stays synchronous inside the boot poll.
- */
-function defaultHttpProbe(port: number): boolean {
-    const script =
-        `fetch('http://127.0.0.1:${port}/').then(()=>process.exit(0),()=>process.exit(1));`
-        + `setTimeout(()=>process.exit(1),2000)`
-    try {
-        const r = spawnSync(process.execPath, ['-e', script], {
-            encoding: 'utf8',
-            timeout: 5000
-        })
-        return !r.error && r.status === 0
-    } catch {
-        return false
-    }
-}
-
-/** Process-group id of `pid`, or null if it cannot be read. */
-function pgidOf(pid: number): number | null {
-    try {
-        const r = spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], {
-            encoding: 'utf8',
-            timeout: 4000
-        })
-        const n = Number((r.stdout ?? '').trim())
-        return Number.isInteger(n) && n > 0 ? n : null
-    } catch {
-        return null
-    }
-}
-
-/** Default listener probe: any LISTENing socket owned by a pid in process group
- *  `pgid` (the detached boot child IS its own group leader, so pgid === child.pid). */
-function defaultGroupHasListener(pgid: number): boolean {
-    for (const {pid} of listeningSockets()) {
-        if (pgidOf(pid) === pgid) return true
-    }
-    return false
-}
-
-/** Default port lookup for the render check: the LOWEST port among the group's
- *  listeners (a dev toolchain may open an HMR socket too; the app's own server
- *  conventionally sits on the lower, configured port). Null when undeterminable. */
-function defaultGroupListeningPort(pgid: number): number | null {
-    const ports = listeningSockets()
-        .filter(({pid}) => pgidOf(pid) === pgid)
-        .map(({port}) => port)
-    return ports.length > 0 ? Math.min(...ports) : null
-}
-
-/** Default port-holder lookup: `lsof` first, then `ss`/`fuser`. Returns null on any
- *  failure (the diagnosis then omits the pid — never blocks). */
-function defaultFindPortHolder(port: number): {pid: number; command: string} | null {
-    try {
-        const t = spawnSync('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t', '-P', '-n'], {
-            encoding: 'utf8',
-            timeout: 4000
-        })
-        const pid = Number((t.stdout ?? '').split('\n')[0]?.trim())
-        if (!Number.isInteger(pid) || pid <= 0) return null
-        const ps = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], {
-            encoding: 'utf8',
-            timeout: 4000
-        })
-        return {pid, command: (ps.stdout ?? '').trim() || `pid ${pid}`}
-    } catch {
-        return null
-    }
-}
-
-function defaultReap(pid: number): boolean {
-    try {
-        process.kill(pid, 'SIGTERM')
-        setTimeout(() => {
-            try {
-                process.kill(pid, 'SIGKILL')
-            } catch {
-                // already gone
-            }
-        }, 1_000).unref()
-        return true
-    } catch {
-        return false
-    }
-}
-
-/** Does the port holder look like one of OUR gate children (a `dev`/`start` run of
- *  the discovered boot command)? Only then do we reap it — never a foreign process
- *  the user happens to be running. */
-function holderIsOurs(command: string, boot: HealthCommand): boolean {
-    const script = boot[1][boot[1].length - 1] ?? '' // 'start' | 'dev' | 'run'
-    const c = command.toLowerCase()
-    return (
-        (c.includes('bun') || c.includes('node') || c.includes('npm') || c.includes('make'))
-        && (c.includes(` ${script}`) || c.endsWith(script))
-    )
-}
-
-/**
- * Exercise the start command ONCE. For a CLI project (`expectServer` false) the
- * command's own fate within the grace window decides:
- *
- *   - non-zero exit (or signal death) before the window closes → FAIL, output tail;
- *   - exit 0 before the window closes → PASS (a CLI-style "run" that finished);
- *   - still alive when the window closes → PASS, then the whole process group is
- *     killed (detached spawn = own group; SIGTERM, escalating to SIGKILL).
- *
- * For a SERVED app (`expectServer` true — the spec/plan promised an HTTP server) mere
- * survival is not enough: a watcher (`dev` = tailwind/bundler --watch) stays alive
- * forever without ever listening, and a type-only entrypoint exits 0 in <1s having
- * served nothing (mx5 run 10 — both were blessed by the survival rule). The boot then
- * PASSes only once a LISTENing socket owned by our process group is observed; if the
- * command exits, or the grace window closes, with no listener ever seen → FAIL naming
- * that a listening server was expected.
- *
- * OBSERVABILITY is a precondition of that FAIL (mx5 run 14, validated). The listener
- * requirement needs pgid-attributed socket enumeration; win32 has none, and neither
- * does a Linux image shipping no ss/netstat/lsof — run 14's sandbox was exactly that,
- * so the check emitted "never opened a listening socket" against an app that
- * demonstrably served, three autofix passes could not falsify it, and the run was
- * recorded failed. Two defences, in order:
- *
- *   - the child is spawned with a freshly reserved, otherwise-unused PORT, and an
- *     HTTP answer on THAT port proves a listener regardless of tooling. The private
- *     port is what makes the HTTP probe trustworthy: an orphaned server from an
- *     earlier check answers on :3000, but nobody else knows this number.
- *   - if nothing can enumerate listeners AND the assigned port never answered, the
- *     served-app requirement is unobservable here, so `expectServer` collapses to
- *     the survival rule and the PASS is stamped UNOBSERVED. An app that ignores PORT
- *     is indistinguishable from one that never listened — an observer limitation,
- *     not an app defect, and it may not be reported as one.
- *
- * A child that EXITS non-zero still FAILs in every environment: "the process died"
- * needs no socket probe, so run 14's original true positive (a `--hot` runtime
- * pinning a crashed app) stays reportable wherever the tooling exists.
- *
- * Env-gap contract as everywhere: spawn error (ENOENT) or a command-not-found
- * inside the chain (exit 127, or the runner's own wording where the platform
- * reports it that way — see isCommandNotFound) → skip.
- */
-export async function runBootCheck(
-    cwd: string,
-    [bin, args]: HealthCommand,
-    graceMs = 10_000,
-    opts: {expectServer?: boolean; deps?: BootDeps} = {}
-): Promise<BootOutcome> {
-    const expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'
-    const groupHasListener = opts.deps?.groupHasListener ?? defaultGroupHasListener
-    const httpProbe = opts.deps?.httpProbe ?? defaultHttpProbe
-    const canEnumerate =
-        expectServer ? (opts.deps?.enumerationCapable ?? canEnumerateListeners)() : true
-    // Only served apps get an assigned port: a CLI project has nothing to bind, and
-    // an unexpected PORT in its env is noise.
-    // The app's OWN declared local port wins when it is free (see pinnedLocalPort):
-    // a client whose base URL was baked in at build time calls that origin and no
-    // other, so serving it anywhere else makes the whole authenticated half
-    // unobservable. Anything else — no declaration, a port already held — falls back
-    // to the freshly reserved private port that run 14's ownership evidence needs.
-    const noPreference = (): Promise<number | null> => Promise.resolve(null)
-    const preferred = expectServer ? await (opts.deps?.preferredPort ?? noPreference)() : null
-    const assignedPort =
-        preferred ?? (expectServer ? await (opts.deps?.pickPort ?? pickFreePort)() : null)
-    // Runner resolution (mx5 run 16): same contract as runGateCommand — resolve
-    // the runner and carry its directory on PATH so the boot script's own chain
-    // can re-invoke it.
-    const runner = resolveRunner(bin)
-    return new Promise(resolve => {
-        const child = spawn(runner.bin, args, {
-            cwd,
-            detached: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env: {
-                ...runnerEnv(runner),
-                ...(assignedPort !== null ? {PORT: String(assignedPort)} : {})
-            }
-        })
-        // Best-effort cleanup only: killGroup below can silently fail to reap the
-        // process (platform/sandbox-specific — observed on a GH Actions Linux
-        // runner where the group-kill did not take, hanging the whole `bun test
-        // --isolate` run on the leaked child's piped stdio). unref() so a child
-        // we already tried to kill can never itself keep this process alive.
-        child.unref()
-        let out = ''
-        let err = ''
-        let listenerSeen = false
-        const cap = (s: string) => (s.length > 8000 ? s.slice(-8000) : s)
-        child.stdout?.on('data', (d: Buffer) => (out = cap(out + String(d))))
-        child.stderr?.on('data', (d: Buffer) => (err = cap(err + String(d))))
-        let settled = false
-        const settle = (r: BootOutcome) => {
-            if (settled) return
-            settled = true
-            clearTimeout(timer)
-            if (poll) clearInterval(poll)
-            resolve(r)
-        }
-        const killGroup = (sig: NodeJS.Signals) => {
-            try {
-                if (!child.pid) return
-                if (process.platform === 'win32') {
-                    // Windows has no process groups / negative-pid kill. taskkill
-                    // /T tears down the whole tree (the detached child plus any
-                    // grandchildren it spawned); /F forces it, so the SIGTERM→
-                    // SIGKILL escalation collapses to one idempotent call.
-                    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
-                } else {
-                    process.kill(-child.pid, sig)
-                }
-            } catch {
-                // group already gone
-            }
-        }
-        const passAndKill = (renderNote?: string) => {
-            settle(renderNote ? {outcome: 'pass', renderNote} : {outcome: 'pass'})
-            killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
-        }
-        const failAndKill = (detail: string) => {
-            settle({outcome: 'fail', detail})
-            killGroup('SIGTERM')
-            setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
-        }
-        // Served apps only: poll for a listening socket owned by our process group.
-        // As soon as one appears the boot has demonstrably served → run the render
-        // check against the LIVE listener (mx5 runs 8/11: a listener that serves a
-        // permanently blank page passed every curl-shaped check), then PASS/FAIL.
-        // The probe is spawnSync, so the interval cannot re-enter mid-check.
-        // The deep probe is asynchronous (it drives a browser session), so the
-        // interval body must not re-enter while one is in flight — a second session
-        // would race the first for the same still-booting child.
-        let probing = false
-        const poll =
-            expectServer ?
-                setInterval(() => {
-                    if (settled || probing || !child.pid) return
-                    // pgid attribution first (precise, cheap). If it saw nothing — or
-                    // cannot see anything here — fall back to the private assigned
-                    // port: an HTTP answer on a number only this child was told is
-                    // proof of OUR listener, not of some orphan on :3000.
-                    const byGroup = canEnumerate && groupHasListener(child.pid)
-                    const byPort = !byGroup && assignedPort !== null && httpProbe(assignedPort)
-                    if (!byGroup && !byPort) return
-                    listenerSeen = true
-                    const probe = opts.deps?.renderProbe
-                    if (!probe) return passAndKill()
-                    const port =
-                        byGroup ?
-                            (opts.deps?.groupListeningPort ?? defaultGroupListeningPort)(child.pid)
-                        :   assignedPort
-                    if (port === null) {
-                        return passAndKill(
-                            'render check UNOBSERVED: a listener was seen but its port could not be determined'
-                        )
-                    }
-                    const url = `http://127.0.0.1:${port}/`
-                    const rr = probe(url)
-                    if (rr.outcome === 'fail') {
-                        return failAndKill(`listens on :${port} but ${rr.detail}`)
-                    }
-                    const deep = opts.deps?.deepRenderProbe
-                    if (rr.outcome !== 'pass' || !deep) {
-                        return passAndKill(
-                            rr.outcome === 'skip' ?
-                                `render check UNOBSERVED: ${rr.note}`
-                            :   undefined
-                        )
-                    }
-                    // The page renders. Now sign in and prove the AUTHENTICATED half
-                    // is alive (mx5 run 17): the server accepted the login and the
-                    // client never used it. Async, so the interval is held off by
-                    // `probing` until this settles.
-                    probing = true
-                    void Promise.resolve(deep(url)).then(
-                        dr => {
-                            if (settled) return
-                            if (dr.outcome === 'fail') {
-                                return failAndKill(`listens on :${port} but ${dr.detail}`)
-                            }
-                            passAndKill(
-                                dr.outcome === 'skip' ?
-                                    `authenticated render check UNOBSERVED: ${dr.note}`
-                                :   undefined
-                            )
-                        },
-                        () => {
-                            // The deep probe may never fail the gate on its own fault.
-                            if (!settled) passAndKill()
-                        }
-                    )
-                }, 500)
-            :   null
-        const onGrace = (): void => {
-            // A browser session in flight outlives the grace window by design (it
-            // signs in and waits for the app's data calls). Settling here would kill
-            // the server under it and discard its verdict, so the window re-arms
-            // until the probe resolves — which it always does, on its own hard
-            // timeout (DEEP_RENDER_TIMEOUT_MS).
-            if (probing) {
-                timer = setTimeout(onGrace, 500)
-                return
-            }
-            if (expectServer && !listenerSeen) {
-                // Blind here (no enumeration tool, and the assigned port never
-                // answered) ⇒ we cannot tell "never listened" from "ignores PORT".
-                // Survival rule, stamped UNOBSERVED — an observer limitation is not
-                // an app defect (mx5 run 14).
-                if (!canEnumerate) return passAndKill(UNOBSERVED_LISTENER_NOTE)
-                settle({
-                    outcome: 'fail',
-                    detail: `still running after ${graceMs}ms but never opened a listening socket — the spec/dependencies promise an HTTP server`
-                })
-                killGroup('SIGTERM')
-                setTimeout(() => killGroup('SIGKILL'), 2_000).unref()
-                return
-            }
-            passAndKill()
-        }
-        let timer = setTimeout(onGrace, graceMs)
-        child.on('error', () => settle({outcome: 'skip', spawnFailed: true}))
-        child.on('exit', (status, signal) => {
-            if (status === 0) {
-                if (expectServer && !listenerSeen) {
-                    if (!canEnumerate) {
-                        return settle({outcome: 'pass', renderNote: UNOBSERVED_LISTENER_NOTE})
-                    }
-                    return settle({
-                        outcome: 'fail',
-                        detail:
-                            'exited 0 without ever opening a listening socket — the spec/dependencies '
-                            + 'promise an HTTP server, so a boot that serves nothing is not a launch'
-                    })
-                }
-                return settle({outcome: 'pass'})
-            }
-            // Command-not-found inside the boot chain — 127 on a posix shell, or
-            // the runner's own wording where it isn't (Windows bun exits 1). Either
-            // way the boot never RAN, so it is an environment gap, not an app fault.
-            if (
-                isCommandNotFound(status, `${out}\n${err}`)
-                || (status === null && signal === null)
-            ) {
-                return settle({outcome: 'skip'})
-            }
-            const what = status !== null ? `exited ${status}` : `was killed by ${signal}`
-            const tail = outputTail(out, err)
-            // A bind collision is an environment condition, not an app defect — hand
-            // it back distinctly so the gate can reap our own orphan and retry rather
-            // than reporting the app "crashed" (mx5 run 9 item 3).
-            if (isAddressInUse(`${out}\n${err}`)) {
-                settle({
-                    outcome: 'orphan-port',
-                    port: extractPort(`${out}\n${err}`),
-                    detail: `${what}${tail ? ` — ${tail}` : ''}`
-                })
-                return
-            }
-            settle({outcome: 'fail', detail: `${what}${tail ? ` — ${tail}` : ''}`})
-        })
-    })
 }
 
 /**
@@ -1424,92 +587,30 @@ export function unobservedVerdict(args: {
     )
 }
 
-/**
- * The SAME third verdict, at the door unobservedVerdict cannot reach: the boot
- * check specifically (mx5 run 18, validated).
- *
- * Run 18 shipped an app with no HTTP server behind a converged final gate. Its
- * `src/server/index.ts` ends at `export {app}` — no `Bun.serve`, no
- * `export default app`, no `start` script — so `bun run src/server/index.ts` exits
- * 0 immediately and the product cannot be started at all. The gate's boot command
- * resolved to `bun run dev`, whose body begins `docker compose … up -d`; the gate
- * sandbox had no docker, so the boot SKIPPED as an environment gap. Skips
- * contribute nothing to `dynObserved`, and `bun run test`, `test:ct`, `build`,
- * `lint`, `seed` and `migrate` all ran — so `dynObserved > 0`, the full-skip
- * blindness guard (observabilityGapFailure) stayed correctly quiet, and the trail
- * read `final-gate: autofix converged — statics + … passed` with 24/24 tasks green.
- *
- * The defect is that "the app was never observed to boot" and "the app booted
- * fine" produced BYTE-IDENTICAL gate output. That is the class scripts/ab-verdict.ts
- * exists to kill one layer up: absence of evidence rendered in the shape of
- * evidence. So a discovered-but-skipped boot now names itself, and — unlike every
- * other skip — it CANNOT be cancelled by observations from other commands.
- * Component tests are the trap here, not the alibi: run 18 had 51 green Playwright
- * CT tests, and CT mounts components in a browser without ever assembling or
- * starting the server.
- *
- * DECIDED, do not silently re-open:
- *  - NOT a FAIL. A boot skip on a docker-less box is a genuine environment gap, and
- *    failing it re-creates run 16's unfalsifiable-FAIL mistake pointing the other
- *    way. UNOBSERVED blocks nothing while being loud and durable (the caller records
- *    it as final-gate debt the next run re-surfaces), and it keeps "boot never ran"
- *    out of the autofix child's seed — a child cannot fix a missing docker, so the
- *    highest-probability response would be to FABRICATE a bootable command, the
- *    class that refuted the `## verified tooling` harvest.
- *  - BOTH skip flavours count. Run 18's skip carried `spawnFailed: false` (127 inside
- *    the script chain, not an ENOENT on the runner), so keying off spawnFailed would
- *    have missed the actual defect.
- *  - SERVED APPS ONLY. `expectServer === false` (a CLI/library project) is fenced off
- *    deliberately: a CLI whose `dev` script needs an absent tool has no server to be
- *    unobserved, and widening the lever there buys warnings nobody can act on.
- */
-export function bootSkipVerdict(args: {
-    /** `bin args…` of the DISCOVERED boot command; null ⇒ nothing to boot, which is
-     *  not the same thing as a boot that was not observed. */
-    label: string | null
-    /** Did the boot check end in `skip` (either flavour)? */
-    skipped: boolean
-    /** Does this project stand up an HTTP server (detectsServedApp)? */
-    expectServer: boolean
-}): string | null {
-    if (args.label === null || !args.skipped || !args.expectServer) return null
-    // Deliberately short: the run-level trail slices the reason at 300 chars and this
-    // note leads it, so the command name always survives.
-    return (
-        `boot check: \`${args.label}\` NEVER RAN (environment gap) — the app was not observed `
-        + 'to start, and no test suite substitutes for that.'
-    )
-}
-
-/**
- * Boot check hit an address-in-use bind failure. If the port is held by one of OUR
- * own orphaned gate children (a `dev`/`start` run), reap it and retry the boot once
- * so the app gets a fair launch; otherwise leave the (foreign) holder alone and let
- * the caller emit the harness diagnosis. Never reaps a process we cannot attribute
- * to ourselves.
- */
-async function recoverOrphanPort(
-    cwd: string,
-    boot: HealthCommand,
-    first: {outcome: 'orphan-port'; detail: string; port: number | null},
-    bootGraceMs: number,
-    deps: BootDeps,
-    expectServer: boolean
-): Promise<BootOutcome> {
-    if (first.port === null) return first
-    const holder = (deps.findPortHolder ?? defaultFindPortHolder)(first.port)
-    if (!holder || !holderIsOurs(holder.command, boot)) return first
-    const reaped = (deps.reap ?? defaultReap)(holder.pid)
-    if (!reaped) return first
-    // Give the OS a moment to release the socket, then re-run the boot once.
-    await new Promise(r => setTimeout(r, 1_500))
-    return runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps})
-}
-
 // File → introducing-task provenance moved to task-provenance.ts (mx5 run-12
 // PROMPT 2 extracted it for the cross-task deletion guards); re-exported so
 // existing importers keep working.
 export {taskThatIntroduced}
+
+// The boot probe moved to boot-probe.ts (its own concern, 0 other importers inside
+// src/). Re-exported so the seven validation harnesses under scripts/ — which have
+// always imported exactly this surface and nothing else from the gate — keep
+// working unchanged. Same pattern as taskThatIntroduced above.
+export {
+    discoverBootCommand,
+    detectsServedApp,
+    runBootCheck,
+    bootSkipVerdict,
+    nonLaunchScriptReason,
+    rejectedLaunchScript,
+    parseSsListeners,
+    parseNetstatListeners,
+    parseLsofListeners,
+    pickFreePort,
+    preferredDeclaredPort,
+    canEnumerateListeners
+}
+export type {BootDeps}
 
 /**
  * ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
@@ -1794,13 +895,54 @@ export type {ClosureScan, ClosureScanInput, ClosureScanStage}
  * it, and autofix converges only when the whole list is empty. Per-section
  * env-gap/INFRA_GAP skip semantics and orphan-port recovery are unchanged.
  */
+/**
+ * Everything the run-end gate needs beyond the tree it is judging.
+ *
+ * An options object rather than a positional tail: the production call site read
+ * `runFinalIntegrationGate(cwd, undefined, undefined, undefined, planText)`, and
+ * `bootGraceMs`/`timeoutMs` are adjacent numbers that swap without a type error.
+ *
+ * `run`, `envClosure` and `trackedFiles` are SEAMS, by the same test GateDeps
+ * states: a scenario needs to substitute them. `runGateCommand`,
+ * `runVerifyCommandLine` and `rerunDebtVerifyCommand` each already take a
+ * `CommandRunner`; this is the fourth and last driver in the file, and without it
+ * the config-gap branch below is unreachable in test — not by oversight, but
+ * because reaching it needs a git-tracked env template, so every launch-contract
+ * test (bare `makeDir`, no `git init`) misses it by construction.
+ */
+export interface FinalGateOptions {
+    timeoutMs?: number
+    bootGraceMs?: number
+    bootDeps?: BootDeps
+    planText?: string
+    /** Spawner for the lockfile / integration / launch-script sections. Boot
+     *  spawns through `bootDeps`, which has its own probes. */
+    run?: CommandRunner
+    /** The tracked env-template closure. Default reads git, degrading to inert. */
+    envClosure?: (cwd: string) => EnvClosure
+    /** The repo's tracked file list, or null when it cannot be determined. */
+    trackedFiles?: (cwd: string) => string[] | null
+}
+
 export async function runFinalIntegrationGate(
     cwd: string,
-    timeoutMs = 900_000,
-    bootGraceMs = 10_000,
-    bootDeps: BootDeps = {},
-    planText?: string
+    opts: FinalGateOptions = {}
 ): Promise<FinalGateOutcome> {
+    const {
+        timeoutMs = 900_000,
+        bootGraceMs = 10_000,
+        bootDeps = {},
+        planText,
+        run: runCmd = spawnCommand,
+        envClosure = (c: string) => {
+            try {
+                return scanEnvTemplateClosure(c)
+            } catch {
+                return inertClosure()
+            }
+        },
+        trackedFiles: trackedFilesFn = trackedFiles
+    } = opts
     const stat = runRepoHealthCheck(cwd)
     const {openDebts, debtNote} = await deriveOpenDebts(cwd, stat.ok)
     // The debt note rides in its OWN field: `reason` stays the mechanical failure
@@ -1899,7 +1041,7 @@ export async function runFinalIntegrationGate(
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             dynAttempted += 1
             dynBins.add(cmd[0])
-            const r = runGateCommand(cwd, cmd, timeoutMs)
+            const r = runGateCommand(cwd, cmd, timeoutMs, undefined, undefined, runCmd)
             if (r.outcome === 'skip') {
                 if (r.spawnFailed) dynSpawnFailures += 1
                 continue
@@ -1947,14 +1089,8 @@ export async function runFinalIntegrationGate(
         // union of every tracked env template's declared variables. Both empty on a
         // non-git tree or a tree with no template, which makes the whole check inert
         // — a project with no template gains no excuse. See launch-config-gap.ts.
-        const closure = (() => {
-            try {
-                return scanEnvTemplateClosure(cwd)
-            } catch {
-                return inertClosure()
-            }
-        })()
-        const trackedForGap = closure.templates.length > 0 ? (trackedFiles(cwd) ?? []) : []
+        const closure = envClosure(cwd)
+        const trackedForGap = closure.templates.length > 0 ? (trackedFilesFn(cwd) ?? []) : []
         const launchTimeout = Math.min(timeoutMs, 180_000)
         for (const name of runnableDeclaredScripts(declared, covered)) {
             if (!present.has(name.toLowerCase())) continue
@@ -1962,7 +1098,14 @@ export async function runFinalIntegrationGate(
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             dynAttempted += 1
             dynBins.add(cmd[0])
-            const r = runGateCommand(cwd, cmd, launchTimeout, INFRA_GAP_OUTPUT_RE)
+            const r = runGateCommand(
+                cwd,
+                cmd,
+                launchTimeout,
+                INFRA_GAP_OUTPUT_RE,
+                undefined,
+                runCmd
+            )
             if (r.outcome === 'skip') {
                 if (r.spawnFailed) dynSpawnFailures += 1
                 skippedLaunch.push(name)
@@ -1995,7 +1138,8 @@ export async function runFinalIntegrationGate(
                         cmd,
                         launchTimeout,
                         INFRA_GAP_OUTPUT_RE,
-                        probeEnv(runnerEnv(resolveRunner(cmd[0])), gap)
+                        probeEnv(runnerEnv(resolveRunner(cmd[0])), gap),
+                        runCmd
                     )
                     if (probe.outcome === 'pass') {
                         // Nothing about this script was OBSERVED: the real run could

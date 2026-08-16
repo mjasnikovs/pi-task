@@ -1,8 +1,10 @@
-import {expect, test} from 'bun:test'
+import {describe, expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {
     runGatesForTask,
+    resolveVerifyGate,
+    runEnforcePass,
     yoloAcceptReason,
     MAX_AUTO_AUTOFIX,
     type GateDeps,
@@ -772,18 +774,16 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
     const keptDebts: string[] = []
     const queued: Array<{file: string; owner: string}> = []
     const trail: string[] = []
-    let verifyCalls = 0
     const deps = makeDeps({
         record: (_c, _id, line) => {
             trail.push(line)
             return Promise.resolve()
         },
-        verify: () => {
-            verifyCalls += 1
-            return Promise.resolve(
-                verifyCalls === 1 ? {ok: true} : {ok: false, reason: RUN18_CT_FAIL}
-            )
-        },
+        // The two verifies are two fields now, not one field and a call counter.
+        // `verify` is the GATE (it must pass, or enforce never reaches edit mode);
+        // `reVerify` is the DIFFERENTIAL this suite is actually about.
+        verify: () => Promise.resolve({ok: true}),
+        reVerify: () => Promise.resolve({ok: false, reason: RUN18_CT_FAIL}),
         enforce: () => Promise.resolve({ok: true}),
         revert: c => {
             reverted.push(c)
@@ -837,21 +837,14 @@ test('enforce: a FAIL the enforce diff cannot reach KEEPS the edits and records 
 test('enforce: a FAIL naming a file the ENFORCE COMMIT touched still REVERTS', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        let verifyCalls = 0
         const h = attributionDeps({
-            verify: () => {
-                verifyCalls += 1
-                return Promise.resolve(
-                    verifyCalls === 1 ?
-                        {ok: true}
-                    :   {
-                            ok: false,
-                            reason:
-                                'work did not verify: `bunx tsc --noEmit` exits 2 — '
-                                + 'src/client/pages/Admin.tsx:84:21 error TS2554'
-                        }
-                )
-            }
+            reVerify: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason:
+                        'work did not verify: `bunx tsc --noEmit` exits 2 — '
+                        + 'src/client/pages/Admin.tsx:84:21 error TS2554'
+                })
         })
         await runGatesForTask(ctx, h.deps, baseParams({cwd: dir, taskId: 'TASK_0024'}))
         expect(h.reverted).toHaveLength(1)
@@ -865,17 +858,11 @@ test('enforce: a FAIL naming NO file reverts — the filter never keeps on ignor
     for (const over of [
         // nothing extractable in the text …
         {
-            verify: (() => {
-                let n = 0
-                return () => {
-                    n += 1
-                    return Promise.resolve(
-                        n === 1 ?
-                            {ok: true}
-                        :   {ok: false, reason: 'work did not verify: the VERIFY command exited 1'}
-                    )
-                }
-            })()
+            reVerify: () =>
+                Promise.resolve({
+                    ok: false,
+                    reason: 'work did not verify: the VERIFY command exited 1'
+                })
         },
         // … and an unreadable enforce diff.
         {touchedFiles: () => Promise.resolve(null)}
@@ -1799,5 +1786,178 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
         expect(r.kind).toBe('paused')
         expect(captured.selects).toHaveLength(1)
         expect(runTaskCalls).toBe(0)
+    })
+})
+
+// ─── Reachable only now the halves are two ──────────────────────────────────
+//
+// Both branches below sit in the ENFORCE half and had no coverage: reaching them
+// meant driving the whole VERIFY loop first, and the two tests that would have
+// done it assert enforce never runs at all. With `runEnforcePass` addressable and
+// `reVerify` its own field, each is a direct call.
+describe('runEnforcePass — branches the joined function could not reach', () => {
+    const params = baseParams({cwd: '/tmp', taskId: 'TASK_0031'})
+
+    test('an enforce commit that commits NOTHING records the skip and re-verifies nothing', async () => {
+        // task-gates.ts: `enforce(edit): no fixes to commit`. The only
+        // non-committing-commit test in this file asserts enforce never runs, so
+        // the enforce commit was never even attempted.
+        const trail: string[] = []
+        let reVerifyCalls = 0
+        await runEnforcePass(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({
+                enforce: () => Promise.resolve({ok: true}),
+                commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
+                dirty: () => Promise.resolve(true),
+                reVerify: () => {
+                    reVerifyCalls += 1
+                    return Promise.resolve({ok: true})
+                }
+            }),
+            params,
+            line => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            () => Promise.resolve(null),
+            {cleanPass: true, commit: {committed: true}}
+        )
+        expect(trail).toContain('enforce(edit): no fixes to commit')
+        // Nothing was committed, so there is nothing to guard: no differential.
+        expect(reVerifyCalls).toBe(0)
+    })
+
+    test('a re-verify FAIL with NO revert dep is recorded as left-in-place, not silently kept', async () => {
+        // task-gates.ts: the `deps.revert` ABSENT sub-branch. Every revert test in
+        // this file supplies `revert`, so this wording had never been produced.
+        const trail: string[] = []
+        const debts: string[] = []
+        await runEnforcePass(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({
+                enforce: () => Promise.resolve({ok: true}),
+                commit: () => Promise.resolve({committed: true}),
+                dirty: () => Promise.resolve(true),
+                revert: undefined,
+                touchedFiles: () => Promise.resolve(null),
+                repoFiles: () => Promise.resolve(null),
+                recordDebt: (_c, _id, reason) => {
+                    debts.push(reason)
+                    return Promise.resolve()
+                },
+                reVerify: () => Promise.resolve({ok: false, reason: 'the suite now fails'})
+            }),
+            params,
+            line => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            () => Promise.resolve(null),
+            {cleanPass: true, commit: {committed: true}}
+        )
+        const line = trail.find(l => l.startsWith('enforce: fixes committed but re-verify FAILED'))
+        expect(line).toContain('left in place (no revert available)')
+        // The finding is still durable — keeping the edits must never lose it.
+        expect(debts).toEqual(['the suite now fails'])
+    })
+
+    test('cleanPass false → flag mode, and no enforce commit is attempted', async () => {
+        // The one boolean that crosses the two halves, asserted directly instead of
+        // by arranging a no-op pass upstream.
+        const trail: string[] = []
+        const modes: string[] = []
+        let commits = 0
+        await runEnforcePass(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({
+                enforce: (_c, _cwd, _t, mode) => {
+                    modes.push(mode)
+                    return Promise.resolve({ok: true})
+                },
+                commit: () => {
+                    commits += 1
+                    return Promise.resolve({committed: true})
+                }
+            }),
+            params,
+            line => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            () => Promise.resolve(null),
+            {cleanPass: false, commit: {committed: true}}
+        )
+        expect(modes).toEqual(['flag'])
+        expect(commits).toBe(0) // flag mode makes no edits
+        expect(trail.some(l => l.startsWith('enforce(flag):'))).toBe(true)
+    })
+
+    test('nothing committed this round → enforce is skipped and the skip is recorded', async () => {
+        const trail: string[] = []
+        let enforceCalls = 0
+        await runEnforcePass(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({
+                enforce: () => {
+                    enforceCalls += 1
+                    return Promise.resolve({ok: true})
+                }
+            }),
+            params,
+            line => {
+                trail.push(line)
+                return Promise.resolve()
+            },
+            () => Promise.resolve(null),
+            {cleanPass: true, commit: {committed: false, reason: 'nothing to commit'}}
+        )
+        expect(enforceCalls).toBe(0)
+        expect(trail).toContain('enforce: skipped (nothing committed this round)')
+    })
+})
+
+describe('resolveVerifyGate — the verify half, without the enforce half', () => {
+    const params = baseParams({cwd: '/tmp', taskId: 'TASK_0032'})
+    const rec = (): Promise<void> => Promise.resolve()
+
+    test('a clean PASS proceeds and reports cleanPass', async () => {
+        const step = await resolveVerifyGate(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({verify: () => Promise.resolve({ok: true})}),
+            params,
+            rec,
+            () => Promise.resolve(null)
+        )
+        expect('proceed' in step).toBe(true)
+        expect('proceed' in step && step.proceed.cleanPass).toBe(true)
+    })
+
+    test('a PASS carrying a reason is NOT a guardable signal', async () => {
+        // A no-op pass (no spec) or an accept-override must leave enforce flag-only.
+        const step = await resolveVerifyGate(
+            makeFakeCtx('/tmp').ctx,
+            makeDeps({verify: () => Promise.resolve({ok: true, reason: 'no VERIFY block'})}),
+            params,
+            rec,
+            () => Promise.resolve(null)
+        )
+        expect('proceed' in step && step.proceed.cleanPass).toBe(false)
+    })
+
+    test('a dismissed picker stops the sequence, and enforce is never reached', async () => {
+        const handle = makeFakeCtx('/tmp')
+        handle.queueSelect(undefined)
+        const step = await resolveVerifyGate(
+            handle.ctx,
+            makeDeps({
+                verify: () => Promise.resolve({ok: false, reason: 'the suite fails'}),
+                recommend: () => Promise.resolve({recommend: 'accept', rationale: 'ship it'})
+            }),
+            params,
+            rec,
+            () => Promise.resolve(null)
+        )
+        expect('stop' in step && step.stop.kind).toBe('paused')
     })
 })

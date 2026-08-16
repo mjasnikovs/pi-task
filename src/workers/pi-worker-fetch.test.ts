@@ -1,10 +1,13 @@
 import {test, expect} from 'bun:test'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
-import {registerPiWorkerFetch, type PiWorkerFetchInternals} from './pi-worker-fetch.js'
+import {
+    registerPiWorkerFetch,
+    fetchCacheable,
+    type PiWorkerFetchInternals
+} from './pi-worker-fetch.js'
 import {FetchAndCleanError} from './html-clean.js'
 import type {CleanResult} from './html-clean.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
-import {isAbstention} from './abstention.js'
 
 interface RegisteredTool {
     execute: (
@@ -258,13 +261,8 @@ test('pi-worker-fetch description is trigger-framed toward integration/wiring in
 
 // ─── cacheable — the F-2(e) non-answer rule, on the fetch channel ─────────────
 
-/**
- * Mirrors `cacheable` in pi-worker-fetch.ts. The sentinel half is the REAL
- * predicate (isAbstention), not a copy of its regex — copying it is how the
- * package/project/page matchers drifted apart in the first place.
- */
-const fetchCacheable = (d: {childExitCode?: number}, text: string): boolean =>
-    d.childExitCode === 0 && !isAbstention(text)
+// The SHIPPED predicate, imported rather than mirrored. Copying it is how the
+// package/project/page matchers drifted apart in the first place.
 
 test('fetch cacheable: a real answer is cached', () => {
     expect(fetchCacheable({childExitCode: 0}, 'The endpoint accepts POST with a JSON body.')).toBe(

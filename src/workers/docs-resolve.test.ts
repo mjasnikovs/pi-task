@@ -8,7 +8,9 @@ import {
     hasTypeFiles,
     detectTypesRedirect,
     countEntryDeclarations,
-    splitRuntimeNamespace
+    splitRuntimeNamespace,
+    resolveTypeSource,
+    type ResolvedPackage
 } from './docs-resolve.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
@@ -203,3 +205,79 @@ test.each(['../etc/passwd', '/abs/path', 'pkg with spaces', '', '@scope/', '@/na
         }
     }
 )
+
+// ─── the redirect WALK, which had no test in either of its two former copies ──
+//
+// `detectTypesRedirect`, `hasTypeFiles`, `typesPackageName` and
+// `countEntryDeclarations` were exported and covered by 35 references between
+// them — but the loop they exist to serve lived in docs-core.ts and
+// phantom-imports.ts as two byte-identical copies, and NEITHER was exercised:
+// both of their tests pin the zero-hop case only. So `bun → @types/bun →
+// bun-types`, cited by name in five doc comments, was asserted nowhere.
+const pkg = (name: string, root = `/fake/${name}`): ResolvedPackage =>
+    ({name, root, version: '1.0.0'}) as ResolvedPackage
+
+/** Walk a scripted graph: `hops[name]` is what resolving `name` returns. */
+const walk = (
+    start: ResolvedPackage,
+    seed: string,
+    hops: Record<string, ResolvedPackage | null>,
+    seen: string[] = []
+): Promise<ResolvedPackage> =>
+    resolveTypeSource(start, seed, next => {
+        seen.push(next)
+        return Promise.resolve(hops[next] ?? null)
+    })
+
+test('resolveTypeSource: a package that ships its own types follows no redirect', async () => {
+    // hasTypeFiles is true for a real directory containing .d.ts; use this file's
+    // own fixture tree, which docs-resolve.test already relies on.
+    const self = pkg('tiny-pkg', path.join(FIXTURES, 'node_modules', 'tiny-pkg'))
+    const seen: string[] = []
+    const out = await walk(self, 'tiny-pkg', {}, seen)
+    expect(out.name).toBe('tiny-pkg')
+    expect(seen).toEqual([])
+})
+
+test('resolveTypeSource: a typeless package hops to its @types/ twin', async () => {
+    const seen: string[] = []
+    const out = await walk(
+        pkg('left-pad'),
+        'left-pad',
+        {'@types/left-pad': pkg('@types/left-pad')},
+        seen
+    )
+    expect(seen).toEqual(['@types/left-pad'])
+    expect(out.name).toBe('@types/left-pad')
+})
+
+test('resolveTypeSource: an unresolvable hop stops the walk at the last good package', async () => {
+    const seen: string[] = []
+    const out = await walk(pkg('left-pad'), 'left-pad', {}, seen)
+    expect(seen).toEqual(['@types/left-pad'])
+    // The hop returned null, so the walk keeps what it had rather than failing.
+    expect(out.name).toBe('left-pad')
+})
+
+test('resolveTypeSource: the seed name is pre-visited, so a redirect cannot loop back', async () => {
+    // Asking about `@types/foo` must not hop to `@types/foo` again.
+    const seen: string[] = []
+    const out = await walk(pkg('foo'), '@types/foo', {'@types/foo': pkg('@types/foo')}, seen)
+    expect(seen).toEqual([])
+    expect(out.name).toBe('foo')
+})
+
+test('resolveTypeSource: the walk is bounded to three hops', async () => {
+    // A cycle-free chain longer than the bound must stop, not run away. Each hop is
+    // a fresh typeless package whose @types/ twin exists.
+    const seen: string[] = []
+    const hops: Record<string, ResolvedPackage> = {}
+    let name = 'a'
+    for (let i = 0; i < 8; i++) {
+        const twin = `@types/${name}`
+        hops[twin] = pkg(twin.replace('@types/', '') + 'x')
+        name = hops[twin]!.name
+    }
+    await walk(pkg('a'), 'a', hops, seen)
+    expect(seen.length).toBeLessThanOrEqual(3)
+})

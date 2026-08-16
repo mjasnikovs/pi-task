@@ -1205,3 +1205,74 @@ describe('childArgs in-run guard extensions', () => {
         expect(childArgs('read')).not.toContain('-e')
     })
 })
+
+describe('PhaseDeps.runChild seam', () => {
+    // The child's NAME is what a caller branches on. Before this seam it was
+    // discarded before reaching `spawn`, so a phase test had to recover it by
+    // matching prompt PROSE against prompts.ts — coupling the suite's routing to
+    // copy this codebase reworders and A/B's for a living.
+    const noSpawn: SpawnFn = () => {
+        throw new Error('spawned a real child despite deps.runChild')
+    }
+
+    test('runPhaseChild delegates, and is handed the name it was called with', async () => {
+        const seen: Array<{name: string; tools: string; prompt: string}> = []
+        const out = await runPhaseChild(
+            {
+                cwd: '/tmp',
+                taskId: 'TASK_TEST',
+                signal: new AbortController().signal,
+                spawn: noSpawn,
+                runChild: (name, tools, prompt) => {
+                    seen.push({name, tools, prompt})
+                    return Promise.resolve(`answer for ${name}`)
+                }
+            },
+            'refine',
+            'read',
+            'the prompt'
+        )
+        expect(out).toBe('answer for refine')
+        expect(seen).toEqual([{name: 'refine', tools: 'read', prompt: 'the prompt'}])
+    })
+
+    test('runPhaseWithLoopGuard delegates with the first strike’s prompt', async () => {
+        const seen: string[] = []
+        const out = await runPhaseWithLoopGuard(
+            {
+                cwd: '/tmp',
+                taskId: 'TASK_TEST',
+                signal: new AbortController().signal,
+                spawn: noSpawn,
+                runChild: (name, _tools, prompt) => {
+                    seen.push(`${name}:${prompt}`)
+                    return Promise.resolve('done')
+                }
+            },
+            'grill-gen',
+            'read',
+            hint => (hint === null ? 'clean prompt' : `hinted: ${hint}`)
+        )
+        expect(out).toBe('done')
+        // No loop hit has happened yet, so the substitute sees the clean prompt.
+        expect(seen).toEqual(['grill-gen:clean prompt'])
+    })
+
+    test('absent → the real wrappers run, so the ladder still owns the verdict', async () => {
+        // The seam must not weaken the guards it stands in front of: with no
+        // substitute, an empty completion is still the ladder's failure.
+        await expect(
+            runPhaseChild(
+                {
+                    cwd: '/tmp',
+                    taskId: 'TASK_TEST',
+                    signal: new AbortController().signal,
+                    spawn: fakeSpawnSimple('', 0)
+                },
+                'refine',
+                'read',
+                'prompt'
+            )
+        ).rejects.toThrow(/refine child produced no output/)
+    })
+})

@@ -93,6 +93,23 @@ export interface GateDeps {
         taskId: string
     ) => Promise<VerifyOutcome>
     /**
+     * The DIFFERENTIAL re-verify the enforce pass runs against the enforced tree,
+     * to decide whether its own commit survives. Absent → `verify`, which is what
+     * it has always been, so production wiring is untouched.
+     *
+     * Its own field because it answers a different question from the gate above.
+     * While the two shared one field the only way to answer them differently was to
+     * count invocations — a `verifyCalls` state machine whose FIRST return existed
+     * solely to unlock `mode === 'edit'`, re-invented in the suite and again in
+     * scripts/enforce-revert-attribution-replay-ab.ts.
+     */
+    reVerify?: (
+        ctx: ExtensionCommandContext,
+        cwd: string,
+        taskTitle: string,
+        taskId: string
+    ) => Promise<VerifyOutcome>
+    /**
      * Hold the committed work to AGENTS.md / CLAUDE.md. `edit` (fix in place) only
      * with a clean verify signal to guard against; otherwise `flag` (report only).
      * Absent in tests or when `enforce guidelines` is off → skipped.
@@ -364,62 +381,56 @@ export async function askVerifyResolution(
  * only a user cancel inside a gate child propagates (handled by the caller's
  * USER_CANCELLED path).
  */
-export async function runGatesForTask(
+/** The durable per-task gate trail: every outcome is appended to the task file so
+ *  the sequence is auditable from artifacts alone. Best-effort — recording must
+ *  never break the gate sequence. */
+type Recorder = (line: string) => Promise<void>
+
+/**
+ * The root-cause channel: was this FAIL caused by a pre-existing defect in a file
+ * some OTHER task created and this task never touched?
+ */
+type RootCauseRouter = (
+    failReason: string,
+    rationale: string,
+    scope: 'worktree' | 'committed' | 'enforce-commit'
+) => Promise<RepairCandidate | null>
+
+/**
+ * What the VERIFY half settled. Either the sequence is over (`stop` carries the
+ * terminal GateResult — dismissed picker, cancelled session, interrupted or failed
+ * autofix) or the task proceeds to commit + enforce.
+ *
+ * `cleanPass` is the ONE fact that crosses to the enforce half: a GENUINE clean
+ * pass (a real signal ran and the work met it) is the only thing that gives
+ * enforce a signal to revert against, so only then may it edit in place. A no-op
+ * pass, a disabled gate or an accept-override leaves it false → flag-only.
+ */
+type VerifyGateStep =
+    | {stop: GateResult}
+    | {proceed: {ctx: ExtensionCommandContext; cleanPass: boolean}}
+
+/**
+ * The VERIFY resolution loop: run the task's verification against the finished
+ * work, and negotiate a FAIL through the graduated ladder (bounded lint fix →
+ * recommendation → unattended autofix → picker) until it verifies, is accepted,
+ * or terminates.
+ *
+ * Split out of `runGatesForTask` at the single boolean that crosses to the
+ * ENFORCE half. It carries 8 mutable locals over ~290 lines and has four terminal
+ * exits; enforce carries one local and always falls through. Joining them meant a
+ * test of the enforce differential had to traverse this whole loop first, which is
+ * why `deps.verify` was driven by an invocation counter whose first return existed
+ * only to unlock `mode === 'edit'`.
+ */
+export async function resolveVerifyGate(
     ctxIn: ExtensionCommandContext,
     deps: GateDeps,
-    p: GateParams
-): Promise<GateResult> {
+    p: GateParams,
+    rec: Recorder,
+    routeRootCause: RootCauseRouter
+): Promise<VerifyGateStep> {
     let active = ctxIn
-    // Durable per-task gate trail — every outcome below is also appended to the
-    // task file so the sequence is auditable from artifacts alone. Best-effort.
-    const rec = async (line: string): Promise<void> => {
-        try {
-            await deps.record?.(p.cwd, p.taskId, line)
-        } catch {
-            // recording must never break the gate sequence
-        }
-    }
-    /**
-     * ROOT-CAUSE CHANNEL (mx5 run 14 item 5). Ask whether a FAIL was caused by a
-     * pre-existing defect in a file some OTHER task created and this task never
-     * touched. On a hit: record the durable debt (so the final gate surfaces it)
-     * and queue a scoped repair task (so something finally FIXES it — run 14
-     * recorded the same `test/teardown.ts` cause twice and scheduled nothing, and
-     * the bug survived ~24h). Returns the candidate so the caller can also decide
-     * NOT to punish the current task for it. Never throws: any fault degrades to
-     * null, i.e. exactly the pre-existing behavior.
-     */
-    const routeRootCause = async (
-        failReason: string,
-        rationale: string,
-        scope: 'worktree' | 'committed' | 'enforce-commit'
-    ): Promise<RepairCandidate | null> => {
-        if (!deps.touchedFiles || !deps.introducedBy) return null
-        try {
-            const candidate = await findRepairCandidate({
-                failReason,
-                rationale,
-                currentTaskId: p.taskId,
-                touched: await deps.touchedFiles(p.cwd, scope),
-                introducedBy: rel => deps.introducedBy!(p.cwd, rel)
-            })
-            if (!candidate) return null
-            await deps.recordDebt?.(
-                p.cwd,
-                p.taskId,
-                `${failReason} — ROOT CAUSE: \`${candidate.file}\` (introduced by ${candidate.owner}, not touched by this task)`,
-                'root-cause'
-            )
-            await deps.recordRepairCandidate?.(p.cwd, candidate)
-            await rec(
-                `root-cause: FAIL attributed to \`${candidate.file}\` — a pre-existing defect in ${candidate.owner}'s file that this task never touched; `
-                    + 'recorded as durable debt and a scoped repair task queued'
-            )
-            return candidate
-        } catch {
-            return null
-        }
-    }
     const verdictLine = (v: VerifyOutcome): string =>
         v.ok ?
             v.reason ?
@@ -614,7 +625,7 @@ export async function runGatesForTask(
             }
             if (choice.action === 'cancel') {
                 await rec('resolution: user dismissed the verify-FAIL picker — paused')
-                return {kind: 'paused', ctx: active, reason: failReason}
+                return {stop: {kind: 'paused', ctx: active, reason: failReason}}
             }
             if (choice.action === 'accept') {
                 const byYolo = yoloChoice !== null
@@ -703,9 +714,9 @@ export async function runGatesForTask(
                 fixInstruction
             })
             active = fixRes.ctx ?? active
-            if (fixRes.sessionCancelled) return {kind: 'session-cancelled', ctx: active}
-            if (fixRes.interrupted) return {kind: 'interrupted', ctx: active}
-            if (!fixRes.ok) return {kind: 'failed', ctx: active, reason: fixRes.reason}
+            if (fixRes.sessionCancelled) return {stop: {kind: 'session-cancelled', ctx: active}}
+            if (fixRes.interrupted) return {stop: {kind: 'interrupted', ctx: active}}
+            if (!fixRes.ok) return {stop: {kind: 'failed', ctx: active, reason: fixRes.reason}}
             // Resume reuses the same inner task id, so p.taskId is stable.
             verified = await deps.verify(active, p.cwd, p.title, p.taskId)
             await rec(verdictLine(verified))
@@ -715,43 +726,29 @@ export async function runGatesForTask(
         // accept-override (verified.ok still false at break) is NOT a guardable signal.
         verifyCleanPass = verified.ok && !verified.reason
     }
-    // Mark the work verified (parent task-list check-off for /task-auto; no-op for
-    // /task) BEFORE committing, so the commit captures the check-off too.
-    await p.onVerified?.()
-    // Commit the task's work as one snapshot FIRST — before guideline enforcement —
-    // so a passing task is durably recorded no matter what enforcement later finds.
-    const commit = await deps.commit(p.cwd, `task: ${p.title} (${p.taskId})`)
-    if (commit.committed) {
-        await rec(`commit: task snapshot committed${commit.note ? ` (${commit.note})` : ''}`)
-        // SAY WHAT WAS LEFT OUT. The stage skips untracked regenerable test-runner
-        // output (mx5 run 20: TASK_0027's `git add -A` swept in three Playwright
-        // failure screenshots and two later fix attempts were rejected for deleting
-        // them). A SILENT exclusion is the same failure class as the silent
-        // ignored-path write nexttask 4 closed, so it gets its own trail line.
-        if (commit.excluded && commit.excluded.length > 0) {
-            await rec(
-                `commit: left ${commit.excluded.length} untracked test-runner artifact(s) out of the `
-                    + `snapshot — regenerable output, not deliverables: `
-                    + `${commit.excluded.slice(0, 8).join(', ')}`
-                    + `${commit.excluded.length > 8 ? `, +${commit.excluded.length - 8} more` : ''}`
-            )
-        }
-        active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
-    } else {
-        await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
-        // A benign skip ("nothing to commit", auto-commit off) is a warning. A real
-        // git failure is louder: it silently disables enforce AND every commit-based
-        // guard — mx5 run 4 lost all 10 commits (no container git identity) with only
-        // per-task warnings to show for it. "blocked" is the unmerged-index refusal
-        // (gitCommitAll) — the same severity: nothing can commit until it's resolved.
-        const gitFailure = /^git (commit|add) (failed|blocked)/.test(commit.reason ?? '')
-        active.ui.notify(
-            gitFailure ?
-                `${p.tag}: COMMIT FAILED (${commit.reason}) — enforce and revert guards are disabled for this task.`
-            :   `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
-            gitFailure ? 'error' : 'warning'
-        )
-    }
+    return {proceed: {ctx: active, cleanPass: verifyCleanPass}}
+}
+
+/**
+ * The ENFORCE differential: hold the committed work to AGENTS.md / CLAUDE.md,
+ * then decide whether the pass\'s own commit survives.
+ *
+ * `reVerify` is deliberately NOT `deps.verify`. They answer two different
+ * questions — the gate above, and this differential — and while they shared one
+ * field the only way to answer them differently was to count invocations.
+ *
+ * Reads `active` and never reassigns it: nothing here can replace the live
+ * session, unlike the autofix in the verify half.
+ */
+export async function runEnforcePass(
+    active: ExtensionCommandContext,
+    deps: GateDeps,
+    p: GateParams,
+    rec: Recorder,
+    routeRootCause: RootCauseRouter,
+    args: {cleanPass: boolean; commit: CommitResult}
+): Promise<void> {
+    const {cleanPass: verifyCleanPass, commit} = args
     // With the task committed, hold its work to AGENTS.md / CLAUDE.md — but as a step
     // INSIDE the validation gate, gated by the verify signal (see GateDeps.enforce).
     // Skipped when nothing was committed this round, when enforce is off, or in tests
@@ -881,9 +878,10 @@ export async function runGatesForTask(
             if (enforceCommit.committed) {
                 // Differential guard: re-run the verify signal against the enforced
                 // tree. A regression ⇒ drop the enforce commit, keep the verified work.
+                const differential = deps.reVerify ?? deps.verify
                 const after =
-                    deps.verify ?
-                        await deps.verify(active, p.cwd, p.title, p.taskId)
+                    differential ?
+                        await differential(active, p.cwd, p.title, p.taskId)
                     :   ({ok: true} as VerifyOutcome)
                 const afterReason = after.reason ?? 'enforce re-verify failed'
                 // PRE-EXISTING-CAUSE KEEP PATH (mx5 run 14 item 5b). Both of run
@@ -1021,5 +1019,101 @@ export async function runGatesForTask(
         // so a missing enforce run is explainable from the trail (mx5 audit gap).
         await rec('enforce: skipped (nothing committed this round)')
     }
+}
+
+export async function runGatesForTask(
+    ctxIn: ExtensionCommandContext,
+    deps: GateDeps,
+    p: GateParams
+): Promise<GateResult> {
+    const rec: Recorder = async (line: string): Promise<void> => {
+        try {
+            await deps.record?.(p.cwd, p.taskId, line)
+        } catch {
+            // recording must never break the gate sequence
+        }
+    }
+    /**
+     * ROOT-CAUSE CHANNEL (mx5 run 14 item 5). Ask whether a FAIL was caused by a
+     * pre-existing defect in a file some OTHER task created and this task never
+     * touched. On a hit: record the durable debt (so the final gate surfaces it)
+     * and queue a scoped repair task (so something finally FIXES it — run 14
+     * recorded the same `test/teardown.ts` cause twice and scheduled nothing, and
+     * the bug survived ~24h). Returns the candidate so the caller can also decide
+     * NOT to punish the current task for it. Never throws: any fault degrades to
+     * null, i.e. exactly the pre-existing behavior.
+     */
+    const routeRootCause = async (
+        failReason: string,
+        rationale: string,
+        scope: 'worktree' | 'committed' | 'enforce-commit'
+    ): Promise<RepairCandidate | null> => {
+        if (!deps.touchedFiles || !deps.introducedBy) return null
+        try {
+            const candidate = await findRepairCandidate({
+                failReason,
+                rationale,
+                currentTaskId: p.taskId,
+                touched: await deps.touchedFiles(p.cwd, scope),
+                introducedBy: rel => deps.introducedBy!(p.cwd, rel)
+            })
+            if (!candidate) return null
+            await deps.recordDebt?.(
+                p.cwd,
+                p.taskId,
+                `${failReason} — ROOT CAUSE: \`${candidate.file}\` (introduced by ${candidate.owner}, not touched by this task)`,
+                'root-cause'
+            )
+            await deps.recordRepairCandidate?.(p.cwd, candidate)
+            await rec(
+                `root-cause: FAIL attributed to \`${candidate.file}\` — a pre-existing defect in ${candidate.owner}'s file that this task never touched; `
+                    + 'recorded as durable debt and a scoped repair task queued'
+            )
+            return candidate
+        } catch {
+            return null
+        }
+    }
+    const step = await resolveVerifyGate(ctxIn, deps, p, rec, routeRootCause)
+    if ('stop' in step) return step.stop
+    const {ctx: active, cleanPass} = step.proceed
+    // Mark the work verified (parent task-list check-off for /task-auto; no-op for
+    // /task) BEFORE committing, so the commit captures the check-off too.
+    await p.onVerified?.()
+    // Commit the task's work as one snapshot FIRST — before guideline enforcement —
+    // so a passing task is durably recorded no matter what enforcement later finds.
+    const commit = await deps.commit(p.cwd, `task: ${p.title} (${p.taskId})`)
+    if (commit.committed) {
+        await rec(`commit: task snapshot committed${commit.note ? ` (${commit.note})` : ''}`)
+        // SAY WHAT WAS LEFT OUT. The stage skips untracked regenerable test-runner
+        // output (mx5 run 20: TASK_0027's `git add -A` swept in three Playwright
+        // failure screenshots and two later fix attempts were rejected for deleting
+        // them). A SILENT exclusion is the same failure class as the silent
+        // ignored-path write nexttask 4 closed, so it gets its own trail line.
+        if (commit.excluded && commit.excluded.length > 0) {
+            await rec(
+                `commit: left ${commit.excluded.length} untracked test-runner artifact(s) out of the `
+                    + `snapshot — regenerable output, not deliverables: `
+                    + `${commit.excluded.slice(0, 8).join(', ')}`
+                    + `${commit.excluded.length > 8 ? `, +${commit.excluded.length - 8} more` : ''}`
+            )
+        }
+        active.ui.notify(`${p.tag}: committed "${p.title}".`, 'info')
+    } else {
+        await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
+        // A benign skip ("nothing to commit", auto-commit off) is a warning. A real
+        // git failure is louder: it silently disables enforce AND every commit-based
+        // guard — mx5 run 4 lost all 10 commits (no container git identity) with only
+        // per-task warnings to show for it. "blocked" is the unmerged-index refusal
+        // (gitCommitAll) — the same severity: nothing can commit until it's resolved.
+        const gitFailure = /^git (commit|add) (failed|blocked)/.test(commit.reason ?? '')
+        active.ui.notify(
+            gitFailure ?
+                `${p.tag}: COMMIT FAILED (${commit.reason}) — enforce and revert guards are disabled for this task.`
+            :   `${p.tag}: not committed (${commit.reason ?? 'unknown'}) — continuing.`,
+            gitFailure ? 'error' : 'warning'
+        )
+    }
+    await runEnforcePass(active, deps, p, rec, routeRootCause, {cleanPass, commit})
     return {kind: 'done', ctx: active}
 }

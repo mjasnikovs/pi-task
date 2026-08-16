@@ -3,13 +3,17 @@ import {spawnSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type {CacheHandle} from './docs-cache.js'
-import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
+import {
+    retrieveChunks as defaultRetrieveChunks,
+    PROJECT_RETRIEVE_LIMIT,
+    RETRIEVE_CONTENT_BUDGET
+} from './docs-retrieve.js'
 import type {RetrievedChunk} from './docs-retrieve.js'
 import {buildExtractionPrompt} from './abstention.js'
 import {chunkDeclarations} from './docs-chunk.js'
 
-const DEFAULT_LIMIT = 50
-const DEFAULT_BUDGET = 24_000
+const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
+const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 
 export function getProjectName(cwd: string): string {
     try {

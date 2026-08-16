@@ -321,6 +321,23 @@ interface PhaseDeps {
     /** Injectable delay for connection-error backoff; defaults to a real timer.
      *  Tests override it with a no-op so retries don't actually sleep. */
     sleepFor?: (ms: number) => Promise<void>
+    /**
+     * Run ONE named Child pi and return its assistant text — the seam every phase
+     * child goes through. Absent (production) → the real wrappers run, with the
+     * loop detector, the wall-clock budget and the Error-triage ladder. Present →
+     * the substitute answers directly and NONE of those guards run.
+     *
+     * The child's NAME is the first parameter because the name is what a caller
+     * branches on and what a test wants to assert. It used to be discarded before
+     * reaching the only injectable boundary (`spawn`), so a phase test had to
+     * reconstruct it by matching prompt PROSE against prompts.ts — which made
+     * prompt copy load-bearing test infrastructure in a codebase whose practice is
+     * rewording prompts and A/B-ing them.
+     *
+     * `spawn` stays: the ladder's OWN tests must drive a real process to exercise
+     * the rungs. This seam is for callers to whom the child is a premise.
+     */
+    runChild?: (name: string, tools: string, prompt: string) => Promise<string>
 }
 
 export type {PhaseDeps}
@@ -433,6 +450,7 @@ export async function runPhaseChild(
     tools: string,
     prompt: string
 ): Promise<string> {
+    if (deps.runChild) return await deps.runChild(name, tools, prompt)
     let hint: string | null = null
     const loopHistory: LoopHit[] = []
     const budgetMs = deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS
@@ -561,6 +579,9 @@ export async function runPhaseWithLoopGuard(
     buildPrompt: (loopHint: string | null) => string,
     opts: LoopGuardOptions = {}
 ): Promise<string> {
+    // The substitute stands in for the whole guarded run, so it is handed the
+    // prompt the first strike would have used (no loop hint in flight yet).
+    if (deps.runChild) return await deps.runChild(name, tools, buildPrompt(null))
     const loopHistory: LoopHit[] = []
     // Carries the correction hint (loop OR leaked-tool-call) into the next strike.
     let nextHint: string | null = null

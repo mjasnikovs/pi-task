@@ -16,10 +16,9 @@ import * as path from 'node:path'
 import {
     resolvePackage,
     splitRuntimeNamespace,
-    detectTypesRedirect,
-    typesPackageName,
     hasTypeFiles,
     isDtsFile,
+    resolveTypeSource,
     ResolveError,
     type ResolvedPackage
 } from './docs-resolve.js'
@@ -115,34 +114,24 @@ function suggestionFor(v: RuntimeImportVerdict, runtime: string): string {
     )
 }
 
-/** Sync resolution of a runtime to the package that actually holds its type
- *  declarations (bun -> @types/bun -> bun-types), bounded to a few hops. No
- *  auto-install: a runtime whose types aren't installed simply can't be verified
- *  (returns null), so we never flag what we can't prove. */
-function resolveRuntimeTypesRoot(runtime: string, cwd: string): string | null {
-    let cur: ResolvedPackage
+/** The phantom-import checker's adapter over the shared redirect walk: hops resolve
+ *  SYNCHRONOUSLY and never install. A runtime whose types aren't on disk simply
+ *  can't be verified (null), so we never flag what we can't prove. */
+async function resolveRuntimeTypesRoot(runtime: string, cwd: string): Promise<string | null> {
+    let start: ResolvedPackage
     try {
-        cur = resolvePackage(runtime, cwd)
+        start = resolvePackage(runtime, cwd)
     } catch (err) {
         if (err instanceof ResolveError) return null
         throw err
     }
-    const visited = new Set<string>([cur.name, runtime])
-    for (let hop = 0; hop < 3; hop++) {
-        let next = detectTypesRedirect(cur)
-        if (next && visited.has(next)) next = null
-        if (!next && !hasTypeFiles(cur.root)) {
-            const types = typesPackageName(cur.name)
-            if (types && !visited.has(types)) next = types
-        }
-        if (!next) break
-        visited.add(next)
+    const cur = await resolveTypeSource(start, runtime, next => {
         try {
-            cur = resolvePackage(next, cwd)
+            return Promise.resolve(resolvePackage(next, cwd))
         } catch {
-            break
+            return Promise.resolve(null)
         }
-    }
+    })
     return hasTypeFiles(cur.root) ? cur.root : null
 }
 
@@ -181,8 +170,8 @@ function readRuntimeTypeText(root: string): string {
 }
 
 /** Default loader: resolve the runtime's installed types and read their .d.ts. */
-export function loadRuntimeTypeText(runtime: string, cwd: string): string | null {
-    const root = resolveRuntimeTypesRoot(runtime, cwd)
+export async function loadRuntimeTypeText(runtime: string, cwd: string): Promise<string | null> {
+    const root = await resolveRuntimeTypesRoot(runtime, cwd)
     if (!root) return null
     const text = readRuntimeTypeText(root)
     return text.length > 0 ? text : null
@@ -194,18 +183,21 @@ export function loadRuntimeTypeText(runtime: string, cwd: string): string | null
  * the runtime's type package. A runtime whose types can't be loaded is skipped
  * (we never flag what we can't verify), so this is silent when types are absent.
  */
-export function findPhantomImports(
+export async function findPhantomImports(
     text: string,
     cwd: string,
-    loadText: (runtime: string, cwd: string) => string | null = loadRuntimeTypeText
-): PhantomImport[] {
+    loadText: (
+        runtime: string,
+        cwd: string
+    ) => string | null | Promise<string | null> = loadRuntimeTypeText
+): Promise<PhantomImport[]> {
     const out: PhantomImport[] = []
     const typeTextByRuntime = new Map<string, string | null>()
     for (const spec of extractRuntimeSpecifiers(text)) {
         const ns = splitRuntimeNamespace(spec)
         if (!ns) continue
         if (!typeTextByRuntime.has(ns.runtime)) {
-            typeTextByRuntime.set(ns.runtime, loadText(ns.runtime, cwd))
+            typeTextByRuntime.set(ns.runtime, await loadText(ns.runtime, cwd))
         }
         const typeText = typeTextByRuntime.get(ns.runtime)
         if (!typeText) continue
@@ -264,7 +256,7 @@ const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
  * Unreadable mentions are skipped; silent when types are absent or nothing is flagged.
  * Drives the impl-handoff override banner (Layer B).
  */
-export function findDeliveryPhantoms(spec: string, cwd: string): PhantomImport[] {
+export async function findDeliveryPhantoms(spec: string, cwd: string): Promise<PhantomImport[]> {
     let text = spec
     const seen = new Set<string>()
     for (const m of spec.matchAll(MENTION_RE)) {

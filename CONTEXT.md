@@ -56,6 +56,15 @@ concept get that concept recorded here.
 - **Child pi** — an isolated `pi` process spawned to do bounded work (a phase
   step, a worker lookup). Spawned and parsed through `shared/child-process.ts`
   (`runChild`).
+  > Every phase child goes through the `PhaseDeps.runChild(name, tools, prompt)`
+  > seam, and every research worker through `PhaseResearchDeps.runWorker(label,
+  > input)`. Both default to the real implementation when absent, so production is
+  > untouched. They take a NAME because the name is what a caller branches on: it
+  > used to be discarded before reaching the only injectable boundary (`spawn`), so
+  > `phases.test.ts` reconstructed it by matching prompt PROSE against
+  > `prompts.ts` — 27 routing decisions keyed on sentences this codebase reworders
+  > and A/B's for a living. `spawn` stays: the Error-triage ladder's own tests must
+  > drive a real process. The seams are for callers to whom the child is a premise.
 - **Error-triage ladder** — the fixed four-rung verdict a phase applies to a
   finished Child pi: non-zero exit throws, a connection-class error backs off and
   retries, an empty completion retries, a leaked tool call retries with a
@@ -150,6 +159,45 @@ concept get that concept recorded here.
   `recordDebt(cwd, taskId, reason, origin)`, replaced eight byte-identical
   recorders; the parser reads the same table instead of a hand-maintained
   whitelist. Adding an origin is three edits.
+- **Boot probe** — does the assembled product actually START, and does the page it
+  serves actually render? `task/boot-probe.ts`: shell-chain lexing and non-launch
+  detection, boot-command discovery, listener enumeration (ss/netstat/lsof), port
+  reservation, `runBootCheck`, orphan-port recovery and `bootSkipVerdict`. It was
+  42% of `final-gate.ts` and the largest of that file's seven concerns, while
+  nothing inside `src/` imported any of it except the one call site in
+  `runFinalIntegrationGate` — the boundary already existed in the CONSUMERS, seven
+  harnesses under `scripts/` that import exactly this surface. The gate re-exports
+  the public names so those keep working, the same way `taskThatIntroduced` does.
+  > Still deliberately NOT a `CLOSURE_SCANS` row: it is async, stateful and
+  > port-binding, and would need its own escape hatch in the row type. This was a
+  > file move, not a re-shaping.
+- **The two gate halves** — `runGatesForTask` is a thin spine over
+  `resolveVerifyGate` (the VERIFY resolution loop: 8 mutable locals, four terminal
+  exits) and `runEnforcePass` (the ENFORCE differential: one local, always falls
+  through), joined by ONE boolean — `cleanPass`, the genuine-clean-pass signal that
+  decides whether enforce may edit in place. `GateDeps.reVerify` is the enforce
+  differential's own field: it and `verify` answer different questions, and while
+  they shared one field the only way to answer them differently was to count
+  invocations — a `verifyCalls` state machine whose first return existed solely to
+  unlock `mode === 'edit'`, re-invented in the suite and again in
+  `scripts/enforce-revert-attribution-replay-ab.ts`.
+  > This is a split WITHIN one loop. It does not reopen "the two resolution loops
+  > stay two", which is about sharing a spine BETWEEN `runGatesForTask` and
+  > `runFinalGateStage` at different altitudes.
+- **`FinalGateOptions`** — the run-end gate takes an options object, not a
+  positional tail (the production call site read `runFinalIntegrationGate(cwd,
+  undefined, undefined, undefined, planText)`, and `timeoutMs`/`bootGraceMs` are
+  adjacent numbers that swap without a type error). `run`, `envClosure` and
+  `trackedFiles` are seams by the `GateDeps` test. `run` completes a
+  `CommandRunner` seam `runGateCommand`, `runVerifyCommandLine` and
+  `rerunDebtVerifyCommand` already had; the two git reads make the CONFIG-GAP
+  demotion reachable in test at all — it needs a tracked env template in a real git
+  tree, so every launch-contract test (bare `makeDir`, no `git init`) missed it by
+  construction. That branch decides whether a failing launch script FAILS the run or
+  is demoted to UNOBSERVED debt.
+  > The env-gap classification tests keep REAL spawns — "a mocked spawn would test
+  > the mock" is right for 127-detection, ENOENT and timeout. Only the tests where
+  > the exit code is a premise script it.
 - **Final gate stage** — the run-end decision path, once every task is done:
   run the gate, trail the verdict, surface UNOBSERVED, re-derive open ACCEPT
   debts, run the resolution picker, bound the autofix, handle stranded fixes.
@@ -217,6 +265,32 @@ concept get that concept recorded here.
   > hallucination check. A failed child returns no `answer` at all (the result
   > is a discriminated union), and every site now receives the rich
   > `ExcerptVerification` rather than a bare boolean.
+
+- **Type-redirect walk** — `resolveTypeSource` (`workers/docs-resolve.ts`): follow
+  the `@types/<name>` + triple-slash `<reference types>` chain from a package that
+  ships no usable types to the one that holds them (`bun` → `@types/bun` →
+  `bun-types`), bounded to three hops. `resolveHop` is injected — the one thing its
+  two call sites disagree about (the docs pipeline auto-installs, the phantom-import
+  checker resolves sync and never installs).
+  > It lived as two byte-identical copies in `docs-core.ts` and
+  > `phantom-imports.ts` while its four predicates were exported and covered by 35
+  > test references. Neither copy was tested: both pinned the zero-hop case only, so
+  > the multi-hop behaviour cited by name in five doc comments was asserted nowhere.
+  > This is the shape where pure functions get extracted for testability and the
+  > real logic stays in how they are CALLED.
+- **Cache policy predicates** — each cacheable Worker tool's `cacheable`/`cacheKey`/
+  `cachePkg` are NAMED exports (`docsCacheable`, `fetchCacheable`, …), not anonymous
+  properties of the adapter literal. They were reachable only through `registerTool
+  → execute()`, so two test files hand-retyped them under "keep in sync" comments —
+  ten tests asserting against copies a change to the shipped rule would leave green.
+  These are the F-2(e) rules whose PREVIOUS drift is documented at length in
+  `abstention.ts` and cost a real bug.
+- **Retrieval limits** — `PACKAGE_RETRIEVE_LIMIT` (8) and `PROJECT_RETRIEVE_LIMIT`
+  (50) live in `workers/docs-retrieve.ts`, the module that owns the query language.
+  They were three declarations across three files at two values, so the divergence
+  was invisible; no comment in the history explains WHY the two corpora differ.
+  Recorded as-is rather than harmonised — changing either is a retrieval-policy
+  change with its own A/B.
 
 > `pi-worker-search` is the outlier: it is a direct Brave API call with **no
 > child pi**, so it registers through `makeWorkerTool` but has no child-failure.

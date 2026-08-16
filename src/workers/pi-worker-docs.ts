@@ -6,9 +6,9 @@ import {openCache as defaultOpenCache} from './docs-cache.js'
 import {ensureIndexed as defaultEnsureIndexed} from './docs-index.js'
 import {resolvePackage as defaultResolvePackage} from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
+import {formatResultText} from '../shared/child-output.js'
 import {
     docsRaw,
-    formatResultText,
     packageHeader,
     buildPrompt,
     buildVersionBanner,
@@ -491,16 +491,13 @@ export function registerPiWorkerDocs(
         // version do not change within a run). A project-source `.` lookup is NOT cached:
         // the working tree mutates as tasks implement, so its answer can go stale mid-run
         // (the docs SQLite index already keys those on file mtime).
-        cacheKey: params =>
-            params.module === '.' ?
-                null
-            :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`,
+        cacheKey: docsCacheKey,
         // Package provenance for per-entry resume invalidation: a docs digest describes
         // one package at one declared version, so a resume drops it only when THAT
         // package moves — an unrelated install no longer discards it. Package names are
         // matched against package.json verbatim (npm names are case-sensitive), unlike
         // the cache key, which normalises for phrasing collisions.
-        cachePkg: params => (params.module === '.' ? undefined : packageRootOf(params.module)),
+        cachePkg: docsCachePkg,
         // Only a completed lookup (child exited 0) is a real answer; not-installed,
         // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
         // through to a live retry next time.
@@ -514,10 +511,42 @@ export function registerPiWorkerDocs(
         //
         // `text` is supplied by makeWorkerTool (shared.ts) alongside details, so the
         // content check needs no new plumbing.
-        cacheable: (d, text) =>
-            d.childExitCode === 0
-            && d.typeOnly !== true
-            && d.excerptVerified !== false
-            && !isAbstention(text)
+        cacheable: docsCacheable
     })
+}
+
+/**
+ * The F-2(e) cache rule for the docs channel, as a NAMED export rather than an
+ * anonymous property of an adapter literal.
+ *
+ * It was reachable only through `registerTool → execute()`, so
+ * pi-worker-docs-typeonly.test.ts gave up and hand-retyped it under a
+ * "keep in sync" comment — six tests asserting against a copy that a change to the
+ * shipped rule would leave green. That is the same drift class the rule itself
+ * exists to prevent: four regexes matching three phrasings, documented at length in
+ * abstention.ts, which cost a real bug.
+ */
+export function docsCacheable(
+    d: Pick<DocsDetails, 'childExitCode' | 'typeOnly' | 'excerptVerified'>,
+    text: string
+): boolean {
+    return (
+        d.childExitCode === 0
+        && d.typeOnly !== true
+        && d.excerptVerified !== false
+        && !isAbstention(text)
+    )
+}
+
+/** The docs cache key: a package's answer is per (module, question). A project-source
+ *  `.` lookup is never cached — the working tree mutates as tasks implement. */
+export function docsCacheKey(params: {module: string; query: string}): string | null {
+    return params.module === '.' ?
+            null
+        :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
+}
+
+/** Package provenance for per-entry resume invalidation. */
+export function docsCachePkg(params: {module: string}): string | undefined {
+    return params.module === '.' ? undefined : packageRootOf(params.module)
 }

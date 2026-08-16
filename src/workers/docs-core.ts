@@ -7,25 +7,26 @@ import {ensureIndexed as defaultEnsureIndexed, type IndexResult} from './docs-in
 import {
     resolvePackage as defaultResolvePackage,
     ResolveError,
-    detectTypesRedirect,
-    typesPackageName,
-    hasTypeFiles,
     isDtsFile,
+    resolveTypeSource,
+    typesPackageName,
     splitRuntimeNamespace,
     type ResolvedPackage
 } from './docs-resolve.js'
-import {retrieveChunks as defaultRetrieveChunks, type RetrievedChunk} from './docs-retrieve.js'
+import {
+    retrieveChunks as defaultRetrieveChunks,
+    PACKAGE_RETRIEVE_LIMIT,
+    RETRIEVE_CONTENT_BUDGET,
+    type RetrievedChunk
+} from './docs-retrieve.js'
 import {npmVersionLookup as defaultNpmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction} from './focused-extractor.js'
 import {buildExtractionPrompt} from './abstention.js'
-import {
-    type ExcerptVerification,
-    formatResultText as formatResultTextShared
-} from '../shared/child-output.js'
+import {type ExcerptVerification} from '../shared/child-output.js'
 
-const DEFAULT_LIMIT = 8
-const DEFAULT_BUDGET = 24_000
+const DEFAULT_LIMIT = PACKAGE_RETRIEVE_LIMIT
+const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 
 const NO_CACHE_HEAD = 25_000
 const NO_CACHE_TAIL = 5_000
@@ -388,11 +389,10 @@ async function tryResolveOrInstall(
     }
 }
 
-/** Follow the @types/<name> + triple-slash `<reference types>` redirect chain
- *  from a package that ships no usable types of its own to the one that actually
- *  holds the declarations (e.g. bun -> @types/bun -> bun-types). Bounded to a few
- *  hops; returns the original package if no better source is found. */
-async function resolveTypeSource(
+/** The docs pipeline's adapter over the shared redirect walk (docs-resolve.ts):
+ *  hops resolve through the auto-installing lookup, so a declaration package that is
+ *  declared but not yet on disk is fetched rather than abandoned. */
+function resolveTypeSourceForDocs(
     pkg: ResolvedPackage,
     requested: string,
     cwd: string,
@@ -400,22 +400,9 @@ async function resolveTypeSource(
     resolvePackage: typeof defaultResolvePackage,
     signal: AbortSignal | undefined
 ): Promise<ResolvedPackage> {
-    const visited = new Set<string>([pkg.name, extractParentPackage(requested)])
-    let cur = pkg
-    for (let depth = 0; depth < 3; depth++) {
-        let next = detectTypesRedirect(cur)
-        if (next && visited.has(next)) next = null
-        if (!next && !hasTypeFiles(cur.root)) {
-            const types = typesPackageName(cur.name)
-            if (types && !visited.has(types)) next = types
-        }
-        if (!next) break
-        visited.add(next)
-        const resolved = await tryResolveOrInstall(next, cwd, spawn, resolvePackage, signal)
-        if (!resolved) break
-        cur = resolved
-    }
-    return cur
+    return resolveTypeSource(pkg, extractParentPackage(requested), next =>
+        tryResolveOrInstall(next, cwd, spawn, resolvePackage, signal)
+    )
 }
 
 export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
@@ -517,7 +504,14 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     // @types/<name> + triple-slash `<reference types>` chain to the package that
     // actually holds the declarations (e.g. bun -> @types/bun -> bun-types).
     // Best-effort: any failure leaves the original resolution untouched.
-    pkg = await resolveTypeSource(pkg, requested, input.cwd, spawn, resolvePackage, input.signal)
+    pkg = await resolveTypeSourceForDocs(
+        pkg,
+        requested,
+        input.cwd,
+        spawn,
+        resolvePackage,
+        input.signal
+    )
 
     // Step 2: open cache
     let cache: CacheHandle | null = null
@@ -767,13 +761,6 @@ export function buildPrompt(pkg: ResolvedPackage, query: string, content: string
  * (`{name, version: 'local', root, entryDts: null, readme: null}`) purely to make
  * this call compile, with three of the five fields existing only for that.
  */
-export function formatResultText(
-    header: string,
-    parsed: {answer: string; excerpt?: string},
-    verified: boolean | undefined
-): string {
-    return formatResultTextShared(header, parsed, verified)
-}
 
 /** The header for an npm package answer. */
 export function packageHeader(pkg: ResolvedPackage): string {

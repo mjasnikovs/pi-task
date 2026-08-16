@@ -180,7 +180,7 @@ async function withoutAdminEnv<T>(fn: () => Promise<T>): Promise<T> {
 async function runArm(name: string, mods: ArmModules): Promise<ArmResult> {
     const dir = makeFixture(name)
     return withoutAdminEnv(async () => {
-        const firstGate = await mods.gate(dir, 120_000, 1_000, {}, '')
+        const firstGate = await mods.gate(dir, {timeoutMs: 120_000, bootGraceMs: 1_000, planText: ''})
 
         // ATTEMPT 1, scripted to do exactly what run 20's attempts did.
         const runChild = (): Promise<string> => {
@@ -198,7 +198,7 @@ async function runArm(name: string, mods: ArmModules): Promise<ArmResult> {
             cwd: dir,
             failReason: firstGate.reason,
             runChild,
-            gate: c => mods.gate(c, 120_000, 1_000, {}, ''),
+            gate: c => mods.gate(c, {timeoutMs: 120_000, bootGraceMs: 1_000, planText: ''}),
             discoverLabels: () => ['bun run test', 'bun run lint'],
             discard: c => {
                 git(c, ['checkout', '--', '.'])

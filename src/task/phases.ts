@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {docsFocused} from '../workers/docs-core.js'
 import {fetchFocused} from '../workers/fetch-core.js'
-import {runWorker, type RunWorkerResult} from '../workers/pi-worker-core.js'
+import {runWorker, type RunWorkerInput, type RunWorkerResult} from '../workers/pi-worker-core.js'
 import {classifyWorkerFailure} from '../workers/worker-failure.js'
 import {
     findPhantomImports,
@@ -441,6 +441,23 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
 
 export interface PhaseResearchDeps extends ExternalContextDeps {
     getFileInventory?: (cwd: string, signal?: AbortSignal) => Promise<string>
+    /**
+     * Run ONE research worker. Absent (production) → the real `runWorker`.
+     *
+     * The seam exists for the same reason `getFileInventory` does: every decision
+     * `runSpec` makes — the three Research retry gates, the fatal/runaway/empty
+     * classification, the marker choice, `postProcess` — is a pure function of the
+     * returned `RunWorkerResult`, but reaching any of them used to require driving
+     * a fake process that emits JSON events. Substituting the result lets a gate be
+     * tested by the fields it actually reads.
+     *
+     * `label` is the worker's name — the same one `recordWorker` trails. It is
+     * passed because a substitute must answer differently per worker, and the only
+     * alternative is matching a marker sentence inside the prompt, which makes
+     * prompt copy load-bearing test infrastructure. Same reason
+     * `PhaseDeps.runChild` takes a name.
+     */
+    runWorker?: (label: string, input: RunWorkerInput) => Promise<RunWorkerResult>
 }
 
 const DOCS_EXTENSION_PATH = fileURLToPath(new URL('../workers/docs-extension.js', import.meta.url))
@@ -796,6 +813,8 @@ export async function phaseResearch(
     researchDeps: PhaseResearchDeps = {}
 ): Promise<string> {
     const fileInventoryFn = researchDeps.getFileInventory ?? getFileInventory
+    const runWorkerFn =
+        researchDeps.runWorker ?? ((_label: string, input: RunWorkerInput) => runWorker(input))
     const externalContext = await gatherExternalContext(refined, deps, researchDeps)
 
     // Pre-compute the project file inventory once and hand it to every worker.
@@ -1121,7 +1140,7 @@ export async function phaseResearch(
         const runOnce = (extraPreamble?: string): Promise<RunWorkerResult> =>
             recordWorker(
                 spec.label,
-                runWorker({
+                runWorkerFn(spec.label, {
                     prompt: extraPreamble ? `${extraPreamble}\n\n${basePrompt}` : basePrompt,
                     cwd: deps.cwd,
                     signal: deps.signal,
@@ -1891,7 +1910,7 @@ export const PHASES: PhaseConfig[] = [
             // (proven: compose re-leaks it 4/4). Rewriting the source so compose has
             // nothing to contradict is the fix. Silent + no-op when nothing is wrong
             // or the runtime's types aren't installed.
-            const phantoms = findPhantomImports(refined, d.cwd)
+            const phantoms = await findPhantomImports(refined, d.cwd)
             if (phantoms.length === 0) return refined
             d.logDebug?.(
                 `phantom specifiers rewritten in refined: ${phantoms.map(x => x.spec).join(', ')}`
@@ -1916,7 +1935,7 @@ export const PHASES: PhaseConfig[] = [
             // through every phase and the implementer fabricates a `declare module`
             // shim to compile it. Append the corrections so compose folds them into
             // CONSTRAINTS. No LLM cost and silent when nothing is wrong.
-            const corrections = formatApiCorrections(findPhantomImports(p.refined, d.cwd))
+            const corrections = formatApiCorrections(await findPhantomImports(p.refined, d.cwd))
             if (corrections) {
                 d.logDebug?.(`phantom imports flagged:\n${corrections}`)
                 return `${out}\n\n${corrections}`

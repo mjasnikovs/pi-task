@@ -55,16 +55,16 @@ test('classifyRuntimeImport: phantom with no base symbol falls back to the modul
     expect(v.baseSymbol).toBeNull()
 })
 
-test('findPhantomImports flags only the unverifiable specifiers (injected loader)', () => {
+test('findPhantomImports flags only the unverifiable specifiers (injected loader)', async () => {
     const text = 'Use bun:sql for the DB, bun:sqlite for tests, bun:nope for nothing.'
-    const phantoms = findPhantomImports(text, '/irrelevant', () => TYPES)
+    const phantoms = await findPhantomImports(text, '/irrelevant', () => TYPES)
     expect(phantoms.map(p => p.spec)).toEqual(['bun:sql', 'bun:nope'])
     expect(phantoms[0].suggestion).toContain('import { sql } from "bun"')
     expect(phantoms[1].suggestion).toContain('bun:ffi, bun:sqlite, bun:test')
 })
 
-test('findPhantomImports skips a runtime whose types cannot be loaded (never flag unverifiable)', () => {
-    const phantoms = findPhantomImports('use bun:sql', '/irrelevant', () => null)
+test('findPhantomImports skips a runtime whose types cannot be loaded (never flag unverifiable)', async () => {
+    const phantoms = await findPhantomImports('use bun:sql', '/irrelevant', () => null)
     expect(phantoms).toEqual([])
 })
 
@@ -94,7 +94,7 @@ test('formatApiOverrideBanner: top banner that supersedes the doc, or empty when
 })
 
 // Lay down a resolvable `bun` types stub so the REAL loader flags bun:sql as phantom.
-function withStubbedBun(fn: (dir: string) => void): void {
+async function withStubbedBun(fn: (dir: string) => void | Promise<void>): Promise<void> {
     const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'phantom-deliv-'))
     const pkg = nodePath.join(dir, 'node_modules', 'bun')
     fs.mkdirSync(pkg, {recursive: true})
@@ -107,39 +107,41 @@ function withStubbedBun(fn: (dir: string) => void): void {
         'export class SQL {}\nexport const sql: SQL\ndeclare module "bun:test" {}\n'
     )
     try {
-        fn(dir)
+        await fn(dir)
     } finally {
         fs.rmSync(dir, {recursive: true, force: true})
     }
 }
 
-test('findDeliveryPhantoms: flags an affirmative bun:sql in the spec text itself', () => {
-    withStubbedBun(dir => {
-        const phantoms = findDeliveryPhantoms('Connect using the `bun:sql` driver.', dir)
+test('findDeliveryPhantoms: flags an affirmative bun:sql in the spec text itself', async () => {
+    await withStubbedBun(async dir => {
+        const phantoms = await findDeliveryPhantoms('Connect using the `bun:sql` driver.', dir)
         expect(phantoms.map(p => p.spec)).toEqual(['bun:sql'])
     })
 })
 
-test('findDeliveryPhantoms: flags bun:sql reached only via an @-referenced design doc', () => {
-    withStubbedBun(dir => {
+test('findDeliveryPhantoms: flags bun:sql reached only via an @-referenced design doc', async () => {
+    await withStubbedBun(async dir => {
         fs.writeFileSync(
             nodePath.join(dir, 'DESIGN.md'),
             '# Design\nDB access via `bun:sql` built-in driver.'
         )
         // The spec itself is clean — the phantom lives only in the doc pi re-expands.
-        const phantoms = findDeliveryPhantoms('Implement the DB layer per @DESIGN.md', dir)
+        const phantoms = await findDeliveryPhantoms('Implement the DB layer per @DESIGN.md', dir)
         expect(phantoms.map(p => p.spec)).toEqual(['bun:sql'])
     })
 })
 
-test('findDeliveryPhantoms: clean spec + no phantom doc -> empty', () => {
-    withStubbedBun(dir => {
-        expect(findDeliveryPhantoms('Use `import { SQL } from "bun"` for the DB.', dir)).toEqual([])
+test('findDeliveryPhantoms: clean spec + no phantom doc -> empty', async () => {
+    await withStubbedBun(async dir => {
+        expect(
+            await findDeliveryPhantoms('Use `import { SQL } from "bun"` for the DB.', dir)
+        ).toEqual([])
     })
 })
 
-test('rewritePhantomSpecifiers strikes all four syntactic forms', () => {
-    const phantoms = findPhantomImports('bun:sql', '/x', () => TYPES)
+test('rewritePhantomSpecifiers strikes all four syntactic forms', async () => {
+    const phantoms = await findPhantomImports('bun:sql', '/x', () => TYPES)
     const text = [
         'import { x } from "bun:sql"',
         'const c = require("bun:sql")',
@@ -157,8 +159,8 @@ test('rewritePhantomSpecifiers strikes all four syntactic forms', () => {
     expect(out).toContain('| import { sql } from "bun" | pg |') // bare word in table cell
 })
 
-test('rewritePhantomSpecifiers is idempotent and a no-op when nothing is flagged', () => {
-    const phantoms = findPhantomImports('use bun:sql', '/x', () => TYPES)
+test('rewritePhantomSpecifiers is idempotent and a no-op when nothing is flagged', async () => {
+    const phantoms = await findPhantomImports('use bun:sql', '/x', () => TYPES)
     const once = rewritePhantomSpecifiers('use bun:sql now', phantoms)
     expect(rewritePhantomSpecifiers(once, phantoms)).toBe(once)
     expect(rewritePhantomSpecifiers('use zod and react', [])).toBe('use zod and react')

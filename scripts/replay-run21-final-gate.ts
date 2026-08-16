@@ -247,7 +247,7 @@ async function runArm(
         ...(opts.blindEnumeration === true ? {enumerationCapable: () => false} : {})
     }
     const gate = async (cwd: string): Promise<FinalGateOutcome> => {
-        const out = await mods.gate(cwd, 300_000, 6_000, bootDeps, PLAN_TEXT)
+        const out = await mods.gate(cwd, {timeoutMs: 300_000, bootGraceMs: 6_000, bootDeps, planText: PLAN_TEXT})
         firstGate ??= out
         return out
     }

@@ -324,3 +324,43 @@ export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
     if (countEntryDeclarations(content) > 0) return null
     return target
 }
+
+/**
+ * Follow the `@types/<name>` + triple-slash `<reference types>` redirect chain from
+ * a package that ships no usable types of its own to the one that actually holds
+ * the declarations — `bun` → `@types/bun` → `bun-types`. Bounded to three hops;
+ * returns the package it started from when no better source is found.
+ *
+ * This is what the four predicates above EXIST for. They were exported and heavily
+ * tested (35 references between them) while the loop that calls them lived in two
+ * byte-identical copies — `docs-core.ts` and `phantom-imports.ts` — and NEITHER was
+ * covered: both of their tests pin only the zero-hop case, so the multi-hop
+ * behaviour cited by name in five doc comments was asserted nowhere.
+ *
+ * `resolveHop` is the one thing the two call sites genuinely disagree about: the
+ * docs pipeline resolves the next hop through an auto-installing async lookup, the
+ * phantom-import checker through a bare sync resolve that must never install. It
+ * returns null to stop the walk.
+ */
+export async function resolveTypeSource(
+    start: ResolvedPackage,
+    seed: string,
+    resolveHop: (name: string) => Promise<ResolvedPackage | null>
+): Promise<ResolvedPackage> {
+    const visited = new Set<string>([start.name, seed])
+    let cur = start
+    for (let hop = 0; hop < 3; hop++) {
+        let next = detectTypesRedirect(cur)
+        if (next && visited.has(next)) next = null
+        if (!next && !hasTypeFiles(cur.root)) {
+            const types = typesPackageName(cur.name)
+            if (types && !visited.has(types)) next = types
+        }
+        if (!next) break
+        visited.add(next)
+        const resolved = await resolveHop(next)
+        if (!resolved) break
+        cur = resolved
+    }
+    return cur
+}
