@@ -13,7 +13,8 @@ import {
     lookupResearch,
     storeResearch,
     depsMap,
-    resumeResearchRun
+    resumeResearchRun,
+    isRetryableFsError
 } from './research-cache.js'
 
 function tmpCwd(): string {
@@ -349,6 +350,29 @@ test('an ABANDONED lock is reclaimed, so a crashed writer cannot wedge the run',
     await fsp.utimes(lock, ancient, ancient)
     await storeResearch(cwd, 'r', 'k', 'v', {})
     expect(await lookupResearch(cwd, 'r', 'k')).toEqual({text: 'v', details: {}})
+})
+
+// The Windows hole behind CI's "39 of 40": a `mkdir` against a lock directory another
+// process is deleting fails with EPERM/EACCES/EBUSY, not EEXIST. Reading any of those
+// as fatal skipped the store silently — no throw, no log, exit 0, one entry missing.
+// This pins the CLASS, which is the decision; the retry loop itself is covered by the
+// held-lock and abandoned-lock tests either side of it.
+test('a delete-pending lock error is retryable, not fatal', () => {
+    for (const code of ['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY']) {
+        expect(isRetryableFsError(Object.assign(new Error(code), {code}))).toBe(true)
+    }
+    // The ordinary "someone holds it" answer stays retryable too.
+    expect(isRetryableFsError(Object.assign(new Error('EEXIST'), {code: 'EEXIST'}))).toBe(true)
+})
+
+test('a genuinely fatal filesystem error is NOT retried', () => {
+    // A missing parent or a read-only volume will never succeed on a retry — giving up
+    // is correct, and is what keeps the acquisition bounded.
+    for (const code of ['ENOENT', 'EROFS', 'ENOSPC', 'ENAMETOOLONG']) {
+        expect(isRetryableFsError(Object.assign(new Error(code), {code}))).toBe(false)
+    }
+    expect(isRetryableFsError(new Error('no code at all'))).toBe(false)
+    expect(isRetryableFsError(null)).toBe(false)
 })
 
 test('the lock is released after a store, leaving nothing behind', async () => {

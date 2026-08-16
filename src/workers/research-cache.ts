@@ -120,12 +120,47 @@ const LOCK_TIMEOUT_MS = 2_000
 /** Poll interval while the lock is held by someone else. */
 const LOCK_POLL_MS = 10
 /**
+ * How long the atomic replace retries a transient refusal. Short: the lock is HELD for
+ * every one of these milliseconds, so this trades a bounded stall for not losing a
+ * write the lock was taken to protect.
+ */
+const RENAME_TIMEOUT_MS = 500
+/**
  * A lock older than this is treated as abandoned and removed. Two writers can both
  * decide that and both proceed, which degrades exactly to the pre-lock behaviour (one
  * lost update) — strictly better than a crashed child wedging the cache for the rest of
  * the run. Sized far above the critical section, so a live holder is never stolen from.
  */
 const LOCK_STALE_MS = 30_000
+
+/**
+ * Filesystem errors that mean "try again in a moment", not "this will never work".
+ *
+ * POSIX gives `mkdir` two clean answers when someone else holds the lock: it succeeds,
+ * or it is EEXIST. Windows has a third. A directory that another process is removing
+ * enters a DELETE-PENDING state, and a create against it fails with EPERM/EACCES/EBUSY
+ * instead of EEXIST — so the exact moment the previous writer released the lock is a
+ * window in which the next writer's `mkdir` fails with a code that used to be read as
+ * fatal. The store was then silently skipped: no throw, no log, exit code 0, one entry
+ * missing. That is the whole of CI's `39 of 40` on windows-latest; the same run's
+ * ubuntu half is green because POSIX never produces the code.
+ *
+ * `rename` over an existing file has the same shape on Windows — it fails while any
+ * other handle is open on the target, including a scanner's — so the cache write
+ * retries on this set too.
+ */
+const RETRYABLE_FS_CODES = new Set(['EEXIST', 'EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY'])
+
+/** Is this a transient filesystem error worth retrying inside the caller's deadline? */
+export function isRetryableFsError(err: unknown): boolean {
+    const code = (err as NodeJS.ErrnoException | null)?.code
+    return code !== undefined && RETRYABLE_FS_CODES.has(code)
+}
+
+/** Does this error mean the lock directory is genuinely held right now? */
+function isHeldError(err: unknown): boolean {
+    return (err as NodeJS.ErrnoException | null)?.code === 'EEXIST'
+}
 
 /**
  * One cached worker result: the focused answer text plus its structured details, and —
@@ -348,13 +383,30 @@ export async function lookupResearch(
 
 /** Write the cache file atomic-ish, so a concurrent reader never sees it half-written. */
 async function writeCacheFile(cwd: string, out: CacheFile): Promise<void> {
+    const tmp = `${researchCacheFile(cwd)}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
     try {
         await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        const tmp = `${researchCacheFile(cwd)}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
         await fsp.writeFile(tmp, JSON.stringify(out), 'utf8')
-        await fsp.rename(tmp, researchCacheFile(cwd))
+        // The replace, not the write, is the part Windows can transiently refuse — any
+        // other open handle on the target (a reader, a scanner) fails it with EPERM.
+        // The whole point of the lock above is that this write is not lost, so a
+        // transient refusal is retried inside the same bounded budget rather than
+        // swallowed. The lock is still held throughout.
+        const deadline = Date.now() + RENAME_TIMEOUT_MS
+        for (;;) {
+            try {
+                await fsp.rename(tmp, researchCacheFile(cwd))
+                return
+            } catch (err) {
+                if (!isRetryableFsError(err) || Date.now() >= deadline) throw err
+                await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
+            }
+        }
     } catch {
         // best-effort cache
+    } finally {
+        // Never leave a .tmp behind for a replace that never happened.
+        await fsp.rm(tmp, {force: true}).catch(() => {})
     }
 }
 
@@ -378,7 +430,16 @@ async function acquireLock(lockPath: string, deadline: number): Promise<boolean>
             await fsp.mkdir(lockPath)
             return true
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false
+            if (!isRetryableFsError(err)) return false
+            // Not EEXIST but still retryable ⇒ Windows delete-pending (see
+            // RETRYABLE_FS_CODES). There is no lock to inspect for staleness: the
+            // directory is on its way out, so wait one poll and try to create it again
+            // rather than reporting a hold that nobody has.
+            if (!isHeldError(err)) {
+                if (Date.now() >= deadline) return false
+                await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
+                continue
+            }
             try {
                 const st = await fsp.stat(lockPath)
                 if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
