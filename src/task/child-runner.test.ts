@@ -1182,6 +1182,72 @@ describe('runPhaseChild — planning-child runaway guards', () => {
         expect(prompts[1]).toContain('SYSTEM NOTE')
         expect(out).toBe('clean answer')
     }, 2000)
+
+    // The wall clock above is OFF in production (PHASE_CHILD_TIMEOUT_MS = 0):
+    // measured healthy reasoning-on decompose runs take 610-927s, so any cap that
+    // catches the runaway also kills good work. The StallDetector replaces it, and
+    // this pins that it kills the same runaway with NO clock armed at all.
+    test('kills a thrashing planning child with no wall clock armed', async () => {
+        const prompts: string[] = []
+        const procs: Array<ReturnType<typeof makeProc>> = []
+        let i = 0
+        const spawn = (() => {
+            const p = makeProc()
+            procs.push(p)
+            const first = i++ === 0
+            p.kill = () => {
+                if (p.killed) return true
+                p.killed = true
+                p.emit('close', 143)
+                return true
+            }
+            queueMicrotask(() => {
+                prompts.push(p.stdinData)
+                if (first) {
+                    // The live shape: five design files cycled over and over.
+                    // In any 20-call window each path appears at most 4 times, so
+                    // neither of LoopDetector's rules (threshold 5) ever trips —
+                    // but across the WHOLE run nothing new is being read. Never
+                    // closes on its own.
+                    const paths = ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']
+                    for (let n = 0; n < 40; n++) {
+                        p.stdout!.emit(
+                            'data',
+                            Buffer.from(
+                                JSON.stringify({
+                                    type: 'tool_execution_start',
+                                    toolName: 'read',
+                                    args: {path: paths[n % paths.length]}
+                                }) + '\n'
+                            )
+                        )
+                    }
+                    return
+                }
+                p.stdout!.emit(
+                    'data',
+                    Buffer.from(
+                        JSON.stringify({
+                            type: 'agent_end',
+                            messages: [
+                                {role: 'assistant', content: [{type: 'text', text: 'clean answer'}]}
+                            ]
+                        }) + '\n'
+                    )
+                )
+                p.emit('close', 0)
+            })
+            return p
+        }) as unknown as SpawnFn
+
+        const out = await runPhaseChild(depsWith(spawn), 'auto-decompose', 'read', 'DECOMPOSE')
+        expect(procs[0]!.killed).toBe(true)
+        expect(prompts.length).toBe(2)
+        // The hint must name the mistake it actually made — re-reading — and must
+        // not tell a model that was merely slow to hurry up.
+        expect(prompts[1]).toContain('already read')
+        expect(out).toBe('clean answer')
+    }, 2000)
 })
 
 describe('childArgs in-run guard extensions', () => {

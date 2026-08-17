@@ -124,6 +124,11 @@ describe('LoopDetector path-aware detection', () => {
     test('re-reading one file with varied offset/limit trips even though args differ', () => {
         // The exact-match key never matches (offset/limit change every call), so
         // only path detection catches this — the TASK_0017 failure signature.
+        //
+        // Counted on the RANGE: a bigger limit from the same offset does reach
+        // lines the child had not seen, so 80 and 200 are progress and only the
+        // reads that end short of the furthest line already covered are revisits.
+        // Five of those are needed to trip.
         const d = new LoopDetector(20, 5)
         const reads = [
             {offset: 0, limit: 50},
@@ -131,13 +136,27 @@ describe('LoopDetector path-aware detection', () => {
             {offset: 0, limit: 40},
             {offset: 0, limit: 200},
             {offset: 0, limit: 30},
-            {offset: 0, limit: 60}
+            {offset: 0, limit: 60},
+            {offset: 0, limit: 45},
+            {offset: 0, limit: 90}
         ]
         let hit = null
         for (const args of reads) {
             hit = d.record({name: 'read', args: {file_path: '/auth.ts', ...args}})
         }
         expect(hit).not.toBeNull()
+    })
+
+    test('paging that re-asks from the same offset with a bigger limit is progress', () => {
+        // Measured on a real decompose run: {limit:80}, then {offset:80,
+        // limit:400}, then {offset:80, limit:300}. The first two reach 320 lines
+        // the child had never seen. Scoring them as revisits (offset alone did)
+        // killed a child that was paging correctly through a 743-line file.
+        const d = new LoopDetector(20, 5)
+        const p = '/DESIGN/marketplace.html'
+        expect(d.record({name: 'read', args: {file_path: p, limit: 80}})).toBeNull()
+        expect(d.record({name: 'read', args: {file_path: p, offset: 80, limit: 400}})).toBeNull()
+        expect(d.record({name: 'read', args: {file_path: p, offset: 480, limit: 300}})).toBeNull()
     })
 
     test('mixed read+grep on the same path accumulates and trips', () => {

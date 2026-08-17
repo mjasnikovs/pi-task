@@ -6,9 +6,9 @@
  *   1. EXACT repeats — the same `(toolName, stable-stringified args)` key appears
  *      `threshold` times within the last `window` events.
  *   2. PATH revisits — the same primary file path is re-targeted `pathThreshold`
- *      times within the window WITHOUT the read offset advancing, which the exact
- *      key misses when `offset/limit` vary call-to-call. Strictly-forward paging
- *      never trips (see countRevisits).
+ *      times within the window over lines it has ALREADY covered, which the exact
+ *      key misses when `offset/limit` vary call-to-call. Forward paging never
+ *      trips (see countRevisits).
  *
  * Either pattern returns a LoopHit so the caller can kill the child and re-spawn
  * with a hint. No I/O. No imports from index.ts. Trivially unit-testable.
@@ -61,6 +61,24 @@ function readOffset(args: unknown): number {
     return typeof o === 'number' && Number.isFinite(o) ? o : 0
 }
 
+/** Default `limit` pi's read tool applies when the call names none. */
+const DEFAULT_READ_LIMIT = 2000
+
+/**
+ * The last line a call reaches, so a page can be told from a re-read. Absent,
+ * junk, or at-the-tool-default `limit` all mean "to the end of the file": at this
+ * layer they are indistinguishable, and the generous reading is the safe one —
+ * scoring an honest page as a revisit is the failure this rule had.
+ */
+function readEnd(args: unknown, offset: number): number {
+    if (!args || typeof args !== 'object') return Infinity
+    const l = (args as Record<string, unknown>).limit
+    if (typeof l !== 'number' || !Number.isFinite(l) || l <= 0 || l >= DEFAULT_READ_LIMIT) {
+        return Infinity
+    }
+    return offset + Math.floor(l) - 1
+}
+
 interface Entry {
     /** Exact-match key: name + stable-stringified args. */
     key: string
@@ -68,6 +86,8 @@ interface Entry {
     path: string | null
     /** Read offset (0 when absent), used to tell forward paging from revisits. */
     offset: number
+    /** Last line this call reaches (Infinity when it runs to end-of-file). */
+    end: number
 }
 
 export class LoopDetector {
@@ -83,7 +103,8 @@ export class LoopDetector {
     /** Record a tool call. Returns LoopHit if either threshold is breached, else null. */
     record(call: ToolCall): LoopHit | null {
         const key = `${call.name}\x00${stableStringify(call.args)}`
-        this.buf.push({key, path: primaryPath(call.args), offset: readOffset(call.args)})
+        const offset = readOffset(call.args)
+        this.buf.push({key, path: primaryPath(call.args), offset, end: readEnd(call.args, offset)})
         if (this.buf.length > this.window) this.buf.shift()
 
         // 1. Exact-match loop: identical (name, args) repeated past threshold.
@@ -106,19 +127,25 @@ export class LoopDetector {
     }
 
     /**
-     * Count same-path calls in the window that are "revisits" — accesses whose
-     * offset does not advance past the furthest offset already seen for that
-     * path. Linear paging (strictly increasing offsets) yields zero revisits and
-     * never trips; repeated whole-file re-reads (offset 0 each time), backward
-     * jumps, and path-targeting greps (offset 0) accumulate.
+     * Count same-path calls in the window that are "revisits" — accesses that end
+     * no further into the file than the furthest line already covered for that
+     * path. Paging yields zero revisits and never trips; repeated whole-file
+     * re-reads, backward jumps and path-targeting greps accumulate.
+     *
+     * The comparison is on the RANGE, not the offset. Offset alone scored a page
+     * that re-asks from the same start with a bigger limit — `{offset:80,
+     * limit:400}` after `{offset:80, limit:300}`, real reads from a measured
+     * decompose run — as a revisit, even though it covers 100 lines the child had
+     * never seen. That is the same mistake SingleReadGuard made by keying on the
+     * path alone, and it is corrected the same way.
      */
     private countRevisits(path: string): number {
-        let maxOffset = -1
+        let maxEnd = -1
         let revisits = 0
         for (const e of this.buf) {
             if (e.path !== path) continue
-            if (e.offset > maxOffset)
-                maxOffset = e.offset // progress: new ground
+            if (e.end > maxEnd)
+                maxEnd = e.end // progress: new ground
             else revisits++ // revisit: already-covered ground
         }
         return revisits

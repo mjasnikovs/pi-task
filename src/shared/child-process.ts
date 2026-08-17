@@ -106,6 +106,14 @@ export interface LoopHit {
     call: ToolCall
     count: number
     windowSize: number
+    /**
+     * Set when the kill came from the whole-run StallDetector rather than the
+     * short-window LoopDetector, naming which of its two rules tripped
+     * (task/stall-detector.ts). Absent for an ordinary loop hit. Carried here so
+     * a stall rides the kill/restart plumbing the loop hit already has instead of
+     * needing a second channel.
+     */
+    stall?: 'no-new-ground' | 'context-churn'
 }
 
 export interface ContextSnapshot {

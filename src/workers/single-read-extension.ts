@@ -10,7 +10,7 @@ const DEDUP_TOOLS = new Set(['grep', 'find', 'ls'])
  * blocks, each returning a reason the model receives as an error tool result
  * (agent-loop: block → createErrorToolResult) so the worker continues instead of
  * looping:
- *   - read: blocks any re-read of a file already read this run (path-keyed).
+ *   - read: blocks a re-read of LINES already delivered; forward paging passes.
  *   - grep/find/ls: blocks an identical repeat of the same call (args-keyed).
  * See single-read-guard.ts for why this is scoped to TOOLING.
  */
@@ -19,9 +19,12 @@ export default function (pi: ExtensionAPI): void {
     const calls = new RepeatedCallGuard()
     pi.on('tool_call', event => {
         if (event.toolName === 'read') {
-            const path = (event.input as {path?: unknown}).path
-            if (typeof path !== 'string') return
-            return reads.check(resolve(process.cwd(), path)) ?? undefined
+            const input = event.input as {path?: unknown; offset?: unknown; limit?: unknown}
+            if (typeof input.path !== 'string') return
+            return (
+                reads.check(resolve(process.cwd(), input.path), input.offset, input.limit)
+                ?? undefined
+            )
         }
         if (DEDUP_TOOLS.has(event.toolName)) {
             return calls.check(event.toolName, event.input) ?? undefined
