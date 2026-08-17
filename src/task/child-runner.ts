@@ -17,6 +17,7 @@ import {
 } from '../shared/child-process.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector} from './loop-detector.js'
+import {StallDetector, formatStallHint} from './stall-detector.js'
 import {
     detectLeakedToolCall,
     leakedToolCallHint,
@@ -39,26 +40,30 @@ export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 resta
 // ─── Phase-child wall-clock cap ──────────────────────────────────────────────
 
 /**
- * Hard wall-clock bound on ONE spawn of a phase child.
+ * Optional wall-clock bound on ONE spawn of a phase child. DEFAULT: OFF.
  *
- * The loop detector above only sees IDENTICAL repeated calls; a child that
- * re-reads the same design file at varying offsets slips past it and, with pi
- * compacting its context whenever the window fills, never exits on its own.
- * mx5-n 2026-08-14 is the observed case: a decompose child ran 16m23s at
- * 117,370 of a 120,064-token window, adding ~56k tokens of tool output per
- * minute, and had to be killed by hand. `streamInactivityMs` cannot catch it —
- * that guard fires on SILENCE and this child was the opposite of silent.
+ * It used to default to 600_000, sized against measured HEALTHY planning
+ * children on one local 27B backend (decompose 89s, whole plan phase 321s) on
+ * the reasoning that ten minutes was a 3-6x margin over honest work.
  *
- * Sized against measured HEALTHY planning children on the same local 27B
- * backend, which is the slowest thing we run: requirement extraction 54s,
- * artifact closure 47s, decompose 89s (22 titles), coverage 17s, and a whole
- * plan phase (clarify + two extractions + decompose) 321s end to end. Ten
- * minutes is 3-6x the slowest of those and well under the runaway, so it ends
- * the pathology without ever trimming honest work. Deliberately far above
- * RESEARCH_WORKER_TIMEOUT_MS (240s): a research worker answers one question,
- * a planning child reasons over the whole design doc.
+ * That premise was measured and is false. Replaying ONE captured auto-decompose
+ * request against the same backend with reasoning ON, n=10, everything else
+ * byte-identical (2026-08-17): all ten answered correctly with 26-42 titles, and
+ * every one took 610-927s. The cap would have killed 10 out of 10 GOOD runs and
+ * then failed the phase with PhaseTimeoutError. The number was not measuring the
+ * pathology, it was measuring one model's speed on one day.
+ *
+ * The runaway it was there to catch — a decompose child that ran 16m23s at
+ * 117,370 of a 120,064-token window, forward-paging past the loop detector — is
+ * now caught by StallDetector (stall-detector.ts), which bounds NON-PROGRESS and
+ * CONTEXT CHURN instead of elapsed seconds. Both of those are properties of the
+ * pathology, so neither has to be re-tuned for a slower model or a bigger repo.
+ *
+ * The value and the plumbing stay for a caller that genuinely wants a hard stop
+ * (tests inject a short one), but nothing sets it in production. Pass
+ * `timeoutMs` explicitly to arm it.
  */
-export const PHASE_CHILD_TIMEOUT_MS = 600_000
+export const PHASE_CHILD_TIMEOUT_MS = 0
 
 /**
  * Restart hint after a phase child burns its whole wall-clock budget. It
@@ -215,7 +220,13 @@ export async function runChild(
     onToolCall?: (call: ToolCall) => LoopHit | null,
     spawnFn?: SpawnFn,
     /** Internal `-e` extension paths for in-run guards (see childArgs). */
-    extensions?: readonly string[]
+    extensions?: readonly string[],
+    /**
+     * Every finished tool call's result text. The StallDetector's churn rule
+     * needs the size of what actually entered the child's context, which the
+     * CALL alone does not carry (task/stall-detector.ts).
+     */
+    onToolResult?: (text: string, isError: boolean) => void
 ): Promise<PhaseRunResult> {
     const invocation = getPiInvocation(childArgs(tools, extensions), prompt)
     let loopHit: LoopHit | undefined
@@ -234,6 +245,7 @@ export async function runChild(
             streamInactivityMs: getConfig().streamInactivityMs,
             onLine,
             onContextUsage,
+            onToolResult: onToolResult ? r => onToolResult(r.text, r.isError) : undefined,
             onToolCall: call => {
                 if (!onToolCall) return null
                 const hit = onToolCall(call)
@@ -433,16 +445,20 @@ async function triageChildResult(
  * Empty completions and connection-class model errors share that same budget —
  * see triageChildResult, which decides every one of those cases.
  *
- * TWO RUNAWAY GUARDS ride the same budget, because this is the runner every
+ * THREE RUNAWAY GUARDS ride the same budget, because this is the runner every
  * /task-auto planning child goes through (clarify, decompose, coverage,
- * contract-extract) and until mx5-n 2026-08-14 it had neither:
+ * contract-extract) and until mx5-n 2026-08-14 it had none:
  *   • a LoopDetector, so an identical repeated tool call is killed and
  *     re-prompted instead of being allowed to fill the context window;
- *   • PHASE_CHILD_TIMEOUT_MS, the backstop for the varied-args thrash the
- *     detector cannot see — the shape that actually cost us a 16-minute
- *     decompose child that was never going to return.
- * Both are checked BEFORE the triage ladder: we killed the child, so its exit
- * status describes our SIGTERM and says nothing about its verdict.
+ *   • a StallDetector, the backstop for the varied-args thrash the loop
+ *     detector's short window cannot see — the shape that actually cost us a
+ *     16-minute decompose child that was never going to return. It bounds
+ *     consecutive no-new-ground calls and total context churn, NOT elapsed time;
+ *   • PHASE_CHILD_TIMEOUT_MS, a hard wall clock, OFF by default because the
+ *     measured healthy range (610-927s for a reasoning-on decompose) overlaps
+ *     any value that would catch the pathology. See its comment.
+ * All three are checked BEFORE the triage ladder: we killed the child, so its
+ * exit status describes our SIGTERM and says nothing about its verdict.
  */
 export async function runPhaseChild(
     deps: PhaseDeps,
@@ -456,6 +472,7 @@ export async function runPhaseChild(
     const budgetMs = deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS
     for (let attempt = 0; attempt <= MAX_LEAK_RETRIES; attempt++) {
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
+        const stall = new StallDetector()
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
         try {
@@ -465,23 +482,30 @@ export async function runPhaseChild(
                 prependHint(hint, prompt),
                 clock.signal,
                 deps.onChildOutput,
-                deps.onContextUsage,
-                call => detector.record(call),
+                snapshot => {
+                    stall.noteContext(snapshot.contextWindow)
+                    deps.onContextUsage?.(snapshot)
+                },
+                call => detector.record(call) ?? stall.record(call),
                 deps.spawn,
-                deps.childExtensions
+                deps.childExtensions,
+                (text, isError) => stall.noteResult(text, isError)
             )
         } finally {
             clock.cleanup()
         }
-        // A user cancel must not be mistaken for either guard.
+        // A user cancel must not be mistaken for any of the guards.
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         if (r.loopHit) {
             loopHistory.push(r.loopHit)
             if (attempt === MAX_LEAK_RETRIES) throw new LoopExhaustedError(name, loopHistory)
             deps.logDebug?.(
-                `${name}: looped on ${r.loopHit.call.name} — retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+                r.loopHit.stall ?
+                    `${name}: stalled (${r.loopHit.stall}) on ${r.loopHit.call.name} — `
+                        + `retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+                :   `${name}: looped on ${r.loopHit.call.name} — retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
             )
-            hint = formatLoopHint(r.loopHit)
+            hint = r.loopHit.stall ? formatStallHint(r.loopHit.stall) : formatLoopHint(r.loopHit)
             continue
         }
         if (clock.timedOut()) {
@@ -588,6 +612,7 @@ export async function runPhaseWithLoopGuard(
     for (let strike = 0; strike <= MAX_LOOP_RESTARTS; strike++) {
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
+        const stall = new StallDetector()
         const prompt = buildPrompt(nextHint)
         const r = await runChild(
             deps.cwd,
@@ -595,9 +620,14 @@ export async function runPhaseWithLoopGuard(
             prompt,
             deps.signal,
             deps.onChildOutput,
-            deps.onContextUsage,
-            call => detector.record(call),
-            deps.spawn
+            snapshot => {
+                stall.noteContext(snapshot.contextWindow)
+                deps.onContextUsage?.(snapshot)
+            },
+            call => detector.record(call) ?? stall.record(call),
+            deps.spawn,
+            undefined,
+            (text, isError) => stall.noteResult(text, isError)
         )
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         if (r.loopHit) {
@@ -625,7 +655,8 @@ export async function runPhaseWithLoopGuard(
                 }
                 throw new LoopExhaustedError(name, loopHistory)
             }
-            nextHint = formatLoopHint(r.loopHit)
+            nextHint =
+                r.loopHit.stall ? formatStallHint(r.loopHit.stall) : formatLoopHint(r.loopHit)
             continue
         }
         // Everything past the loop kill is the shared ladder: exit code, model

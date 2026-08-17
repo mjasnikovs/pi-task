@@ -42,9 +42,48 @@ describe('SingleReadGuard', () => {
     })
 
     test('reason names the blocked path and tells the model to answer', () => {
-        const msg = singleReadReason('/workspace/package.json')
+        const msg = singleReadReason('/workspace/package.json', Infinity)
         expect(msg).toContain('/workspace/package.json')
         expect(msg.toLowerCase()).toContain('write your final answer')
+    })
+
+    // The measured failure this guard caused: a 743-line design file the planner
+    // paged deliberately (`limit: 80`), whose second page was refused. It never
+    // reached the end and spent 197 of 200 calls asking for the rest.
+    test('forward paging through a big file is never blocked', () => {
+        const g = new SingleReadGuard()
+        expect(g.check('/DESIGN/marketplace.html', undefined, 80)).toBeNull()
+        expect(g.check('/DESIGN/marketplace.html', 80, 400)).toBeNull()
+        expect(g.check('/DESIGN/marketplace.html', 480, 300)).toBeNull()
+    })
+
+    test('a page that lies entirely inside ground already delivered is blocked', () => {
+        const g = new SingleReadGuard()
+        g.check('/a.ts', undefined, 80) // lines 1-80
+        g.check('/a.ts', 80, 400) // lines 80-479
+        const r = g.check('/a.ts', 120, 250) // lines 120-369, all seen
+        expect(r?.block).toBe(true)
+    })
+
+    test('the reason points at the next unread line, not at a dead end', () => {
+        const g = new SingleReadGuard()
+        g.check('/a.ts', undefined, 80)
+        const r = g.check('/a.ts', 10, 20)
+        expect(r?.reason).toContain('line 81')
+    })
+
+    test('a read with no limit reaches EOF, so any later read is blocked', () => {
+        const g = new SingleReadGuard()
+        expect(g.check('/a.ts')).toBeNull()
+        expect(g.check('/a.ts', 500, 100)).not.toBeNull()
+        expect(g.check('/a.ts')).not.toBeNull()
+    })
+
+    test('a tail read after a partial page is allowed, then closes the file', () => {
+        const g = new SingleReadGuard()
+        g.check('/a.ts', undefined, 100) // lines 1-100
+        expect(g.check('/a.ts', 100)).toBeNull() // line 100 to EOF: new ground
+        expect(g.check('/a.ts', 100, 300)).not.toBeNull() // now nothing is left
     })
 })
 
