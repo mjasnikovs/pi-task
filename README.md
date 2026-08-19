@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-3025%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-3797%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -233,13 +233,17 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | `CHROME_BIN` | verify-work render check | Explicit headless Chrome-family binary. Tried before the Playwright cache and a browser on `PATH`. No browser found ⇒ the render check SKIPs; it never installs one. |
 | `PLAYWRIGHT_BROWSERS_PATH` | verify-work render check | Where to look for a cached Playwright Chromium (defaults to `~/.cache/ms-playwright`, or `~/Library/Caches/ms-playwright` on macOS). |
 
-Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. Add `.pi-tasks/` to your `.gitignore` if you don't want them checked in.
+Tasks are persisted to `<cwd>/.pi-tasks/TASK_NNNN.md`. A run also keeps small
+line-oriented ledgers beside them — contracts, launch contract, environment
+notes, accepted debt, repair queue, requirements — plus `*-debug.log` when
+**debug logs** is on. Add `.pi-tasks/` to your `.gitignore` if you don't want
+them checked in.
 
 ## Development
 
 ```sh
 bun install
-bun run test       # 3028 tests across 173 files
+bun run test       # 3800 tests across 214 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```
