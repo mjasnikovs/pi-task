@@ -9,7 +9,7 @@
 [![npm](https://img.shields.io/npm/v/@mjasnikovs/pi-task?color=cb3837&logo=npm)](https://www.npmjs.com/package/@mjasnikovs/pi-task)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](./LICENSE)
 [![pi extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-[![tests](https://img.shields.io/badge/tests-3799%20passing-3fb950)](#development)
+[![tests](https://img.shields.io/badge/tests-3771%20passing-3fb950)](#development)
 [![types](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](./tsconfig.json)
 
 </div>
@@ -72,7 +72,7 @@ A whole plan — `/task-auto` splits it into an ordered task list and runs each 
 | `/task-auto <feature>` | Plan a feature into a task list and run each title through `/task` in order (resumable). |
 | `/task-auto-resume [--unattended]` | Resume the active `/task-auto` run at the next unfinished task. `--unattended` is the boot-hook form: in-flight runs only. |
 | `/task-auto-cancel` | Stop the `/task-auto` loop after the current task (still resumable). |
-| `/task-config` | Toggle pi-task settings in an editor dialog: remote control, compress thinking, auto-commit, verify work, enforce guidelines, project tour, parallel research, research cache, search engine, command timeout, stuck reply retry, yolo mode, debug logs, one `watch:` toggle per live tool, and one `ext:` toggle per installed host extension. |
+| `/task-config` | Toggle pi-task settings in an editor dialog: remote control, auto-commit, verify work, enforce guidelines, project tour, parallel research, research cache, search engine, command timeout, stuck reply retry, yolo mode, debug logs, one `watch:` toggle per live tool, and one `ext:` toggle per installed host extension. |
 | `/remote` | Show the QR code & URLs for the web view (`/remote stop` to stop). Answer grill questions, start tasks, and watch progress from your phone. |
 
 ## The pipeline
@@ -204,7 +204,6 @@ Run `/task-config` to toggle pi-task's behavior in an editor dialog. Settings pe
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **remote control** | on | The remote UI server (QR code, phone access). Turn off to never start it. |
-| **compress thinking** | on | After each message, compresses the model's `<think>` blocks down to the decisions/constraints/facts that matter later — keeping long local-model runs from drowning their own context in self-talk. |
 | **auto-commit** | on | Snapshots the working tree into one git commit per `/task-auto` sub-task (see above). |
 | **verify work** | on | After each `/task` (and `/task-auto` task) implements — but **before** it's checked off or committed — actually **runs** the spec's own `VERIFY` block in the real workspace. pi-task otherwise only _authors_ a VERIFY block and never executes it, so a task that doesn't build is indistinguishable from one that works. A fresh `read` + `bash` child of the same local model runs the declared check, observes the real output, and reports **PASS/FAIL** (a legitimately no-op VERIFY is a PASS). On FAIL the run doesn't dead-stop: you get a boxed picker — **Autofix** (re-run the implementation turn against the failure, then re-verify; no attempt cap) or **Accept** (override a misjudged artifact) — and dismissing it pauses the run, resumable. A genuine clean pass is also the behavioral signal that lets **enforce guidelines** fix in place (see below). |
 | **enforce guidelines** | on | After each `/task` (and `/task-auto` task) is committed, re-checks that commit's work against the project's `AGENTS.md` / `CLAUDE.md` (in the working directory). A bare fix-in-place pass trashes working code (A/B-proven), so enforcement is gated on the **verify work** signal. **With** a genuine verify pass: a fresh `read` + `edit` child of the same local model reads the **last commit's** diff and fixes violations in place; its fixes are committed **separately** as an `ENFORCE GUIDELINES` commit, then the verify signal is re-run against the enforced tree — a regression **reverts** the enforce commit and keeps the verified work. **Without** that signal (verify off, no spec, or an accept-override): the pass runs read-only and only **reports** violations, never rewrites logic. Either way a violation it can't clear (or a pass that can't run) only **warns** — the task commit already landed, so the run continues. Skipped when nothing was committed for the task. |
@@ -243,7 +242,7 @@ them checked in.
 
 ```sh
 bun install
-bun run test       # 3800 tests across 214 files
+bun run test       # 3772 tests across 212 files
 bun run lint       # prettier + eslint + tsc --noEmit
 bun run build      # tsc → dist/
 ```

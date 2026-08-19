@@ -149,12 +149,6 @@ export const ITEMS: ConfigItem[] = [
             + 'your phone. Prints a QR code to scan when it starts'
     ),
     booleanItem(
-        'compressReasoning',
-        'compress thinking',
-        "Shrink the model's thinking blocks once it has moved on, so a long run keeps more "
-            + 'room for the work itself'
-    ),
-    booleanItem(
         'autoCommit',
         'auto-commit',
         'Make a git commit before and after every sub-task, so each step is a checkpoint '

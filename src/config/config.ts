@@ -7,7 +7,6 @@ import {DEFAULT_STREAM_INACTIVITY_MS} from '../shared/stream-watchdog.js'
 
 export interface PiTaskConfig {
     remote: boolean
-    compressReasoning: boolean
     autoCommit: boolean
     orientation: boolean
     enforceGuidelines: boolean
@@ -235,7 +234,6 @@ export function sanitizeStreamInactivityMs(value: unknown): number {
  */
 export const DEFAULT_CONFIG: PiTaskConfig = {
     remote: true,
-    compressReasoning: true,
     autoCommit: true,
     orientation: true,
     enforceGuidelines: true,

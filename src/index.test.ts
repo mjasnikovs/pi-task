@@ -77,7 +77,7 @@ describe('the pi-task extension entry point', () => {
         expect(r.tools.sort()).toEqual([...WORKER_TOOLS].sort())
     })
 
-    test('subscribes the watchdogs, the remote bridge and the thinking compressor', () => {
+    test('subscribes the watchdogs and the remote bridge', () => {
         const r = recorder()
         registerExtension(r.pi)
         // One representative event per registrar that has no command or tool of
@@ -87,7 +87,7 @@ describe('the pi-task extension entry point', () => {
             'session_shutdown', // remote, command watchdog, stream watchdog
             'tool_execution_start', // command watchdog + impl widget
             'before_provider_request', // stream watchdog
-            'message_end' // thinking compression
+            'message_end' // stream watchdog + remote
         ]) {
             expect(r.events).toContain(event)
         }
