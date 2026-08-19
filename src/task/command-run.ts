@@ -29,7 +29,7 @@
  */
 
 import {spawnSync} from 'node:child_process'
-import {isCommandNotFound} from './runner-resolve.js'
+import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
 export interface CommandRun {
@@ -196,4 +196,71 @@ export function classifyCommandRun(
         status: run.status ?? -1,
         tail: outputTail(run.stdout, run.stderr)
     }
+}
+
+/**
+ * How a re-run of ONE recorded VERIFY command line ended.
+ *   pass — it ran and exited 0. The ONLY outcome that may close a debt.
+ *   fail — it ran and exited non-zero for a real reason. Debt stays open.
+ *   gap  — nothing was observed: the shell/runner never spawned, 127 inside the
+ *          chain, a timeout, a missing browser, or absent external infrastructure.
+ *          INCONCLUSIVE, so the debt stays open (surface, never re-hide).
+ */
+export type VerifyRerunOutcome =
+    | {outcome: 'pass'}
+    | {outcome: 'fail'; status: number; tail: string}
+    | {outcome: 'gap'; detail: string}
+
+/** The command word of a shell line, past any leading `VAR=value` assignments. */
+function leadingBin(line: string): string | null {
+    for (const tok of line.trim().split(/\s+/)) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue
+        return tok
+    }
+    return null
+}
+
+/**
+ * Re-run one VERIFY-block command line (nexttask 5) under the gate's existing
+ * env-gap contract, so a debt whose reason NAMES that command can be closed by the
+ * command itself rather than by a judgement about it.
+ *
+ * Runs through `sh -c` because a VERIFY line is a shell line, not an argv: run 19's
+ * is `AGENT=1 bun test test/listings.test.ts`, and env prefixes, `&&` and redirects
+ * are all ordinary there. The leading command word is still resolved through
+ * runner-resolve so a login-shell-stripped PATH cannot make every re-run look like a
+ * gap (mx5 run 16's blindness, one level down).
+ *
+ * The asymmetry is the point: only exit 0 is conclusive. Every other ending — real
+ * failure, missing tool, unreachable database, timeout, no POSIX shell — leaves the
+ * debt exactly as open as it was.
+ */
+export function runVerifyCommandLine(
+    cwd: string,
+    line: string,
+    timeoutMs: number,
+    extraGapRe?: RegExp,
+    /** The spawner. Injected so a re-run's outcome can be tested without one. */
+    run: CommandRunner = spawnCommand
+): VerifyRerunOutcome {
+    const bin = leadingBin(line)
+    const runner = bin === null ? null : resolveRunner(bin)
+    // A VERIFY line is a SHELL line, not an argv — env prefixes, `&&` and
+    // redirects are all ordinary there — so the runner spawns `sh -c`.
+    const verdict = classifyCommandRun(
+        run({
+            cwd,
+            bin: 'sh',
+            args: ['-c', line],
+            timeoutMs,
+            env: runner ? runnerEnv(runner) : {...process.env}
+        }),
+        // Infrastructure counts as a gap on EVERY debt re-run, not only on
+        // request: an unreachable database cannot tell us whether the code is
+        // fixed, and the asymmetry below means an inconclusive re-run simply
+        // leaves the debt as open as it was.
+        extraGapRe ? [INFRA_GAP_OUTPUT_RE, extraGapRe] : [INFRA_GAP_OUTPUT_RE]
+    )
+    if (verdict.outcome === 'gap') return {outcome: 'gap', detail: verdict.detail}
+    return verdict
 }

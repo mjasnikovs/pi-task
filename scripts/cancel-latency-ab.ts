@@ -47,7 +47,11 @@ import {reportArm} from './ab-verdict.js'
 import {writeTaskFile, readTaskFile} from '../src/task/task-io.js'
 import {findResumableAuto, parseTaskList} from '../src/task/auto-io.js'
 import {makeFakeCtx} from '../src/test-utils/fake-ctx.js'
-import {fakeSpawnByPrompt, agentEndResponse, type SpawnResponse} from '../src/test-utils/fake-spawn.js'
+import {
+    fakeSpawnByPrompt,
+    agentEndResponse,
+    type SpawnResponse
+} from '../src/test-utils/fake-spawn.js'
 import type {SpawnFn} from '../src/shared/child-process.js'
 import type {RunTaskFn} from '../src/task/gate-deps.js'
 import type {TaskFrontMatter} from '../src/task/task-types.js'
@@ -63,7 +67,16 @@ process.env.CANCEL_AB_ARM = ARM
 type SpecPhase = 'refine' | 'research' | 'grill' | 'compose' | 'critique'
 type Seam = SpecPhase | 'impl' | 'gates' | 'between-tasks'
 
-const SEAMS: Seam[] = ['refine', 'research', 'grill', 'compose', 'critique', 'impl', 'gates', 'between-tasks']
+const SEAMS: Seam[] = [
+    'refine',
+    'research',
+    'grill',
+    'compose',
+    'critique',
+    'impl',
+    'gates',
+    'between-tasks'
+]
 
 const REFINED = `GOAL\nShip the slice.\n\nCONSTRAINTS\n- Use bun.\n\nKNOWN-UNKNOWNS\n- (none)\n`
 const SPEC = `GOAL\nShip the slice.\n\nCONSTRAINTS\n- none\n\nACCEPTANCE\n- exit 0\n\nVERIFY:\n\`\`\`bash\nbun run lint\n\`\`\`\n`
@@ -196,18 +209,18 @@ async function runTrial(seam: Seam): Promise<Trial> {
     // strips contextual typing, which would leave these parameters implicitly any.
     const runTask: RunTaskFn = async (c, cwd, title, opts) => {
         tasksStarted.push(title)
-        const runner = new TaskRunner(
-            c,
+        const runner = new TaskRunner({
+            ctx: c,
             cwd,
-            title,
-            opts?.resumeId,
-            () => {
+            rawPrompt: title,
+            resumeId: opts?.resumeId,
+            sendSpec: () => {
                 if (seam === 'impl') fire()
                 return Promise.resolve()
             },
-            spawn,
-            opts?.onStart
-        )
+            spawnFn: spawn,
+            onStart: opts?.onStart
+        })
         await runner.run()
         // Control seam: the cancel lands in the quiet moment between tasks,
         // the one case the pre-existing loop-top check already handled.
@@ -269,8 +282,7 @@ async function runTrial(seam: Seam): Promise<Trial> {
     // a stop at loop-top always did (loop-top is on their far side). The 'impl'
     // and 'gates' seams pay it in BOTH arms — mid-turn is not a safe checkpoint,
     // so that cost is the floor, not a regression.
-    const wentThroughImpl =
-        stopPoint === 'loop-top' && seam !== 'between-tasks' ? 1 : 0
+    const wentThroughImpl = stopPoint === 'loop-top' && seam !== 'between-tasks' ? 1 : 0
     const wastedS =
         phaseRuns.reduce((a, k) => a + (CHILD_COST_S[k] ?? 0), 0)
         + (wentThroughImpl + Math.max(0, startedAfter)) * IMPL_GATES_COST_S

@@ -37,14 +37,16 @@ describe('the deterministic stage reports its progress', () => {
             spec: 'GOAL\nx\n\nVERIFY:\n```bash\ntrue\n```\n',
             onStage: s => stages.push(s),
             repoHealth: () => Promise.resolve({ok: true, reason: 'ok'}),
-            probe: () => Promise.resolve([]),
-            prohibitionProbe: () => Promise.resolve([]),
-            testAssemblyProbe: () => Promise.resolve([]),
-            probeGamingProbe: () => Promise.resolve([]),
-            crossTaskDeletionProbe: () => Promise.resolve([]),
-            foreignPathProbe: () => Promise.resolve([]),
-            scriptEscapeProbe: () => Promise.resolve([]),
-            runnerGlobProbe: () => Promise.resolve([]),
+            probes: {
+                substitution: () => Promise.resolve([]),
+                prohibition: () => Promise.resolve([]),
+                testAssembly: () => Promise.resolve([]),
+                probeGaming: () => Promise.resolve([]),
+                crossTaskDeletion: () => Promise.resolve([]),
+                foreignPath: () => Promise.resolve([]),
+                scriptEscape: () => Promise.resolve([]),
+                runnerGlob: () => Promise.resolve([])
+            },
             runChild: () => Promise.resolve('WORK-VERIFIED: PASS')
         })
         expect(out.ok).toBe(true)

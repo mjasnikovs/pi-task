@@ -12,7 +12,7 @@ import {
     FINAL_LEAVE_LABEL,
     buildFinalFixPrompt,
     classifyFinalGateAnswer,
-    extractFailingCommand,
+    exitedCommandFromReason,
     parseFinalFixMarker,
     runFinalGateAutofix,
     type FinalFixDeps
@@ -41,17 +41,17 @@ describe('classifyFinalGateAnswer', () => {
     })
 })
 
-describe('extractFailingCommand', () => {
+describe('exitedCommandFromReason', () => {
     test('integration-command reason', () => {
-        expect(extractFailingCommand('`bun run test` exited 1 — 2 fail')).toBe('bun run test')
+        expect(exitedCommandFromReason('`bun run test` exited 1 — 2 fail')).toBe('bun run test')
     })
 
     test('static-check reason', () => {
-        expect(extractFailingCommand('static checks: `make lint` exited 2')).toBe('make lint')
+        expect(exitedCommandFromReason('static checks: `make lint` exited 2')).toBe('make lint')
     })
 
     test('unparseable reason → null', () => {
-        expect(extractFailingCommand('something went wrong')).toBeNull()
+        expect(exitedCommandFromReason('something went wrong')).toBeNull()
     })
 })
 

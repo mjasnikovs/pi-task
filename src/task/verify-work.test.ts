@@ -586,10 +586,12 @@ describe('runWorkVerification', () => {
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            probe: () =>
-                Promise.resolve([
-                    'src/test/a.test.ts constructs its OWN server/app (Bun.serve(...))'
-                ]),
+            probes: {
+                substitution: () =>
+                    Promise.resolve([
+                        'src/test/a.test.ts constructs its OWN server/app (Bun.serve(...))'
+                    ])
+            },
             runChild: async (_t, p) => {
                 prompt = p
                 return 'WORK-VERIFIED: PASS'
@@ -604,7 +606,7 @@ describe('runWorkVerification', () => {
         const out2 = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            probe: () => Promise.reject(new Error('git broke')),
+            probes: {substitution: () => Promise.reject(new Error('git broke'))},
             runChild: async (_t, p) => {
                 prompt2 = p
                 return 'WORK-VERIFIED: PASS'
@@ -614,17 +616,61 @@ describe('runWorkVerification', () => {
         expect(prompt2).not.toContain('SELF-VERIFICATION NOTICE')
     })
 
+    test('probes are fault-isolated in the table loop: one throwing thunk skips ITS row only', async () => {
+        // The isolation lives in PROBE_ADAPTERS' run (one try/catch per row), not
+        // in the binder — so a bag with one broken probe still yields every other
+        // row's notice, in table order, and the gate still reaches the child.
+        let prompt = ''
+        const stages: string[] = []
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            onStage: s => stages.push(s),
+            probes: {
+                substitution: () => Promise.reject(new Error('git broke')),
+                prohibition: () =>
+                    Promise.resolve(['src/a.ts — modified by this task, but the spec forbids it']),
+                crossTaskDeletion: () => {
+                    throw new Error('sync throw, not even a rejection')
+                },
+                runnerGlob: () => Promise.resolve(['`bun test` also collects e2e/*.spec.ts'])
+            },
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(prompt).not.toContain('SELF-VERIFICATION NOTICE')
+        expect(prompt).not.toContain('CROSS-TASK DELETION NOTICE')
+        expect(prompt).toContain('PROHIBITION NOTICE')
+        expect(prompt).toContain('TEST-RUNNER GLOB COLLISION NOTICE')
+        expect(prompt.indexOf('PROHIBITION NOTICE')).toBeLessThan(
+            prompt.indexOf('TEST-RUNNER GLOB COLLISION NOTICE')
+        )
+        // Every bound row announced its stage — the throwing ones included (the
+        // stage fires before the probe runs) — and the unbound rows did not.
+        expect(stages).toEqual([
+            'substitution probe',
+            'prohibition probe',
+            'cross-task deletion probe',
+            'runner-glob probe'
+        ])
+    })
+
     test('test-assembly findings reach the child prompt; a probe failure never blocks', async () => {
         let prompt = ''
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            testAssemblyProbe: () =>
-                Promise.resolve([
-                    'test/photos.test.ts imports and re-composes 2 leaf module(s) '
-                        + '(src/server/routes/auth, src/server/routes/photos) that '
-                        + 'src/server/index.ts is the ONLY production file to compose'
-                ]),
+            probes: {
+                testAssembly: () =>
+                    Promise.resolve([
+                        'test/photos.test.ts imports and re-composes 2 leaf module(s) '
+                            + '(src/server/routes/auth, src/server/routes/photos) that '
+                            + 'src/server/index.ts is the ONLY production file to compose'
+                    ])
+            },
             runChild: async (_t, p) => {
                 prompt = p
                 return 'WORK-VERIFIED: PASS'
@@ -639,7 +685,7 @@ describe('runWorkVerification', () => {
         const out2 = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            testAssemblyProbe: () => Promise.reject(new Error('git broke')),
+            probes: {testAssembly: () => Promise.reject(new Error('git broke'))},
             runChild: async (_t, p) => {
                 prompt2 = p
                 return 'WORK-VERIFIED: PASS'
@@ -654,10 +700,12 @@ describe('runWorkVerification', () => {
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            prohibitionProbe: () =>
-                Promise.resolve([
-                    'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
-                ]),
+            probes: {
+                prohibition: () =>
+                    Promise.resolve([
+                        'src/server/index.ts — modified by this task, but the spec forbids it: "Do NOT modify `src/server/index.ts`"'
+                    ])
+            },
             runChild: async (_t, p) => {
                 prompt = p
                 return 'WORK-VERIFIED: PASS'
@@ -672,7 +720,7 @@ describe('runWorkVerification', () => {
         const out2 = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            prohibitionProbe: () => Promise.reject(new Error('git broke')),
+            probes: {prohibition: () => Promise.reject(new Error('git broke'))},
             runChild: async (_t, p) => {
                 prompt2 = p
                 return 'WORK-VERIFIED: PASS'
@@ -917,7 +965,9 @@ describe('runWorkVerification', () => {
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            crossTaskDeletionProbe: async () => [{path: 'playwright/index.ts', owner: 'TASK_0020'}],
+            probes: {
+                crossTaskDeletion: async () => [{path: 'playwright/index.ts', owner: 'TASK_0020'}]
+            },
             runChild: async (_t, p) => {
                 prompt = p
                 return 'WORK-VERIFIED: FAIL deleted a sibling deliverable'
@@ -934,7 +984,7 @@ describe('runWorkVerification', () => {
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            crossTaskDeletionProbe: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}],
+            probes: {crossTaskDeletion: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}]},
             runChild: async () => 'WORK-VERIFIED: UNOBSERVED tool absent'
         })
         expect(out.ok).toBe(false)
@@ -946,7 +996,7 @@ describe('runWorkVerification', () => {
         const pass = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            crossTaskDeletionProbe: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}],
+            probes: {crossTaskDeletion: async () => [{path: 'a/b.ts', owner: 'TASK_0002'}]},
             runChild: async () => 'WORK-VERIFIED: PASS'
         })
         expect(pass.ok).toBe(true)
@@ -956,8 +1006,10 @@ describe('runWorkVerification', () => {
         const out = await runWorkVerification({
             cwd: '/x',
             spec: 'GOAL\nx',
-            crossTaskDeletionProbe: async () => {
-                throw new Error('git broke')
+            probes: {
+                crossTaskDeletion: async () => {
+                    throw new Error('git broke')
+                }
             },
             runChild: async (_t, p) => {
                 prompt = p

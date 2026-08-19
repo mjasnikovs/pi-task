@@ -30,10 +30,8 @@
  * is exactly what gets injected, and compose's VERIFY rules fold it into every
  * applicable task's runnable verification.
  */
-import * as fsp from 'node:fs/promises'
-import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
 import {normalise} from './contracts.js'
+import {makeLedger} from './ledger.js'
 
 const REQUIREMENTS_FILE = 'requirements.md'
 /** Cap kept entries so the injected block stays bounded on a large design. */
@@ -50,8 +48,35 @@ export interface RequirementEntry {
     anchor: string
 }
 
+/**
+ * A stored carried-requirements line plus its dedupe key (mirrors contracts.ts:
+ * lines are kept VERBATIM, keyed on the normalised first quoted span — whole line
+ * when there is none; a NEW entry carries the key of its quote directly).
+ */
+interface CarriedLine {
+    line: string
+    key: string
+}
+
+function carriedLineKey(line: string): string {
+    const q = /"([^"]+)"/.exec(line)
+    return normalise(q ? q[1] : line)
+}
+
+const carried = makeLedger<CarriedLine>({
+    file: REQUIREMENTS_FILE,
+    max: MAX_REQUIREMENTS,
+    key: c => c.key,
+    serialize: c => c.line,
+    parse: raw =>
+        raw
+            .split('\n')
+            .filter(l => l.trim().length > 0)
+            .map(line => ({line, key: carriedLineKey(line)}))
+})
+
 export function requirementsFile(cwd: string): string {
-    return path.join(tasksDir(cwd), REQUIREMENTS_FILE)
+    return carried.path(cwd)
 }
 
 /** Parse `REQUIREMENT: "<quote>" [anchor: …]` lines (mirrors parseContractLines). */
@@ -529,11 +554,7 @@ export function accountCoverage(
 
 /** The stored carried-requirements text ('' when none recorded). */
 export async function readRequirements(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(requirementsFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
+    return carried.readRaw(cwd)
 }
 
 function formatEntry(e: RequirementEntry, marker?: string): string {
@@ -567,51 +588,22 @@ export async function appendCarriedRequirements(
     judgeFlagged: string[] = [],
     danglingArtifacts: string[] = []
 ): Promise<void> {
-    if (
-        crossCutting.length === 0
-        && unresolved.length === 0
-        && judgeFlagged.length === 0
-        && danglingArtifacts.length === 0
-    ) {
-        return
+    const fresh: CarriedLine[] = []
+    for (const [entries, marker] of [
+        [crossCutting, undefined],
+        [unresolved, 'no task owns this — surfaced at plan time'],
+        [
+            judgeFlagged.map(q => ({quote: q, anchor: ''})),
+            'judge-flagged uncovered area, no task owns this — surfaced at plan time'
+        ],
+        [
+            danglingArtifacts.map(q => ({quote: q, anchor: ''})),
+            'dangling runtime artifact, nothing produces it — surfaced at plan time'
+        ]
+    ] as const) {
+        for (const e of entries) fresh.push({line: formatEntry(e, marker), key: normalise(e.quote)})
     }
-    try {
-        const existing = (await readRequirements(cwd)).split('\n').filter(l => l.trim().length > 0)
-        const seen = new Set(
-            existing.map(l => {
-                const q = /"([^"]+)"/.exec(l)
-                return normalise(q ? q[1] : l)
-            })
-        )
-        const merged = [...existing]
-        for (const [entries, marker] of [
-            [crossCutting, undefined],
-            [unresolved, 'no task owns this — surfaced at plan time'],
-            [
-                judgeFlagged.map(q => ({quote: q, anchor: ''})),
-                'judge-flagged uncovered area, no task owns this — surfaced at plan time'
-            ],
-            [
-                danglingArtifacts.map(q => ({quote: q, anchor: ''})),
-                'dangling runtime artifact, nothing produces it — surfaced at plan time'
-            ]
-        ] as const) {
-            for (const e of entries) {
-                const key = normalise(e.quote)
-                if (seen.has(key)) continue
-                seen.add(key)
-                merged.push(formatEntry(e, marker))
-            }
-        }
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(
-            requirementsFile(cwd),
-            merged.slice(-MAX_REQUIREMENTS).join('\n') + '\n',
-            'utf8'
-        )
-    } catch {
-        // best-effort artifact
-    }
+    await carried.append(cwd, fresh)
 }
 
 /**
@@ -673,8 +665,23 @@ export interface OwnedRequirement {
     pending?: string[]
 }
 
+/**
+ * Uncapped and never appended to — the mapping is recomputed whole per plan
+ * round and rewritten by the DETACH/CLAIM passes, so the key is the quote only
+ * for the ledger's contract; nothing dedupes through it.
+ */
+const ownedLedger = makeLedger<OwnedRequirement>({
+    file: OWNED_REQUIREMENTS_FILE,
+    key: o => normalise(o.quote),
+    serialize: o =>
+        `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''}`
+        + (o.pending && o.pending.length > 0 ? ` [pending: ${o.pending.join(', ')}]` : '')
+        + ` [title: ${o.title.replace(/\n/g, ' ')}]`,
+    parse: parseOwnedRequirements
+})
+
 export function ownedRequirementsFile(cwd: string): string {
-    return path.join(tasksDir(cwd), OWNED_REQUIREMENTS_FILE)
+    return ownedLedger.path(cwd)
 }
 
 /** Persist the task-mapped requirements (host-side, plan time). Overwrites —
@@ -682,28 +689,13 @@ export function ownedRequirementsFile(cwd: string): string {
  *  artifact. */
 export async function writeOwnedRequirements(
     cwd: string,
-    owned: OwnedRequirement[]
+    entries: OwnedRequirement[]
 ): Promise<void> {
-    try {
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        const lines = owned.map(
-            o =>
-                `OWNED: "${o.quote}"${o.anchor ? ` [anchor: ${o.anchor}]` : ''}`
-                + (o.pending && o.pending.length > 0 ? ` [pending: ${o.pending.join(', ')}]` : '')
-                + ` [title: ${o.title.replace(/\n/g, ' ')}]`
-        )
-        await fsp.writeFile(ownedRequirementsFile(cwd), lines.join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort artifact
-    }
+    await ownedLedger.write(cwd, entries)
 }
 
 export async function readOwnedRequirements(cwd: string): Promise<OwnedRequirement[]> {
-    try {
-        return parseOwnedRequirements(await fsp.readFile(ownedRequirementsFile(cwd), 'utf8'))
-    } catch {
-        return []
-    }
+    return ownedLedger.read(cwd)
 }
 
 export function parseOwnedRequirements(text: string): OwnedRequirement[] {

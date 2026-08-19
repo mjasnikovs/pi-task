@@ -635,41 +635,12 @@ export async function runDeepRenderCheck(
     }
     const budget = opts.timeoutMs ?? DEEP_RENDER_TIMEOUT_MS
     const userDataDir = mkdtempSync(path.join(os.tmpdir(), 'pi-task-deep-render-'))
-    let child: ReturnType<typeof spawn> | null = null
-    let socket: WebSocket | null = null
-    const cleanup = (): void => {
-        try {
-            socket?.close()
-        } catch {
-            // socket already gone
-        }
-        try {
-            if (child?.pid) process.kill(-child.pid, 'SIGKILL')
-        } catch {
-            // group already gone
-        }
-        try {
-            rmSync(userDataDir, {recursive: true, force: true})
-        } catch {
-            // best-effort temp cleanup
-        }
-    }
+    // Aborted in `finally`, so a browser still mid-launch when the budget expires is
+    // torn down too — the launch owns the process, and this is how it hears about it.
+    const teardown = new AbortController()
     try {
         return await withTimeout(
-            drive(
-                url,
-                bin,
-                userDataDir,
-                credentials,
-                c => {
-                    child = c
-                },
-                s => {
-                    socket = s
-                },
-                opts.onFacts,
-                opts.quietMs
-            ),
+            drive(url, bin, userDataDir, credentials, opts.onFacts, opts.quietMs, teardown.signal),
             budget
         )
     } catch (e) {
@@ -679,7 +650,12 @@ export async function runDeepRenderCheck(
             note: `the authenticated render session could not run (${why}) — the authenticated half of the app was NOT observed`
         }
     } finally {
-        cleanup()
+        teardown.abort()
+        try {
+            rmSync(userDataDir, {recursive: true, force: true})
+        } catch {
+            // best-effort temp cleanup
+        }
     }
 }
 
@@ -700,60 +676,154 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     })
 }
 
+/** launch → session → close. The two halves are separately testable: the launch
+ *  against a fake browser on disk, the session against an in-process fake CDP. */
 async function drive(
     url: string,
     bin: string,
     userDataDir: string,
     credentials: LoginCredentials | null,
-    holdChild: (c: ReturnType<typeof spawn>) => void,
-    holdSocket: (s: WebSocket) => void,
     onFacts: ((f: DeepSessionFacts) => void) | undefined,
-    quietMs: number | undefined
+    quietMs: number | undefined,
+    signal?: AbortSignal
 ): Promise<DeepRenderOutcome> {
-    const origin = new URL(url).origin
     /** Every verdict goes through here, so a recorder sees the same facts the judge
      *  does — the corpus is what the gate itself read, not a reconstruction. */
     const judge = (f: DeepSessionFacts): DeepRenderOutcome => {
         onFacts?.(f)
         return judgeDeepSession(f)
     }
-    const child = spawn(
-        bin,
-        [
-            '--headless',
-            '--disable-gpu',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-extensions',
-            `--user-data-dir=${userDataDir}`,
-            '--remote-debugging-port=0',
-            'about:blank'
-        ],
-        {detached: true, stdio: ['ignore', 'pipe', 'pipe']}
-    )
-    holdChild(child)
-    child.unref()
-    const wsUrl = await new Promise<string>((resolve, reject) => {
-        let buf = ''
-        const onData = (d: Buffer): void => {
-            buf += String(d)
-            const m = /DevTools listening on (ws:\/\/\S+)/.exec(buf)
-            if (m) resolve(m[1])
+    const browser = await launchBrowser(bin, userDataDir, {signal})
+    try {
+        return await driveSession(browser.cdp, {url, credentials, judge, quietMs})
+    } finally {
+        await browser.close()
+    }
+}
+
+/** A launched, connected browser: the client to speak to it and the one way to
+ *  tear it down. `close` is idempotent and never throws. */
+export interface LaunchedBrowser {
+    cdp: Cdp
+    close: () => Promise<void>
+}
+
+/**
+ * Everything that touches a real process or the filesystem: spawn the Chrome-family
+ * binary at `bin` with a throwaway profile at `userDataDir`, read the DevTools ws
+ * URL off its output, connect. Rejects if the browser exits or errors before it
+ * listens, or the socket cannot open; whatever was started by then is torn down.
+ * `signal` is the caller's teardown: aborting it closes whatever exists, mid-launch
+ * or after, which is how a budget timeout reaches a browser that never listened.
+ * The caller owns `userDataDir` (creation and removal) — this only points Chrome
+ * at it.
+ *
+ * @internal Exported for `drive` and its own harness; the gate goes through
+ * `runDeepRenderCheck`.
+ */
+export async function launchBrowser(
+    bin: string,
+    userDataDir: string,
+    {signal}: {signal?: AbortSignal} = {}
+): Promise<LaunchedBrowser> {
+    let child: ReturnType<typeof spawn> | null = null
+    let socket: WebSocket | null = null
+    const close = (): Promise<void> => {
+        try {
+            socket?.close()
+        } catch {
+            // socket already gone
         }
-        child.stderr?.on('data', onData)
-        child.stdout?.on('data', onData)
-        child.on('error', e => reject(e))
-        child.on('exit', code => reject(new Error(`browser exited ${code} before listening`)))
-    })
-    const socket = new WebSocket(wsUrl, {perMessageDeflate: false, maxPayload: 128 * 1024 * 1024})
-    holdSocket(socket)
-    await new Promise<void>((resolve, reject) => {
-        socket.once('open', () => resolve())
-        socket.once('error', e => reject(e instanceof Error ? e : new Error(String(e))))
-    })
-    const cdp = new Cdp(socket)
+        try {
+            if (child?.pid) process.kill(-child.pid, 'SIGKILL')
+        } catch {
+            // group already gone
+        }
+        return Promise.resolve()
+    }
+    signal?.addEventListener('abort', () => void close(), {once: true})
+    if (signal?.aborted) {
+        throw new Error('aborted before launch')
+    }
+    try {
+        child = spawn(
+            bin,
+            [
+                '--headless',
+                '--disable-gpu',
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-extensions',
+                `--user-data-dir=${userDataDir}`,
+                '--remote-debugging-port=0',
+                'about:blank'
+            ],
+            {detached: true, stdio: ['ignore', 'pipe', 'pipe']}
+        )
+        const proc = child
+        proc.unref()
+        const wsUrl = await new Promise<string>((resolve, reject) => {
+            let buf = ''
+            const onData = (d: Buffer): void => {
+                buf += String(d)
+                const m = /DevTools listening on (ws:\/\/\S+)/.exec(buf)
+                if (m) resolve(m[1])
+            }
+            proc.stderr?.on('data', onData)
+            proc.stdout?.on('data', onData)
+            proc.on('error', e => reject(e))
+            proc.on('exit', code => reject(new Error(`browser exited ${code} before listening`)))
+        })
+        const ws = new WebSocket(wsUrl, {perMessageDeflate: false, maxPayload: 128 * 1024 * 1024})
+        socket = ws
+        await new Promise<void>((resolve, reject) => {
+            ws.once('open', () => resolve())
+            ws.once('error', e => reject(e instanceof Error ? e : new Error(String(e))))
+        })
+        return {cdp: new Cdp(ws), close}
+    } catch (e) {
+        await close()
+        throw e
+    }
+}
+
+/** The subset of `Cdp` the session drives: request/response and event fan-out.
+ *  Defined from what `driveSession` calls, so a scripted fake is a dozen lines. */
+export interface CdpLike {
+    send(
+        method: string,
+        params?: Record<string, unknown>,
+        sessionId?: string
+    ): Promise<Record<string, unknown>>
+    on(method: string, cb: (params: Record<string, unknown>) => void): void
+}
+
+export interface DriveSessionOptions {
+    url: string
+    credentials: LoginCredentials | null
+    /** Turns the facts the session gathered into the verdict. `drive` wraps
+     *  `judgeDeepSession` with the recorder hook here. */
+    judge: (f: DeepSessionFacts) => DeepRenderOutcome
+    /** Settle quiet window; defaults to QUIET_MS. */
+    quietMs?: number
+}
+
+/**
+ * The session over an already-connected browser: navigate, inspect, sign in if the
+ * landing is a wall and credentials exist, settle, phase the same-origin request
+ * log against the sign-in request, re-enter once the sign-in was accepted, and
+ * hand the facts to `judge`. Pure protocol logic — no process, no filesystem, no
+ * socket — so every branch is testable against a fake `CdpLike`.
+ *
+ * @internal Exported for its own tests.
+ */
+export async function driveSession(
+    cdp: CdpLike,
+    {url, credentials, judge, quietMs}: DriveSessionOptions
+): Promise<DeepRenderOutcome> {
+    const origin = new URL(url).origin
 
     const requests = new Map<string, TrackedRequest>()
     let lastActivity = Date.now()

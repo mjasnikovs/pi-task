@@ -51,16 +51,13 @@ import {
 import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
-import {armCancelListener, disarmCancelListener} from './cancel-input.js'
-import {beginRun, endRun} from './mid-run-input.js'
-import {reportDroppedInput} from './dropped-input.js'
+import {withRun, announceTerminal} from './run-bracket.js'
 import {refineExistingFilesBlock, SINGLE_READ_EXTENSION_PATH} from './phases.js'
 import {SessionUI, registerBridgeCommand, publishLifecycleNotice} from '../remote/bridge.js'
-import {pushNotify} from '../remote/push.js'
-import {startAutoLoader, type ContextSnapshot} from './widget.js'
-import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
+import {getParentContextWindow} from './context-usage.js'
+import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import {buildGateDeps, collectTreeChanges} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {runFinalGateStage, type FinalGateStageDeps} from './run-final-gate.js'
@@ -1522,12 +1519,11 @@ function defaultDeps(
     signal: AbortSignal,
     title: string
 ): AutoDeps {
-    // Captured by the planning loader's getState so the widget mirrors the child's
-    // latest output line and context usage, exactly like the single-task phase
-    // widget. (The gate children manage their own loaders inside buildGateDeps.)
-    let lastLine: string | undefined
-    let contextUsage: ContextSnapshot | undefined
+    // The planning loader mirrors the child's latest output line and context
+    // usage, exactly like the single-task phase widget. (The gate children have
+    // their own ChildStatus inside buildGateDeps.)
     const parentContextWindow = getParentContextWindow(ctx)
+    const status = new ChildStatus({parentContextWindow})
 
     const phaseDeps: PhaseDeps = {
         cwd,
@@ -1540,40 +1536,32 @@ function defaultDeps(
         // it has already opened can only be thrash — which makes the read-once
         // block safe here in a way it is not for a phase that must explore.
         childExtensions: [SINGLE_READ_EXTENSION_PATH],
-        onChildOutput: (line: string) => {
-            lastLine = line
-        },
-        onContextUsage: snapshot => {
-            contextUsage = resolveContextUsage(snapshot, contextUsage, parentContextWindow)
-        }
+        ...statusCallbacks(status)
     }
     return {
         // Planning-only seam. The shared gate surface (runTask/commit/verify/
         // enforce/recommend/revert) comes from buildGateDeps below — identical to
         // what /task builds, so both commands gate the same way.
-        runChild: async (name, tools, prompt) => {
-            // Planning children are slow LLM calls with no UI of their own; show
-            // the same status block as /task so this never goes silent until the
-            // drill dialog.
-            lastLine = undefined
-            contextUsage = undefined
-            const startedAt = Date.now()
-            const {step, stepNum} = AUTO_PLAN_STEPS[name] ?? {step: name, stepNum: 1}
-            const stopLoader = startAutoLoader(ctx, () => ({
-                title,
-                step,
-                stepNum,
-                stepTotal: AUTO_PLAN_STEP_TOTAL,
-                startedAt,
-                lastLine,
-                contextUsage
-            }))
-            try {
-                return await runPhaseChild(phaseDeps, name, tools, prompt)
-            } finally {
-                stopLoader()
-            }
-        },
+        //
+        // Planning children are slow LLM calls with no UI of their own; the
+        // shared loader shows the same status block as /task so this never goes
+        // silent until the drill dialog.
+        runChild: (name, tools, prompt) =>
+            runPlanningChild({
+                ctx,
+                status,
+                phaseDeps,
+                name,
+                tools,
+                prompt,
+                loader: {
+                    title,
+                    step: n => ({
+                        ...(AUTO_PLAN_STEPS[n] ?? {step: n, stepNum: 1}),
+                        stepTotal: AUTO_PLAN_STEP_TOTAL
+                    })
+                }
+            }),
         ...buildGateDeps({signal, parentContextWindow, runTask: gateRunTask}),
         // Loop-level repo integrity + run-end gate glue (see AutoDeps docs).
         unmergedPaths: cwd2 => gitUnmergedPaths(cwd2, signal),
@@ -1618,12 +1606,7 @@ function announceDone(
     msg: string,
     level: 'info' | 'warning' | 'error'
 ): void {
-    ctx.ui.notify(msg, level)
-    // ctx.ui.notify is terminal-only and pushNotify is a backgrounded-device web
-    // push — neither shows up in a remote viewer that's watching live. Mirror it
-    // into the session view too (errors become a persistent red bubble).
-    publishLifecycleNotice(msg, level)
-    void pushNotify('Task finished', msg, 'pi-end').catch(() => {})
+    announceTerminal(ctx, msg, level)
 }
 
 export async function runAutoLoop(
@@ -1913,43 +1896,42 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
         return
     }
     autoRunning = true
-    beginRun() // the whole loop owns the session, not just the task inside it
-    // Take delivery of a typed /task-auto-cancel for the WHOLE run, planning
-    // included — planning is children too, so the host is not streaming and the
-    // ordinary command path cannot reach us.
-    armTerminalCancel(ctx)
+    // The whole loop owns the session, not just the task inside it — and the
+    // bracket takes delivery of a typed /task-auto-cancel for the WHOLE run,
+    // planning included: planning is children too, so the host is not streaming
+    // and the ordinary command path cannot reach us.
     try {
-        // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
-        // every task's research phase share one run's cache; disabled ⇒ clears any token a
-        // prior run left, so nothing is cached.
-        configureResearchRun(getConfig().researchCache)
-        const abort = new AbortController()
-        const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
-        let id: string | null
-        try {
-            id = await planAuto(ctx, cwd, raw, deps)
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
-            if (msg === USER_CANCELLED) {
+        await withRun(ctx, {onCancel: terminalCancel}, async () => {
+            // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
+            // every task's research phase share one run's cache; disabled ⇒ clears any token a
+            // prior run left, so nothing is cached.
+            configureResearchRun(getConfig().researchCache)
+            const abort = new AbortController()
+            const deps = defaultDeps(ctx, cwd, abort.signal, deriveTitle(raw))
+            let id: string | null
+            try {
+                id = await planAuto(ctx, cwd, raw, deps)
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err)
+                if (msg === USER_CANCELLED) {
+                    announceDone(ctx, '/task-auto cancelled.', 'warning')
+                    return
+                }
+                announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
+                return
+            }
+            if (!id) return
+            // Check for a cancel that was requested during the planning phase before the
+            // loop resets the flag.
+            if (isCancelRequested()) {
+                resetCancel()
                 announceDone(ctx, '/task-auto cancelled.', 'warning')
                 return
             }
-            announceDone(ctx, `/task-auto planning failed: ${msg}`, 'error')
-            return
-        }
-        if (!id) return
-        // Check for a cancel that was requested during the planning phase before the
-        // loop resets the flag.
-        if (isCancelRequested()) {
-            resetCancel()
-            announceDone(ctx, '/task-auto cancelled.', 'warning')
-            return
-        }
-        await runAutoLoop(ctx, cwd, id, deps)
+            await runAutoLoop(ctx, cwd, id, deps)
+        })
     } finally {
         autoRunning = false
-        reportDroppedInput(endRun(), ctx)
-        disarmCancelListener()
     }
 }
 
@@ -1978,30 +1960,29 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
     const id = candidate.id
     await updateTaskFrontMatter(cwd, id, {state: 'in_progress'})
     autoRunning = true
-    beginRun() // the whole loop owns the session, not just the task inside it
-    armTerminalCancel(ctx)
+    // The whole loop owns the session, not just the task inside it.
     try {
-        // Reuse the interrupted run's research-cache id, dropping only the entries whose
-        // own package moved version (F10). mx5 run 13 resumed three times and each
-        // resume's fresh id discarded a working 201-entry cache; run 14 then showed a
-        // whole-file freshness gate can never hold on a greenfield run that installs
-        // packages as it goes, so invalidation is per entry. See resumeResearchRun.
-        const research = await resumeResearchRun(cwd, getConfig().researchCache)
-        if (research.reused) {
-            logPlanDebug(
-                cwd,
-                `research cache: resume reused ${research.entries} entr(ies), `
-                    + `dropped ${research.dropped} stale`
-            )
-        }
-        const abort = new AbortController()
-        // Resume only runs the loop (runTask); no planning children, so the loader
-        // title is unused here — pass the id for clarity if that ever changes.
-        await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
+        await withRun(ctx, {onCancel: terminalCancel}, async () => {
+            // Reuse the interrupted run's research-cache id, dropping only the entries whose
+            // own package moved version (F10). mx5 run 13 resumed three times and each
+            // resume's fresh id discarded a working 201-entry cache; run 14 then showed a
+            // whole-file freshness gate can never hold on a greenfield run that installs
+            // packages as it goes, so invalidation is per entry. See resumeResearchRun.
+            const research = await resumeResearchRun(cwd, getConfig().researchCache)
+            if (research.reused) {
+                logPlanDebug(
+                    cwd,
+                    `research cache: resume reused ${research.entries} entr(ies), `
+                        + `dropped ${research.dropped} stale`
+                )
+            }
+            const abort = new AbortController()
+            // Resume only runs the loop (runTask); no planning children, so the loader
+            // title is unused here — pass the id for clarity if that ever changes.
+            await runAutoLoop(ctx, cwd, id, defaultDeps(ctx, cwd, abort.signal, id))
+        })
     } finally {
         autoRunning = false
-        reportDroppedInput(endRun(), ctx)
-        disarmCancelListener()
     }
 }
 
@@ -2025,23 +2006,21 @@ const CANCEL_ACK = 'Stopping /task-auto at the next safe checkpoint…'
 
 /**
  * Deliver a /task-auto-cancel typed in the terminal while a run owns the main
- * loop. `armCancelListener` watches raw stdin, so it works during the spec
- * phases and the gates — the windows where pi would otherwise queue the line
- * until after the run (see cancel-input.ts). The remote path is unaffected:
- * dispatchRemoteLine invokes the handler directly.
+ * loop — the run bracket's `onCancel`. The armed listener watches raw stdin, so
+ * it works during the spec phases and the gates — the windows where pi would
+ * otherwise queue the line until after the run (see cancel-input.ts). The
+ * remote path is unaffected: dispatchRemoteLine invokes the handler directly.
  */
-function armTerminalCancel(ctx: ExtensionCommandContext): void {
-    armCancelListener(ctx, live => {
-        requestAutoCancel()
-        // `live` is the ctx the listener is currently installed on — the captured
-        // one is stale the moment a task replaces the session.
-        try {
-            live.ui.notify(CANCEL_ACK, 'warning')
-        } catch {
-            /* the acknowledgement must never break the cancel itself */
-        }
-        publishLifecycleNotice(CANCEL_ACK, 'warning')
-    })
+function terminalCancel(live: ExtensionCommandContext): void {
+    requestAutoCancel()
+    // `live` is the ctx the listener is currently installed on — the captured
+    // one is stale the moment a task replaces the session.
+    try {
+        live.ui.notify(CANCEL_ACK, 'warning')
+    } catch {
+        /* the acknowledgement must never break the cancel itself */
+    }
+    publishLifecycleNotice(CANCEL_ACK, 'warning')
 }
 
 // ─── Registration ────────────────────────────────────────────────────────────

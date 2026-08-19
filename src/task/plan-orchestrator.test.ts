@@ -15,6 +15,7 @@ import {buildIdleSpec, type PlanOutcome} from './plan-session.js'
 import {writeTaskFile, readSection, readTaskFile, setTaskSection} from './task-io.js'
 import type {TaskFrontMatter} from './task-types.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
+import {isRunActive} from './mid-run-input.js'
 
 const PLAN_ID = 'TASK_PLAN_0001'
 
@@ -201,6 +202,29 @@ describe('handleTaskPlan', () => {
         expect(rec.prompts[0]).toContain('per-provider')
         // The advisory note is NOT handed to the implementer.
         expect(rec.prompts[0]).not.toContain('src/workers/index.ts')
+    })
+
+    // The plan session's children run with the host idle — the same window in
+    // which /task and /task-auto hold mid-run input. Left unbracketed, a line
+    // typed then went into pi's queue and fired after the plan.
+    test('the plan session owns the session: mid-run input is held for its duration', async () => {
+        const cwd = await freshRepo()
+        const h = makeFakeCtx(cwd)
+        const seen: boolean[] = []
+        const {deps, rec} = commandHarness(DECIDED)
+        deps.run = () => {
+            seen.push(isRunActive())
+            return Promise.resolve(DECIDED)
+        }
+        deps.handoff = (_ctx, _cwd, prompt) => {
+            seen.push(isRunActive())
+            rec.prompts.push(prompt)
+            return Promise.resolve('TASK_0042')
+        }
+        expect(isRunActive()).toBe(false)
+        await handleTaskPlan('add rate limiting', h.ctx, deps)
+        expect(seen).toEqual([true, true])
+        expect(isRunActive()).toBe(false)
     })
 
     test('cancelling keeps the file as a record and hands nothing to /task', async () => {

@@ -21,7 +21,7 @@ import type {GateDeps} from './task-gates.js'
 import {tasksDir, readTaskFile, appendGateRecord} from './task-io.js'
 import {gitCommitAll, gitDropLastCommit, git} from './auto-commit.js'
 import {runGuidelineEnforcement} from './enforce-guidelines.js'
-import {runWorkVerification, extractSpecForVerification} from './verify-work.js'
+import {runWorkVerification, extractSpecForVerification, type VerifyProbes} from './verify-work.js'
 import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
 import {recordDebt} from './accept-debt.js'
@@ -64,8 +64,8 @@ import {captureGitState, reconcileGitState, type ReconcileResult} from './git-st
 import {runWorker} from '../workers/pi-worker-core.js'
 import {getConfig} from '../config/config.js'
 import {makeDebugAppender} from './debug-log.js'
-import {startAutoLoader, type ContextSnapshot} from './widget.js'
-import {resolveContextUsage} from './context-usage.js'
+import {startAutoLoader} from './widget.js'
+import {ChildStatus} from './child-status.js'
 import {makeGateChild, type GateChildKind} from './gate-child.js'
 
 /** A function that re-runs a task's implementation turn (AUTOFIX). Injected by the
@@ -557,6 +557,104 @@ export async function collectTestAssemblyFindings(
 }
 
 /**
+ * The composed spec a gate judges against: the `## spec` section of the task file
+ * (see extractSpecForVerification). A task that never reached compose has no spec
+ * section, and an unreadable task file is the same case — both are null, and every
+ * caller already treats null as "nothing to hold the work to" (verify no-ops,
+ * frozen paths are empty, recommend falls back to the title). Never throws. This
+ * used to be the same four-line try/catch at four gate sites.
+ */
+export async function readSpecForVerification(cwd: string, taskId: string): Promise<string | null> {
+    try {
+        const {body} = await readTaskFile(cwd, taskId)
+        return extractSpecForVerification(body)
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Bind the deterministic verify probes — THE one place the collectors above meet
+ * the probe table in verify-work.ts. One entry per `BoundProbeKey`; the table row
+ * with that key reads it, and the table's loop owns the ritual (skip when absent,
+ * degrade to the row's empty value when the thunk throws), so nothing here needs a
+ * try/catch and a fault in one probe cannot reach another. Each thunk is LAZY:
+ * building the record runs no git.
+ *
+ * `spec` is the composed spec (see readSpecForVerification): the prohibition probe
+ * reads it and skips the git call when the spec forbids nothing. `log` is the
+ * verify debug appender for the one probe that repairs as well as reports.
+ */
+export function buildVerifyProbes(params: {
+    cwd: string
+    signal?: AbortSignal
+    taskId: string
+    spec: string | null
+    log?: (msg: string) => void
+}): VerifyProbes {
+    const {cwd, signal, taskId, spec, log} = params
+    return {
+        // Deterministic self-verification probe: test files the task itself
+        // authored/changed become prompt-level findings mandating the child
+        // to drive the real artifact before trusting their green result.
+        substitution: () => collectChangedFiles(cwd, signal).then(findSubstitutionSuspects),
+        // Deterministic prohibition probe: paths the spec forbids modifying
+        // that the task's diff modified anyway become prompt-level findings
+        // under the no-waiver rule — the child otherwise rarely runs `git
+        // diff` and cannot even see the violation.
+        prohibition: () => {
+            const banned = spec ? extractProhibitions(spec) : []
+            if (banned.length === 0) return Promise.resolve([])
+            return collectChangedFiles(cwd, signal).then(files =>
+                findProhibitionViolations(banned, files)
+            )
+        },
+        // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
+        // tracked files this task's diff DELETES whose introducing commit
+        // belongs to a DIFFERENT task — a sibling's committed deliverable
+        // destroyed (typically to green a check). Injected under rule 4d and
+        // carried on a FAIL so an ACCEPT records durable debts.
+        crossTaskDeletion: () =>
+            collectTaskTreeChanges(cwd, signal).then(changes =>
+                findCrossTaskDeletions(changes, taskId, rel => taskThatIntroduced(cwd, rel))
+            ),
+        // Deterministic probe-gaming probe (F6): added lines whose stated
+        // purpose is to make a check pass rather than meet the requirement
+        // ("return 401 so the verification test passes") become rule-4c
+        // findings so the child verifies the real requirement, not the check.
+        probeGaming: () => collectAddedLines(cwd, signal).then(findProbeGaming),
+        // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
+        // 1): absolute paths committed from the authoring child's own
+        // environment (`/workspace/src/shared`) that resolve nowhere here.
+        // Repaired deterministically where the relative form provably
+        // resolves; the remainder is injected under rule 4e, whose point is
+        // that such a path breaks the BUILD — so the checks that would have
+        // caught it report nothing rather than failing.
+        foreignPath: () => collectForeignPathFindings(cwd, signal, log),
+        // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
+        // item 4): a check script this task authored that cannot fail
+        // (`… || true`, an inverted-grep launder). Injected under rule 4f,
+        // because the child provably cannot find this by running the
+        // script — it passes, which IS the defect.
+        scriptEscape: () => collectScriptEscapeFindings(cwd, signal),
+        // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
+        // PROMPT 4 item 2): both `bun test` and `playwright test` declared
+        // with no proof their file sets are disjoint. Injected under rule
+        // 4g — the collision kills the suite during COLLECTION, which does
+        // not look like a test failure.
+        runnerGlob: () => collectRunnerGlobFindings(cwd),
+        // Deterministic test-assembly probe (F4): authored test files that
+        // rebuild production wiring — importing the leaf modules the shipped
+        // entry composes and assembling their own copy — become rule-3f
+        // findings so the child drives the REAL assembly, not the copy.
+        testAssembly: () =>
+            collectChangedFiles(cwd, signal).then(changed =>
+                collectTestAssemblyFindings(cwd, changed, signal)
+            )
+    }
+}
+
+/**
  * Build the gate deps for one command run. `runTask` is the orchestrator's
  * implementation re-runner, injected by the caller. The returned object also drives
  * a shared status widget: `getLastLine`/`getContextUsage` expose the children's
@@ -574,10 +672,11 @@ export function buildGateDeps(params: {
     // loader across the deterministic stage — so the dead air can be measured in the
     // SAME binary rather than against a remembered baseline. Unset in every real run.
     const deadAirBaseline = process.env.DEADAIR_AB_ARM === 'baseline'
-    // Captured by each gate child's loader so the widget mirrors the child's latest
-    // output line and context usage, exactly like the single-task phase widget.
-    let lastLine: string | undefined
-    let contextUsage: ContextSnapshot | undefined
+    // ONE live status for every gate child, so the widget mirrors the running
+    // child's latest output line and context usage exactly like the single-task
+    // phase widget — and so the verify gate's own loader (below) reads what its
+    // loader-less child feeds.
+    const status = new ChildStatus({parentContextWindow})
     // What the git-state guard had to restore after the MOST RECENT verify/recommend
     // child run (see git-state-guard.ts). runWorkVerification reads this through its
     // mutationCheck dep to discard a verdict computed on a mutated tree.
@@ -593,8 +692,8 @@ export function buildGateDeps(params: {
 
     // Adapter onto the shared gate-child runner (gate-child.ts). What survives
     // here is WIRING — which context, which log file, which config knobs, and
-    // where the live-widget state lives; the ritual and the per-kind policy are
-    // the table's. The enforce child below goes through the same call.
+    // the shared live status; the ritual and the per-kind policy are the
+    // table's. The enforce child below goes through the same call.
     const gateChild = (
         gateCtx: ExtensionCommandContext,
         cwd2: string,
@@ -602,25 +701,8 @@ export function buildGateDeps(params: {
         kind: GateChildKind,
         logFile: string,
         opts: {loader?: boolean} = {}
-    ): ((tools: string, prompt: string, sig?: AbortSignal) => Promise<string>) => {
-        // An accessor box, not a copy: the runner writes these fields and the
-        // loader snapshot reads them on every tick, so both must see the same
-        // closure state the rest of buildGateDeps already shares.
-        const widget = {
-            get lastLine(): string | undefined {
-                return lastLine
-            },
-            set lastLine(v: string | undefined) {
-                lastLine = v
-            },
-            get contextUsage(): ContextSnapshot | undefined {
-                return contextUsage
-            },
-            set contextUsage(v: ContextSnapshot | undefined) {
-                contextUsage = v
-            }
-        }
-        return makeGateChild({
+    ): ((tools: string, prompt: string, sig?: AbortSignal) => Promise<string>) =>
+        makeGateChild({
             ctx: gateCtx,
             cwd: cwd2,
             taskTitle,
@@ -629,22 +711,18 @@ export function buildGateDeps(params: {
             ...(opts.loader === undefined ? {} : {loader: opts.loader}),
             commandTimeoutMs: getConfig().requestTimeoutMs,
             streamInactivityMs: getConfig().streamInactivityMs,
-            parentContextWindow,
+            status,
             runWorker,
             makeDebugAppender,
-            startAutoLoader,
             captureGitState,
             reconcileGitState,
             describeTreeChanges: async (c, sig) =>
                 formatTreeChanges(await collectTreeChanges(c, sig)),
-            resolveContextUsage,
             truncateToolResult,
-            widget,
             onReconcile: rec => {
                 lastGuardReconcile = rec
             }
         })
-    }
 
     return {
         runTask,
@@ -717,14 +795,8 @@ export function buildGateDeps(params: {
         // enforce EDIT pass makes to them before those edits are committed. Reads the
         // same composed spec + extractProhibitions the verify probe consumes; empty on
         // a spec that froze nothing → the guard is a no-op.
-        frozenPaths: async (cwd2, taskId) => {
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                return frozenPathsFromSpec(extractSpecForVerification(body))
-            } catch {
-                return []
-            }
-        },
+        frozenPaths: async (cwd2, taskId) =>
+            frozenPathsFromSpec(await readSpecForVerification(cwd2, taskId)),
         // Restore those frozen paths to HEAD, discarding a gate child's edits to them;
         // returns the files actually reverted (for the trail). Best-effort git shape.
         revertFrozenPaths: (cwd2, paths) =>
@@ -768,13 +840,7 @@ export function buildGateDeps(params: {
             // The spec to verify against is the composed spec committed in the task
             // file. A task that never reached compose has no spec section —
             // runWorkVerification treats a null spec as a no-op pass.
-            let spec: string | null
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                spec = extractSpecForVerification(body)
-            } catch {
-                spec = null
-            }
+            const spec = await readSpecForVerification(cwd2, taskId)
             // DEAD AIR (the reason this loader exists). The gate's DETERMINISTIC
             // stage — repo health plus ten probes — runs before the verify child,
             // and the child's own loader only starts once the child does. The impl
@@ -787,33 +853,32 @@ export function buildGateDeps(params: {
             // deterministic stage and the child — so the run is never silent.
             const gateStartedAt = Date.now()
             let stageLine: string | undefined
-            // Clear the PREVIOUS child's trailer before the loader goes up: the
-            // deterministic stage has no child of its own, so a stale `↳` line from
-            // the last task's enforce pass would otherwise sit under the new
-            // status block as if it were live.
-            lastLine = undefined
-            contextUsage = undefined
-            const stopGateLoader =
-                deadAirBaseline ?
-                    () => {}
-                :   startAutoLoader(verifyCtx, () => ({
+            // `track` clears the PREVIOUS child's trailer before the loader goes
+            // up: the deterministic stage has no child of its own, so a stale `↳`
+            // line from the last task's enforce pass would otherwise sit under the
+            // new status block as if it were live. The frame's `lastLine` wins
+            // over the status's own, which is how the stage label shows until
+            // the child has a line.
+            const gateFrame =
+                deadAirBaseline ? null : (
+                    () => ({
                         title: taskTitle,
-                        kind: 'verify',
+                        kind: 'verify' as const,
                         step: 'verify',
                         stepNum: 1,
                         stepTotal: 1,
                         startedAt: gateStartedAt,
-                        lastLine: lastLine ?? stageLine,
-                        contextUsage
-                    }))
-            try {
-                return await runWorkVerification({
+                        lastLine: status.snapshot().lastLine ?? stageLine
+                    })
+                )
+            return status.track(verifyCtx, gateFrame, () =>
+                runWorkVerification({
                     cwd: cwd2,
                     signal,
                     spec,
                     // The child renders no loader of its own: the gate-wide one above is
-                    // already live and reads the same `lastLine`/`contextUsage` the child
-                    // feeds, so a second widget on the same key would only fight it.
+                    // already live and reads the same status the child feeds, so a
+                    // second widget on the same key would only fight it.
                     runChild: gateChild(verifyCtx, cwd2, taskTitle, 'verify', 'verify-debug.log', {
                         loader: deadAirBaseline
                     }),
@@ -834,70 +899,15 @@ export function buildGateDeps(params: {
                                     stageLine = `repo health · ${c}`
                                 }
                             }),
-                    // Deterministic self-verification probe: test files the task itself
-                    // authored/changed become prompt-level findings mandating the child
-                    // to drive the real artifact before trusting their green result.
-                    probe: () => collectChangedFiles(cwd2, signal).then(findSubstitutionSuspects),
-                    // Deterministic test-assembly probe (F4): authored test files that
-                    // rebuild production wiring — importing the leaf modules the shipped
-                    // entry composes and assembling their own copy — become rule-3f
-                    // findings so the child drives the REAL assembly, not the copy.
-                    testAssemblyProbe: () =>
-                        collectChangedFiles(cwd2, signal).then(changed =>
-                            collectTestAssemblyFindings(cwd2, changed, signal)
-                        ),
-                    // Deterministic probe-gaming probe (F6): added lines whose stated
-                    // purpose is to make a check pass rather than meet the requirement
-                    // ("return 401 so the verification test passes") become rule-4c
-                    // findings so the child verifies the real requirement, not the check.
-                    probeGamingProbe: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
-                    // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
-                    // tracked files this task's diff DELETES whose introducing commit
-                    // belongs to a DIFFERENT task — a sibling's committed deliverable
-                    // destroyed (typically to green a check). Injected under rule 4d and
-                    // carried on a FAIL so an ACCEPT records durable debts.
-                    crossTaskDeletionProbe: () =>
-                        collectTaskTreeChanges(cwd2, signal).then(changes =>
-                            findCrossTaskDeletions(changes, taskId, rel =>
-                                taskThatIntroduced(cwd2, rel)
-                            )
-                        ),
-                    // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
-                    // 1): absolute paths committed from the authoring child's own
-                    // environment (`/workspace/src/shared`) that resolve nowhere here.
-                    // Repaired deterministically where the relative form provably
-                    // resolves; the remainder is injected under rule 4e, whose point is
-                    // that such a path breaks the BUILD — so the checks that would have
-                    // caught it report nothing rather than failing.
-                    foreignPathProbe: () =>
-                        collectForeignPathFindings(
-                            cwd2,
-                            signal,
-                            makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
-                        ),
-                    // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
-                    // item 4): a check script this task authored that cannot fail
-                    // (`… || true`, an inverted-grep launder). Injected under rule 4f,
-                    // because the child provably cannot find this by running the
-                    // script — it passes, which IS the defect.
-                    scriptEscapeProbe: () => collectScriptEscapeFindings(cwd2, signal),
-                    // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
-                    // PROMPT 4 item 2): both `bun test` and `playwright test` declared
-                    // with no proof their file sets are disjoint. Injected under rule
-                    // 4g — the collision kills the suite during COLLECTION, which does
-                    // not look like a test failure.
-                    runnerGlobProbe: () => collectRunnerGlobFindings(cwd2),
-                    // Deterministic prohibition probe: paths the spec forbids modifying
-                    // that the task's diff modified anyway become prompt-level findings
-                    // under the no-waiver rule — the child otherwise rarely runs `git
-                    // diff` and cannot even see the violation.
-                    prohibitionProbe: () => {
-                        const banned = spec ? extractProhibitions(spec) : []
-                        if (banned.length === 0) return Promise.resolve([])
-                        return collectChangedFiles(cwd2, signal).then(files =>
-                            findProhibitionViolations(banned, files)
-                        )
-                    },
+                    // The deterministic probes, bound in one place (buildVerifyProbes
+                    // above); the PROBE_ADAPTERS table in verify-work.ts runs them.
+                    probes: buildVerifyProbes({
+                        cwd: cwd2,
+                        signal,
+                        taskId,
+                        spec,
+                        log: makeDebugAppender(path.join(tasksDir(cwd2), 'verify-debug.log'))
+                    }),
                     // Git-state guard result of the most recent child run: a verdict
                     // computed on a tree the child itself mutated is discarded — but ONLY
                     // when the mutation touched graded state (verdictTainted). A child
@@ -927,9 +937,7 @@ export function buildGateDeps(params: {
                     // boundary → no block.
                     contracts: () => readContracts(cwd2)
                 })
-            } finally {
-                stopGateLoader()
-            }
+            )
         },
         lintFix: async (fixCtx, cwd2, taskTitle, taskId, failReason) => {
             // Same frozen extraction the enforce guard and the verify rule-4b
@@ -937,13 +945,8 @@ export function buildGateDeps(params: {
             // tsconfig.json because ESLint's own error text instructed it, then
             // verify failed the TASK for that edit — the child must know the
             // spec's do-not-touch list AND be mechanically denied it).
-            let frozenPaths: string[] = []
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                frozenPaths = frozenPathsFromSpec(extractSpecForVerification(body))
-            } catch {
-                // spec unreadable → no frozen paths; the guard degrades to a no-op
-            }
+            // (spec unreadable → no frozen paths; the guard degrades to a no-op)
+            const frozenPaths = frozenPathsFromSpec(await readSpecForVerification(cwd2, taskId))
             return runBoundedLintFix({
                 cwd: cwd2,
                 signal,
@@ -1051,13 +1054,7 @@ export function buildGateDeps(params: {
         recommend: async (recCtx, cwd2, taskTitle, taskId, failReason) => {
             // Read the same composed spec the verify gate judged against, so the
             // recommendation reasons over the real contract (degrade to the bare title).
-            let spec: string
-            try {
-                const {body} = await readTaskFile(cwd2, taskId)
-                spec = extractSpecForVerification(body) ?? taskTitle
-            } catch {
-                spec = taskTitle
-            }
+            const spec = (await readSpecForVerification(cwd2, taskId)) ?? taskTitle
             return researchResolution({
                 cwd: cwd2,
                 signal,

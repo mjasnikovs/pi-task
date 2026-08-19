@@ -8,14 +8,17 @@
  *
  * The child-spawning deps (verify, enforce, recommend, lintFix, finalGateFix)
  * are not driven here — they need a live pi child; their disabled-by-config
- * short circuits are, because those must never reach a child.
+ * short circuits are, because those must never reach a child. The verify dep's
+ * DETERMINISTIC half — `buildVerifyProbes`, the one place the collectors are bound
+ * to the probe table — IS driven here, against a real worktree and a fake child.
  */
 
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {buildGateDeps} from './gate-deps.js'
+import {buildGateDeps, buildVerifyProbes, readSpecForVerification} from './gate-deps.js'
+import {BOUND_PROBE_KEYS, runWorkVerification} from './verify-work.js'
 import type {GateDeps} from './task-gates.js'
 import {getConfig} from './../config/config.js'
 import {readSection, writeTaskFile} from './task-io.js'
@@ -315,5 +318,100 @@ describe('the frozen-path deps', () => {
         const dir = makeRepo({'tsconfig.json': '{"strict": true}\n'})
         expect(await deps().revertFrozenPaths(dir, ['tsconfig.json'])).toEqual([])
         expect(await deps().revertFrozenPaths(dir, [])).toEqual([])
+    })
+})
+
+describe('readSpecForVerification — the one spec read every gate site shares', () => {
+    test('returns the composed spec section, and null when there is none to hold the work to', async () => {
+        const dir = makeRepo()
+        await writeSpec(dir, 'TASK_0001', 'GOAL\nship it\n\nVERIFY:\n```sh\nbun test\n```')
+        expect(await readSpecForVerification(dir, 'TASK_0001')).toBe(
+            'GOAL\nship it\n\nVERIFY:\n```sh\nbun test\n```'
+        )
+        // No task file at all → null, never a throw.
+        expect(await readSpecForVerification(dir, 'TASK_0099')).toBeNull()
+        // A task that never reached compose has no spec section → null.
+        const now = new Date(0).toISOString()
+        await writeTaskFile(
+            dir,
+            {
+                id: 'TASK_0002',
+                state: 'in_progress',
+                phase: 'refine',
+                created_at: now,
+                updated_at: now,
+                title: 't'
+            },
+            '## refined\nsome prose\n'
+        )
+        expect(await readSpecForVerification(dir, 'TASK_0002')).toBeNull()
+    })
+})
+
+describe('buildVerifyProbes — the one place the collectors meet the probe table', () => {
+    const params = (cwd: string, spec: string | null = null) => ({
+        cwd,
+        taskId: 'TASK_0021',
+        spec
+    })
+
+    test('binds exactly the channels the table reads, and building runs nothing', () => {
+        // Deletion test: drop a key from ProbeRaw and this record is the one
+        // binding line the compiler names. Adding a table row without a binding
+        // shows up here as a missing key.
+        const probes = buildVerifyProbes(params(noGit()))
+        expect(Object.keys(probes).sort()).toEqual([...BOUND_PROBE_KEYS].sort())
+        for (const key of BOUND_PROBE_KEYS) expect(typeof probes[key]).toBe('function')
+    })
+
+    test('every probe is lazy and degrades to empty on a non-git dir — no thunk rejects', async () => {
+        const probes = buildVerifyProbes(params(noGit(), 'Do NOT modify `a.ts`.'))
+        for (const key of BOUND_PROBE_KEYS) {
+            // Each collector owns its own degrade path (git fault → []); the table
+            // loop would swallow a rejection anyway, but the collectors never
+            // hand it one.
+            expect(await probes[key]!()).toEqual([])
+        }
+    })
+
+    test('the bound probes reach the verify prompt through the table (substitution + prohibition)', async () => {
+        // A task that authors its own test AND edits a spec-forbidden file: the
+        // substitution probe (git shape) and the prohibition probe (spec + git
+        // shape) must both surface as notices, proving the binding is wired end
+        // to end without a live child.
+        const dir = makeRepo({
+            'src/app.ts': 'export const app = () => 1\n',
+            'src/server.ts': 'export const s = 1\n'
+        })
+        write(dir, {
+            'src/app.test.ts': [
+                "import {test, expect} from 'bun:test'",
+                'const app = () => 1 // re-implemented copy',
+                "test('x', () => expect(app()).toBe(1))",
+                ''
+            ].join('\n'),
+            'src/server.ts': 'export const s = 2\n'
+        })
+        const spec = 'GOAL\nadd a test\n\nCONSTRAINTS\n- Do NOT modify `src/server.ts`.\n'
+        let prompt = ''
+        const out = await runWorkVerification({
+            cwd: dir,
+            spec,
+            probes: buildVerifyProbes(params(dir, spec)),
+            runChild: async (_t, p) => {
+                prompt = p
+                return 'WORK-VERIFIED: PASS'
+            }
+        })
+        expect(out.ok).toBe(true)
+        expect(prompt).toContain('PROHIBITION NOTICE')
+        expect(prompt).toContain('src/server.ts')
+        expect(prompt).toContain('SELF-VERIFICATION NOTICE')
+        expect(prompt).toContain('src/app.test.ts')
+    })
+
+    test('a spec that forbids nothing makes the prohibition probe skip git entirely', async () => {
+        const probes = buildVerifyProbes(params(makeRepo(), 'GOAL\nno constraints'))
+        expect(await probes.prohibition!()).toEqual([])
     })
 })

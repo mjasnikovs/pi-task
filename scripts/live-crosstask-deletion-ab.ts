@@ -195,7 +195,9 @@ async function runLintFixTrial(mode: Mode, n: number): Promise<LintFixTrial> {
             return {
                 ok: r.exitCode === 0,
                 reason:
-                    r.exitCode === 0 ? 'clean' : `repo health: \`bun run lint\` exited ${r.exitCode}`,
+                    r.exitCode === 0 ?
+                        'clean'
+                    :   `repo health: \`bun run lint\` exited ${r.exitCode}`,
                 output: `${r.stdout}\n${r.stderr}`
             }
         },
@@ -272,7 +274,9 @@ async function runVerifyTrial(mode: Mode, n: number): Promise<VerifyTrial> {
             spec: SPEC,
             runChild: async (tools, prompt, signal) => {
                 log(`=== child start (tools=${tools}) ===`)
-                log(`--- prompt has deletion notice: ${prompt.includes('CROSS-TASK DELETION NOTICE')} ---`)
+                log(
+                    `--- prompt has deletion notice: ${prompt.includes('CROSS-TASK DELETION NOTICE')} ---`
+                )
                 const r = await runChild(dir, tools, prompt, signal ?? abort.signal, line =>
                     log(line)
                 )
@@ -284,15 +288,17 @@ async function runVerifyTrial(mode: Mode, n: number): Promise<VerifyTrial> {
             // The A/B lever: the deterministic probe (exactly as gate-deps wires it).
             ...(mode === 'verify-treatment' ?
                 {
-                    crossTaskDeletionProbe: async () => {
-                        const st = await git(dir, ['status', '--porcelain'])
-                        const found = await findCrossTaskDeletions(
-                            parseTreeChanges(st.stdout),
-                            CURRENT_TASK,
-                            rel => taskThatIntroduced(dir, rel)
-                        )
-                        findingsInjected = found.length
-                        return found
+                    probes: {
+                        crossTaskDeletion: async () => {
+                            const st = await git(dir, ['status', '--porcelain'])
+                            const found = await findCrossTaskDeletions(
+                                parseTreeChanges(st.stdout),
+                                CURRENT_TASK,
+                                rel => taskThatIntroduced(dir, rel)
+                            )
+                            findingsInjected = found.length
+                            return found
+                        }
                     }
                 }
             :   {})
@@ -359,7 +365,9 @@ async function main(): Promise<void> {
         }
         console.log(`\n[${mode}] over ${trials} trials:`)
         console.log(`  ct deletion SURVIVED the pass: ${deletionsSurvived}/${trials}`)
-        console.log(`  pass returned ok WHILE ct files deleted (the hole): ${okWhileDeleting}/${trials}`)
+        console.log(
+            `  pass returned ok WHILE ct files deleted (the hole): ${okWhileDeleting}/${trials}`
+        )
         console.log(`  guard restored files + named owner: ${restoredAndNamed}/${trials}`)
         console.log(`  task work lost: ${workLost}/${trials}`)
 
@@ -370,8 +378,7 @@ async function main(): Promise<void> {
             name: 'live-crosstask-deletion-ab',
             arm: mode,
             reps: trials,
-            targetShape:
-                "the lint-fix pass returning ok WHILE a sibling task's files are deleted",
+            targetShape: "the lint-fix pass returning ok WHILE a sibling task's files are deleted",
             hits: okWhileDeleting,
             witnessed: deletionAttempted,
             expect: mode.endsWith('baseline') ? 'some' : 'none',

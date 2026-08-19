@@ -25,10 +25,14 @@
  * model, so it is SURFACED, never auto-closed — biasing hard toward informing the
  * user rather than re-hiding a live defect. "Nothing still open = clean."
  */
-import * as fsp from 'node:fs/promises'
+import {existsSync} from 'node:fs'
 import * as path from 'node:path'
+import * as fsp from 'node:fs/promises'
+import {runVerifyCommandLine, spawnCommand, type CommandRunner} from './command-run.js'
+import {taskThatIntroduced} from './task-provenance.js'
+import {makeLedger} from './ledger.js'
 import {parseVerifyBlockStrict} from './spec-validation.js'
-import {taskFilePath, tasksDir} from './task-io.js'
+import {taskFilePath} from './task-io.js'
 import {isUnfailableCommand} from './unfailable-command.js'
 
 const ACCEPT_DEBT_FILE = 'accept-debt.md'
@@ -170,16 +174,12 @@ export interface AcceptDebt {
 }
 
 export function acceptDebtFile(cwd: string): string {
-    return path.join(tasksDir(cwd), ACCEPT_DEBT_FILE)
+    return ledger.path(cwd)
 }
 
 /** The raw stored ledger ('' when none recorded yet). Parse with parseAcceptDebts. */
 export async function readAcceptDebtsRaw(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(acceptDebtFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
+    return ledger.readRaw(cwd)
 }
 
 /**
@@ -219,7 +219,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
 
 /** Read + parse in one step. */
 export async function readAcceptDebts(cwd: string): Promise<AcceptDebt[]> {
-    return parseAcceptDebts(await readAcceptDebtsRaw(cwd))
+    return ledger.read(cwd)
 }
 
 function normaliseReason(reason: string): string {
@@ -249,6 +249,19 @@ function debtKey(d: AcceptDebt): string {
 }
 
 /**
+ * The debt ledger. `onNoop: 'skip'` — a duplicate is a return, not a rewrite: the
+ * file is touched only when a NEW debt enters it.
+ */
+const ledger = makeLedger<AcceptDebt>({
+    file: ACCEPT_DEBT_FILE,
+    max: MAX_DEBTS,
+    key: debtKey,
+    serialize,
+    parse: parseAcceptDebts,
+    onNoop: 'skip'
+})
+
+/**
  * Append one accepted-despite-FAIL record, deduplicated against what is already
  * stored (case-insensitive on task id + reason), keeping the newest MAX_DEBTS.
  * Failures are swallowed — the ledger is an auditing aid, never a blocker of the
@@ -263,12 +276,7 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
         const verifyCommand =
             entry.verifyCommand ?? (await classifyVerifyCommand(cwd, entry.taskId, entry.reason))
         if (verifyCommand !== null && verifyCommand !== undefined) entry = {...entry, verifyCommand}
-        const existing = parseAcceptDebts(await readAcceptDebtsRaw(cwd))
-        const seen = new Set(existing.map(debtKey))
-        if (seen.has(debtKey(entry))) return
-        const kept = [...existing, entry].slice(-MAX_DEBTS)
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(acceptDebtFile(cwd), kept.map(serialize).join('\n') + '\n', 'utf8')
+        await ledger.append(cwd, [entry])
     } catch {
         // best-effort ledger
     }
@@ -329,16 +337,7 @@ export function extractDeletedDebtPath(reason: string): string | null {
 
 /** Overwrite the ledger with exactly these records (used to prune resolved debts). */
 export async function writeAcceptDebts(cwd: string, debts: AcceptDebt[]): Promise<void> {
-    try {
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        if (debts.length === 0) {
-            await fsp.writeFile(acceptDebtFile(cwd), '', 'utf8')
-            return
-        }
-        await fsp.writeFile(acceptDebtFile(cwd), debts.map(serialize).join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort ledger
-    }
+    await ledger.write(cwd, debts)
 }
 
 /**
@@ -647,4 +646,119 @@ export function buildAcceptDebtNote(open: AcceptDebt[]): string {
  */
 export function describeDebt(d: AcceptDebt): string {
     return isKnownOrigin(d.origin) ? DEBT_LABELS[d.origin] : DEBT_LABELS.accepted
+}
+
+/**
+ * ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
+ * the user accepted despite a verify-FAIL and re-check each against the CURRENT
+ * tree. A static-class debt whose statics now pass is provably RESOLVED (a later
+ * task fixed it) and pruned from the ledger; every other debt cannot be proven
+ * resolved deterministically, so it stays OPEN and is surfaced — a run may not
+ * complete silently carrying an accepted defect. FP-safe by construction (see
+ * accept-debt.ts). Best-effort: a ledger read/write failure must never break the
+ * caller.
+ *
+ * FACTORED OUT of runFinalIntegrationGate (nexttask 6): the derivation has to be
+ * runnable at a SECOND moment — after a converged final-gate autofix, where the
+ * orchestrator used to rebuild its gate outcome as a bare `{ok, reason}` and drop
+ * `openDebts` entirely. The report a run ends on has to be derived from the tree
+ * the run ends with, not from the tree as it was before the fix pass.
+ *
+ * `staticOk` is the caller's claim about the CURRENT statics, and it is the only
+ * thing that can auto-close a static-class debt — so a caller that does not know
+ * must pass `false` (unprovable ⇒ stays open), never a guess.
+ */
+export async function deriveOpenDebts(
+    cwd: string,
+    staticOk: boolean
+): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
+    const {
+        open: openRaw,
+        resolved,
+        trail
+    } = recheckAcceptDebts(await readAcceptDebts(cwd), {
+        staticOk,
+        // Cross-task-deletion debts auto-close iff the deleted file is back in the
+        // tree — a deterministic existence check, corroborating the per-file
+        // provenance the record already carries.
+        fileExists: rel => existsSync(path.join(cwd, rel)),
+        // VERIFY-COMMAND class (nexttask 5): a debt that NAMES a command is settled
+        // by running that command, under the gate's own env-gap contract and behind
+        // the no-write guard below.
+        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd)
+    })
+    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
+    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
+    // named file is another task's committed deliverable is a plan defect — surface
+    // the contradiction with the debt so nobody (human or child) treats the claim as
+    // a deletion instruction. Pure git-history lookup; degrades to no annotation.
+    const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
+    const debtNote = buildAcceptDebtNote(openDebts)
+    return {openDebts, ...(debtNote ? {debtNote} : {}), ...(trail.length > 0 ? {trail} : {})}
+}
+
+/** Per-command ceiling for a debt re-run (`inv-bounded`). */
+const DEBT_RERUN_TIMEOUT_MS = 300_000
+
+/**
+ * Extra infrastructure-gap shapes recognised ONLY when re-running a debt's command,
+ * never in the gate's own verdicts. A driver that reports its connection simply
+ * closed (`ERR_POSTGRES_CONNECTION_CLOSED` — what bun's SQL client says when the
+ * database is not there at all, as on this box with the mx5 container stopped) is an
+ * absent dependency, and calling that "the defect is still present" would be a
+ * finding the environment invented. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
+ * gate verdict the same wording can be a real fault the suite must own, and only the
+ * debt re-check needs the conservative reading — where it costs nothing, because gap
+ * and fail both leave the debt open.
+ */
+const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|ECONNRESET/i
+
+/**
+ * Re-run ONE debt's stored VERIFY command for the re-check, with the no-write guard
+ * (`inv-no-write`) wrapped around it.
+ *
+ * A VERIFY command is the project's own command and may legitimately write (a build
+ * emits `dist/`, a suite writes a snapshot). What it may NOT do is turn the tree into
+ * a passing tree and have that count as the debt being fixed — the run would then be
+ * certifying its own side effect. So tracked state is captured before and after, and
+ * a pass that came with a tracked change is downgraded to INCONCLUSIVE with the
+ * change named. Untracked output is left alone: it is what a build legitimately
+ * produces, and `git status --porcelain` in a repo with the usual ignores does not
+ * see it.
+ *
+ * A repository the guard cannot read (no git, git absent) is not a licence to skip
+ * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
+ * assumption rather than an observation.
+ */
+export function rerunDebtVerifyCommand(
+    cwd: string,
+    command: string,
+    /** The spawner, for BOTH the command and the tracked-state reads. Injected so
+     *  the guard's four outcomes are testable without a repo or a real command. */
+    run: CommandRunner = spawnCommand
+): VerifyRerunResult {
+    const tracked = (): string | null => {
+        const r = run({
+            cwd,
+            bin: 'git',
+            args: ['status', '--porcelain', '--untracked-files=no'],
+            timeoutMs: 60_000
+        })
+        return r.failedToStart || r.status !== 0 ? null : r.stdout
+    }
+    const before = tracked()
+    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE, run)
+    if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
+    if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
+    const after = tracked()
+    if (before === null || after === null) {
+        return {outcome: 'gap', detail: 'tracked-state guard could not read git status'}
+    }
+    if (before !== after) {
+        return {
+            outcome: 'gap',
+            detail: 'the re-run itself CHANGED tracked files — a command that edits the tree into a pass proves nothing'
+        }
+    }
+    return {outcome: 'pass'}
 }

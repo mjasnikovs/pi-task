@@ -46,7 +46,7 @@ export {
 /**
  * One-shot marker: the most recent turn abort was issued BY THE WATCHDOG, not by
  * a human ESC. Both end the assistant turn with stopReason 'aborted' — the only
- * signal steerUntilDone's wasInterrupted() can read — so without this flag the
+ * signal steerUntilDone's classifyTurnEnd() can read — so without this flag the
  * steer loop can win the race against the watchdog's queued follow-up turn and
  * show a steering prompt to an empty room (wedging an unattended run).
  *

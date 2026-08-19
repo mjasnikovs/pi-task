@@ -7,6 +7,7 @@ import {
 } from './gate-child.js'
 import type {RunWorkerResult} from '../workers/pi-worker-core.js'
 import type {ReconcileResult, GitStateSnapshot} from './git-state-guard.js'
+import {ChildStatus, type ChildStatusDeps} from './child-status.js'
 
 /**
  * None of this was reachable before. The runner lived inside buildGateDeps'
@@ -35,6 +36,15 @@ const workerResult = (over: Partial<RunWorkerResult> = {}): RunWorkerResult =>
 
 const clean: ReconcileResult = {mutated: false, verdictTainted: false, actions: []}
 
+/** The shared live status, with a fake loader. `startLoader` is the seam the
+ *  loader tests capture the frame getter through. */
+function status(startLoader?: ChildStatusDeps['startLoader']): ChildStatus {
+    return new ChildStatus({
+        parentContextWindow: 200_000,
+        ...(startLoader ? {startLoader} : {})
+    })
+}
+
 function harness(over: Partial<GateChildDeps> = {}): {
     deps: GateChildDeps
     log: string[]
@@ -58,13 +68,12 @@ function harness(over: Partial<GateChildDeps> = {}): {
         logPath: '/repo/.pi-tasks/verify-debug.log',
         commandTimeoutMs: 900_000,
         streamInactivityMs: 120_000,
-        parentContextWindow: 200_000,
+        status: status(() => () => order.push('loader-stopped')),
         runWorker: () => {
             order.push('worker')
             return Promise.resolve(workerResult())
         },
         makeDebugAppender: () => line => log.push(line),
-        startAutoLoader: () => () => order.push('loader-stopped'),
         captureGitState: () => {
             order.push('capture')
             return Promise.resolve({} as GitStateSnapshot)
@@ -74,9 +83,7 @@ function harness(over: Partial<GateChildDeps> = {}): {
             return Promise.resolve(clean)
         },
         describeTreeChanges: () => Promise.resolve('2 files changed'),
-        resolveContextUsage: s => s,
         truncateToolResult: t => t,
-        widget: {},
         ...over
     }
     return {deps, log, notices, order}
@@ -236,10 +243,7 @@ test('a surviving loop WARNS but never blocks — the verdict gate alone decides
 test('the loader is suppressed when the caller already renders one', async () => {
     // Two loaders on one widget key only fight each other; the verify gate spans
     // its child with its own.
-    const {deps, order} = harness({
-        loader: false,
-        startAutoLoader: () => () => order.push('loader-stopped')
-    })
+    const {deps, order} = harness({loader: false})
     await makeGateChild(deps)('read', 'x')
     expect(order).not.toContain('loader-stopped')
 })
@@ -270,14 +274,16 @@ describe('the live-state callbacks', () => {
      *  render a frame at any point, exactly as the 100ms tick does. */
     function loaderHarness(over: Partial<GateChildDeps> = {}) {
         let snapshot: (() => unknown) | null = null
-        const h = harness({
-            startAutoLoader: (_ctx, getState) => {
-                snapshot = getState as () => unknown
-                return () => {}
-            },
-            ...over
+        const capturing = status((_ctx, getState) => {
+            snapshot = getState as () => unknown
+            return () => {}
         })
-        return {...h, frame: () => (snapshot ? (snapshot() as Record<string, unknown>) : null)}
+        const h = harness({status: capturing, ...over})
+        return {
+            ...h,
+            status: capturing,
+            frame: () => (snapshot ? (snapshot() as Record<string, unknown>) : null)
+        }
     }
 
     test('the loader frame names the kind, the step and the title', async () => {
@@ -305,9 +311,9 @@ describe('the live-state callbacks', () => {
     })
 
     test('the trailer is cleared before the next child, not carried over', async () => {
-        const {deps, frame} = loaderHarness({
-            widget: {lastLine: 'a line from the LAST task', contextUsage: {} as never}
-        })
+        const {deps, frame, status: shared} = loaderHarness()
+        shared.onLine('a line from the LAST task')
+        shared.onContextUsage({tokens: 1_000, contextWindow: 10_000, percent: 10})
         let during: unknown
         const withCapture = {
             ...deps,
@@ -321,24 +327,17 @@ describe('the live-state callbacks', () => {
         expect((during as Record<string, unknown>).contextUsage).toBeUndefined()
     })
 
-    test('onContextUsage goes through resolveContextUsage with the parent window', async () => {
-        const seen: Array<{snapshot: unknown; prev: unknown; window: number}> = []
+    test('onContextUsage is resolved against the parent window when the child names none', async () => {
         const {deps, frame} = loaderHarness({
-            parentContextWindow: 200_000,
-            resolveContextUsage: (snapshot, prev, window) => {
-                seen.push({snapshot, prev, window})
-                return {used: 4_000, total: window} as never
-            },
             runWorker: input => {
-                input.onContextUsage?.({used: 4_000} as never)
+                input.onContextUsage?.({tokens: 4_000, contextWindow: 0, percent: 0})
                 return Promise.resolve(workerResult())
             }
         })
         await makeGateChild(deps)('read', 'x')
-        expect(seen).toHaveLength(1)
-        expect(seen[0].window).toBe(200_000)
-        expect(seen[0].prev).toBeUndefined()
-        expect(frame()?.contextUsage).toEqual({used: 4_000, total: 200_000})
+        // The status was reset before the child, so there is no previous window
+        // to prefer: the parent's 200k is the fallback.
+        expect(frame()?.contextUsage).toEqual({tokens: 4_000, contextWindow: 200_000, percent: 2})
     })
 
     test('a discarded attempt is logged — otherwise a restart is invisible', async () => {

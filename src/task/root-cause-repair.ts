@@ -43,9 +43,7 @@
  * fails, it lands in the ledger like any other task and is never re-spawned, which
  * is what keeps this from looping.
  */
-import * as fsp from 'node:fs/promises'
-import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
+import {makeLedger} from './ledger.js'
 
 /** A path-like token: at least one directory separator, ending in a file name. */
 const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
@@ -266,7 +264,7 @@ function normalisePath(p: string): string {
 // discardEdits and the git-state guard, and a resume picks up what a crash left.
 
 export function repairQueueFile(cwd: string): string {
-    return path.join(tasksDir(cwd), REPAIR_QUEUE_FILE)
+    return ledger.path(cwd)
 }
 
 function serialize(c: RepairCandidate): string {
@@ -296,27 +294,23 @@ export function parseRepairQueue(raw: string): RepairCandidate[] {
     return out
 }
 
+/**
+ * The queue. Keyed on file + blamed task ("cap 1 repair task per file per run" is
+ * enforced at drain; here a re-detection of the same accusation is a return, not a
+ * second record — hence `onNoop: 'skip'`).
+ */
+const ledger = makeLedger<RepairCandidate>({
+    file: REPAIR_QUEUE_FILE,
+    max: MAX_QUEUED,
+    key: x => `${x.file.toLowerCase()} ${x.blamedTask.toLowerCase()}`,
+    serialize,
+    parse: parseRepairQueue,
+    onNoop: 'skip'
+})
+
 /** Append one candidate. Best-effort — the queue never blocks a gate. */
 export async function recordRepairCandidate(cwd: string, c: RepairCandidate): Promise<void> {
-    try {
-        const existing = parseRepairQueue(await readQueueRaw(cwd))
-        const key = (x: RepairCandidate): string =>
-            `${x.file.toLowerCase()} ${x.blamedTask.toLowerCase()}`
-        if (existing.some(e => key(e) === key(c))) return
-        const kept = [...existing, c].slice(-MAX_QUEUED)
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(repairQueueFile(cwd), kept.map(serialize).join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort ledger
-    }
-}
-
-async function readQueueRaw(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(repairQueueFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
+    await ledger.append(cwd, [c])
 }
 
 /**
@@ -326,14 +320,11 @@ async function readQueueRaw(cwd: string): Promise<string> {
  * {@link planHasRepairFor}) or was already covered by one.
  */
 export async function drainRepairQueue(cwd: string): Promise<RepairCandidate[]> {
-    const parsed = parseRepairQueue(await readQueueRaw(cwd))
+    const parsed = await ledger.read(cwd)
     if (parsed.length === 0) return []
-    try {
-        await fsp.writeFile(repairQueueFile(cwd), '', 'utf8')
-    } catch {
-        // best-effort; a failed clear at worst re-offers candidates that
-        // planHasRepairFor then rejects.
-    }
+    // Best-effort clear; a failed clear at worst re-offers candidates that
+    // planHasRepairFor then rejects.
+    await ledger.write(cwd, [])
     return parsed
 }
 

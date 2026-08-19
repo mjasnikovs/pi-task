@@ -255,10 +255,12 @@ describe('runDeepRenderCheck env gaps', () => {
 /**
  * The driver internals that need no browser.
  *
- * `drive()` itself cannot be exercised without a real Chrome, but the three
- * pieces below decide whether it works at all: whether a reply is matched to the
- * request that asked for it, whether a password survives being embedded in an
- * injected expression, and when a page counts as settled.
+ * `launchBrowser()` needs a browser (deep-render-driver.test.ts fakes one on
+ * disk) and `driveSession()` is scripted against a fake `CdpLike` in
+ * deep-render-check.session.test.ts; the three pieces below decide whether either
+ * works at all: whether a reply is matched to the request that asked for it,
+ * whether a password survives being embedded in an injected expression, and when
+ * a page counts as settled.
  */
 describe('Cdp', () => {
     /** A `ws`-shaped double: records what was sent, lets the test reply. */

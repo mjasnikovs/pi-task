@@ -32,9 +32,7 @@
  * exactly that scrutiny, and forbids treating a grep of a generated artifact as
  * evidence of absence. Provenance is mechanical; re-validation is prompt-level.
  */
-import * as fsp from 'node:fs/promises'
-import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
+import {makeLedger} from './ledger.js'
 
 const ENV_NOTES_FILE = 'env-notes.md'
 /** Cap kept notes so a chatty run cannot grow the prompt block unboundedly. */
@@ -47,19 +45,6 @@ const MAX_NOTE_LENGTH = 240
  * stray tab in an emitted fact is normalised to a space before storage.
  */
 const ORIGIN_SEP = '\t'
-
-export function envNotesFile(cwd: string): string {
-    return path.join(tasksDir(cwd), ENV_NOTES_FILE)
-}
-
-/** The raw stored file ('' when none were recorded yet). Parse with parseEnvNotes. */
-export async function readEnvNotes(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(envNotesFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
-}
 
 /** One recorded fact plus the origin task that established it (may be ''). */
 export interface EnvNote {
@@ -85,6 +70,25 @@ export function parseEnvNotes(raw: string): EnvNote[] {
 
 function serializeNote(n: EnvNote): string {
     return n.origin ? `${n.fact}${ORIGIN_SEP}${n.origin}` : n.fact
+}
+
+/** Keyed on the fact alone (case-insensitive): a fact already present keeps its
+ *  ORIGINAL origin — provenance traces to who first established it. */
+const ledger = makeLedger<EnvNote>({
+    file: ENV_NOTES_FILE,
+    max: MAX_NOTES,
+    key: n => n.fact.toLowerCase(),
+    serialize: serializeNote,
+    parse: parseEnvNotes
+})
+
+export function envNotesFile(cwd: string): string {
+    return ledger.path(cwd)
+}
+
+/** The raw stored file ('' when none were recorded yet). Parse with parseEnvNotes. */
+export async function readEnvNotes(cwd: string): Promise<string> {
+    return ledger.readRaw(cwd)
 }
 
 /**
@@ -143,24 +147,13 @@ export function isExcuseNote(fact: string): boolean {
  * blocker.
  */
 export async function appendEnvNotes(cwd: string, notes: string[], origin = ''): Promise<void> {
-    if (notes.length === 0) return
-    try {
-        const existing = parseEnvNotes(await readEnvNotes(cwd))
-        const seen = new Set(existing.map(n => n.fact.toLowerCase()))
-        const merged = [...existing]
-        for (const note of notes) {
-            const fact = note.trim().replace(/\t/g, ' ')
-            const key = fact.toLowerCase()
-            if (key.length === 0 || seen.has(key)) continue
-            seen.add(key)
-            merged.push({fact, origin: origin.trim()})
-        }
-        const kept = merged.slice(-MAX_NOTES)
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(envNotesFile(cwd), kept.map(serializeNote).join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort cache
+    const fresh: EnvNote[] = []
+    for (const note of notes) {
+        const fact = note.trim().replace(/\t/g, ' ')
+        if (fact.length === 0) continue
+        fresh.push({fact, origin: origin.trim()})
     }
+    await ledger.append(cwd, fresh)
 }
 
 /**

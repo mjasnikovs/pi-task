@@ -151,9 +151,10 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * three of them).
  *
  * Each probe is now an ADAPTER: one row carrying only what is specific to it —
- * the dep field it reads, the empty value it degrades to, how its raw result
- * becomes finding lines, the notice block those lines produce, and the numbered
- * rule the notice routes the child to. The loop owns the ritual. (Same shape as
+ * its key (which names the thunk it reads from `deps.probes`), the empty value it
+ * degrades to, how its raw result becomes finding lines, the notice block those
+ * lines produce, and the numbered rule the notice routes the child to. The loop
+ * owns the ritual. (Same shape as
  * LOCKFILE_CHECKS in final-gate.ts, where a whole package ecosystem is one row.)
  *
  * THIS PROMPT IS A MEASURED ARTIFACT — its wording is A/B-tested on the live
@@ -168,17 +169,41 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * substitution rules, 3f, 5c) carries `ruleId` for the reader and no `rule` text.
  */
 
+/**
+ * What each probe channel's RAW probe returns — the one place a channel's shape
+ * is declared. `ProbeKey` is derived from it, so a channel exists exactly when it
+ * has a row here; delete one and the compiler names its table row and its single
+ * binding line in gate-deps' `buildVerifyProbes`.
+ */
+export interface ProbeRaw {
+    substitution: string[]
+    prohibition: string[]
+    crossTaskDeletion: CrossTaskDeletion[]
+    probeGaming: string[]
+    skipEscape: string[]
+    foreignPath: string[]
+    scriptEscape: string[]
+    runnerGlob: string[]
+    testAssembly: string[]
+}
+
 /** Stable identity of one probe channel: table row ↔ findings-bag key. */
-export type ProbeKey =
-    | 'substitution'
-    | 'prohibition'
-    | 'crossTaskDeletion'
-    | 'probeGaming'
-    | 'skipEscape'
-    | 'foreignPath'
-    | 'scriptEscape'
-    | 'runnerGlob'
-    | 'testAssembly'
+export type ProbeKey = keyof ProbeRaw
+
+/**
+ * The channels a CALLER binds — every key but `skipEscape`, which is pure text
+ * analysis of `deps.spec` and is sourced inside its own table row, so it is never
+ * absent and never bound from outside.
+ */
+export type BoundProbeKey = Exclude<ProbeKey, 'skipEscape'>
+
+/**
+ * The bound probes: one optional thunk per channel, typed to that channel's raw
+ * shape. Built in ONE place (gate-deps' `buildVerifyProbes`); an absent key means
+ * the row is skipped. Adding a probe is a `ProbeRaw` line, a table row, and a
+ * binding line — nothing else.
+ */
+export type VerifyProbes = {[K in BoundProbeKey]?: () => Promise<ProbeRaw[K]>}
 
 /** The finding lines each probe channel contributed. Absent/empty ⇒ no block. */
 export type ProbeFindings = Partial<Record<ProbeKey, string[]>>
@@ -198,6 +223,9 @@ interface ProbeResult {
  */
 interface ProbeAdapter {
     key: ProbeKey
+    /** True when the row reads its probe from `deps.probes` (i.e. a caller binds
+     *  it); false for the row that sources itself from the spec. */
+    bound: boolean
     /** Progress label for the deterministic stage. Absent ⇒ the row costs
      *  nothing observable (the skip-escape row is pure text analysis of the
      *  spec, not a git/fs call, and never had a stage of its own). */
@@ -219,29 +247,38 @@ interface ProbeAdapter {
  * type-checked against the dep's real signature; the result is the erased
  * `ProbeAdapter` the table stores.
  */
-function probeAdapter<Raw>(row: {
-    key: ProbeKey
+function probeAdapter<K extends ProbeKey>(row: {
+    key: K
     stage?: string
-    /** The dep field this row reads. Absent ⇒ the probe is skipped. */
-    dep: (deps: VerificationDeps) => (() => Promise<Raw>) | undefined
-    /** Value used when the dep is absent OR the probe throws. */
-    empty: Raw
+    /** Where this row's probe comes from. Default: `deps.probes[key]`, the thunk
+     *  the caller bound. Only the skip-escape row overrides it (it reads the spec
+     *  the deps already carry, so nothing needs binding). Absent ⇒ skipped. */
+    source?: (deps: VerificationDeps) => (() => Promise<ProbeRaw[K]>) | undefined
+    /** Value used when the probe is absent OR throws. */
+    empty: ProbeRaw[K]
     /** Raw probe value → prompt finding lines. */
-    findings: (raw: Raw) => string[]
+    findings: (raw: ProbeRaw[K]) => string[]
     block: (findings: string[]) => string[]
     ruleId: string
     rule?: string[]
 }): ProbeAdapter {
     const {key, stage, block, ruleId, rule} = row
+    const source =
+        row.source
+        ?? ((deps: VerificationDeps) =>
+            // One channel per key, so the bag's entry for this key IS this row's
+            // thunk; the cast only re-narrows what the mapped type already says.
+            deps.probes?.[key as BoundProbeKey] as (() => Promise<ProbeRaw[K]>) | undefined)
     return {
         key,
+        bound: !row.source,
         stage,
         block,
         ruleId,
         rule,
         run: async (deps, onStage) => {
-            const probe = row.dep(deps)
-            // Probes are INDEPENDENTLY OPTIONAL: an absent dep is "skipped", and a
+            const probe = source(deps)
+            // Probes are INDEPENDENTLY OPTIONAL: an absent probe is "skipped", and a
             // probe that throws degrades to its own empty value — it is a sharpener,
             // never a blocker, so a fault in one can neither block the gate nor
             // leak into another row.
@@ -272,10 +309,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * attention on the local model. The findings are pure git shape (test files the
      * task itself changed), so the mandate is language- and framework-agnostic.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'substitution',
         stage: 'substitution probe',
-        dep: deps => deps.probe,
         empty: [],
         findings: asLines,
         ruleId: '3b',
@@ -305,10 +341,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * fixture (prohibition in spec, probe silent) 5/5 PASS — no paranoia.
      * Reverted-violation ≡ clean at the diff level (no entry → no finding).
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'prohibition',
         stage: 'prohibition probe',
-        dep: deps => deps.prohibitionProbe,
         empty: [],
         findings: asLines,
         ruleId: '4b',
@@ -345,10 +380,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * return finding lines — the structured value also rides on a FAIL outcome so
      * an ACCEPT records each deletion as a durable debt.
      */
-    probeAdapter<CrossTaskDeletion[]>({
+    probeAdapter({
         key: 'crossTaskDeletion',
         stage: 'cross-task deletion probe',
-        dep: deps => deps.crossTaskDeletionProbe,
         empty: [],
         findings: crossTaskDeletionVerifyFindings,
         ruleId: '4d',
@@ -384,10 +418,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * whose stated purpose is to make a CHECK pass instead of meeting the
      * requirement it stands for ("return 401 so the verification test passes").
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'probeGaming',
         stage: 'probe-gaming probe',
-        dep: deps => deps.probeGamingProbe,
         empty: [],
         findings: asLines,
         ruleId: '4c',
@@ -430,9 +463,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * `deps.spec`, so this row needs no dep and reports no stage: it is the one probe
      * that is never absent and never costs a git call.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'skipEscape',
-        dep: deps => () =>
+        source: deps => () =>
             Promise.resolve(skipEscapeVerifyFindings(findSkipEscapes(deps.spec ?? ''))),
         empty: [],
         findings: asLines,
@@ -457,10 +490,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * authoring child's own environment — `/workspace/src/shared` in a vite alias —
      * while the real file sits at `src/shared` here.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'foreignPath',
         stage: 'foreign-path probe',
-        dep: deps => deps.foreignPathProbe,
         empty: [],
         findings: asLines,
         ruleId: '4e',
@@ -500,10 +532,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * damage is second-order — the script still "passes" — which is exactly why the
      * child cannot discover it by running the check.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'scriptEscape',
         stage: 'script-escape probe',
-        dep: deps => deps.scriptEscapeProbe,
         empty: [],
         findings: asLines,
         ruleId: '4f',
@@ -539,10 +570,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * are not provably disjoint, so the scanning one imports the other's specs and
      * dies during COLLECTION.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'runnerGlob',
         stage: 'runner-glob probe',
-        dep: deps => deps.runnerGlobProbe,
         empty: [],
         findings: asLines,
         ruleId: '4g',
@@ -574,10 +604,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * composes and assembling their own copy instead of the real assembly — under
      * rule 3f (F4 test-the-copy, 3rd recurrence). Pure import-graph shape.
      */
-    probeAdapter<string[]>({
+    probeAdapter({
         key: 'testAssembly',
         stage: 'test-assembly probe',
-        dep: deps => deps.testAssemblyProbe,
         empty: [],
         findings: asLines,
         ruleId: '3f',
@@ -598,6 +627,15 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     })
 ]
+
+/**
+ * The channels a caller must bind — the table rows that read `deps.probes`, in
+ * table order. Exported so the one binder (gate-deps' `buildVerifyProbes`) can be
+ * checked against the table rather than against a hand-kept list.
+ */
+export const BOUND_PROBE_KEYS: readonly BoundProbeKey[] = PROBE_ADAPTERS.filter(a => a.bound).map(
+    a => a.key as BoundProbeKey
+)
 
 /**
  * Build the verification child's prompt. Kept pure so the wording is unit-tested
@@ -880,75 +918,22 @@ export interface VerificationDeps {
      * pure no-op for callers/tests that do not wire it. */
     repoHealth?: () => Promise<{ok: boolean; reason: string}>
     /**
-     * Progress hook for the DETERMINISTIC stage — the repo-health run plus the ten
-     * probes below, all of which run BEFORE the child (and therefore before the
+     * Progress hook for the DETERMINISTIC stage — the repo-health run plus the
+     * `probes` below, all of which run BEFORE the child (and therefore before the
      * child's own status widget exists). Called with a short label as each step
      * starts, so the caller can keep a live line on screen through what was
      * otherwise the run's longest stretch of dead air (MEASURED at 15–69s per
      * repo-health run). ABSENT → no progress reporting, same behaviour as before. */
     onStage?: (stage: string) => void
     /**
-     * DETERMINISTIC substitution probe (see substitution-probe.ts): scans the task's
-     * changed test files for test-the-copy shapes and returns finding lines to inject
-     * into the child's prompt. A/B-proven load-bearing: the prompt rule alone caught
-     * the class 2/5, rule + probe finding 5/5. ABSENT or empty → no probe block. */
-    probe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC prohibition probe (see prohibition-probe.ts): spec-forbidden
-     * paths the task's diff modified anyway, injected as prompt findings under the
-     * no-waiver rule (4b). Advisory, never auto-FAIL — real prohibitions can be
-     * conditional prose. ABSENT or empty → no prohibition block. */
-    prohibitionProbe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC test-assembly probe (see test-assembly.ts): authored test files
-     * that rebuild production WIRING — importing the leaf modules the shipped entry
-     * composes and assembling their own copy instead of the real assembly — become
-     * prompt findings under rule 3f (F4 test-the-copy, 3rd recurrence). Pure import-
-     * graph shape; the child then drives the real assembly before trusting the copy.
-     * ABSENT or empty → no test-assembly block. */
-    testAssemblyProbe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC probe-gaming probe (see probe-gaming.ts, run-8 F6): added lines
-     * in the task's diff whose stated purpose is to make a CHECK pass instead of
-     * meeting the requirement it stands for ("return 401 so the verification test
-     * passes"). Injected as findings under rule 4c so the child confirms the
-     * underlying requirement is genuinely met rather than trusting the green check.
-     * Pure diff-text analysis; ABSENT or empty → no probe block. */
-    probeGamingProbe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC cross-task deletion probe (see task-provenance.ts, mx5 run 12
-     * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
-     * provenance) differs from the current task — a sibling's committed deliverable
-     * destroyed, typically to green a check. Injected as prompt findings under rule
-     * 4d (MANDATORY + verdict-gating, the A/B-proven shape — buried rules score
-     * 0/5), and carried structurally on a FAIL outcome so an ACCEPT records each as
-     * a durable debt. ABSENT or empty → no block. */
-    crossTaskDeletionProbe?: () => Promise<CrossTaskDeletion[]>
-    /**
-     * DETERMINISTIC sandbox-path-leak probe (see foreign-path.ts, mx5 run 13
-     * PROMPT 4 item 1): absolute paths this task committed that exist only inside
-     * the authoring child's own environment — `/workspace/src/shared` in a vite
-     * alias — while the real file sits at `src/shared` here. The probe REPAIRS
-     * what it can deterministically first; only leaks it could not repair reach
-     * this hook, injected under rule 4e (MANDATORY + verdict-gating, the same
-     * shape as 4d — a leak makes the affected command fail to BUILD, so the
-     * checks that would notice never run at all). ABSENT or empty → no block. */
-    foreignPathProbe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC neutered-check-script probe (see script-escape.ts, mx5 run 13
-     * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
-     * exit status cannot be non-zero (`… || true`, an inverted-grep launder). The
-     * damage is second-order — the script still "passes", so the gates that run it
-     * report success without measuring anything — which is exactly why the child
-     * cannot discover it by running the check. ABSENT or empty → no block. */
-    scriptEscapeProbe?: () => Promise<string[]>
-    /**
-     * DETERMINISTIC test-runner glob-collision probe (see runner-globs.ts, mx5 runs
-     * 7 AND 13, PROMPT 4 item 2): the manifest declares two runners whose file sets
-     * are not provably disjoint, so the scanning one imports the other's specs and
-     * dies during COLLECTION. Injected under rule 4g. UNKNOWN (one runner, or
-     * disjointness proven) yields nothing. ABSENT or empty → no block. */
-    runnerGlobProbe?: () => Promise<string[]>
+     * The DETERMINISTIC probes, one optional thunk per channel (see `PROBE_ADAPTERS`
+     * above for what each channel is and which rule its findings cite; the
+     * substitution, prohibition, test-assembly, probe-gaming, cross-task-deletion,
+     * foreign-path, script-escape and runner-glob probes all live here). Bound in
+     * ONE place — gate-deps' `buildVerifyProbes` — and consumed by the table: an
+     * absent key skips its row, a throwing thunk degrades to the row's empty value.
+     * ABSENT → no probe blocks at all (tests / callers that wire none). */
+    probes?: VerifyProbes
     /**
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file

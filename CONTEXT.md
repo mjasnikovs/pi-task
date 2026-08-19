@@ -21,6 +21,67 @@ concept get that concept recorded here.
   > (runChild/runTask/commit) are deliberately different abstractions. Their one
   > real overlap — mirroring child context_usage into the widget — lives in
   > `task/context-usage.ts` (`getParentContextWindow`, `resolveContextUsage`).
+  > **`TaskRunnerOptions`** — the single-task runner takes one options object, not
+  > ten positionals (`RunSingleTaskOptions` was already a bag that got
+  > re-flattened into them). It carries `runChild?: PhaseDeps['runChild']` straight
+  > through into `PhaseDeps`, so a runner-driven test answers phase children BY
+  > NAME (`scriptedChildren({refine, 'grill-gen', compose, critique, …})`) instead
+  > of matching prompt prose. `spawn` stays beside it for the two orchestrator
+  > tests that ARE about the ladder (empty completion, loop exhaustion). The one
+  > thing `runChild` cannot reach from a `TaskRunner` is the four research workers:
+  > `PHASES.research` calls `phaseResearch(d, p.refined)` with no
+  > `PhaseResearchDeps`, so `runWorker(label, input)` is unreachable from the runner
+  > and those four remain prompt-keyed in `orchestrator.test.ts` — labelled as
+  > such, and the next seam to thread.
+- **Implementation turn** — the supervision that runs between "spec delivered" and
+  "we know how the implementation REALLY ended" (`task/implementation-turn.ts`). A
+  single `waitForIdle` resolves for four reasons and only one is completion;
+  `classifyTurnEnd(entries)` names it — `aborted` > `compaction` > `error` >
+  `stop`, the precedence the old three booleans (`wasInterrupted`,
+  `endedAtCompactionBoundary`, `implementationError`) applied by call order — so a
+  new terminal state is one enum member, not a fourth boolean.
+  `superviseImplementation(ctx, opts)` owns resume-across-compactions →
+  steer-until-done → read-the-error behind `ImplementationTurnDeps` (`entries`,
+  `send`, `waitForIdle`, `ask`, `watchdog`, `log?`), bound from a live ctx by
+  `turnDepsFor`; `runSingleTask` calls it once. The steer prompt still fans out
+  through `SessionUI` (local input + remote card) — that binding moved with it,
+  unchanged.
+- **ChildStatus** — the live status of the child pi running under a status
+  loader: its latest stream line and its context gauge, plus the loader ritual
+  around one child (`track`: reset, raise a loader whose every tick is the frame
+  merged over the live status, run, always stop). `task/child-status.ts`. It was
+  `let lastLine; let contextUsage;` + two callbacks + a reset + a loader in three
+  places — `/task-auto`'s planning `runChild`, `/task-plan`'s `child`, and
+  `buildGateDeps` (an accessor box handed to `makeGateChild`) — and the first two
+  were the same 25 lines. `runPlanningChild` is what both are thin adapters over;
+  what genuinely varied (tool set, head command, per-tick step label, task id,
+  read-once extension, debug log) is a parameter, and the read-only tree diff
+  stays `/task-plan`'s own. The status OUTLIVES a track: the gate shares one
+  across every gate child, and the verify gate's gate-wide loader reads it over a
+  child that renders none (`frame: null`).
+  > The fourth mirror, `TaskRunner`'s `_widgetState`, is deliberately NOT one: its
+  > state is the whole-run `WidgetState`, shared by reference with `PhaseContext`
+  > and written by the phases themselves; only the two callbacks overlap.
+- **Run bracket** — what "a command owns the session" means, in one place:
+  `withRun(ctx, {onCancel?}, fn)` (`task/run-bracket.ts`) holds mid-run input
+  (`beginRun`/`endRun`) and arms the raw-stdin interception
+  (`armCancelListener`/`disarm…`) for exactly `fn`'s duration, releases both on
+  return and on throw, and reports the held lines that never found a turn. It was
+  written out at four sites in two files whose `finally` halves disagreed on order
+  (the orchestrator disarmed first, `/task-auto` ended first) — an order that is
+  not observable, so there is one order, not an option. `/task-plan` was the fifth
+  owner and never bracketed; it does now, so a line typed during a planning child
+  is held for the handed-off run's first turn instead of firing from pi's queue
+  after the plan. `TaskRunner.run` used to begin ~65 lines before its `try`, so a
+  throw in task-file setup leaked both refcounts for the process lifetime; wrapping
+  the whole body closes that. The two refcounts (`runDepth`, `armed.depth`) stay
+  two — read by different consumers with no ctx in hand, armed alone by the cancel
+  harness — but the bracket is now the ONLY production caller of either pair,
+  which is what prevents drift. `announceTerminal(ctx, msg, level, {push?})` is
+  the terminal triplet (toast + remote bubble + web push) that `announceDone`,
+  `/task`'s `announce` and `/task-plan`'s two endings each hand-rolled;
+  `/task-plan` opts out of the push because a plan is a conversation, not a task —
+  the run it hands off to pushes its own ending.
 - **Plan stage** — one step of `planAuto`, the `/task-auto` planning pipeline:
   ORIENT → ELICIT → DECOMPOSE → COVER → persist. Each is its own function in
   `task/auto-orchestrator.ts`, taking what the earlier stages settled and
@@ -145,6 +206,20 @@ concept get that concept recorded here.
   throw, the stage label, the notice ordering, and the rule ordering (two
   different orders, both derived from the table). `buildVerifyPrompt` takes a
   findings bag, not nine positional parameters.
+  > The eight bound probes reach the table as ONE dep, `VerificationDeps.probes:
+  > VerifyProbes` — a mapped type over `ProbeRaw`, the interface where each
+  > channel's raw shape is declared once (`ProbeKey = keyof ProbeRaw`). A row reads
+  > `deps.probes[key]` by default; only skip-escape overrides its `source`, because
+  > it is text analysis of the spec the deps already carry and is never bound. The
+  > collectors meet the table in exactly one place, `buildVerifyProbes` in
+  > `task/gate-deps.ts` (`buildGateDeps.verify` is now: read spec, build probes, run
+  > verify), and `readSpecForVerification` is the one spec read all four gate sites
+  > share instead of four copies of the same try/catch. Adding a probe is a
+  > `ProbeRaw` line, a table row and a binding line; deleting one, the compiler
+  > names the row and the binding. Skip-when-absent and degrade-to-empty stay in
+  > the row's `run` — the binder needs no try/catch and a fault in one probe cannot
+  > reach another. `BOUND_PROBE_KEYS` is derived from the table so the binder is
+  > checked against the rows, not a hand-kept list.
 - **Closure scan** — a run-level static check that reads the tree and emits
   failure lines, fault-isolated so a scanner bug can never break the gate. Rows
   in `CLOSURE_SCANS` (`task/final-gate.ts`) carry an id, a `stage`
@@ -153,12 +228,72 @@ concept get that concept recorded here.
   mid-scan fault. Only the three uniform scans are in the table; repo-health,
   launch-contract, launch-config-gap and the boot check are deliberately outside
   it, because each would need its own escape hatch in the row type.
+- **Gate tally** — what the run-end gate's sections RECORD, and the one pure
+  function that turns the record into a `FinalGateOutcome`. `GateTally`
+  (`task/gate-tally.ts`) replaces the twelve mutable locals
+  `runFinalIntegrationGate` threaded through ~400 lines by closure — the ranked
+  failure list, four dynamic counters, three note lists, warnings, the boot
+  verdict. Each section calls a method named for what it means (`attempted(bin)`,
+  `observed()`, `unobserve()` for the config-gap un-count that used to be
+  `dynObserved -= 1`, `failObserved()` for a probe that looked), and
+  `verdict(debts)` is the ONLY place the PASS / FAIL / UNOBSERVED polarity, note
+  ordering (boot note, zero-observation verdict, config gaps, inert contract) and
+  debt attachment live — testable with no tree, where before it was reachable only
+  through temp dirs and `node -e`. `observabilityGapFailure` and
+  `unobservedVerdict` moved with the counters they read; `final-gate.ts`
+  re-exports them.
+  > The zero-discovery return now asks the tally (`!boot && tally.silent()`) and
+  > sits AFTER the launch-script loop, which is the one-line fix for the f5d7110
+  > finding: a declared, present, non-boot-class launch script RUNS on a tree with
+  > no discoverable integration/lockfile/boot command. It still returns before the
+  > boot `else` branch and the post-boot closure scans: `stage` is a statement
+  > about when a scan is meaningful, and this did not change it. Repo-health,
+  > launch-contract, config-gap and boot remain outside `CLOSURE_SCANS`.
+- **Deep-render driver halves** — `deep-render-check.ts`'s `drive()` is launch →
+  session → close, split at the `Cdp` seam it already had. `launchBrowser(bin,
+  userDataDir, {signal})` is everything that touches a process or a socket:
+  spawn, read the DevTools banner, connect, and a `close` that is idempotent,
+  never throws, and is also what the caller's abort `signal` fires — so a budget
+  timeout reaches a browser that never listened, which two hold-callbacks used to
+  do by hand. `driveSession(cdp: CdpLike, {url, credentials, judge, quietMs})` is
+  the protocol body unchanged, over the two methods it actually calls (`send`,
+  `on`) — defined from the consumer, not from `Cdp`, so a scripted fake is a dozen
+  lines. `judge` is a parameter because `drive` is where the recorder hook wraps
+  `judgeDeepSession`; the session only gathers facts.
+  `deep-render-driver.test.ts` keeps its fake Chrome on disk for the launch half;
+  `deep-render-check.session.test.ts` is the branch table for the session half.
+  > `Cdp` itself did not move and `runDeepRenderCheck` still owns the temp profile
+  > dir: the split is at the process/protocol boundary, not a re-shaping of the
+  > client.
 - **Debt origin** — why a debt entered the ledger. `DEBT_LABELS`
   (`task/accept-debt.ts`) is the registry: a `Record<DebtOrigin, string>`, so a
   new union member is a compile error until it has a label. One writer,
   `recordDebt(cwd, taskId, reason, origin)`, replaced eight byte-identical
   recorders; the parser reads the same table instead of a hand-maintained
   whitelist. Adding an origin is three edits.
+  > The ACCEPT-debt re-check — `deriveOpenDebts` and `rerunDebtVerifyCommand` —
+  > lives here too, with the ledger it reads and writes; `runVerifyCommandLine`
+  > lives in `command-run.ts` with the other command drivers. `final-gate.ts`
+  > re-exports all three so the orchestrator and the harnesses under `scripts/`
+  > are unchanged.
+- **Ledger** — a run-level line file under `.pi-tasks/` with one read-modify-write
+  ritual: read (any error → ''), parse, key, drop what is already stored, cap to
+  the newest `max` (oldest dropped), mkdir, write the whole file back (`join('\n')
+  + '\n'`, plain `writeFile`, not atomic), swallow every fault. `makeLedger`
+  (`task/ledger.ts`) is the one implementation; contracts, launch-contract,
+  env-notes, accept-debt, repair-queue and both requirements files are
+  **adapters** that declare file/max/key/serialize/parse and call
+  `read`/`append`/`write`. Six copies of the ritual agreed on everything except ONE
+  rule — what an append does when it adds nothing new: the four batch ledgers
+  rewrite (re-cap, canonicalise), the two single-record ledgers (`recordDebt`,
+  `recordRepairCandidate`) return without touching the file. That is `onNoop:
+  'rewrite' | 'skip'`, an option rather than a unification, because the two are
+  observable once a file has drifted from what its writer produces. `recordDebt`
+  is still the ONLY debt writer; the ledger is what it calls, not a second door.
+  > Stored contract/requirement lines are kept VERBATIM and keyed by the
+  > normalised first quoted span; a new entry carries the key of its quote
+  > directly (`{line, key}`), so the dedupe rule is unchanged even for a quote
+  > containing `"`. Not atomic and not made atomic — no site was.
 - **Boot probe** — does the assembled product actually START, and does the page it
   serves actually render? `task/boot-probe.ts`: shell-chain lexing and non-launch
   detection, boot-command discovery, listener enumeration (ss/netstat/lsof), port

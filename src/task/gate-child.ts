@@ -32,8 +32,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
 import type {GitStateSnapshot, ReconcileResult} from './git-state-guard.js'
-import type {ContextSnapshot} from '../shared/child-process.js'
-import type {AutoLoaderState} from './widget.js'
+import type {ChildStatus} from './child-status.js'
 import {formatLoopHint} from './child-runner.js'
 import {classifyEnforceChildFailure} from './enforce-guidelines.js'
 
@@ -95,15 +94,17 @@ export interface GateChildDeps {
     commandTimeoutMs: number
     /** Hung-stream bound; the probe-based stall guard cannot supply it. */
     streamInactivityMs: number
-    parentContextWindow: number
+    /**
+     * The live widget state this child feeds and its loader reads. SHARED with
+     * the caller — the verify gate's own loader reads the same status while this
+     * child runs with `loader: false` — so it is the caller's object, not a copy.
+     * It also owns the loader ritual and the context-usage resolution.
+     */
+    status: ChildStatus
 
     // ── seams ────────────────────────────────────────────────────────────────
     runWorker: (input: RunWorkerInput) => Promise<RunWorkerResult>
     makeDebugAppender: (path: string) => (line: string, level?: 'event' | 'stream') => void
-    startAutoLoader: (
-        ctx: ExtensionCommandContext,
-        getState: () => AutoLoaderState | null
-    ) => () => void
     captureGitState: (cwd: string, signal?: AbortSignal) => Promise<GitStateSnapshot>
     reconcileGitState: (
         cwd: string,
@@ -112,14 +113,7 @@ export interface GateChildDeps {
     ) => Promise<ReconcileResult>
     /** Tree changes for a WRITE-capable child, already formatted. */
     describeTreeChanges: (cwd: string, signal?: AbortSignal) => Promise<string>
-    resolveContextUsage: (
-        snapshot: ContextSnapshot,
-        prev: ContextSnapshot | undefined,
-        parentContextWindow: number
-    ) => ContextSnapshot
     truncateToolResult: (text: string) => string
-    /** Where the live widget reads `lastLine` / `contextUsage` from. */
-    widget: {lastLine?: string; contextUsage?: ContextSnapshot}
     /** Set to the last reconcile so the caller can discard a tainted verdict. */
     onReconcile?: (rec: ReconcileResult) => void
 }
@@ -136,8 +130,11 @@ export function makeGateChild(
 ): (tools: string, prompt: string, sig?: AbortSignal) => Promise<string> {
     const row = GATE_CHILD_KINDS[deps.kind]
     return async (tools, prompt, sig) => {
-        deps.widget.lastLine = undefined
-        deps.widget.contextUsage = undefined
+        // Reset FIRST — before the start marker and the guard snapshot, not just
+        // inside `track` — so a previous child's trailer never shows under this
+        // one while the git snapshot is still being taken (the verify gate's own
+        // loader is already reading this status by then).
+        deps.status.reset()
         const startedAt = Date.now()
         // Every marker below (start/end, the guard's restore, the loop warning, a
         // write-capable child's tree changes) is a guard record that survives at
@@ -146,20 +143,18 @@ export function makeGateChild(
         const log = deps.makeDebugAppender(deps.logPath)
         log(`=== ${deps.kind} start: ${deps.taskTitle} ===`)
         const guardSnapshot = row.guarded ? await deps.captureGitState(deps.cwd, sig) : null
-        const stopLoader =
+        const frame =
             deps.loader === false ?
-                () => {}
-            :   deps.startAutoLoader(deps.ctx, () => ({
+                null
+            :   () => ({
                     title: deps.taskTitle,
                     kind: deps.kind,
                     step: row.step,
                     stepNum: 1,
                     stepTotal: 1,
-                    startedAt,
-                    lastLine: deps.widget.lastLine,
-                    contextUsage: deps.widget.contextUsage
-                }))
-        try {
+                    startedAt
+                })
+        return deps.status.track(deps.ctx, frame, async () => {
             let r: RunWorkerResult
             try {
                 r = await deps.runWorker({
@@ -189,10 +184,10 @@ export function makeGateChild(
                                 + ' ==='
                         ),
                     onLine: line => {
-                        // `lastLine` feeds the LIVE widget and is not logging — it
+                        // The status feeds the LIVE widget and is not logging — it
                         // stays outside the gate, or a quiet trail would also blank
                         // the progress display.
-                        deps.widget.lastLine = line
+                        deps.status.onLine(line)
                         log(line, 'stream')
                     },
                     ...(row.logToolResults ?
@@ -205,13 +200,7 @@ export function makeGateChild(
                                 )
                         }
                     :   {}),
-                    onContextUsage: snapshot => {
-                        deps.widget.contextUsage = deps.resolveContextUsage(
-                            snapshot,
-                            deps.widget.contextUsage,
-                            deps.parentContextWindow
-                        )
-                    }
+                    onContextUsage: snapshot => deps.status.onContextUsage(snapshot)
                 })
             } finally {
                 // Restore whatever the child moved BEFORE any verdict or failure is
@@ -271,8 +260,6 @@ export function makeGateChild(
                 )
             }
             return r.text
-        } finally {
-            stopLoader()
-        }
+        })
     }
 }

@@ -1,5 +1,5 @@
 /**
- * Driver-level tests for deep-render-check's `drive()` — the half of the module
+ * Driver-level tests for deep-render-check's `launchBrowser()` half (via `drive()`) — the part of the module
  * that needs a browser and was therefore the only untested half (59% of its
  * functions never ran).
  *

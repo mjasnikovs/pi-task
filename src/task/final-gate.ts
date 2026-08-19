@@ -52,15 +52,7 @@ import {
     discoverHealthCommands,
     type HealthCommand
 } from './repo-health-check.js'
-import {
-    readAcceptDebts,
-    recheckAcceptDebts,
-    writeAcceptDebts,
-    buildAcceptDebtNote,
-    annotateDebtConflicts,
-    type AcceptDebt,
-    type VerifyRerunResult
-} from './accept-debt.js'
+import {deriveOpenDebts, rerunDebtVerifyCommand, type AcceptDebt} from './accept-debt.js'
 import {
     readDeclaredScripts,
     missingDeclaredScripts,
@@ -112,6 +104,7 @@ import {
 } from './env-template-closure.js'
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 import {makefileRecipe} from './command-shrink.js'
+import {GateTally, observabilityGapFailure, unobservedVerdict} from './gate-tally.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -421,171 +414,14 @@ function runGateCommand(
     return verdict
 }
 
-/**
- * How a re-run of ONE recorded VERIFY command line ended.
- *   pass — it ran and exited 0. The ONLY outcome that may close a debt.
- *   fail — it ran and exited non-zero for a real reason. Debt stays open.
- *   gap  — nothing was observed: the shell/runner never spawned, 127 inside the
- *          chain, a timeout, a missing browser, or absent external infrastructure.
- *          INCONCLUSIVE, so the debt stays open (surface, never re-hide).
- */
-export type VerifyRerunOutcome =
-    | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string}
-    | {outcome: 'gap'; detail: string}
+// `runVerifyCommandLine` and its outcome type live in command-run.ts with the
+// other command drivers; re-exported so existing importers keep working.
+export {runVerifyCommandLine, type VerifyRerunOutcome} from './command-run.js'
 
-/** The command word of a shell line, past any leading `VAR=value` assignments. */
-function leadingBin(line: string): string | null {
-    for (const tok of line.trim().split(/\s+/)) {
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue
-        return tok
-    }
-    return null
-}
-
-/**
- * Re-run one VERIFY-block command line (nexttask 5) under the gate's existing
- * env-gap contract, so a debt whose reason NAMES that command can be closed by the
- * command itself rather than by a judgement about it.
- *
- * Runs through `sh -c` because a VERIFY line is a shell line, not an argv: run 19's
- * is `AGENT=1 bun test test/listings.test.ts`, and env prefixes, `&&` and redirects
- * are all ordinary there. The leading command word is still resolved through
- * runner-resolve so a login-shell-stripped PATH cannot make every re-run look like a
- * gap (mx5 run 16's blindness, one level down).
- *
- * The asymmetry is the point: only exit 0 is conclusive. Every other ending — real
- * failure, missing tool, unreachable database, timeout, no POSIX shell — leaves the
- * debt exactly as open as it was.
- */
-export function runVerifyCommandLine(
-    cwd: string,
-    line: string,
-    timeoutMs: number,
-    extraGapRe?: RegExp,
-    /** The spawner. Injected so a re-run's outcome can be tested without one. */
-    run: CommandRunner = spawnCommand
-): VerifyRerunOutcome {
-    const bin = leadingBin(line)
-    const runner = bin === null ? null : resolveRunner(bin)
-    // A VERIFY line is a SHELL line, not an argv — env prefixes, `&&` and
-    // redirects are all ordinary there — so the runner spawns `sh -c`.
-    const verdict = classifyCommandRun(
-        run({
-            cwd,
-            bin: 'sh',
-            args: ['-c', line],
-            timeoutMs,
-            env: runner ? runnerEnv(runner) : {...process.env}
-        }),
-        // Infrastructure counts as a gap on EVERY debt re-run, not only on
-        // request: an unreachable database cannot tell us whether the code is
-        // fixed, and the asymmetry below means an inconclusive re-run simply
-        // leaves the debt as open as it was.
-        extraGapRe ? [INFRA_GAP_OUTPUT_RE, extraGapRe] : [INFRA_GAP_OUTPUT_RE]
-    )
-    if (verdict.outcome === 'gap') return {outcome: 'gap', detail: verdict.detail}
-    return verdict
-}
-
-/**
- * The full-skip blindness guard (mx5 run 16, validated): dynamic commands were
- * DISCOVERED but every single one skipped as an environment gap, so the gate
- * decided on statics alone and stamped a permanently blank app green. Per-command
- * env-gap skips stay legitimate (a missing browser must not fail a suite); what
- * may never happen again is ALL of them skipping while the gate still reports
- * PASS — a gate that observed nothing dynamic has no basis to vouch for the
- * assembled app. Pure so the semantics are unit-tested; the caller feeds it the
- * attempt/observation counters and runner resolvability.
- */
-export function observabilityGapFailure(args: {
-    /** Dynamic commands the gate discovered and tried to run. */
-    attempted: number
-    /** Of those, how many it actually OBSERVED (a real pass OR a real fail —
-     *  either proves the command ran; only skips observe nothing). */
-    observed: number
-    /** Of the skips, how many were SPAWN failures (runner never ran, ENOENT).
-     *  Tool-level gaps (missing browser, 127 inside the chain, timeout) prove
-     *  the runner itself works and keep the classic env-gap contract — the
-     *  blindness class fires only when EVERY attempt failed to even spawn. */
-    spawnFailures: number
-    /** Distinct runner bins across the attempted commands. */
-    runnerBins: string[]
-    /** Is this runner spawnable (bare or via a known install location)? */
-    runnerResolvable: (bin: string) => boolean
-}): string | null {
-    if (args.attempted === 0 || args.observed > 0) return null
-    if (args.spawnFailures < args.attempted) return null
-    const unresolvable = args.runnerBins.filter(b => !args.runnerResolvable(b))
-    const runnerNote =
-        unresolvable.length > 0 ?
-            ` — the project's own runner ${unresolvable
-                .map(b => `\`${b}\``)
-                .join(', ')} is not spawnable here (not on PATH nor any known install location)`
-        :   ''
-    return (
-        `observability gap: ${args.attempted} integration/boot command(s) exist but NONE `
-        + `could even spawn in this environment${runnerNote}; `
-        + `the gate observed nothing dynamic and cannot vouch for the assembled app`
-    )
-}
-
-/**
- * The THIRD verdict. observabilityGapFailure above covers "commands were DISCOVERED
- * but every one failed to spawn" — a rank-0 FAIL. It deliberately returns null for
- * `attempted === 0`, and until now that silence fell straight through to
- * `PASS — no integration command found (statics passed)`: the run-16 blindness class
- * entering through a different door, where "we never checked" reads exactly like "we
- * checked and it was fine". Measured 2026-07-27: IAR1 (C++/CMake, no package.json)
- * shipped that verdict TWICE while carrying 2 and 3 open verify-FAIL debts, and
- * godot-engine (package.json whose only script is `verify`) reproduces it live today.
- *
- * So: observed anything dynamic ⇒ PASS; discovered-but-all-spawn-failed ⇒ the
- * existing FAIL; observed NOTHING ⇒ this note, carried on an `ok: true` outcome.
- *
- * WHY NON-BLOCKING (decided, not deferred — the evidence cuts both ways and this is
- * the resolution):
- *  - Blocking's case: both real occurrences also carried open verify-FAIL debt, so
- *    the runs with no dynamic evidence were exactly the runs already known to be
- *    carrying defects.
- *  - Against, and decisive: (1) that debt is ALREADY surfaced unconditionally at the
- *    gate moment, on PASS as on FAIL — the IAR1 records literally read "PASS — no
- *    integration command found … UNRESOLVED VERIFY-FAIL DEBT still open (2)". The
- *    missing signal was never the debt, it was the word PASS endorsing the run, and
- *    that is what this fixes. (2) `ok: false` routes into the autofix picker, whose
- *    seed is `reason`; "no integration command is discoverable" is not fixable by
- *    editing code, so the highest-probability child response is to FABRICATE a
- *    runnable command to satisfy the gate — the same fabrication class that refuted
- *    the `## verified tooling` harvest (see discoverIntegrationCommands) and that had
- *    run 11's fix child `rm` a sibling's deliverable. (3) That harvest being refuted
- *    means IAR1 and godot-engine can NEVER discover a command, so blocking would end
- *    every non-npm run in `failed` permanently, with no remedy — the task's own I3
- *    ("show blocking does not block IAR1/godot post-Task-1") is unsatisfiable, and
- *    its stated consequence is to downgrade to a warning and say so. This is that.
- * The teeth are elsewhere and are real: the verdict word changes, the gate trail says
- * UNOBSERVED, and the caller records a durable final-gate debt that the NEXT run's
- * gate re-surfaces (it can never auto-close — it is not static-class).
- */
-export function unobservedVerdict(args: {
-    /** Dynamic commands the gate discovered and tried to run (0 ⇒ nothing existed). */
-    discovered: number
-    /** Of those, how many actually RAN (a real pass or a real fail). */
-    observed: number
-}): string | null {
-    if (args.observed > 0) return null
-    // Kept short ON PURPOSE: the run-level trail line slices the reason at 300 chars,
-    // and the whole point of this verdict is that the durable record carries it.
-    const why =
-        args.discovered === 0 ?
-            'no integration, lockfile or boot command was discoverable here, so the gate ran '
-            + 'nothing at all'
-        :   `all ${args.discovered} discovered command(s) skipped as environment gaps, so the `
-            + 'gate ran nothing observable'
-    return (
-        `UNOBSERVED — NOT a pass: ${why}; statics passed, but this run produced NO evidence `
-        + 'that the assembled product builds, boots or works.'
-    )
-}
+// The two verdict predicates — the run-16 full-blindness FAIL and the third,
+// non-blocking UNOBSERVED verdict — live with the counters they read, in
+// gate-tally.ts (GateTally). Re-exported so every existing importer keeps working.
+export {observabilityGapFailure, unobservedVerdict}
 
 // File → introducing-task provenance moved to task-provenance.ts (mx5 run-12
 // PROMPT 2 extracted it for the cross-task deletion guards); re-exported so
@@ -612,120 +448,10 @@ export {
 }
 export type {BootDeps}
 
-/**
- * ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
- * the user accepted despite a verify-FAIL and re-check each against the CURRENT
- * tree. A static-class debt whose statics now pass is provably RESOLVED (a later
- * task fixed it) and pruned from the ledger; every other debt cannot be proven
- * resolved deterministically, so it stays OPEN and is surfaced — a run may not
- * complete silently carrying an accepted defect. FP-safe by construction (see
- * accept-debt.ts). Best-effort: a ledger read/write failure must never break the
- * caller.
- *
- * FACTORED OUT of runFinalIntegrationGate (nexttask 6): the derivation has to be
- * runnable at a SECOND moment — after a converged final-gate autofix, where the
- * orchestrator used to rebuild its gate outcome as a bare `{ok, reason}` and drop
- * `openDebts` entirely. The report a run ends on has to be derived from the tree
- * the run ends with, not from the tree as it was before the fix pass.
- *
- * `staticOk` is the caller's claim about the CURRENT statics, and it is the only
- * thing that can auto-close a static-class debt — so a caller that does not know
- * must pass `false` (unprovable ⇒ stays open), never a guess.
- */
-export async function deriveOpenDebts(
-    cwd: string,
-    staticOk: boolean
-): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
-    const {
-        open: openRaw,
-        resolved,
-        trail
-    } = recheckAcceptDebts(await readAcceptDebts(cwd), {
-        staticOk,
-        // Cross-task-deletion debts auto-close iff the deleted file is back in the
-        // tree — a deterministic existence check, corroborating the per-file
-        // provenance the record already carries.
-        fileExists: rel => existsSync(path.join(cwd, rel)),
-        // VERIFY-COMMAND class (nexttask 5): a debt that NAMES a command is settled
-        // by running that command, under the gate's own env-gap contract and behind
-        // the no-write guard below.
-        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd)
-    })
-    if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
-    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
-    // named file is another task's committed deliverable is a plan defect — surface
-    // the contradiction with the debt so nobody (human or child) treats the claim as
-    // a deletion instruction. Pure git-history lookup; degrades to no annotation.
-    const openDebts = annotateDebtConflicts(openRaw, p => taskThatIntroduced(cwd, p))
-    const debtNote = buildAcceptDebtNote(openDebts)
-    return {openDebts, ...(debtNote ? {debtNote} : {}), ...(trail.length > 0 ? {trail} : {})}
-}
-
-/** Per-command ceiling for a debt re-run (`inv-bounded`). */
-const DEBT_RERUN_TIMEOUT_MS = 300_000
-
-/**
- * Extra infrastructure-gap shapes recognised ONLY when re-running a debt's command,
- * never in the gate's own verdicts. A driver that reports its connection simply
- * closed (`ERR_POSTGRES_CONNECTION_CLOSED` — what bun's SQL client says when the
- * database is not there at all, as on this box with the mx5 container stopped) is an
- * absent dependency, and calling that "the defect is still present" would be a
- * finding the environment invented. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
- * gate verdict the same wording can be a real fault the suite must own, and only the
- * debt re-check needs the conservative reading — where it costs nothing, because gap
- * and fail both leave the debt open.
- */
-const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|ECONNRESET/i
-
-/**
- * Re-run ONE debt's stored VERIFY command for the re-check, with the no-write guard
- * (`inv-no-write`) wrapped around it.
- *
- * A VERIFY command is the project's own command and may legitimately write (a build
- * emits `dist/`, a suite writes a snapshot). What it may NOT do is turn the tree into
- * a passing tree and have that count as the debt being fixed — the run would then be
- * certifying its own side effect. So tracked state is captured before and after, and
- * a pass that came with a tracked change is downgraded to INCONCLUSIVE with the
- * change named. Untracked output is left alone: it is what a build legitimately
- * produces, and `git status --porcelain` in a repo with the usual ignores does not
- * see it.
- *
- * A repository the guard cannot read (no git, git absent) is not a licence to skip
- * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
- * assumption rather than an observation.
- */
-export function rerunDebtVerifyCommand(
-    cwd: string,
-    command: string,
-    /** The spawner, for BOTH the command and the tracked-state reads. Injected so
-     *  the guard's four outcomes are testable without a repo or a real command. */
-    run: CommandRunner = spawnCommand
-): VerifyRerunResult {
-    const tracked = (): string | null => {
-        const r = run({
-            cwd,
-            bin: 'git',
-            args: ['status', '--porcelain', '--untracked-files=no'],
-            timeoutMs: 60_000
-        })
-        return r.failedToStart || r.status !== 0 ? null : r.stdout
-    }
-    const before = tracked()
-    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE, run)
-    if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
-    if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
-    const after = tracked()
-    if (before === null || after === null) {
-        return {outcome: 'gap', detail: 'tracked-state guard could not read git status'}
-    }
-    if (before !== after) {
-        return {
-            outcome: 'gap',
-            detail: 'the re-run itself CHANGED tracked files — a command that edits the tree into a pass proves nothing'
-        }
-    }
-    return {outcome: 'pass'}
-}
+// The ACCEPT-debt re-check (`deriveOpenDebts`, `rerunDebtVerifyCommand`) lives in
+// accept-debt.ts with the ledger it reads and writes; re-exported so the
+// orchestrator and the harnesses under scripts/ keep working unchanged.
+export {deriveOpenDebts, rerunDebtVerifyCommand}
 
 /**
  * Where in the gate a closure scan runs. The two stages are NOT interchangeable
@@ -944,32 +670,16 @@ export async function runFinalIntegrationGate(
         trackedFiles: trackedFilesFn = trackedFiles
     } = opts
     const stat = runRepoHealthCheck(cwd)
-    const {openDebts, debtNote} = await deriveOpenDebts(cwd, stat.ok)
-    // The debt note rides in its OWN field: `reason` stays the mechanical failure
-    // because it seeds the autofix child's prompt (see FinalGateOutcome.reason —
-    // run 11's fix child executed a recorded claim as an instruction).
-    const withDebts = (o: FinalGateOutcome): FinalGateOutcome => ({
-        ...o,
-        ...(debtNote ? {debtNote} : {}),
-        openDebts
-    })
-    // Aggregated failures across ALL sections (mx5 run 13 — see the function doc).
-    // rank 0 = boot/render ("does not serve/render" is the most load-bearing
-    // signal); rank 1 = everything else, kept in execution order by stable sort.
-    const failures: Array<{rank: number; text: string; observed?: boolean}> = []
-    const fail = (text: string, rank = 1): void => {
-        failures.push({rank, text})
-    }
-    /**
-     * A failure a PROBE returned after observing (nexttask 19A — see
-     * FinalGateOutcome.observedFailures). Used by exactly one caller: the boot
-     * section, whose `fail` outcome can only arise from a probe that looked. Every
-     * other `fail()` keeps today's class, so nothing else changes.
-     */
-    const failObserved = (text: string, rank = 1): void => {
-        failures.push({rank, text, observed: true})
-    }
-    if (!stat.ok) fail(`static checks: ${stat.reason}`)
+    // Debts are derived once, before any section runs, and ride on every verdict
+    // shape (GateTally.verdict): `reason` stays the mechanical failure because it
+    // seeds the autofix child's prompt — run 11's fix child executed a recorded
+    // claim as an instruction.
+    const debts = await deriveOpenDebts(cwd, stat.ok)
+    // Every section below RECORDS into the tally (failures ranked, the four
+    // dynamic counters, the notes) and the verdict is assembled ONCE at the end —
+    // see gate-tally.ts for what each method means.
+    const tally = new GateTally()
+    if (!stat.ok) tally.fail(`static checks: ${stat.reason}`)
     // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
     // scripts that fell through decompose and shipped missing, unchecked. Diff the
     // plan-time-extracted declared scripts against the manifest; a missing one is a
@@ -985,15 +695,14 @@ export async function runFinalIntegrationGate(
     // readLaunchManifest resolves package.json, else a Makefile's targets, else
     // nothing — and nothing means no failure plus a note, never a silent pass.
     const declared = await readDeclaredScripts(cwd)
-    const contractNotes: string[] = []
     if (declared.length > 0) {
         const manifest = readLaunchManifest(cwd)
         if (manifest.kind === 'none') {
-            contractNotes.push(inertLaunchContractNote(declared, manifest))
+            tally.contractNote(inertLaunchContractNote(declared, manifest))
         } else {
             const missing = missingDeclaredScripts(declared, manifest.names)
             if (missing.length > 0) {
-                fail(
+                tally.fail(
                     `launch contract: the design declares script(s) the shipped ${manifest.file} does not expose: ${missing.join(', ')} (declared: ${declared.join(', ')})`
                 )
             }
@@ -1001,57 +710,30 @@ export async function runFinalIntegrationGate(
     }
     // Run-level closure scans that must be decided BEFORE the zero-discovery early
     // return below — a static check needs no runner (CLOSURE_SCANS: 'pre-discovery').
-    runClosureScans('pre-discovery', {cwd, planText}, fail)
+    runClosureScans('pre-discovery', {cwd, planText}, (t, r) => tally.fail(t, r))
     const lockCmds = discoverLockfileChecks(cwd)
     const {cmds} = discoverIntegrationCommands(cwd)
     const boot = discoverBootCommand(cwd)
-    // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict). Nothing was
-    // discovered, so nothing ran, so observabilityGapFailure (attempted === 0 → null) does
-    // not fire — and this outcome used to be reported as `PASS — no integration command
-    // found (statics passed)`, i.e. "we never checked" reading identically to "we checked
-    // and it was fine". IAR1 shipped that verdict TWICE while carrying open verify-FAIL
-    // debt (its .pi-tasks/TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37). The outcome stays
-    // `ok: true` (non-blocking, justified at unobservedVerdict) but is now labelled, trailed
-    // and carried as debt by the caller. It needs no new command source, so unlike the
-    // harvest lever refuted at discoverIntegrationCommands it cannot inject a fabricated
-    // failure.
-    if (lockCmds.length === 0 && cmds.length === 0 && !boot && failures.length === 0) {
-        // The inert-contract note rides here too: a non-npm project carrying a launch
-        // contract usually discovers no command either, and that is exactly the run
-        // whose silence must not read as "the contract was checked and was fine".
-        const note = [unobservedVerdict({discovered: 0, observed: 0}) ?? '', ...contractNotes]
-            .filter(n => n !== '')
-            .join(' ')
-        return withDebts({ok: true, unobserved: note, reason: note})
-    }
-    const ran: string[] = []
-    // Full-skip blindness counters (mx5 run 16): every dynamic spawn counts an
-    // attempt; a real pass OR a real fail counts an observation; skips observe
-    // nothing. If everything discovered ends up skipped, observabilityGapFailure
-    // turns the silence into a rank-0 failure instead of a static-only PASS.
-    let dynAttempted = 0
-    let dynObserved = 0
-    let dynSpawnFailures = 0
-    const dynBins = new Set<string>()
     for (const {prefix, list} of [
         {prefix: 'lockfile check: ', list: lockCmds},
         {prefix: '', list: cmds}
     ]) {
         for (const cmd of list) {
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
-            dynAttempted += 1
-            dynBins.add(cmd[0])
+            tally.attempted(cmd[0])
             const r = runGateCommand(cwd, cmd, timeoutMs, undefined, undefined, runCmd)
             if (r.outcome === 'skip') {
-                if (r.spawnFailed) dynSpawnFailures += 1
+                if (r.spawnFailed) tally.spawnFailure(cmd[0])
                 continue
             }
-            dynObserved += 1
+            tally.observed()
             if (r.outcome === 'fail') {
-                fail(`${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`)
+                tally.fail(
+                    `${prefix}\`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
+                )
                 continue
             }
-            ran.push(label)
+            tally.ran(label)
         }
     }
     // EXECUTE the launch contract (mx5 run 11): every declared script that is
@@ -1064,12 +746,6 @@ export async function runFinalIntegrationGate(
     // note (F7) is surfaced as an UNOBSERVED warning — the note may be covering a
     // real defect the gate could not reach here (run 11's "pre-existing .rows
     // bug" note excused the exact scripts that shipped broken).
-    const warnings: string[] = []
-    /** UNOBSERVED notes for launch scripts reclassified as CONFIG GAPS (run 20).
-     *  They ride in `unobserved`, not `warnings`, so the caller's existing
-     *  `recordDebt(cwd, id, fin.unobserved, 'final-gate')` writes the debt —
-     *  never a PASS. */
-    const configGapNotes: string[] = []
     if (declared.length > 0) {
         const covered = cmds.flatMap(([bin, args]) =>
             (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
@@ -1096,8 +772,7 @@ export async function runFinalIntegrationGate(
             if (!present.has(name.toLowerCase())) continue
             const cmd: HealthCommand = ['bun', ['run', name]]
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
-            dynAttempted += 1
-            dynBins.add(cmd[0])
+            tally.attempted(cmd[0])
             const r = runGateCommand(
                 cwd,
                 cmd,
@@ -1107,11 +782,11 @@ export async function runFinalIntegrationGate(
                 runCmd
             )
             if (r.outcome === 'skip') {
-                if (r.spawnFailed) dynSpawnFailures += 1
+                if (r.spawnFailed) tally.spawnFailure(cmd[0])
                 skippedLaunch.push(name)
                 continue
             }
-            dynObserved += 1
+            tally.observed()
             if (r.outcome === 'fail') {
                 // A CONFIG GAP IS NOT A CODE FAULT (mx5 run 20). The run died on
                 // `bun run seed` exiting 1 because ADMIN_PHONE — which the project's
@@ -1145,18 +820,18 @@ export async function runFinalIntegrationGate(
                         // Nothing about this script was OBSERVED: the real run could
                         // not reach it and the probe run is a diagnostic, never an
                         // observation. So it un-counts, exactly like a skip.
-                        dynObserved -= 1
+                        tally.unobserve()
                         skippedLaunch.push(name)
-                        configGapNotes.push(configGapUnobservedNote(gap))
+                        tally.configGap(configGapUnobservedNote(gap))
                         continue
                     }
                 }
-                fail(
+                tally.fail(
                     `launch script: \`${label}\` exited ${r.status}${r.tail ? ` — ${r.tail}` : ''}`
                 )
                 continue
             }
-            ran.push(label)
+            tally.ran(label)
         }
         if (skippedLaunch.length > 0) {
             const notes = parseEnvNotes(await readEnvNotes(cwd)).filter(n => isExcuseNote(n.fact))
@@ -1164,7 +839,7 @@ export async function runFinalIntegrationGate(
                 const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
                 const excuse = notes.find(n => re.test(n.fact))
                 if (excuse) {
-                    warnings.push(
+                    tally.warn(
                         `launch script \`${name}\` could not run here (environment gap) and a `
                             + `standing excuse note covers it ("${excuse.fact.slice(0, 160)}") — `
                             + `UNOBSERVED: verify it by hand before trusting the launch surface`
@@ -1177,13 +852,35 @@ export async function runFinalIntegrationGate(
     // construction, and it carries the run's most load-bearing signal — earlier
     // failures no longer shadow it. Its failures rank FIRST in the aggregate.
     // A boot that never RAN is its own verdict (mx5 run 18 — see bootSkipVerdict);
-    // it lives outside the dynObserved counters on purpose, so the test/build
+    // it lives outside the tally's dynamic counters on purpose, so the test/build
     // commands that did run cannot cancel it.
-    let bootUnobserved: string | null = null
+    //
+    // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict, and the
+    // zero-attempts branch of GateTally.verdict). Nothing was discovered, so nothing
+    // ran, so the blindness guard below (attempted === 0 → null) does not fire — and
+    // this outcome used to be reported as `PASS — no integration command found
+    // (statics passed)`, i.e. "we never checked" reading identically to "we checked
+    // and it was fine". IAR1 shipped that verdict TWICE while carrying open
+    // verify-FAIL debt (its .pi-tasks/TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37).
+    // The outcome stays `ok: true` (non-blocking, justified at unobservedVerdict) but
+    // is labelled, trailed and carried as debt by the caller. It needs no new command
+    // source, so unlike the harvest lever refuted at discoverIntegrationCommands it
+    // cannot inject a fabricated failure. The inert-contract note rides on it too: a
+    // non-npm project carrying a launch contract usually discovers no command either,
+    // and that is exactly the run whose silence must not read as "the contract was
+    // checked and was fine".
+    //
+    // This return sits AFTER the launch-script loop, not before it: it used to fire
+    // first, so a DECLARED launch script never ran on a tree with no discoverable
+    // integration command (found and left unfixed in f5d7110). "Nothing to observe"
+    // is a fact about the tally — no attempt, no failure — not about discovery, and
+    // asking the tally makes the two paths see the same state. It still returns
+    // before the boot `else` branch and the post-boot closure scans, whose stage is a
+    // statement about when they are meaningful.
+    if (!boot && tally.silent()) return tally.verdict(debts)
     if (boot) {
         const label = `${boot[0]} ${boot[1].join(' ')}`
-        dynAttempted += 1
-        dynBins.add(boot[0])
+        tally.attempted(boot[0])
         const expectServer = detectsServedApp(cwd, planText)
         // Render check (mx5 runs 8/11): for a served app, load the live page in a
         // headless browser and judge the RENDERED DOM — curl can't run JS, so a
@@ -1211,13 +908,15 @@ export async function runFinalIntegrationGate(
         if (b.outcome === 'orphan-port') {
             b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDepsWithRender, expectServer)
         }
-        if (b.outcome !== 'skip') dynObserved += 1
-        else if (b.spawnFailed) dynSpawnFailures += 1
-        bootUnobserved = bootSkipVerdict({
-            label,
-            skipped: b.outcome === 'skip',
-            expectServer
-        })
+        if (b.outcome !== 'skip') tally.observed()
+        else if (b.spawnFailed) tally.spawnFailure(boot[0])
+        tally.bootUnobserved(
+            bootSkipVerdict({
+                label,
+                skipped: b.outcome === 'skip',
+                expectServer
+            })
+        )
         if (b.outcome === 'fail') {
             // OBSERVED (nexttask 19A). Every path that produces `fail` here is a
             // probe that looked: the render judge saw an empty body, the deep
@@ -1226,7 +925,7 @@ export async function runFinalIntegrationGate(
             // condition that means "we could not look" — no ss/netstat/lsof, mx5
             // run 14 — returns PASS stamped UNOBSERVED and never reaches here
             // (`b0f90a7`, final-gate.ts `if (!canEnumerate) return passAndKill(…)`).
-            failObserved(`boot check: \`${label}\` ${b.detail}`, 0)
+            tally.failObserved(`boot check: \`${label}\` ${b.detail}`, 0)
         } else if (b.outcome === 'orphan-port') {
             // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
             // FAIL: name the port and (when known) the process squatting on it.
@@ -1236,15 +935,15 @@ export async function runFinalIntegrationGate(
                 holder ? ` — held by an orphaned process (pid ${holder.pid}: ${holder.command})`
                 : b.port !== null ? ` — port ${b.port} is held by another process`
                 : ''
-            fail(
+            tally.fail(
                 `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`,
                 0
             )
         } else if (b.outcome === 'pass') {
-            ran.push(label)
+            tally.ran(label)
             // A listener that served, but whose page could not be OBSERVED to render
             // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
-            if (b.renderNote) warnings.push(b.renderNote)
+            if (b.renderNote) tally.warn(b.renderNote)
         }
     } else {
         // Nothing to boot — but if the reason is that the project's only launch
@@ -1252,78 +951,23 @@ export async function runFinalIntegrationGate(
         // project with no launch surface, and it must not degrade into silence.
         const rejected = rejectedLaunchScript(cwd)
         if (rejected && detectsServedApp(cwd, planText)) {
-            bootUnobserved =
+            tally.bootUnobserved(
                 `boot check: this project's only launch script (\`${rejected.name}\`) is not a `
-                + `launch — ${rejected.reason} — so nothing was started and the app was never `
-                + 'observed to run.'
+                    + `launch — ${rejected.reason} — so nothing was started and the app was never `
+                    + 'observed to run.'
+            )
         }
     }
     // Full-skip blindness guard (mx5 run 16): commands were discovered but every
     // one skipped → rank-0 failure, never a static-only PASS. Runner resolvability
     // is checked through resolveRunner so the failure text can name the missing
     // runner when that is the cause (the run-16 shape: login-shell PATH lost bun).
-    const gap = observabilityGapFailure({
-        attempted: dynAttempted,
-        observed: dynObserved,
-        spawnFailures: dynSpawnFailures,
-        runnerBins: [...dynBins],
-        runnerResolvable: b => resolveRunner(b).ok
-    })
-    if (gap) fail(gap, 0)
+    const gap = tally.blindness(b => resolveRunner(b).ok)
+    if (gap) tally.fail(gap, 0)
     // The remaining run-level closure scans — "the shipped tree references or
     // requires something it does not contain" — after every dynamic section, so
     // their failures keep their historical place in the aggregate (CLOSURE_SCANS:
     // 'post-boot').
-    runClosureScans('post-boot', {cwd, planText}, fail)
-    if (failures.length > 0) {
-        // Stable sort: boot/render (rank 0) leads, everything else keeps execution
-        // order. One failure keeps the exact single-failure wording; several become
-        // a numbered list so the trail, the ACCEPT picker, and the autofix seed all
-        // carry the complete ranked picture.
-        const ranked = [...failures].sort((a, b) => a.rank - b.rank)
-        const texts = ranked.map(f => f.text)
-        // The observed subset rides along by exact text identity (19A) — the demote
-        // decision downstream reads THIS, instead of re-deriving observability from
-        // the failure string.
-        const observed = ranked.filter(f => f.observed === true).map(f => f.text)
-        return withDebts({
-            ok: false,
-            reason:
-                texts.length === 1 ?
-                    texts[0]
-                :   `${texts.length} failures (ranked, most load-bearing first):\n${texts
-                        .map((t, i) => `${i + 1}. ${t}`)
-                        .join('\n')}`,
-            failures: texts,
-            ...(observed.length > 0 ? {observedFailures: observed} : {})
-        })
-    }
-    const warningNote = warnings.length > 0 ? ` — WARNING: ${warnings.join('; WARNING: ')}` : ''
-    // The same three-way verdict at the other zero-observation door: commands WERE
-    // discovered, none spawn-failed (so the run-16 guard correctly stayed silent — every
-    // skip was a tool-level env gap), and yet nothing ran. That was `statics passed
-    // (integration commands not runnable here)`, which is the identical "we never checked"
-    // silence wearing different words. Unchanged when anything at all was observed, so a
-    // project with runnable commands is byte-for-byte unaffected.
-    // Two independent UNOBSERVED notes, either or both of which may apply: the boot
-    // never ran (run 18), and/or NOTHING dynamic ran at all. The boot note leads
-    // because it names a concrete command and the trail line is sliced at 300 chars.
-    const unobserved = [
-        bootUnobserved,
-        unobservedVerdict({discovered: dynAttempted, observed: dynObserved}),
-        ...configGapNotes,
-        ...contractNotes
-    ]
-        .filter(n => n !== null)
-        .join(' ')
-    return withDebts({
-        ok: true,
-        ...(unobserved ? {unobserved} : {}),
-        reason:
-            (unobserved ? `${unobserved} — ` : '')
-            + (ran.length > 0 ?
-                `statics + ${ran.map(c => `\`${c}\``).join(', ')} passed`
-            :   'statics passed (integration commands not runnable here)')
-            + warningNote
-    })
+    runClosureScans('post-boot', {cwd, planText}, (t, r) => tally.fail(t, r))
+    return tally.verdict(debts)
 }

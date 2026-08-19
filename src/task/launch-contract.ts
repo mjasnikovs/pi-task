@@ -23,9 +23,7 @@
  * naming any declared script the manifest is missing. FP-safe by construction: an
  * empty/ungrounded list (a design that never backticks a script name) yields no check.
  */
-import * as fsp from 'node:fs/promises'
-import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
+import {makeLedger} from './ledger.js'
 
 const LAUNCH_CONTRACT_FILE = 'launch-contract.md'
 /** Cap kept entries so a noisy extraction cannot grow the artifact unboundedly. */
@@ -33,8 +31,29 @@ const MAX_SCRIPTS = 40
 /** npm/package script names are short kebab/colon tokens; reject anything unscript-like. */
 const SCRIPT_NAME_RE = /^[a-z0-9][a-z0-9:_-]{0,39}$/i
 
+/** Stored one name per line; a line that is not a script name is skipped on read. */
+const ledger = makeLedger<string>({
+    file: LAUNCH_CONTRACT_FILE,
+    max: MAX_SCRIPTS,
+    key: n => n.toLowerCase(),
+    serialize: n => n,
+    parse: raw => {
+        const seen = new Set<string>()
+        const out: string[] = []
+        for (const line of raw.split('\n')) {
+            const n = line.trim()
+            if (n.length === 0 || !SCRIPT_NAME_RE.test(n)) continue
+            const key = n.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            out.push(n)
+        }
+        return out
+    }
+})
+
 export function launchContractFile(cwd: string): string {
-    return path.join(tasksDir(cwd), LAUNCH_CONTRACT_FILE)
+    return ledger.path(cwd)
 }
 
 /**
@@ -116,47 +135,17 @@ export function enumerateScriptCandidates(sourceDoc: string): string[] {
 
 /** The stored declared-script list ('' when none recorded). */
 export async function readLaunchContractRaw(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(launchContractFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
+    return ledger.readRaw(cwd)
 }
 
 /** The declared script names recorded for this run (deduped, order preserved). */
 export async function readDeclaredScripts(cwd: string): Promise<string[]> {
-    const raw = await readLaunchContractRaw(cwd)
-    const seen = new Set<string>()
-    const out: string[] = []
-    for (const line of raw.split('\n')) {
-        const n = line.trim()
-        if (n.length === 0 || !SCRIPT_NAME_RE.test(n)) continue
-        const key = n.toLowerCase()
-        if (seen.has(key)) continue
-        seen.add(key)
-        out.push(n)
-    }
-    return out
+    return ledger.read(cwd)
 }
 
 /** Append grounded script names, deduped against what is stored, keeping newest MAX. */
 export async function appendDeclaredScripts(cwd: string, names: string[]): Promise<void> {
-    if (names.length === 0) return
-    try {
-        const existing = await readDeclaredScripts(cwd)
-        const seen = new Set(existing.map(n => n.toLowerCase()))
-        const merged = [...existing]
-        for (const n of names) {
-            if (seen.has(n.toLowerCase())) continue
-            seen.add(n.toLowerCase())
-            merged.push(n)
-        }
-        const kept = merged.slice(-MAX_SCRIPTS)
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(launchContractFile(cwd), kept.join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort artifact
-    }
+    await ledger.append(cwd, names)
 }
 
 /**

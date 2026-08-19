@@ -27,9 +27,7 @@
  * Stack-agnostic: an "interface fact" is any pinned boundary string; the guard is
  * pure substring matching over the source text, with no assumption about its shape.
  */
-import * as fsp from 'node:fs/promises'
-import * as path from 'node:path'
-import {tasksDir} from './task-io.js'
+import {makeLedger} from './ledger.js'
 
 const CONTRACTS_FILE = 'contracts.md'
 /** Cap kept entries so the injected block stays bounded on a large design. */
@@ -46,17 +44,41 @@ export interface ContractEntry {
     anchor: string
 }
 
+/**
+ * A stored line plus its dedupe key. The file is a list of formatted lines kept
+ * VERBATIM (an existing line is never re-serialised); its key is the normalised
+ * first quoted span, falling back to the whole line. A NEW entry carries the key
+ * of its quote directly — the same value for every entry the parser can produce.
+ */
+interface ContractLine {
+    line: string
+    key: string
+}
+
+function lineKey(line: string): string {
+    const q = /"([^"]+)"/.exec(line)
+    return normalise(q ? q[1] : line)
+}
+
+const ledger = makeLedger<ContractLine>({
+    file: CONTRACTS_FILE,
+    max: MAX_CONTRACTS,
+    key: c => c.key,
+    serialize: c => c.line,
+    parse: raw =>
+        raw
+            .split('\n')
+            .filter(l => l.trim().length > 0)
+            .map(line => ({line, key: lineKey(line)}))
+})
+
 export function contractsFile(cwd: string): string {
-    return path.join(tasksDir(cwd), CONTRACTS_FILE)
+    return ledger.path(cwd)
 }
 
 /** The stored registry text ('' when none recorded yet). */
 export async function readContracts(cwd: string): Promise<string> {
-    try {
-        return (await fsp.readFile(contractsFile(cwd), 'utf8')).trim()
-    } catch {
-        return ''
-    }
+    return ledger.readRaw(cwd)
 }
 
 /**
@@ -127,30 +149,10 @@ function formatEntry(e: ContractEntry): string {
  * are swallowed — the registry is a sharpener, never a blocker.
  */
 export async function appendContracts(cwd: string, entries: ContractEntry[]): Promise<void> {
-    if (entries.length === 0) return
-    try {
-        const existingLines = (await readContracts(cwd))
-            .split('\n')
-            .filter(l => l.trim().length > 0)
-        const seen = new Set(
-            existingLines.map(l => {
-                const q = /"([^"]+)"/.exec(l)
-                return normalise(q ? q[1] : l)
-            })
-        )
-        const merged = [...existingLines]
-        for (const e of entries) {
-            const key = normalise(e.quote)
-            if (seen.has(key)) continue
-            seen.add(key)
-            merged.push(formatEntry(e))
-        }
-        const kept = merged.slice(-MAX_CONTRACTS)
-        await fsp.mkdir(tasksDir(cwd), {recursive: true})
-        await fsp.writeFile(contractsFile(cwd), kept.join('\n') + '\n', 'utf8')
-    } catch {
-        // best-effort registry
-    }
+    await ledger.append(
+        cwd,
+        entries.map(e => ({line: formatEntry(e), key: normalise(e.quote)}))
+    )
 }
 
 /**

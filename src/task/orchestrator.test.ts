@@ -1,15 +1,6 @@
 import {describe, expect, test} from 'bun:test'
-import {
-    TaskRunner,
-    runSingleTask,
-    endedAtCompactionBoundary,
-    resumeAcrossCompactions,
-    steerUntilDone,
-    CONTINUE_AFTER_COMPACTION,
-    MAX_COMPACTION_RESUMES,
-    type SteerCtx
-} from './orchestrator.js'
-import {consumeWatchdogAbort, noteWatchdogAbort, reminderMessage} from './command-watchdog.js'
+import {TaskRunner, runSingleTask, type TaskRunnerOptions} from './orchestrator.js'
+import {CONTINUE_AFTER_COMPACTION, MAX_COMPACTION_RESUMES} from './implementation-turn.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
 import {
     agentEndResponse,
@@ -17,42 +8,80 @@ import {
     fakeSpawnByPrompt,
     type SpawnResponse
 } from '../test-utils/fake-spawn.js'
-import {makeFakeCtx, assistantEntry, compactionEntry, userEntry} from '../test-utils/fake-ctx.js'
-import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
+import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {_setSink, reset as resetSessionState} from '../remote/session-state.js'
 import {broadcast as wsBroadcast} from '../remote/broadcast.js'
 import type {SpawnFn} from '../shared/child-process.js'
+import type {PhaseDeps} from './child-runner.js'
 
-const PHASE_TAGS = {
-    refine: 'Rewrite it to be unambiguous and actionable',
-    researchFiles: 'FILES owns paths',
-    researchApis: 'APIS owns symbols and commands BY NAME ONLY',
-    researchContext: 'gather background knowledge',
-    researchTooling: 'identify the verification tools',
-    verifyTooling: 'YOU MAY ONLY READ. Do NOT execute',
-    grillGen: 'preparing clarifying questions',
-    grillAuto: 'pre-answering a clarifying question',
-    compose: 'composing the final implementation spec',
-    critique: 'reviewing the implementation spec'
+// ─── Phase children: routed by NAME through the `runChild` seam ───────────────
+
+/** The names phases.ts / title-label.ts hand to runPhaseChild / runPhaseWithLoopGuard. */
+type ChildName =
+    | 'refine'
+    | 'verify-tooling'
+    | 'grill-gen'
+    | 'grill-auto'
+    | 'compose'
+    | 'critique-triage'
+    | 'critique'
+    | 'compress-label'
+type ChildScript = string | ((prompt: string) => string)
+
+/**
+ * A `PhaseDeps.runChild` that answers each phase child by NAME. An unscripted
+ * child throws the way the Error-triage ladder does when a child says nothing, so
+ * a test only scripts the children it is about and the rest fail as before.
+ */
+function scriptedChildren(
+    scripts: Partial<Record<ChildName, ChildScript>>
+): NonNullable<PhaseDeps['runChild']> {
+    return (name, _tools, prompt) => {
+        const v = scripts[name as ChildName]
+        if (v === undefined) return Promise.reject(new Error(`${name} child produced no output`))
+        // The real seam hands back the event sink's assistant text, which is
+        // trimmed — a substitute must match that contract.
+        return Promise.resolve((typeof v === 'function' ? v(prompt) : v).trim())
+    }
 }
 
-function findTag(prompt: string): keyof typeof PHASE_TAGS | 'unknown' {
-    for (const [k, v] of Object.entries(PHASE_TAGS)) {
-        if (prompt.includes(v)) return k as keyof typeof PHASE_TAGS
+// ─── Research workers: still routed by prompt PROSE through `spawn` ───────────
+//
+// The four research workers do not go through `runChild`: PHASES.research calls
+// `phaseResearch(d, p.refined)` with no PhaseResearchDeps, so a TaskRunner-driven
+// test cannot reach the `runWorker(label, input)` seam. Until that is threaded,
+// these are the ONLY prompt-matched fakes left in this file.
+
+type WorkerName = 'files' | 'apis' | 'context' | 'tooling'
+type WorkerScript = string | (() => string | SpawnResponse)
+
+const WORKER_TAGS: Record<WorkerName, string> = {
+    files: 'FILES owns paths',
+    apis: 'APIS owns symbols and commands BY NAME ONLY',
+    context: 'gather background knowledge',
+    tooling: 'identify the verification tools'
+}
+
+function findWorker(prompt: string): WorkerName | 'unknown' {
+    for (const [k, v] of Object.entries(WORKER_TAGS)) {
+        if (prompt.includes(v)) return k as WorkerName
     }
     return 'unknown'
 }
 
-function scriptedSpawn(
-    scripts: Partial<Record<keyof typeof PHASE_TAGS, string | (() => string)>>
+/** A spawn fake answering each research worker; unknown prompts get `fallback`. */
+function researchWorkers(
+    scripts: Partial<Record<WorkerName, WorkerScript>>,
+    fallback = ''
 ): SpawnFn {
     return fakeSpawnByPrompt(args => {
         const prompt = args[args.length - 1]
-        const tag = findTag(prompt)
-        const v = scripts[tag as keyof typeof PHASE_TAGS]
-        const text = typeof v === 'function' ? v() : (v ?? '')
-        return agentEndResponse(text) as SpawnResponse
+        const worker = findWorker(prompt)
+        const v = worker === 'unknown' ? undefined : scripts[worker]
+        if (v === undefined) return agentEndResponse(fallback) as SpawnResponse
+        const out = typeof v === 'function' ? v() : v
+        return typeof out === 'string' ? (agentEndResponse(out) as SpawnResponse) : out
     })
 }
 
@@ -97,33 +126,63 @@ bun run lint
 \`\`\`
 `
 
+function happyChildren(over: Partial<Record<ChildName, ChildScript>> = {}) {
+    return scriptedChildren({
+        refine: REFINED_FIXTURE,
+        'verify-tooling': VERIFY_TOOLING_OUT,
+        'grill-gen': NO_QUESTIONS,
+        compose: COMPOSE_SPEC,
+        critique: COMPOSE_SPEC,
+        ...over
+    })
+}
+
+function happyWorkers(
+    over: Partial<Record<WorkerName, WorkerScript>> = {},
+    fallback = ''
+): SpawnFn {
+    return researchWorkers(
+        {
+            files: RESEARCH_FILES,
+            apis: RESEARCH_APIS,
+            context: RESEARCH_CONTEXT,
+            tooling: RESEARCH_TOOLING,
+            ...over
+        },
+        fallback
+    )
+}
+
+/** Both fakes for a full happy run, in the shape TaskRunner / runSingleTask take. */
+function happy(): Pick<TaskRunnerOptions, 'runChild' | 'spawnFn'> {
+    return {runChild: happyChildren(), spawnFn: happyWorkers()}
+}
+
+/** Drive one TaskRunner to completion over `fakes`; returns what the runner sent. */
+async function runOnce(
+    ctx: TaskRunnerOptions['ctx'],
+    cwd: string,
+    fakes: Partial<TaskRunnerOptions>
+): Promise<{runner: TaskRunner; sent: string[]}> {
+    const sent: string[] = []
+    const runner = new TaskRunner({
+        ctx,
+        cwd,
+        rawPrompt: 'run lint',
+        sendSpec: async s => {
+            sent.push(s)
+        },
+        ...fakes
+    })
+    await runner.run()
+    return {runner, sent}
+}
+
 describe('TaskRunner — happy path', () => {
     test('refine fills title and refined section', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
-            })
-            const sentSpecs: string[] = []
-            const runner = new TaskRunner(
-                ctx,
-                cwd,
-                'run lint',
-                undefined,
-                async spec => {
-                    sentSpecs.push(spec)
-                },
-                spawn
-            )
-            await runner.run()
+            const {sent: sentSpecs} = await runOnce(ctx, cwd, happy())
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             expect(frontMatter.title).toContain('Run the linter')
@@ -137,18 +196,7 @@ describe('TaskRunner — happy path', () => {
     test('verify-tooling: research TOOLING is replaced with VERIFIED-TOOLING', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
-            })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            await runOnce(ctx, cwd, happy())
             const research = await readSection(cwd, 'TASK_0001', 'research')
             expect(research).toContain('VERIFIED-TOOLING')
             expect(research).toContain('bun run lint')
@@ -167,26 +215,13 @@ describe('TaskRunner — happy path', () => {
             // loop terminate.
             const grillQuestions = ['1. should we use bun?', '1. should we lint tests?']
             let genCall = 0
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: () => grillQuestions[genCall++] ?? 'NONE',
-                grillAuto: 'ANSWER: yes',
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
+            await runOnce(handle.ctx, cwd, {
+                spawnFn: happyWorkers(),
+                runChild: happyChildren({
+                    'grill-gen': () => grillQuestions[genCall++] ?? 'NONE',
+                    'grill-auto': 'ANSWER: yes'
+                })
             })
-            await new TaskRunner(
-                handle.ctx,
-                cwd,
-                'run lint',
-                undefined,
-                async () => {},
-                spawn
-            ).run()
             expect(handle.captured.inputs).toHaveLength(0)
             const qa = await readSection(cwd, 'TASK_0001', 'grill Q&A')
             expect(qa).toContain('(auto)')
@@ -197,25 +232,15 @@ describe('TaskRunner — happy path', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             let composePrompt = ''
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1]
-                const tag = findTag(prompt)
-                if (tag === 'compose') composePrompt = prompt
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchFiles: RESEARCH_FILES,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING,
-                    verifyTooling: VERIFY_TOOLING_OUT,
-                    grillGen: NO_QUESTIONS,
-                    compose: COMPOSE_SPEC,
-                    critique: COMPOSE_SPEC
-                }
-                const text = map[tag] ?? ''
-                return agentEndResponse(text)
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers(),
+                runChild: happyChildren({
+                    compose: prompt => {
+                        composePrompt = prompt
+                        return COMPOSE_SPEC
+                    }
+                })
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             expect(composePrompt).toContain('Run the linter')
             expect(composePrompt).toContain('package.json')
         })
@@ -225,25 +250,15 @@ describe('TaskRunner — happy path', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             let critiquePrompt = ''
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1]
-                const tag = findTag(prompt)
-                if (tag === 'critique') critiquePrompt = prompt
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchFiles: RESEARCH_FILES,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING,
-                    verifyTooling: VERIFY_TOOLING_OUT,
-                    grillGen: NO_QUESTIONS,
-                    compose: COMPOSE_SPEC,
-                    critique: COMPOSE_SPEC
-                }
-                const text = map[tag] ?? ''
-                return agentEndResponse(text)
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers(),
+                runChild: happyChildren({
+                    critique: prompt => {
+                        critiquePrompt = prompt
+                        return COMPOSE_SPEC
+                    }
+                })
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             expect(critiquePrompt).toContain(COMPOSE_SPEC.trim())
         })
     })
@@ -251,18 +266,7 @@ describe('TaskRunner — happy path', () => {
     test('phase timings section is written on success and lists every phase', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
-            })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            await runOnce(ctx, cwd, happy())
             const timings = await readSection(cwd, 'TASK_0001', 'phase timings')
             expect(timings).not.toBeNull()
             const body = timings ?? ''
@@ -279,14 +283,10 @@ describe('TaskRunner — happy path', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             // refine succeeds, FILES research worker returns empty → research fails.
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: '',
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers({files: ''}),
+                runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             const timings = await readSection(cwd, 'TASK_0001', 'phase timings')
@@ -302,28 +302,7 @@ describe('TaskRunner — happy path', () => {
     test('handoff: completed state and sendSpec receives final spec', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
-            })
-            const sent: string[] = []
-            await new TaskRunner(
-                ctx,
-                cwd,
-                'run lint',
-                undefined,
-                async s => {
-                    sent.push(s)
-                },
-                spawn
-            ).run()
+            const {sent} = await runOnce(ctx, cwd, happy())
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             expect(frontMatter.phase).toBe('done')
@@ -374,39 +353,28 @@ VERIFIED-TOOLING
 `
             )
             let refineCalled = false
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1]
-                const tag = findTag(prompt)
-                if (tag === 'refine') refineCalled = true
-                const map: Partial<Record<typeof tag, string>> = {
-                    grillGen: NO_QUESTIONS,
+            await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: '',
+                resumeId: 'TASK_0001',
+                sendSpec: async () => {},
+                runChild: scriptedChildren({
+                    refine: () => {
+                        refineCalled = true
+                        return REFINED_FIXTURE
+                    },
+                    'grill-gen': NO_QUESTIONS,
                     compose: COMPOSE_SPEC,
                     critique: COMPOSE_SPEC
-                }
-                const text = map[tag] ?? ''
-                return agentEndResponse(text)
-            })
-            await new TaskRunner(ctx, cwd, '', 'TASK_0001', async () => {}, spawn).run()
+                })
+            }).run()
             expect(refineCalled).toBe(false)
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
         })
     })
 })
-
-function happyScripts() {
-    return {
-        refine: REFINED_FIXTURE,
-        researchFiles: RESEARCH_FILES,
-        researchApis: RESEARCH_APIS,
-        researchContext: RESEARCH_CONTEXT,
-        researchTooling: RESEARCH_TOOLING,
-        verifyTooling: VERIFY_TOOLING_OUT,
-        grillGen: NO_QUESTIONS,
-        compose: COMPOSE_SPEC,
-        critique: COMPOSE_SPEC
-    }
-}
 
 describe('runSingleTask', () => {
     test('runSingleTask: default delivers spec without an extra idle wait (parity with /task)', async () => {
@@ -415,7 +383,7 @@ describe('runSingleTask', () => {
             // on the shared call log rather than patching the (soon-stale) ctx.
             const {ctx, captured} = makeFakeCtx(cwd)
             const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(ok).toBe(true)
             expect(taskId).toBe('TASK_0001')
@@ -427,7 +395,7 @@ describe('runSingleTask', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)
             const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
-                spawnFn: scriptedSpawn(happyScripts()),
+                ...happy(),
                 fixInstruction: 'work did not verify: bun run build exited 1'
             })
             expect(ok).toBe(true)
@@ -445,7 +413,7 @@ describe('runSingleTask', () => {
             const {ctx, captured} = makeFakeCtx(cwd)
             const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(ok).toBe(true)
             expect(captured.calls).toEqual(['send', 'idle'])
@@ -462,7 +430,7 @@ describe('runSingleTask', () => {
             const {ctx, captured, setForeignTurnStreaming} = makeFakeCtx(cwd)
             setForeignTurnStreaming(true)
             const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(ok).toBe(true)
             expect(taskId).toBe('TASK_0001')
@@ -481,7 +449,7 @@ describe('runSingleTask', () => {
             let asks = 0
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts()),
+                ...happy(),
                 // The user steers once; that turn then completes naturally.
                 promptSteer: () => {
                     asks++
@@ -503,7 +471,7 @@ describe('runSingleTask', () => {
             setStopReason('aborted')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts()),
+                ...happy(),
                 // The user declines to steer — pause the run.
                 promptSteer: () => Promise.resolve(undefined)
             })
@@ -523,7 +491,7 @@ describe('runSingleTask', () => {
             try {
                 const res = await runSingleTask(ctx, cwd, 'run lint', {
                     waitForImplementation: true,
-                    spawnFn: scriptedSpawn(happyScripts())
+                    ...happy()
                     // no promptSteer → the production default (SessionUI.ask) runs
                 })
                 // Local half: the TUI input with the steer title and placeholder.
@@ -557,7 +525,7 @@ describe('runSingleTask', () => {
             let asks = 0
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts()),
+                ...happy(),
                 promptSteer: () => {
                     asks++
                     return Promise.resolve(undefined)
@@ -576,7 +544,7 @@ describe('runSingleTask', () => {
             setStopReason('error', '400 request (124789 tokens) exceeds the available context size')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             // Must NOT read as ok despite the file saying "completed" — otherwise
             // /task-auto would check the task off and commit a dead turn.
@@ -592,7 +560,7 @@ describe('runSingleTask', () => {
             setStopReason('stop')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res.ok).toBe(true)
             expect(res.reason).toBeUndefined()
@@ -603,7 +571,7 @@ describe('runSingleTask', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             const res = await runSingleTask(ctx, cwd, 'run lint', {
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             // The run replaced the session, so the handed-back ctx is a new, live
             // object — not the original, which now throws on use.
@@ -621,41 +589,6 @@ describe('compaction-aware implementation wait', () => {
     const continueCount = (sent: Array<{spec: string}>): number =>
         sent.filter(m => m.spec === CONTINUE_AFTER_COMPACTION).length
 
-    // Minimal ctx exposing only getEntries, for the pure detector.
-    const ctxWithEntries = (entries: unknown[]): ExtensionCommandContext =>
-        ({sessionManager: {getEntries: () => entries}}) as unknown as ExtensionCommandContext
-
-    test('endedAtCompactionBoundary: a compaction after the last assistant message is a boundary', () => {
-        expect(
-            endedAtCompactionBoundary(ctxWithEntries([assistantEntry('stop'), compactionEntry()]))
-        ).toBe(true)
-    })
-
-    test('endedAtCompactionBoundary: a turn ending on an assistant message is NOT a boundary', () => {
-        // genuine completion (no trailing compaction)
-        expect(endedAtCompactionBoundary(ctxWithEntries([assistantEntry('stop')]))).toBe(false)
-        // a compaction followed by a fresh assistant turn = already continued
-        expect(
-            endedAtCompactionBoundary(ctxWithEntries([compactionEntry(), assistantEntry('stop')]))
-        ).toBe(false)
-        // no entries at all
-        expect(endedAtCompactionBoundary(ctxWithEntries([]))).toBe(false)
-    })
-
-    test('resumeAcrossCompactions: drives continues until the turn ends on an assistant message', async () => {
-        const {ctx, captured, setIdleEntries} = makeFakeCtx('/tmp/x')
-        setIdleEntries([
-            [compactionEntry()], // parked at a compaction boundary
-            [compactionEntry()], // resumed → crossed threshold again
-            [assistantEntry('stop')] // resumed → genuinely finished
-        ])
-        // Mirror runSingleTask: the first idle has already happened.
-        await ctx.waitForIdle()
-        const resumes = await resumeAcrossCompactions(ctx as SteerCtx)
-        expect(resumes).toBe(2)
-        expect(continueCount(captured.sentMessages)).toBe(2)
-    })
-
     // ── A/B: same harness, the ONLY difference is whether the turn parks at a
     // compaction boundary. Pre-fix, both jumped straight past the wait; the control
     // proves no regression, the compaction case proves the resume now fires.
@@ -666,7 +599,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res.ok).toBe(true)
             expect(res.interrupted).toBe(false)
@@ -684,7 +617,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()], [assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res.ok).toBe(true)
             expect(res.interrupted).toBe(false)
@@ -700,7 +633,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()], [compactionEntry()], [assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res.ok).toBe(true)
             expect(continueCount(captured.sentMessages)).toBe(2)
@@ -717,7 +650,7 @@ describe('compaction-aware implementation wait', () => {
             queueInput(undefined) // decline to steer → pause
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res.interrupted).toBe(true)
             expect(continueCount(captured.sentMessages)).toBe(0)
@@ -732,7 +665,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                spawnFn: scriptedSpawn(happyScripts())
+                ...happy()
             })
             expect(res).toBeDefined()
             expect(continueCount(captured.sentMessages)).toBe(MAX_COMPACTION_RESUMES)
@@ -744,8 +677,9 @@ describe('TaskRunner — failure modes', () => {
     test('empty refine output → state failed, reason mentions refine (TASK_0004 regression)', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({refine: ''})
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            // Through `spawn`, not `runChild`: the ladder's empty-completion rung is
+            // the subject here, and only a real (fake) process exercises it.
+            await runOnce(ctx, cwd, {spawnFn: fakeSpawnByPrompt(() => agentEndResponse(''))})
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.phase).toBe('refine')
@@ -762,18 +696,10 @@ describe('TaskRunner — failure modes', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             let filesAttempts = 0
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: () => (++filesAttempts === 1 ? '' : RESEARCH_FILES),
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers({files: () => (++filesAttempts === 1 ? '' : RESEARCH_FILES)}),
+                runChild: happyChildren()
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             expect(filesAttempts).toBe(2)
@@ -784,18 +710,7 @@ describe('TaskRunner — failure modes', () => {
     test('FILES worker empty twice → section recorded as (none), task still completes', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: '',
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: COMPOSE_SPEC
-            })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            await runOnce(ctx, cwd, {spawnFn: happyWorkers({files: ''}), runChild: happyChildren()})
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             const research = (await readSection(cwd, 'TASK_0001', 'research')) ?? ''
@@ -813,22 +728,14 @@ describe('TaskRunner — failure modes', () => {
     test('MUTE FILES worker (no stdout at all) → state failed, never recorded as empty', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = fakeSpawnByPrompt(args => {
-                const tag = findTag(args[args.length - 1])
-                if (tag === 'researchFiles') {
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers({
                     // No events, no stdout, dead on arrival — the shape of a child
                     // that could not resolve a provider and exited at startup.
-                    return {events: [], exitCode: 0, stderr: 'no model configured'}
-                }
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING
-                }
-                return agentEndResponse(map[tag] ?? '') as SpawnResponse
+                    files: () => ({events: [], exitCode: 0, stderr: 'no model configured'})
+                }),
+                runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.reason).toMatch(/never wrote a single byte/)
@@ -839,21 +746,12 @@ describe('TaskRunner — failure modes', () => {
     test('empty FILES worker WITH a model error → state failed, reason names the cause', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1]
-                const tag = findTag(prompt)
-                if (tag === 'researchFiles') {
-                    return agentErrorResponse('fetch failed: socket hang up') as SpawnResponse
-                }
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING
-                }
-                return agentEndResponse(map[tag] ?? '') as SpawnResponse
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers({
+                    files: () => agentErrorResponse('fetch failed: socket hang up') as SpawnResponse
+                }),
+                runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.reason).toMatch(/Research FILES worker: model error/)
@@ -866,36 +764,16 @@ describe('TaskRunner — failure modes', () => {
             const {ctx} = makeFakeCtx(cwd)
             let composeAttempts = 0
             const composePrompts: string[] = []
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1]
-                const tag = findTag(prompt)
-                if (tag === 'compose') {
-                    composePrompts.push(prompt)
-                    composeAttempts++
-                    const text = composeAttempts === 1 ? '```sh\nGOAL\n…\n```' : COMPOSE_SPEC
-                    return {
-                        events: [
-                            {
-                                type: 'agent_end',
-                                messages: [{role: 'assistant', content: [{type: 'text', text}]}]
-                            }
-                        ]
+            await runOnce(ctx, cwd, {
+                spawnFn: happyWorkers(),
+                runChild: happyChildren({
+                    compose: prompt => {
+                        composePrompts.push(prompt)
+                        composeAttempts++
+                        return composeAttempts === 1 ? '```sh\nGOAL\n…\n```' : COMPOSE_SPEC
                     }
-                }
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchFiles: RESEARCH_FILES,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING,
-                    verifyTooling: VERIFY_TOOLING_OUT,
-                    grillGen: NO_QUESTIONS,
-                    critique: COMPOSE_SPEC
-                }
-                const text = map[tag] ?? ''
-                return agentEndResponse(text)
+                })
             })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
             expect(composeAttempts).toBe(2)
             expect(composePrompts[1]).toContain('PREVIOUS ATTEMPT VIOLATED')
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -913,28 +791,10 @@ CONSTRAINTS
 ACCEPTANCE
 - w
 `
-            const spawn = scriptedSpawn({
-                refine: REFINED_FIXTURE,
-                researchFiles: RESEARCH_FILES,
-                researchApis: RESEARCH_APIS,
-                researchContext: RESEARCH_CONTEXT,
-                researchTooling: RESEARCH_TOOLING,
-                verifyTooling: VERIFY_TOOLING_OUT,
-                grillGen: NO_QUESTIONS,
-                compose: COMPOSE_SPEC,
-                critique: BAD_CRITIQUE
+            const {sent} = await runOnce(handle.ctx, cwd, {
+                spawnFn: happyWorkers(),
+                runChild: happyChildren({critique: BAD_CRITIQUE})
             })
-            const sent: string[] = []
-            await new TaskRunner(
-                handle.ctx,
-                cwd,
-                'run lint',
-                undefined,
-                async s => {
-                    sent.push(s)
-                },
-                spawn
-            ).run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             const fallbackNotify = handle.captured.notifies.find(
@@ -955,12 +815,9 @@ ACCEPTANCE
                     args: {path: '/foo'}
                 }))
             }
-            const spawn = fakeSpawnByPrompt(args => {
-                const tag = findTag(args[args.length - 1])
-                if (tag === 'refine') return loopRefine
-                return agentEndResponse('noop')
-            })
-            await new TaskRunner(ctx, cwd, 'run lint', undefined, async () => {}, spawn).run()
+            // Through `spawn`: the loop detector only runs around a real (fake)
+            // process, and refine is the first child, so every spawn IS refine.
+            await runOnce(ctx, cwd, {spawnFn: fakeSpawnByPrompt(() => loopRefine)})
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.reason).toMatch(/loop detected 3× in refine/)
@@ -975,110 +832,30 @@ ACCEPTANCE
             const handle = makeFakeCtx(cwd)
             const runnerHolder: {runner?: TaskRunner} = {}
             let cancelTriggered = false
-            const spawn = fakeSpawnByPrompt(args => {
-                const tag = findTag(args[args.length - 1])
-                if (tag === 'researchFiles' && !cancelTriggered) {
-                    cancelTriggered = true
-                    queueMicrotask(() => runnerHolder.runner?.cancel())
-                }
-                const map: Partial<Record<typeof tag, string>> = {
-                    refine: REFINED_FIXTURE,
-                    researchFiles: RESEARCH_FILES,
-                    researchApis: RESEARCH_APIS,
-                    researchContext: RESEARCH_CONTEXT,
-                    researchTooling: RESEARCH_TOOLING
-                }
-                const text = map[tag] ?? 'noop'
-                return agentEndResponse(text)
-            })
-            runnerHolder.runner = new TaskRunner(
-                handle.ctx,
+            runnerHolder.runner = new TaskRunner({
+                ctx: handle.ctx,
                 cwd,
-                'run lint',
-                undefined,
-                async () => {},
-                spawn
-            )
+                rawPrompt: 'run lint',
+                sendSpec: async () => {},
+                spawnFn: happyWorkers(
+                    {
+                        files: () => {
+                            if (!cancelTriggered) {
+                                cancelTriggered = true
+                                queueMicrotask(() => runnerHolder.runner?.cancel())
+                            }
+                            return RESEARCH_FILES
+                        }
+                    },
+                    'noop'
+                ),
+                runChild: scriptedChildren({refine: REFINED_FIXTURE})
+            })
             await runnerHolder.runner.run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('cancelled')
             const warn = handle.captured.notifies.find(n => n.level === 'warning')
             expect(warn).toBeDefined()
         })
-    })
-})
-
-describe('steerUntilDone watchdog-abort guard', () => {
-    const REMINDER = reminderMessage('bash', 15 * 60_000)
-    // Fast knobs so the stale-flag case doesn't wait out the real 10s grace.
-    const FAST = {graceMs: 50, pollMs: 5}
-
-    test('watchdog abort with a delivered reminder never prompts the user', async () => {
-        const handle = makeFakeCtx('/tmp/steer-wd')
-        // Turn 1: aborted by the watchdog, its follow-up already queued.
-        // Turn 2 (after the follow-up runs): a clean stop.
-        handle.setIdleEntries([
-            [assistantEntry('aborted'), userEntry(REMINDER)],
-            [assistantEntry('aborted'), userEntry(REMINDER), assistantEntry('stop')]
-        ])
-        let prompted = 0
-        const paused = await steerUntilDone(
-            handle.ctx as SteerCtx,
-            async () => {
-                prompted++
-                return ''
-            },
-            {...FAST, consume: () => true}
-        )
-        expect(prompted).toBe(0)
-        expect(paused).toBe(false) // implementation completed, no pause
-    })
-
-    test('human ESC (no watchdog flag) still prompts to steer', async () => {
-        const handle = makeFakeCtx('/tmp/steer-esc')
-        handle.setIdleEntries([[assistantEntry('aborted')]])
-        let prompted = 0
-        const paused = await steerUntilDone(
-            handle.ctx as SteerCtx,
-            async () => {
-                prompted++
-                return '' // decline → pause
-            },
-            {...FAST, consume: () => false}
-        )
-        expect(prompted).toBe(1)
-        expect(paused).toBe(true)
-    })
-
-    test('stale watchdog flag falls back to the prompt after the grace expires', async () => {
-        const handle = makeFakeCtx('/tmp/steer-stale')
-        // Aborted, but no reminder ever lands — the flag was left over.
-        handle.setIdleEntries([[assistantEntry('aborted')]])
-        let prompted = 0
-        let consumed = 0
-        const paused = await steerUntilDone(
-            handle.ctx as SteerCtx,
-            async () => {
-                prompted++
-                return ''
-            },
-            {
-                ...FAST,
-                consume: () => {
-                    consumed++
-                    return consumed === 1 // one-shot, like the real flag
-                }
-            }
-        )
-        expect(prompted).toBe(1)
-        expect(paused).toBe(true)
-    })
-
-    test('watchdog abort flag is one-shot', () => {
-        consumeWatchdogAbort() // clear any residue from other tests
-        expect(consumeWatchdogAbort()).toBe(false)
-        noteWatchdogAbort()
-        expect(consumeWatchdogAbort()).toBe(true)
-        expect(consumeWatchdogAbort()).toBe(false)
     })
 })

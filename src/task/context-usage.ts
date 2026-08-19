@@ -1,7 +1,8 @@
 /**
- * Context-usage resolution — shared by the single-task widget (TaskRunner) and
- * the /task-auto planning loader (defaultDeps), which both mirror a child's
- * context_usage events into a display snapshot with identical math.
+ * Context-usage resolution — the one piece of math every child-status mirror
+ * shares. `ChildStatus` (child-status.ts) folds it into its `onContextUsage` for
+ * the planning and gate children; the single-task widget (TaskRunner) calls it
+ * directly, because its state is the whole-run `WidgetState`, not one child's.
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'

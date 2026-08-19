@@ -45,7 +45,8 @@ describe('StallDetector — no-new-ground rule', () => {
         // calls, each at a different RISING offset. By arguments that is textbook
         // forward paging; by result it is the same refusal over and over.
         const d = new StallDetector()
-        const refusal = 'You already read a.md earlier in this run — its contents are in your context.'
+        const refusal =
+            'You already read a.md earlier in this run — its contents are in your context.'
         let hit = null
         for (let n = 1; n <= NO_PROGRESS_LIMIT + 2; n++) {
             hit = d.record(read('a.md', n * 40))

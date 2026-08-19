@@ -43,18 +43,10 @@ import {
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {armImplWidget, disarmImplWidget, setupImplWidget} from './impl-widget.js'
-import {
-    publishViewer,
-    publishNotify,
-    publishLifecycleNotice,
-    registerBridgeCommand,
-    getBridge,
-    SessionUI
-} from '../remote/bridge.js'
+import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
 import {gateDebugWriter} from './debug-log.js'
-import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 import {buildGateDeps, type RunTaskFn} from './gate-deps.js'
 import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
@@ -62,12 +54,17 @@ import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-
 import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
-import {armCancelListener, disarmCancelListener, rearmCancelListener} from './cancel-input.js'
-import {beginRun, endRun, takeHeldInput} from './mid-run-input.js'
-import {reportDroppedInput} from './dropped-input.js'
+import {rearmCancelListener} from './cancel-input.js'
+import {takeHeldInput} from './mid-run-input.js'
+import {withRun, announceTerminal} from './run-bracket.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
+import {
+    superviseImplementation,
+    type SteerCtx,
+    type SuperviseOptions
+} from './implementation-turn.js'
 import {TERMINAL_OUTCOMES, formatAt, formatWhy} from './terminal-outcome.js'
 
 // ─── Module-level state ──────────────────────────────────────────────────────
@@ -88,6 +85,58 @@ function clearActiveTask(runner: TaskRunner): void {
 // Captured from the factory so command handlers can call pi.sendUserMessage.
 let piApi: ExtensionAPI | null = null
 
+// ─── TaskRunner options ──────────────────────────────────────────────────────
+
+/**
+ * Everything one TaskRunner needs, as one object. The runner is the shared core
+ * under `runSingleTask` (and so under /task-auto's per-task loop), so this is the
+ * shape both of those construct; `RunSingleTaskOptions` extends the injectable
+ * subset and adds what only the wrapper reads.
+ */
+export interface TaskRunnerOptions {
+    ctx: ExtensionCommandContext
+    cwd: string
+    rawPrompt: string
+    /** Resume an existing task by ID instead of starting a new one. */
+    resumeId?: string
+    /** Deliver the finished spec to the main session. Absent → nothing is sent. */
+    sendSpec?: (spec: string) => Promise<void>
+    /** Test seam: spawn function forwarded into `PhaseDeps.spawn`. Keep for tests
+     *  that drive the Error-triage ladder or a real process. */
+    spawnFn?: SpawnFn
+    /**
+     * Test seam: `PhaseDeps.runChild(name, tools, prompt)`. Present → every phase
+     * child is answered by name, with none of the ladder's guards. Use this when
+     * the child is a premise of the test, not its subject.
+     */
+    runChild?: PhaseDeps['runChild']
+    /** Called with the resolved task id once its file exists, before any phase
+     *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
+     *  interrupted run can be resumed instead of restarted. */
+    onStart?: (taskId: string) => void | Promise<void>
+    /**
+     * Scope fence naming the sibling steps of a /task-auto plan. Forwarded into
+     * the refine phase so a single decomposed step bounds its slice instead of
+     * re-expanding the whole referenced spec doc. Set only by /task-auto's loop;
+     * a bare /task leaves it undefined and the refine prompt is unchanged.
+     */
+    planContext?: string
+    /**
+     * Marks this run as a verify-FAIL re-attempt. When set (only by /task-auto's
+     * autofix path, with `resumeId` pointing at the already-composed task), the
+     * text — the verify gate's failure reason plus any guidance the user typed —
+     * is prepended to the delivered spec as a RE-ATTEMPT banner, so the
+     * implementer fixes the specific failure and re-satisfies the VERIFY block
+     * rather than blindly redoing the task. Empty/undefined on a first attempt.
+     */
+    fixInstruction?: string
+    /** True when the caller awaits the implementation turn (waitForImplementation):
+     *  the impl widget stays armed across the whole impl phase (incl. compaction /
+     *  steer turns) and is disarmed here. False for fire-and-forget /task, where the
+     *  widget is armed one-shot and its own agent_end disarms it. */
+    implAwaited?: boolean
+}
+
 // ─── TaskRunner class ────────────────────────────────────────────────────────
 
 /** Encapsulates the full lifecycle of a single pi-task run. */
@@ -100,10 +149,7 @@ export class TaskRunner {
     private readonly _onStart: ((taskId: string) => void | Promise<void>) | undefined
     private readonly _planContext: string | undefined
     private readonly _fixInstruction: string | undefined
-    /** True when the caller awaits the implementation turn (waitForImplementation):
-     *  the impl widget stays armed across the whole impl phase (incl. compaction /
-     *  steer turns) and is disarmed here. False for fire-and-forget /task, where the
-     *  widget is armed one-shot and its own agent_end disarms it. */
+    /** See {@link TaskRunnerOptions.implAwaited}. */
     private readonly _implAwaited: boolean
 
     private readonly _abort = new AbortController()
@@ -122,27 +168,17 @@ export class TaskRunner {
     private readonly _timings: TimingEntry[] = []
     private _currentPhaseChildren: TimingEntry[] | null = null
 
-    constructor(
-        ctx: ExtensionCommandContext,
-        cwd: string,
-        rawPrompt: string,
-        resumeId?: string,
-        sendSpec?: (spec: string) => Promise<void>,
-        spawnFn?: SpawnFn,
-        onStart?: (taskId: string) => void | Promise<void>,
-        planContext?: string,
-        fixInstruction?: string,
-        implAwaited?: boolean
-    ) {
+    constructor(opts: TaskRunnerOptions) {
+        const {ctx, cwd, rawPrompt} = opts
         this._ctx = ctx
         this._cwd = cwd
         this._rawPrompt = rawPrompt
-        this._resumeId = resumeId
-        this._sendSpec = sendSpec
-        this._onStart = onStart
-        this._planContext = planContext
-        this._fixInstruction = fixInstruction
-        this._implAwaited = implAwaited ?? false
+        this._resumeId = opts.resumeId
+        this._sendSpec = opts.sendSpec
+        this._onStart = opts.onStart
+        this._planContext = opts.planContext
+        this._fixInstruction = opts.fixInstruction
+        this._implAwaited = opts.implAwaited ?? false
         this._startedAt = Date.now()
 
         // We'll populate id/title/phase lazily in run().
@@ -160,7 +196,13 @@ export class TaskRunner {
             cwd,
             taskId: '',
             signal: this._abort.signal,
-            spawn: spawnFn,
+            spawn: opts.spawnFn,
+            runChild: opts.runChild,
+            // Deliberately NOT a ChildStatus (child-status.ts): the phase widget's
+            // state is the whole-run WidgetState — task id, phase, label — shared by
+            // reference with PhaseContext and written by the phases themselves
+            // (grill sets `lastLine`, compose sets the title). Only these two
+            // callbacks overlap, and they call the same resolveContextUsage.
             onChildOutput: (line: string) => {
                 this._widgetState.lastLine = line
             },
@@ -210,14 +252,18 @@ export class TaskRunner {
         this._abort.abort()
     }
 
-    /** Execute the full task lifecycle. */
+    /** Execute the full task lifecycle. Mid-run input holds instead of starting
+     *  a competing turn for the whole of it, and the terminal interception is
+     *  armed for the same window (`withRun`); nested inside `runGatedTask` or
+     *  the `/task-auto` loop the bracket refcounts, so this changes nothing there
+     *  and covers the fire-and-forget `runSingleTask` path on its own. */
     async run(): Promise<void> {
+        return withRun(this._ctx, {}, () => this._run())
+    }
+
+    private async _run(): Promise<void> {
         const cwd = this._cwd
         const ctx = this._ctx
-        // Mid-run input holds instead of starting a competing turn from here on,
-        // and the terminal interception is armed for the same window.
-        beginRun()
-        armCancelListener(ctx)
 
         // Initialise or resume the TASK file.
         let id: string
@@ -354,8 +400,6 @@ export class TaskRunner {
         } finally {
             this._disposeWidget()
             clearActiveTask(this)
-            disarmCancelListener()
-            reportDroppedInput(endRun(), ctx)
         }
     }
 
@@ -436,18 +480,13 @@ export class TaskRunner {
 
 // ─── runSingleTask ────────────────────────────────────────────────────────────
 
-export interface RunSingleTaskOptions {
+export interface RunSingleTaskOptions extends Pick<
+    TaskRunnerOptions,
+    'resumeId' | 'spawnFn' | 'runChild' | 'onStart' | 'planContext' | 'fixInstruction'
+> {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
     waitForImplementation?: boolean
-    /** Resume an existing task by ID instead of starting a new one. */
-    resumeId?: string
-    /** Test seam: spawn function forwarded to TaskRunner. */
-    spawnFn?: SpawnFn
-    /** Called with the resolved task id once its file exists, before any phase
-     *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
-     *  interrupted run can be resumed instead of restarted. */
-    onStart?: (taskId: string) => void | Promise<void>
     /**
      * Ask the user for a steering message after they interrupt (ESC) the
      * implementation turn. Return text to continue the same task as another turn,
@@ -456,7 +495,7 @@ export interface RunSingleTaskOptions {
      * raced against a remote browser card); injectable so the steer loop is
      * testable without a real dialog.
      */
-    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>
+    promptSteer?: SuperviseOptions['promptSteer']
     /**
      * Push a "Task finished" notification to subscribed devices when this run
      * reaches a terminal state (completed / failed / cancelled). Set only by the
@@ -464,41 +503,6 @@ export interface RunSingleTaskOptions {
      * internal per-task runs, which must stay silent. Default false.
      */
     notifyFinish?: boolean
-    /**
-     * Scope fence naming the sibling steps of a /task-auto plan. Forwarded into
-     * the refine phase so a single decomposed step bounds its slice instead of
-     * re-expanding the whole referenced spec doc. Set only by /task-auto's loop;
-     * a bare /task leaves it undefined and the refine prompt is unchanged.
-     */
-    planContext?: string
-    /**
-     * Marks this run as a verify-FAIL re-attempt. When set (only by /task-auto's
-     * autofix path, with `resumeId` pointing at the already-composed task), the
-     * text — the verify gate's failure reason plus any guidance the user typed —
-     * is prepended to the delivered spec as a RE-ATTEMPT banner, so the
-     * implementer fixes the specific failure and re-satisfies the VERIFY block
-     * rather than blindly redoing the task. Empty/undefined on a first attempt.
-     */
-    fixInstruction?: string
-}
-
-/** Dialog copy for the post-interrupt steering prompt. */
-const STEER_TITLE = 'Paused — steer the model'
-const STEER_PLACEHOLDER = 'Type guidance to continue this task, or leave empty to pause'
-/** Remote-card copy for the same prompt. The browser has no placeholder ghost
- *  text, so the pause affordance must be spelled out in the question itself
- *  (Skip = empty answer = pause, same as an empty local submit). */
-const STEER_QUESTION =
-    'Paused — the implementation was interrupted.\n'
-    + 'Type guidance to continue this task, or Skip to pause the run.'
-
-/**
- * The slice of the replacement-session context the steer loop needs.
- * `sendUserMessage` lives on ReplacedSessionContext (not the base command ctx,
- * and not re-exported from the package), so we narrow to just what we call.
- */
-export type SteerCtx = ExtensionCommandContext & {
-    sendUserMessage(content: string, options?: {deliverAs?: 'steer' | 'followUp'}): Promise<void>
 }
 
 export interface RunSingleTaskResult {
@@ -535,258 +539,6 @@ export interface RunSingleTaskResult {
 }
 
 /**
- * True when the most recent assistant turn ended because the user interrupted it
- * (pressed ESC). pi records a user abort as stopReason "aborted" on the assistant
- * message, distinct from a natural "stop". Read after the implementation wait so
- * the /task-auto loop can tell "user wants to steer" apart from "task finished".
- */
-function wasInterrupted(ctx: ExtensionCommandContext): boolean {
-    const entries = ctx.sessionManager.getEntries()
-    for (let i = entries.length - 1; i >= 0; i--) {
-        const e = entries[i]
-        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
-            return e.message.stopReason === 'aborted'
-        }
-    }
-    return false
-}
-
-/**
- * The error cause when the most recent assistant turn ended with stopReason
- * "error" — the model/provider failed mid-implementation (context overflow,
- * disconnect, provider 5xx) after pi exhausted its own retries. Returns the
- * provider's errorMessage, or undefined if the turn ended cleanly ("stop") or
- * was user-aborted ("aborted", handled by wasInterrupted).
- *
- * The /task-auto loop reads this AFTER the implementation wait: a task's file is
- * marked `completed` at spec-handoff (before implementation), so without this
- * check an implementation turn that died — e.g. "400 ... exceeds the available
- * context size" — would still read as ok and get checked off and committed.
- */
-function implementationError(ctx: ExtensionCommandContext): string | undefined {
-    const entries = ctx.sessionManager.getEntries()
-    for (let i = entries.length - 1; i >= 0; i--) {
-        const e = entries[i]
-        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
-            const m = e.message as {stopReason?: string; errorMessage?: string}
-            return m.stopReason === 'error' ? (m.errorMessage ?? 'model error') : undefined
-        }
-    }
-    return undefined
-}
-
-/**
- * True when the implementation turn went idle right after a context compaction —
- * the most recent entry in the branch is a `compaction` boundary sitting after the
- * last assistant message.
- *
- * A *threshold* auto-compaction (the runtime's "context is getting large" path)
- * compacts and then deliberately does NOT auto-continue: it returns to idle and
- * expects a manual continue (`_runAutoCompaction("threshold", false)` →
- * `hasQueuedMessages()` is false → the agent loop stops). Our implementation wait
- * resolves at exactly that idle. Without this check it reads as "the model
- * finished" (the last assistant message is a normal `stop`, not `aborted`/`error`),
- * so the run jumps straight to the verify gate and abandons a half-done task at the
- * compaction boundary — the failure this detector closes.
- *
- * Position-based, not timestamp-based: the runtime APPENDS the compaction entry to
- * the tail of the branch after the assistant message that triggered it
- * (`appendCompaction` → `_appendEntry` push), so a `compaction` after the last
- * assistant message means we are parked on a compaction with no continuation. A
- * genuinely finished turn ends on an assistant message with no trailing compaction;
- * an *overflow* compaction self-retries, so it never leaves us idle here.
- */
-export function endedAtCompactionBoundary(ctx: ExtensionCommandContext): boolean {
-    const entries = ctx.sessionManager.getEntries()
-    let lastAssistant = -1
-    let lastCompaction = -1
-    for (let i = 0; i < entries.length; i++) {
-        const e = entries[i]
-        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
-            lastAssistant = i
-        } else if (e.type === 'compaction') {
-            lastCompaction = i
-        }
-    }
-    return lastCompaction > lastAssistant
-}
-
-/**
- * Nudge that resumes an implementation turn the runtime parked at a compaction
- * boundary. It must let a turn that was genuinely finished (then tipped over the
- * threshold by its own final message) confirm completion without inventing busywork
- * — we cannot tell "paused mid-task by compaction" from "finished, then compacted"
- * from the boundary alone, so the wording lets a done turn end in one line.
- */
-export const CONTINUE_AFTER_COMPACTION =
-    'Your context was automatically compacted. Continue implementing this task from '
-    + 'exactly where you left off, and keep going until it is fully done. If the '
-    + 'implementation is already complete, say so in one line and stop — do not invent '
-    + 'extra work or restart the task.'
-
-/**
- * Safety cap on compaction-driven resumes for a single implementation turn. Each
- * resume follows a real compaction (which only fires after the model produced a
- * turn large enough to cross the threshold), so a legitimately large task may
- * resume a handful of times; the cap exists only to stop a pathological loop from
- * auto-sending forever with no user in the loop. Hitting it stops resuming and lets
- * the verify gate / `/task-auto-resume` catch any leftover incompleteness.
- */
-export const MAX_COMPACTION_RESUMES = 20
-
-/**
- * Resume an implementation turn that went idle at a threshold-compaction boundary.
- * The runtime compacts and parks at idle without auto-continuing; we send a
- * continue and wait again, repeating across successive compactions until the turn
- * ends on a real assistant message (genuine completion). A user ESC takes priority
- * (it is not a compaction boundary, and `wasInterrupted` guards the loop so the
- * steer loop handles it), and the safety cap bounds a runaway. Returns the number
- * of resumes performed (0 when the turn did not end on a compaction).
- */
-export async function resumeAcrossCompactions(ctx: SteerCtx): Promise<number> {
-    let resumes = 0
-    while (
-        resumes < MAX_COMPACTION_RESUMES
-        && !wasInterrupted(ctx)
-        && endedAtCompactionBoundary(ctx)
-    ) {
-        await ctx.sendUserMessage(CONTINUE_AFTER_COMPACTION, {deliverAs: 'followUp'})
-        await ctx.waitForIdle()
-        resumes++
-    }
-    return resumes
-}
-
-/**
- * True when the watchdog's reminder follow-up has been DELIVERED into the session
- * after the aborted assistant turn but its own turn has not finished yet — the
- * artifact that confirms a pending watchdog recovery. Scoped after the LAST
- * assistant entry so an earlier fire's reminder (already answered by its own
- * turn) never matches.
- */
-function watchdogReminderDelivered(ctx: ExtensionCommandContext): boolean {
-    const entries = ctx.sessionManager.getEntries()
-    let lastAssistant = -1
-    for (let i = 0; i < entries.length; i++) {
-        const e = entries[i]
-        if ('message' in e && 'role' in e.message && e.message.role === 'assistant') {
-            lastAssistant = i
-        }
-    }
-    for (let i = lastAssistant + 1; i < entries.length; i++) {
-        const e = entries[i]
-        if (!('message' in e) || !('role' in e.message) || e.message.role !== 'user') continue
-        const content = (e.message as {content?: unknown}).content
-        const text =
-            typeof content === 'string' ? content
-            : Array.isArray(content) ?
-                content
-                    .map(b =>
-                        b !== null && typeof b === 'object' && 'text' in b ?
-                            String((b as {text: unknown}).text)
-                        :   ''
-                    )
-                    .join(' ')
-            :   ''
-        if (text.includes(WATCHDOG_CANCEL_MARKER)) return true
-    }
-    return false
-}
-
-/**
- * Timing knobs for the watchdog-abort guard in {@link steerUntilDone}, injectable
- * so tests exercise the grace expiry without a 10-second wait. `graceMs` bounds
- * how long the loop waits for the watchdog's follow-up to be DELIVERED (not to
- * finish — its turn may legitimately run for minutes afterwards); delivery is
- * normally near-instant, so the grace only expires on a stale flag.
- */
-export interface SteerWatchdogDeps {
-    consume: () => boolean
-    graceMs: number
-    pollMs: number
-}
-
-const STEER_WATCHDOG_DEFAULTS: SteerWatchdogDeps = {
-    consume: consumeWatchdogAbort,
-    graceMs: 10_000,
-    pollMs: 100
-}
-
-/**
- * Wait for a watchdog abort's queued follow-up turn instead of prompting. The
- * abort and the reminder follow-up are two separate steps in the watchdog's
- * onFire, so the steer loop can observe the aborted turn before the reminder is
- * delivered — poll (bounded) until it lands or the follow-up turn has already
- * completed. True = recovery observed, re-check the loop; false = grace expired
- * with no reminder (stale flag) — fall back to the human prompt.
- */
-async function awaitWatchdogFollowUp(ctx: SteerCtx, wd: SteerWatchdogDeps): Promise<boolean> {
-    const deadline = Date.now() + wd.graceMs
-    for (;;) {
-        if (!wasInterrupted(ctx)) return true // follow-up turn already completed
-        if (watchdogReminderDelivered(ctx)) {
-            await ctx.waitForIdle() // let the follow-up turn run to completion
-            return true
-        }
-        if (Date.now() >= deadline) return false
-        await new Promise<void>(r => setTimeout(r, wd.pollMs))
-    }
-}
-
-/**
- * After the implementation turn settles, honour a user ESC by letting them steer.
- *
- * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
- * the turn → idle). When the last turn was aborted, the host's main input loop is
- * blocked inside our command handler, so a message typed in the editor would only
- * queue, never run (interactive-mode routes idle input through onInputCallback,
- * which is unset while we hold the loop). We therefore solicit the steering text
- * ourselves and feed it back as another turn via sendUserMessage — which runs to
- * completion when the session is idle. Repeat until a turn finishes uninterrupted.
- *
- * A WATCHDOG abort also ends the turn with stopReason 'aborted' — indistinguishable
- * from a human ESC by the session entries alone at that instant. The watchdog
- * queues its own recovery follow-up, so prompting there would show a steering
- * dialog to an empty room and wedge an unattended run on the race. The one-shot
- * flag (set synchronously before the abort) routes that case to
- * {@link awaitWatchdogFollowUp} instead; a stale flag degrades to a bounded wait
- * followed by the ordinary prompt, never to a suppressed one.
- *
- * Returns true when the user declined to steer (empty/cancelled) and the run
- * should pause; false when the implementation completed (steered or not).
- */
-export async function steerUntilDone(
-    ctx: SteerCtx,
-    promptSteer?: (ctx: ExtensionCommandContext) => Promise<string | undefined>,
-    watchdog?: Partial<SteerWatchdogDeps>
-): Promise<boolean> {
-    const wd: SteerWatchdogDeps = {...STEER_WATCHDOG_DEFAULTS, ...watchdog}
-    // Fan the prompt out through the bridge (local TUI input + remote browser
-    // card, first answer wins) instead of a raw ctx.ui.input: an interrupt can
-    // come from the remote Stop button just as well as a terminal ESC, and a
-    // terminal-only dialog leaves the remote viewer staring at a silently
-    // paused run. Remote Skip returns '' → same pause path as an empty local
-    // submit.
-    const ask =
-        promptSteer
-        ?? (c =>
-            new SessionUI(c).ask({
-                localTitle: STEER_TITLE,
-                localPlaceholder: STEER_PLACEHOLDER,
-                question: STEER_QUESTION,
-                allowSkip: true
-            }))
-    while (wasInterrupted(ctx)) {
-        if (wd.consume() && (await awaitWatchdogFollowUp(ctx, wd))) continue
-        const steer = await ask(ctx)
-        if (steer === undefined || steer.trim().length === 0) return true // pause
-        await ctx.sendUserMessage(steer, {deliverAs: 'followUp'})
-        await ctx.waitForIdle()
-    }
-    return false
-}
-
-/**
  * Run one prompt through the full single-task pipeline in a fresh session and
  * deliver its spec. With waitForImplementation, block until the agent finishes
  * implementing the delivered spec. Success is read off the produced task file's
@@ -818,36 +570,35 @@ export async function runSingleTask(
             // happens at the START of each task — precisely the window a typed
             // /task-auto-cancel has to survive. No-op unless a run armed one.
             rearmCancelListener(newCtx)
-            const runner = new TaskRunner(
-                newCtx,
+            const runner = new TaskRunner({
+                ctx: newCtx,
                 cwd,
                 rawPrompt,
-                opts.resumeId,
-                async spec => {
+                resumeId: opts.resumeId,
+                sendSpec: async spec => {
                     // Queue-or-run: never throws, whatever else is on the session (issue #8).
                     await newCtx.sendUserMessage(spec, {deliverAs: 'followUp'})
                     if (opts.waitForImplementation) {
                         await newCtx.waitForIdle()
                         // A threshold auto-compaction parks the turn at idle WITHOUT
-                        // auto-continuing (the runtime expects a manual continue). Our
-                        // single waitForIdle resolves there, so without this the run
-                        // would treat a compaction mid-task as completion and jump
-                        // straight to the verify gate. Resume across any compaction
-                        // boundaries first, so steering/error inspection below see the
-                        // turn's REAL end, not a compaction pause.
-                        await resumeAcrossCompactions(newCtx)
-                        interrupted = await steerUntilDone(newCtx, opts.promptSteer)
-                        // A user-declined steer (interrupted) is its own paused
-                        // path; otherwise inspect how the turn actually ended.
-                        if (!interrupted) implError = implementationError(newCtx)
+                        // auto-continuing, and a user ESC ends it "aborted": the
+                        // first idle is not the turn's real end. superviseImplementation
+                        // resumes across compactions, steers across interrupts, and
+                        // reads how the turn ACTUALLY ended.
+                        const outcome = await superviseImplementation(newCtx as SteerCtx, {
+                            promptSteer: opts.promptSteer
+                        })
+                        interrupted = outcome.interrupted
+                        implError = outcome.error
                     }
                 },
-                opts.spawnFn,
-                opts.onStart,
-                opts.planContext,
-                opts.fixInstruction,
-                opts.waitForImplementation
-            )
+                spawnFn: opts.spawnFn,
+                runChild: opts.runChild,
+                onStart: opts.onStart,
+                planContext: opts.planContext,
+                fixInstruction: opts.fixInstruction,
+                implAwaited: opts.waitForImplementation
+            })
             await runner.run()
             taskId = runner.taskId
         }
@@ -943,18 +694,13 @@ export async function runGatedTask(
     // TaskRunner would leave verify/enforce looking like "no run", which a live
     // run on pi 0.82.1 showed as runActive=false while the widget still read
     // "verifying work" (issue #8). The body has many early returns, so the
-    // bracket lives in this wrapper rather than in a dozen places.
-    beginRun()
-    // Arm the raw-stdin interception for the WHOLE run. Without this a plain
-    // /task had no terminal path at all — only /task-auto armed one — so a line
-    // typed during it went into pi's queue and fired after the run (seen live).
-    armCancelListener(ctx)
-    try {
-        await runGatedTaskInner(ctx, cwd, raw, opts)
-    } finally {
-        disarmCancelListener()
-        reportDroppedInput(endRun(), ctx)
-    }
+    // bracket lives in this wrapper rather than in a dozen places. The same
+    // bracket arms the raw-stdin interception for the WHOLE run: without it a
+    // plain /task had no terminal path at all — only /task-auto armed one — so a
+    // line typed during it went into pi's queue and fired after the run (seen
+    // live). No onCancel: a typed /task-auto-cancel goes through the generic
+    // bridge dispatch here.
+    await withRun(ctx, {}, () => runGatedTaskInner(ctx, cwd, raw, opts))
 }
 
 async function runGatedTaskInner(
@@ -974,11 +720,9 @@ async function runGatedTaskInner(
     let active = ctx
     // One push + remote bubble on the terminal outcome (parity with the
     // notifyFinish push the fire-and-forget path emits via runSingleTask).
-    const announce = (msg: string, level: 'info' | 'warning' | 'error'): void => {
-        active.ui.notify(msg, level)
-        publishLifecycleNotice(msg, level)
-        void pushNotify('Task finished', msg, 'pi-end').catch(() => {})
-    }
+    // Bound late to `active`: a gate autofix can replace the live session.
+    const announce = (msg: string, level: 'info' | 'warning' | 'error'): void =>
+        announceTerminal(active, msg, level)
 
     // First implementation run (blocking).
     const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId})

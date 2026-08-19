@@ -33,6 +33,7 @@ import {
     type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
 import {RESEARCH_CONTEXT_PROMPT} from './prompts.js'
+import type {PhaseDeps} from './child-runner.js'
 import {
     DEFAULT_WORKER_PROGRESS_CEILING_MS,
     PROJECT_DOCS_BUDGET_ENV,
@@ -64,6 +65,29 @@ const groundedResponse = (text: string): SpawnResponseJsonEvents => ({
 })
 const isApisPrompt = (args: ReadonlyArray<string>): boolean =>
     (args[args.length - 1] ?? '').includes('content of an APIS section')
+
+/**
+ * A `PhaseDeps.runChild` that answers each phase child by NAME and records every
+ * call. For tests to whom the child is a premise: nothing about the ladder, the
+ * loop detector or the argv runs. An unscripted name throws the ladder's
+ * "produced no output", so a test only scripts the children it is about.
+ */
+type ChildScript = string | ((prompt: string) => string)
+function scriptedChildren(scripts: Record<string, ChildScript>): {
+    runChild: NonNullable<PhaseDeps['runChild']>
+    seen: Array<{name: string; tools: string; prompt: string}>
+} {
+    const seen: Array<{name: string; tools: string; prompt: string}> = []
+    const runChild: NonNullable<PhaseDeps['runChild']> = (name, tools, prompt) => {
+        seen.push({name, tools, prompt})
+        const v = scripts[name]
+        if (v === undefined) return Promise.reject(new Error(`${name} child produced no output`))
+        // The real seam hands back the event sink's assistant text, which is
+        // trimmed — a substitute must match that contract.
+        return Promise.resolve((typeof v === 'function' ? v(prompt) : v).trim())
+    }
+    return {runChild, seen}
+}
 
 describe('refineExistingFilesBlock', () => {
     const deps = (cwd: string) => ({cwd, taskId: 'TASK_0001', signal: new AbortController().signal})
@@ -1950,37 +1974,17 @@ describe('phaseGrill', () => {
         await withTmpTaskDir(async cwd => {
             let genCall = 0
             const genPrompts: string[] = []
-
-            const spawn: SpawnFn = (_cmd: string, _args: ReadonlyArray<string>) => {
-                const proc = makeProc()
-                // The prompt arrives on stdin (written by runChild after spawn
-                // returns), so branch on it inside the deferred microtask.
-                queueMicrotask(() => {
-                    const prompt = proc.stdinData
-                    const isAuto = prompt.includes('pre-answering a clarifying question')
-                    const isGen = prompt.includes('preparing clarifying questions')
-                    if (isGen) genPrompts.push(prompt)
-                    let text: string
-                    if (isAuto) {
-                        text = 'ANSWER: yes'
-                    } else if (isGen) {
-                        const qs = ['1. should we use bun?', '1. should we lint tests?', 'NONE']
-                        text = qs[genCall++] ?? 'NONE'
-                    } else {
-                        text = 'noop'
-                    }
-                    const evt = {
-                        type: 'agent_end',
-                        messages: [{role: 'assistant', content: [{type: 'text', text}]}]
-                    }
-                    proc.stdout!.emit('data', Buffer.from(JSON.stringify(evt) + '\n'))
-                    proc.emit('close', 0)
-                })
-                return proc
-            }
+            const {runChild} = scriptedChildren({
+                'grill-auto': 'ANSWER: yes',
+                'grill-gen': prompt => {
+                    genPrompts.push(prompt)
+                    const qs = ['1. should we use bun?', '1. should we lint tests?', 'NONE']
+                    return qs[genCall++] ?? 'NONE'
+                }
+            })
 
             const out = await phaseGrill(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 stubCtx,
                 stubWidgetState,
                 'refined-task',
@@ -2006,41 +2010,25 @@ describe('phaseGrill', () => {
             let genCall = 0
             let autoCalls = 0
             const genPrompts: string[] = []
-            const spawn: SpawnFn = (_cmd: string, _args: ReadonlyArray<string>) => {
-                const proc = makeProc()
-                // The prompt arrives on stdin; branch on it in the microtask.
-                queueMicrotask(() => {
-                    const prompt = proc.stdinData
-                    const isAuto = prompt.includes('pre-answering a clarifying question')
-                    const isGen = prompt.includes('preparing clarifying questions')
-                    if (isGen) genPrompts.push(prompt)
-                    if (isAuto) autoCalls++
-                    let text: string
-                    if (isAuto) {
-                        text = 'ANSWER: yes'
-                    } else if (isGen) {
-                        const qs = [
-                            '1. Should uploaded images be resized server-side with sharp before storing in postgresql, or stored as raw blobs?',
-                            '1. Should the image upload pipeline resize images server-side using sharp, or keep raw uploaded blobs in postgresql?', // dup → reprompt
-                            '1. Should multer middleware parse the multipart form-data, or stream it natively?', // distinct
-                            'NONE'
-                        ]
-                        text = qs[genCall++] ?? 'NONE'
-                    } else {
-                        text = 'noop'
-                    }
-                    const evt = {
-                        type: 'agent_end',
-                        messages: [{role: 'assistant', content: [{type: 'text', text}]}]
-                    }
-                    proc.stdout!.emit('data', Buffer.from(JSON.stringify(evt) + '\n'))
-                    proc.emit('close', 0)
-                })
-                return proc
-            }
+            const {runChild} = scriptedChildren({
+                'grill-auto': () => {
+                    autoCalls++
+                    return 'ANSWER: yes'
+                },
+                'grill-gen': prompt => {
+                    genPrompts.push(prompt)
+                    const qs = [
+                        '1. Should uploaded images be resized server-side with sharp before storing in postgresql, or stored as raw blobs?',
+                        '1. Should the image upload pipeline resize images server-side using sharp, or keep raw uploaded blobs in postgresql?', // dup → reprompt
+                        '1. Should multer middleware parse the multipart form-data, or stream it natively?', // distinct
+                        'NONE'
+                    ]
+                    return qs[genCall++] ?? 'NONE'
+                }
+            })
 
             const out = await phaseGrill(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 stubCtx,
                 stubWidgetState,
                 'refined-task',
@@ -2209,13 +2197,9 @@ describe('phaseCritique conditional rewrite', () => {
 
     test('CLEAN triage short-circuits — returns the draft, never rewrites', async () => {
         await withTmpTaskDir(async cwd => {
-            const promptsSeen: string[] = []
-            const spawn = fakeSpawnByPrompt(args => {
-                promptsSeen.push(args[args.length - 1] as string)
-                return agentEndResponse('CLEAN')
-            })
+            const {runChild, seen} = scriptedChildren({'critique-triage': 'CLEAN'})
             const out = await phaseCritique(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 validSpec,
                 'refined',
                 'qa'
@@ -2223,8 +2207,7 @@ describe('phaseCritique conditional rewrite', () => {
             // Draft returned verbatim.
             expect(out).toBe(validSpec)
             // Exactly one child ran (triage); the rewrite was skipped.
-            expect(promptsSeen.length).toBe(1)
-            expect(promptsSeen[0]).toContain('triaging an implementation spec')
+            expect(seen.map(c => c.name)).toEqual(['critique-triage'])
         })
     })
 
@@ -2234,27 +2217,21 @@ describe('phaseCritique conditional rewrite', () => {
                 'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"\n```\n'
             const rewritten =
                 'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js\n```\n'
-            const promptsSeen: string[] = []
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1] as string
-                promptsSeen.push(prompt)
-                // Triage says CLEAN — but the deterministic skip-escape must still force a rewrite.
-                if (prompt.includes('triaging an implementation spec'))
-                    return agentEndResponse('CLEAN')
-                return agentEndResponse(rewritten)
+            // Triage says CLEAN — but the deterministic skip-escape must still force a rewrite.
+            const {runChild, seen} = scriptedChildren({
+                'critique-triage': 'CLEAN',
+                critique: rewritten
             })
             const out = await phaseCritique(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 escapeSpec,
                 'refined',
                 'qa'
             )
             // Did NOT short-circuit despite CLEAN triage: the rewrite ran.
             expect(out).toBe(rewritten.trim())
-            expect(promptsSeen.length).toBe(2)
-            const rewritePrompt = promptsSeen.find(p =>
-                p.includes('reviewing the implementation spec')
-            )!
+            expect(seen.map(c => c.name)).toEqual(['critique-triage', 'critique'])
+            const rewritePrompt = seen.find(c => c.name === 'critique')!.prompt
             expect(rewritePrompt).toContain('SKIP-ESCAPE in the VERIFY block')
             expect(rewritePrompt).toContain('uismoke smoke.spec.js || echo')
         })
@@ -2307,19 +2284,14 @@ describe('phaseCritique conditional rewrite', () => {
 
     test('triage defects flow into the rewrite as a FOCUS block', async () => {
         await withTmpTaskDir(async cwd => {
-            const promptsSeen: string[] = []
             const rewritten =
                 'GOAL\n  sharper\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y measured by z\n\nVERIFY:\n```sh\nnpm test\n```\n'
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1] as string
-                promptsSeen.push(prompt)
-                if (prompt.includes('triaging an implementation spec')) {
-                    return agentEndResponse('ACCEPTANCE: criterion is unmeasurable')
-                }
-                return agentEndResponse(rewritten)
+            const {runChild, seen} = scriptedChildren({
+                'critique-triage': 'ACCEPTANCE: criterion is unmeasurable',
+                critique: rewritten
             })
             const out = await phaseCritique(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 validSpec,
                 'refined',
                 'qa'
@@ -2327,10 +2299,8 @@ describe('phaseCritique conditional rewrite', () => {
             // Rewrite output is the child's assistant text (trimmed by the runner).
             expect(out).toBe(rewritten.trim())
             // Two children: triage then rewrite.
-            expect(promptsSeen.length).toBe(2)
-            const rewritePrompt = promptsSeen.find(p =>
-                p.includes('reviewing the implementation spec')
-            )!
+            expect(seen.map(c => c.name)).toEqual(['critique-triage', 'critique'])
+            const rewritePrompt = seen.find(c => c.name === 'critique')!.prompt
             expect(rewritePrompt).toContain('FOCUS —')
             expect(rewritePrompt).toContain('ACCEPTANCE: criterion is unmeasurable')
         })
@@ -2339,65 +2309,51 @@ describe('phaseCritique conditional rewrite', () => {
     test('a draft without a runnable VERIFY block skips triage and goes straight to rewrite', async () => {
         await withTmpTaskDir(async cwd => {
             const draftNoVerify = 'GOAL\n  x\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - b\n'
-            const promptsSeen: string[] = []
-            const spawn = fakeSpawnByPrompt(args => {
-                promptsSeen.push(args[args.length - 1] as string)
-                return agentEndResponse(validSpec)
+            const {runChild, seen} = scriptedChildren({
+                'critique-triage': 'CLEAN',
+                critique: validSpec
             })
             const out = await phaseCritique(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 draftNoVerify,
                 'refined',
                 'qa'
             )
             expect(out).toBe(validSpec.trim())
             // No triage call — the very first (and only) child is the rewrite.
-            expect(promptsSeen[0]).toContain('reviewing the implementation spec')
-            expect(promptsSeen.every(p => !p.includes('triaging an implementation spec'))).toBe(
-                true
-            )
+            expect(seen.map(c => c.name)).toEqual(['critique'])
         })
     })
 
     test('triage failure is non-fatal — falls back to the rewrite', async () => {
         await withTmpTaskDir(async cwd => {
-            let call = 0
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1] as string
-                call++
-                // First call is triage: simulate a crash (non-zero exit, no text).
-                if (prompt.includes('triaging an implementation spec')) {
-                    return agentEndResponse('', 1)
-                }
-                return agentEndResponse(validSpec)
-            })
+            // Triage crashes (the ladder would throw on a non-zero exit); the
+            // rewrite still runs. An unscripted name throws the same way.
+            const {runChild, seen} = scriptedChildren({critique: validSpec})
             const out = await phaseCritique(
-                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                {cwd, taskId: 'TASK_TEST', signal: new AbortController().signal, runChild},
                 validSpec,
                 'refined',
                 'qa'
             )
             expect(out).toBe(validSpec.trim())
-            expect(call).toBeGreaterThanOrEqual(2)
+            expect(seen.map(c => c.name)).toEqual(['critique-triage', 'critique'])
         })
     })
 
     test('records triage and rewrite sub-step timings', async () => {
         await withTmpTaskDir(async cwd => {
             const subSteps: Array<{label: string; ms: number}> = []
-            const spawn = fakeSpawnByPrompt(args => {
-                const prompt = args[args.length - 1] as string
-                if (prompt.includes('triaging an implementation spec')) {
-                    return agentEndResponse('NEEDS WORK: tighten acceptance')
-                }
-                return agentEndResponse(validSpec)
+            const {runChild} = scriptedChildren({
+                'critique-triage': 'NEEDS WORK: tighten acceptance',
+                critique: validSpec
             })
             await phaseCritique(
                 {
                     cwd,
                     taskId: 'TASK_TEST',
                     signal: new AbortController().signal,
-                    spawn,
+                    runChild,
                     recordSubStep: (label, ms) => subSteps.push({label, ms})
                 },
                 validSpec,

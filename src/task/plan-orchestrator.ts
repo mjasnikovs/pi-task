@@ -22,7 +22,7 @@
 
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {runPhaseChild, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {PLAN_QUESTION_PROMPT, PLAN_ANSWER_PROMPT} from './plan-prompts.js'
 import {
     runPlanSession,
@@ -61,18 +61,18 @@ import {deriveTitle} from './parsers.js'
 import {renderInlineMarkdown} from './inline-markdown.js'
 import {expandFeatureMentions} from './auto-orchestrator.js'
 import {runSingleTask, runGatedTask} from './orchestrator.js'
-import {startAutoLoader, type ContextSnapshot} from './widget.js'
 import {
     SessionUI,
     publishViewer,
-    publishNotify,
     publishLifecycleNotice,
     registerBridgeCommand
 } from '../remote/bridge.js'
+import {withRun, announceTerminal} from './run-bracket.js'
 import {getConfig} from '../config/config.js'
 import {isYoloMode} from './yolo.js'
 import {gateDebugWriter} from './debug-log.js'
-import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
+import {getParentContextWindow} from './context-usage.js'
+import {ChildStatus, runPlanningChild, statusCallbacks} from './child-status.js'
 import * as fsp from 'node:fs/promises'
 
 /** Loader labels for the two planning children. */
@@ -95,10 +95,8 @@ export function buildPlanDeps(
 ): PlanSessionDeps {
     const ui = new SessionUI(ctx)
     const theme = ctx.ui.theme
-    let lastLine: string | undefined
     let status: string | undefined
-    let contextUsage: ContextSnapshot | undefined
-    const parentContextWindow = getParentContextWindow(ctx)
+    const childStatus = new ChildStatus({parentContextWindow: getParentContextWindow(ctx)})
     const title = deriveTitle(task)
 
     const logDebug = gateDebugWriter((msg: string) => {
@@ -110,12 +108,7 @@ export function buildPlanDeps(
         cwd,
         taskId: planId,
         signal,
-        onChildOutput: line => {
-            lastLine = line
-        },
-        onContextUsage: snapshot => {
-            contextUsage = resolveContextUsage(snapshot, contextUsage, parentContextWindow)
-        },
+        ...statusCallbacks(childStatus),
         ...(logDebug && {logDebug})
     }
 
@@ -128,24 +121,22 @@ export function buildPlanDeps(
      * the plan file itself is written.
      */
     const child = async (name: string, prompt: string): Promise<string> => {
-        lastLine = undefined
-        contextUsage = undefined
-        const startedAt = Date.now()
-        const stopLoader = startAutoLoader(ctx, () => ({
-            command: '/task-plan',
-            title,
-            step: status ?? PLAN_STEPS[name] ?? name,
-            stepNum: 1,
-            stepTotal: 1,
-            startedAt,
-            lastLine,
-            contextUsage
-        }))
         const before = await collectTreeChanges(cwd, signal).catch(() => null)
         try {
-            return await runPhaseChild(phaseDeps, name, PLAN_TOOLS, prompt)
+            return await runPlanningChild({
+                ctx,
+                status: childStatus,
+                phaseDeps,
+                name,
+                tools: PLAN_TOOLS,
+                prompt,
+                loader: {
+                    command: '/task-plan',
+                    title,
+                    step: n => ({step: status ?? PLAN_STEPS[n] ?? n, stepNum: 1, stepTotal: 1})
+                }
+            })
         } finally {
-            stopLoader()
             // Outside a git repo `before` is null and there is nothing to compare
             // against — the same degrade every other tree-reading guard here takes.
             if (before) {
@@ -366,6 +357,23 @@ export async function handleTaskPlan(
     }
     await writeTaskFile(cwd, fm, buildPlanBody(task))
 
+    // The plan session owns the session the way a run does: its children run
+    // with the host idle, so an unbracketed line typed then went into pi's queue
+    // (terminal) or started a competing turn (browser) — the issue #8 shape.
+    // /task-auto brackets its planning for the same reason; this one was left
+    // out when /task-plan landed. Held lines reach the handed-off /task run's
+    // first turn (the bracket nests), or are reported when the plan ends without
+    // one. No onCancel: /task-auto-cancel is not this command's to acknowledge.
+    await withRun(ctx, {}, () => runPlanCommand(ctx, cwd, planId, task, commandDeps))
+}
+
+async function runPlanCommand(
+    ctx: ExtensionCommandContext,
+    cwd: string,
+    planId: string,
+    task: string,
+    commandDeps: PlanCommandDeps
+): Promise<void> {
     const abort = new AbortController()
 
     let outcome: PlanOutcome
@@ -377,9 +385,9 @@ export async function handleTaskPlan(
             state: msg === USER_CANCELLED ? 'cancelled' : 'failed',
             reason: msg.slice(0, 200)
         }).catch(() => {})
-        const line = `${planId} stopped — ${msg.slice(0, 160)}`
-        ctx.ui.notify(line, 'error')
-        publishLifecycleNotice(line, 'error')
+        // No push: a plan is a conversation, not a task; the run it hands off
+        // to pushes its own ending.
+        announceTerminal(ctx, `${planId} stopped — ${msg.slice(0, 160)}`, 'error', {push: false})
         return
     }
 
@@ -392,8 +400,7 @@ export async function handleTaskPlan(
             outcome.entries.length === 0 ?
                 `${planId} cancelled — nothing planned.`
             :   `${planId} cancelled — ${outcome.entries.length} entr${outcome.entries.length === 1 ? 'y' : 'ies'} kept in .pi-tasks/${planId}.md`
-        ctx.ui.notify(line, 'warning')
-        publishNotify(line, 'warning')
+        announceTerminal(ctx, line, 'warning', {push: false})
         return
     }
 

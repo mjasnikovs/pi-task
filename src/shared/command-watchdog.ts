@@ -80,7 +80,7 @@ function correction(): string {
 
 /**
  * Stable substring of {@link reminderMessage}, used by the steer loop
- * (orchestrator steerUntilDone) to recognise the watchdog's follow-up turn in
+ * (implementation-turn steerUntilDone) to recognise the watchdog's follow-up turn in
  * the session entries — the artifact that distinguishes a watchdog abort from a
  * human ESC. Interpolated into the message so the detector and the text cannot
  * drift apart.

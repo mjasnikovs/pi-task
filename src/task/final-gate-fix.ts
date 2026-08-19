@@ -106,7 +106,7 @@ export function classifyFinalGateAnswer(answer: string | undefined): FinalGateCh
  * Extract it for reporting; the shrink guard itself compares the FULL
  * discovered-command sets, so a reason this cannot parse still guards.
  */
-export function extractFailingCommand(reason: string): string | null {
+export function exitedCommandFromReason(reason: string): string | null {
     const m = /`([^`]+)`\s+exited\b/.exec(reason)
     return m ? m[1] : null
 }

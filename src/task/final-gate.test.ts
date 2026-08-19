@@ -1146,6 +1146,41 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
         expect(out.reason).toContain('result.rows')
     })
 
+    test('a declared launch script RUNS even when no integration/boot command is discoverable', async () => {
+        // The zero-discovery return used to fire BEFORE the launch-script loop
+        // (found and left unfixed in f5d7110): a package.json whose only scripts
+        // are `migrate`/`seed` discovers no test/build/start, so the gate returned
+        // UNOBSERVED without ever running the launch contract it had been handed.
+        // The return now asks the tally — no attempt, no failure — after the loop.
+        const dir = makeDir({
+            scripts: {
+                migrate: `node -e "console.error('TypeError: undefined is not an object (evaluating result.rows)'); process.exit(1)"`
+            }
+        })
+        await appendDeclaredScripts(dir, ['migrate'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(false)
+        expect(out.reason).toContain('launch script: `bun run migrate` exited 1')
+        expect(out.reason).toContain('result.rows')
+    })
+
+    test('a declared launch script that passes on a zero-discovery tree is a PASS naming it', async () => {
+        const dir = makeDir({scripts: {seed: 'exit 0'}})
+        await appendDeclaredScripts(dir, ['seed'])
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toBeUndefined()
+        expect(out.reason).toBe('statics + `bun run seed` passed')
+    })
+
+    test('nothing declared, nothing discoverable → the zero-discovery UNOBSERVED verdict, unchanged', async () => {
+        const dir = makeDir({scripts: {verify: 'exit 0'}})
+        const out = await runFinalIntegrationGate(dir)
+        expect(out.ok).toBe(true)
+        expect(out.unobserved).toContain('nothing at all')
+        expect(out.reason).toBe(out.unobserved!)
+    })
+
     test('missing external infrastructure is an env gap, not a script fault', async () => {
         const dir = makeDir({
             scripts: {
