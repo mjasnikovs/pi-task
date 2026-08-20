@@ -5,12 +5,20 @@
  * child (mx5 runs 4/6): stash-and-abandon, checkout-and-stay, `--fix`-style file
  * rewrites, junk file creation, and untracked-file deletion.
  */
-import {describe, expect, test} from 'bun:test'
+import {describe, expect, setDefaultTimeout, test} from 'bun:test'
 import {execFileSync} from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {captureGitState, reconcileGitState, withGitStateGuard} from './git-state-guard.js'
+
+// Every test here spawns REAL git (init/config/add/commit) against a temp dir, so
+// each one is 4-6 subprocesses of file I/O. On the Windows CI runner that I/O is
+// scanned by Defender (MsMpEng burned 13.5 CPU-s during the 0.38.15 run), and the
+// three heaviest cases blew bun's 5000ms default *inside makeRepo* — `git commit`
+// took the SIGTERM with empty stdout/stderr, not an assertion. The classification
+// under test has no time budget of its own, so give the subprocesses room.
+setDefaultTimeout(30_000)
 
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@t'] as const
 
