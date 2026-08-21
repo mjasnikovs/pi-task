@@ -289,6 +289,11 @@ export type GateResult =
     | {kind: 'session-cancelled'; ctx: ExtensionCommandContext}
     /** An AUTOFIX re-run was interrupted (ESC) and the user declined to steer. */
     | {kind: 'interrupted'; ctx: ExtensionCommandContext}
+    /**
+     * The USER cancelled an AUTOFIX re-run. Distinct from `interrupted`: the task
+     * file already says `cancelled` and must not be demoted to `failed` over it.
+     */
+    | {kind: 'cancelled'; ctx: ExtensionCommandContext}
     /** An AUTOFIX re-run's implementation itself failed. */
     | {kind: 'failed'; ctx: ExtensionCommandContext; reason?: string}
 
@@ -714,9 +719,31 @@ export async function resolveVerifyGate(
                 fixInstruction
             })
             active = fixRes.ctx ?? active
-            if (fixRes.sessionCancelled) return {stop: {kind: 'session-cancelled', ctx: active}}
-            if (fixRes.interrupted) return {stop: {kind: 'interrupted', ctx: active}}
-            if (!fixRes.ok) return {stop: {kind: 'failed', ctx: active, reason: fixRes.reason}}
+            // The re-run's ending, mapped to this loop's own terminal kinds. A
+            // CANCEL lands on `interrupted` — the user stopped it, so the task is
+            // left resumable rather than reported as a fault.
+            if (fixRes.end.kind === 'no-session') {
+                return {stop: {kind: 'session-cancelled', ctx: active}}
+            }
+            // A CANCEL and an ESC-interrupt are NOT the same ending. Folding them
+            // together sent a cancelled re-run down the `interrupted` row, which
+            // demotes the task file — writing `failed` over the `cancelled` the
+            // cancel itself wrote.
+            if (fixRes.end.kind === 'cancelled') {
+                return {stop: {kind: 'cancelled', ctx: active}}
+            }
+            if (fixRes.end.kind === 'interrupted') {
+                return {stop: {kind: 'interrupted', ctx: active}}
+            }
+            if (fixRes.end.kind === 'failed') {
+                return {
+                    stop: {
+                        kind: 'failed',
+                        ctx: active,
+                        ...(fixRes.end.reason === undefined ? {} : {reason: fixRes.end.reason})
+                    }
+                }
+            }
             // Resume reuses the same inner task id, so p.taskId is stable.
             verified = await deps.verify(active, p.cwd, p.title, p.taskId)
             await rec(verdictLine(verified))

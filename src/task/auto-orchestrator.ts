@@ -10,6 +10,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {gateRunTask, markResumable} from './orchestrator.js'
+import {RUN_END_POLICY, runSucceeded} from './run-end.js'
 import {parseClarifyList, parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {
@@ -63,6 +64,7 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {runFinalGateStage, type FinalGateStageDeps} from './run-final-gate.js'
 import {gitUnmergedPaths, gitStashRef} from './auto-commit.js'
 import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
+import {spawnCommand} from './command-run.js'
 import {getConfig} from '../config/config.js'
 import {debugLogLevel, shouldLogDebug} from './debug-log.js'
 import {isYoloMode, yoloPickAnswer, YOLO_STAMP} from './yolo.js'
@@ -1570,7 +1572,7 @@ function defaultDeps(
         // run-level half of the same verification story.
         finalGate: (cwd2, planText) =>
             getConfig().verifyWork ?
-                runFinalIntegrationGate(cwd2, {planText})
+                runFinalIntegrationGate(cwd2, {planText, signal})
             :   Promise.resolve({ok: true, reason: 'disabled'}),
         // Uncommitted paths, for the stranded-sub-fix handling around the final-gate
         // picker (mx5 run 13 PROMPT 4 item 3). Every task is committed by the time
@@ -1582,7 +1584,10 @@ function defaultDeps(
         // Re-derive the debt ledger against the FINAL tree after a converged
         // autofix (nexttask 6). Only ever reached from inside the gate's own
         // resolution loop, so it needs no `verify work` switch of its own.
-        recheckOpenDebts: (cwd2, staticOk) => deriveOpenDebts(cwd2, staticOk)
+        // Same section, same cancel: this re-runs every ACCEPT-debt VERIFY command
+        // against the final tree, each under its own 300s cap.
+        recheckOpenDebts: (cwd2, staticOk) =>
+            deriveOpenDebts(cwd2, staticOk, spawnCommand, signal)
     }
 }
 
@@ -1746,58 +1751,40 @@ export async function runAutoLoop(
                     )
             })
             active = res.ctx ?? active
-            if (res.sessionCancelled) {
-                announceDone(
-                    active,
-                    `${id} paused — could not start a session. Run /task-auto-resume to retry.`,
-                    'warning'
-                )
-                return
-            }
-            if (res.interrupted) {
-                // The user interrupted implementation (ESC) and then declined to
-                // steer (empty steer prompt) — they want to stop here. Pause
-                // without checking the task off, so /task-auto-resume re-delivers
-                // this task's spec to finish it. (A plain ESC that the user
-                // follows with steering text never reaches here — that loops on
-                // the same task inside runSingleTask until a turn completes.)
-                await markResumable(cwd, res.taskId)
-                announceDone(
-                    active,
-                    `${id} paused at "${next.title}" — resume with /task-auto-resume.`,
-                    'warning'
-                )
-                return
-            }
-            // A phase-boundary cancel surfaces here as a plain !res.ok: the runner
-            // caught its own USER_CANCELLED and wrote state 'cancelled' (resumable)
-            // to the inner file. Claim it BEFORE the failure branch, or a
-            // user-requested stop is announced in red as "stopped … fix and
-            // resume". The inner file is already resumable and the parent stays
-            // in_progress, matching the loop-top cancel.
-            if (!res.ok && isCancelRequested()) {
-                announceDone(
-                    active,
-                    `${id} cancelled during "${next.title}" — resume with /task-auto-resume.`,
-                    'warning'
-                )
-                return
-            }
-            if (!res.ok) {
-                // Demote the INNER task file too: it reads `completed` from
+            // One dispatch over the named ending. The five-branch ladder this
+            // replaces had to ask `isCancelRequested()` — a module global
+            // `/task-cancel` never sets — to tell a user stop from a fault, so a
+            // cancel during a task was announced in red as "stopped … fix and
+            // resume" and the inner file's `cancelled` was overwritten with
+            // `failed`. The runner names the ending now; resumability is
+            // RUN_END_POLICY's; only the wording is this command's.
+            if (!runSucceeded(res.end)) {
+                const policy = RUN_END_POLICY[res.end.kind]
+                // Demote the INNER task file: it reads `completed` from
                 // spec-handoff, and leaving it that way is how a failed run's task
                 // file claimed success in the run 6 audit.
-                await markResumable(cwd, res.taskId)
-                await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                // res.reason is set when the implementation turn itself died
-                // (e.g. a context-overflow 400) — surface it so the real cause
-                // isn't lost behind the generic "stopped" message.
-                const why = res.reason ? ` — ${res.reason.slice(0, 160)}` : ''
-                announceDone(
-                    active,
-                    `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`,
-                    'error'
-                )
+                if (policy.resumable) await markResumable(cwd, res.taskId)
+                // The PLAN fails only on a fault. A declined-steer interrupt leaves
+                // it in progress so /task-auto-resume re-delivers this task's spec.
+                if (policy.failsRun) await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                const why =
+                    res.end.kind === 'failed' && res.end.reason ?
+                        ` — ${res.end.reason.slice(0, 160)}`
+                    :   ''
+                const msg =
+                    res.end.kind === 'no-session' ?
+                        `${id} paused — could not start a session. Run /task-auto-resume to retry.`
+                    : res.end.kind === 'cancelled' ?
+                        `${id} cancelled during "${next.title}" — resume with /task-auto-resume.`
+                    : res.end.kind === 'interrupted' ?
+                        // The user interrupted implementation (ESC) and then declined
+                        // to steer — they want to stop here. Paused without checking
+                        // the task off, so /task-auto-resume re-delivers this task's
+                        // spec. (A plain ESC followed by steering text never reaches
+                        // here — that loops inside runSingleTask until a turn ends.)
+                        `${id} paused at "${next.title}" — resume with /task-auto-resume.`
+                    :   `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`
+                announceDone(active, msg, policy.level)
                 return
             }
             // GATE: actually RUN the task's verification against the just-finished

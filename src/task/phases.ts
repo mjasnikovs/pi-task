@@ -14,8 +14,8 @@ import {
     formatApiCorrections,
     rewritePhantomSpecifiers
 } from '../workers/phantom-imports.js'
-import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
-import type {SearchProvider} from '../workers/search-types.js'
+import {searchProviderKey, type SearchProvider} from '../workers/search-types.js'
+import {channelSet} from '../workers/worker-channels.js'
 import {
     fanoutTimeoutPolicy,
     workerCarryForward,
@@ -36,11 +36,7 @@ import {buildOrientation, orientationTier} from './orientation.js'
 import {getConfig} from '../config/config.js'
 import {readFile} from 'node:fs/promises'
 import {resolve} from 'node:path'
-import {
-    buildExternalContext,
-    gatherExternalContext,
-    type ExternalContextDeps
-} from './external-context.js'
+import {buildExternalContext, gatherExternalContext} from './external-context.js'
 import {
     REFINE_PROMPT,
     RESEARCH_FILES_PROMPT,
@@ -109,7 +105,6 @@ import {
 import {trackedSourceOracle} from './owned-freeze-conflict.js'
 import {
     runPhaseChild,
-    runPhaseWithLoopGuard,
     runWithEmphasisRetry,
     prependHint,
     USER_CANCELLED,
@@ -377,17 +372,11 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
     // re-check the output below (lever). Empty on an ordinary prompt → refine unchanged.
     const directives = extractUserDirectives(raw)
     const directivesBlock = preserveDirectivesBlock(directives)
-    const refined = await runPhaseWithLoopGuard(
+    const refined = await runPhaseChild(
         deps,
         'refine',
         'read',
-        hint =>
-            prependHint(
-                hint,
-                appendNoThink(
-                    REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock)
-                )
-            ),
+        appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock)),
         // refine's deliverable is a 4-section text rewrite that never strictly
         // needs a successful read — on a test-writing task against a large
         // existing codebase the model over-explores (re-reads source hunting for
@@ -395,7 +384,7 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         // attempt instead of hard-failing the whole run. See TASK_0016 (mx5):
         // refine looped 3×/resume forever; the deliverable was always producible
         // from the title + design doc alone.
-        {degradeOnExhaustion: true}
+        {degradeOnExhaustion: true, verb: 'restart'}
     )
     // Deterministic backstop: if the refined spec still dropped a directive, append
     // it verbatim rather than trusting the paraphrase. No model in this path.
@@ -439,48 +428,38 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
     return replaceToolingWithVerified(research, parsed.verified)
 }
 
-export interface PhaseResearchDeps extends ExternalContextDeps {
-    getFileInventory?: (cwd: string, signal?: AbortSignal) => Promise<string>
-    /**
-     * Run ONE research worker. Absent (production) → the real `runWorker`.
-     *
-     * The seam exists for the same reason `getFileInventory` does: every decision
-     * `runSpec` makes — the three Research retry gates, the fatal/runaway/empty
-     * classification, the marker choice, `postProcess` — is a pure function of the
-     * returned `RunWorkerResult`, but reaching any of them used to require driving
-     * a fake process that emits JSON events. Substituting the result lets a gate be
-     * tested by the fields it actually reads.
-     *
-     * `label` is the worker's name — the same one `recordWorker` trails. It is
-     * passed because a substitute must answer differently per worker, and the only
-     * alternative is matching a marker sentence inside the prompt, which makes
-     * prompt copy load-bearing test infrastructure. Same reason
-     * `PhaseDeps.runChild` takes a name.
-     */
-    runWorker?: (label: string, input: RunWorkerInput) => Promise<RunWorkerResult>
+/**
+ * The worker channels the APIS research worker is given.
+ *
+ * `pi-worker-search` + `pi-worker-fetch` ride along only when the configured
+ * engine is usable (a keyless engine always is; brave needs its key). A tool
+ * without a key just errors, and a weak model burns calls on it — while search
+ * being ABSENT was structural in the other direction: three consecutive audited
+ * runs made 0 search calls because the child literally did not have the tool.
+ *
+ * Both halves of "given a channel" — the tools string and the `-e` path — come
+ * from the same rows, so they cannot disagree.
+ */
+function apisWorkerChannels(): {tools: string; extensions: string[]} {
+    return channelSet([
+        'pi-worker-docs',
+        ...(searchConfigured() ? ['pi-worker-search', 'pi-worker-fetch'] : [])
+    ])
 }
-
-const DOCS_EXTENSION_PATH = fileURLToPath(new URL('../workers/docs-extension.js', import.meta.url))
-
-/** pi-worker-search + pi-worker-fetch, loaded into the APIS research worker only
- *  when a Brave key is configured (the tool without a key just errors, and a weak
- *  model burns calls on it). Search being absent from the research toolset was
- *  STRUCTURAL: three consecutive audited runs made 0 search calls because the
- *  child literally did not have the tool. */
-const SEARCH_EXTENSION_PATH = fileURLToPath(
-    new URL('../workers/search-extension.js', import.meta.url)
-)
 
 /**
  * Is live web search configured for this process? The keyless providers (exa,
- * ddg) always are; only brave needs its API key — mirrors search-core's lookup.
+ * ddg) always are; only brave needs its API key.
  */
 export function searchConfigured(
     getEnv: (k: string) => string | undefined = k => process.env[k],
     provider: SearchProvider = getConfig().searchProvider
 ): boolean {
-    if (provider !== 'brave') return true
-    return Boolean(getEnv('BRAVE_SEARCH_API_KEY') ?? getEnv('BRAVE_API_KEY'))
+    // Asks the SAME row `search()` asks. This used to re-state brave's env pair
+    // under a comment saying it "mirrors search-core's lookup" — two statements of
+    // one fact, and the one that decides whether the APIS worker is even handed the
+    // search tool.
+    return searchProviderKey(provider, getEnv) !== null
 }
 
 /** Extra prompt block for the APIS worker when search is available — trigger-framed
@@ -807,15 +786,11 @@ const CONTEXT_SILENT_RETRY_PREAMBLE =
     + 'ONLY when quoting an EXTERNAL CONTEXT block; otherwise write it as an "unverified:" open '
     + 'question. One claim per bullet. Better to emit three sharp sourced bullets than to say nothing.'
 
-export async function phaseResearch(
-    deps: PhaseDeps,
-    refined: string,
-    researchDeps: PhaseResearchDeps = {}
-): Promise<string> {
-    const fileInventoryFn = researchDeps.getFileInventory ?? getFileInventory
+export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<string> {
+    const fileInventoryFn = deps.getFileInventory ?? getFileInventory
     const runWorkerFn =
-        researchDeps.runWorker ?? ((_label: string, input: RunWorkerInput) => runWorker(input))
-    const externalContext = await gatherExternalContext(refined, deps, researchDeps)
+        deps.runWorker ?? ((_label: string, input: RunWorkerInput) => runWorker(input))
+    const externalContext = await gatherExternalContext(refined, deps)
 
     // Pre-compute the project file inventory once and hand it to every worker.
     // Workers can then jump straight to targeted read/grep on known paths
@@ -950,6 +925,9 @@ export async function phaseResearch(
     // The worker still calls as many tools as it wants; it just stops narrating
     // between them. See appendNoThink. Result order (files, apis, context,
     // tooling) is preserved for assembly.
+    // Resolved once: `searchConfigured()` reads the environment, and the tools
+    // string and the `-e` paths must be derived from the SAME answer.
+    const apisChannels = apisWorkerChannels()
     const workerSpecs: Array<{
         /** Section heading this worker's output is assembled under. */
         section: string
@@ -1012,14 +990,12 @@ export async function phaseResearch(
                         // to the worker as a broken tool.
                         + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget))
                 ),
-            tools:
-                'read,grep,find,ls,pi-worker-docs'
-                + (searchConfigured() ? ',pi-worker-search,pi-worker-fetch' : ''),
+            // The tools string and the `-e` paths are ONE fact — which worker
+            // channels this research worker is given — and used to be two literals
+            // kept in step by eye. `channelSet` derives both from the same rows.
+            tools: `read,grep,find,ls,${apisChannels.tools}`,
             fanoutBounded: true,
-            extensions: [
-                DOCS_EXTENSION_PATH,
-                ...(searchConfigured() ? [SEARCH_EXTENSION_PATH] : [])
-            ],
+            extensions: apisChannels.extensions,
             // ZERO-RETRIEVAL GATE (mx5 run-15 F-1, distinct from the STAGE 1-3 stopping-point
             // thread). In a MINORITY of reps worker:apis emits a complete, plausible APIS section
             // having made ZERO retrieval tool calls — the whole thing recalled from memory.
@@ -1375,21 +1351,14 @@ export async function phaseResearch(
     return sections.map(({name, text}) => `${name}\n${text}`).join('\n\n')
 }
 
-export interface PhaseAutoAnswerDeps {
-    docsFocused?: typeof docsFocused
-    fetchFocused?: typeof fetchFocused
-    searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
-}
-
 export async function phaseAutoAnswer(
     deps: PhaseDeps,
     refined: string,
     research: string,
-    question: string,
-    autoDeps: PhaseAutoAnswerDeps = {}
+    question: string
 ): Promise<AutoAnswer> {
-    const docsFocusedFn = autoDeps.docsFocused ?? docsFocused
-    const fetchFocusedFn = autoDeps.fetchFocused ?? fetchFocused
+    const docsFocusedFn = deps.docsFocused ?? docsFocused
+    const fetchFocusedFn = deps.fetchFocused ?? fetchFocused
     try {
         // Same assembly as the research phase (see external-context.ts); what
         // differs is POLICY and the worker variant, and both are arguments now.
@@ -1429,7 +1398,7 @@ export async function phaseAutoAnswer(
                     })
                     return {body: countBody(r.answer || undefined)}
                 },
-                search: autoDeps.searchFn
+                search: deps.searchFn
             },
             {targetCap: 2, serviceCap: 2}
         )
@@ -1555,11 +1524,12 @@ export async function phaseGrill(
     for (let n = 0; n < MAX_GRILL_QUESTIONS; n++) {
         const tGenStart = Date.now()
         const genHint = dupHint
-        const raw = await runPhaseWithLoopGuard(deps, 'grill-gen', 'read', hint =>
-            prependHint(
-                hint,
-                prependHint(genHint, GRILL_GEN_PROMPT(refined, research, qa.join('\n')))
-            )
+        const raw = await runPhaseChild(
+            deps,
+            'grill-gen',
+            'read',
+            prependHint(genHint, GRILL_GEN_PROMPT(refined, research, qa.join('\n'))),
+            {verb: 'restart'}
         )
         deps.recordSubStep?.('gen', Date.now() - tGenStart)
         const questions = parseGrillQuestions(raw)
@@ -1896,93 +1866,106 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
 
 // ─── Phase config table ──────────────────────────────────────────────────────
 
-export const PHASES: PhaseConfig[] = [
-    {
-        name: 'refine',
-        section: 'refined prompt',
-        field: 'refined',
-        run: async (d, p) => {
-            const refined = await phaseRefine(d, p.rawPrompt, p.planContext)
-            // Subtractively strike any phantom runtime specifier (`bun:sql`) the
-            // refine carried up verbatim from the spec doc, BEFORE it flows to
-            // research/grill/compose. An appended correction alone loses: the
-            // affirmative survives into the composed GOAL and on to the implementer
-            // (proven: compose re-leaks it 4/4). Rewriting the source so compose has
-            // nothing to contradict is the fix. Silent + no-op when nothing is wrong
-            // or the runtime's types aren't installed.
-            const phantoms = await findPhantomImports(refined, d.cwd)
-            if (phantoms.length === 0) return refined
-            d.logDebug?.(
-                `phantom specifiers rewritten in refined: ${phantoms.map(x => x.spec).join(', ')}`
-            )
-            return rewritePhantomSpecifiers(refined, phantoms)
-        }
-    },
-    {
-        name: 'research',
-        section: 'research',
-        field: 'research',
-        run: async (d, p) => {
-            const tResearch = Date.now()
-            const rawResearch = await phaseResearch(d, p.refined)
-            d.recordSubStep?.('workers', Date.now() - tResearch)
-            const tVerify = Date.now()
-            const out = await phaseVerifyTooling(d, rawResearch)
-            d.recordSubStep?.('verify-tooling', Date.now() - tVerify)
-            // Deterministically verify every runtime builtin specifier the refined
-            // task names (`bun:sql`, `node:…`) against the installed types. A doc can
-            // confidently name a module that does not exist; left unchecked it rides
-            // through every phase and the implementer fabricates a `declare module`
-            // shim to compile it. Append the corrections so compose folds them into
-            // CONSTRAINTS. No LLM cost and silent when nothing is wrong.
-            const corrections = formatApiCorrections(await findPhantomImports(p.refined, d.cwd))
-            if (corrections) {
-                d.logDebug?.(`phantom imports flagged:\n${corrections}`)
-                return `${out}\n\n${corrections}`
-            }
-            return out
-        }
-    },
-    {
-        name: 'grill',
-        section: 'grill Q&A',
-        field: 'qa',
-        run: (d, p) => phaseGrill(d, p.ctx, p.widgetState, p.refined, p.research)
-    },
-    {
-        name: 'compose',
-        section: 'spec',
-        field: 'spec',
-        run: async (d, p) => {
-            p.refined = await dropRefutedConstraints(d, p.refined, p.research)
-            return await phaseCompose(d, p.refined, p.research, p.qa)
-        }
-    },
-    {
-        name: 'critique',
-        section: 'spec',
-        field: 'spec',
-        run: async (d, p) => {
-            const spec = await critiqueWithFallback(d, p)
-            // BRACES (mx5 run 16): after the LAST spec-producing step, append any
-            // owned design obligation the spec still omits as a CONSTRAINTS
-            // bullet. The belt block upstream is obeyed ~25% (measured); a
-            // host-side append is obeyed by construction. Idempotent: quotes the
-            // spec already carries (belt-obeying reps) are skipped.
-            const owned = await ownedForThisTask(d)
-            if (owned.length === 0) return spec
-            const out = appendOwnedConstraints(spec, owned)
-            if (out !== spec) {
-                d.logDebug?.(
-                    'owned-requirements braces: appended omitted design obligation(s) to CONSTRAINTS'
-                )
-            }
-            // An owned obligation whose only file this spec also FREEZES is
-            // unsatisfiable here; move it to the pending task that writes that
-            // file rather than shipping a requirement no one can meet.
-            return await resolveOwnedFreezeForThisTask(d, out)
-        }
+/**
+ * REFINE — restate the raw prompt as a bounded 4-section spec, then subtractively
+ * strike any phantom runtime specifier (`bun:sql`) it carried up verbatim from the
+ * spec doc, BEFORE it flows to research/grill/compose. An appended correction alone
+ * loses: the affirmative survives into the composed GOAL and on to the implementer
+ * (proven: compose re-leaks it 4/4). Rewriting the source so compose has nothing to
+ * contradict is the fix. Silent + no-op when nothing is wrong or the runtime's types
+ * aren't installed.
+ */
+export async function refinePhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
+    const refined = await phaseRefine(d, p.rawPrompt, p.planContext)
+    const phantoms = await findPhantomImports(refined, d.cwd)
+    if (phantoms.length === 0) return refined
+    d.logDebug?.(`phantom specifiers rewritten in refined: ${phantoms.map(x => x.spec).join(', ')}`)
+    return rewritePhantomSpecifiers(refined, phantoms)
+}
+
+/**
+ * RESEARCH — the four workers, then the TOOLING verification pass, then a
+ * deterministic check of every runtime builtin specifier the refined task names
+ * (`bun:sql`, `node:…`) against the installed types. A doc can confidently name a
+ * module that does not exist; left unchecked it rides through every phase and the
+ * implementer fabricates a `declare module` shim to compile it. The corrections are
+ * APPENDED so compose folds them into CONSTRAINTS. No LLM cost, silent when clean.
+ */
+export async function researchPhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
+    const tResearch = Date.now()
+    const rawResearch = await phaseResearch(d, p.refined)
+    d.recordSubStep?.('workers', Date.now() - tResearch)
+    const tVerify = Date.now()
+    const out = await phaseVerifyTooling(d, rawResearch)
+    d.recordSubStep?.('verify-tooling', Date.now() - tVerify)
+    const corrections = formatApiCorrections(await findPhantomImports(p.refined, d.cwd))
+    if (corrections) {
+        d.logDebug?.(`phantom imports flagged:\n${corrections}`)
+        return `${out}\n\n${corrections}`
     }
+    return out
+}
+
+/** GRILL — the adaptive question loop, and the only phase that talks to the user. */
+export function grillPhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
+    return phaseGrill(d, p.ctx, p.widgetState, p.refined, p.research)
+}
+
+/**
+ * COMPOSE — drop constraints research REFUTED before composing, then compose.
+ *
+ * The drop mutates `p.refined` in place on purpose: the refuted constraint must be
+ * gone from every later reader of the refined spec, not just from this call's
+ * argument. Critique re-reads it.
+ */
+export async function composePhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
+    p.refined = await dropRefutedConstraints(d, p.refined, p.research)
+    return await phaseCompose(d, p.refined, p.research, p.qa)
+}
+
+/**
+ * CRITIQUE — the last spec-producing step, and the two host-side corrections that
+ * must run after it in THIS ORDER.
+ *
+ * BRACES (mx5 run 16): append any owned design obligation the spec still omits as a
+ * CONSTRAINTS bullet. The belt block upstream is obeyed ~25% (measured); a host-side
+ * append is obeyed by construction. Idempotent — quotes the spec already carries
+ * (belt-obeying reps) are skipped.
+ *
+ * Then DETACH: an owned obligation whose only file this spec also FREEZES is
+ * unsatisfiable here, so it moves to the pending task that writes that file rather
+ * than shipping a requirement no one can meet. It MUST run after the append, because
+ * the append is what writes the stamp the detach reads — a critique-time probe
+ * measured 0/40 because the stamp did not exist yet.
+ */
+export async function critiquePhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
+    const spec = await critiqueWithFallback(d, p)
+    const owned = await ownedForThisTask(d)
+    if (owned.length === 0) return spec
+    const out = appendOwnedConstraints(spec, owned)
+    if (out !== spec) {
+        d.logDebug?.(
+            'owned-requirements braces: appended omitted design obligation(s) to CONSTRAINTS'
+        )
+    }
+    return await resolveOwnedFreezeForThisTask(d, out)
+}
+
+/**
+ * The pipeline, as a table with no bodies.
+ *
+ * Every row's `run` is a named exported function, so the COMPOSITION inside a
+ * step — which is where this codebase's recorded phase defects have lived, not in
+ * the parts — is drivable directly instead of only through a whole TaskRunner run.
+ * The parts stay exported and separately covered; what changed is that the ORDER
+ * they run in is now asserted by driving the row rather than retyped in a test.
+ */
+export const PHASES: PhaseConfig[] = [
+    {name: 'refine', section: 'refined prompt', field: 'refined', run: refinePhase},
+    {name: 'research', section: 'research', field: 'research', run: researchPhase},
+    {name: 'grill', section: 'grill Q&A', field: 'qa', run: grillPhase},
+    {name: 'compose', section: 'spec', field: 'spec', run: composePhase},
+    {name: 'critique', section: 'spec', field: 'spec', run: critiquePhase}
 ]
 
 // INTEGRATION-DEPTH APPEND (2026-07-27): the lever proposed for this exact site —

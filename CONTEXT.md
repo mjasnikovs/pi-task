@@ -11,6 +11,16 @@ concept get that concept recorded here.
 - **Phase** — one stage of the single-task pipeline: refine → research → grill →
   compose → critique. Phases live in `task/phases.ts` and are driven by the
   orchestrator.
+  > Every `PHASES` row's `run` is a NAMED exported function (`refinePhase`,
+  > `researchPhase`, `grillPhase`, `composePhase`, `critiquePhase`), so `PHASES` is a
+  > table with no bodies. Four of the five were anonymous closures carrying real
+  > decisions and reachable only through a whole `TaskRunner` run: the parts were
+  > exported and covered, but the COMPOSITION — which is where this codebase's phase
+  > defects have lived — was asserted by a test that RETYPED the order. `critiquePhase`
+  > is the case that matters: the braces (`appendOwnedConstraints`) write the stamp the
+  > detach (`resolveOwnedFreezeForThisTask`) reads, and a critique-time probe once
+  > measured 0/40 because the stamp did not exist yet. `owned-freeze-wiring.test.ts`
+  > drives the row now, and reversing the two inside it fails.
 - **Orchestrator** — drives a task through its phases, spawning child pi
   sessions, tracking context/widget state, and persisting for resumability.
   `task/orchestrator.ts` runs a single task; `task/auto-orchestrator.ts` plans a
@@ -27,12 +37,42 @@ concept get that concept recorded here.
   > through into `PhaseDeps`, so a runner-driven test answers phase children BY
   > NAME (`scriptedChildren({refine, 'grill-gen', compose, critique, …})`) instead
   > of matching prompt prose. `spawn` stays beside it for the two orchestrator
-  > tests that ARE about the ladder (empty completion, loop exhaustion). The one
-  > thing `runChild` cannot reach from a `TaskRunner` is the four research workers:
-  > `PHASES.research` calls `phaseResearch(d, p.refined)` with no
-  > `PhaseResearchDeps`, so `runWorker(label, input)` is unreachable from the runner
-  > and those four remain prompt-keyed in `orchestrator.test.ts` — labelled as
-  > such, and the next seam to thread.
+  > tests that ARE about the ladder (empty completion, loop exhaustion).
+  >
+  > **`PhaseDeps` carries every phase seam.** `runWorker`, `getFileInventory` and the
+  > EXTERNAL CONTEXT lookups (`docsRaw`, `fetchRaw`, `npmVersionLookup`, `searchFn`,
+  > `docsFocused`, `fetchFocused`) are fields on it, defaulting to the real
+  > implementations exactly as `runChild` does. They were two trailing `= {}` dep bags
+  > (`PhaseResearchDeps`, `PhaseAutoAnswerDeps`) on `phaseResearch` and
+  > `phaseAutoAnswer` — nine injectable seams no production caller could reach, because
+  > `PhaseConfig.run` takes `(deps, pc)` and a row physically cannot pass a third
+  > argument. `TaskRunnerOptions` forwards them (`runWorker`, `lookups`), so
+  > `orchestrator.test.ts` answers a research worker BY LABEL (`worker:files`) and
+  > states the `RunWorkerResult` fields a gate reads, instead of matching a marker
+  > SENTENCE lifted out of `prompts.ts` against a fake process emitting JSON events.
+  > `searchFn` is ONE field, not two: research and auto-answer differ in the doc/url
+  > worker VARIANT (raw vs focused) and in POLICY, never in how they search.
+- **Run end** — how one `/task` run stopped, named once: `RunEnd` (`task/run-end.ts`),
+  a union of `completed | cancelled | failed{reason} | interrupted | no-session`,
+  plus `RUN_END_POLICY` — the table saying whether each ending marks the task
+  resumable and whether it fails the containing plan.
+  `TaskRunner.run` returns it and `handleFailure` hands back the `FailureClass` it
+  already computed.
+  > It returned `void`. `runSingleTask` learned what it had just done by RE-READING
+  > the task file's front matter, narrowed that to `ok: boolean`, and smuggled the
+  > rest out of the `withSession` closure through three mutable captures — while
+  > `classifyFailure` had named the ending exactly and thrown the name away. The
+  > report was wrong for it: `/task-cancel` writes `cancelled`, which is not
+  > `completed`, so `ok` was false, so `!res.ok` ran `markResumable` (which writes
+  > `failed`) and announced a red *"stopped — fix and run /task-resume"* for a stop
+  > the user asked for. `/task-auto` hit the same arm and papered over it by
+  > consulting `isCancelRequested()`, a module global `/task-cancel` never sets.
+  > `failsRun` is strictly narrower than `resumable`, and that gap is load-bearing: a
+  > declined-steer interrupt leaves the inner task resumable but the PLAN in progress,
+  > so `/task-auto-resume` re-delivers that task's spec. The WORDING stays per-command
+  > (`/task-resume` vs `/task-auto-resume`); only the policy is shared. The task file
+  > is still written — it is what a RESUME reads — but it is no longer the channel
+  > this process uses to talk to itself.
 - **Implementation turn** — the supervision that runs between "spec delivered" and
   "we know how the implementation REALLY ended" (`task/implementation-turn.ts`). A
   single `waitForIdle` resolves for four reasons and only one is completion;
@@ -129,11 +169,22 @@ concept get that concept recorded here.
 - **Error-triage ladder** — the fixed four-rung verdict a phase applies to a
   finished Child pi: non-zero exit throws, a connection-class error backs off and
   retries, an empty completion retries, a leaked tool call retries with a
-  correction hint. One implementation, `triageChildResult`
-  (`task/child-runner.ts`); `runPhaseChild` and `runPhaseWithLoopGuard` pass
-  their own budget and their own log verb (`retry` vs `restart`, the only
-  externally visible difference). Loop-hit detection stays in the wrapper that
-  has it, because it must consume the hit *before* the ladder runs.
+  correction hint. One implementation, `triageChildResult` (`task/child-runner.ts`),
+  called from ONE loop.
+  > **`runPhaseChild` is that loop.** `runPhaseWithLoopGuard` is deleted. Two ~70-line
+  > loops drove the same child through the same ladder, and the one thing keeping them
+  > apart — the loop guard's `buildPrompt(loopHint)` callback — was the exact identity
+  > `runPhaseChild` performs internally (`prependHint(hint, prompt)`) at 2 of 2 call
+  > sites. The generality was dead, and each loop was missing something the other had:
+  > the guard silently dropped `deps.childExtensions` and `deps.timeoutMs` (latent —
+  > only the planning child sets the first and only tests set the second), and
+  > `runPhaseChild` never wrote the `loop events` trail. `PhaseChildOptions` carries
+  > the two things that genuinely varied: `degradeOnExhaustion` (one caller, refine)
+  > and `verb` (`'retry'` by default, `'restart'` for refine and grill-gen) — the log
+  > word is the SINGLE externally visible difference the collapse preserved, and
+  > `LADDER_CALL_SITES` runs all four rungs through both option sets to keep it the
+  > only one. The loop trail is now written for every phase child and is best-effort,
+  > because six sites that never had one do not all own a task file on disk.
 - **`makeGit` (seam)** — the one git runner (`shared/git-runner.ts`). Returns
   `{stdout, exitCode}` and never throws, carries the abort signal, and takes an
   injectable `spawnFn` so git-touching modules are testable without a repo.
@@ -294,6 +345,29 @@ concept get that concept recorded here.
   > normalised first quoted span; a new entry carries the key of its quote
   > directly (`{line, key}`), so the dedupe rule is unchanged even for a quote
   > containing `"`. Not atomic and not made atomic — no site was.
+- **Command runner** — running one project command and deciding what its ending
+  MEANS. `CommandRunner` (`task/command-run.ts`) is `(CommandSpec) =>
+  Promise<CommandRun>`; `spawnCommand` is the real async spawn; `classifyCommandRun`
+  is the pure gap ladder (`GAP_RULES`). One runner, one ladder, for repo-health, the
+  lockfile/integration/launch sections and every ACCEPT-debt re-run.
+  > **ASYNC by contract, and that is the point.** It was `(spec) => CommandRun`, so
+  > the only possible implementation was `spawnSync` and the run-end gate blocked the
+  > event loop end to end — repo-health under a 600s cap, then every gate command
+  > under 900s, then every debt re-run under 300s, with no loader able to paint and no
+  > cancel able to be noticed. The freeze is MEASURED (0 of 686 expected 100ms ticks
+  > during a 69s run), the same class was already fixed on the VERIFY path, and
+  > `repo-health-check.ts`'s own doc comment told gate callers not to do it while
+  > `final-gate.ts` was a gate caller doing exactly that. `FinalGateOptions.signal`
+  > now reaches every command the gate spawns. This reopened the deferral recorded
+  > under `makeGit` ("converting them would change signatures across the gate"); the
+  > measured freeze is what paid for it.
+  > **repo-health is an ADAPTER over it.** `HealthRun`, `classifyHealthRun` and
+  > `spawnHealthCommand` are deleted — a second statement of the same gap ladder with
+  > no injectable runner, so every classification case in its suite spawned a real
+  > shell. `runRepoHealthCheck` is now discovery + `CommandRunner` + its own output
+  > policy: `captureHealthOutput` keeps 40 lines of a linter's report where the
+  > ladder's `tail` keeps 400 characters, so the run is CLASSIFIED, not consumed —
+  > the verdict decides, the raw streams are what we show.
 - **Boot probe** — does the assembled product actually START, and does the page it
   serves actually render? `task/boot-probe.ts`: shell-chain lexing and non-launch
   detection, boot-command discovery, listener enumeration (ss/netstat/lsof), port
@@ -304,8 +378,20 @@ concept get that concept recorded here.
   harnesses under `scripts/` that import exactly this surface. The gate re-exports
   the public names so those keep working, the same way `taskThatIntroduced` does.
   > Still deliberately NOT a `CLOSURE_SCANS` row: it is async, stateful and
-  > port-binding, and would need its own escape hatch in the row type. This was a
-  > file move, not a re-shaping.
+  > port-binding, and would need its own escape hatch in the row type.
+  > **`runBootSection(cwd, {planText, graceMs, deps})` is the re-shaping** the file
+  > move left open. It returns a `BootSectionVerdict` — what was attempted, whether a
+  > probe LOOKED, the UNOBSERVED note, the one failure with its rank and whether it
+  > was observed, the label that RAN, and the render warnings — and `final-gate.ts`'s
+  > boot branch is now that call plus tally writes. Everything else moved inside:
+  > served-app detection, the `renderProbe`/`deepRenderProbe`/`preferredPort`
+  > defaults (which are `BootDeps`' own now, matching `findPortHolder`), the
+  > four-armed `BootOutcome` destructure, orphan-port recovery, the port-holder
+  > diagnosis sentence (which used to reach back into `BootDeps` a SECOND time from
+  > the gate), `bootSkipVerdict` and the rejected-launch-script branch.
+  > `recoverOrphanPort` takes an options object rather than four trailing positionals
+  > — `graceMs` and a boolean sat adjacent and swapped without a type error.
+  > `runBootCheck` stays exported unchanged: seven harnesses drive it directly.
 - **The two gate halves** — `runGatesForTask` is a thin spine over
   `resolveVerifyGate` (the VERIFY resolution loop: 8 mutable locals, four terminal
   exits) and `runEnforcePass` (the ENFORCE differential: one local, always falls
@@ -333,6 +419,27 @@ concept get that concept recorded here.
   > The env-gap classification tests keep REAL spawns — "a mocked spawn would test
   > the mock" is right for 127-detection, ENOENT and timeout. Only the tests where
   > the exit code is a premise script it.
+- **Autofix ledger** — what the run-end RESOLUTION LOOP records, and the decisions
+  that record makes: the attempt count and its bound, the accumulated gitignored
+  writes, the stranded sub-fixes, the previous failure signature, the demoted set and
+  the rejected-edits flag. `AutofixLedger` (`task/autofix-ledger.ts`), `GateTally`'s
+  twin one altitude up. Methods named for what they mean — `attempt()`,
+  `canAutofix()`, `judge(outcome, edited)`, `remaining(outcome)`, `wroteIgnored()`,
+  `mayCommitTree()`.
+  > Six mutable locals threaded by closure through a ~235-line loop before, with
+  > `final-gate-progress.ts`'s five pure functions each called from exactly ONE site
+  > inside it — extracted for testability while the ORDERING and CARRY-FORWARD
+  > decisions stayed in the caller. That is the shape `isNonProgress`'s own comment
+  > indicts: *"the bug is that the decision was made downstream from the evidence"* —
+  > mx5 run 21 shipped a product whose every page was blank as a `completed` run
+  > through that gap. `judge` enters the demoted signature and breaks the
+  > previous-signature chain in the SAME call that decides to demote, so a demotion
+  > cannot cascade; the observed check reads `observedFailures` off the same outcome
+  > the failure came from. The suite could previously only observe this loop through
+  > trail strings (`startsWith('final-gate: check DEMOTED')`).
+  > The ledger performs no I/O — no picker, no ledger file, no commit — for the same
+  > reason `GateTally` does not: a record that performs effects cannot be driven by a
+  > test that only wants the verdict.
 - **Final gate stage** — the run-end decision path, once every task is done:
   run the gate, trail the verdict, surface UNOBSERVED, re-derive open ACCEPT
   debts, run the resolution picker, bound the autofix, handle stranded fixes.
@@ -345,6 +452,19 @@ concept get that concept recorded here.
   > writes a different artifact; `revert` and `discardEdits` close over the
   > abort signal; `introducedBy` would otherwise demand a real git history).
   > A field that only forwards to an import is not a seam — import it.
+  >
+  > **`FinalGateOutcome` crosses the autofix pass WHOLE.** `FinalFixDeps.gate`
+  > returns it, `FinalFixResult` carries `gate?: FinalGateOutcome`, and demotion is
+  > `FinalGateOutcome → FinalGateOutcome`. It used to be re-declared structurally on
+  > the way in, re-flattened into four `gate*` fields on the way out, and rebuilt as a
+  > literal three times after — each literal silently dropping `openDebts`. That loss
+  > is the mx5 run-18 defect, and the fix at the time was `reconcileDebts` RE-DERIVING
+  > the field rather than keeping the value; 19A then had to push `observedFailures`
+  > across the same wall as a third parallel field and re-pair it downstream by
+  > `gateObservedFailures?.includes(detail)`, a membership test that existed only
+  > because the pairing was broken in transit. `reconcileDebts` stays — re-deriving
+  > debts against the FINAL tree is a real fact about the tree — but it is no longer
+  > the only thing restoring a field the assignment threw away.
   >
   > `recordDebt` and `ownedRequirements` ARE seams by that test, and are now
   > fields: both write or read a durable ledger, which is exactly what a
@@ -380,10 +500,60 @@ concept get that concept recorded here.
   `textResult`. Each worker is an **adapter**: a name/label/schema, a `run` that
   returns `{text, details}`, and a `renderCall`. Adding a worker is an adapter,
   not copied boilerplate.
+- **Worker outcome** — what a worker tool PRODUCED: `WorkerOutcome<TDetails>`
+  (`workers/shared.ts`), `{kind: 'answer'}` or `{kind: 'unavailable', reason}`, built
+  by `workerAnswer` / `workerUnavailable`. `makeWorkerTool` stores only an `answer`,
+  so a non-answer is unrepresentable as a research-cache entry, and `cacheable`
+  shrinks to what it is actually about — answer QUALITY (`typeOnly`, abstention,
+  `excerptVerified`).
+  > It was a bare `{text, details}` bag, and "did it succeed" was re-derived
+  > downstream from `details.childExitCode === 0`. That derivation was wrong in the
+  > one case it most needed to be right: `runChild` reports `exitCode: code ?? 0`, so
+  > a SIGTERM-killed child arrives with exit code 0. REPRODUCED against the shipped
+  > rule — `docsCacheable({childExitCode: 0}, "Docs lookup aborted.")` returned
+  > `true`, so a cancelled lookup was memoised for the whole run and re-served to
+  > every later sibling with escalation unable to re-fire. That is exactly the failure
+  > `abstention.ts` exists to stop. `docsFailureResult`'s own contract said it
+  > recorded the code "NOT as 0"; the value it copied was 0, and `DocsDetails.aborted`
+  > was written and read by nothing, which is what let it hide.
+  > `reason` comes from `childFailureReason`, which asks `classifyWorkerFailure` — the
+  > one ordered ladder — rather than re-deriving the precedence.
 - **Child-failure** — the standard outcome of a worker's child pi failing
   (aborted, or non-zero exit with an stderr tail). Formatted in exactly one
   place, `formatChildFailure` (`workers/shared.ts`), so the rule never drifts
   across workers. Returns `null` when the child succeeded.
+- **`httpRequest` (seam)** — the one bounded HTTP request
+  (`workers/http-request.ts`): `httpRequest(url, opts, handle)` owns the internal
+  `AbortController`, the wall clock, the `userAborted` flag and the `finally` that
+  clears both, and throws `HttpRequestError{kind: 'aborted' | 'network'}`. The
+  handler runs INSIDE the clock — `fetch` resolves on headers, so a seam that
+  returned the `Response` and cleared its own timer would leave the body read
+  unbounded.
+  > Five modules hand-rolled the same ~12 lines (`brave-search`, `exa-search`,
+  > `ddg-search`, `html-clean`, `npm-version`), and the copies had DRIFTED:
+  > `npm-version.ts` never grew the `userAborted` flag, so a user cancel returned
+  > `null` — indistinguishable from a registry that is down. It throws now; every
+  > caller already wrapped it in `.catch(() => null)`, so the degraded answer is
+  > unchanged and the distinction is available.
+  > What is shared is the BOUNDING, not the interpretation: each caller keeps its own
+  > status policy (DDG treats 429/403 as throttling, Brave splits auth from
+  > rate-limit, npm treats every non-OK as "no answer") and its own error type. What
+  > they cannot differ on is whether the request was cancelled, timed out, or was
+  > refused.
+- **Search provider (adapter)** — an engine is a row: `SEARCH_ADAPTERS`
+  (`workers/search-core.ts`) carries `run`, the missing-key message, and which throws
+  already carry a finished user-facing message. Its key requirement is
+  `SEARCH_PROVIDER_KEY_ENV` in `search-types.ts`, beside the ids.
+  > `SearchProvider` was a union with nothing behind it, so every consumer branched on
+  > it by hand: `search()` had a brave special case plus a two-arm ternary, the three
+  > engine functions arrived as three separate seams on `SearchCoreInput`, the three
+  > error classes were reconciled by matching `err.name` as a STRING, and brave's key
+  > pair was stated a second time in `phases.ts` under a comment saying it "mirrors
+  > search-core's lookup". `searchConfigured` asks the same row now — and it is the
+  > thing that decides whether the APIS research worker is handed the search tool at
+  > all. Brave was also the ONE provider without an injectable `fetchImpl`, so its
+  > status ladder — the widest of the three — could not be driven at the request
+  > level; the seam gives every provider the same door.
 - **Focused extractor (seam)** — running a `--no-tools` child pi that answers ONE
   question over content already in hand and cites a verbatim `<excerpt>`, then
   checking that citation. `runFocusedExtraction`
@@ -401,6 +571,23 @@ concept get that concept recorded here.
   > is a discriminated union), and every site now receives the rich
   > `ExcerptVerification` rather than a bare boolean.
 
+- **Worker channel** — what a worker TOOL is, as data: a row in `WORKER_CHANNELS`
+  (`workers/worker-channels.ts`) carrying the tool `name`, the `-e` `entryPath` that
+  registers it, whether it `grounding`s a claim, how to `summarize` its arguments for
+  the debug log, and any per-tool predicate. `channelSet(names)` returns the tools
+  string and the `-e` paths TOGETHER, because they are one fact.
+  > `spec.name` never left the registration closure, so the same names were re-typed
+  > as literals in three directories and had to agree by hand: `phases.ts` paired a
+  > tools string with an extension path list by eye, `GROUNDING_RETRIEVAL_TOOLS` was a
+  > second copy, and `summarizeToolArgs` a third that also re-stated each tool's
+  > parameter shape. Worst for locality: `runWorker` — the GENERIC child runner —
+  > hardcoded one tool's identity AND its parameter (`call.name === 'pi-worker-docs'
+  > && args.module === '.'`) to decide a fan-out deadline extension; it asks the row's
+  > `isProjectSourceLookup` now. A rename was five edits with no compile error linking
+  > them.
+  > `read`/`grep` are NOT rows — they are pi's own built-ins. They are in the
+  > grounding set because grounding is about RETRIEVAL, not about which extension
+  > supplies the tool.
 - **Type-redirect walk** — `resolveTypeSource` (`workers/docs-resolve.ts`): follow
   the `@types/<name>` + triple-slash `<reference types>` chain from a package that
   ships no usable types to the one that holds them (`bun` → `@types/bun` →

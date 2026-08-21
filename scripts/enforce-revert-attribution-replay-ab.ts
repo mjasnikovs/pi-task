@@ -218,7 +218,7 @@ async function replay(runGates: RunGates, inc: Incident): Promise<Observation> {
         const obs: Observation = {reverted: false, debts: [], queued: [], trail: []}
         let verifyCalls = 0
         const deps: GateDeps = {
-            runTask: () => Promise.resolve({taskId: 'TASK_0024', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0024', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 obs.trail.push(line)

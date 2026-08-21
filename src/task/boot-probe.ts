@@ -24,10 +24,16 @@ import {existsSync, readFileSync} from 'node:fs'
 import * as net from 'node:net'
 import * as path from 'node:path'
 import type {RenderOutcome} from './render-check.js'
+import {runRenderCheck} from './render-check.js'
 import {resolveRunner, runnerEnv, isCommandNotFound} from './runner-resolve.js'
 import {outputTail} from './command-run.js'
 import {packageScripts, makeHasTarget} from './launch-manifest.js'
-import {collectProjectEnv, pinnedLocalPort, type DeepRenderOutcome} from './deep-render-check.js'
+import {
+    collectProjectEnv,
+    pinnedLocalPort,
+    runDeepRenderCheck,
+    type DeepRenderOutcome
+} from './deep-render-check.js'
 import type {HealthCommand} from './repo-health-check.js'
 
 /** Leading `FOO=bar` env assignments and `sudo`/`exec` wrappers carry no verb. */
@@ -924,10 +930,11 @@ export async function recoverOrphanPort(
     cwd: string,
     boot: HealthCommand,
     first: {outcome: 'orphan-port'; detail: string; port: number | null},
-    bootGraceMs: number,
-    deps: BootDeps,
-    expectServer: boolean
+    /** One options object, not four trailing positionals — `bootGraceMs` and a
+     *  boolean sat adjacent and swapped without a type error. */
+    opts: {graceMs?: number; deps: BootDeps; expectServer: boolean}
 ): Promise<BootOutcome> {
+    const {graceMs: bootGraceMs, deps, expectServer} = opts
     if (first.port === null) return first
     const holder = (deps.findPortHolder ?? defaultFindPortHolder)(first.port)
     if (!holder || !holderIsOurs(holder.command, boot)) return first
@@ -936,4 +943,158 @@ export async function recoverOrphanPort(
     // Give the OS a moment to release the socket, then re-run the boot once.
     await new Promise(r => setTimeout(r, 1_500))
     return runBootCheck(cwd, boot, bootGraceMs, {expectServer, deps})
+}
+
+// ─── The boot SECTION ────────────────────────────────────────────────────────
+
+/**
+ * Everything the run-end gate records about "did the assembled product start?".
+ *
+ * This module owned the mechanics but not the CONCEPT: answering that question
+ * meant reading ~110 lines of `final-gate.ts` as well, where the four-armed
+ * {@link BootOutcome} union was destructured, the render/deep-render/port probe
+ * defaults were bound, `recoverOrphanPort` was re-invoked with six positional
+ * arguments, and the port-holder diagnosis reached back into `BootDeps` a SECOND
+ * time to build its own sentence. CONTEXT.md records the earlier extraction as
+ * "a file move, not a re-shaping"; this is the re-shaping it left open.
+ *
+ * The gate's boot branch is now: call this, write the fields into the tally.
+ * `runBootCheck` stays exported unchanged — seven harnesses under `scripts/`
+ * drive it directly.
+ */
+export interface BootSectionVerdict {
+    /** The bin the gate counts as ATTEMPTED. Absent ⇒ there was nothing to boot. */
+    attempted?: string
+    /** A probe LOOKED. False for a skip, and for a project with no launch surface. */
+    observed: boolean
+    /** The runner binary never spawned — feeds the full-blindness guard. */
+    spawnFailedBin?: string
+    /** The UNOBSERVED note, offered on both branches (a rejected launch script has one). */
+    unobservedNote?: string
+    /**
+     * The one failure this section can produce, with the rank the gate gives it (0 —
+     * boot failures lead the aggregate) and whether a probe OBSERVED it. A harness
+     * condition (a port we could not clear) is a failure that nothing observed about
+     * the APP, which is why `observed` is a field and not implied by `failure`.
+     */
+    failure?: {detail: string; rank: number; observed: boolean}
+    /** The label recorded as having RUN, on a clean boot. */
+    ranLabel?: string
+    /** UNOBSERVED warnings — a listener that served but whose page could not be judged. */
+    warnings: string[]
+}
+
+export interface BootSectionOptions {
+    /** The plan text, for served-app detection. */
+    planText?: string
+    /** Grace period for the boot check. */
+    graceMs?: number
+    /**
+     * Probe overrides. The render, deep-render and preferred-port defaults are
+     * bound HERE now: they were the gate's, so a caller that wanted the real boot
+     * behaviour had to know to supply three functions it should never have had to
+     * name — `findPortHolder` was already defaulted inside this module, and the
+     * other three now match it.
+     */
+    deps?: BootDeps
+}
+
+export async function runBootSection(
+    cwd: string,
+    opts: BootSectionOptions = {}
+): Promise<BootSectionVerdict> {
+    const boot = discoverBootCommand(cwd)
+    const expectServer = detectsServedApp(cwd, opts.planText)
+    const warnings: string[] = []
+
+    if (!boot) {
+        // Nothing to boot — but if the reason is that the project's only launch
+        // script was REJECTED as not-a-launch (2A), that is not the same thing as a
+        // project with no launch surface, and it must not degrade into silence.
+        const rejected = rejectedLaunchScript(cwd)
+        if (rejected && expectServer) {
+            return {
+                observed: false,
+                warnings,
+                unobservedNote:
+                    `boot check: this project's only launch script (\`${rejected.name}\`) is not a `
+                    + `launch — ${rejected.reason} — so nothing was started and the app was never `
+                    + 'observed to run.'
+            }
+        }
+        return {observed: false, warnings}
+    }
+
+    const label = `${boot[0]} ${boot[1].join(' ')}`
+    // Render check (mx5 runs 8/11): for a served app, load the live page in a
+    // headless browser and judge the RENDERED DOM — curl can't run JS, so a
+    // blank-mount app passed every prior "renders" check. runRenderCheck
+    // env-gap-SKIPs when no browser exists, so a box without one never gets a
+    // false FAIL.
+    //
+    // Authenticated deep-render check (mx5 run 17): the page above renders, so now
+    // sign in with the account the project's own dotenv declares (the same
+    // ADMIN_PHONE/ADMIN_PASSWORD the launch contract's seed step consumes) and
+    // require the session to actually work. WEB-ONLY by construction — it hangs off
+    // the served-app branch and never runs for C++, Godot, CLI or library projects.
+    // It may only FAIL when the SERVER authenticated us; no browser, no
+    // credentials, an undrivable form or rejected credentials all skip as env gaps.
+    const deps: BootDeps = {
+        ...opts.deps,
+        renderProbe: opts.deps?.renderProbe ?? runRenderCheck,
+        deepRenderProbe: opts.deps?.deepRenderProbe ?? (url => runDeepRenderCheck(url, cwd)),
+        preferredPort: opts.deps?.preferredPort ?? (() => preferredDeclaredPort(cwd))
+    }
+
+    let b = await runBootCheck(cwd, boot, opts.graceMs, {expectServer, deps})
+    if (b.outcome === 'orphan-port') {
+        b = await recoverOrphanPort(cwd, boot, b, {
+            ...(opts.graceMs === undefined ? {} : {graceMs: opts.graceMs}),
+            deps,
+            expectServer
+        })
+    }
+
+    const verdict: BootSectionVerdict = {
+        attempted: boot[0],
+        observed: b.outcome !== 'skip',
+        warnings,
+        ...(b.outcome === 'skip' && b.spawnFailed ? {spawnFailedBin: boot[0]} : {})
+    }
+    const unobserved = bootSkipVerdict({label, skipped: b.outcome === 'skip', expectServer})
+    if (unobserved !== null) verdict.unobservedNote = unobserved
+
+    if (b.outcome === 'fail') {
+        // OBSERVED (nexttask 19A). Every path that produces `fail` here is a probe
+        // that looked: the render judge saw an empty body, the deep session saw the
+        // authenticated half dead, the enumerator saw no listener, or the launch
+        // command itself exited non-zero. The one condition that means "we could not
+        // look" — no ss/netstat/lsof, mx5 run 14 — returns PASS stamped UNOBSERVED
+        // and never reaches here.
+        verdict.failure = {detail: `boot check: \`${label}\` ${b.detail}`, rank: 0, observed: true}
+    } else if (b.outcome === 'orphan-port') {
+        // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
+        // FAIL: name the port and (when known) the process squatting on it. The
+        // holder lookup reads the SAME deps the boot ran under — it used to be a
+        // second reach into `BootDeps` from the gate, one layer away from the run.
+        const holder =
+            b.port !== null ? (deps.findPortHolder ?? defaultFindPortHolder)(b.port) : null
+        const who =
+            holder ? ` — held by an orphaned process (pid ${holder.pid}: ${holder.command})`
+            : b.port !== null ? ` — port ${b.port} is held by another process`
+            : ''
+        verdict.failure = {
+            detail:
+                `boot check: \`${label}\` could not bind: orphaned process / port already in `
+                + `use${who} (harness condition, not an app fault)`,
+            rank: 0,
+            observed: false
+        }
+    } else if (b.outcome === 'pass') {
+        verdict.ranLabel = label
+        // A listener that served, but whose page could not be OBSERVED to render
+        // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
+        if (b.renderNote) warnings.push(b.renderNote)
+    }
+    return verdict
 }

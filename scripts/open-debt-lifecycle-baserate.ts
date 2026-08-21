@@ -234,7 +234,7 @@ interface Row {
     staticOk: boolean | null
 }
 
-function main(): void {
+async function main(): Promise<void> {
     const ledgers = SEARCH_ROOTS.flatMap(r => findLedgers(r))
     const rows: Row[] = []
     let treesWithDebt = 0
@@ -257,12 +257,12 @@ function main(): void {
         let staticOk: boolean | null = null
         if (RUN_STATICS) {
             try {
-                staticOk = runRepoHealthCheck(tree, 120_000).ok
+                staticOk = (await runRepoHealthCheck(tree, {timeoutMs: 120_000})).ok
             } catch {
                 staticOk = null
             }
         }
-        const {resolved} = recheckAcceptDebts(debts, {
+        const {resolved} = await recheckAcceptDebts(debts, {
             staticOk: staticOk ?? true,
             fileExists: rel => fs.existsSync(path.join(tree, rel))
         })
@@ -387,4 +387,4 @@ function main(): void {
     console.log('   read the deduped line, not the raw one.')
 }
 
-main()
+void main()

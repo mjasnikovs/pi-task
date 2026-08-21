@@ -28,7 +28,7 @@
  * had none.
  */
 
-import {spawnSync} from 'node:child_process'
+import {spawn} from 'node:child_process'
 import {isCommandNotFound, resolveRunner, runnerEnv} from './runner-resolve.js'
 
 /** What one finished command looks like, stripped of how it was spawned. */
@@ -50,35 +50,178 @@ export interface CommandSpec {
     args: string[]
     timeoutMs: number
     /**
-     * Replaces the child's environment wholesale. Passed explicitly because bun's
-     * spawnSync resolves the binary against a startup snapshot of the environment
+     * Replaces the child's environment wholesale. Passed explicitly because a
+     * spawn resolves the binary against a startup snapshot of the environment
      * rather than the live `process.env`.
      */
     env?: Record<string, string | undefined>
+    /** The caller's cancel. Kills the child; the run reads as `status: null`. */
+    signal?: AbortSignal
 }
 
 /**
  * The injectable half. The gate takes one of these so its tests can script
  * verdicts instead of paying process-spawn cost for every classification case.
+ *
+ * ASYNC by contract. It was `(spec) => CommandRun`, so the only implementation
+ * could be `spawnSync`, and the run-end gate blocked the event loop end to end:
+ * repo-health under a 600s cap, then every lockfile/test/build/launch command
+ * under a 900s cap, then every ACCEPT-debt re-run under a 300s cap, with no
+ * loader able to paint through any of it. That freeze is MEASURED — 0 of 686
+ * expected 100ms ticks fired during a 69s run — and `repo-health-check.ts`'s own
+ * doc comment already told gate callers not to do it, while `final-gate.ts`'s
+ * repo-health call did exactly that.
  */
-export type CommandRunner = (spec: CommandSpec) => CommandRun
+export type CommandRunner = (spec: CommandSpec) => Promise<CommandRun>
 
-/** The real runner. */
-export const spawnCommand: CommandRunner = spec => {
-    const r = spawnSync(spec.bin, spec.args, {
-        cwd: spec.cwd,
-        encoding: 'utf8',
-        timeout: spec.timeoutMs,
-        ...(spec.env ? {env: spec.env} : {})
-    })
-    return {
-        failedToStart: r.error !== undefined && r.error !== null,
-        ...(r.error ? {failureMessage: r.error.message} : {}),
-        status: r.status,
-        stdout: r.stdout ?? '',
-        stderr: r.stderr ?? ''
+/**
+ * How much of ONE stream may be held in the HOST process, and how it is split.
+ *
+ * `spawnSync` bounded this at its 1 MB default `maxBuffer`. The async runner had
+ * no bound at all: two strings grew in the TUI's own process for as long as a
+ * command under the 900s cap kept talking.
+ *
+ * BOTH ENDS are kept, because both are read. `isCommandNotFound` and the two gap
+ * regexes match wording a runner prints FIRST; `outputTail` and every failure
+ * reason take the LAST 400 characters. A single-ended cap loses one of them.
+ */
+const OUTPUT_HEAD_CAP = 256 * 1024
+const OUTPUT_TAIL_CAP = 768 * 1024
+
+/** One stream, bounded, keeping its head and its tail with the middle elided. */
+class BoundedOutput {
+    private head = ''
+    private tail = ''
+    private total = 0
+
+    push(chunk: string): void {
+        this.total += chunk.length
+        let rest = chunk
+        if (this.head.length < OUTPUT_HEAD_CAP) {
+            const room = OUTPUT_HEAD_CAP - this.head.length
+            this.head += rest.slice(0, room)
+            rest = rest.slice(room)
+        }
+        if (rest.length === 0) return
+        this.tail = (this.tail + rest).slice(-OUTPUT_TAIL_CAP)
+    }
+
+    toString(): string {
+        const elided = this.total - this.head.length - this.tail.length
+        return elided > 0 ?
+                `${this.head}\n…[${elided} characters elided]…\n${this.tail}`
+            :   this.head + this.tail
     }
 }
+
+/**
+ * After the child EXITS, how long its pipes may still deliver buffered data
+ * before the run is reported. Not a wait for the pipes to CLOSE — that is the
+ * bug below — just the turn or two the reader needs to hand over what it has.
+ */
+const DRAIN_MS = 50
+
+/**
+ * The real runner: one bounded child, output collected, never rejects.
+ *
+ * A kill — by the wall clock or by the caller's cancel — reads as `status: null`,
+ * which the gap ladder already treats as "nothing was observed".
+ *
+ * THE RUN SETTLES ON THE CHILD, NOT ON THE PIPE. `close` fires only once every
+ * stdio pipe has reached EOF, and a backgrounded grandchild INHERITS stdout: a
+ * seed script that starts a daemon, a build that leaves a watcher, a launch
+ * script. Waiting for `close` there is waiting for the grandchild, which no
+ * timeout can reach — SIGKILL goes to the direct child and the inherited pipe
+ * survives it. So `exit` settles the run, and the deadline settles it itself.
+ */
+export const spawnCommand: CommandRunner = spec =>
+    new Promise<CommandRun>(resolve => {
+        const out = new BoundedOutput()
+        const err = new BoundedOutput()
+        let settled = false
+        let exitStatus: number | null = null
+        let exited = false
+        let endedStreams = 0
+        let drain: ReturnType<typeof setTimeout> | undefined
+        const child = spawn(spec.bin, spec.args, {
+            cwd: spec.cwd,
+            // stdin CLOSED. `spawnSync` gave the child none; the default `spawn`
+            // stdio is a live pipe nobody ever ends, so a check that reads stdin —
+            // a `cat`-style pipeline, a tool that prompts, a pager — blocked until
+            // the kill timer: 600s for repo-health, 900s for a gate command.
+            stdio: ['ignore', 'pipe', 'pipe'],
+            ...(spec.env ? {env: spec.env} : {})
+        })
+        const done = (status: number | null, failure?: string): void => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            clearTimeout(drain)
+            spec.signal?.removeEventListener('abort', killAndSettle)
+            resolve({
+                failedToStart: failure !== undefined,
+                ...(failure === undefined ? {} : {failureMessage: failure}),
+                status,
+                stdout: out.toString(),
+                stderr: err.toString()
+            })
+        }
+        const expectedStreams = (child.stdout ? 1 : 0) + (child.stderr ? 1 : 0)
+        const settleIfDrained = (): void => {
+            if (exited && endedStreams >= expectedStreams) done(exitStatus)
+        }
+        const kill = (): void => {
+            try {
+                child.kill('SIGKILL')
+            } catch {
+                /* already gone */
+            }
+        }
+        /**
+         * The deadline and the cancel both END the run. The kill only reaches the
+         * direct child, so this cannot wait to observe its effect — it kills, gives
+         * the pipes one drain, and reports `status: null` regardless.
+         */
+        const killAndSettle = (): void => {
+            kill()
+            clearTimeout(drain)
+            drain = setTimeout(() => done(null), DRAIN_MS)
+        }
+        // NOT unref'd. With `spawnSync`'s own `timeout` gone this timer is the only
+        // bound left on every gate command, repo-health command and ACCEPT-debt
+        // re-run — and an unref'd timer is MEASURED in this repo never to fire at
+        // all on Windows (0/20s), which would leave all of them unbounded. It is
+        // cleared the moment the run settles, so it holds the loop open only while
+        // a command the caller is awaiting anyway is still running.
+        const timer = setTimeout(killAndSettle, spec.timeoutMs)
+        if (spec.signal) {
+            if (spec.signal.aborted) killAndSettle()
+            else spec.signal.addEventListener('abort', killAndSettle, {once: true})
+        }
+        child.stdout?.on('data', (d: Buffer) => out.push(d.toString()))
+        child.stderr?.on('data', (d: Buffer) => err.push(d.toString()))
+        child.stdout?.on('end', () => {
+            endedStreams++
+            settleIfDrained()
+        })
+        child.stderr?.on('end', () => {
+            endedStreams++
+            settleIfDrained()
+        })
+        child.on('error', (e: Error) => done(null, e.message))
+        child.on('exit', (code: number | null) => {
+            exited = true
+            exitStatus = code
+            // Both ends of the same question: settle now if the pipes are already
+            // at EOF, otherwise settle after one short drain rather than waiting on
+            // whoever else is holding them.
+            settleIfDrained()
+            if (!settled) {
+                clearTimeout(drain)
+                drain = setTimeout(() => done(exitStatus), DRAIN_MS)
+            }
+        })
+    })
 
 /**
  * A non-zero exit whose output shows an EXTERNAL runtime dependency is missing, not
@@ -169,6 +312,27 @@ export function outputTail(stdout: string, stderr: string, limit = 400): string 
 }
 
 /**
+ * Which gap rows may be claimed by a command's OUTPUT rather than by the fact
+ * that it never ran. Only these can be WRONG about a command that did run, which
+ * is why they are the ones a caller opts into.
+ */
+export interface ClassifyOptions {
+    /**
+     * May this command's output claim a MISSING BROWSER/RUNTIME?
+     *
+     * True by default: the row exists for the gate's TEST commands, where a
+     * Playwright suite on a box with no browsers is an environment gap.
+     *
+     * False for the static ladder. `ENV_GAP_OUTPUT_RE` matches ordinary English
+     * — `browsers are not installed`, `wasn't installed` — and repo-health runs
+     * lint and typecheck only, which have no browsers to miss. A real lint report
+     * that happens to quote that wording would otherwise SKIP the static check
+     * and tell the gate the repo is healthy.
+     */
+    runtimeGap?: boolean
+}
+
+/**
  * Decide what one finished command proved. Pure — no spawning, no filesystem, no
  * clock — so every case is stateable as a literal.
  *
@@ -177,14 +341,17 @@ export function outputTail(stdout: string, stderr: string, limit = 400): string 
  */
 export function classifyCommandRun(
     run: CommandRun,
-    gapPatterns: readonly RegExp[] = []
+    gapPatterns: readonly RegExp[] = [],
+    opts: ClassifyOptions = {}
 ): CommandVerdict {
     // A clean exit is a pass before any gap shape is consulted: gap patterns
     // describe output, and passing output can legitimately mention a database or
     // a browser.
     if (!run.failedToStart && run.status === 0) return {outcome: 'pass'}
     const output = `${run.stdout}\n${run.stderr}`
+    const runtimeGap = opts.runtimeGap ?? true
     for (const rule of GAP_RULES) {
+        if (rule.id === 'missing-runtime' && !runtimeGap) continue
         if (rule.applies(run, output, gapPatterns)) {
             return {outcome: 'gap', gap: rule.id, detail: rule.detail(run)}
         }
@@ -235,25 +402,27 @@ function leadingBin(line: string): string | null {
  * failure, missing tool, unreachable database, timeout, no POSIX shell — leaves the
  * debt exactly as open as it was.
  */
-export function runVerifyCommandLine(
+export async function runVerifyCommandLine(
     cwd: string,
     line: string,
     timeoutMs: number,
     extraGapRe?: RegExp,
     /** The spawner. Injected so a re-run's outcome can be tested without one. */
-    run: CommandRunner = spawnCommand
-): VerifyRerunOutcome {
+    run: CommandRunner = spawnCommand,
+    signal?: AbortSignal
+): Promise<VerifyRerunOutcome> {
     const bin = leadingBin(line)
     const runner = bin === null ? null : resolveRunner(bin)
     // A VERIFY line is a SHELL line, not an argv — env prefixes, `&&` and
     // redirects are all ordinary there — so the runner spawns `sh -c`.
     const verdict = classifyCommandRun(
-        run({
+        await run({
             cwd,
             bin: 'sh',
             args: ['-c', line],
             timeoutMs,
-            env: runner ? runnerEnv(runner) : {...process.env}
+            env: runner ? runnerEnv(runner) : {...process.env},
+            ...(signal === undefined ? {} : {signal})
         }),
         // Infrastructure counts as a gap on EVERY debt re-run, not only on
         // request: an unreachable database cannot tell us whether the code is

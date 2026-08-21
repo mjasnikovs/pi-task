@@ -5,7 +5,7 @@ import {Text} from '@earendil-works/pi-tui'
 import {fetchAndClean as defaultFetchAndClean, FetchAndCleanError} from './html-clean.js'
 import {fetchFocused} from './fetch-core.js'
 import {formatResultText} from '../shared/child-output.js'
-import {makeWorkerTool} from './shared.js'
+import {childFailureReason, makeWorkerTool, workerAnswer, workerUnavailable} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
 import {isAbstention} from './abstention.js'
 
@@ -70,7 +70,7 @@ export function registerPiWorkerFetch(
             try {
                 new URL(params.url)
             } catch {
-                return {text: `Invalid URL: ${params.url}`, details: {}}
+                return workerUnavailable(`Invalid URL: ${params.url}`, {}, 'bad-url')
             }
 
             try {
@@ -87,7 +87,14 @@ export function registerPiWorkerFetch(
                 // (workers/focused-extractor.ts) — this used to re-map the result back into a
                 // ChildOutcome just to ask formatChildFailure the same question.
                 if (result.failure !== undefined) {
-                    return {text: result.failure, details: {childExitCode: result.childExitCode}}
+                    return workerUnavailable(
+                        result.failure,
+                        {childExitCode: result.childExitCode},
+                        childFailureReason({
+                            exitCode: result.childExitCode,
+                            aborted: result.aborted
+                        })
+                    )
                 }
 
                 const body =
@@ -100,25 +107,23 @@ export function registerPiWorkerFetch(
                 // in the TEXT, not only in details: details are for the harness, and the
                 // worker acts on what it reads.
                 const text = result.nextStep ? `${body}\n\n${result.nextStep}` : body
-                return {
-                    text,
-                    details: {
-                        childExitCode: 0,
-                        answer: result.answer,
-                        excerpt: result.excerpt,
-                        excerptVerified: result.excerptVerified,
-                        coverageMiss: result.coverageMiss,
-                        anchoredSection: result.anchoredSection
-                    }
-                }
+                return workerAnswer(text, {
+                    childExitCode: 0,
+                    answer: result.answer,
+                    excerpt: result.excerpt,
+                    excerptVerified: result.excerptVerified,
+                    coverageMiss: result.coverageMiss,
+                    anchoredSection: result.anchoredSection
+                })
             } catch (err) {
                 if (err instanceof FetchAndCleanError) {
-                    return {text: err.message, details: {}}
+                    return workerUnavailable(err.message, {}, 'fetch-failed')
                 }
-                return {
-                    text: `Could not fetch ${params.url}: ${err instanceof Error ? err.message : String(err)}`,
-                    details: {}
-                }
+                return workerUnavailable(
+                    `Could not fetch ${params.url}: ${err instanceof Error ? err.message : String(err)}`,
+                    {},
+                    'fetch-failed'
+                )
             }
         },
 
@@ -154,8 +159,10 @@ export function registerPiWorkerFetch(
  * `docsCacheable`: pi-worker-fetch.test.ts carried a hand-retyped copy driving four
  * tests, which a change to the shipped rule would leave green.
  */
-export function fetchCacheable(d: Pick<FetchDetails, 'childExitCode'>, text: string): boolean {
-    return d.childExitCode === 0 && !isAbstention(text)
+export function fetchCacheable(_d: Pick<FetchDetails, never>, text: string): boolean {
+    // Answer QUALITY only — see docsCacheable. `childExitCode === 0` used to lead
+    // this rule and was true of an aborted child, so `"Fetch aborted."` cached.
+    return !isAbstention(text)
 }
 
 /** The fetch cache key. URL verbatim (path case can matter), question normalised —

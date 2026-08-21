@@ -75,7 +75,7 @@ describe('runAutoLoop cancel checkpoints', () => {
                 runChild: () => Promise.resolve(''),
                 runTask: (_c: unknown, _cwd: string, title: string) => {
                     ran.push(title)
-                    return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                    return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
                 },
                 // The pre-task checkpoint sits immediately after this commit, so
                 // firing here is the loop's last chance to stop for free.
@@ -108,7 +108,7 @@ describe('runAutoLoop cancel checkpoints', () => {
                     // Ask to stop while the only task is running; the loop must
                     // honour it at loop-top and never enter the final gate.
                     requestAutoCancel()
-                    return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                    return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
                 },
                 commit: () => Promise.resolve({committed: false}),
                 finalGate: () => {
@@ -133,17 +133,17 @@ describe('runAutoLoop cancel checkpoints', () => {
             await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), autoBody(['A', 'B']))
             const d: AutoDeps = {
                 runChild: () => Promise.resolve(''),
-                // A phase-boundary cancel reaches the loop exactly like this: the
-                // runner swallowed its own USER_CANCELLED and wrote state
-                // 'cancelled', so the loop sees a plain !ok with the flag still set.
-                runTask: () => {
-                    requestAutoCancel()
-                    return Promise.resolve({
-                        taskId: 'TASK_0006',
-                        ok: false,
-                        sessionCancelled: false
-                    })
-                },
+                // A phase-boundary cancel reaches the loop exactly like this. The
+                // runner catches its own USER_CANCELLED, writes state 'cancelled'
+                // to the inner file — and NAMES the ending.
+                //
+                // Note what is NOT here: `requestAutoCancel()`. The loop used to
+                // see a plain `!ok` and had to consult `isCancelRequested()` — a
+                // module global `/task-cancel` never sets — to tell a user stop
+                // from a fault, so a `/task-cancel` was announced in red as
+                // "stopped … fix and run", and `markResumable` overwrote the
+                // inner file's `cancelled` with `failed`.
+                runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'cancelled'}}),
                 commit: () => Promise.resolve({committed: false})
             } as unknown as AutoDeps
             await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
@@ -156,6 +156,35 @@ describe('runAutoLoop cancel checkpoints', () => {
             expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe(
                 'in_progress'
             )
+        })
+    })
+
+    test('the cancelled inner task file is NOT rewritten to `failed`', async () => {
+        await withTmpTaskDir(async dir => {
+            const {ctx} = makeFakeCtx(dir)
+            await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), autoBody(['A', 'B']))
+            // The inner file as the runner left it: cancelled, and resumable.
+            await writeTaskFile(
+                dir,
+                {
+                    id: 'TASK_0006',
+                    state: 'cancelled',
+                    phase: 'grill',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 'A'
+                },
+                '\n'
+            )
+            const d: AutoDeps = {
+                runChild: () => Promise.resolve(''),
+                runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'cancelled'}}),
+                commit: () => Promise.resolve({committed: false})
+            } as unknown as AutoDeps
+            await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+            // `markResumable` writes `failed`. A cancel is not resumable-as-failed:
+            // the user stopped it, and the ledger must not say otherwise.
+            expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('cancelled')
         })
     })
 })
@@ -171,7 +200,7 @@ describe('end-to-end: a typed /task-auto-cancel reaches a run that owns the main
                 runChild: () => Promise.resolve(''),
                 runTask: (_c: unknown, _cwd: string, title: string) => {
                     ran.push(title)
-                    return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                    return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
                 },
                 commit: () => {
                     // The user types the command while the run owns the main
@@ -216,7 +245,7 @@ describe('end-to-end: a typed /task-auto-cancel reaches a run that owns the main
                 runChild: () => Promise.resolve(''),
                 runTask: (_c: unknown, _cwd: string, title: string) => {
                     ran.push(title)
-                    return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                    return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
                 },
                 commit: () => {
                     if (ran.length === 0) consumed = typeLine('/task-auto-cancel')

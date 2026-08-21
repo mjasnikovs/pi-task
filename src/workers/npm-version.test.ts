@@ -135,7 +135,12 @@ describe('npmVersionLookup', () => {
         }
     })
 
-    test('honours user-supplied abort signal', async () => {
+    test('a user cancel THROWS — it is not a missing version', async () => {
+        // This module was the copy of the request ritual that never grew a
+        // `userAborted` flag, so a cancelled lookup returned `null`, exactly like a
+        // registry that is down. Every caller wraps this in `.catch(() => null)`, so
+        // the degraded answer is unchanged — what changed is that a caller CAN now
+        // tell the two apart.
         const controller = new AbortController()
         controller.abort()
         const restore = mockFetch(req => {
@@ -143,8 +148,20 @@ describe('npmVersionLookup', () => {
             throw new Error('aborted')
         })
         try {
-            const info = await npmVersionLookup('react', {signal: controller.signal})
-            expect(info).toBeNull()
+            await expect(npmVersionLookup('react', {signal: controller.signal})).rejects.toThrow(
+                /aborted/i
+            )
+        } finally {
+            restore()
+        }
+    })
+
+    test('a network failure is still a null — the registry being down is not a cancel', async () => {
+        const restore = mockFetch(() => {
+            throw new Error('ECONNREFUSED')
+        })
+        try {
+            expect(await npmVersionLookup('react')).toBeNull()
         } finally {
             restore()
         }

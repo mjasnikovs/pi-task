@@ -13,7 +13,11 @@ import {afterEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {claimOwnedFreezeForThisTask, resolveOwnedFreezeForThisTask} from './phases.js'
+import {
+    claimOwnedFreezeForThisTask,
+    critiquePhase,
+    resolveOwnedFreezeForThisTask
+} from './phases.js'
 import {
     appendOwnedConstraints,
     ownedForTitle,
@@ -21,6 +25,8 @@ import {
     readRequirements
 } from './requirements.js'
 import type {PhaseDeps} from './child-runner.js'
+import type {PhaseContext} from './phases.js'
+import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 
 const QUOTE = '**Server:** `bun run --watch src/server/index.ts` — serves `/api` + static `dist/`.'
 const BUILD_TOOLING = 'Build tooling — build.ts, dev/build scripts in package.json'
@@ -263,5 +269,85 @@ describe('claimOwnedFreezeForThisTask (wired, CLAIM)', () => {
         expect(fs.readFileSync(path.join(cwd, '.pi-tasks', 'requirements-owned.md'), 'utf8')).toBe(
             before
         )
+    })
+})
+
+// ─── The ORDER, driven rather than retyped ───────────────────────────────────
+//
+// The two halves above are covered separately, and the order they run in was
+// asserted by a test that CALLED them in sequence — which proves the sequence the
+// test wrote, not the sequence the phase runs. `critiquePhase` is that row's whole
+// body now, so the order is drivable: the braces write the stamp, the detach reads
+// it, and a critique-time probe once measured 0/40 because that stamp did not exist
+// yet. Reversing the two inside `critiquePhase` fails this test.
+
+/** A compose draft with a runnable VERIFY, so triage may short-circuit the rewrite. */
+const DRAFT = [
+    'GOAL',
+    '  Build tooling.',
+    'CONSTRAINTS',
+    '  - Do not touch `tsconfig.json`, `eslint.config.js`, or any configuration file outside of `package.json`.',
+    'ACCEPTANCE',
+    '  - `package.json` gains a `dev` script.',
+    'VERIFY:',
+    '```sh',
+    'bun run dev',
+    '```'
+].join('\n')
+
+describe('critiquePhase (the row) — braces then detach, in that order', () => {
+    const phaseContext = (cwd: string, ctx: PhaseContext['ctx']): PhaseContext => ({
+        cwd,
+        id: 'TASK_0015',
+        ctx,
+        widgetState: {
+            taskId: 'TASK_0015',
+            phase: 'critique',
+            label: ''
+        } as PhaseContext['widgetState'],
+        rawPrompt: BUILD_TOOLING,
+        refined: BUILD_TOOLING,
+        research: '',
+        qa: '',
+        spec: DRAFT
+    })
+
+    test('the row appends the owned quote AND detaches it, with no hand-written sequence', async () => {
+        const cwd = fixture()
+        const {ctx} = makeFakeCtx(cwd)
+        const d: PhaseDeps = {
+            ...deps(cwd),
+            // Critique's own children are a premise here: triage says CLEAN, and the
+            // draft carries a runnable VERIFY, so phaseCritique returns the draft.
+            runChild: (name, _tools, _prompt) =>
+                Promise.resolve(name === 'critique-triage' ? 'CLEAN' : DRAFT)
+        }
+
+        const out = await critiquePhase(d, phaseContext(cwd, ctx))
+
+        // BRACES ran: the quote was appended to a draft that did not carry it…
+        expect(DRAFT).not.toContain('serves `/api` + static `dist/`')
+        // …and DETACH ran after it: the appended clause is gone again, because this
+        // task freezes the only file that could satisfy it.
+        expect(out).not.toContain('serves `/api` + static `dist/`')
+
+        // The stamp the detach read is the one the append wrote — the ledger now
+        // carries the obligation as pending on the frozen path, owned by nobody.
+        const ledger = await readOwnedRequirements(cwd)
+        expect(ledger).toHaveLength(1)
+        expect(ledger[0].quote).toBe(QUOTE)
+        expect(ledger[0].pending).toEqual(['src/server/index.ts'])
+        expect(ownedForTitle(ledger, BUILD_TOOLING)).toEqual([])
+    })
+
+    test('nothing owned by this task ⇒ the row returns the critique output untouched', async () => {
+        const cwd = fixture({ledgerTitle: CLIENT_API})
+        const {ctx} = makeFakeCtx(cwd)
+        const d: PhaseDeps = {
+            ...deps(cwd),
+            runChild: name => Promise.resolve(name === 'critique-triage' ? 'CLEAN' : DRAFT)
+        }
+        expect(await critiquePhase(d, phaseContext(cwd, ctx))).toBe(DRAFT)
+        expect((await readOwnedRequirements(cwd))[0].pending).toBeUndefined()
     })
 })

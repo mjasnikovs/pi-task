@@ -141,7 +141,7 @@ async function trial(arm: 'baseline' | 'treatment', cwd: string): Promise<Trial>
     const deps = buildGateDeps({
         signal: abort.signal,
         parentContextWindow: 100_000,
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false, ctx})
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}, ctx})
     })
     const timer = setInterval(() => ticks.push(Date.now()), TICK_MS)
     const t0 = Date.now()

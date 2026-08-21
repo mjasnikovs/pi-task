@@ -1,6 +1,7 @@
 import {spawn as defaultSpawn, spawnSync as spawnSyncDefault} from 'node:child_process'
 import type {EventEmitter} from 'node:events'
 import {realStreamTimerDeps, StreamWatchdog} from './stream-watchdog.js'
+import {workerChannel} from '../workers/worker-channels.js'
 
 /** Grace period between SIGTERM and SIGKILL (ms). */
 export const KILL_GRACE_MS = 5000
@@ -656,27 +657,16 @@ export function runChildDefault(
 export function summarizeToolArgs(toolName: string, args: unknown): string {
     if (!args || typeof args !== 'object') return ''
     const a = args as Record<string, unknown>
-    const clip = (s: string): string => {
-        const one = s.replace(/\s+/g, ' ').trim()
-        return one.length > 60 ? one.slice(0, 59) + '…' : one
-    }
     if (toolName === 'bash' && typeof a.command === 'string') {
         return a.command.replace(/\s+/g, ' ').trim()
     }
-    if (
-        toolName === 'pi-worker-docs'
-        && typeof a.module === 'string'
-        && typeof a.query === 'string'
-    ) {
-        return `${a.module} "${clip(a.query)}"`
-    }
-    // Search/fetch workers: without these the debug log shows a bare tool name
-    // and a run audit cannot tell WHAT was searched or fetched.
-    if (toolName === 'pi-worker-search' && typeof a.query === 'string') {
-        return `"${clip(a.query)}"`
-    }
-    if (toolName === 'pi-worker-fetch' && typeof a.url === 'string') {
-        return clip(a.url)
+    // Each worker tool's argument shape is its own row's fact (worker-channels.ts);
+    // this used to be a third copy of the names AND a re-statement of each one's
+    // parameters. A row that has nothing to say falls through to the generic keys.
+    const channel = workerChannel(toolName)
+    if (channel) {
+        const summary = channel.summarize(a)
+        if (summary) return summary
     }
     if (typeof a.file_path === 'string') return a.file_path
     if (typeof a.path === 'string') return a.path

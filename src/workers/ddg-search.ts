@@ -9,7 +9,7 @@
  */
 
 import {parseHTML} from 'linkedom'
-import type {FetchLike} from './exa-search.js'
+import {httpRequest, HttpRequestError, type FetchLike} from './http-request.js'
 import type {SearchResult} from './search-types.js'
 
 const DDG_ENDPOINT = 'https://html.duckduckgo.com/html/'
@@ -51,58 +51,47 @@ interface ParsedDocument {
 
 export async function ddgSearch(query: string, opts: DdgSearchOpts = {}): Promise<SearchResult[]> {
     const count = Math.max(1, Math.min(MAX_COUNT, opts.count ?? DEFAULT_COUNT))
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-    const fetchImpl = opts.fetchImpl ?? fetch
-
     const url = `${DDG_ENDPOINT}?q=${encodeURIComponent(query)}`
 
-    const internalController = new AbortController()
-    let userAborted = false
-    const timeoutHandle = setTimeout(() => internalController.abort(), timeoutMs)
-    const onUserAbort = () => {
-        userAborted = true
-        internalController.abort()
-    }
-    if (opts.signal) {
-        if (opts.signal.aborted) onUserAbort()
-        else opts.signal.addEventListener('abort', onUserAbort, {once: true})
-    }
-
     try {
-        let response: Response
-        try {
-            response = await fetchImpl(url, {
+        return await httpRequest(
+            url,
+            {
+                timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                ...(opts.signal === undefined ? {} : {signal: opts.signal}),
+                ...(opts.fetchImpl === undefined ? {} : {fetchImpl: opts.fetchImpl}),
                 method: 'GET',
                 headers: {
                     'user-agent': USER_AGENT,
                     accept: 'text/html'
-                },
-                signal: internalController.signal
-            })
-        } catch (err) {
-            if (userAborted) throw new DdgSearchError('Search aborted.', 'aborted')
-            throw new DdgSearchError(`DuckDuckGo request failed: ${describeError(err)}`, 'network')
+                }
+            },
+            async response => {
+                // DDG's own status policy: 429/403 is throttling, not a plain HTTP fault.
+                if (response.status === 429 || response.status === 403) {
+                    throw new DdgSearchError(
+                        `DuckDuckGo is rate-limiting this client (HTTP ${response.status}). Try again in a moment.`,
+                        'rate-limit',
+                        response.status
+                    )
+                }
+                if (!response.ok) {
+                    throw new DdgSearchError(
+                        `DuckDuckGo HTTP ${response.status} ${response.statusText}`,
+                        'http',
+                        response.status
+                    )
+                }
+                return parseDdgHtml(await response.text()).slice(0, count)
+            }
+        )
+    } catch (err) {
+        if (err instanceof HttpRequestError) {
+            throw err.kind === 'aborted' ?
+                    new DdgSearchError('Search aborted.', 'aborted')
+                :   new DdgSearchError(`DuckDuckGo request failed: ${err.detail}`, 'network')
         }
-
-        if (response.status === 429 || response.status === 403) {
-            throw new DdgSearchError(
-                `DuckDuckGo is rate-limiting this client (HTTP ${response.status}). Try again in a moment.`,
-                'rate-limit',
-                response.status
-            )
-        }
-        if (!response.ok) {
-            throw new DdgSearchError(
-                `DuckDuckGo HTTP ${response.status} ${response.statusText}`,
-                'http',
-                response.status
-            )
-        }
-
-        return parseDdgHtml(await response.text()).slice(0, count)
-    } finally {
-        clearTimeout(timeoutHandle)
-        if (opts.signal) opts.signal.removeEventListener('abort', onUserAbort)
+        throw err
     }
 }
 
@@ -155,9 +144,4 @@ function unwrapDdgRedirect(href: string): string | null {
 
 function collapse(text: string): string {
     return text.replace(/\s+/g, ' ').trim()
-}
-
-function describeError(err: unknown): string {
-    if (err instanceof Error) return err.message
-    return String(err)
 }

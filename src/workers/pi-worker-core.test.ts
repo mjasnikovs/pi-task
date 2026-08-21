@@ -228,7 +228,7 @@ describe('runWorker', () => {
     test('restarts on a connection-class model error and returns the retry', async () => {
         // Measured live: pi already retries a connection failure 4× over ~15s, so a
         // surfaced "Connection error." means an outage that outlasted pi's own
-        // budget. A phase child re-spawns there (runPhaseWithLoopGuard); a research
+        // budget. A phase child re-spawns there (runPhaseChild); a research
         // worker used to fail the whole task instead.
         const slept: number[] = []
         const spawn = fakeSpawnQueue([

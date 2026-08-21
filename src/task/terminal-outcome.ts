@@ -26,7 +26,13 @@
  */
 
 /** The gate outcomes a command has to act on. Mirrors runGatesForTask's union. */
-export type TerminalOutcomeKind = 'done' | 'paused' | 'session-cancelled' | 'interrupted' | 'failed'
+export type TerminalOutcomeKind =
+    | 'done'
+    | 'paused'
+    | 'session-cancelled'
+    | 'cancelled'
+    | 'interrupted'
+    | 'failed'
 
 /** What the message needs to name. */
 export interface TerminalMessageContext {
@@ -99,6 +105,18 @@ export const TERMINAL_OUTCOMES: Record<TerminalOutcomeKind, TerminalOutcome> = {
         message: c =>
             `${c.tag} paused — could not start a session for autofix. `
             + `Run ${c.resumeCmd} to retry.`
+    },
+    cancelled: {
+        // The USER stopped the re-run. The task file already says `cancelled`, and
+        // `markResumable` writes `failed` — that both lies in the ledger and turns
+        // a deliberate stop into a red error. RUN_END_POLICY states this for the
+        // first implementation run; this row states the same thing for a re-run.
+        markResumable: false,
+        failParent: false,
+        level: 'warning',
+        // `cancelled` is already in RESUMABLE_STATES, so the file needs no demotion
+        // AND the resume works — naming it costs nothing and is true.
+        message: c => `${c.tag} cancelled${c.at} — resume with ${c.resumeCmd}.`
     },
     interrupted: {
         markResumable: true,

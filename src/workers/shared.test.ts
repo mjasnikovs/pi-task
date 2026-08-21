@@ -4,7 +4,14 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {Type} from '@sinclair/typebox'
 import {Text} from '@earendil-works/pi-tui'
-import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {
+    childFailureReason,
+    formatChildFailure,
+    makeWorkerTool,
+    workerAnswer,
+    workerUnavailable,
+    type WorkerOutcome
+} from './shared.js'
 import {RESEARCH_RUN_ID_ENV, researchCacheFile} from './research-cache.js'
 
 // ─── formatChildFailure ──────────────────────────────────────────────────────
@@ -80,7 +87,7 @@ test('makeWorkerTool registers a parallel tool and wraps run output in textResul
             parameters: Params,
             async run(params, _signal, ctx) {
                 seenCwd = ctx.cwd
-                return {text: `got ${params.q}`, details: {n: params.q.length}}
+                return workerAnswer(`got ${params.q}`, {n: params.q.length})
             },
             renderCall: args => new Text(args.q, 0, 0)
         }
@@ -104,7 +111,7 @@ test('makeWorkerTool delegates renderCall to the spec', () => {
         label: 'Demo',
         description: 'd',
         parameters: Params,
-        run: async () => ({text: '', details: undefined}),
+        run: async () => workerAnswer('', undefined),
         renderCall: args => new Text(`rendered:${args.q}`, 0, 0)
     })
     const rendered = registered[0].renderCall!({q: 'x'}, {})
@@ -128,8 +135,11 @@ function cachingTool(opts?: {
     cacheKey?: (p: {q: string}) => string | null
     cacheable?: (d: {n: number}, t: string) => boolean
     cachePkg?: (p: {q: string}) => string | undefined
+    /** Answer or not. Default: every call answers. */
+    outcome?: (text: string, details: {n: number}) => WorkerOutcome<{n: number}>
 }): {registered: RegisteredTool[]; calls: () => number} {
     const {registered, api} = makePi()
+    const outcome = opts?.outcome ?? workerAnswer
     let calls = 0
     makeWorkerTool<typeof Params, {n: number}>(
         api as unknown as Parameters<typeof makeWorkerTool>[0],
@@ -140,7 +150,7 @@ function cachingTool(opts?: {
             parameters: Params,
             async run(params) {
                 calls++
-                return {text: `answer:${params.q}:${calls}`, details: {n: calls}}
+                return outcome(`answer:${params.q}:${calls}`, {n: calls})
             },
             renderCall: args => new Text(args.q, 0, 0),
             cacheKey: opts?.cacheKey ?? (p => p.q),
@@ -231,4 +241,61 @@ test('a different run id does not see the prior run cache (isolation through the
     process.env[RESEARCH_RUN_ID_ENV] = 'run-B'
     await exec('id2', {q: 'x'}, undefined, undefined, {cwd})
     expect(tool.calls()).toBe(2)
+})
+
+// ─── An `unavailable` outcome is never stored ────────────────────────────────
+//
+// This is the rule the four `cacheable` predicates used to carry as
+// `childExitCode === 0`, and got wrong: `runChild` reports `code ?? 0`, so a
+// SIGTERM-killed child arrives with exit code 0, every clause passed, and
+// "Docs lookup aborted." was memoised for the whole run and re-served to every
+// later sibling — with escalation unable to re-fire because the miss never
+// recurred. The outcome states it now, so no rule has to derive it.
+
+test('makeWorkerTool never caches an `unavailable`, even when cacheable() says yes', async () => {
+    const cwd = tmpCwd()
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-unavailable'
+    const {registered, calls} = cachingTool({
+        // The old rule, faithfully: "the child exited 0, so cache it."
+        cacheable: () => true,
+        outcome: (text, details) => workerUnavailable(text, details, 'aborted')
+    })
+    const tool = registered[0]!
+
+    const first = await tool.execute('id', {q: 'hono'}, undefined, undefined, {cwd})
+    const second = await tool.execute('id', {q: 'hono'}, undefined, undefined, {cwd})
+
+    // Both calls ran: nothing was served from the cache…
+    expect(calls()).toBe(2)
+    // …and the second answer is the second run's, not a memoised first.
+    expect(first.content[0]).toEqual({type: 'text', text: 'answer:hono:1'})
+    expect(second.content[0]).toEqual({type: 'text', text: 'answer:hono:2'})
+    // The text still reaches the caller — refusing to CACHE is not refusing to ANSWER.
+    expect(await Bun.file(researchCacheFile(cwd)).exists()).toBe(false)
+    fs.rmSync(cwd, {recursive: true, force: true})
+})
+
+test('an `answer` with the same tool and rule IS cached (the control)', async () => {
+    const cwd = tmpCwd()
+    process.env[RESEARCH_RUN_ID_ENV] = 'run-answer'
+    const {registered, calls} = cachingTool({cacheable: () => true})
+    const tool = registered[0]!
+
+    await tool.execute('id', {q: 'hono'}, undefined, undefined, {cwd})
+    const second = await tool.execute('id', {q: 'hono'}, undefined, undefined, {cwd})
+
+    expect(calls()).toBe(1)
+    expect(second.content[0]).toEqual({type: 'text', text: 'answer:hono:1'})
+    fs.rmSync(cwd, {recursive: true, force: true})
+})
+
+test('childFailureReason names the kill through the one ordered ladder', () => {
+    // A SIGTERM kill sets `aborted` and leaves exitCode 0 — the shape that made
+    // the old exit-code derivation say "success".
+    expect(childFailureReason({exitCode: 0, aborted: true})).toBe('aborted')
+    // A specific cause outranks the generic abort it also sets.
+    expect(childFailureReason({exitCode: 0, aborted: true, timedOut: true})).toBe('worker-timeout')
+    expect(childFailureReason({exitCode: 3, aborted: false})).toBe('exit')
+    // Nothing killed it; the caller simply has no answer to give.
+    expect(childFailureReason({exitCode: 0, aborted: false})).toBe('no-answer')
 })

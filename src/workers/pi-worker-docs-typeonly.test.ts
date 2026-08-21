@@ -54,37 +54,34 @@ export declare const hc: <T extends Hono>(baseUrl: string) => Client<T>
 // "keep in sync" comment, so a change to the real rule left these six tests green.
 const cacheable = docsCacheable
 
-describe('cacheable — a non-answer must never be memoised (F-2e)', () => {
+// The rule is about answer QUALITY only. Whether there IS an answer is the
+// outcome's `kind`, and `makeWorkerTool` refuses an `unavailable` before this
+// runs — see shared.test.ts. The rule used to open with `childExitCode === 0`,
+// which a SIGTERM-killed child satisfies (`code ?? 0`), so `"Docs lookup
+// aborted."` passed every clause and was memoised for the whole run.
+describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
     test('a real answer is cached', () => {
-        expect(cacheable({childExitCode: 0, excerptVerified: true}, 'Per hono@4: hc takes …')).toBe(
-            true
-        )
+        expect(cacheable({excerptVerified: true}, 'Per hono@4: hc takes …')).toBe(true)
     })
 
-    test('"unclear from this package" is NOT cached, though the child exited 0', () => {
+    test('"unclear from this package" is NOT cached', () => {
         // This is the exact run-15 defect: 52 cached entries were "unclear" with
         // hitCache true, so one dead end was paid for many times and escalation could
         // never re-fire because the miss never recurred.
-        expect(cacheable({childExitCode: 0}, 'unclear from this package')).toBe(false)
+        expect(cacheable({}, 'unclear from this package')).toBe(false)
     })
 
     test('a TYPE-ONLY answer is NOT cached', () => {
-        expect(cacheable({childExitCode: 0, typeOnly: true}, 'hc takes two parameters…')).toBe(
-            false
-        )
+        expect(cacheable({typeOnly: true}, 'hc takes two parameters…')).toBe(false)
     })
 
     test('an unverified excerpt is NOT cached — never memoise a suspected fabrication', () => {
-        expect(cacheable({childExitCode: 0, excerptVerified: false}, 'Per bun@1: …')).toBe(false)
-    })
-
-    test('a crashed child is still not cached (original behaviour preserved)', () => {
-        expect(cacheable({childExitCode: 1}, 'whatever')).toBe(false)
+        expect(cacheable({excerptVerified: false}, 'Per bun@1: …')).toBe(false)
     })
 
     test('excerptVerified undefined (no excerpt offered) still caches', () => {
         // Only an excerpt that FAILED verification is disqualifying; a result with no
         // excerpt at all was never a fabrication signal and must stay cacheable.
-        expect(cacheable({childExitCode: 0}, 'Per zod@4: z.object(...) builds a schema')).toBe(true)
+        expect(cacheable({}, 'Per zod@4: z.object(...) builds a schema')).toBe(true)
     })
 })

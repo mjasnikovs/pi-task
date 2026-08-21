@@ -18,7 +18,7 @@ import {YOLO_STAMP} from './yolo.js'
 /** A GateDeps whose runTask/commit always succeed; override per test. */
 function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
     return {
-        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true}),
         ...over
     }
@@ -338,7 +338,7 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
                 fixInstructions.push(opts?.fixInstruction)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
                 verifyCalls += 1
@@ -374,7 +374,7 @@ test('runGatesForTask: UNOBSERVED verify FAIL forces the picker — never unatte
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls += 1
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () =>
                 Promise.resolve({
@@ -406,7 +406,7 @@ test('runGatesForTask: recommended AUTOFIX that keeps FAILing shows the picker a
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, _opts) => {
                 runTaskCalls += 1
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             // Never converges, and the research keeps recommending AUTOFIX.
             verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
@@ -427,12 +427,7 @@ test('runGatesForTask: AUTOFIX re-run that fails → failed result with reason',
         const {ctx} = handle
         const deps = makeDeps({
             runTask: () =>
-                Promise.resolve({
-                    taskId: 'TASK_0006',
-                    ok: false,
-                    sessionCancelled: false,
-                    reason: 'model died'
-                }),
+                Promise.resolve({taskId: 'TASK_0006', end: {kind: 'failed', reason: 'model died'}}),
             verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'defect'})
         })
@@ -447,13 +442,7 @@ test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate'
     await withTmpTaskDir(async dir => {
         const interruptedHandle = makeFakeCtx(dir)
         const interruptedDeps = makeDeps({
-            runTask: () =>
-                Promise.resolve({
-                    taskId: 'TASK_0006',
-                    ok: true,
-                    sessionCancelled: false,
-                    interrupted: true
-                }),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'interrupted'}}),
             verify: () => Promise.resolve({ok: false, reason: 'x'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
         })
@@ -466,8 +455,7 @@ test('runGatesForTask: AUTOFIX re-run interrupted / session-cancelled propagate'
 
         const cancelledHandle = makeFakeCtx(dir)
         const cancelledDeps = makeDeps({
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: false, sessionCancelled: true}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'no-session'}}),
             verify: () => Promise.resolve({ok: false, reason: 'x'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
         })
@@ -1266,7 +1254,7 @@ test("runGatesForTask: the recommend child's diagnosis rides into the AUTOFIX fi
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
                 fixInstructions.push(opts?.fixInstruction)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
                 verifyCalls += 1
@@ -1300,7 +1288,7 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
         const deps = makeDeps({
             runTask: (_c, _cwd, _t, opts) => {
                 fixInstructions.push(opts?.fixInstruction)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
                 verifyCalls += 1
@@ -1329,7 +1317,7 @@ test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, 
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             record: (_c, _i, line) => {
                 trail.push(line)
@@ -1401,7 +1389,7 @@ test('frozen-blocked: an ordinary (non-frozen) lint-fix rejection still auto-AUT
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => {
                 verifyCalls++
@@ -1503,7 +1491,7 @@ test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             // Never converges: every verify FAILs, and the research keeps saying AUTOFIX.
             verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
@@ -1607,7 +1595,7 @@ test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed 
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             // Converges on the re-run: FAIL first, PASS after the one attempt.
             verify: () =>
@@ -1647,7 +1635,7 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
@@ -1685,7 +1673,7 @@ test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the bu
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => Promise.resolve({ok: false, reason: 'still broken'}),
             recommend: () =>
@@ -1710,7 +1698,7 @@ test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () =
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () =>
                 Promise.resolve({
@@ -1746,7 +1734,7 @@ test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the resc
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () =>
                 Promise.resolve({ok: false, reason: 'repo health: `bun run lint` exited 2'}),
@@ -1775,7 +1763,7 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
         const deps = makeDeps({
             runTask: () => {
                 runTaskCalls++
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             verify: () => Promise.resolve({ok: false, reason: 'over-strict check'}),
             recommend: () => Promise.resolve({recommend: 'accept', rationale: 'valid file'}),
@@ -1959,5 +1947,29 @@ describe('resolveVerifyGate — the verify half, without the enforce half', () =
             () => Promise.resolve(null)
         )
         expect('stop' in step && step.stop.kind).toBe('paused')
+    })
+})
+
+/**
+ * REGRESSION — a CANCELLED autofix re-run must not be reported as interrupted.
+ *
+ * `runGatesForTask` maps `cancelled` onto `interrupted`, whose TERMINAL_OUTCOMES
+ * row demotes the task file with `markResumable` — which writes `state: 'failed'`
+ * over the `cancelled` the cancel itself wrote. That is exactly the ledger lie
+ * RUN_END_POLICY was introduced to stop; the first implementation run honours it
+ * and this path does not.
+ */
+test('runGatesForTask: an AUTOFIX re-run the USER cancelled is reported as cancelled', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx} = makeFakeCtx(dir)
+        const deps = makeDeps({
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'cancelled'}}),
+            verify: () => Promise.resolve({ok: false, reason: 'x'}),
+            recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'y'})
+        })
+        const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
+        expect(r.kind).toBe('cancelled')
+        // And it must stay distinguishable from an ESC-interrupt, which IS demoted.
+        expect(r.kind).not.toBe('interrupted')
     })
 })

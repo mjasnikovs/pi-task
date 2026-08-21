@@ -50,7 +50,7 @@
 import {test, expect, describe} from 'bun:test'
 import * as path from 'node:path'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
-import {registerPiWorkerDocs, type PiWorkerDocsInternals} from './pi-worker-docs.js'
+import {docsCacheable, registerPiWorkerDocs, type PiWorkerDocsInternals} from './pi-worker-docs.js'
 import {openCache} from './docs-cache.js'
 import {fakeSpawnSimple} from '../test-utils/fake-spawn.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
@@ -254,10 +254,12 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
             {module: 'rpc-client-pkg', query: HC_QUERY}
         )
         const d = result.details as {typeOnly?: boolean; childExitCode?: number}
-        // The child exited 0 — process health said "fine". Cacheability must key on the
-        // ANSWER, not on the exit code.
-        expect(d.childExitCode).toBe(0)
+        // The child ran clean, so this IS an answer — and an answer carries no exit
+        // code at all now. Cacheability keys on the ANSWER, and nothing else can.
+        expect(d.childExitCode).toBeUndefined()
         expect(d.typeOnly).toBe(true)
+        const body = result.content[0]
+        expect(docsCacheable(d, body?.type === 'text' ? body.text : '')).toBe(false)
         cache.close()
     })
 })

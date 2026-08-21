@@ -282,8 +282,8 @@ async function defaultHandoff(
         await runGatedTask(ctx, cwd, prompt)
         return undefined
     }
-    const {taskId, sessionCancelled} = await runSingleTask(ctx, cwd, prompt, {notifyFinish: true})
-    if (sessionCancelled) {
+    const {taskId, end} = await runSingleTask(ctx, cwd, prompt, {notifyFinish: true})
+    if (end.kind === 'no-session') {
         ctx.ui.notify('Could not start a fresh session for /task-plan.', 'warning')
         return undefined
     }

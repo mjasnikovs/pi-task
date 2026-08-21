@@ -5,11 +5,13 @@ import {
     formatWhy,
     type TerminalOutcomeKind
 } from './terminal-outcome.js'
+import {RUN_END_POLICY} from './run-end.js'
 
 const KINDS: readonly TerminalOutcomeKind[] = [
     'done',
     'paused',
     'session-cancelled',
+    'cancelled',
     'interrupted',
     'failed'
 ]
@@ -37,8 +39,11 @@ describe('persistence — the two questions each outcome answers', () => {
         paused: {markResumable: true, failParent: true},
         // Nothing ran, so there is nothing to demote.
         'session-cancelled': {markResumable: false, failParent: false},
-        // The USER stopped it — the parent run stays in_progress so a resume
-        // picks up where it left off.
+        // The USER stopped it. The file already says `cancelled`; demoting it
+        // would write `failed` over that.
+        cancelled: {markResumable: false, failParent: false},
+        // ESC, and the user declined to steer — the parent run stays in_progress
+        // so a resume picks up where it left off.
         interrupted: {markResumable: true, failParent: false},
         failed: {markResumable: true, failParent: true}
     }
@@ -53,7 +58,7 @@ describe('persistence — the two questions each outcome answers', () => {
 test('only a real failure is announced in red', () => {
     expect(TERMINAL_OUTCOMES.failed.level).toBe('error')
     expect(TERMINAL_OUTCOMES.done.level).toBe('info')
-    for (const kind of ['paused', 'session-cancelled', 'interrupted'] as const) {
+    for (const kind of ['paused', 'session-cancelled', 'cancelled', 'interrupted'] as const) {
         // A pause is not an error: the tree is fine and the user simply has not
         // decided. Announcing it in red is how a user-requested stop reads as a
         // crash.
@@ -118,4 +123,35 @@ test('a failed outcome reads the same from both commands apart from step and ver
             ctx({tag: 'TASK_0001', why: formatWhy('exit 1'), resumeCmd: '/task-resume'})
         )
     ).toBe('TASK_0001 stopped — exit 1 — fix and run /task-resume.')
+})
+
+/**
+ * REGRESSION — a CANCELLED autofix re-run is a user stop, not a fault.
+ *
+ * `RUN_END_POLICY` exists because folding `cancelled` into a "not ok" arm made
+ * `markResumable` write `failed` over the file's `cancelled`: it lies in the
+ * ledger and turns a deliberate stop into a red error. `runGatedTaskInner` and
+ * `runAutoLoop` honour that policy for the FIRST implementation run.
+ *
+ * The gate's autofix re-run does not. It folds `cancelled` into `interrupted`,
+ * whose row here says `markResumable: true` — the same overwrite, one level down.
+ * The outcome needs its own row.
+ */
+describe('a cancelled gate re-run', () => {
+    test('has a row of its own, and it never demotes the task file', () => {
+        const row = (TERMINAL_OUTCOMES as Record<string, (typeof TERMINAL_OUTCOMES)['done']>)
+            .cancelled
+        expect(row).toBeDefined()
+        expect(row.markResumable).toBe(false)
+        expect(row.failParent).toBe(false)
+        expect(row.level).toBe('warning')
+    })
+
+    test('agrees with RUN_END_POLICY — one answer, not two', () => {
+        const row = (TERMINAL_OUTCOMES as Record<string, (typeof TERMINAL_OUTCOMES)['done']>)
+            .cancelled
+        expect(row?.markResumable).toBe(RUN_END_POLICY.cancelled.resumable)
+        expect(row?.failParent).toBe(RUN_END_POLICY.cancelled.failsRun)
+        expect(row?.level).toBe(RUN_END_POLICY.cancelled.level)
+    })
 })

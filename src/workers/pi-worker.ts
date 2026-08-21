@@ -11,7 +11,13 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
 import {runWorker} from './pi-worker-core.js'
-import {formatChildFailure, makeWorkerTool} from './shared.js'
+import {
+    childFailureReason,
+    formatChildFailure,
+    makeWorkerTool,
+    workerAnswer,
+    workerUnavailable
+} from './shared.js'
 
 const RENDER_PROMPT_MAX = 120
 
@@ -53,9 +59,11 @@ export function registerPiWorker(pi: ExtensionAPI): void {
             const details: WorkerDetails = {exitCode: result.exitCode}
 
             const failure = formatChildFailure(result, 'Worker aborted.')
-            if (failure !== null) return {text: failure, details}
+            if (failure !== null) {
+                return workerUnavailable(failure, details, childFailureReason(result))
+            }
 
-            return {text: result.text || '(no output)', details}
+            return workerAnswer(result.text || '(no output)', details)
         },
 
         renderCall(args, theme) {

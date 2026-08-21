@@ -477,7 +477,7 @@ const MAX_VERIFY_RERUNS = 3
  * passed. FP-safe: the only auto-closes are ones a deterministic check can stand
  * behind, and here the check is the task spec's own command.
  */
-export function recheckAcceptDebts(
+export async function recheckAcceptDebts(
     debts: AcceptDebt[],
     opts: {
         staticOk: boolean
@@ -489,9 +489,9 @@ export function recheckAcceptDebts(
          * caller is expected to have made `pass` mean "ran, exited 0, and changed
          * nothing tracked" (`inv-no-write`).
          */
-        rerunVerify?: (command: string, debt: AcceptDebt) => VerifyRerunResult
+        rerunVerify?: (command: string, debt: AcceptDebt) => Promise<VerifyRerunResult>
     }
-): {open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]} {
+): Promise<{open: AcceptDebt[]; resolved: AcceptDebt[]; trail: string[]}> {
     const open: AcceptDebt[] = []
     const resolved: AcceptDebt[] = []
     const trail: string[] = []
@@ -532,7 +532,7 @@ export function recheckAcceptDebts(
         rerunsLeft -= 1
         let r: VerifyRerunResult
         try {
-            r = opts.rerunVerify(cmd, d)
+            r = await opts.rerunVerify(cmd, d)
         } catch {
             // A harness fault observes nothing, so it proves nothing.
             r = {outcome: 'gap', detail: 're-run harness fault'}
@@ -670,13 +670,16 @@ export function describeDebt(d: AcceptDebt): string {
  */
 export async function deriveOpenDebts(
     cwd: string,
-    staticOk: boolean
+    staticOk: boolean,
+    /** The spawner for the VERIFY-COMMAND re-runs. Defaults to the real one. */
+    run: CommandRunner = spawnCommand,
+    signal?: AbortSignal
 ): Promise<{openDebts: AcceptDebt[]; debtNote?: string; trail?: string[]}> {
     const {
         open: openRaw,
         resolved,
         trail
-    } = recheckAcceptDebts(await readAcceptDebts(cwd), {
+    } = await recheckAcceptDebts(await readAcceptDebts(cwd), {
         staticOk,
         // Cross-task-deletion debts auto-close iff the deleted file is back in the
         // tree — a deterministic existence check, corroborating the per-file
@@ -685,7 +688,7 @@ export async function deriveOpenDebts(
         // VERIFY-COMMAND class (nexttask 5): a debt that NAMES a command is settled
         // by running that command, under the gate's own env-gap contract and behind
         // the no-write guard below.
-        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd)
+        rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
     })
     if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
     // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
@@ -730,27 +733,36 @@ const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|E
  * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
  * assumption rather than an observation.
  */
-export function rerunDebtVerifyCommand(
+export async function rerunDebtVerifyCommand(
     cwd: string,
     command: string,
     /** The spawner, for BOTH the command and the tracked-state reads. Injected so
      *  the guard's four outcomes are testable without a repo or a real command. */
-    run: CommandRunner = spawnCommand
-): VerifyRerunResult {
-    const tracked = (): string | null => {
-        const r = run({
+    run: CommandRunner = spawnCommand,
+    signal?: AbortSignal
+): Promise<VerifyRerunResult> {
+    const tracked = async (): Promise<string | null> => {
+        const r = await run({
             cwd,
             bin: 'git',
             args: ['status', '--porcelain', '--untracked-files=no'],
-            timeoutMs: 60_000
+            timeoutMs: 60_000,
+            ...(signal === undefined ? {} : {signal})
         })
         return r.failedToStart || r.status !== 0 ? null : r.stdout
     }
-    const before = tracked()
-    const r = runVerifyCommandLine(cwd, command, DEBT_RERUN_TIMEOUT_MS, DEBT_INFRA_GAP_RE, run)
+    const before = await tracked()
+    const r = await runVerifyCommandLine(
+        cwd,
+        command,
+        DEBT_RERUN_TIMEOUT_MS,
+        DEBT_INFRA_GAP_RE,
+        run,
+        signal
+    )
     if (r.outcome === 'fail') return {outcome: 'fail', detail: `exit ${r.status} — ${r.tail}`}
     if (r.outcome === 'gap') return {outcome: 'gap', detail: r.detail}
-    const after = tracked()
+    const after = await tracked()
     if (before === null || after === null) {
         return {outcome: 'gap', detail: 'tracked-state guard could not read git status'}
     }

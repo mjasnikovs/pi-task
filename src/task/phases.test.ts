@@ -266,9 +266,14 @@ describe('phaseResearch leaked tool-call guard', () => {
             const spawn = fakeSpawnByPrompt(() => agentEndResponse(leaked))
             await expect(
                 phaseResearch(
-                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                    'a refined goal with no mentions',
-                    {getFileInventory: async () => ''}
+                    {
+                        cwd,
+                        taskId: 'TASK_0001',
+                        signal: new AbortController().signal,
+                        spawn,
+                        getFileInventory: async () => ''
+                    },
+                    'a refined goal with no mentions'
                 )
             ).rejects.toThrow(/tool call|leaked/i)
         })
@@ -313,9 +318,14 @@ describe('phaseResearch loop guard', () => {
                 return agentEndResponse('- a real finding')
             })
             const out = await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'a refined goal with no mentions',
-                {getFileInventory: async () => ''}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    getFileInventory: async () => ''
+                },
+                'a refined goal with no mentions'
             )
             // CONTEXT section is present but flagged degraded and carries the loop
             // detail plus whatever partial text the worker streamed.
@@ -366,9 +376,14 @@ describe('phaseResearch silent-retry gate (worker:context)', () => {
                 return agentEndResponse('- a real finding')
             })
             const out = await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'a refined goal with no mentions',
-                {getFileInventory: async () => ''}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    getFileInventory: async () => ''
+                },
+                'a refined goal with no mentions'
             )
             return {out, contextAttempts}
         })
@@ -460,9 +475,14 @@ describe('phaseResearch empty-section gate (issue #10)', () => {
             })
             try {
                 result = await phaseResearch(
-                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                    'a refined goal with no mentions',
-                    {getFileInventory: async () => ''}
+                    {
+                        cwd,
+                        taskId: 'TASK_0001',
+                        signal: new AbortController().signal,
+                        spawn,
+                        getFileInventory: async () => ''
+                    },
+                    'a refined goal with no mentions'
                 )
             } catch (e) {
                 thrown = e
@@ -561,9 +581,10 @@ describe('phaseResearch per-worker persistence', () => {
             // Run 1: TOOLING's model turn fails → the phase throws with a
             // TOOLING-named error.
             await expect(
-                phaseResearch(deps, 'a refined goal with no mentions', {
-                    getFileInventory: async () => ''
-                })
+                phaseResearch(
+                    {...deps, getFileInventory: async () => ''},
+                    'a refined goal with no mentions'
+                )
             ).rejects.toThrow(/TOOLING worker: model error/i)
 
             // The three good workers were cached; the failed one was not.
@@ -578,9 +599,10 @@ describe('phaseResearch per-worker persistence', () => {
 
             // Run 2 (resume at research): TOOLING now answers cleanly.
             toolingShouldFail = false
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
 
             // The cached workers were NOT re-spawned; only TOOLING ran again (once).
             expect(spawns.files).toBe(afterRun1.files)
@@ -633,9 +655,10 @@ describe('phaseResearch per-worker persistence', () => {
 
             // Run 1: FILES degrades (cached), then TOOLING fatally fails → throw.
             await expect(
-                phaseResearch(deps, 'a refined goal with no mentions', {
-                    getFileInventory: async () => ''
-                })
+                phaseResearch(
+                    {...deps, getFileInventory: async () => ''},
+                    'a refined goal with no mentions'
+                )
             ).rejects.toThrow(/TOOLING worker: model error/i)
 
             // FILES looped through its full restart budget once, and its degraded
@@ -649,9 +672,10 @@ describe('phaseResearch per-worker persistence', () => {
             // Run 2 (resume): TOOLING now answers cleanly; FILES is reused from the
             // cache and is NOT re-spawned — the deterministic loop never runs again.
             toolingShouldFail = false
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
             expect(spawns.files ?? 0).toBe(filesSpawnsAfterRun1)
             expect(out).toMatch(/FILES\n\(degraded: research FILES worker stuck in a loop/i)
             expect(out).toContain('TOOLING\n- finding for tooling')
@@ -712,9 +736,10 @@ describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', ()
                 return agentEndResponse('- finding')
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
 
             expect(spawns.apis).toBe(2) // retried once
             expect(spawns.files).toBe(1) // control: not retried
@@ -747,9 +772,10 @@ describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', ()
                 return agentEndResponse('- finding')
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
             expect(apis).toBe(2) // retried once, then gave up
             expect(out).toContain('$get/$post methods') // original kept — entry count preserved
         })
@@ -779,9 +805,10 @@ describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', ()
                 return agentEndResponse('- finding')
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
-            await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
             expect(apis).toBe(1)
         })
     })
@@ -835,9 +862,10 @@ describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
             // exactly where the gate has to have run: the cache a resume reads back must
             // never carry the laundered claim either.
             await expect(
-                phaseResearch(deps, 'a refined goal with no mentions', {
-                    getFileInventory: async () => ''
-                })
+                phaseResearch(
+                    {...deps, getFileInventory: async () => ''},
+                    'a refined goal with no mentions'
+                )
             ).rejects.toThrow(/TOOLING worker: model error/i)
 
             const cached = (await readSection(cwd, 'TASK_0001', 'research worker CONTEXT')) ?? ''
@@ -853,9 +881,10 @@ describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
             // Resume: the gated section is served from cache unchanged and the assembled
             // research text never carries the attribution.
             toolingShouldFail = false
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
             expect(out).toContain('OPEN QUESTION')
             expect(out).not.toMatch(/LIVE data/i)
         })
@@ -889,9 +918,10 @@ describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
                 return agentEndResponse('- finding')
             })
             const deps = {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn}
-            const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                getFileInventory: async () => ''
-            })
+            const out = await phaseResearch(
+                {...deps, getFileInventory: async () => ''},
+                'a refined goal with no mentions'
+            )
             expect(out).not.toContain('OPEN QUESTION')
             expect(out).toContain('external context confirms latest is 4.12.31.')
         })
@@ -924,9 +954,14 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
                     return agentEndResponse('- finding')
                 })
                 await phaseResearch(
-                    {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                    'a refined goal with no mentions',
-                    {getFileInventory: async () => ''}
+                    {
+                        cwd,
+                        taskId: 'TASK_0001',
+                        signal: new AbortController().signal,
+                        spawn,
+                        getFileInventory: async () => ''
+                    },
+                    'a refined goal with no mentions'
                 )
             })
             return apisPrompt
@@ -988,9 +1023,14 @@ describe('phaseResearch search-path wiring (run 9 item 5)', () => {
                 return agentEndResponse('- finding')
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'a refined goal with no mentions',
-                {getFileInventory: async () => ''}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    getFileInventory: async () => ''
+                },
+                'a refined goal with no mentions'
             )
         })
         // Default provider is exa (keyless) → searchConfigured() is true → the tool
@@ -1068,9 +1108,10 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     signal: new AbortController().signal,
                     spawn
                 }
-                const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                    getFileInventory: async () => ''
-                })
+                const out = await phaseResearch(
+                    {...deps, getFileInventory: async () => ''},
+                    'a refined goal with no mentions'
+                )
                 const order = ['FILES', 'APIS', 'CONTEXT', 'TOOLING'].map(s => out.indexOf(s))
                 expect(order.every(i => i >= 0)).toBe(true)
                 expect([...order].sort((a, b) => a - b)).toEqual(order)
@@ -1106,9 +1147,10 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                     spawn
                 }
                 await expect(
-                    phaseResearch(deps, 'a refined goal with no mentions', {
-                        getFileInventory: async () => ''
-                    })
+                    phaseResearch(
+                        {...deps, getFileInventory: async () => ''},
+                        'a refined goal with no mentions'
+                    )
                 ).rejects.toThrow(/APIS worker: model error/i)
 
                 expect(await readSection(cwd, 'TASK_0001', 'research worker FILES')).toContain(
@@ -1125,9 +1167,10 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                 // Resume: only APIS re-runs; the cached three are skipped.
                 apisShouldFail = false
                 const before = {...spawns}
-                const out = await phaseResearch(deps, 'a refined goal with no mentions', {
-                    getFileInventory: async () => ''
-                })
+                const out = await phaseResearch(
+                    {...deps, getFileInventory: async () => ''},
+                    'a refined goal with no mentions'
+                )
                 expect(spawns.files).toBe(before.files)
                 expect(spawns.context).toBe(before.context)
                 expect(spawns.tooling).toBe(before.tooling)
@@ -1165,9 +1208,11 @@ describe('phaseResearch enrichment DI', () => {
                 ]
             }))
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'use `zod` for validation',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsRaw: async ({pkg}) => {
                         pkgsSeen.push(pkg)
                         return {
@@ -1183,7 +1228,8 @@ describe('phaseResearch enrichment DI', () => {
                             hitCache: true
                         }
                     }
-                }
+                },
+                'use `zod` for validation'
             )
             expect(pkgsSeen).toContain('zod')
         })
@@ -1222,9 +1268,11 @@ describe('phaseResearch enrichment DI', () => {
                 }
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'use `zod` for validation',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsRaw: async ({pkg}) => ({
                         kind: 'ok',
                         pkg: {
@@ -1237,7 +1285,8 @@ describe('phaseResearch enrichment DI', () => {
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
                         hitCache: true
                     })
-                }
+                },
+                'use `zod` for validation'
             )
             const withMarker = promptsSeen.filter(p => p.includes('ZOD_DOCS_MARKER'))
             expect(withMarker.length).toBe(4)
@@ -1276,9 +1325,11 @@ describe('phaseResearch enrichment DI', () => {
                 }
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'pin `react` to exact version',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsRaw: async ({pkg}) => ({
                         kind: 'ok',
                         pkg: {
@@ -1297,7 +1348,8 @@ describe('phaseResearch enrichment DI', () => {
                             publishedAt: '2026-04-10T00:00:00.000Z'
                         }
                     })
-                }
+                },
+                'pin `react` to exact version'
             )
             const reactPrompt = promptsSeen.find(p => p.includes('### npm: react'))
             expect(reactPrompt).toBeDefined()
@@ -1344,9 +1396,11 @@ describe('phaseResearch enrichment DI', () => {
                 }
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'pin `zod` to exact version',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsRaw: async ({pkg}) => ({
                         kind: 'ok',
                         pkg: {
@@ -1360,7 +1414,8 @@ describe('phaseResearch enrichment DI', () => {
                         hitCache: true,
                         npmVersion: null
                     })
-                }
+                },
+                'pin `zod` to exact version'
             )
             const withMarker = promptsSeen.filter(p => p.includes('DOCS_ONLY'))
             expect(withMarker.length).toBe(4)
@@ -1468,9 +1523,14 @@ describe('phaseResearch enrichment DI', () => {
                 return proc
             }
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'plain refined prompt',
-                {getFileInventory: async () => ''}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    getFileInventory: async () => ''
+                },
+                'plain refined prompt'
             )
             const contextObs = observed.find(o => o.prompt.includes('background knowledge'))
             expect(contextObs).toBeDefined()
@@ -1505,9 +1565,14 @@ describe('phaseResearch enrichment DI', () => {
                 return agentEndResponse('- worker-output')
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'plain refined prompt',
-                {getFileInventory: async () => 'src/a.ts\nsrc/b.ts'}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    getFileInventory: async () => 'src/a.ts\nsrc/b.ts'
+                },
+                'plain refined prompt'
             )
             const withMarker = promptsSeen.filter(p =>
                 p.includes('PROJECT FILE INVENTORY\nsrc/a.ts\nsrc/b.ts')
@@ -1537,13 +1602,16 @@ describe('phaseResearch enrichment DI', () => {
                 return agentEndResponse('- worker-output')
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'plain refined prompt',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     getFileInventory: async () => {
                         throw new Error('inventory unavailable')
                     }
-                }
+                },
+                'plain refined prompt'
             )
             // All four workers still ran, just without an inventory header.
             expect(promptsSeen.length).toBe(4)
@@ -1573,9 +1641,11 @@ describe('phaseResearch enrichment DI', () => {
                 return agentEndResponse('- worker-output')
             })
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'use `zod` for validation',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     getFileInventory: async () => 'src/a.ts',
                     docsRaw: async ({pkg}) => ({
                         kind: 'ok',
@@ -1589,7 +1659,8 @@ describe('phaseResearch enrichment DI', () => {
                         chunks: [{filePath: 'x', kind: 'dts', content: 'ZOD_DOCS_MARKER', rank: 0}],
                         hitCache: true
                     })
-                }
+                },
+                'use `zod` for validation'
             )
             const filesPrompt = promptsSeen.find(p =>
                 p.includes('every path on disk the agent will read')
@@ -1628,9 +1699,11 @@ describe('phaseResearch enrichment DI', () => {
                 ]
             }))
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'use `zod` for validation',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsRaw: async ({pkg}) => ({
                         kind: 'ok',
                         pkg: {
@@ -1643,7 +1716,8 @@ describe('phaseResearch enrichment DI', () => {
                         chunks: [{filePath: 'x', kind: 'dts', content: 'fake docs', rank: 0}],
                         hitCache: true
                     })
-                }
+                },
+                'use `zod` for validation'
             )
             const fs = await import('fs/promises')
             const path = await import('path')
@@ -1723,13 +1797,7 @@ describe('phaseAutoAnswer integration-unknown routing', () => {
                     cwd,
                     taskId: 'TASK_0001',
                     signal: new AbortController().signal,
-                    spawn: answerSpawn('ANSWER: register it in the build config')
-                },
-                'refined',
-                'research',
-                'How should the `some-plugin` plugin be wired into the build pipeline?',
-                {
-                    // A docs worker returns a non-empty answer → the integration
+                    spawn: answerSpawn('ANSWER: register it in the build config'), // A docs worker returns a non-empty answer → the integration
                     // unknown is grounded, so the auto-answer is allowed to stand.
                     docsFocused: async ({pkg}) => ({
                         answer: 'register the plugin in the build config and import it from the entry',
@@ -1747,7 +1815,10 @@ describe('phaseAutoAnswer integration-unknown routing', () => {
                         stderr: '',
                         npmVersion: null
                     })
-                }
+                },
+                'refined',
+                'research',
+                'How should the `some-plugin` plugin be wired into the build pipeline?'
             )
             expect(result.kind).toBe('answered')
         })
@@ -1792,11 +1863,11 @@ describe('phaseAutoAnswer enrichment', () => {
                 }
             })
             const result = await phaseAutoAnswer(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'refined-task-text',
-                'research-notes',
-                'Which exact version of `react` should we pin?',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     docsFocused: async ({pkg}) => ({
                         answer: '',
                         excerpt: undefined,
@@ -1818,7 +1889,10 @@ describe('phaseAutoAnswer enrichment', () => {
                             publishedAt: '2026-04-10T00:00:00.000Z'
                         }
                     })
-                }
+                },
+                'refined-task-text',
+                'research-notes',
+                'Which exact version of `react` should we pin?'
             )
             expect(result.kind).toBe('answered')
             const grillPrompt = promptsSeen[0]
@@ -1861,11 +1935,16 @@ describe('phaseAutoAnswer enrichment', () => {
                 ]
             }))
             const result = await phaseAutoAnswer(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    docsFocused: async () => Promise.reject(new Error('docs unavailable'))
+                },
                 'refined',
                 'research',
-                'Which version of `react`?',
-                {docsFocused: async () => Promise.reject(new Error('docs unavailable'))}
+                'Which version of `react`?'
             )
             expect(result.kind).toBe('unknown')
         })
@@ -2515,9 +2594,11 @@ describe('phaseResearch service enrichment', () => {
                 '  - Twitch  current event subscription API'
             ].join('\n')
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                refined,
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async ({query}) => {
                         queriesSeen.push(query)
                         return {
@@ -2531,7 +2612,8 @@ describe('phaseResearch service enrichment', () => {
                             ]
                         }
                     }
-                }
+                },
+                refined
             )
             expect(queriesSeen).toContain('Twitch current event subscription API')
         })
@@ -2573,9 +2655,11 @@ describe('phaseResearch service enrichment', () => {
                 '  - Twitch  current event subscription API'
             ].join('\n')
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                refined,
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async () => ({
                         kind: 'ok',
                         results: [
@@ -2586,7 +2670,8 @@ describe('phaseResearch service enrichment', () => {
                             }
                         ]
                     })
-                }
+                },
+                refined
             )
             // All 4 workers see the same EXTERNAL CONTEXT prefix.
             for (const p of promptsSeen) {
@@ -2633,11 +2718,14 @@ describe('phaseResearch service enrichment', () => {
                 '  - Stripe  webhook signing'
             ].join('\n')
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                refined,
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async () => ({kind: 'no_key', message: 'no key'})
-                }
+                },
+                refined
             )
             const headerOccurrences = promptsSeen[0].match(/### freshness-check skipped/g) ?? []
             expect(headerOccurrences.length).toBe(1)
@@ -2685,9 +2773,11 @@ describe('phaseResearch service enrichment', () => {
                 '  - Broken  this one errors'
             ].join('\n')
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                refined,
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async ({query}) => {
                         if (query.startsWith('Broken')) {
                             return {kind: 'error', message: 'oops'}
@@ -2697,7 +2787,8 @@ describe('phaseResearch service enrichment', () => {
                             results: [{title: 'T', url: 'https://t', description: 'd'}]
                         }
                     }
-                }
+                },
+                refined
             )
             expect(promptsSeen[0]).toContain('### service: Twitch')
             expect(promptsSeen[0]).not.toContain('### service: Broken')
@@ -2737,9 +2828,14 @@ describe('phaseResearch service enrichment', () => {
             })
             const refined = ['EXTERNAL-DEPENDENCIES', '  - Obscure  no hits expected'].join('\n')
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                refined,
-                {searchFn: async () => ({kind: 'ok', results: []})}
+                {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
+                    searchFn: async () => ({kind: 'ok', results: []})
+                },
+                refined
             )
             expect(promptsSeen[0]).toContain('### service: Obscure')
             expect(promptsSeen[0]).toContain('Query: Obscure no hits expected')
@@ -2772,14 +2868,17 @@ describe('phaseResearch service enrichment', () => {
             }))
             let calls = 0
             await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'GOAL\n  local only\n',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async () => {
                         calls++
                         return {kind: 'ok', results: []}
                     }
-                }
+                },
+                'GOAL\n  local only\n'
             )
             expect(calls).toBe(0)
         })
@@ -2814,11 +2913,11 @@ describe('phaseAutoAnswer service enrichment', () => {
             }))
             const question = ['EXTERNAL-DEPENDENCIES', '  - Twitch  current API'].join('\n')
             await phaseAutoAnswer(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'refined',
-                'research',
-                question,
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn,
                     searchFn: async ({query}) => {
                         queriesSeen.push(query)
                         return {
@@ -2826,7 +2925,10 @@ describe('phaseAutoAnswer service enrichment', () => {
                             results: [{title: 'T', url: 'https://t', description: 'd'}]
                         }
                     }
-                }
+                },
+                'refined',
+                'research',
+                question
             )
             expect(queriesSeen).toContain('Twitch current API')
         })
@@ -2867,12 +2969,11 @@ describe('phaseAutoAnswer service enrichment', () => {
                 '  - C  c'
             ].join('\n')
             await phaseAutoAnswer(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-                'refined',
-                'research',
-                question,
                 {
-                    // Minimal stub — only the `answer` field is read by the
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn, // Minimal stub — only the `answer` field is read by the
                     // pkg branch under test. Cast keeps the verbatim plan
                     // intent while satisfying tsc.
                     docsFocused: (async () => ({
@@ -2882,7 +2983,10 @@ describe('phaseAutoAnswer service enrichment', () => {
                         queriesSeen.push(query)
                         return {kind: 'ok', results: []}
                     }
-                }
+                },
+                'refined',
+                'research',
+                question
             )
             // First 2 services queried; 3rd dropped by the cap.
             expect(queriesSeen.length).toBe(2)
@@ -3050,9 +3154,14 @@ async function observeResearchWorkers(
         return proc
     }
     await phaseResearch(
-        {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-        'plain refined prompt',
-        {getFileInventory: async () => ''}
+        {
+            cwd,
+            taskId: 'TASK_0001',
+            signal: new AbortController().signal,
+            spawn,
+            getFileInventory: async () => ''
+        },
+        'plain refined prompt'
     )
     return observed
 }
@@ -3208,9 +3317,14 @@ describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadl
             return agentEndResponse('- a finding')
         })
         await phaseResearch(
-            {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
-            'a refined goal with no mentions',
-            {getFileInventory: async () => ''}
+            {
+                cwd,
+                taskId: 'TASK_0001',
+                signal: new AbortController().signal,
+                spawn,
+                getFileInventory: async () => ''
+            },
+            'a refined goal with no mentions'
         )
         return {
             apis: prompts.find(p => p.isApis)?.text ?? '',
@@ -3227,10 +3341,10 @@ describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadl
                 taskId: 'TASK_0001',
                 signal: new AbortController().signal,
                 spawn: fakeSpawnByPrompt(() => agentEndResponse('- a finding')),
-                logDebug: (line: string) => lines.push(line)
+                logDebug: (line: string) => lines.push(line),
+                getFileInventory: async () => ''
             },
-            'a refined goal with no mentions',
-            {getFileInventory: async () => ''}
+            'a refined goal with no mentions'
         )
         return lines
     }
@@ -3498,16 +3612,19 @@ describe('PhaseResearchDeps.runWorker seam', () => {
             )
             const seen: Record<string, number> = {}
             const out = await phaseResearch(
-                {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn: noSpawn},
-                'a refined goal with no mentions',
                 {
+                    cwd,
+                    taskId: 'TASK_0001',
+                    signal: new AbortController().signal,
+                    spawn: noSpawn,
                     getFileInventory: () => Promise.resolve(''),
                     runWorker: (label: string) => {
                         seen[label] = (seen[label] ?? 0) + 1
                         calls.push(label)
                         return Promise.resolve(onWorker(label, seen[label]))
                     }
-                }
+                },
+                'a refined goal with no mentions'
             )
             return {out, calls}
         })

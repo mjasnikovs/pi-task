@@ -544,21 +544,21 @@ async function runTrial(
                 signal: abort.signal,
                 onChildOutput: l => fs.appendFileSync(logPath, l + '\n'),
                 logDebug: m => fs.appendFileSync(logPath, `[debug] ${m}\n`),
-                spawn: capturingSpawn(promptSink)
-            },
-            fixture.refined,
-            // OFFLINE ENRICHMENT, identically in every arm. External context is a
-            // prompt header the lever does not touch; leaving it live would add
-            // network variance to a wall-clock metric and spend model time on
-            // package summaries that are the same in both arms.
-            {
+                spawn: capturingSpawn(promptSink),
+                // OFFLINE ENRICHMENT, identically in every arm. External context is
+                // a prompt header the lever does not touch; leaving it live would
+                // add network variance to a wall-clock metric and spend model time
+                // on package summaries that are the same in both arms. These are
+                // PhaseDeps fields now, not a third parameter no production caller
+                // could reach.
                 searchFn: () => Promise.resolve({kind: 'ok' as const, results: []}),
                 fetchRaw: () =>
                     Promise.resolve({markdown: '', finalUrl: '', title: 'offline (A/B fixture)'}),
                 docsRaw: () =>
                     Promise.resolve({kind: 'error' as const, message: 'offline (A/B fixture)'}),
                 npmVersionLookup: () => Promise.resolve(null)
-            }
+            },
+            fixture.refined
         )
     } catch (e) {
         error = String(e).slice(0, 300)

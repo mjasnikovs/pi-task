@@ -36,7 +36,16 @@ import type {PhaseDeps} from './child-runner.js'
 /** How much of a docs/url body survives into the block, for the raw-worker lookups. */
 const RAW_BODY_LIMIT = 4000
 
-type GatherDeps = Pick<PhaseDeps, 'cwd' | 'signal' | 'recordSubStep'>
+/**
+ * What assembling the block needs off the phase's deps: where it runs, when to
+ * stop, where to trail a sub-step — and, for the research binding, the four
+ * lookup seams. They are fields on `PhaseDeps` (not a second bag) because the
+ * bag was a trailing parameter no production caller could reach.
+ */
+type GatherDeps = Pick<
+    PhaseDeps,
+    'cwd' | 'signal' | 'recordSubStep' | 'docsRaw' | 'fetchRaw' | 'npmVersionLookup' | 'searchFn'
+>
 
 /** One docs (`pkg`) or url target, in the order it will appear in the block. */
 interface ExternalTarget {
@@ -201,14 +210,6 @@ export async function buildExternalContext(
     return `EXTERNAL CONTEXT\n${sections.join('\n\n')}\n\n`
 }
 
-/** Injectable workers so enrichment is testable without spawning real lookups. */
-export interface ExternalContextDeps {
-    docsRaw?: typeof docsRaw
-    fetchRaw?: typeof fetchRaw
-    searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
-    npmVersionLookup?: typeof npmVersionLookup
-}
-
 /**
  * The RESEARCH-phase binding: raw workers, no caps, live versions for every
  * named dep, truncated bodies, timed, and short-circuited when there is nothing
@@ -216,14 +217,10 @@ export interface ExternalContextDeps {
  *
  * Returns the `EXTERNAL CONTEXT\n…\n\n` block for the refined spec, or `''`.
  */
-export async function gatherExternalContext(
-    refined: string,
-    deps: GatherDeps,
-    researchDeps: ExternalContextDeps = {}
-): Promise<string> {
-    const docsRawFn = researchDeps.docsRaw ?? docsRaw
-    const fetchRawFn = researchDeps.fetchRaw ?? fetchRaw
-    const npmVersionFn = researchDeps.npmVersionLookup ?? npmVersionLookup
+export async function gatherExternalContext(refined: string, deps: GatherDeps): Promise<string> {
+    const docsRawFn = deps.docsRaw ?? docsRaw
+    const fetchRawFn = deps.fetchRaw ?? fetchRaw
+    const npmVersionFn = deps.npmVersionLookup ?? npmVersionLookup
     const docsQuery = refined.split('\n').find(l => l.trim()) ?? refined
 
     return buildExternalContext(
@@ -252,7 +249,7 @@ export async function gatherExternalContext(
                 const r = await fetchRawFn({url, signal: deps.signal})
                 return {body: r.markdown.slice(0, RAW_BODY_LIMIT)}
             },
-            search: researchDeps.searchFn
+            search: deps.searchFn
         },
         {
             versionLookup: pkg => npmVersionFn(pkg, {signal: deps.signal}),

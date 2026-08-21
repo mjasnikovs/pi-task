@@ -8,6 +8,7 @@
  * separated by `---`, which we parse back into structured results.
  */
 
+import {httpRequest, HttpRequestError, type FetchLike} from './http-request.js'
 import type {SearchResult} from './search-types.js'
 
 const EXA_MCP_ENDPOINT = 'https://mcp.exa.ai/mcp'
@@ -16,8 +17,9 @@ const MAX_COUNT = 20
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_DESCRIPTION_CHARS = 400
 
-/** Injectable fetch — the narrow signature keeps test fakes free of Bun's extras. */
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
+// `FetchLike` is the request seam's (http-request.ts); re-exported because
+// ddg-search and several tests import it from here.
+export type {FetchLike}
 
 export interface ExaSearchOpts {
     count?: number
@@ -47,25 +49,29 @@ interface ExaMcpRpcResponse {
 
 export async function exaSearch(query: string, opts: ExaSearchOpts = {}): Promise<SearchResult[]> {
     const count = Math.max(1, Math.min(MAX_COUNT, opts.count ?? DEFAULT_COUNT))
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-    const fetchImpl = opts.fetchImpl ?? fetch
 
-    const internalController = new AbortController()
-    let userAborted = false
-    const timeoutHandle = setTimeout(() => internalController.abort(), timeoutMs)
-    const onUserAbort = () => {
-        userAborted = true
-        internalController.abort()
-    }
-    if (opts.signal) {
-        if (opts.signal.aborted) onUserAbort()
-        else opts.signal.addEventListener('abort', onUserAbort, {once: true})
-    }
+    return await request(
+        {
+            timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            ...(opts.signal === undefined ? {} : {signal: opts.signal}),
+            ...(opts.fetchImpl === undefined ? {} : {fetchImpl: opts.fetchImpl})
+        },
+        count,
+        query
+    )
+}
 
+/** The Exa-specific half: its argv, its status policy, its error type. */
+async function request(
+    bounds: {timeoutMs: number; signal?: AbortSignal; fetchImpl?: FetchLike},
+    count: number,
+    query: string
+): Promise<SearchResult[]> {
     try {
-        let response: Response
-        try {
-            response = await fetchImpl(EXA_MCP_ENDPOINT, {
+        return await httpRequest(
+            EXA_MCP_ENDPOINT,
+            {
+                ...bounds,
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json',
@@ -85,44 +91,45 @@ export async function exaSearch(query: string, opts: ExaSearchOpts = {}): Promis
                             contextMaxCharacters: 3000
                         }
                     }
-                }),
-                signal: internalController.signal
-            })
-        } catch (err) {
-            if (userAborted) throw new ExaSearchError('Search aborted.', 'aborted')
-            throw new ExaSearchError(`Exa search request failed: ${describeError(err)}`, 'network')
-        }
+                })
+            },
+            async response => {
+                if (!response.ok) {
+                    throw new ExaSearchError(
+                        `Exa search HTTP ${response.status} ${response.statusText}`,
+                        'http',
+                        response.status
+                    )
+                }
 
-        if (!response.ok) {
-            throw new ExaSearchError(
-                `Exa search HTTP ${response.status} ${response.statusText}`,
-                'http',
-                response.status
-            )
-        }
+                const rpc = parseRpcBody(await response.text())
+                if (rpc.error) {
+                    throw new ExaSearchError(
+                        `Exa MCP error${rpc.error.code !== undefined ? ` ${rpc.error.code}` : ''}: ${rpc.error.message ?? 'unknown error'}`,
+                        'protocol'
+                    )
+                }
+                const text = rpc.result?.content?.find(
+                    c => c.type === 'text' && typeof c.text === 'string' && c.text.trim().length > 0
+                )?.text
+                if (rpc.result?.isError) {
+                    throw new ExaSearchError(
+                        text?.trim() || 'Exa MCP returned an error result.',
+                        'protocol'
+                    )
+                }
+                if (!text) throw new ExaSearchError('Exa MCP returned no text content.', 'protocol')
 
-        const rpc = parseRpcBody(await response.text())
-        if (rpc.error) {
-            throw new ExaSearchError(
-                `Exa MCP error${rpc.error.code !== undefined ? ` ${rpc.error.code}` : ''}: ${rpc.error.message ?? 'unknown error'}`,
-                'protocol'
-            )
+                return parseResultBlocks(text).slice(0, count)
+            }
+        )
+    } catch (err) {
+        if (err instanceof HttpRequestError) {
+            throw err.kind === 'aborted' ?
+                    new ExaSearchError('Search aborted.', 'aborted')
+                :   new ExaSearchError(`Exa search request failed: ${err.detail}`, 'network')
         }
-        const text = rpc.result?.content?.find(
-            c => c.type === 'text' && typeof c.text === 'string' && c.text.trim().length > 0
-        )?.text
-        if (rpc.result?.isError) {
-            throw new ExaSearchError(
-                text?.trim() || 'Exa MCP returned an error result.',
-                'protocol'
-            )
-        }
-        if (!text) throw new ExaSearchError('Exa MCP returned no text content.', 'protocol')
-
-        return parseResultBlocks(text).slice(0, count)
-    } finally {
-        clearTimeout(timeoutHandle)
-        if (opts.signal) opts.signal.removeEventListener('abort', onUserAbort)
+        throw err
     }
 }
 
@@ -185,9 +192,4 @@ function parseResultBlocks(text: string): SearchResult[] {
         results.push({title: title || url, url, description})
     }
     return results
-}
-
-function describeError(err: unknown): string {
-    if (err instanceof Error) return err.message
-    return String(err)
 }

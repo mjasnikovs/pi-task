@@ -256,9 +256,9 @@ interface RunResult {
     mutated: boolean
 }
 
-function runOne(clone: string, command: string): RunResult {
+async function runOne(clone: string, command: string): Promise<RunResult> {
     const before = porcelain(clone)
-    const r = runVerifyCommandLine(clone, command, PER_COMMAND_TIMEOUT_MS)
+    const r = (await runVerifyCommandLine(clone, command, PER_COMMAND_TIMEOUT_MS))
     const after = porcelain(clone)
     const mutated = before !== after
     if (r.outcome === 'pass') return {outcome: 'pass', detail: 'exit 0', mutated}
@@ -276,7 +276,7 @@ function short(s: string, n = 150): string {
     return s.length > n ? `${s.slice(0, n)}…` : s
 }
 
-function main(): void {
+async function main(): Promise<void> {
     const snapshots: RunSnapshot[] = []
     const seenTrees = new Set<string>()
     for (const f of SEARCH_ROOTS.flatMap(r => findLedgers(r))) {
@@ -393,7 +393,7 @@ function main(): void {
                 console.log(`   ${r.snapshot.label} ${r.debt.taskId}: SKIPPED (clone failed)`)
                 continue
             }
-            const res = runOne(clone, r.command!)
+            const res = (await runOne(clone, r.command!))
             console.log(
                 `   ${r.snapshot.label.padEnd(22)} ${r.debt.taskId.padEnd(12)} `
                     + `\`${r.command}\` → ${res.outcome.toUpperCase()} (${short(res.detail, 180)})`
@@ -423,4 +423,4 @@ function main(): void {
     )
 }
 
-main()
+void main()

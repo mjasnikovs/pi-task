@@ -11,6 +11,8 @@
  * short list of recent versions, and the publish date of latest.
  */
 
+import {httpRequest, HttpRequestError} from './http-request.js'
+
 const REGISTRY_BASE = 'https://registry.npmjs.org'
 const DEFAULT_TIMEOUT_MS = 3000
 const RECENT_VERSIONS_LIMIT = 10
@@ -48,48 +50,47 @@ export async function npmVersionLookup(
 
     const base = opts.registry ?? REGISTRY_BASE
     const url = `${base}/${encodePackageName(pkg)}`
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-
-    const internalController = new AbortController()
-    const timeoutHandle = setTimeout(() => internalController.abort(), timeoutMs)
-    const onUserAbort = () => internalController.abort()
-    if (opts.signal) {
-        if (opts.signal.aborted) onUserAbort()
-        else opts.signal.addEventListener('abort', onUserAbort, {once: true})
-    }
 
     try {
-        let response: Response
-        try {
-            response = await fetch(url, {
+        return await httpRequest(
+            url,
+            {
+                timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                ...(opts.signal === undefined ? {} : {signal: opts.signal}),
                 method: 'GET',
-                headers: {accept: 'application/vnd.npm.install-v1+json, application/json'},
-                signal: internalController.signal
-            })
-        } catch {
-            return null
-        }
-        if (!response.ok) return null
+                headers: {accept: 'application/vnd.npm.install-v1+json, application/json'}
+            },
+            async response => {
+                // npm's own status policy: a version banner is a nicety, so every
+                // non-OK answer is simply "no version to report".
+                if (!response.ok) return null
 
-        let body: RegistryResponse
-        try {
-            body = (await response.json()) as RegistryResponse
-        } catch {
-            return null
-        }
+                let body: RegistryResponse
+                try {
+                    body = (await response.json()) as RegistryResponse
+                } catch {
+                    return null
+                }
 
-        const latest = body['dist-tags']?.latest
-        if (typeof latest !== 'string' || latest.length === 0) return null
+                const latest = body['dist-tags']?.latest
+                if (typeof latest !== 'string' || latest.length === 0) return null
 
-        const allVersions = Object.keys(body.versions ?? {})
-        const recent = allVersions.slice(-RECENT_VERSIONS_LIMIT).reverse()
-        const publishedAtRaw = body.time?.[latest]
-        const publishedAt = typeof publishedAtRaw === 'string' ? publishedAtRaw : undefined
+                const allVersions = Object.keys(body.versions ?? {})
+                const recent = allVersions.slice(-RECENT_VERSIONS_LIMIT).reverse()
+                const publishedAtRaw = body.time?.[latest]
+                const publishedAt = typeof publishedAtRaw === 'string' ? publishedAtRaw : undefined
 
-        return {pkg, latest, recent, publishedAt}
-    } finally {
-        clearTimeout(timeoutHandle)
-        if (opts.signal) opts.signal.removeEventListener('abort', onUserAbort)
+                return {pkg, latest, recent, publishedAt}
+            }
+        )
+    } catch (err) {
+        // A user cancel is re-thrown, not swallowed. This module was the copy of the
+        // request ritual that never grew a `userAborted` flag, so a cancelled lookup
+        // returned `null` — indistinguishable from a registry that is down, and the
+        // caller went on assembling a block for a run the user had already stopped.
+        if (err instanceof HttpRequestError && err.kind === 'aborted') throw err
+        if (err instanceof HttpRequestError) return null
+        throw err
     }
 }
 

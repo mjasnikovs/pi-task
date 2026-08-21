@@ -234,7 +234,7 @@ async function runTrial(seam: Seam): Promise<Trial> {
         } catch {
             ok = false
         }
-        return {taskId: id, ok, sessionCancelled: false, ctx: c}
+        return {taskId: id, end: ok ? {kind: 'completed'} : {kind: 'failed'}, ctx: c}
     }
 
     const deps: AutoDeps = {

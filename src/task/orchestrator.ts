@@ -57,6 +57,7 @@ import {cancelCheckpoint} from './cancel-points.js'
 import {rearmCancelListener} from './cancel-input.js'
 import {takeHeldInput} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
+import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
 import type {SpawnFn} from '../shared/child-process.js'
@@ -110,6 +111,25 @@ export interface TaskRunnerOptions {
      * the child is a premise of the test, not its subject.
      */
     runChild?: PhaseDeps['runChild']
+    /**
+     * Test seam: `PhaseDeps.runWorker(label, input)`. Present → every research
+     * worker is answered BY NAME, so the three Research retry gates and the
+     * fatal/runaway/empty classification are reachable from a runner-driven test
+     * without matching a marker sentence inside the prompt.
+     */
+    runWorker?: PhaseDeps['runWorker']
+    /** Test seam: the four EXTERNAL CONTEXT lookups plus the file inventory. Each
+     *  defaults to the real implementation when absent. */
+    lookups?: Pick<
+        PhaseDeps,
+        | 'getFileInventory'
+        | 'docsRaw'
+        | 'fetchRaw'
+        | 'npmVersionLookup'
+        | 'docsFocused'
+        | 'fetchFocused'
+        | 'searchFn'
+    >
     /** Called with the resolved task id once its file exists, before any phase
      *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
      *  interrupted run can be resumed instead of restarted. */
@@ -198,6 +218,8 @@ export class TaskRunner {
             signal: this._abort.signal,
             spawn: opts.spawnFn,
             runChild: opts.runChild,
+            runWorker: opts.runWorker,
+            ...opts.lookups,
             // Deliberately NOT a ChildStatus (child-status.ts): the phase widget's
             // state is the whole-run WidgetState — task id, phase, label — shared by
             // reference with PhaseContext and written by the phases themselves
@@ -257,11 +279,17 @@ export class TaskRunner {
      *  armed for the same window (`withRun`); nested inside `runGatedTask` or
      *  the `/task-auto` loop the bracket refcounts, so this changes nothing there
      *  and covers the fire-and-forget `runSingleTask` path on its own. */
-    async run(): Promise<void> {
+    /**
+     * Run the task and NAME how it ended.
+     *
+     * This returned `void`, so the caller re-read the task file to learn what had
+     * just happened here — see run-end.ts for the report that got wrong.
+     */
+    async run(): Promise<RunEnd> {
         return withRun(this._ctx, {}, () => this._run())
     }
 
-    private async _run(): Promise<void> {
+    private async _run(): Promise<RunEnd> {
         const cwd = this._cwd
         const ctx = this._ctx
 
@@ -385,6 +413,7 @@ export class TaskRunner {
             await setTaskSection(cwd, id, 'phase timings', formatTimings(this._timings))
             await setTaskSection(cwd, id, 'handoff', `handoff_at: ${new Date().toISOString()}`)
             await this._deliverSpec(ctx)
+            return {kind: 'completed'}
         } catch (err) {
             this._disposeWidget()
             // Persist whatever timings we collected so failed runs are still
@@ -396,7 +425,12 @@ export class TaskRunner {
                     /* ignore — preserve original failure */
                 }
             }
-            await handleFailure(err, ctx, cwd, id, this._abort.signal.aborted)
+            // `classifyFailure` already decided whether this was a cancel or a
+            // fault; the value is the answer, not a side effect of writing a file.
+            const c = await handleFailure(err, ctx, cwd, id, this._abort.signal.aborted)
+            return c.state === 'cancelled' ?
+                    {kind: 'cancelled'}
+                :   {kind: 'failed', ...(c.reason === undefined ? {} : {reason: c.reason})}
         } finally {
             this._disposeWidget()
             clearActiveTask(this)
@@ -482,7 +516,14 @@ export class TaskRunner {
 
 export interface RunSingleTaskOptions extends Pick<
     TaskRunnerOptions,
-    'resumeId' | 'spawnFn' | 'runChild' | 'onStart' | 'planContext' | 'fixInstruction'
+    | 'resumeId'
+    | 'spawnFn'
+    | 'runChild'
+    | 'runWorker'
+    | 'lookups'
+    | 'onStart'
+    | 'planContext'
+    | 'fixInstruction'
 > {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
@@ -507,8 +548,15 @@ export interface RunSingleTaskOptions extends Pick<
 
 export interface RunSingleTaskResult {
     taskId: string
-    ok: boolean
-    sessionCancelled: boolean
+    /**
+     * How the run ended, named by the runner rather than re-derived from disk.
+     *
+     * This was `ok: boolean` plus `sessionCancelled`, `interrupted` and `reason`
+     * — four fields for one fact, three of them smuggled out of the `withSession`
+     * closure through mutable captures. `/task-cancel` fell into the `!ok` arm
+     * and was reported as a failure; see run-end.ts.
+     */
+    end: RunEnd
     /**
      * The session context the caller must use for any work after this call. A
      * successful run replaces the session via ctx.newSession(), which leaves the
@@ -518,31 +566,16 @@ export interface RunSingleTaskResult {
      * only so test fakes that don't model session replacement can omit it.
      */
     ctx?: ExtensionCommandContext
-    /**
-     * Set when the user interrupted the implementation (ESC) and then declined to
-     * steer (submitted an empty steer prompt) — i.e. they want the run to pause
-     * rather than continue. Only meaningful with waitForImplementation. The
-     * /task-auto loop reads this to pause (resumable) instead of checking the task
-     * off and advancing. A plain ESC that the user follows with steering text does
-     * NOT set this — that case loops on the same task until a turn finishes
-     * uninterrupted.
-     */
-    interrupted?: boolean
-    /**
-     * Why the run is not ok, when known. Set when a waitForImplementation turn
-     * ended with stopReason "error" (the model/provider died mid-implementation —
-     * e.g. a context-overflow 400 — after the task file was already marked
-     * `completed` at spec-handoff). The /task-auto loop surfaces this in its
-     * "stopped at …" message so the real cause isn't lost. Undefined otherwise.
-     */
-    reason?: string
 }
 
 /**
  * Run one prompt through the full single-task pipeline in a fresh session and
  * deliver its spec. With waitForImplementation, block until the agent finishes
- * implementing the delivered spec. Success is read off the produced task file's
- * front-matter state (TaskRunner.run never throws).
+ * implementing the delivered spec.
+ *
+ * The ending comes from `TaskRunner.run`. It used to be read back off the task
+ * file's front matter — a disk round-trip this process made to learn what it had
+ * just done, and one that could not tell a cancel from a failure.
  */
 export async function runSingleTask(
     ctx: ExtensionCommandContext,
@@ -551,6 +584,9 @@ export async function runSingleTask(
     opts: RunSingleTaskOptions = {}
 ): Promise<RunSingleTaskResult> {
     let taskId = ''
+    // How the runner said it ended. `no-session` until it has run at all — the
+    // withSession callback below may never be entered.
+    let runEnd: RunEnd = {kind: 'no-session'} as RunEnd
     // The newSession replacement ctx, captured so the caller can keep driving the
     // UI after the original ctx is torn down. Defaults to the original for the
     // cancellation path (where no replacement occurs).
@@ -594,12 +630,14 @@ export async function runSingleTask(
                 },
                 spawnFn: opts.spawnFn,
                 runChild: opts.runChild,
+                runWorker: opts.runWorker,
+                lookups: opts.lookups,
                 onStart: opts.onStart,
                 planContext: opts.planContext,
                 fixInstruction: opts.fixInstruction,
                 implAwaited: opts.waitForImplementation
             })
-            await runner.run()
+            runEnd = await runner.run()
             taskId = runner.taskId
         }
     })
@@ -612,34 +650,29 @@ export async function runSingleTask(
                 'pi-end'
             ).catch(() => {})
         }
-        return {taskId, ok: false, sessionCancelled: true, ctx}
+        return {taskId, end: {kind: 'no-session'}, ctx}
     }
-    let ok = false
-    let state: string | undefined
-    if (taskId) {
-        try {
-            const {frontMatter} = await readTaskFile(cwd, taskId)
-            state = frontMatter.state
-            ok = state === 'completed'
-        } catch {
-            ok = false
-        }
-    }
-    // The file reads `completed` from spec-handoff even when the implementation
-    // turn then died. Demote to a failure so /task-auto stops here (leaving the
-    // entry unchecked and resumable) instead of committing and advancing.
-    if (ok && implError) ok = false
+    // The runner already named the ending. What the SUPERVISION adds is the two
+    // endings the runner cannot see, because they happen after the spec is
+    // delivered and the task file already reads `completed`:
+    //
+    //   • the user interrupted and declined to steer — a pause, not a fault;
+    //   • the implementation turn died with stopReason "error" (a context-overflow
+    //     400, say), which must stop /task-auto here rather than let it commit and
+    //     advance on a file that says `completed`.
+    //
+    // Both used to reach the caller as extra fields beside a boolean, and both are
+    // endings.
+    let end = runEnd
+    if (end.kind === 'completed' && interrupted) end = {kind: 'interrupted'}
+    else if (end.kind === 'completed' && implError) end = {kind: 'failed', reason: implError}
     if (opts.notifyFinish) {
-        // One push per top-level /task or /task-resume, on any terminal end. The
-        // file state is the source of truth: 'completed' on success, 'failed' /
-        // 'cancelled' otherwise; an unreadable/absent file falls back to 'ended'.
-        void pushNotify(
-            'Task finished',
-            `${taskId || 'Task'} ${state ?? 'ended'}.`,
-            'pi-end'
-        ).catch(() => {})
+        // One push per top-level /task or /task-resume, on any terminal end.
+        void pushNotify('Task finished', `${taskId || 'Task'} ${end.kind}.`, 'pi-end').catch(
+            () => {}
+        )
     }
-    return {taskId, ok, sessionCancelled: false, ctx: freshCtx, interrupted, reason: implError}
+    return {taskId, end, ctx: freshCtx}
 }
 
 // ─── Gated single-task flow ────────────────────────────────────────────────────
@@ -728,19 +761,22 @@ async function runGatedTaskInner(
     const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId})
     active = res.ctx ?? active
     const tag = res.taskId || 'Task'
-    if (res.sessionCancelled) {
-        announce(`${tag} — could not start a fresh session for /task.`, 'warning')
-        return
-    }
-    if (res.interrupted) {
-        await markResumable(cwd, res.taskId)
-        announce(`${tag} paused — resume with /task-resume.`, 'warning')
-        return
-    }
-    if (!res.ok) {
-        await markResumable(cwd, res.taskId)
-        const why = res.reason ? ` — ${res.reason.slice(0, 160)}` : ''
-        announce(`${tag} stopped${why} — fix and run /task-resume.`, 'error')
+    // One dispatch over the named ending. The four-branch ladder this replaces put
+    // a CANCELLED run into the `!ok` arm, so `/task-cancel` overwrote the file's
+    // `cancelled` with `failed` and told the user their task had stopped and needed
+    // fixing. Resumability comes from RUN_END_POLICY; the wording stays here,
+    // because `/task-auto` says `/task-auto-resume` where this says `/task-resume`.
+    if (!runSucceeded(res.end)) {
+        const policy = RUN_END_POLICY[res.end.kind]
+        if (policy.resumable) await markResumable(cwd, res.taskId)
+        const why =
+            res.end.kind === 'failed' && res.end.reason ? ` — ${res.end.reason.slice(0, 160)}` : ''
+        const msg =
+            res.end.kind === 'no-session' ? `${tag} — could not start a fresh session for /task.`
+            : res.end.kind === 'cancelled' ? `${tag} cancelled.`
+            : res.end.kind === 'interrupted' ? `${tag} paused — resume with /task-resume.`
+            : `${tag} stopped${why} — fix and run /task-resume.`
+        announce(msg, policy.level)
         return
     }
 
@@ -798,8 +834,8 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
         await runGatedTask(ctx, cwd, raw)
         return
     }
-    const {sessionCancelled} = await runSingleTask(ctx, cwd, raw, {notifyFinish: true})
-    if (sessionCancelled) {
+    const {end} = await runSingleTask(ctx, cwd, raw, {notifyFinish: true})
+    if (end.kind === 'no-session') {
         ctx.ui.notify('Could not start a fresh session for /task.', 'warning')
     }
 }
@@ -885,8 +921,8 @@ async function handleTaskResume(args: string, ctx: ExtensionCommandContext): Pro
         await runGatedTask(ctx, cwd, '', {resumeId: id})
         return
     }
-    const {sessionCancelled} = await runSingleTask(ctx, cwd, '', {resumeId: id, notifyFinish: true})
-    if (sessionCancelled) {
+    const {end} = await runSingleTask(ctx, cwd, '', {resumeId: id, notifyFinish: true})
+    if (end.kind === 'no-session') {
         ctx.ui.notify('Could not start a fresh session for /task-resume.', 'warning')
     }
 }

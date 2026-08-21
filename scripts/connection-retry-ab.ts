@@ -4,7 +4,7 @@
  *
  * THE GAP IT MEASURES. `runWorker` (src/workers/pi-worker-core.ts) restarts on a
  * loop kill, a hung command, a stalled stream and a wall-clock timeout, but had no
- * branch for a connection-class `modelError` — while `runPhaseWithLoopGuard`
+ * branch for a connection-class `modelError` — while `runPhaseChild`
  * (src/task/child-runner.ts) has retried exactly that since the connection-retry
  * work. So one dropped fetch inside any of the four research workers failed the
  * whole task at research, while the identical blip in refine/compose was absorbed.
