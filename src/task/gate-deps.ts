@@ -26,7 +26,7 @@ import {readEnvNotes, appendEnvNotes} from './env-notes.js'
 import {readContracts} from './contracts.js'
 import {recordDebt} from './accept-debt.js'
 import {recordRepairCandidate} from './root-cause-repair.js'
-import {runRepoHealthCheck, runRepoHealthCheckAsync} from './repo-health-check.js'
+import {runRepoHealthCheck} from './repo-health-check.js'
 import {
     runFinalIntegrationGate,
     discoverGateCommandLabels,
@@ -890,15 +890,20 @@ export function buildGateDeps(params: {
                     // own lint/typecheck and fails on a real non-zero exit, independent of
                     // the model-authored VERIFY block (which may not lint at all). ASYNC:
                     // the sync runner froze the event loop for the whole lint (see above).
+                    // ONE call, both arms. The baseline arm used to call this
+                    // without the signal or the progress hook, because
+                    // `runRepoHealthCheck` was SYNCHRONOUS and blocking the event
+                    // loop was the thing being measured. It is async now, so that
+                    // branch measured treatment against treatment — and it also
+                    // made `DEADAIR_AB_ARM=baseline` silently uncancellable and
+                    // mute. The arm's real difference is the LOADER, above.
                     repoHealth: () =>
-                        deadAirBaseline ?
-                            Promise.resolve(runRepoHealthCheck(cwd2))
-                        :   runRepoHealthCheckAsync(cwd2, {
-                                signal,
-                                onCommand: c => {
-                                    stageLine = `repo health · ${c}`
-                                }
-                            }),
+                        runRepoHealthCheck(cwd2, {
+                            signal,
+                            onCommand: c => {
+                                stageLine = `repo health · ${c}`
+                            }
+                        }),
                     // The deterministic probes, bound in one place (buildVerifyProbes
                     // above); the PROBE_ADAPTERS table in verify-work.ts runs them.
                     probes: buildVerifyProbes({
@@ -952,7 +957,7 @@ export function buildGateDeps(params: {
                 signal,
                 failReason,
                 runChild: gateChild(fixCtx, cwd2, taskTitle, 'lint-fix', 'verify-debug.log'),
-                repoHealth: () => runRepoHealthCheckAsync(cwd2, {signal}),
+                repoHealth: () => runRepoHealthCheck(cwd2, {signal}),
                 git: async args => {
                     const r = await git(cwd2, args, signal)
                     return {exitCode: r.exitCode, stdout: r.stdout}
@@ -984,7 +989,7 @@ export function buildGateDeps(params: {
                 startedAt,
                 lastLine: running ? `repo health · ${running}` : 'repo health'
             }))
-            return runRepoHealthCheckAsync(cwd2, {
+            return runRepoHealthCheck(cwd2, {
                 signal,
                 onCommand: c => {
                     running = c
@@ -1014,7 +1019,9 @@ export function buildGateDeps(params: {
                 ),
                 // The gate re-run is the only arbiter of convergence, and the
                 // shrink guard's discovery is the gate's own (see final-gate.ts).
-                gate: c => runFinalIntegrationGate(c),
+                // The run's cancel reaches the re-run too. Without it the whole
+                // `FinalGateOptions.signal` path is inert in the shipped code.
+                gate: c => runFinalIntegrationGate(c, {signal}),
                 discoverLabels: discoverGateCommandLabels,
                 discoverBodies: discoverGateCommandBodies,
                 discard: discardTreeEdits,
@@ -1046,7 +1053,7 @@ export function buildGateDeps(params: {
                     gatePassesWithoutIgnored(
                         cwd2,
                         paths,
-                        c => runFinalIntegrationGate(c),
+                        c => runFinalIntegrationGate(c, {signal}),
                         makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))
                     ),
                 log: makeDebugAppender(path.join(tasksDir(cwd2), 'final-gate-debug.log'))

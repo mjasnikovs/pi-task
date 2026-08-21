@@ -233,7 +233,7 @@ async function replay(params: {
     const deps: AutoDeps = {
         runChild: () => Promise.resolve(''),
         runTask: () =>
-            Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true}),
         record: (_c, _id, line) => {
             trail.push(line)
@@ -258,8 +258,7 @@ async function replay(params: {
                 return Promise.resolve({
                     ok: false,
                     reason: `did not converge: ${params.failures[0]}`,
-                    gateReason: params.failures[0],
-                    gateFailures: params.failures
+                    gate: {ok: false, reason: params.failures[0], failures: params.failures}
                 })
             }
             converged = true
@@ -270,8 +269,7 @@ async function replay(params: {
                 return Promise.resolve({
                     ok: false,
                     reason: `did not converge: ${params.failures[0]}`,
-                    gateReason: params.failures[0],
-                    gateFailures: [params.failures[0]]
+                    gate: {ok: false, reason: params.failures[0], failures: [params.failures[0]]}
                 })
             }
             return Promise.resolve({

@@ -2,6 +2,7 @@ import {parseHTML} from 'linkedom'
 import {Readability} from '@mozilla/readability'
 import TurndownService from 'turndown'
 import {readPkgVersion} from '../shared/pkg-version.js'
+import {httpRequest, HttpRequestError, describeError} from './http-request.js'
 
 export interface CleanResult {
     title: string
@@ -120,120 +121,110 @@ export async function fetchAndClean(
     url: string,
     opts: FetchAndCleanOpts = {}
 ): Promise<CleanResult> {
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
-
-    const internalController = new AbortController()
     let sizeExceeded = false
-    let userAborted = false
-
-    const timeoutHandle = setTimeout(() => internalController.abort(), timeoutMs)
-    const onUserAbort = () => {
-        userAborted = true
-        internalController.abort()
-    }
-    if (opts.signal) {
-        if (opts.signal.aborted) onUserAbort()
-        else opts.signal.addEventListener('abort', onUserAbort, {once: true})
-    }
 
     try {
-        let response: Response
-        try {
-            response = await fetch(url, {
+        return await httpRequest(
+            url,
+            {
+                timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                ...(opts.signal === undefined ? {} : {signal: opts.signal}),
                 headers: {'user-agent': USER_AGENT},
-                redirect: 'follow',
-                signal: internalController.signal
-            })
-        } catch (err) {
-            if (userAborted) {
-                throw new FetchAndCleanError('Fetch aborted.', 'aborted', err)
-            }
-            throw new FetchAndCleanError(
-                `Could not fetch ${url}: ${describeError(err)}`,
-                'network',
-                err
-            )
-        }
-
-        if (!response.ok) {
-            throw new FetchAndCleanError(
-                `Fetch failed: HTTP ${response.status} ${response.statusText} for ${url}`,
-                'http-error'
-            )
-        }
-
-        const contentType = response.headers.get('content-type') ?? ''
-        const kind = classifyContentType(contentType)
-        if (kind === 'reject') {
-            throw new FetchAndCleanError(
-                `${url} is ${contentType || 'unknown content type'}, not a text or HTML page that pi-worker-fetch can read.`,
-                'not-html'
-            )
-        }
-
-        const reader = response.body?.getReader()
-        if (!reader) {
-            throw new FetchAndCleanError(`Could not fetch ${url}: empty response body`, 'network')
-        }
-
-        const decoder = decoderFor(contentType)
-        let text = ''
-        let bytesRead = 0
-        try {
-            while (true) {
-                // response.body's stream type doesn't resolve here, so the chunk
-                // surfaces as `any`; pin it to the Uint8Array the reader yields.
-                const {value, done} = (await reader.read()) as {
-                    value?: Uint8Array
-                    done: boolean
+                redirect: 'follow'
+            },
+            async (response, ctl) => {
+                if (!response.ok) {
+                    throw new FetchAndCleanError(
+                        `Fetch failed: HTTP ${response.status} ${response.statusText} for ${url}`,
+                        'http-error'
+                    )
                 }
-                if (done) break
-                if (value) {
-                    bytesRead += value.byteLength
-                    if (bytesRead > maxBytes) {
-                        sizeExceeded = true
-                        internalController.abort()
-                        break
+
+                const contentType = response.headers.get('content-type') ?? ''
+                const kind = classifyContentType(contentType)
+                if (kind === 'reject') {
+                    throw new FetchAndCleanError(
+                        `${url} is ${contentType || 'unknown content type'}, not a text or HTML page that pi-worker-fetch can read.`,
+                        'not-html'
+                    )
+                }
+
+                const reader = response.body?.getReader()
+                if (!reader) {
+                    throw new FetchAndCleanError(
+                        `Could not fetch ${url}: empty response body`,
+                        'network'
+                    )
+                }
+
+                const decoder = decoderFor(contentType)
+                let text = ''
+                let bytesRead = 0
+                try {
+                    while (true) {
+                        // response.body's stream type doesn't resolve here, so the chunk
+                        // surfaces as `any`; pin it to the Uint8Array the reader yields.
+                        const {value, done} = (await reader.read()) as {
+                            value?: Uint8Array
+                            done: boolean
+                        }
+                        if (done) break
+                        if (value) {
+                            bytesRead += value.byteLength
+                            if (bytesRead > maxBytes) {
+                                // OUR abort, told apart from the user's and the clock's
+                                // by the seam — all three abort the same signal.
+                                sizeExceeded = true
+                                ctl.abort()
+                                break
+                            }
+                            text += decoder.decode(value, {stream: true})
+                        }
                     }
-                    text += decoder.decode(value, {stream: true})
+                    text += decoder.decode()
+                } catch (err) {
+                    if (sizeExceeded) {
+                        // fall through to throw outside the catch
+                    } else if (ctl.userAborted()) {
+                        throw new FetchAndCleanError('Fetch aborted.', 'aborted', err)
+                    } else {
+                        throw new FetchAndCleanError(
+                            `Could not fetch ${url}: ${describeError(err)}`,
+                            'network',
+                            err
+                        )
+                    }
+                }
+
+                if (sizeExceeded) {
+                    throw new FetchAndCleanError(
+                        `${url} exceeds ${formatBytes(maxBytes)} size cap. Try a more specific URL.`,
+                        'too-large'
+                    )
+                }
+
+                const finalUrl = response.url || url
+                if (kind === 'html') return cleanHtml(text, finalUrl)
+                // text-ish formats are already clean — return them verbatim.
+                return {
+                    title: hostnameOf(finalUrl),
+                    markdown: text.trim(),
+                    finalUrl
                 }
             }
-            text += decoder.decode()
-        } catch (err) {
-            if (sizeExceeded) {
-                // fall through to throw outside the catch
-            } else if (userAborted) {
-                throw new FetchAndCleanError('Fetch aborted.', 'aborted', err)
-            } else {
-                throw new FetchAndCleanError(
-                    `Could not fetch ${url}: ${describeError(err)}`,
-                    'network',
-                    err
-                )
-            }
+        )
+    } catch (err) {
+        if (err instanceof HttpRequestError) {
+            throw err.kind === 'aborted' ?
+                    new FetchAndCleanError('Fetch aborted.', 'aborted', err.cause)
+                :   new FetchAndCleanError(
+                        `Could not fetch ${url}: ${err.detail}`,
+                        'network',
+                        err.cause
+                    )
         }
-
-        if (sizeExceeded) {
-            throw new FetchAndCleanError(
-                `${url} exceeds ${formatBytes(maxBytes)} size cap. Try a more specific URL.`,
-                'too-large'
-            )
-        }
-
-        const finalUrl = response.url || url
-        if (kind === 'html') {
-            return cleanHtml(text, finalUrl)
-        }
-        // text-ish formats are already clean — return them verbatim.
-        return {
-            title: hostnameOf(finalUrl),
-            markdown: text.trim(),
-            finalUrl
-        }
-    } finally {
-        clearTimeout(timeoutHandle)
-        if (opts.signal) opts.signal.removeEventListener('abort', onUserAbort)
+        throw err
     }
 }
 
@@ -243,11 +234,6 @@ function hostnameOf(url: string): string {
     } catch {
         return url
     }
-}
-
-function describeError(err: unknown): string {
-    if (err instanceof Error) return err.message
-    return String(err)
 }
 
 function formatBytes(n: number): string {

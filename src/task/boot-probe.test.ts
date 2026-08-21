@@ -21,7 +21,8 @@ import {
     parseSsListeners,
     parseNetstatListeners,
     parseLsofListeners,
-    pickFreePort
+    pickFreePort,
+    runBootSection
 } from './boot-probe.js'
 
 // Some cases exercise irreducibly-POSIX process mechanics — death by a Unix signal
@@ -679,5 +680,58 @@ describe('detectsServedApp (run 10 item 1)', () => {
         const dir = makeDir({dependencies: {chalk: '^5'}})
         expect(detectsServedApp(dir)).toBe(false)
         expect(detectsServedApp(dir, 'The app serves /api and static dist/ over HTTP')).toBe(true)
+    })
+})
+
+// ─── runBootSection: the boot CONCEPT, in one module ─────────────────────────
+//
+// These branches used to live in `final-gate.ts` — the four-armed BootOutcome
+// destructure, the probe defaults, orphan-port recovery, the port-holder
+// diagnosis sentence, the skip verdict and the rejected-launch-script arm — so
+// reaching any of them meant driving the whole run-end gate over a temp tree.
+describe('runBootSection', () => {
+    test('no launch surface at all → nothing attempted, nothing observed, no note', async () => {
+        const v = await runBootSection(makeDir({scripts: {test: 't'}}))
+        expect(v.attempted).toBeUndefined()
+        expect(v.observed).toBe(false)
+        expect(v.unobservedNote).toBeUndefined()
+        expect(v.failure).toBeUndefined()
+    })
+
+    test('a REJECTED launch script on a served app is UNOBSERVED, not silence', async () => {
+        // 2A: "the project has no launch script" and "the project's only launch
+        // script is not a launch" are different facts, and the second must not
+        // degrade into the first.
+        const dir = makeDir({
+            scripts: {start: 'docker compose -f docker-compose.dev.yml up -d'},
+            dependencies: {hono: '^4'}
+        })
+        const v = await runBootSection(dir, {planText: 'serves an HTTP API on port 3000'})
+        expect(v.attempted).toBeUndefined()
+        expect(v.observed).toBe(false)
+        expect(v.unobservedNote).toContain('is not a')
+        expect(v.unobservedNote).toContain('never')
+    })
+
+    test('a boot that FAILS is a rank-0 failure a probe OBSERVED', async () => {
+        // OBSERVED (nexttask 19A): the launch command itself exited non-zero, which
+        // is a probe having looked — distinct from the harness conditions below.
+        const dir = makeDir({scripts: {start: 'echo boom 1>&2; exit 3'}})
+        const v = await runBootSection(dir, {graceMs: 500})
+        expect(v.attempted).toBe('bun')
+        expect(v.observed).toBe(true)
+        expect(v.failure?.rank).toBe(0)
+        expect(v.failure?.observed).toBe(true)
+        expect(v.failure?.detail).toContain('boot check: `bun run start`')
+        expect(v.failure?.detail).toContain('exited 3')
+        expect(v.ranLabel).toBeUndefined()
+    })
+
+    test('a CLI-style boot that exits 0 RAN, and produced no failure', async () => {
+        const dir = makeDir({scripts: {start: 'exit 0'}})
+        const v = await runBootSection(dir, {graceMs: 500})
+        expect(v.observed).toBe(true)
+        expect(v.failure).toBeUndefined()
+        expect(v.ranLabel).toBe('bun run start')
     })
 })

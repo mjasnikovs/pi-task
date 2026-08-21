@@ -27,6 +27,14 @@ import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 import {getConfig} from '../config/config.js'
 import type {DebugLine} from './debug-log.js'
+// Type-only: `PhaseDeps` declares the research/auto-answer seams, and a seam is
+// declared by the shape of the thing it stands in for. Erased at compile time,
+// so this does not make the child runner depend on the worker modules.
+import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
+import type {docsRaw, docsFocused} from '../workers/docs-core.js'
+import type {fetchRaw, fetchFocused} from '../workers/fetch-core.js'
+import type {npmVersionLookup} from '../workers/npm-version.js'
+import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
 
 // ─── Loop detection constants ────────────────────────────────────────────────
 // Defined here (not in phases.ts) to avoid a circular dependency:
@@ -350,6 +358,53 @@ interface PhaseDeps {
      * the rungs. This seam is for callers to whom the child is a premise.
      */
     runChild?: (name: string, tools: string, prompt: string) => Promise<string>
+
+    // ─── Research + auto-answer seams ────────────────────────────────────────
+    //
+    // These used to be two trailing `= {}` dep bags on `phaseResearch` and
+    // `phaseAutoAnswer` (`PhaseResearchDeps`, `PhaseAutoAnswerDeps`). Nothing in
+    // production ever passed either — `PhaseConfig.run` takes `(deps, pc)`, so a
+    // row physically could not reach a third parameter — which left nine seams
+    // that only a direct call could use and ~30 routing decisions in two suites
+    // keyed on prompt PROSE. They belong here for exactly the reason `runChild`
+    // does: this is the interface a phase's children are a premise behind, and
+    // it is already threaded end to end from `TaskRunnerOptions`.
+    //
+    // Each defaults to the real implementation when absent, so production wiring
+    // is untouched.
+
+    /**
+     * Run ONE research worker. Absent (production) → the real `runWorker`.
+     *
+     * Every decision `runSpec` makes — the three Research retry gates, the
+     * fatal/runaway/empty classification, the marker choice, `postProcess` — is a
+     * pure function of the returned `RunWorkerResult`, but reaching any of them
+     * otherwise requires driving a fake process that emits JSON events.
+     *
+     * `label` is the worker's name — the same one `recordWorker` trails — because
+     * a substitute must answer differently per worker, and the only alternative
+     * is matching a marker sentence inside the prompt. Same reason `runChild`
+     * takes a name.
+     */
+    runWorker?: (label: string, input: RunWorkerInput) => Promise<RunWorkerResult>
+    /** The project file inventory handed to every research worker's header. */
+    getFileInventory?: (cwd: string, signal?: AbortSignal) => Promise<string>
+    /** RAW docs lookup — the research phase's EXTERNAL CONTEXT variant. */
+    docsRaw?: typeof docsRaw
+    /** RAW url fetch — the research phase's EXTERNAL CONTEXT variant. */
+    fetchRaw?: typeof fetchRaw
+    /** Live npm version lookup for the research phase's named deps. */
+    npmVersionLookup?: typeof npmVersionLookup
+    /** FOCUSED docs lookup — the grill auto-answer's variant. */
+    docsFocused?: typeof docsFocused
+    /** FOCUSED url fetch — the grill auto-answer's variant. */
+    fetchFocused?: typeof fetchFocused
+    /**
+     * Live web search. ONE field, not two: the research phase and the auto-answer
+     * differ in the doc/url worker VARIANT (raw vs focused) and in POLICY, never
+     * in how they search — the two dep bags declared it identically.
+     */
+    searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
 }
 
 export type {PhaseDeps}
@@ -374,18 +429,18 @@ type LadderStep = {done: true; text: string} | {done: false; hint?: string}
  * tool call. Callers own the loop, the prompt and the hint; this owns the
  * verdict, so a fix to any rung lands in every caller at once.
  *
- * `attempt` is the caller's 0-based counter (its attempt/strike), `budget` the
- * matching restart allowance (MAX_LEAK_RETRIES for runPhaseChild's leak budget,
- * MAX_LOOP_RESTARTS for runPhaseWithLoopGuard's strike budget) — so both run
- * `budget + 1` attempts in total before a rung gives up and throws.
+ * `attempt` is the caller's 0-based counter, `budget` the matching restart
+ * allowance (MAX_LEAK_RETRIES, which is also MAX_LOOP_RESTARTS — the loop and
+ * leak budgets were separate constants at the same value and are shared by one
+ * loop now) — so a phase runs `budget + 1` attempts before a rung gives up.
  *
- * `verb` names the caller's restart in the debug log ("retry" for runPhaseChild,
- * "restart" for runPhaseWithLoopGuard). It is the only externally visible thing
- * that differs between the two, and the only way to tell from a debug log which
- * wrapper produced a given line — so it is passed in rather than hardcoded.
+ * `verb` names the restart in the debug log ("retry" by default, "restart" for
+ * refine and grill-gen). It is the only externally visible thing that differed
+ * between the two loops this collapsed, and the only way to tell from a debug
+ * log which phase produced a line — so it is passed in rather than hardcoded.
  *
- * A loop kill (`r.loopHit`) is NOT handled here: only runPhaseWithLoopGuard
- * detects loops, and it must consume the hit before calling this.
+ * A loop kill (`r.loopHit`) is NOT handled here: the caller detects loops and
+ * must consume the hit before calling this.
  */
 async function triageChildResult(
     deps: PhaseDeps,
@@ -464,13 +519,17 @@ export async function runPhaseChild(
     deps: PhaseDeps,
     name: string,
     tools: string,
-    prompt: string
+    prompt: string,
+    opts: PhaseChildOptions = {}
 ): Promise<string> {
     if (deps.runChild) return await deps.runChild(name, tools, prompt)
+    const verb = opts.verb ?? 'retry'
     let hint: string | null = null
     const loopHistory: LoopHit[] = []
     const budgetMs = deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS
     for (let attempt = 0; attempt <= MAX_LEAK_RETRIES; attempt++) {
+        // A cancel between attempts must not buy another spawn.
+        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
         const stall = new StallDetector()
         const clock = phaseTimeout(deps.signal, budgetMs)
@@ -497,13 +556,31 @@ export async function runPhaseChild(
         // A user cancel must not be mistaken for any of the guards.
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         if (r.loopHit) {
+            const isLastStrike = attempt === MAX_LEAK_RETRIES
             loopHistory.push(r.loopHit)
-            if (attempt === MAX_LEAK_RETRIES) throw new LoopExhaustedError(name, loopHistory)
+            await appendLoopEvent(
+                deps.cwd,
+                deps.taskId,
+                name,
+                r.loopHit,
+                attempt + 1,
+                isLastStrike ?
+                    opts.degradeOnExhaustion ?
+                        'degraded — no-tools final attempt'
+                    :   'phase failed'
+                :   'restarted with hint'
+            )
+            if (isLastStrike) {
+                if (opts.degradeOnExhaustion) {
+                    return await runDegradedFinalAttempt(deps, name, prompt, r.loopHit, loopHistory)
+                }
+                throw new LoopExhaustedError(name, loopHistory)
+            }
             deps.logDebug?.(
                 r.loopHit.stall ?
                     `${name}: stalled (${r.loopHit.stall}) on ${r.loopHit.call.name} — `
-                        + `retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
-                :   `${name}: looped on ${r.loopHit.call.name} — retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+                        + `${verb} ${attempt + 1}/${MAX_LEAK_RETRIES}`
+                :   `${name}: looped on ${r.loopHit.call.name} — ${verb} ${attempt + 1}/${MAX_LEAK_RETRIES}`
             )
             hint = r.loopHit.stall ? formatStallHint(r.loopHit.stall) : formatLoopHint(r.loopHit)
             continue
@@ -514,12 +591,12 @@ export async function runPhaseChild(
             }
             deps.logDebug?.(
                 `${name}: exceeded its ${Math.round(budgetMs / 1000)}s budget — `
-                    + `retry ${attempt + 1}/${MAX_LEAK_RETRIES}`
+                    + `${verb} ${attempt + 1}/${MAX_LEAK_RETRIES}`
             )
             hint = PHASE_TIMEOUT_HINT
             continue
         }
-        const step = await triageChildResult(deps, name, r, attempt, MAX_LEAK_RETRIES, 'retry')
+        const step = await triageChildResult(deps, name, r, attempt, MAX_LEAK_RETRIES, verb)
         if (step.done) return step.text
         if (step.hint !== undefined) hint = step.hint
     }
@@ -560,6 +637,15 @@ export function prependHint(hint: string | null, prompt: string): string {
     return hint === null ? prompt : `${hint}\n\n${prompt}`
 }
 
+/**
+ * Append one line to the task file's `loop events` section.
+ *
+ * Best-effort by contract: it runs for EVERY phase child now that there is one
+ * loop, and the six sites that used to reach the un-trailed wrapper do not all
+ * own a task file on disk (a scripted harness, a bare unit deps bag). A trail
+ * that cannot be written must cost the phase nothing — the loop kill itself is
+ * already reported through the debug log and the thrown LoopExhaustedError.
+ */
 async function appendLoopEvent(
     cwd: string,
     taskId: string,
@@ -573,17 +659,29 @@ async function appendLoopEvent(
     const line =
         `- ${ts}  ${phase}  strike ${strike}/${MAX_LOOP_RESTARTS + 1}  `
         + `${hit.call.name}(${argsStr}) ×${hit.count} in last ${hit.windowSize} calls  → ${outcome}`
-    const existing = (await readSection(cwd, taskId, 'loop events')) ?? ''
-    const next = existing ? `${existing}\n${line}` : line
-    await setTaskSection(cwd, taskId, 'loop events', next)
+    try {
+        const existing = (await readSection(cwd, taskId, 'loop events')) ?? ''
+        const next = existing ? `${existing}\n${line}` : line
+        await setTaskSection(cwd, taskId, 'loop events', next)
+    } catch {
+        /* best-effort: a trail is never worth failing a phase for */
+    }
 }
 
 /**
- * Run a phase child with loop detection. On a detected loop, kill and re-spawn
- * with a hint that names the offending call. Cap at MAX_LOOP_RESTARTS restarts;
- * the (MAX_LOOP_RESTARTS+1)th loop throws LoopExhaustedError.
+ * The two things a phase child can disagree about. Everything else — the loop
+ * and stall detectors, the wall clock, the loop trail, the triage ladder and its
+ * budget — is the one loop's, because the two wrappers that used to differ
+ * disagreed on nothing else that was ever observable.
  */
-export interface LoopGuardOptions {
+export interface PhaseChildOptions {
+    /**
+     * The wrapper's own word in the debug log for "we are going round again".
+     * An option rather than one word because it is the single externally visible
+     * difference between the two loops this collapsed, and the debug trail of a
+     * real run is read by a human who knows which phases restart and which retry.
+     */
+    verb?: 'retry' | 'restart'
     /**
      * When the strike budget is exhausted by loops, do NOT fail the phase. Run
      * ONE final attempt with NO tools and a terminal hint ordering the model to
@@ -594,82 +692,6 @@ export interface LoopGuardOptions {
      * their output depends on real reads, so a no-tools fallback would fabricate.
      */
     degradeOnExhaustion?: boolean
-}
-
-export async function runPhaseWithLoopGuard(
-    deps: PhaseDeps,
-    name: string,
-    tools: string,
-    buildPrompt: (loopHint: string | null) => string,
-    opts: LoopGuardOptions = {}
-): Promise<string> {
-    // The substitute stands in for the whole guarded run, so it is handed the
-    // prompt the first strike would have used (no loop hint in flight yet).
-    if (deps.runChild) return await deps.runChild(name, tools, buildPrompt(null))
-    const loopHistory: LoopHit[] = []
-    // Carries the correction hint (loop OR leaked-tool-call) into the next strike.
-    let nextHint: string | null = null
-    for (let strike = 0; strike <= MAX_LOOP_RESTARTS; strike++) {
-        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
-        const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
-        const stall = new StallDetector()
-        const prompt = buildPrompt(nextHint)
-        const r = await runChild(
-            deps.cwd,
-            tools,
-            prompt,
-            deps.signal,
-            deps.onChildOutput,
-            snapshot => {
-                stall.noteContext(snapshot.contextWindow)
-                deps.onContextUsage?.(snapshot)
-            },
-            call => detector.record(call) ?? stall.record(call),
-            deps.spawn,
-            undefined,
-            (text, isError) => stall.noteResult(text, isError)
-        )
-        if (deps.signal.aborted) throw new Error(USER_CANCELLED)
-        if (r.loopHit) {
-            const isLastStrike = strike === MAX_LOOP_RESTARTS
-            loopHistory.push(r.loopHit)
-            const lastOutcome =
-                opts.degradeOnExhaustion ? 'degraded — no-tools final attempt' : 'phase failed'
-            await appendLoopEvent(
-                deps.cwd,
-                deps.taskId,
-                name,
-                r.loopHit,
-                strike + 1,
-                isLastStrike ? lastOutcome : 'restarted with hint'
-            )
-            if (isLastStrike) {
-                if (opts.degradeOnExhaustion) {
-                    return await runDegradedFinalAttempt(
-                        deps,
-                        name,
-                        buildPrompt,
-                        r.loopHit,
-                        loopHistory
-                    )
-                }
-                throw new LoopExhaustedError(name, loopHistory)
-            }
-            nextHint =
-                r.loopHit.stall ? formatStallHint(r.loopHit.stall) : formatLoopHint(r.loopHit)
-            continue
-        }
-        // Everything past the loop kill is the shared ladder: exit code, model
-        // error (connection-class restarts within the strike budget), empty
-        // completion, leaked tool call. The strike budget is shared with the
-        // loop restarts above — MAX_LOOP_RESTARTS+1 attempts across all causes.
-        const step = await triageChildResult(deps, name, r, strike, MAX_LOOP_RESTARTS, 'restart')
-        if (step.done) return step.text
-        // Only a leak produces a new correction hint; the other rungs have
-        // nothing to correct and leave any loop hint already in flight alone.
-        if (step.hint !== undefined) nextHint = step.hint
-    }
-    throw new LoopExhaustedError(name, loopHistory)
 }
 
 /**
@@ -684,7 +706,7 @@ export async function runPhaseWithLoopGuard(
 async function runDegradedFinalAttempt(
     deps: PhaseDeps,
     name: string,
-    buildPrompt: (loopHint: string | null) => string,
+    prompt: string,
     hit: LoopHit,
     loopHistory: LoopHit[]
 ): Promise<string> {
@@ -692,7 +714,7 @@ async function runDegradedFinalAttempt(
     const r = await runChild(
         deps.cwd,
         '', // --no-tools: the model cannot read/grep/list, only answer
-        buildPrompt(formatDegradeHint(hit)),
+        prependHint(formatDegradeHint(hit), prompt),
         deps.signal,
         deps.onChildOutput,
         deps.onContextUsage,

@@ -42,7 +42,7 @@ function seqDeps(
             }
             return Promise.resolve(decompose)
         },
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true}),
         ...over
     }
@@ -96,8 +96,7 @@ test('planAuto: strips phantom bun:sql out of the spec before clarify sees it', 
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         await planAuto(ctx, dir, 'Implement @design.md', d)
@@ -237,8 +236,7 @@ test('planAuto: clarify-triage auto-resolves a spec-settled question (never show
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'Implement server', d)
@@ -290,8 +288,7 @@ test('planAuto: feeds the existing-files block into clarify-triage when a manife
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         await planAuto(ctx, dir, 'set up the project', d)
@@ -318,8 +315,7 @@ test('planAuto: clarify-triage surfaces a genuine open fork (UNKNOWN)', async ()
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'add photo uploads', d)
@@ -347,8 +343,7 @@ test('planAuto: clarify-triage failure falls back to surfacing the question', as
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'add billing', d)
@@ -394,8 +389,7 @@ test('planAuto: feeds each answer into the next clarify call (adaptive)', async 
                 }
                 return Promise.resolve('- [ ] Task A')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         await planAuto(ctx, dir, 'build a frontend', d)
@@ -475,11 +469,7 @@ test('runAutoLoop: runs each title in order, checks boxes, completes', async () 
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, title) => {
                 ran.push(title)
-                return Promise.resolve({
-                    taskId: `TASK_000${n++}`,
-                    ok: true,
-                    sessionCancelled: false
-                })
+                return Promise.resolve({taskId: `TASK_000${n++}`, end: {kind: 'completed'}})
             },
             commit: (_cwd, message) => {
                 commits.push(message)
@@ -527,7 +517,7 @@ test("runAutoLoop: adopts each task's replacement ctx; never touches a stale one
                     }
                 })
                 void title
-                return {taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false, ctx: fresh}
+                return {taskId: `TASK_000${n++}`, ctx: fresh, end: {kind: 'completed'}}
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -552,8 +542,7 @@ test('runAutoLoop: pre-task checkpoint announces only when it actually commits',
         let n = 6
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: `TASK_000${n++}`, end: {kind: 'completed'}}),
             // Dirty tree before A (checkpoint commits), clean before B (no-op); the
             // post-task `task: ...` commits always land.
             commit: (_cwd, message) =>
@@ -585,7 +574,7 @@ test('runAutoLoop: a failed commit only warns; the run continues and completes',
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, title) => {
                 ran.push(title)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: false, reason: 'not a git repository'})
         }
@@ -613,7 +602,7 @@ test('runAutoLoop: stops and marks failed on first failing task', async () => {
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, title) => {
                 ran.push(title)
-                return Promise.resolve({taskId: 'TASK_0006', ok: false, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'failed'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -636,8 +625,7 @@ test('runAutoLoop: a guideline violation only warns — task stays committed, ru
         const enforceModes: Array<'edit' | 'flag'> = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -677,8 +665,7 @@ test('runAutoLoop: clean verify ⇒ enforce runs in EDIT mode; fixes that re-ver
         let reverted = false
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -714,8 +701,7 @@ test('runAutoLoop: enforce edits that REGRESS the verify signal are reverted, no
         let verifyCalls = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -758,8 +744,7 @@ test('runAutoLoop: verify FAIL + user dismisses the picker → run pauses, task 
         const commits: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -789,8 +774,7 @@ test('runAutoLoop: verify FAIL + user ACCEPTS → run proceeds, checks off and c
         const commits: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -825,7 +809,7 @@ test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifi
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, _t, opts) => {
                 fixInstructions.push(opts?.fixInstruction)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: (_cwd, message) => {
                 commits.push(message)
@@ -871,8 +855,7 @@ test('runAutoLoop: a passing verification lets the run check off and complete', 
         let verified = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             verify: () => {
                 verified++
@@ -894,8 +877,7 @@ test('runAutoLoop: verification runs even when no commit lands (it gates the wor
         let verified = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             // Unlike enforce (which needs the last commit's diff), verification runs
             // against the working tree, so a no-commit round still verifies.
             commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
@@ -917,8 +899,7 @@ test('runAutoLoop: enforce is skipped when the task commit did not land', async 
         let enforced = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             // No commit ever lands (e.g. autoCommit off / nothing to commit), so the
             // last commit isn't this task's work — there is nothing to enforce.
             commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
@@ -945,8 +926,7 @@ test('runAutoLoop: a clean guideline verdict lets the run complete normally', as
         let n = 6
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: `TASK_000${n++}`, ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: `TASK_000${n++}`, end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             enforce: (_ctx, _cwd, title) => {
                 enforced.push(title)
@@ -974,12 +954,7 @@ test('runAutoLoop: enforce gets the fresh post-task ctx, not the stale captured 
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
             runTask: () =>
-                Promise.resolve({
-                    taskId: 'TASK_0006',
-                    ok: true,
-                    sessionCancelled: false,
-                    ctx: freshCtx
-                }),
+                Promise.resolve({taskId: 'TASK_0006', ctx: freshCtx, end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             enforce: enforceCtx => {
                 seen = enforceCtx
@@ -1005,9 +980,7 @@ test('runAutoLoop: surfaces a failed task reason in the stop message', async () 
             runTask: () =>
                 Promise.resolve({
                     taskId: 'TASK_0006',
-                    ok: false,
-                    sessionCancelled: false,
-                    reason: '400 request exceeds the available context size'
+                    end: {kind: 'failed', reason: '400 request exceeds the available context size'}
                 }),
             commit: () => Promise.resolve({committed: true})
         }
@@ -1035,7 +1008,7 @@ test('runAutoLoop: cancel after current task leaves state in_progress', async ()
             runTask: (_c, _cwd, title) => {
                 ran.push(title)
                 requestAutoCancel()
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1050,7 +1023,7 @@ test('runAutoLoop: cancel after current task leaves state in_progress', async ()
     })
 })
 
-test('runAutoLoop: sessionCancelled pauses without marking failed', async () => {
+test('runAutoLoop: a session that could not start pauses without marking failed', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         await writeTaskFile(
@@ -1060,7 +1033,7 @@ test('runAutoLoop: sessionCancelled pauses without marking failed', async () => 
         )
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () => Promise.resolve({taskId: '', ok: false, sessionCancelled: true}),
+            runTask: () => Promise.resolve({taskId: '', end: {kind: 'no-session'}}),
             commit: () => Promise.resolve({committed: true})
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
@@ -1084,12 +1057,7 @@ test('runAutoLoop: a declined-steer interrupt pauses without checking off or adv
                 ran.push(title)
                 // The inner task finished its pipeline (ok), but the user pressed
                 // ESC and declined to steer — runSingleTask reports interrupted.
-                return Promise.resolve({
-                    taskId: 'TASK_0006',
-                    ok: true,
-                    sessionCancelled: false,
-                    interrupted: true
-                })
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'interrupted'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1117,7 +1085,7 @@ test('runAutoLoop: resume skips already-checked tasks', async () => {
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, title) => {
                 ran.push(title)
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1145,7 +1113,7 @@ test('runAutoLoop: resumes an in-progress inner task instead of starting fresh',
             runTask: (_c, _cwd, _title, opts) => {
                 resumeIds.push(opts?.resumeId)
                 const taskId = opts?.resumeId ?? `TASK_000${fresh++}`
-                return Promise.resolve({taskId, ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId, end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1163,10 +1131,10 @@ test('runAutoLoop: stamps the inner task id at start so an interruption is resum
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
             // Allocate the inner id, stamp it via onStart, then simulate the session
-            // dying mid-pipeline (sessionCancelled) before the task is checked off.
+            // dying mid-pipeline (no-session) before the task is checked off.
             runTask: async (_c, _cwd, _title, opts) => {
                 await opts?.onStart?.('TASK_0009')
-                return {taskId: '', ok: false, sessionCancelled: true}
+                return {taskId: '', end: {kind: 'no-session'}}
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1198,7 +1166,7 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
                 // The runner writes the inner task file before the session dies;
                 // run 2's resume relies on that file being present on disk.
                 await writeTaskFile(dir, autoFm('TASK_0006'), '## prompt\n\nA\n')
-                return {taskId: '', ok: false, sessionCancelled: true}
+                return {taskId: '', end: {kind: 'no-session'}}
             },
             commit: () => Promise.resolve({committed: true})
         })
@@ -1214,8 +1182,7 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
                 seen2.push(opts?.resumeId)
                 return Promise.resolve({
                     taskId: opts?.resumeId ?? `TASK_000${fresh++}`,
-                    ok: true,
-                    sessionCancelled: false
+                    end: {kind: 'completed'}
                 })
             },
             commit: () => Promise.resolve({committed: true})
@@ -1244,7 +1211,7 @@ test('runAutoLoop: a stamped inner task with a missing file restarts fresh, neve
             runChild: () => Promise.resolve(''),
             runTask: (_c, _cwd, _title, opts) => {
                 resumeIds.push(opts?.resumeId)
-                return Promise.resolve({taskId: 'TASK_0009', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0009', end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: true})
         }
@@ -1453,7 +1420,7 @@ function coverageDeps(
             }
             return Promise.resolve('')
         },
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true})
     }
 }
@@ -1684,7 +1651,7 @@ function dedupCliDeps(): AutoDeps & {calls: {decompose: number}} {
             }
             return Promise.resolve('')
         },
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true})
     }
 }
@@ -1780,7 +1747,7 @@ function pipelineDeps(
                 return Promise.resolve('MAP: 1 -> TASK 1\nMAP: 2 -> TASK 1\nMAP: 3 -> TASK 1')
             return Promise.resolve('')
         },
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true})
     }
 }
@@ -1875,7 +1842,7 @@ function granularityDeps(
                 )
             return Promise.resolve('')
         },
-        runTask: () => Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true})
     }
 }
@@ -1927,8 +1894,7 @@ test('plan-shape: the host answers the breakdown fork, the triage never sees it'
                     )
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, GRAN_FEATURE, d)
@@ -2023,8 +1989,7 @@ test('plan-shape: a chore keeps the old triage path — the host never seizes it
                 if (name === 'coverage-map') return Promise.resolve('MAP: 1 -> TASK 1')
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'rename the foo() helper', d)
@@ -2216,8 +2181,7 @@ test('contract extraction: grounded quotes stored, fabrications dropped', async 
                     )
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         await planAuto(ctx, dir, feature, d)
@@ -2238,8 +2202,7 @@ test('contract extraction: a child fault never blocks planning', async () => {
                 if (name === 'contract-extract') return Promise.reject(new Error('boom'))
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'build the app', d)
@@ -2271,8 +2234,7 @@ test('orientFeature: the requirement ledger and the floor it implies', async () 
                         quotes.map(q => `REQUIREMENT: "${q}" [anchor: Photos feature]`).join('\n')
                     :   ''
                 ),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const oriented = await orientFeature(dir, feature, d)
@@ -2313,8 +2275,7 @@ test('decomposePlan: a plan under the floor is split ONCE and the longer list wi
                     :   '- [ ] Everything'
                 )
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const oriented = await orientFeature(dir, feature, d)
@@ -2340,8 +2301,7 @@ test('an empty plan spends no extraction child and leaves no run-level artifact'
                 // Every decompose attempt comes back with no titles at all.
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'build the app', d)
@@ -2367,7 +2327,7 @@ test('runAutoLoop: unmerged index → stops LOUD before the task, nothing runs',
             runChild: () => Promise.resolve(''),
             runTask: () => {
                 taskRan = true
-                return Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false})
+                return Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}})
             },
             commit: () => Promise.resolve({committed: false, reason: 'nothing to commit'}),
             unmergedPaths: () =>
@@ -2394,8 +2354,7 @@ test('runAutoLoop: gate failure demotes the INNER task file from its handoff "co
         await writeTaskFile(dir, autoFm('TASK_0006', 'completed'), '## spec\nGOAL x\n')
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             verify: () => Promise.resolve({ok: false, reason: 'work did not verify: broken'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
@@ -2414,8 +2373,7 @@ test('runAutoLoop: stash stack changed during a task → loud warning names the 
         let stashCalls = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             stashRef: () => Promise.resolve(stashCalls++ === 0 ? null : 'abc123')
         }
@@ -2437,8 +2395,7 @@ test('runAutoLoop: final gate FAIL + dismissed picker → run left failed, resum
         let gateRuns = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => {
                 gateRuns++
@@ -2465,8 +2422,7 @@ test('runAutoLoop: final gate FAIL + user ACCEPTS → run completes with a warni
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'})
         }
@@ -2489,8 +2445,7 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -2528,8 +2483,7 @@ test('runAutoLoop: an UNOBSERVED final gate completes the run but is never recor
         const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -2580,8 +2534,7 @@ test('runAutoLoop: aggregated final-gate FAIL → every entry trailed, full list
         const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -2612,8 +2565,7 @@ test('runAutoLoop: final gate FAIL + user picks AUTOFIX → fix runs, gate green
         let fixSeed = ''
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: (_cwd, message) => {
                 commits.push(message)
                 return Promise.resolve({committed: true})
@@ -2646,8 +2598,7 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
         let fixRuns = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
             finalGateFix: () => {
@@ -2655,7 +2606,7 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
                 return Promise.resolve({
                     ok: false,
                     reason: 'did not converge: `bun run test` exited 1 — still',
-                    gateReason: '`bun run test` exited 1 — still'
+                    gate: {ok: false, reason: '`bun run test` exited 1 — still'}
                 })
             }
         }
@@ -2693,7 +2644,7 @@ function strandedDeps(
 ): AutoDeps {
     return {
         runChild: () => Promise.resolve(''),
-        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
         commit: (_cwd, message) => {
             commits.push(message)
             return Promise.resolve(commitResult)
@@ -2707,7 +2658,7 @@ function strandedDeps(
             Promise.resolve({
                 ok: false,
                 reason: 'did not converge: `bun run test:ct` exited 1',
-                gateReason: '`bun run test:ct` exited 1'
+                gate: {ok: false, reason: '`bun run test:ct` exited 1'}
             }),
         pendingChanges: () => Promise.resolve(pending)
     }
@@ -2839,7 +2790,7 @@ function nonProgressDeps(opts: {
     const firstOf = (n: number): string[] => [opts.first, ...(n === 0 ? (opts.extra ?? []) : [])]
     return {
         runChild: () => Promise.resolve(''),
-        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
         commit: (_cwd, message) => {
             opts.commits.push(message)
             return Promise.resolve({committed: true, sha: 'abc1234'})
@@ -2856,8 +2807,7 @@ function nonProgressDeps(opts: {
             return Promise.resolve({
                 ok: false,
                 reason: `did not converge: ${failures.join(' | ')}`,
-                gateReason: failures.join(' | '),
-                gateFailures: failures
+                gate: {ok: false, reason: failures.join(' | '), failures: failures}
             })
         },
         pendingChanges: () => Promise.resolve(['package.json', 'src/db/teardown.ts'])
@@ -2993,8 +2943,7 @@ test('runAutoLoop: no finalGateFix dep → picker keeps only the two original ca
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'})
         }
@@ -3018,8 +2967,7 @@ test('runAutoLoop: free text typed at the final-gate picker becomes autofix guid
         let fixSeed = ''
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run test` exited 1'}),
             finalGateFix: (_ctx, _cwd, failReason) => {
@@ -3053,7 +3001,7 @@ function convergingDebtDeps(
 ): AutoDeps {
     return {
         runChild: () => Promise.resolve(''),
-        runTask: () => Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+        runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
         commit: () => Promise.resolve({committed: true}),
         record: (_c, _id, line) => {
             trail.push(line)
@@ -3237,8 +3185,7 @@ test('runAutoLoop: a DEPENDENT ignored write is trailed, carried as debt, and la
         const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -3276,8 +3223,7 @@ test('runAutoLoop: an INDEPENDENT ignored write is trailed and opens NO debt', a
         const trail: string[] = []
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             record: (_c, _id, line) => {
                 trail.push(line)
@@ -3311,8 +3257,7 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
         let attempt = 0
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0006', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true}),
             finalGate: () => Promise.resolve({ok: false, reason: '`bun run seed` exited 1'}),
             finalGateFix: (_ctx, _cwd, _seed, ignoredKnown) => {
@@ -3325,7 +3270,7 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
                         {
                             ok: false,
                             reason: 'did not converge: `bun run seed` exited 1',
-                            gateReason: '`bun run seed` exited 1',
+                            gate: {ok: false, reason: '`bun run seed` exited 1'},
                             ignoredWrites: ['.env']
                         }
                     :   {ok: true, reason: 'statics + `bun run seed` passed'}
@@ -3457,8 +3402,7 @@ test("coverage loop: an adopted plan whose coverage-map FAULTS does not inherit 
                 }
                 return Promise.resolve('')
             },
-            runTask: () =>
-                Promise.resolve({taskId: 'TASK_0001', ok: true, sessionCancelled: false}),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, DEDUP_CLI_SPEC, d)

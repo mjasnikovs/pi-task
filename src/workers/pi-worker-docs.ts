@@ -20,7 +20,13 @@ import {
 } from './npm-version.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction, type FocusedFailure, type FocusedResult} from './focused-extractor.js'
-import {makeWorkerTool} from './shared.js'
+import {
+    childFailureReason,
+    makeWorkerTool,
+    workerAnswer,
+    workerUnavailable,
+    type WorkerOutcome
+} from './shared.js'
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
@@ -108,22 +114,26 @@ function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | '
  * The paths differ only in `prefix`: the npm path leads every result, failures included, with
  * its version banner and npm-version header; the project path has neither.
  *
- * `childExitCode` is recorded but NOT as 0, which is what keeps a failure out of the research
- * cache (see `cacheable` below).
+ * It says UNAVAILABLE, so the cache cannot take it. It used to say so by writing a
+ * non-zero `childExitCode` and letting `docsCacheable` re-derive the verdict — a
+ * derivation that failed on the case it mattered most for: a signal-killed child
+ * reports exit code 0, so `"Docs lookup aborted."` was cached for the whole run.
+ * `aborted` was written here and read by nothing, which is what let that hide.
  */
 function docsFailureResult(
     extraction: FocusedFailure,
     baseDetails: DocsDetails,
     prefix: string
-): {text: string; details: DocsDetails} {
-    return {
-        text: prefix + extraction.failure,
-        details: {
+): WorkerOutcome<DocsDetails> {
+    return workerUnavailable(
+        prefix + extraction.failure,
+        {
             ...baseDetails,
             ...(extraction.aborted ? {aborted: true} : {}),
             childExitCode: extraction.exitCode
-        }
-    }
+        },
+        childFailureReason({exitCode: extraction.exitCode, aborted: extraction.aborted})
+    )
 }
 
 export interface PiWorkerDocsInternals {
@@ -218,10 +228,11 @@ export function registerPiWorkerDocs(
                 if (budget !== null && ++projectLookups > budget) {
                     // Refused BEFORE any work: the point of the cap is the child
                     // spawn and the model pass this branch would otherwise run.
-                    return {
-                        text: projectDocsBudgetExhausted(budget),
-                        details: {budgetSpent: true}
-                    }
+                    return workerUnavailable(
+                        projectDocsBudgetExhausted(budget),
+                        {budgetSpent: true},
+                        'budget-spent'
+                    )
                 }
                 const openCache = internals.openCache ?? defaultOpenCache
                 let cache
@@ -233,26 +244,32 @@ export function registerPiWorkerDocs(
                 }
 
                 if (!cache) {
-                    return {
-                        text: `Project docs unavailable: cache open failed (${cacheError}).`,
-                        details: {}
-                    }
+                    return workerUnavailable(
+                        `Project docs unavailable: cache open failed (${cacheError}).`,
+                        {},
+                        'cache-open-failed'
+                    )
                 }
 
                 const retrieveChunks = internals.retrieveChunks ?? defaultRetrieveChunks
                 const projectResult = projectDocsRaw(cache, ctx.cwd, params.query, retrieveChunks)
 
                 if (projectResult.kind === 'error') {
-                    return {text: `Project docs error: ${projectResult.message}`, details: {}}
+                    return workerUnavailable(
+                        `Project docs error: ${projectResult.message}`,
+                        {},
+                        'project-docs-error'
+                    )
                 }
                 if (projectResult.kind === 'no_chunks') {
-                    return {
-                        text: `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
-                        details: {
+                    // The project IS indexed and has nothing — a real answer.
+                    return workerAnswer(
+                        `Project "${projectResult.projectName}" has no .ts/.tsx files indexed.`,
+                        {
                             hitCache: projectResult.hitCache,
                             indexedFiles: projectResult.filesIngested
                         }
-                    }
+                    )
                 }
 
                 const {projectName, chunks, hitCache, filesIngested, indexingMs} = projectResult
@@ -298,14 +315,10 @@ export function registerPiWorkerDocs(
                     excerptCheck: extraction.excerptCheck,
                     toolText: text
                 })
-                return {
-                    text,
-                    details: {
-                        ...baseDetails,
-                        childExitCode: 0,
-                        excerptVerified: verified
-                    }
-                }
+                return workerAnswer(text, {
+                    ...baseDetails,
+                    excerptVerified: verified
+                })
             }
 
             // ── npm package lookup (existing path) ──────────────────────────
@@ -342,16 +355,16 @@ export function registerPiWorkerDocs(
                     autoInstalled: rawResult.autoInstalled,
                     ...npmDetails
                 }
-                return {text: npmHeader + rawResult.message, details}
+                return workerUnavailable(npmHeader + rawResult.message, details, 'docs-error')
             }
 
             if (rawResult.kind === 'not_installed') {
-                return {
-                    text:
-                        npmHeader
+                return workerUnavailable(
+                    npmHeader
                         + `Package "${rawResult.pkg}" is not installed and auto-install failed.`,
-                    details: {resolveError: 'not_installed' as const, ...npmDetails}
-                }
+                    {resolveError: 'not_installed' as const, ...npmDetails},
+                    'not-installed'
+                )
             }
 
             if (rawResult.kind === 'no_chunks') {
@@ -361,12 +374,13 @@ export function registerPiWorkerDocs(
                     rawResult.pkg.version,
                     ctx.cwd
                 )
-                return {
-                    text:
-                        banner
+                // The package resolved and genuinely ships nothing to read — an
+                // answer, and a stable one for this run.
+                return workerAnswer(
+                    banner
                         + npmHeader
                         + `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README. Use pi-worker to read source directly.`,
-                    details: {
+                    {
                         version: rawResult.pkg.version,
                         hitCache: rawResult.hitCache,
                         indexedFiles: rawResult.indexedFiles ?? 0,
@@ -375,7 +389,7 @@ export function registerPiWorkerDocs(
                         ...pinDetails(rawResult.autoInstallPin),
                         ...npmDetails
                     }
-                }
+                )
             }
 
             // kind === 'ok'
@@ -465,15 +479,11 @@ export function registerPiWorkerDocs(
                 toolText: text
             })
 
-            return {
-                text,
-                details: {
-                    ...baseDetails,
-                    childExitCode: 0,
-                    excerptVerified: verified,
-                    ...(typeOnly.typeOnly ? {typeOnly: true} : {})
-                }
-            }
+            return workerAnswer(text, {
+                ...baseDetails,
+                excerptVerified: verified,
+                ...(typeOnly.typeOnly ? {typeOnly: true} : {})
+            })
         },
 
         renderCall(args, theme) {
@@ -527,15 +537,14 @@ export function registerPiWorkerDocs(
  * abstention.ts, which cost a real bug.
  */
 export function docsCacheable(
-    d: Pick<DocsDetails, 'childExitCode' | 'typeOnly' | 'excerptVerified'>,
+    d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified'>,
     text: string
 ): boolean {
-    return (
-        d.childExitCode === 0
-        && d.typeOnly !== true
-        && d.excerptVerified !== false
-        && !isAbstention(text)
-    )
+    // Answer QUALITY only. Whether there IS an answer is `WorkerOutcome.kind`, and
+    // `makeWorkerTool` has already refused an `unavailable` before reaching here —
+    // this used to open with `childExitCode === 0`, which a signal-killed child
+    // satisfies, so an aborted lookup was memoised for the run.
+    return d.typeOnly !== true && d.excerptVerified !== false && !isAbstention(text)
 }
 
 /** The docs cache key: a package's answer is per (module, question). A project-source

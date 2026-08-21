@@ -107,9 +107,8 @@ describe('the gate paints while the deterministic stage runs', () => {
                 runTask: () =>
                     Promise.resolve({
                         taskId: 'TASK_0001',
-                        ok: true,
-                        sessionCancelled: false,
-                        ctx: handle.ctx
+                        ctx: handle.ctx,
+                        end: {kind: 'completed'}
                     })
             })
             try {

@@ -241,12 +241,12 @@ function verifyBlockFor(dir: string): string[] {
 }
 
 /** Run every VERIFY line. PASS only when all of them exit 0. */
-function measureVerify(dir: string): VerifyMeasurement {
+async function measureVerify(dir: string): Promise<VerifyMeasurement> {
     const perLine: VerifyMeasurement['perLine'] = []
     let firstBad: string | null = null
     let testsPassed: number | null = null
     for (const line of verifyBlockFor(dir)) {
-        const r = runVerifyCommandLine(dir, line, VERIFY_TIMEOUT_MS)
+        const r = await runVerifyCommandLine(dir, line, VERIFY_TIMEOUT_MS)
         perLine.push({line, outcome: r.outcome})
         if (r.outcome !== 'pass' && firstBad === null) {
             firstBad =
@@ -315,7 +315,7 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
     }
 
     // Fixture check: the recorded FAIL must actually reproduce before anything runs.
-    const first = measureVerify(dir)
+    const first = (await measureVerify(dir))
     trial.reproduced = !first.ok
     if (!trial.reproduced) {
         clearTimeout(timer)
@@ -333,11 +333,11 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
     const deps: GateDeps = {
         // The gate's first FAIL carries the RECORDED reason (narrowing 1); every
         // later call is a live re-measurement of the tree.
-        verify: () => {
+        verify: async () => {
             verifyCalls += 1
-            if (verifyCalls === 1) return Promise.resolve({ok: false, reason: RECORDED_FAIL_REASON})
-            const m = measureVerify(dir)
-            return Promise.resolve(m.ok ? {ok: true} : {ok: false, reason: m.reason})
+            if (verifyCalls === 1) return {ok: false, reason: RECORDED_FAIL_REASON}
+            const m = await measureVerify(dir)
+            return m.ok ? {ok: true} : {ok: false, reason: m.reason}
         },
         // The recorded recommendation, replayed. Run 19's child said ACCEPT after
         // proving the fix worked; its prose is not in the log, so the rationale is
@@ -350,7 +350,7 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
             const r = await runChild(dir, 'read,edit,bash', prompt, abort.signal, line => log(line))
             log(`=== impl child ${trial.attempts} end: exit ${r.exitCode} ===`)
             trial.childOk = r.exitCode === 0
-            return {ctx: c, taskId: TASK_ID, ok: r.exitCode === 0, sessionCancelled: false}
+            return {ctx: c, taskId: TASK_ID, end: r.exitCode === 0 ? {kind: 'completed'} : {kind: 'failed'}}
         },
         commit: () => Promise.resolve({committed: true}),
         record: (_c, _id, line) => {
@@ -374,7 +374,7 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
     }
 
     // THE METRIC: a fresh, independent measurement after the gate returned.
-    const after = measureVerify(dir)
+    const after = (await measureVerify(dir))
     trial.converged = after.ok
     trial.finalReason = after.reason
     trial.testsPassed = after.testsPassed
@@ -412,7 +412,7 @@ async function probeNoAttempt(
     const deps: GateDeps = {
         runTask: c => {
             attempts += 1
-            return Promise.resolve({ctx: c, taskId: TASK_ID, ok: true, sessionCancelled: false})
+            return Promise.resolve({ctx: c, taskId: TASK_ID, end: {kind: 'completed'}})
         },
         commit: () => Promise.resolve({committed: true}),
         record: (_c, _id, line) => {

@@ -6,6 +6,7 @@ import {
     type ToolCall
 } from '../shared/child-process.js'
 import {CommandWatchdog, commandTimeoutHint, realTimerDeps} from '../shared/command-watchdog.js'
+import {isGroundingRetrieval as isGrounding, workerChannel} from './worker-channels.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector, type LoopHit} from '../task/loop-detector.js'
 import {
@@ -45,18 +46,10 @@ const DEFAULT_TOOLS = 'read,grep,find,ls'
  * exclusion is the anti-gaming property of any gate built on this count: "one
  * trivial `ls` then fabricate the rest" leaves groundingRetrievalCount at 0.
  */
-const GROUNDING_RETRIEVAL_TOOLS = new Set([
-    'pi-worker-docs',
-    'read',
-    'grep',
-    'pi-worker-search',
-    'pi-worker-fetch'
-])
-
-/** True when a tool call retrieves content an APIS entry could be grounded in. */
-export function isGroundingRetrieval(toolName: string): boolean {
-    return GROUNDING_RETRIEVAL_TOOLS.has(toolName)
-}
+// The grounding set is derived from WORKER_CHANNELS (worker-channels.ts), not
+// hand-kept — this was a second copy of the four tool names. Re-exported because
+// several call sites and tests import it from here.
+export {isGroundingRetrieval} from './worker-channels.js'
 
 /**
  * Hard wall-clock bound on a single research worker run (one spawn). The
@@ -664,7 +657,7 @@ interface RestartRule {
 const RESTART_RULES: readonly RestartRule[] = [
     {
         // A loop-kill gets the same restart-with-hint treatment every other phase
-        // already gets (runPhaseWithLoopGuard) — name the offending call so the
+        // already gets (runPhaseChild) — name the offending call so the
         // re-spawn avoids it. Bounded by the shared restart budget.
         reason: 'loop',
         detect: s =>
@@ -727,7 +720,7 @@ const RESTART_RULES: readonly RestartRule[] = [
     },
     {
         // A connection-class model error is restartable on the same budget, exactly
-        // as runPhaseWithLoopGuard already treats it — a research worker had no such
+        // as runPhaseChild already treats it — a research worker had no such
         // retry, so one dropped fetch failed the whole task at research while the
         // identical blip in refine/compose was absorbed.
         //
@@ -849,7 +842,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     const timeoutMs = input.timeoutMs ?? RESEARCH_WORKER_TIMEOUT_MS
     let hint: string | null = null
     // Loop-kill and timeout share one restart budget, mirroring
-    // runPhaseWithLoopGuard: a runaway worker gets re-spawned with a corrective
+    // runPhaseChild: a runaway worker gets re-spawned with a corrective
     // hint up to MAX_LOOP_RESTARTS times before we give up. Leaked tool calls
     // keep their own MAX_LEAK_RETRIES budget below — a different failure mode.
     let restartBudgetSpent = 0
@@ -955,17 +948,20 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         // A tool call is the worker working. Inert unless the
                         // caller opted into a progress-based deadline.
                         timeout.progress()
+                        // The generic child runner used to name ONE tool and ONE of
+                        // its parameters here. It asks the tool's own row now.
                         if (
                             input.fanoutTimeout
-                            && call.name === 'pi-worker-docs'
-                            && (call.args as {module?: unknown} | undefined)?.module === '.'
+                            && workerChannel(call.name)?.isProjectSourceLookup?.(
+                                (call.args as Record<string, unknown> | undefined) ?? {}
+                            ) === true
                         ) {
                             timeout.extend(
                                 input.fanoutTimeout.perLookupMs,
                                 input.fanoutTimeout.ceilingMs
                             )
                         }
-                        if (isGroundingRetrieval(call.name)) groundingRetrievalCount++
+                        if (isGrounding(call.name)) groundingRetrievalCount++
                         if (!loopDetector) return null
                         const hit = loopDetector.record(call)
                         if (hit && !loopHit) loopHit = hit

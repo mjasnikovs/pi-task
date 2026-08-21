@@ -96,13 +96,21 @@ export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
     }
 }
 
+/**
+ * Persist, flash and announce a failure — and RETURN the classification.
+ *
+ * It used to return `void`, so the name it had just computed died here and the
+ * caller learned how the run ended by re-reading the task file's front matter and
+ * narrowing it to a boolean. Handing the value back is what lets `TaskRunner.run`
+ * say `RunEnd` instead.
+ */
 export async function handleFailure(
     err: unknown,
     ctx: ExtensionCommandContext,
     cwd: string,
     id: string,
     aborted: boolean
-): Promise<void> {
+): Promise<FailureClass> {
     const c = classifyFailure(err, aborted)
     await updateTaskFrontMatter(cwd, id, {state: c.state, reason: c.reason})
     flashTerminalWidget(ctx, c.state, id, c.flash)
@@ -110,4 +118,5 @@ export async function handleFailure(
     // Mirror to remote viewers — ctx.ui.notify is terminal-only, so without this
     // the remote view shows nothing when a task fails.
     publishLifecycleNotice(`${id} ${c.notify}`, c.level)
+    return c
 }

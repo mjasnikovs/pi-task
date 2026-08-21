@@ -139,21 +139,25 @@ describe('recheckAcceptDebts (FP-safe re-check)', () => {
     const staticDebt: AcceptDebt = {taskId: 'T9', reason: 'repo health: lint exited 1'}
     const frozenDebt: AcceptDebt = {taskId: 'T12', reason: 'modified frozen path src/main.tsx'}
 
-    test('static-class debt is RESOLVED when statics now pass', () => {
-        const {open, resolved} = recheckAcceptDebts([staticDebt, frozenDebt], {staticOk: true})
+    test('static-class debt is RESOLVED when statics now pass', async () => {
+        const {open, resolved} = await recheckAcceptDebts([staticDebt, frozenDebt], {
+            staticOk: true
+        })
         expect(resolved).toEqual([staticDebt])
         // The frozen-path (behavioral) debt can never be auto-closed — always surfaced.
         expect(open).toEqual([frozenDebt])
     })
 
-    test('static-class debt stays OPEN when statics still fail', () => {
-        const {open, resolved} = recheckAcceptDebts([staticDebt, frozenDebt], {staticOk: false})
+    test('static-class debt stays OPEN when statics still fail', async () => {
+        const {open, resolved} = await recheckAcceptDebts([staticDebt, frozenDebt], {
+            staticOk: false
+        })
         expect(resolved).toEqual([])
         expect(open).toEqual([staticDebt, frozenDebt])
     })
 
-    test('nothing recorded → nothing open (clean)', () => {
-        expect(recheckAcceptDebts([], {staticOk: true})).toEqual({
+    test('nothing recorded → nothing open (clean)', async () => {
+        expect(await recheckAcceptDebts([], {staticOk: true})).toEqual({
             open: [],
             resolved: [],
             trail: []
@@ -219,11 +223,11 @@ describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
         ])
     })
 
-    test('a behavioral enforce-revert debt stays OPEN even when statics pass', () => {
+    test('a behavioral enforce-revert debt stays OPEN even when statics pass', async () => {
         const debts: AcceptDebt[] = [
             {taskId: 'TASK_0004', reason: TASK_0004_DIAGNOSIS, origin: 'enforce-revert'}
         ]
-        const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
+        const {open, resolved} = await recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved).toHaveLength(0)
         expect(open).toHaveLength(1)
     })
@@ -377,8 +381,8 @@ describe("recordDebt origin 'frozen-blocked' / origin round-trip", () => {
         const cwd = makeCwd()
         await recordDebt(cwd, 'TASK_0021', REASON, 'frozen-blocked')
         const debts = await readAcceptDebts(cwd)
-        expect(recheckAcceptDebts(debts, {staticOk: true}).resolved).toHaveLength(1)
-        expect(recheckAcceptDebts(debts, {staticOk: false}).open).toHaveLength(1)
+        expect((await recheckAcceptDebts(debts, {staticOk: true})).resolved).toHaveLength(1)
+        expect((await recheckAcceptDebts(debts, {staticOk: false})).open).toHaveLength(1)
     })
 
     test('describeDebt names the cross-task contradiction', () => {
@@ -429,18 +433,18 @@ describe("recordDebt origin 'cross-task-deletion' / re-check by file existence (
         )
         const debts = await readAcceptDebts(cwd)
         // Still missing: stays open even when statics pass (not a static-class debt).
-        const still = recheckAcceptDebts(debts, {staticOk: true, fileExists: () => false})
+        const still = await recheckAcceptDebts(debts, {staticOk: true, fileExists: () => false})
         expect(still.open).toHaveLength(1)
         expect(still.resolved).toHaveLength(0)
         // Restored: the deterministic existence check closes it.
-        const restored = recheckAcceptDebts(debts, {
+        const restored = await recheckAcceptDebts(debts, {
             staticOk: false,
             fileExists: rel => rel === 'playwright/index.ts'
         })
         expect(restored.resolved).toHaveLength(1)
         expect(restored.open).toHaveLength(0)
         // No fileExists wired (older caller): surfaced, never silently closed.
-        const noDep = recheckAcceptDebts(debts, {staticOk: true})
+        const noDep = await recheckAcceptDebts(debts, {staticOk: true})
         expect(noDep.open).toHaveLength(1)
     })
 
@@ -453,7 +457,7 @@ describe("recordDebt origin 'cross-task-deletion' / re-check by file existence (
             'cross-task-deletion'
         )
         const debts = await readAcceptDebts(cwd)
-        const out = recheckAcceptDebts(debts, {
+        const out = await recheckAcceptDebts(debts, {
             staticOk: true,
             fileExists: () => {
                 throw new Error('fs broke')
@@ -492,7 +496,7 @@ describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades a
         await recordDebt(cwd, 'TASK_0007', 'repo health: `bun run lint` exited 1', 'yolo-accepted')
         await recordDebt(cwd, 'TASK_0008', 'the edit listing page renders blank', 'yolo-accepted')
         const debts = await readAcceptDebts(cwd)
-        const {open, resolved} = recheckAcceptDebts(debts, {staticOk: true})
+        const {open, resolved} = await recheckAcceptDebts(debts, {staticOk: true})
         expect(resolved.map(d => d.taskId)).toEqual(['TASK_0007'])
         expect(open.map(d => d.taskId)).toEqual(['TASK_0008'])
     })
@@ -537,7 +541,7 @@ describe('verify-command debt class', () => {
         return cwd
     }
 
-    test('extracts ONLY a backticked span that is a verbatim VERIFY line', () => {
+    test('extracts ONLY a backticked span that is a verbatim VERIFY line', async () => {
         const cmds = ['bunx tsc --noEmit', 'AGENT=1 bun test test/listings.test.ts']
         expect(verifyCommandFromReason(REASON, cmds)).toBe('AGENT=1 bun test test/listings.test.ts')
         // A near-miss is a miss: no prefix, no paraphrase, no substring.
@@ -625,7 +629,7 @@ describe('verify-command debt class', () => {
         ).toBe(real)
     })
 
-    test('19C: a debt already carrying an unfailable command can never auto-close', () => {
+    test('19C: a debt already carrying an unfailable command can never auto-close', async () => {
         const debt: AcceptDebt = {
             taskId: 'TASK_0003',
             reason: 'work did not verify: the shared library was not produced',
@@ -634,15 +638,15 @@ describe('verify-command debt class', () => {
         }
         // The re-run seam says PASS — because the shell really does exit 0 here.
         // That is the defect, and it must no longer be able to close anything.
-        const out = recheckAcceptDebts([debt], {
+        const out = await recheckAcceptDebts([debt], {
             staticOk: true,
-            rerunVerify: () => ({outcome: 'pass'})
+            rerunVerify: async () => ({outcome: 'pass'})
         })
         expect(out.resolved).toHaveLength(0)
         expect(out.open.map(d => d.taskId)).toEqual(['TASK_0003'])
     })
 
-    test('inv-no-false-clear — only a ZERO exit closes; fail/gap/absent never do', () => {
+    test('inv-no-false-clear — only a ZERO exit closes; fail/gap/absent never do', async () => {
         const debt: AcceptDebt = {
             taskId: 'TASK_0009',
             reason: REASON,
@@ -650,9 +654,9 @@ describe('verify-command debt class', () => {
             verifyCommand: 'AGENT=1 bun test test/listings.test.ts'
         }
         const noCommand: AcceptDebt = {taskId: 'TASK_0019', reason: 'main.tsx was modified'}
-        const closes = recheckAcceptDebts([debt, noCommand], {
+        const closes = await recheckAcceptDebts([debt, noCommand], {
             staticOk: true,
-            rerunVerify: () => ({outcome: 'pass'})
+            rerunVerify: async () => ({outcome: 'pass'})
         })
         expect(closes.resolved.map(d => d.taskId)).toEqual(['TASK_0009'])
         expect(closes.trail.join(' ')).toContain('RESOLVED')
@@ -661,32 +665,34 @@ describe('verify-command debt class', () => {
             {outcome: 'gap' as const, detail: 'command not found (127)'},
             {outcome: 'gap' as const, detail: 'killed (timeout or signal)'}
         ]) {
-            const out = recheckAcceptDebts([debt, noCommand], {
+            const out = await recheckAcceptDebts([debt, noCommand], {
                 staticOk: true,
-                rerunVerify: () => r
+                rerunVerify: async () => r
             })
             expect(out.resolved).toEqual([])
             expect(out.open.map(d => d.taskId)).toEqual(['TASK_0009', 'TASK_0019'])
         }
         // No re-runner wired, or no stored command: the class is inert, not lenient.
-        expect(recheckAcceptDebts([debt], {staticOk: true}).open).toHaveLength(1)
+        expect((await recheckAcceptDebts([debt], {staticOk: true})).open).toHaveLength(1)
         expect(
-            recheckAcceptDebts([noCommand], {
-                staticOk: true,
-                rerunVerify: () => ({outcome: 'pass'})
-            }).open
+            (
+                await recheckAcceptDebts([noCommand], {
+                    staticOk: true,
+                    rerunVerify: async () => ({outcome: 'pass'})
+                })
+            ).open
         ).toHaveLength(1)
         // A throwing re-runner observed nothing, so it proves nothing.
-        const faulted = recheckAcceptDebts([debt], {
+        const faulted = await recheckAcceptDebts([debt], {
             staticOk: true,
-            rerunVerify: () => {
+            rerunVerify: async () => {
                 throw new Error('spawn exploded')
             }
         })
         expect(faulted.resolved).toEqual([])
     })
 
-    test('inv-prohibition-never-closes — a prohibition debt stays open even when its VERIFY passes', () => {
+    test('inv-prohibition-never-closes — a prohibition debt stays open even when its VERIFY passes', async () => {
         // run 19's TASK_0019: `main.tsx` was edited under a spec freeze. The violation
         // is permanent; the task's VERIFY (tsc, eslint, a CT spec) can pass all day.
         // It never classifies, because the reason quotes a PATH, not a command — and
@@ -699,15 +705,15 @@ describe('verify-command debt class', () => {
             origin: 'yolo-accepted'
         }
         expect(verifyCommandFromReason(t19.reason, ['bunx tsc --noEmit', 'bun test'])).toBeNull()
-        const out = recheckAcceptDebts([t19], {
+        const out = await recheckAcceptDebts([t19], {
             staticOk: true,
-            rerunVerify: () => ({outcome: 'pass'})
+            rerunVerify: async () => ({outcome: 'pass'})
         })
         expect(out.resolved).toEqual([])
         expect(out.open).toEqual([t19])
     })
 
-    test('inv-existing-classes-kept — the two shipped classes decide exactly what they did', () => {
+    test('inv-existing-classes-kept — the two shipped classes decide exactly what they did', async () => {
         const staticClass: AcceptDebt = {
             taskId: 'T9',
             reason: 'repo health: `bun run lint` exited 1',
@@ -721,10 +727,10 @@ describe('verify-command debt class', () => {
             origin: 'cross-task-deletion'
         }
         let ran = 0
-        const out = recheckAcceptDebts([staticClass, deletion], {
+        const out = await recheckAcceptDebts([staticClass, deletion], {
             staticOk: true,
             fileExists: () => true,
-            rerunVerify: () => {
+            rerunVerify: async () => {
                 ran++
                 return {outcome: 'fail'}
             }
@@ -733,7 +739,7 @@ describe('verify-command debt class', () => {
         expect(ran).toBe(0)
     })
 
-    test('inv-bounded — the per-run re-run budget caps the work and never closes past it', () => {
+    test('inv-bounded — the per-run re-run budget caps the work and never closes past it', async () => {
         const many: AcceptDebt[] = Array.from({length: 10}, (_, i) => ({
             taskId: `T${i}`,
             reason: 'work did not verify: `bun test` fails',
@@ -741,9 +747,9 @@ describe('verify-command debt class', () => {
             verifyCommand: 'bun test'
         }))
         let ran = 0
-        const out = recheckAcceptDebts(many, {
+        const out = await recheckAcceptDebts(many, {
             staticOk: true,
-            rerunVerify: () => {
+            rerunVerify: async () => {
                 ran++
                 return {outcome: 'gap', detail: 'stub'}
             }

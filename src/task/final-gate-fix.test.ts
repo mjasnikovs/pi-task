@@ -142,7 +142,7 @@ describe('runFinalGateAutofix', () => {
         )
         expect(r.ok).toBe(false)
         expect(r.reason).toContain('did not converge')
-        expect(r.gateReason).toBe('`bun run test` exited 1 — still')
+        expect(r.gate?.reason).toBe('`bun run test` exited 1 — still')
     })
 
     test('the fresh gate’s RANKED failure list rides through (run 13 aggregation)', async () => {
@@ -161,7 +161,7 @@ describe('runFinalGateAutofix', () => {
             })
         )
         expect(r.ok).toBe(false)
-        expect(r.gateFailures).toEqual(failures)
+        expect(r.gate?.failures).toEqual(failures)
     })
 
     test('SHRINK GUARD: a discovered command vanishing → edits discarded, gate never re-run', async () => {
@@ -597,8 +597,14 @@ describe('runFinalGateAutofix — ignored-path channel', () => {
         expect(r.unobserved).toContain('.env')
     })
 
-    test('with no channel wired the result is byte-identical to the old contract', async () => {
+    test('with no channel wired the result carries the outcome and nothing else', async () => {
         const r = await runFinalGateAutofix(base({}))
-        expect(r).toEqual({ok: true, reason: 'statics + `bun run seed` passed'})
+        // The gate outcome rides whole now — it used to be four flattened `gate*`
+        // mirrors, and the flattening is what dropped `openDebts`.
+        expect(r).toEqual({
+            ok: true,
+            reason: 'statics + `bun run seed` passed',
+            gate: {ok: true, reason: 'statics + `bun run seed` passed'}
+        })
     })
 })

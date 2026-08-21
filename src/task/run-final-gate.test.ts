@@ -271,7 +271,7 @@ test('the autofix card is WITHDRAWN after MAX_FINAL_GATE_AUTOFIX failed attempts
                     return Promise.resolve({
                         ok: false,
                         reason: `attempt ${attempts}`,
-                        gateReason: `fail-${attempts}`
+                        gate: {ok: false, reason: `fail-${attempts}`}
                     })
                 }
             }),
@@ -318,7 +318,8 @@ test('LEAVE commits the sub-fixes a non-converging attempt stranded, and names t
             handle.ctx,
             stageDeps(trail, commits, {
                 finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
-                finalGateFix: () => Promise.resolve({ok: false, reason: 'no', gateReason: 'boom2'}),
+                finalGateFix: () =>
+                    Promise.resolve({ok: false, reason: 'no', gate: {ok: false, reason: 'boom2'}}),
                 pendingChanges: () => Promise.resolve(['src/a.ts', 'src/b.ts'])
             }),
             params(dir)
@@ -348,7 +349,7 @@ test('a guard-REJECTED attempt whose edits survived is never committed', async (
                     Promise.resolve({
                         ok: false,
                         reason: 'guard tripped',
-                        gateReason: 'boom2',
+                        gate: {ok: false, reason: 'boom2'},
                         guardTripped: true,
                         editsDiscarded: false
                     }),
@@ -376,7 +377,8 @@ test('a commit that did not land is reported as UNCOMMITTED, never as a commit',
                     return Promise.resolve()
                 },
                 finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
-                finalGateFix: () => Promise.resolve({ok: false, reason: 'no', gateReason: 'boom2'}),
+                finalGateFix: () =>
+                    Promise.resolve({ok: false, reason: 'no', gate: {ok: false, reason: 'boom2'}}),
                 pendingChanges: () => Promise.resolve(['src/a.ts'])
             },
             params(dir)
@@ -402,7 +404,8 @@ test('a pendingChanges fault is inconclusive — nothing is claimed or committed
             handle.ctx,
             stageDeps([], commits, {
                 finalGate: () => Promise.resolve({ok: false, reason: 'boom'}),
-                finalGateFix: () => Promise.resolve({ok: false, reason: 'no', gateReason: 'boom2'}),
+                finalGateFix: () =>
+                    Promise.resolve({ok: false, reason: 'no', gate: {ok: false, reason: 'boom2'}}),
                 pendingChanges: () => Promise.reject(new Error('git unavailable'))
             }),
             params(dir)
@@ -625,8 +628,11 @@ test('an identical failure across tree-changing attempts is DEMOTED and carried 
                     Promise.resolve({
                         ok: false,
                         reason: 'no',
-                        gateReason: 'boot probe: no listener',
-                        gateFailures: ['boot probe: no listener']
+                        gate: {
+                            ok: false,
+                            reason: 'boot probe: no listener',
+                            failures: ['boot probe: no listener']
+                        }
                     }),
                 pendingChanges: () => Promise.resolve(['src/a.ts'])
             }),
@@ -692,7 +698,7 @@ test('YOLO autofixes while the card is offered, then LEAVES — never accepts', 
                         return Promise.resolve({
                             ok: false,
                             reason: 'no',
-                            gateReason: `boom-${attempts}`
+                            gate: {ok: false, reason: `boom-${attempts}`}
                         })
                     }
                 }),
@@ -728,5 +734,46 @@ test('a record() fault never breaks the gate', async () => {
             params(dir)
         )
         expect(res.kind).toBe('completed')
+    })
+})
+
+// ─── The gate outcome crosses the autofix pass WHOLE ─────────────────────────
+//
+// `FinalGateOutcome` used to be re-declared structurally on the way into the fix
+// pass, re-flattened into four `gate*` fields on the way out, and rebuilt as a
+// literal after — each literal dropping `openDebts`, which is the recorded mx5
+// run-18 defect (the fix at the time RE-DERIVED the field instead of keeping the
+// value). It rides whole now, so the fresh gate's own record is what goes forward.
+test('a fresh gate outcome rides forward whole: every ranked failure is re-trailed', async () => {
+    await withTmpTaskDir(async dir => {
+        const handle = makeFakeCtx(dir)
+        const trail: string[] = []
+        for (let i = 0; i < MAX_FINAL_GATE_AUTOFIX; i++) handle.queueSelect(FINAL_AUTOFIX_LABEL)
+        await runFinalGateStage(
+            handle.ctx,
+            stageDeps(trail, [], {
+                finalGate: () => Promise.resolve({ok: false, reason: 'stale reason'}),
+                finalGateFix: () =>
+                    Promise.resolve({
+                        ok: false,
+                        reason: 'no',
+                        gate: {
+                            ok: false,
+                            reason: 'still red',
+                            failures: ['still red', 'and this too'],
+                            // Paired ON the outcome — the caller reads the two off one
+                            // value instead of re-establishing the pairing by string
+                            // membership against a parallel field.
+                            observedFailures: ['still red'],
+                            openDebts: [],
+                            debtNote: '\n\n1 accepted defect is still open.'
+                        }
+                    })
+            }),
+            params(dir)
+        )
+        // Both entries, not just the ranked first, and from the FRESH gate.
+        expect(trail.some(l => l.includes('still red'))).toBe(true)
+        expect(trail.some(l => l.includes('and this too'))).toBe(true)
     })
 })

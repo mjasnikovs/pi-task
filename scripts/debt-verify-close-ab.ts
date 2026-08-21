@@ -217,18 +217,18 @@ interface ArmResult {
     trail: string[]
 }
 
-function arm(
+async function arm(
     debts: AcceptDebt[],
     tree: string,
-    rerun: ((cmd: string, d: AcceptDebt) => VerifyRerunResult) | undefined
-): ArmResult {
-    const r = recheckAcceptDebts(debts, {
+    rerun: ((cmd: string, d: AcceptDebt) => Promise<VerifyRerunResult>) | undefined
+): Promise<ArmResult> {
+    const r = (await recheckAcceptDebts(debts, {
         // Favourable to the OLD classes on both sides: statics assumed passing, so
         // anything the shipped classes could ever close, they do close here.
         staticOk: true,
         fileExists: rel => fs.existsSync(path.join(tree, rel)),
         ...(rerun ? {rerunVerify: rerun} : {})
-    })
+    }))
     return {
         open: new Set(r.open.map(keyOf)),
         resolved: new Set(r.resolved.map(keyOf)),
@@ -262,16 +262,22 @@ async function main(): Promise<void> {
     console.log('')
     console.log('── inv-no-false-clear (whole corpus, re-runner stubbed)')
     for (const stub of [
-        {name: 'always FAIL', fn: (): VerifyRerunResult => ({outcome: 'fail', detail: 'stub'})},
-        {name: 'always GAP', fn: (): VerifyRerunResult => ({outcome: 'gap', detail: 'stub'})}
+        {
+            name: 'always FAIL',
+            fn: (): Promise<VerifyRerunResult> => Promise.resolve({outcome: 'fail', detail: 'stub'})
+        },
+        {
+            name: 'always GAP',
+            fn: (): Promise<VerifyRerunResult> => Promise.resolve({outcome: 'gap', detail: 'stub'})
+        }
     ]) {
         let diverged = 0
         let classified = 0
         for (const run of runs) {
             const withCmd = withVerifyCommands(run)
             classified += withCmd.filter(d => d.verifyCommand !== undefined).length
-            const base = arm(run.debts, run.tree, undefined)
-            const treat = arm(withCmd, run.tree, stub.fn)
+            const base = (await arm(run.debts, run.tree, undefined))
+            const treat = (await arm(withCmd, run.tree, stub.fn))
             if (!sameSet(base.open, treat.open)) diverged++
         }
         check(
@@ -290,10 +296,10 @@ async function main(): Promise<void> {
     let provenanceChecked = 0
     for (const run of runs) {
         const withCmd = withVerifyCommands(run)
-        const base = arm(run.debts, run.tree, undefined)
+        const base = (await arm(run.debts, run.tree, undefined))
         // Treatment with an always-gap re-runner: the OLD classes must still make
         // every close they made, independently of anything the new class does.
-        const treat = arm(withCmd, run.tree, () => ({outcome: 'gap'}))
+        const treat = (await arm(withCmd, run.tree, () => Promise.resolve({outcome: 'gap'})))
         for (const k of base.resolved) if (!treat.resolved.has(k)) lostClose++
         for (const d of withCmd) {
             if (d.verifyCommand === undefined) continue
@@ -322,13 +328,13 @@ async function main(): Promise<void> {
         verifyCommand: 'bun test'
     }))
     let calls = 0
-    const capped = recheckAcceptDebts(many, {
+    const capped = (await recheckAcceptDebts(many, {
         staticOk: true,
         rerunVerify: () => {
             calls++
-            return {outcome: 'gap', detail: 'stub'}
+            return Promise.resolve({outcome: 'gap' as const, detail: 'stub'})
         }
-    })
+    }))
     check(
         'inv-bounded',
         calls <= 3 && capped.open.length === 10,
@@ -351,15 +357,15 @@ async function main(): Promise<void> {
                 + (d.verifyCommand ? `→ \`${d.verifyCommand}\`` : '→ (no command named)')
         )
     }
-    const base = arm(mx5Run19.debts, mx5Run19.tree, undefined)
+    const base = (await arm(mx5Run19.debts, mx5Run19.tree, undefined))
     const observed: Array<{taskId: string; outcome: string; detail: string}> = []
-    const treat = arm(withCmd, mx5Run19.tree, (cmd, d) => {
+    const treat = (await arm(withCmd, mx5Run19.tree, async (cmd, d) => {
         // The SHIPPED wrapper — env-gap contract plus the no-write guard — pointed at
         // the clone. Nothing about the measurement path is a copy of the product.
-        const r = rerunDebtVerifyCommand(clone, cmd)
+        const r = (await rerunDebtVerifyCommand(clone, cmd))
         observed.push({taskId: d.taskId, outcome: r.outcome, detail: r.detail ?? ''})
         return r
-    })
+    }))
     for (const o of observed) {
         console.log(`   re-ran for ${o.taskId}: ${o.outcome.toUpperCase()} ${o.detail.slice(0, 200)}`)
     }
@@ -393,7 +399,7 @@ async function main(): Promise<void> {
     const spec19 = mx5Run19.readSpec('TASK_0019')
     const v19 = spec19 === null ? null : parseVerifyBlockStrict(spec19)
     for (const c of v19 ?? []) {
-        const r = rerunDebtVerifyCommand(clone, c.raw)
+        const r = (await rerunDebtVerifyCommand(clone, c.raw))
         console.log(
             `   TASK_0019 VERIFY \`${c.raw.slice(0, 70)}\` → ${r.outcome.toUpperCase()} `
                 + `${(r.detail ?? '').slice(0, 120)}`

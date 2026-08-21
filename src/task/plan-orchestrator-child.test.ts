@@ -20,6 +20,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import * as realChildRunner from './child-runner.js'
 import * as realOrchestrator from './orchestrator.js'
+import type {RunEnd} from './run-end.js'
 import * as realPlanSession from './plan-session.js'
 import type {PhaseDeps} from './child-runner.js'
 import type {PlanOutcome} from './plan-session.js'
@@ -53,9 +54,9 @@ void mock.module('./child-runner.js', () => ({
 
 const gated: Array<{prompt: string}> = []
 const single: Array<{prompt: string}> = []
-let singleResult: {taskId: string; sessionCancelled: boolean} = {
+let singleResult: {taskId: string; end: RunEnd} = {
     taskId: 'TASK_0007',
-    sessionCancelled: false
+    end: {kind: 'completed'} as RunEnd
 }
 
 void mock.module('./orchestrator.js', () => ({
@@ -109,7 +110,7 @@ beforeEach(() => {
     childBody = () => {}
     childReply = 'NONE'
     childThrows = null
-    singleResult = {taskId: 'TASK_0007', sessionCancelled: false}
+    singleResult = {taskId: 'TASK_0007', end: {kind: 'completed'}}
     sessionOutcome = {kind: 'proceed', entries: []}
     savedVerify = getConfig().verifyWork
     savedEnforce = getConfig().enforceGuidelines
@@ -315,7 +316,7 @@ describe('the default handoff', () => {
     test('a session that could not be replaced is reported and links nothing', async () => {
         getConfig().verifyWork = false
         getConfig().enforceGuidelines = false
-        singleResult = {taskId: '', sessionCancelled: true}
+        singleResult = {taskId: '', end: {kind: 'no-session'}}
         const cwd = repo(false)
         const h = makeFakeCtx(cwd)
 

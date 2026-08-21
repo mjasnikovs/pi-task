@@ -44,6 +44,7 @@
  * producing task). It activates only when a run-GLOBAL freeze source exists.
  */
 import {USER_CANCELLED} from './child-runner.js'
+import type {FinalGateOutcome} from './final-gate.js'
 import {
     findForbiddenDeletions,
     diffIgnoredSnapshots,
@@ -238,22 +239,24 @@ export interface FinalFixResult {
     ok: boolean
     /** Human-readable outcome (converged gate reason, or why the attempt failed). */
     reason: string
-    /** On a did-not-converge outcome: the FRESH gate failure, so the caller's next
-     *  picker (and next fix attempt) works from the current state, not the stale one. */
-    gateReason?: string
-    /** The fresh gate's individual ranked failures (see FinalGateOutcome.failures),
-     *  so the caller can trail each entry — never just the first. */
-    gateFailures?: string[]
-    /** …and which of them a PROBE returned after OBSERVING (see
-     *  FinalGateOutcome.observedFailures). Carried so the caller's non-progress
-     *  classifier can ask the probe's own verdict instead of guessing from the
-     *  failure text — a check that was observed to FAIL is never demote-eligible
-     *  (nexttask 19A). */
-    gateObservedFailures?: string[]
-    /** On a converged outcome: the re-run gate's UNOBSERVED note, if it observed
-     *  nothing dynamic (see FinalGateOutcome.unobserved). Carried so the caller
-     *  labels a converge-on-statics-alone the same way it labels a first-pass one —
-     *  "converged" must never quietly mean "we stopped being able to check". */
+    /**
+     * The re-run gate's OUTCOME, whole — present whenever the gate actually ran
+     * (absent only when the fix child self-declared blocked and the re-run was
+     * skipped).
+     *
+     * This used to be four flattened `gate*` mirrors, and the flattening lost
+     * things. `openDebts` never crossed at all, so `runFinalGateStage` rebuilt
+     * `fin` as a literal three times and each literal dropped it — the recorded
+     * mx5 run-18 defect, fixed by RE-DERIVING the field (`reconcileDebts`) rather
+     * than by keeping the value. Then 19A had to push `observedFailures` across the
+     * same wall as a third parallel field and re-pair it downstream by
+     * `gateObservedFailures?.includes(detail)` — a membership test that exists only
+     * because the pairing was broken in transit.
+     */
+    gate?: FinalGateOutcome
+    /** On a converged outcome: the UNOBSERVED note the CALLER should show. It is
+     *  the gate's own note plus any downgrade this fix pass added (see the
+     *  ignored-dependency probe below), so it is not simply `gate.unobserved`. */
     unobserved?: string
     /** Gitignored path(s) this fix pass wrote, exempt classes already removed (see
      *  write-guard.ts). Present whether or not the gate converged — the caller
@@ -283,16 +286,9 @@ export interface FinalFixDeps {
     /** Re-run the final integration gate — the only arbiter of convergence.
      *  Converges only when the gate's FULL aggregated failure list is empty
      *  (ok=true); `failures` rides through so the caller sees every entry. */
-    gate: (cwd: string) => Promise<{
-        ok: boolean
-        reason: string
-        failures?: string[]
-        /** Which of them a probe returned after OBSERVING (nexttask 19A) — carried
-         *  through so the caller's demote decision can ask the probe's own verdict
-         *  instead of re-deriving observability from the failure string. */
-        observedFailures?: string[]
-        unobserved?: string
-    }>
+    /** Returns the gate's own outcome type, not a structural copy of five of its
+     *  fields — a re-declaration is how `openDebts` came to be silently absent. */
+    gate: (cwd: string) => Promise<FinalGateOutcome>
     /** Labels of every currently-discoverable gate command (static + integration),
      *  for the shrink guard. Pure discovery — nothing is executed. */
     discoverLabels: (cwd: string) => string[]
@@ -487,13 +483,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
 
     const fin = await deps.gate(deps.cwd)
     if (!fin.ok) {
-        return withIgnored({
-            ok: false,
-            reason: `did not converge: ${fin.reason}`,
-            gateReason: fin.reason,
-            gateFailures: fin.failures,
-            ...(fin.observedFailures ? {gateObservedFailures: fin.observedFailures} : {})
-        })
+        return withIgnored({ok: false, reason: `did not converge: ${fin.reason}`, gate: fin})
     }
 
     // IGNORED-DEPENDENCY DOWNGRADE (mx5 run 19). The gate says PASS; the question
@@ -523,6 +513,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     return withIgnored({
         ok: true,
         reason: fin.reason,
+        gate: fin,
         ...(notes.length > 0 ? {unobserved: notes.join(' ')} : {}),
         ...(ignoredDependent !== undefined ? {ignoredDependent} : {})
     })

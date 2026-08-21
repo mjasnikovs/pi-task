@@ -68,6 +68,7 @@ import {
     discoverBootCommand,
     detectsServedApp,
     runBootCheck,
+    runBootSection,
     bootSkipVerdict,
     nonLaunchScriptReason,
     rejectedLaunchScript,
@@ -77,13 +78,9 @@ import {
     pickFreePort,
     preferredDeclaredPort,
     canEnumerateListeners,
-    recoverOrphanPort,
-    defaultFindPortHolder,
     type BootDeps
 } from './boot-probe.js'
 import {readEnvNotes, parseEnvNotes, isExcuseNote} from './env-notes.js'
-import {runRenderCheck} from './render-check.js'
-import {runDeepRenderCheck} from './deep-render-check.js'
 import {resolveRunner, runnerEnv} from './runner-resolve.js'
 import {
     classifyCommandRun,
@@ -377,7 +374,7 @@ function resolveCommandBody(
  * passes `extraGapRe` (launch scripts), missing external infrastructure. Only a
  * command that actually ran and exited non-zero for a real reason fails.
  */
-function runGateCommand(
+async function runGateCommand(
     cwd: string,
     [bin, args]: HealthCommand,
     timeoutMs: number,
@@ -386,8 +383,9 @@ function runGateCommand(
      *  see launch-config-gap.ts). Absent ⇒ `runnerEnv(runner)`, i.e. unchanged. */
     envOverride?: Record<string, string | undefined>,
     /** The spawner. Injected so the gate's own tests can script a verdict. */
-    run: CommandRunner = spawnCommand
-):
+    run: CommandRunner = spawnCommand,
+    signal?: AbortSignal
+): Promise<
     | {
           outcome: 'skip'
           /** true → the runner binary never spawned (ENOENT). Distinct from a
@@ -397,7 +395,8 @@ function runGateCommand(
           spawnFailed: boolean
       }
     | {outcome: 'pass'}
-    | {outcome: 'fail'; status: number; tail: string} {
+    | {outcome: 'fail'; status: number; tail: string}
+> {
     // Runner resolution (mx5 run 16): a login-shell-stripped PATH left `bun`
     // unspawnable, so every dynamic check skipped and the gate went blind. The
     // resolved binary is spawned, and its directory rides on the child's PATH so
@@ -405,7 +404,14 @@ function runGateCommand(
     // inside — a bare 127 there is the same blindness one level down).
     const runner = resolveRunner(bin)
     const verdict = classifyCommandRun(
-        run({cwd, bin: runner.bin, args, timeoutMs, env: envOverride ?? runnerEnv(runner)}),
+        await run({
+            cwd,
+            bin: runner.bin,
+            args,
+            timeoutMs,
+            env: envOverride ?? runnerEnv(runner),
+            ...(signal === undefined ? {} : {signal})
+        }),
         extraGapRe ? [extraGapRe] : []
     )
     if (verdict.outcome === 'gap') {
@@ -436,6 +442,7 @@ export {
     discoverBootCommand,
     detectsServedApp,
     runBootCheck,
+    runBootSection,
     bootSkipVerdict,
     nonLaunchScriptReason,
     rejectedLaunchScript,
@@ -447,6 +454,7 @@ export {
     canEnumerateListeners
 }
 export type {BootDeps}
+export type {BootSectionVerdict} from './boot-probe.js'
 
 // The ACCEPT-debt re-check (`deriveOpenDebts`, `rerunDebtVerifyCommand`) lives in
 // accept-debt.ts with the ledger it reads and writes; re-exported so the
@@ -648,6 +656,13 @@ export interface FinalGateOptions {
     envClosure?: (cwd: string) => EnvClosure
     /** The repo's tracked file list, or null when it cannot be determined. */
     trackedFiles?: (cwd: string) => string[] | null
+    /**
+     * The run's cancel. Reaches every command the gate spawns — repo-health, the
+     * lockfile/integration/launch sections and the ACCEPT-debt re-runs. Nothing
+     * could be cancelled while `CommandRunner` was synchronous: the event loop
+     * never got a turn in which to notice.
+     */
+    signal?: AbortSignal
 }
 
 export async function runFinalIntegrationGate(
@@ -669,12 +684,18 @@ export async function runFinalIntegrationGate(
         },
         trackedFiles: trackedFilesFn = trackedFiles
     } = opts
-    const stat = runRepoHealthCheck(cwd)
+    // ASYNC: the run-end gate no longer blocks the event loop for the project's own
+    // lint (measured 15s mx5 / 69s aiz-client with zero timer ticks), so a loader can
+    // paint and a cancel can reach the child.
+    const stat = await runRepoHealthCheck(cwd, {
+        run: runCmd,
+        ...(opts.signal === undefined ? {} : {signal: opts.signal})
+    })
     // Debts are derived once, before any section runs, and ride on every verdict
     // shape (GateTally.verdict): `reason` stays the mechanical failure because it
     // seeds the autofix child's prompt — run 11's fix child executed a recorded
     // claim as an instruction.
-    const debts = await deriveOpenDebts(cwd, stat.ok)
+    const debts = await deriveOpenDebts(cwd, stat.ok, runCmd, opts.signal)
     // Every section below RECORDS into the tally (failures ranked, the four
     // dynamic counters, the notes) and the verdict is assembled ONCE at the end —
     // see gate-tally.ts for what each method means.
@@ -721,7 +742,15 @@ export async function runFinalIntegrationGate(
         for (const cmd of list) {
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             tally.attempted(cmd[0])
-            const r = runGateCommand(cwd, cmd, timeoutMs, undefined, undefined, runCmd)
+            const r = await runGateCommand(
+                cwd,
+                cmd,
+                timeoutMs,
+                undefined,
+                undefined,
+                runCmd,
+                opts.signal
+            )
             if (r.outcome === 'skip') {
                 if (r.spawnFailed) tally.spawnFailure(cmd[0])
                 continue
@@ -773,13 +802,14 @@ export async function runFinalIntegrationGate(
             const cmd: HealthCommand = ['bun', ['run', name]]
             const label = `${cmd[0]} ${cmd[1].join(' ')}`
             tally.attempted(cmd[0])
-            const r = runGateCommand(
+            const r = await runGateCommand(
                 cwd,
                 cmd,
                 launchTimeout,
                 INFRA_GAP_OUTPUT_RE,
                 undefined,
-                runCmd
+                runCmd,
+                opts.signal
             )
             if (r.outcome === 'skip') {
                 if (r.spawnFailed) tally.spawnFailure(cmd[0])
@@ -808,13 +838,14 @@ export async function runFinalIntegrationGate(
                     env: process.env
                 })
                 if (gap) {
-                    const probe = runGateCommand(
+                    const probe = await runGateCommand(
                         cwd,
                         cmd,
                         launchTimeout,
                         INFRA_GAP_OUTPUT_RE,
                         probeEnv(runnerEnv(resolveRunner(cmd[0])), gap),
-                        runCmd
+                        runCmd,
+                        opts.signal
                     )
                     if (probe.outcome === 'pass') {
                         // Nothing about this script was OBSERVED: the real run could
@@ -878,86 +909,26 @@ export async function runFinalIntegrationGate(
     // before the boot `else` branch and the post-boot closure scans, whose stage is a
     // statement about when they are meaningful.
     if (!boot && tally.silent()) return tally.verdict(debts)
-    if (boot) {
-        const label = `${boot[0]} ${boot[1].join(' ')}`
-        tally.attempted(boot[0])
-        const expectServer = detectsServedApp(cwd, planText)
-        // Render check (mx5 runs 8/11): for a served app, load the live page in a
-        // headless browser and judge the RENDERED DOM — curl can't run JS, so a
-        // blank-mount app passed every prior "renders" check. Default to the real
-        // probe; tests inject their own. runRenderCheck env-gap-SKIPs when no
-        // browser exists, so a box without one never gets a false FAIL.
-        // Authenticated deep-render check (mx5 run 17): the page above renders, so
-        // now sign in with the account the project's own dotenv declares (the same
-        // ADMIN_PHONE/ADMIN_PASSWORD the launch contract's seed step consumes) and
-        // require the session to actually work. WEB-ONLY by construction — it hangs
-        // off the served-app branch and never runs for C++, Godot, CLI or library
-        // projects. It may only FAIL when the SERVER authenticated us; no browser,
-        // no credentials, an undrivable form or rejected credentials all skip as
-        // env gaps (judgeDeepSession).
-        const bootDepsWithRender: BootDeps = {
-            ...bootDeps,
-            renderProbe: bootDeps.renderProbe ?? runRenderCheck,
-            deepRenderProbe: bootDeps.deepRenderProbe ?? (url => runDeepRenderCheck(url, cwd)),
-            preferredPort: bootDeps.preferredPort ?? (() => preferredDeclaredPort(cwd))
-        }
-        let b = await runBootCheck(cwd, boot, bootGraceMs, {
-            expectServer,
-            deps: bootDepsWithRender
-        })
-        if (b.outcome === 'orphan-port') {
-            b = await recoverOrphanPort(cwd, boot, b, bootGraceMs, bootDepsWithRender, expectServer)
-        }
-        if (b.outcome !== 'skip') tally.observed()
-        else if (b.spawnFailed) tally.spawnFailure(boot[0])
-        tally.bootUnobserved(
-            bootSkipVerdict({
-                label,
-                skipped: b.outcome === 'skip',
-                expectServer
-            })
-        )
-        if (b.outcome === 'fail') {
-            // OBSERVED (nexttask 19A). Every path that produces `fail` here is a
-            // probe that looked: the render judge saw an empty body, the deep
-            // session saw the authenticated half dead, the enumerator saw no
-            // listener, or the launch command itself exited non-zero. The one
-            // condition that means "we could not look" — no ss/netstat/lsof, mx5
-            // run 14 — returns PASS stamped UNOBSERVED and never reaches here
-            // (`b0f90a7`, final-gate.ts `if (!canEnumerate) return passAndKill(…)`).
-            tally.failObserved(`boot check: \`${label}\` ${b.detail}`, 0)
-        } else if (b.outcome === 'orphan-port') {
-            // Could not clear the port. Distinct HARNESS diagnosis, never a bare app
-            // FAIL: name the port and (when known) the process squatting on it.
-            const holder =
-                b.port !== null ? (bootDeps.findPortHolder ?? defaultFindPortHolder)(b.port) : null
-            const who =
-                holder ? ` — held by an orphaned process (pid ${holder.pid}: ${holder.command})`
-                : b.port !== null ? ` — port ${b.port} is held by another process`
-                : ''
-            tally.fail(
-                `boot check: \`${label}\` could not bind: orphaned process / port already in use${who} (harness condition, not an app fault)`,
-                0
-            )
-        } else if (b.outcome === 'pass') {
-            tally.ran(label)
-            // A listener that served, but whose page could not be OBSERVED to render
-            // (no browser, undeterminable port) → UNOBSERVED warning, not a silent pass.
-            if (b.renderNote) tally.warn(b.renderNote)
-        }
-    } else {
-        // Nothing to boot — but if the reason is that the project's only launch
-        // script was REJECTED as not-a-launch (2A), that is not the same thing as a
-        // project with no launch surface, and it must not degrade into silence.
-        const rejected = rejectedLaunchScript(cwd)
-        if (rejected && detectsServedApp(cwd, planText)) {
-            tally.bootUnobserved(
-                `boot check: this project's only launch script (\`${rejected.name}\`) is not a `
-                    + `launch — ${rejected.reason} — so nothing was started and the app was never `
-                    + 'observed to run.'
-            )
-        }
+    // The boot CONCEPT lives in boot-probe.ts (runBootSection): discovery,
+    // served-app detection, the probe defaults, the boot check, orphan-port
+    // recovery, the port-holder diagnosis, the skip verdict and the
+    // rejected-launch-script branch. This is the record, and nothing else.
+    const bootSection = await runBootSection(cwd, {
+        ...(planText === undefined ? {} : {planText}),
+        ...(bootGraceMs === undefined ? {} : {graceMs: bootGraceMs}),
+        deps: bootDeps
+    })
+    if (bootSection.attempted) tally.attempted(bootSection.attempted)
+    if (bootSection.observed) tally.observed()
+    else if (bootSection.spawnFailedBin) tally.spawnFailure(bootSection.spawnFailedBin)
+    tally.bootUnobserved(bootSection.unobservedNote ?? null)
+    if (bootSection.failure) {
+        const {detail, rank, observed} = bootSection.failure
+        if (observed) tally.failObserved(detail, rank)
+        else tally.fail(detail, rank)
     }
+    if (bootSection.ranLabel) tally.ran(bootSection.ranLabel)
+    for (const w of bootSection.warnings) tally.warn(w)
     // Full-skip blindness guard (mx5 run 16): commands were discovered but every
     // one skipped → rank-0 failure, never a static-only PASS. Runner resolvability
     // is checked through resolveRunner so the failure text can name the missing

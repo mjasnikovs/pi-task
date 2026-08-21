@@ -2,7 +2,6 @@ import {describe, expect, test} from 'bun:test'
 import {
     runPhaseChild,
     prependHint,
-    runPhaseWithLoopGuard,
     runWithEmphasisRetry,
     LoopExhaustedError,
     LeakedToolCallError,
@@ -320,7 +319,7 @@ function loopEvents(
     return events
 }
 
-describe('runPhaseWithLoopGuard', () => {
+describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGuard)', () => {
     test('restarts with hint when 5 identical tool calls hit within window', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
@@ -335,25 +334,22 @@ describe('runPhaseWithLoopGuard', () => {
                 },
                 '\n'
             )
-            const spawn = fakeSpawnQueue([
+            const {spawn, prompts} = ladderSpawn([
                 {events: loopEvents('Read', {path: '/foo'}, 5)},
                 agentEndResponse('refined content')
             ])
-            const builds: Array<string | null> = []
-            const out = await runPhaseWithLoopGuard(
+            const out = await runPhaseChild(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                 'refine',
                 'read',
-                hint => {
-                    builds.push(hint)
-                    return 'PROMPT'
-                }
+                'PROMPT',
+                {verb: 'restart'}
             )
             expect(out).toBe('refined content')
-            expect(builds.length).toBe(2)
-            expect(builds[0]).toBeNull()
-            expect(builds[1]).toContain('SYSTEM NOTE')
-            expect(builds[1]).toContain('Read')
+            expect(prompts.length).toBe(2)
+            expect(prompts[0]).toBe('PROMPT')
+            expect(prompts[1]).toContain('SYSTEM NOTE')
+            expect(prompts[1]).toContain('Read')
         })
     })
 
@@ -373,24 +369,21 @@ describe('runPhaseWithLoopGuard', () => {
             )
             // First strike yields no assistant text (transient empty turn); the
             // re-spawn succeeds. This is the TASK_0005 refine failure mode.
-            const spawn = fakeSpawnQueue([
+            const {spawn, prompts} = ladderSpawn([
                 agentEndResponse(''),
                 agentEndResponse('refined content')
             ])
-            const builds: Array<string | null> = []
-            const out = await runPhaseWithLoopGuard(
+            const out = await runPhaseChild(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                 'refine',
                 'read',
-                hint => {
-                    builds.push(hint)
-                    return 'PROMPT'
-                }
+                'PROMPT',
+                {verb: 'restart'}
             )
             expect(out).toBe('refined content')
-            expect(builds.length).toBe(2)
-            // Empty output carries no hint — the restart sees a null hint, not a SYSTEM NOTE.
-            expect(builds[1]).toBeNull()
+            expect(prompts.length).toBe(2)
+            // Empty output carries no hint — the restart re-sends the bare prompt.
+            expect(prompts[1]).toBe('PROMPT')
         })
     })
 
@@ -415,11 +408,12 @@ describe('runPhaseWithLoopGuard', () => {
                 agentErrorResponse('invalid request: messages too long'),
                 agentEndResponse('should not be reached')
             ])
-            const p = runPhaseWithLoopGuard(
+            const p = runPhaseChild(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                 'refine',
                 'read',
-                () => 'PROMPT'
+                'PROMPT',
+                {verb: 'restart'}
             )
             await expect(p).rejects.toBeInstanceOf(ModelError)
             await expect(p).rejects.toThrow(/model error — invalid request/)
@@ -442,12 +436,11 @@ describe('runPhaseWithLoopGuard', () => {
             )
             // The TASK_0012 grill-gen failure: a single "Connection error." against
             // a live single-slot local server. Transient — the restart succeeds.
-            const spawn = fakeSpawnQueue([
+            const {spawn, prompts} = ladderSpawn([
                 agentErrorResponse('Connection error.'),
                 agentEndResponse('grilled questions')
             ])
-            const builds: Array<string | null> = []
-            const out = await runPhaseWithLoopGuard(
+            const out = await runPhaseChild(
                 {
                     cwd,
                     taskId: 'TASK_0001',
@@ -457,15 +450,13 @@ describe('runPhaseWithLoopGuard', () => {
                 },
                 'grill-gen',
                 'read',
-                hint => {
-                    builds.push(hint)
-                    return 'PROMPT'
-                }
+                'PROMPT',
+                {verb: 'restart'}
             )
             expect(out).toBe('grilled questions')
-            expect(builds.length).toBe(2)
+            expect(prompts.length).toBe(2)
             // A connection restart carries no correction hint — same bare prompt.
-            expect(builds[1]).toBeNull()
+            expect(prompts[1]).toBe('PROMPT')
         })
     })
 
@@ -489,7 +480,7 @@ describe('runPhaseWithLoopGuard', () => {
                 agentErrorResponse('Connection error.'),
                 agentErrorResponse('Connection error.')
             ])
-            const p = runPhaseWithLoopGuard(
+            const p = runPhaseChild(
                 {
                     cwd,
                     taskId: 'TASK_0001',
@@ -499,7 +490,8 @@ describe('runPhaseWithLoopGuard', () => {
                 },
                 'grill-gen',
                 'read',
-                () => 'PROMPT'
+                'PROMPT',
+                {verb: 'restart'}
             )
             await expect(p).rejects.toBeInstanceOf(ModelError)
             await expect(p).rejects.toThrow(/model error — Connection error/)
@@ -522,11 +514,12 @@ describe('runPhaseWithLoopGuard', () => {
             )
             const spawn = fakeSpawnQueue([agentEndResponse('')])
             await expect(
-                runPhaseWithLoopGuard(
+                runPhaseChild(
                     {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                     'refine',
                     'read',
-                    () => 'PROMPT'
+                    'PROMPT',
+                    {verb: 'restart'}
                 )
             ).rejects.toThrow(/refine child produced no output/)
         })
@@ -552,11 +545,12 @@ describe('runPhaseWithLoopGuard', () => {
                 {events: loopEvents('Read', {path: '/foo'}, 5)}
             ])
             await expect(
-                runPhaseWithLoopGuard(
+                runPhaseChild(
                     {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                     'refine',
                     'read',
-                    () => 'PROMPT'
+                    'PROMPT',
+                    {verb: 'restart'}
                 )
             ).rejects.toBeInstanceOf(LoopExhaustedError)
         })
@@ -591,16 +585,12 @@ describe('runPhaseWithLoopGuard', () => {
                     {events: loopEvents('Read', {path: '/foo'}, 5)},
                     agentEndResponse('GOAL\n  a degraded but complete spec')
                 ])
-                const builds: Array<string | null> = []
-                const out = await runPhaseWithLoopGuard(
+                const out = await runPhaseChild(
                     {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                     'refine',
                     'read',
-                    hint => {
-                        builds.push(hint)
-                        return 'PROMPT'
-                    },
-                    {degradeOnExhaustion: true}
+                    'PROMPT',
+                    {degradeOnExhaustion: true, verb: 'restart'}
                 )
                 expect(out).toBe('GOAL\n  a degraded but complete spec')
                 // 4 spawns: 3 strikes + 1 degrade attempt.
@@ -610,9 +600,10 @@ describe('runPhaseWithLoopGuard', () => {
                 expect(calls[3]).toContain('--no-tools')
                 expect(calls[3]).not.toContain('--tools')
                 // The degrade prompt was built with the terminal "NO tools" hint.
-                expect(builds.length).toBe(4)
-                expect(builds[3]).toContain('SYSTEM NOTE')
-                expect(builds[3]).toContain('NO tools')
+                const degradePrompt = String(calls[3]![calls[3]!.length - 1])
+                expect(degradePrompt).toContain('SYSTEM NOTE')
+                expect(degradePrompt).toContain('NO tools')
+                expect(degradePrompt).toContain('PROMPT')
             })
         })
 
@@ -636,12 +627,12 @@ describe('runPhaseWithLoopGuard', () => {
                     {events: loopEvents('Read', {path: '/foo'}, 5)},
                     agentEndResponse('GOAL\n  spec\n')
                 ])
-                await runPhaseWithLoopGuard(
+                await runPhaseChild(
                     {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                     'refine',
                     'read',
-                    () => 'PROMPT',
-                    {degradeOnExhaustion: true}
+                    'PROMPT',
+                    {degradeOnExhaustion: true, verb: 'restart'}
                 )
                 const events = (await readSection(cwd, 'TASK_0001', 'loop events')) ?? ''
                 expect(events).toContain('degraded — no-tools final attempt')
@@ -670,12 +661,12 @@ describe('runPhaseWithLoopGuard', () => {
                     agentEndResponse('') // degrade attempt is also empty → honest fail
                 ])
                 await expect(
-                    runPhaseWithLoopGuard(
+                    runPhaseChild(
                         {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                         'refine',
                         'read',
-                        () => 'PROMPT',
-                        {degradeOnExhaustion: true}
+                        'PROMPT',
+                        {degradeOnExhaustion: true, verb: 'restart'}
                     )
                 ).rejects.toBeInstanceOf(LoopExhaustedError)
             })
@@ -704,11 +695,12 @@ describe('runPhaseWithLoopGuard', () => {
                     agentEndResponse('should not be reached')
                 ])
                 await expect(
-                    runPhaseWithLoopGuard(
+                    runPhaseChild(
                         {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                         'refine',
                         'read',
-                        () => 'PROMPT'
+                        'PROMPT',
+                        {verb: 'restart'}
                     )
                 ).rejects.toBeInstanceOf(LoopExhaustedError)
                 expect(calls.length).toBe(3) // no 4th (degrade) spawn
@@ -783,7 +775,7 @@ function capturingQueue(responses: ReadonlyArray<QueuedResponse>): {
 }
 
 describe('leaked tool-call guard', () => {
-    test('runPhaseWithLoopGuard restarts with a correction hint when the child leaks a call', async () => {
+    test('the one loop restarts with a correction hint when the child leaks a call', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -797,29 +789,26 @@ describe('leaked tool-call guard', () => {
                 },
                 '\n'
             )
-            const spawn = fakeSpawnQueue([
+            const {spawn, prompts} = ladderSpawn([
                 agentEndResponse(LEAKED),
                 agentEndResponse('clean refined content')
             ])
-            const builds: Array<string | null> = []
-            const out = await runPhaseWithLoopGuard(
+            const out = await runPhaseChild(
                 {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                 'refine',
                 'read',
-                hint => {
-                    builds.push(hint)
-                    return 'PROMPT'
-                }
+                'PROMPT',
+                {verb: 'restart'}
             )
             expect(out).toBe('clean refined content')
-            expect(builds.length).toBe(2)
-            expect(builds[0]).toBeNull()
-            expect(builds[1]).toContain('SYSTEM NOTE')
-            expect(builds[1]).toMatch(/tool call/i)
+            expect(prompts.length).toBe(2)
+            expect(prompts[0]).toBe('PROMPT')
+            expect(prompts[1]).toContain('SYSTEM NOTE')
+            expect(prompts[1]).toMatch(/tool call/i)
         })
     })
 
-    test('runPhaseWithLoopGuard throws LeakedToolCallError when every attempt leaks', async () => {
+    test('the one loop throws LeakedToolCallError when every attempt leaks', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
                 cwd,
@@ -839,11 +828,12 @@ describe('leaked tool-call guard', () => {
                 agentEndResponse(LEAKED)
             ])
             await expect(
-                runPhaseWithLoopGuard(
+                runPhaseChild(
                     {cwd, taskId: 'TASK_0001', signal: new AbortController().signal, spawn},
                     'refine',
                     'read',
-                    () => 'PROMPT'
+                    'PROMPT',
+                    {verb: 'restart'}
                 )
             ).rejects.toBeInstanceOf(LeakedToolCallError)
         })
@@ -941,34 +931,35 @@ function ladderSpawn(responses: ReadonlyArray<SpawnResponse>): {
 }
 
 /**
- * The two wrappers that share the ladder, driven identically. Both are handed
+ * The two option sets that share the ladder, driven identically. Both are handed
  * the SAME literal prompt and the same queued child responses, so any rung that
  * behaved differently between them would show up as a diff in `prompts` or in
- * the thrown error. `verb` is the wrapper's own word in the debug log — the
- * single externally visible difference the collapse deliberately preserved.
+ * the thrown error. `verb` is the caller's own word in the debug log — the
+ * single externally visible difference the collapse deliberately preserved, and
+ * the only reason `PhaseChildOptions.verb` exists.
  */
 const LADDER_CALL_SITES = [
     {
-        label: 'runPhaseChild',
+        label: 'runPhaseChild (default verb)',
         verb: 'retry',
         otherVerb: 'restart',
         run: (deps: Parameters<typeof runPhaseChild>[0], name: string) =>
             runPhaseChild(deps, name, 'read', 'ORIGINAL PROMPT')
     },
     {
-        label: 'runPhaseWithLoopGuard',
+        label: "runPhaseChild ({verb: 'restart'})",
         verb: 'restart',
         otherVerb: 'retry',
-        run: (deps: Parameters<typeof runPhaseWithLoopGuard>[0], name: string) =>
-            runPhaseWithLoopGuard(deps, name, 'read', hint => prependHint(hint, 'ORIGINAL PROMPT'))
+        run: (deps: Parameters<typeof runPhaseChild>[0], name: string) =>
+            runPhaseChild(deps, name, 'read', 'ORIGINAL PROMPT', {verb: 'restart'})
     }
 ] as const
 
 describe('shared error-triage ladder', () => {
     // runPhaseChild and runPhaseWithLoopGuard used to carry two byte-identical
     // copies of this ladder 166 lines apart, so a fix to one silently missed the
-    // other. They now share one implementation; these tests run all four rungs
-    // through BOTH call sites so the sharing stays proven.
+    // other. There is one loop now; these tests run all four rungs through BOTH
+    // option sets so the one externally visible difference stays the only one.
     for (const site of LADDER_CALL_SITES) {
         describe(site.label, () => {
             const depsFor = (spawn: SpawnFn, debug?: string[]) => ({
@@ -1089,8 +1080,9 @@ describe('shared error-triage ladder', () => {
 // Nothing in the host could end it. runPhaseChild is the runner EVERY
 // /task-auto planning child goes through — clarify, decompose, coverage,
 // contract-extract — and it passes `undefined` for runChild's `onToolCall`, so
-// no LoopDetector is ever constructed for them; only runPhaseWithLoopGuard
-// builds one, and the planning seam does not call it. There is no wall-clock
+// no LoopDetector was ever constructed for them; only the (now deleted)
+// runPhaseWithLoopGuard built one, and the planning seam did not call it. There
+// is no wall-clock
 // bound either: `streamInactivityMs` only fires on SILENCE, and a child
 // thrashing through reads is the opposite of silent. Research workers already
 // carry both guards (RESEARCH_WORKER_TIMEOUT_MS, workers/pi-worker-core.ts) for
@@ -1302,9 +1294,9 @@ describe('PhaseDeps.runChild seam', () => {
         expect(seen).toEqual([{name: 'refine', tools: 'read', prompt: 'the prompt'}])
     })
 
-    test('runPhaseWithLoopGuard delegates with the first strike’s prompt', async () => {
+    test('a restart-verb caller delegates with the same clean prompt', async () => {
         const seen: string[] = []
-        const out = await runPhaseWithLoopGuard(
+        const out = await runPhaseChild(
             {
                 cwd: '/tmp',
                 taskId: 'TASK_TEST',
@@ -1317,10 +1309,13 @@ describe('PhaseDeps.runChild seam', () => {
             },
             'grill-gen',
             'read',
-            hint => (hint === null ? 'clean prompt' : `hinted: ${hint}`)
+            'clean prompt',
+            {verb: 'restart', degradeOnExhaustion: true}
         )
         expect(out).toBe('done')
-        // No loop hit has happened yet, so the substitute sees the clean prompt.
+        // The substitute stands in for the whole guarded run: no loop hit has
+        // happened, so it sees the prompt with no hint in front of it — and the
+        // options are the loop's, invisible to a caller that replaced the loop.
         expect(seen).toEqual(['grill-gen:clean prompt'])
     })
 

@@ -2,13 +2,13 @@ import {test, expect, describe} from 'bun:test'
 import {
     buildExternalContext,
     gatherExternalContext,
-    type ExternalContextDeps,
     type ExternalContextLookups
 } from './external-context.js'
+import type {PhaseDeps} from './child-runner.js'
 
 const deps = {cwd: '/tmp', signal: new AbortController().signal}
 
-function docsOk(pkg: string, content: string, npmLatest?: string): ExternalContextDeps['docsRaw'] {
+function docsOk(pkg: string, content: string, npmLatest?: string): PhaseDeps['docsRaw'] {
     return async () => ({
         kind: 'ok',
         pkg: {name: pkg, version: '1.0.0', root: '/tmp', entryDts: null, readme: null},
@@ -32,11 +32,11 @@ describe('gatherExternalContext', () => {
 
     test('assembles npm version + docs blocks for a backtick package', async () => {
         const recorded: string[] = []
-        const out = await gatherExternalContext(
-            'use `zod` for validation',
-            {...deps, recordSubStep: label => recorded.push(label)},
-            {docsRaw: docsOk('zod', 'zod docs body', '3.23.8')}
-        )
+        const out = await gatherExternalContext('use `zod` for validation', {
+            ...deps,
+            recordSubStep: label => recorded.push(label),
+            docsRaw: docsOk('zod', 'zod docs body', '3.23.8')
+        })
         expect(out.startsWith('EXTERNAL CONTEXT\n')).toBe(true)
         expect(out).toContain('### npm: zod')
         expect(out).toContain('latest: 3.23.8')
@@ -55,8 +55,8 @@ describe('gatherExternalContext', () => {
         const versionCalls: string[] = []
         const out = await gatherExternalContext(
             'add `hono`, `zod`, `react`, `react-dom`, `wouter`, and `tailwindcss`',
-            deps,
             {
+                ...deps,
                 docsRaw: async ({pkg}) => {
                     docsCalls.push(pkg)
                     return {
@@ -90,7 +90,8 @@ describe('gatherExternalContext', () => {
     })
 
     test('assembles a url block from fetchRaw', async () => {
-        const out = await gatherExternalContext('see https://example.com/guide for details', deps, {
+        const out = await gatherExternalContext('see https://example.com/guide for details', {
+            ...deps,
             fetchRaw: async ({url}) => ({
                 markdown: 'page markdown here',
                 finalUrl: url,
@@ -104,8 +105,8 @@ describe('gatherExternalContext', () => {
     test('emits a service block on a search hit', async () => {
         const out = await gatherExternalContext(
             'EXTERNAL-DEPENDENCIES\n- Stripe  payment intents api\n',
-            deps,
             {
+                ...deps,
                 searchFn: async () => ({
                     kind: 'ok',
                     results: [{title: 'Stripe Docs', url: 'https://stripe.com', description: 'pay'}]
@@ -119,15 +120,15 @@ describe('gatherExternalContext', () => {
     test('emits the freshness-skipped block when search has no key', async () => {
         const out = await gatherExternalContext(
             'EXTERNAL-DEPENDENCIES\n- Stripe  payment intents api\n',
-            deps,
-            {searchFn: async () => ({kind: 'no_key', message: 'no key'})}
+            {...deps, searchFn: async () => ({kind: 'no_key', message: 'no key'})}
         )
         expect(out).toContain('### freshness-check skipped')
         expect(out).toContain('- Stripe')
     })
 
     test('tolerates a failing lookup and yields no block for it', async () => {
-        const out = await gatherExternalContext('use `zod` for validation', deps, {
+        const out = await gatherExternalContext('use `zod` for validation', {
+            ...deps,
             docsRaw: async () => {
                 throw new Error('lookup blew up')
             }

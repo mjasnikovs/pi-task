@@ -2,22 +2,18 @@ import {describe, expect, test} from 'bun:test'
 import {TaskRunner, runSingleTask, type TaskRunnerOptions} from './orchestrator.js'
 import {CONTINUE_AFTER_COMPACTION, MAX_COMPACTION_RESUMES} from './implementation-turn.js'
 import {readTaskFile, readSection, writeTaskFile} from './task-io.js'
-import {
-    agentEndResponse,
-    agentErrorResponse,
-    fakeSpawnByPrompt,
-    type SpawnResponse
-} from '../test-utils/fake-spawn.js'
+import {agentEndResponse, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-ctx.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {_setSink, reset as resetSessionState} from '../remote/session-state.js'
 import {broadcast as wsBroadcast} from '../remote/broadcast.js'
-import type {SpawnFn} from '../shared/child-process.js'
 import type {PhaseDeps} from './child-runner.js'
+import type {RunWorkerResult} from '../workers/pi-worker-core.js'
+import {RUN_END_POLICY} from './run-end.js'
 
 // ─── Phase children: routed by NAME through the `runChild` seam ───────────────
 
-/** The names phases.ts / title-label.ts hand to runPhaseChild / runPhaseWithLoopGuard. */
+/** The names phases.ts / title-label.ts hand to runPhaseChild. */
 type ChildName =
     | 'refine'
     | 'verify-tooling'
@@ -46,43 +42,63 @@ function scriptedChildren(
     }
 }
 
-// ─── Research workers: still routed by prompt PROSE through `spawn` ───────────
+// ─── Research workers: routed by LABEL through the `runWorker` seam ───────────
 //
-// The four research workers do not go through `runChild`: PHASES.research calls
-// `phaseResearch(d, p.refined)` with no PhaseResearchDeps, so a TaskRunner-driven
-// test cannot reach the `runWorker(label, input)` seam. Until that is threaded,
-// these are the ONLY prompt-matched fakes left in this file.
+// These were the last prompt-matched fakes in this file: PHASES.research called
+// `phaseResearch(d, p.refined)` and the seam sat on a third parameter no row
+// could reach, so a worker had to be recognised by a marker SENTENCE lifted out
+// of prompts.ts — prompt copy this codebase rewords and A/Bs for a living, as
+// load-bearing test infrastructure. `runWorker` is a `PhaseDeps` field now, so a
+// worker is named, and what a gate reads is stated rather than acted out through
+// a fake process that emits JSON events.
 
 type WorkerName = 'files' | 'apis' | 'context' | 'tooling'
-type WorkerScript = string | (() => string | SpawnResponse)
+/** What a scripted worker answers: its text, or the result fields directly. */
+type WorkerScript = string | (() => string | Partial<RunWorkerResult>)
 
-const WORKER_TAGS: Record<WorkerName, string> = {
-    files: 'FILES owns paths',
-    apis: 'APIS owns symbols and commands BY NAME ONLY',
-    context: 'gather background knowledge',
-    tooling: 'identify the verification tools'
+const WORKER_LABELS: Record<WorkerName, string> = {
+    files: 'worker:files',
+    apis: 'worker:apis',
+    context: 'worker:context',
+    tooling: 'worker:tooling'
 }
 
-function findWorker(prompt: string): WorkerName | 'unknown' {
-    for (const [k, v] of Object.entries(WORKER_TAGS)) {
-        if (prompt.includes(v)) return k as WorkerName
+function workerResult(over: Partial<RunWorkerResult> = {}): RunWorkerResult {
+    return {
+        text: '',
+        exitCode: 0,
+        stderr: '',
+        aborted: false,
+        sawOutput: true,
+        waitMs: 1,
+        workMs: 1,
+        attempts: 1,
+        totalWallMs: 2,
+        restarts: [],
+        salvagedFromDiscardedAttempt: false,
+        // Non-zero so the APIS zero-retrieval gate stays out of the way unless a
+        // test is about it.
+        groundingRetrievalCount: 3,
+        ...over
     }
-    return 'unknown'
 }
 
-/** A spawn fake answering each research worker; unknown prompts get `fallback`. */
+/** A `PhaseDeps.runWorker` answering each research worker by name. */
 function researchWorkers(
     scripts: Partial<Record<WorkerName, WorkerScript>>,
     fallback = ''
-): SpawnFn {
-    return fakeSpawnByPrompt(args => {
-        const prompt = args[args.length - 1]
-        const worker = findWorker(prompt)
-        const v = worker === 'unknown' ? undefined : scripts[worker]
-        if (v === undefined) return agentEndResponse(fallback) as SpawnResponse
+): NonNullable<PhaseDeps['runWorker']> {
+    const byLabel = new Map<string, WorkerScript>(
+        (Object.keys(WORKER_LABELS) as WorkerName[])
+            .filter(k => scripts[k] !== undefined)
+            .map(k => [WORKER_LABELS[k], scripts[k]!])
+    )
+    return label => {
+        const v = byLabel.get(label)
+        if (v === undefined) return Promise.resolve(workerResult({text: fallback}))
         const out = typeof v === 'function' ? v() : v
-        return typeof out === 'string' ? (agentEndResponse(out) as SpawnResponse) : out
-    })
+        return Promise.resolve(workerResult(typeof out === 'string' ? {text: out} : out))
+    }
 }
 
 const REFINED_FIXTURE = `GOAL
@@ -140,7 +156,7 @@ function happyChildren(over: Partial<Record<ChildName, ChildScript>> = {}) {
 function happyWorkers(
     over: Partial<Record<WorkerName, WorkerScript>> = {},
     fallback = ''
-): SpawnFn {
+): NonNullable<PhaseDeps['runWorker']> {
     return researchWorkers(
         {
             files: RESEARCH_FILES,
@@ -154,8 +170,8 @@ function happyWorkers(
 }
 
 /** Both fakes for a full happy run, in the shape TaskRunner / runSingleTask take. */
-function happy(): Pick<TaskRunnerOptions, 'runChild' | 'spawnFn'> {
-    return {runChild: happyChildren(), spawnFn: happyWorkers()}
+function happy(): Pick<TaskRunnerOptions, 'runChild' | 'runWorker'> {
+    return {runChild: happyChildren(), runWorker: happyWorkers()}
 }
 
 /** Drive one TaskRunner to completion over `fakes`; returns what the runner sent. */
@@ -216,7 +232,7 @@ describe('TaskRunner — happy path', () => {
             const grillQuestions = ['1. should we use bun?', '1. should we lint tests?']
             let genCall = 0
             await runOnce(handle.ctx, cwd, {
-                spawnFn: happyWorkers(),
+                runWorker: happyWorkers(),
                 runChild: happyChildren({
                     'grill-gen': () => grillQuestions[genCall++] ?? 'NONE',
                     'grill-auto': 'ANSWER: yes'
@@ -233,7 +249,7 @@ describe('TaskRunner — happy path', () => {
             const {ctx} = makeFakeCtx(cwd)
             let composePrompt = ''
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers(),
+                runWorker: happyWorkers(),
                 runChild: happyChildren({
                     compose: prompt => {
                         composePrompt = prompt
@@ -251,7 +267,7 @@ describe('TaskRunner — happy path', () => {
             const {ctx} = makeFakeCtx(cwd)
             let critiquePrompt = ''
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers(),
+                runWorker: happyWorkers(),
                 runChild: happyChildren({
                     critique: prompt => {
                         critiquePrompt = prompt
@@ -284,7 +300,7 @@ describe('TaskRunner — happy path', () => {
             const {ctx} = makeFakeCtx(cwd)
             // refine succeeds, FILES research worker returns empty → research fails.
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers({files: ''}),
+                runWorker: happyWorkers({files: ''}),
                 runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -382,10 +398,10 @@ describe('runSingleTask', () => {
             // The spec is delivered through the *replacement* session, so assert
             // on the shared call log rather than patching the (soon-stale) ctx.
             const {ctx, captured} = makeFakeCtx(cwd)
-            const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
+            const {end, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
                 ...happy()
             })
-            expect(ok).toBe(true)
+            expect(end).toEqual({kind: 'completed'})
             expect(taskId).toBe('TASK_0001')
             expect(captured.calls).toEqual(['send'])
         })
@@ -394,11 +410,11 @@ describe('runSingleTask', () => {
     test('runSingleTask: fixInstruction prepends a RE-ATTEMPT banner to the delivered spec', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)
-            const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
+            const {end} = await runSingleTask(ctx, cwd, 'run lint', {
                 ...happy(),
                 fixInstruction: 'work did not verify: bun run build exited 1'
             })
-            expect(ok).toBe(true)
+            expect(end).toEqual({kind: 'completed'})
             const delivered = captured.sentMessages.at(-1)?.spec ?? ''
             // The implementer is told this is a re-attempt and given the failure,
             // ahead of the composed spec it still receives in full.
@@ -411,11 +427,11 @@ describe('runSingleTask', () => {
     test('runSingleTask: waitForImplementation awaits idle after delivering the spec', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)
-            const {ok} = await runSingleTask(ctx, cwd, 'run lint', {
+            const {end} = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(ok).toBe(true)
+            expect(end).toEqual({kind: 'completed'})
             expect(captured.calls).toEqual(['send', 'idle'])
         })
     })
@@ -429,10 +445,10 @@ describe('runSingleTask', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured, setForeignTurnStreaming} = makeFakeCtx(cwd)
             setForeignTurnStreaming(true)
-            const {ok, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
+            const {end, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
                 ...happy()
             })
-            expect(ok).toBe(true)
+            expect(end).toEqual({kind: 'completed'})
             expect(taskId).toBe('TASK_0001')
             expect(captured.sentMessages).toHaveLength(1)
             expect((captured.sentMessages[0]?.opts as {deliverAs?: string}).deliverAs).toBe(
@@ -459,7 +475,7 @@ describe('runSingleTask', () => {
             })
             // Steered exactly once, then the next turn finished uninterrupted.
             expect(asks).toBe(1)
-            expect(res.interrupted).toBe(false)
+            expect(res.end.kind).not.toBe('interrupted')
             // The steering text was delivered back as another turn.
             expect(captured.sentMessages.some(m => m.spec === 'use the other API')).toBe(true)
         })
@@ -475,7 +491,7 @@ describe('runSingleTask', () => {
                 // The user declines to steer — pause the run.
                 promptSteer: () => Promise.resolve(undefined)
             })
-            expect(res.interrupted).toBe(true)
+            expect(res.end.kind).toBe('interrupted')
         })
     })
 
@@ -510,7 +526,7 @@ describe('runSingleTask', () => {
                 expect(prompt.recommended).toBeUndefined()
                 expect(prompt.question).toContain('Skip to pause')
                 // No queued local answer → undefined → the run pauses.
-                expect(res.interrupted).toBe(true)
+                expect(res.end.kind).toBe('interrupted')
             } finally {
                 _setSink(wsBroadcast)
                 resetSessionState()
@@ -532,7 +548,7 @@ describe('runSingleTask', () => {
                 }
             })
             expect(asks).toBe(0)
-            expect(res.interrupted).toBe(false)
+            expect(res.end.kind).not.toBe('interrupted')
         })
     })
 
@@ -548,9 +564,11 @@ describe('runSingleTask', () => {
             })
             // Must NOT read as ok despite the file saying "completed" — otherwise
             // /task-auto would check the task off and commit a dead turn.
-            expect(res.ok).toBe(false)
-            expect(res.interrupted).toBe(false)
-            expect(res.reason).toContain('exceeds the available context size')
+            expect(res.end.kind).not.toBe('completed')
+            expect(res.end.kind).not.toBe('interrupted')
+            expect(res.end.kind === 'failed' ? res.end.reason : undefined).toContain(
+                'exceeds the available context size'
+            )
         })
     })
 
@@ -562,8 +580,8 @@ describe('runSingleTask', () => {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(res.ok).toBe(true)
-            expect(res.reason).toBeUndefined()
+            expect(res.end).toEqual({kind: 'completed'})
+            expect(res.end.kind === 'failed' ? res.end.reason : undefined).toBeUndefined()
         })
     })
 
@@ -601,8 +619,8 @@ describe('compaction-aware implementation wait', () => {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(res.ok).toBe(true)
-            expect(res.interrupted).toBe(false)
+            expect(res.end).toEqual({kind: 'completed'})
+            expect(res.end.kind).not.toBe('interrupted')
             expect(continueCount(captured.sentMessages)).toBe(0)
             // exactly one implementation-wait idle, no resume waits
             expect(captured.calls.filter(c => c === 'idle')).toHaveLength(1)
@@ -619,8 +637,8 @@ describe('compaction-aware implementation wait', () => {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(res.ok).toBe(true)
-            expect(res.interrupted).toBe(false)
+            expect(res.end).toEqual({kind: 'completed'})
+            expect(res.end.kind).not.toBe('interrupted')
             // exactly one resume continue, and a second wait for it to settle
             expect(continueCount(captured.sentMessages)).toBe(1)
             expect(captured.calls.filter(c => c === 'idle')).toHaveLength(2)
@@ -635,7 +653,7 @@ describe('compaction-aware implementation wait', () => {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(res.ok).toBe(true)
+            expect(res.end).toEqual({kind: 'completed'})
             expect(continueCount(captured.sentMessages)).toBe(2)
             expect(captured.calls.filter(c => c === 'idle')).toHaveLength(3)
         })
@@ -652,7 +670,7 @@ describe('compaction-aware implementation wait', () => {
                 waitForImplementation: true,
                 ...happy()
             })
-            expect(res.interrupted).toBe(true)
+            expect(res.end.kind).toBe('interrupted')
             expect(continueCount(captured.sentMessages)).toBe(0)
         })
     })
@@ -697,7 +715,9 @@ describe('TaskRunner — failure modes', () => {
             const {ctx} = makeFakeCtx(cwd)
             let filesAttempts = 0
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers({files: () => (++filesAttempts === 1 ? '' : RESEARCH_FILES)}),
+                runWorker: happyWorkers({
+                    files: () => (++filesAttempts === 1 ? '' : RESEARCH_FILES)
+                }),
                 runChild: happyChildren()
             })
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -710,7 +730,10 @@ describe('TaskRunner — failure modes', () => {
     test('FILES worker empty twice → section recorded as (none), task still completes', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
-            await runOnce(ctx, cwd, {spawnFn: happyWorkers({files: ''}), runChild: happyChildren()})
+            await runOnce(ctx, cwd, {
+                runWorker: happyWorkers({files: ''}),
+                runChild: happyChildren()
+            })
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('completed')
             const research = (await readSection(cwd, 'TASK_0001', 'research')) ?? ''
@@ -729,10 +752,10 @@ describe('TaskRunner — failure modes', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers({
-                    // No events, no stdout, dead on arrival — the shape of a child
+                runWorker: happyWorkers({
+                    // Never wrote a byte, dead on arrival — the shape of a child
                     // that could not resolve a provider and exited at startup.
-                    files: () => ({events: [], exitCode: 0, stderr: 'no model configured'})
+                    files: () => ({text: '', sawOutput: false, stderr: 'no model configured'})
                 }),
                 runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
@@ -747,8 +770,8 @@ describe('TaskRunner — failure modes', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers({
-                    files: () => agentErrorResponse('fetch failed: socket hang up') as SpawnResponse
+                runWorker: happyWorkers({
+                    files: () => ({text: '', modelError: 'fetch failed: socket hang up'})
                 }),
                 runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
@@ -765,7 +788,7 @@ describe('TaskRunner — failure modes', () => {
             let composeAttempts = 0
             const composePrompts: string[] = []
             await runOnce(ctx, cwd, {
-                spawnFn: happyWorkers(),
+                runWorker: happyWorkers(),
                 runChild: happyChildren({
                     compose: prompt => {
                         composePrompts.push(prompt)
@@ -792,7 +815,7 @@ ACCEPTANCE
 - w
 `
             const {sent} = await runOnce(handle.ctx, cwd, {
-                spawnFn: happyWorkers(),
+                runWorker: happyWorkers(),
                 runChild: happyChildren({critique: BAD_CRITIQUE})
             })
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -837,7 +860,7 @@ ACCEPTANCE
                 cwd,
                 rawPrompt: 'run lint',
                 sendSpec: async () => {},
-                spawnFn: happyWorkers(
+                runWorker: happyWorkers(
                     {
                         files: () => {
                             if (!cancelTriggered) {
@@ -851,11 +874,45 @@ ACCEPTANCE
                 ),
                 runChild: scriptedChildren({refine: REFINED_FIXTURE})
             })
-            await runnerHolder.runner.run()
+            const end = await runnerHolder.runner.run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('cancelled')
+            // The runner NAMES the ending. It used to return void, so the caller
+            // re-read this file, narrowed `state` to `ok: boolean`, and reported a
+            // user's own cancel as a failure — see run-end.ts.
+            expect(end).toEqual({kind: 'cancelled'})
             const warn = handle.captured.notifies.find(n => n.level === 'warning')
             expect(warn).toBeDefined()
+        })
+    })
+
+    test('a cancel is reported as CANCELLED, and its file is not rewritten to failed', async () => {
+        // The end-to-end shape of the /task-cancel defect: `state` is `cancelled`,
+        // which is not `completed`, so `ok` was false, so `!res.ok` ran
+        // `markResumable` (which writes `failed`) and announced a red
+        // "stopped — fix and run /task-resume" for a stop the user asked for.
+        await withTmpTaskDir(async cwd => {
+            const handle = makeFakeCtx(cwd)
+            const runnerHolder: {runner?: TaskRunner} = {}
+            runnerHolder.runner = new TaskRunner({
+                ctx: handle.ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                sendSpec: async () => {},
+                runChild: (name, _tools, _prompt) => {
+                    if (name === 'refine') queueMicrotask(() => runnerHolder.runner?.cancel())
+                    return Promise.resolve(REFINED_FIXTURE)
+                },
+                runWorker: happyWorkers()
+            })
+            const end = await runnerHolder.runner.run()
+            expect(end.kind).toBe('cancelled')
+            expect(RUN_END_POLICY[end.kind].resumable).toBe(false)
+            // The ledger keeps the truth: the user stopped it.
+            expect((await readTaskFile(cwd, 'TASK_0001')).frontMatter.state).toBe('cancelled')
+            // …and nobody was told to go fix something.
+            expect(handle.captured.notifies.some(n => /fix and run/.test(n.msg))).toBe(false)
+            expect(handle.captured.notifies.some(n => n.level === 'error')).toBe(false)
         })
     })
 })

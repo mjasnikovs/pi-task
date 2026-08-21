@@ -1092,7 +1092,7 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
         return dir
     }
 
-    test('resolves the ORIGINAL introducing task commit, even after deletion', () => {
+    test('resolves the ORIGINAL introducing task commit, even after deletion', async () => {
         const dir = makeRepoWithTaskCommits()
         expect(taskThatIntroduced(dir, 'src/client/pages/admin.tsx')).toBe('TASK_0008')
         // The run-11 shape: the file was rm'd from the worktree — attribution holds.
@@ -1336,7 +1336,7 @@ describe('observabilityGapFailure — full-skip is never a PASS (mx5 run 16)', (
 describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IAR1)', () => {
     const resolvable = () => true
 
-    test('truth table: attempted=0/observed=0 → gap guard silent, UNOBSERVED note raised', () => {
+    test('truth table: attempted=0/observed=0 → gap guard silent, UNOBSERVED note raised', async () => {
         expect(
             observabilityGapFailure({
                 attempted: 0,
@@ -1604,7 +1604,7 @@ function scriptedRunner(byBin: Record<string, CommandRun | CommandRun[]>): {
 } {
     const seen: string[] = []
     const counts: Record<string, number> = {}
-    const run: CommandRunner = spec => {
+    const run: CommandRunner = async spec => {
         seen.push([spec.bin, ...spec.args].join(' '))
         const entry = byBin[spec.bin]
         if (entry === undefined) throw new Error(`no scripted result for ${spec.bin}`)
@@ -1623,16 +1623,22 @@ const ok = (stdout = ''): CommandRun => ({
     stderr: ''
 })
 
-test('runVerifyCommandLine: a VERIFY line is run through sh -c, not as an argv', () => {
+test('runVerifyCommandLine: a VERIFY line is run through sh -c, not as an argv', async () => {
     const {run, seen} = scriptedRunner({sh: ok()})
-    const r = runVerifyCommandLine('/repo', 'AGENT=1 bun test a.test.ts', 1000, undefined, run)
+    const r = await runVerifyCommandLine(
+        '/repo',
+        'AGENT=1 bun test a.test.ts',
+        1000,
+        undefined,
+        run
+    )
     expect(r.outcome).toBe('pass')
     // Env prefixes, && and redirects are ordinary in a VERIFY line, so it must
     // reach a shell rather than being split into a binary and arguments.
     expect(seen[0]).toBe('sh -c AGENT=1 bun test a.test.ts')
 })
 
-test('runVerifyCommandLine: only exit 0 is conclusive — everything else leaves the debt open', () => {
+test('runVerifyCommandLine: only exit 0 is conclusive — everything else leaves the debt open', async () => {
     const cases: Array<[CommandRun, 'pass' | 'fail' | 'gap']> = [
         [ok(), 'pass'],
         [{failedToStart: false, status: 1, stdout: '', stderr: '2 failing'}, 'fail'],
@@ -1654,35 +1660,37 @@ test('runVerifyCommandLine: only exit 0 is conclusive — everything else leaves
     ]
     for (const [result, expected] of cases) {
         const {run} = scriptedRunner({sh: result})
-        expect(runVerifyCommandLine('/repo', 'bun test', 1000, undefined, run).outcome).toBe(
-            expected
-        )
+        expect(
+            (await runVerifyCommandLine('/repo', 'bun test', 1000, undefined, run)).outcome
+        ).toBe(expected)
     }
 })
 
-test('rerunDebtVerifyCommand: a clean pass with an unchanged tree CLOSES the debt', () => {
+test('rerunDebtVerifyCommand: a clean pass with an unchanged tree CLOSES the debt', async () => {
     const {run} = scriptedRunner({git: ok(''), sh: ok()})
-    expect(rerunDebtVerifyCommand('/repo', 'bun test', run)).toEqual({outcome: 'pass'})
+    expect(await rerunDebtVerifyCommand('/repo', 'bun test', run)).toEqual({outcome: 'pass'})
 })
 
-test('rerunDebtVerifyCommand: a pass that CHANGED tracked files proves nothing', () => {
+test('rerunDebtVerifyCommand: a pass that CHANGED tracked files proves nothing', async () => {
     // inv-no-write. A re-run that edits the tree into a pass would have the run
     // certifying its own side effect, so the pass is downgraded to INCONCLUSIVE.
     const {run} = scriptedRunner({git: [ok(''), ok(' M src/app.ts\n')], sh: ok()})
-    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    const r = await rerunDebtVerifyCommand('/repo', 'bun test', run)
     expect(r.outcome).toBe('gap')
     expect(r.detail).toContain('CHANGED tracked files')
 })
 
-test('rerunDebtVerifyCommand: untracked output does not trip the guard', () => {
+test('rerunDebtVerifyCommand: untracked output does not trip the guard', async () => {
     // `git status --porcelain --untracked-files=no` is what the guard reads, so a
     // build's own artifacts — which a repo with the usual ignores does not track —
     // leave the before/after strings identical.
     const {run} = scriptedRunner({git: ok(''), sh: ok()})
-    expect(rerunDebtVerifyCommand('/repo', 'bun run build && bun test', run).outcome).toBe('pass')
+    expect((await rerunDebtVerifyCommand('/repo', 'bun run build && bun test', run)).outcome).toBe(
+        'pass'
+    )
 })
 
-test('rerunDebtVerifyCommand: a repo the guard cannot READ is inconclusive, not a pass', () => {
+test('rerunDebtVerifyCommand: a repo the guard cannot READ is inconclusive, not a pass', async () => {
     // "Nothing changed" would be an assumption rather than an observation.
     const gitGone: CommandRun = {
         failedToStart: true,
@@ -1692,19 +1700,19 @@ test('rerunDebtVerifyCommand: a repo the guard cannot READ is inconclusive, not 
         stderr: ''
     }
     const {run} = scriptedRunner({git: gitGone, sh: ok()})
-    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    const r = await rerunDebtVerifyCommand('/repo', 'bun test', run)
     expect(r.outcome).toBe('gap')
     expect(r.detail).toContain('could not read git status')
 })
 
-test('rerunDebtVerifyCommand: a FAILING command never reaches the tracked-state guard', () => {
+test('rerunDebtVerifyCommand: a FAILING command never reaches the tracked-state guard', async () => {
     // Only the pass path needs the guard, and a failing re-run must report the
     // failure rather than a git-read problem.
     const {run, seen} = scriptedRunner({
         git: ok(''),
         sh: {failedToStart: false, status: 1, stdout: '', stderr: 'assertion failed'}
     })
-    const r = rerunDebtVerifyCommand('/repo', 'bun test', run)
+    const r = await rerunDebtVerifyCommand('/repo', 'bun test', run)
     expect(r.outcome).toBe('fail')
     expect(r.detail).toContain('exit 1')
     // One git read (the "before"), never the second.
@@ -1753,7 +1761,7 @@ describe('launch-script config gap → UNOBSERVED, not FAIL (run 20)', () => {
     const pass = {failedToStart: false, status: 0, stdout: '', stderr: ''}
     const runner =
         (calls: Array<Record<string, string | undefined> | undefined>): CommandRunner =>
-        spec => {
+        async spec => {
             if (!spec.args.includes('seed')) return pass
             calls.push(spec.env)
             // The script's own failure mode: it dies without the variable, and
@@ -1783,7 +1791,7 @@ describe('launch-script config gap → UNOBSERVED, not FAIL (run 20)', () => {
 
     test('a script that fails WITH the variable present stays a FAIL', async () => {
         // An absent variable is not a licence to ignore an exit code the code caused.
-        const alwaysFails: CommandRunner = spec =>
+        const alwaysFails: CommandRunner = async spec =>
             spec.args.includes('seed') ?
                 {failedToStart: false, status: 1, stdout: '', stderr: 'TypeError: rows'}
             :   pass
@@ -1809,5 +1817,124 @@ describe('launch-script config gap → UNOBSERVED, not FAIL (run 20)', () => {
         })
         expect((out.failures ?? []).join('\n')).toContain('bun run seed')
         expect(out.unobserved ?? '').not.toContain('CONFIG GAP')
+    })
+})
+
+// ─── The run-end gate no longer blocks the event loop ────────────────────────
+//
+// `CommandRunner` was `(spec) => CommandRun`, so its only implementation could be
+// `spawnSync` and the whole run-end gate ran without ever yielding: repo-health
+// under a 600s cap, then every lockfile/test/build/launch command under a 900s
+// cap, then every ACCEPT-debt re-run under a 300s cap. No loader could paint and
+// no cancel could be noticed through any of it. `repo-health-check.ts`'s own doc
+// comment told gate callers to use the async runner; `final-gate.ts` was a gate
+// caller using the sync one.
+//
+// The instrument is the one that found the defect: a 100ms interval counting its
+// own executions is an honest "is the screen frozen", independent of whether
+// pi-task drew anything.
+describe('runFinalIntegrationGate — the event loop keeps turning', () => {
+    test('timers fire while the gate runs its commands', async () => {
+        const dir = makeDir({name: 'x', scripts: {lint: 'true', test: 'true', build: 'true'}})
+        fs.writeFileSync(path.join(dir, 'bun.lock'), '{}')
+        let ticks = 0
+        const timer = setInterval(() => ticks++, 20)
+        try {
+            // A runner that takes real asynchronous time, the way a project's own
+            // lint does. Under spawnSync this window delivered ZERO ticks.
+            await runFinalIntegrationGate(dir, {
+                timeoutMs: 20_000,
+                bootGraceMs: 100,
+                run: async () => {
+                    await new Promise<void>(r => setTimeout(r, 60))
+                    return {failedToStart: false, status: 0, stdout: '', stderr: ''}
+                }
+            })
+        } finally {
+            clearInterval(timer)
+        }
+        expect(ticks).toBeGreaterThan(2)
+    })
+
+    test('the run signal reaches the commands the gate spawns', async () => {
+        const dir = makeDir({name: 'x', scripts: {lint: 'true', test: 'true'}})
+        fs.writeFileSync(path.join(dir, 'bun.lock'), '{}')
+        const ctrl = new AbortController()
+        const seen: Array<boolean> = []
+        await runFinalIntegrationGate(dir, {
+            timeoutMs: 20_000,
+            bootGraceMs: 100,
+            signal: ctrl.signal,
+            run: async spec => {
+                seen.push(spec.signal === ctrl.signal)
+                return {failedToStart: false, status: 0, stdout: '', stderr: ''}
+            }
+        })
+        // Nothing could be cancelled while the runner was synchronous: the event
+        // loop never got a turn in which to notice.
+        expect(seen.length).toBeGreaterThan(0)
+        expect(seen.every(Boolean)).toBe(true)
+    })
+})
+
+/**
+ * REGRESSION — the run's cancel must reach every command the gate spawns.
+ *
+ * `FinalGateOptions.signal` was added so a cancel can reach repo-health, the
+ * lockfile/integration/launch sections and every ACCEPT-debt re-run — the whole
+ * reason `CommandRunner` became async. Nothing in the suite held the gate to it,
+ * and the three production call sites did not pass one at all, so the plumbing
+ * was inert in the shipped path.
+ */
+describe('the run cancel reaches the gate children', () => {
+    test('every command the gate spawns carries the caller signal', async () => {
+        const dir = makeDir({
+            scripts: {lint: 'exit 0', typecheck: 'exit 0', test: 'exit 0', build: 'exit 0'}
+        })
+        const seen: Array<{bin: string; signal: AbortSignal | undefined}> = []
+        const recording: CommandRunner = spec => {
+            seen.push({bin: spec.bin, signal: spec.signal})
+            return Promise.resolve({failedToStart: false, status: 0, stdout: '', stderr: ''})
+        }
+        const ac = new AbortController()
+        await runFinalIntegrationGate(dir, {run: recording, signal: ac.signal})
+        // Repo-health runs first, then the discovered sections — all through the
+        // same injected runner, so an unplumbed leg shows up as a missing signal.
+        expect(seen.length).toBeGreaterThan(0)
+        for (const s of seen) expect(s.signal).toBe(ac.signal)
+    })
+
+    test('an ALREADY-cancelled run observes nothing rather than passing', async () => {
+        // A real runner under an aborted signal kills at once, which the gap ladder
+        // reads as `killed`. The point is that the gate is not told the commands
+        // passed: a cancel must not manufacture a green verdict.
+        const dir = makeDir({scripts: {lint: 'exit 0', test: 'exit 0'}})
+        const seen: Array<AbortSignal | undefined> = []
+        const killed: CommandRunner = spec => {
+            seen.push(spec.signal)
+            return Promise.resolve({
+                failedToStart: false,
+                status: spec.signal?.aborted ? null : 0,
+                stdout: '',
+                stderr: ''
+            })
+        }
+        const ac = new AbortController()
+        ac.abort()
+        await runFinalIntegrationGate(dir, {run: killed, signal: ac.signal})
+        expect(seen.length).toBeGreaterThan(0)
+        for (const s of seen) expect(s?.aborted).toBe(true)
+    })
+
+    test('with no signal given, nothing invents one', async () => {
+        const dir = makeDir({scripts: {lint: 'exit 0', test: 'exit 0'}})
+        const seen: Array<AbortSignal | undefined> = []
+        const recording: CommandRunner = spec => {
+            seen.push(spec.signal)
+            return Promise.resolve({failedToStart: false, status: 0, stdout: '', stderr: ''})
+        }
+        await runFinalIntegrationGate(dir, {run: recording})
+        expect(seen.length).toBeGreaterThan(0)
+        for (const s of seen) expect(s).toBeUndefined()
     })
 })

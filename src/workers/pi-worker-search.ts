@@ -7,7 +7,7 @@ import type {ddgSearch as defaultDdgSearch} from './ddg-search.js'
 import type {exaSearch as defaultExaSearch} from './exa-search.js'
 import type {SearchProvider} from './search-types.js'
 import {search} from './search-core.js'
-import {makeWorkerTool} from './shared.js'
+import {makeWorkerTool, workerAnswer, workerUnavailable} from './shared.js'
 import {normalizeQuery} from './research-cache.js'
 
 const Params = Type.Object({
@@ -66,18 +66,20 @@ export function registerPiWorkerSearch(
             })
 
             if (result.kind === 'no_key' || result.kind === 'error') {
-                return {text: result.message, details: {resultCount: 0}}
+                return workerUnavailable(result.message, {resultCount: 0}, result.kind)
             }
 
             const {results} = result
+            // Zero results IS an answer: the search ran and the web has nothing.
+            // Only a search that could not run is unavailable.
             if (results.length === 0) {
-                return {text: `No results for: ${params.query}`, details: {resultCount: 0}}
+                return workerAnswer(`No results for: ${params.query}`, {resultCount: 0})
             }
 
             const lines = results.map(
                 (r, i) => `${i + 1}. [${r.title}](${r.url}) — ${r.description}`
             )
-            return {text: lines.join('\n'), details: {resultCount: results.length}}
+            return workerAnswer(lines.join('\n'), {resultCount: results.length})
         },
 
         renderCall(args, theme) {

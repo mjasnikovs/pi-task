@@ -21,7 +21,7 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import {ChildProcess, execFileSync, spawn as nodeSpawn} from 'node:child_process'
 
-import {runPhaseWithLoopGuard, prependHint, type PhaseDeps} from '../dist/task/child-runner.js'
+import {runPhaseChild, type PhaseDeps} from '../dist/task/child-runner.js'
 import {PhaseTimeoutError} from '../dist/task/child-runner.js'
 import {phaseRefine, phaseResearch, phaseVerifyTooling, phaseCompose, phaseCritique, phaseAutoAnswer, dropRefutedConstraints} from '../dist/task/phases.js'
 import {GRILL_GEN_PROMPT} from '../dist/task/prompts.js'
@@ -68,8 +68,12 @@ async function grill(d: PhaseDeps, refined: string, research: string): Promise<{
     const ms: number[] = []
     for (let n = 0; n < GRILL_CAP; n++) {
         const t0 = Date.now()
-        const raw = await runPhaseWithLoopGuard(d, 'grill-gen', 'read', hint =>
-            prependHint(hint, GRILL_GEN_PROMPT(refined, research, qa.join('\n')))
+        const raw = await runPhaseChild(
+            d,
+            'grill-gen',
+            'read',
+            GRILL_GEN_PROMPT(refined, research, qa.join('\n')),
+            {verb: 'restart'}
         )
         ms.push(Date.now() - t0)
         const qs = parseGrillQuestions(raw)

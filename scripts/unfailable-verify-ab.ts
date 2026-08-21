@@ -284,9 +284,14 @@ async function main(): Promise<void> {
 
     // ── the ledger half ──
     console.log('\nLEDGER — the same 5-debt ledger through both arms')
-    const opts = {staticOk: true, fileExists: () => false, rerunVerify: rerun(specDir)}
-    const bl = base.recheck(structuredClone(LEDGER), opts)
-    const tl = treat.recheck(structuredClone(LEDGER), opts)
+    const rr = rerun(specDir)
+    const opts = {
+        staticOk: true,
+        fileExists: () => false,
+        rerunVerify: (cmd: string) => Promise.resolve(rr(cmd))
+    }
+    const bl = await base.recheck(structuredClone(LEDGER), opts)
+    const tl = await treat.recheck(structuredClone(LEDGER), opts)
     const ids2 = (r: {open: AcceptDebt[]; resolved: AcceptDebt[]}): {open: string[]; resolved: string[]} => ({
         open: r.open.map(d => d.taskId).sort(),
         resolved: r.resolved.map(d => d.taskId).sort()
