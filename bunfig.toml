@@ -1,5 +1,8 @@
 [test]
 pathIgnorePatterns = ["dist/**", "**/__fixtures__/**"]
-# Names each test file as it starts, so a hung CI log says WHICH file hung.
-# Inert unless PI_TEST_PROGRESS is set (CI sets it) — see the script's header.
-preload = ["./scripts/test-file-progress.ts"]
+# test-file-progress: names each test file as it starts, so a hung CI log says
+#   WHICH file hung. Inert unless PI_TEST_PROGRESS is set (CI sets it).
+# test-timeout: raises bun's 5000ms default to 30s. That default is a Windows-CI
+#   tripwire for the 22 test files that spawn real subprocesses — see the
+#   script's header for the two jobs it killed.
+preload = ["./scripts/test-file-progress.ts", "./scripts/test-timeout.ts"]
