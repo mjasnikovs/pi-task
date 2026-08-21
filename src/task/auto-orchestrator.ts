@@ -1586,8 +1586,7 @@ function defaultDeps(
         // resolution loop, so it needs no `verify work` switch of its own.
         // Same section, same cancel: this re-runs every ACCEPT-debt VERIFY command
         // against the final tree, each under its own 300s cap.
-        recheckOpenDebts: (cwd2, staticOk) =>
-            deriveOpenDebts(cwd2, staticOk, spawnCommand, signal)
+        recheckOpenDebts: (cwd2, staticOk) => deriveOpenDebts(cwd2, staticOk, spawnCommand, signal)
     }
 }
 

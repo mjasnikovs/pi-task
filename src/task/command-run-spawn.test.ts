@@ -159,9 +159,9 @@ describe.skipIf(!posix)('nothing is lost on the way out', () => {
                 bin: 'sh',
                 args: [
                     '-c',
-                    'echo "sh: 1: nosuchtool: not found"; ' +
-                        'head -c 4194304 /dev/zero | tr "\\0" "x"; ' +
-                        'echo; echo TAIL_MARKER; exit 127'
+                    'echo "sh: 1: nosuchtool: not found"; '
+                        + 'head -c 4194304 /dev/zero | tr "\\0" "x"; '
+                        + 'echo; echo TAIL_MARKER; exit 127'
                 ],
                 timeoutMs: 60_000
             })

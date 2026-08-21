@@ -9,8 +9,7 @@ import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-const src = (f: string): string =>
-    fs.readFileSync(path.join(import.meta.dir, f), 'utf8')
+const src = (f: string): string => fs.readFileSync(path.join(import.meta.dir, f), 'utf8')
 
 /** The text of one call, from `name(` to its matching close paren. */
 function callSites(source: string, name: string): string[] {

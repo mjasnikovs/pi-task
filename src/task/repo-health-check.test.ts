@@ -245,9 +245,11 @@ describe('runRepoHealthCheck — one runner, and it is async', () => {
  * The browser row exists for the gate's TEST commands. Repo-health only ever runs
  * lint and typecheck, which have no browsers to miss.
  */
-describe('the static ladder does not inherit the gate\'s browser row', () => {
-    const scripted = (over: Partial<CommandRun>): CommandRunner => () =>
-        Promise.resolve({failedToStart: false, status: 0, stdout: '', stderr: '', ...over})
+describe("the static ladder does not inherit the gate's browser row", () => {
+    const scripted =
+        (over: Partial<CommandRun>): CommandRunner =>
+        () =>
+            Promise.resolve({failedToStart: false, status: 0, stdout: '', stderr: '', ...over})
 
     const lintRepo = (): string =>
         tmpRepo({'package.json': JSON.stringify({scripts: {lint: 'eslint .'}})})
@@ -256,7 +258,7 @@ describe('the static ladder does not inherit the gate\'s browser row', () => {
         const out = await runRepoHealthCheck(lintRepo(), {
             run: scripted({
                 status: 1,
-                stdout: "src/e2e.ts:12  error  'browsers are not installed' is not a valid id",
+                stdout: "src/e2e.ts:12  error  'browsers are not installed' is not a valid id"
             })
         })
         expect(out.ok).toBe(false)
@@ -267,7 +269,7 @@ describe('the static ladder does not inherit the gate\'s browser row', () => {
         const out = await runRepoHealthCheck(lintRepo(), {
             run: scripted({
                 status: 2,
-                stderr: 'src/setup.ts(4,9): error TS2322: Type \'"wasn\'t installed"\' is not assignable.'
+                stderr: "src/setup.ts(4,9): error TS2322: Type '\"wasn't installed\"' is not assignable."
             })
         })
         expect(out.ok).toBe(false)
