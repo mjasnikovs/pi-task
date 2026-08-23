@@ -82,6 +82,15 @@ function fakeChild(o: FakeChildOptions = {}) {
 
 const CMD: [string, string[]] = ['bun', ['run', 'start']]
 
+/**
+ * `runBootCheck` forces `expectServer` FALSE on win32 (there are no process
+ * groups to attribute a listener to), so every served-app branch below is
+ * unreachable there and degrades to the survival rule. Same convention as
+ * `boot-probe.test.ts`'s `itPosix`.
+ */
+const IS_WINDOWS = process.platform === 'win32'
+const testPosix = IS_WINDOWS ? test.skip : test
+
 describe('the exit ladder', () => {
     test('exit 0 on a non-served project PASSes', async () => {
         const f = fakeChild()
@@ -143,7 +152,7 @@ describe('the exit ladder', () => {
 describe('the served-app listener rule', () => {
     const served = (over: BootDeps = {}) => ({expectServer: true, deps: over})
 
-    test('a listener seen by pgid PASSes without waiting out the grace window', async () => {
+    testPosix('a listener seen by pgid PASSes without waiting out the grace window', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 60_000, {
             ...served(
@@ -160,7 +169,7 @@ describe('the served-app listener rule', () => {
     // mx5 run 10: a watcher (`dev` = tailwind --watch) stays alive forever without
     // ever listening, and "still alive after the grace window = PASS" blessed a
     // project that cannot serve a single request.
-    test('alive but never listening FAILs when enumeration works', async () => {
+    testPosix('alive but never listening FAILs when enumeration works', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 20, {
             ...served(
@@ -177,7 +186,7 @@ describe('the served-app listener rule', () => {
     })
 
     // An observer limitation is not an app defect (mx5 run 14).
-    test('alive, never listening, and BLIND passes UNOBSERVED instead', async () => {
+    testPosix('alive, never listening, and BLIND passes UNOBSERVED instead', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 20, {
             ...served(
@@ -193,27 +202,30 @@ describe('the served-app listener rule', () => {
         if (r.outcome === 'pass') expect(r.renderNote).toContain('UNOBSERVED')
     })
 
-    test('exit 0 without ever listening FAILs — a boot that serves nothing is not a launch', async () => {
-        const f = fakeChild()
-        const p = runBootCheck('/tmp/x', CMD, 60_000, {
-            ...served(
-                f.deps({
-                    enumerationCapable: () => true,
-                    groupHasListener: () => false,
-                    httpProbe: () => false,
-                    pickPort: () => Promise.resolve(41234)
-                })
-            )
-        })
-        f.exit(0)
-        const r = await p
-        expect(r.outcome).toBe('fail')
-        if (r.outcome === 'fail') expect(r.detail).toContain('exited 0 without ever opening')
-    })
+    testPosix(
+        'exit 0 without ever listening FAILs — a boot that serves nothing is not a launch',
+        async () => {
+            const f = fakeChild()
+            const p = runBootCheck('/tmp/x', CMD, 60_000, {
+                ...served(
+                    f.deps({
+                        enumerationCapable: () => true,
+                        groupHasListener: () => false,
+                        httpProbe: () => false,
+                        pickPort: () => Promise.resolve(41234)
+                    })
+                )
+            })
+            f.exit(0)
+            const r = await p
+            expect(r.outcome).toBe('fail')
+            if (r.outcome === 'fail') expect(r.detail).toContain('exited 0 without ever opening')
+        }
+    )
 
     // An HTTP answer on a number only this child was told is proof of OUR listener,
     // not of some orphan on :3000.
-    test('no pgid attribution falls back to the private assigned port', async () => {
+    testPosix('no pgid attribution falls back to the private assigned port', async () => {
         const f = fakeChild()
         const probed: number[] = []
         const r = await runBootCheck('/tmp/x', CMD, 60_000, {
@@ -244,7 +256,7 @@ describe('the render probes', () => {
             ...over
         })
 
-    test('a failing render probe FAILs the boot, naming the port', async () => {
+    testPosix('a failing render probe FAILs the boot, naming the port', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 60_000, {
             expectServer: true,
@@ -256,7 +268,7 @@ describe('the render probes', () => {
         if (r.outcome === 'fail') expect(r.detail).toBe('listens on :41234 but served a blank page')
     })
 
-    test('a skipped render probe PASSes with an UNOBSERVED note', async () => {
+    testPosix('a skipped render probe PASSes with an UNOBSERVED note', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 60_000, {
             expectServer: true,
@@ -267,7 +279,7 @@ describe('the render probes', () => {
     })
 
     // The shallow blank-page rule keeps its own verdict and is never shadowed.
-    test('the deep probe only runs after the shallow one PASSed', async () => {
+    testPosix('the deep probe only runs after the shallow one PASSed', async () => {
         const f = fakeChild()
         let deepRan = false
         await runBootCheck('/tmp/x', CMD, 60_000, {
@@ -287,33 +299,36 @@ describe('the render probes', () => {
     // there would kill the server under it and discard its verdict. Undrivable
     // before the child was a seam — it is a race between a 500ms interval, a
     // re-armed timer and an async probe.
-    test('a deep probe in flight re-arms the grace window instead of being killed', async () => {
-        const f = fakeChild()
-        // 700ms grace: long enough for the 500ms poll to see the listener and start
-        // the deep probe, short enough that the probe is still in flight when the
-        // window expires.
-        const r = await runBootCheck('/tmp/x', CMD, 700, {
-            expectServer: true,
-            deps: servedDeps(f, {
-                renderProbe: () => ({outcome: 'pass', detail: 'rendered 12 nodes'}),
-                deepRenderProbe: () =>
-                    new Promise(resolve =>
-                        setTimeout(
-                            () => resolve({outcome: 'fail', detail: 'never signed in'}),
-                            1500
+    testPosix(
+        'a deep probe in flight re-arms the grace window instead of being killed',
+        async () => {
+            const f = fakeChild()
+            // 700ms grace: long enough for the 500ms poll to see the listener and start
+            // the deep probe, short enough that the probe is still in flight when the
+            // window expires.
+            const r = await runBootCheck('/tmp/x', CMD, 700, {
+                expectServer: true,
+                deps: servedDeps(f, {
+                    renderProbe: () => ({outcome: 'pass', detail: 'rendered 12 nodes'}),
+                    deepRenderProbe: () =>
+                        new Promise(resolve =>
+                            setTimeout(
+                                () => resolve({outcome: 'fail', detail: 'never signed in'}),
+                                1500
+                            )
                         )
-                    )
+                })
             })
-        })
-        // The grace window expired twice over while the session ran; the deep
-        // verdict still won, rather than being killed and discarded.
-        expect(r.outcome).toBe('fail')
-        if (r.outcome === 'fail') expect(r.detail).toBe('listens on :41234 but never signed in')
-    })
+            // The grace window expired twice over while the session ran; the deep
+            // verdict still won, rather than being killed and discarded.
+            expect(r.outcome).toBe('fail')
+            if (r.outcome === 'fail') expect(r.detail).toBe('listens on :41234 but never signed in')
+        }
+    )
 
     // A probe that throws is a harness fault, and a harness fault may never fail
     // the gate on its own.
-    test('a deep probe that REJECTS degrades to a plain pass', async () => {
+    testPosix('a deep probe that REJECTS degrades to a plain pass', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 60_000, {
             expectServer: true,
@@ -340,5 +355,29 @@ describe('teardown', () => {
         f.exit(0)
         await p
         expect(f.killed).toHaveLength(0)
+    })
+})
+
+// The rule that makes every test above posix-only, asserted rather than assumed.
+describe('the win32 degrade', () => {
+    test('expectServer is forced false on win32 — there are no process groups', async () => {
+        const f = fakeChild()
+        const r = await runBootCheck('/tmp/x', CMD, 20, {
+            expectServer: true,
+            deps: f.deps({
+                enumerationCapable: () => true,
+                groupHasListener: () => false,
+                httpProbe: () => false,
+                pickPort: () => Promise.resolve(41234)
+            })
+        })
+        if (IS_WINDOWS) {
+            // Degraded to the survival rule: still alive after the window ⇒ PASS,
+            // with no listener requirement to have missed.
+            expect(r).toEqual({outcome: 'pass'})
+        } else {
+            expect(r.outcome).toBe('fail')
+            if (r.outcome === 'fail') expect(r.detail).toContain('never opened a listening socket')
+        }
     })
 })
