@@ -15,9 +15,11 @@ import {
     emptySectionBody,
     isBareNoneAnswer,
     PHASES,
+    runPhaseRow,
     type PhaseConfig,
     type PhaseContext
 } from './phases.js'
+import {YOLO_STAMP} from './yolo.js'
 import {spawnSync} from 'node:child_process'
 import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
@@ -3003,7 +3005,13 @@ describe('postCommitPhase label generation', () => {
         + 'trigram indexes, and the searchVector generated column exactly as the spec dictates'
     const refined = `GOAL\n${longParagraph}\nCONSTRAINTS\n- follow the spec`
 
-    const refinePhase = {name: 'refine', section: 'refined prompt', field: 'refined'} as PhaseConfig
+    // The REAL row, not a retyped literal: post-commit is a row field now, so a
+    // hand-built `{name: 'refine', …}` has no `postCommit` and asserts nothing.
+    const refinePhase = ((): PhaseConfig => {
+        const p = PHASES.find(x => x.name === 'refine')
+        if (!p) throw new Error('refine phase missing')
+        return p
+    })()
 
     function makeCtx(cwd: string, widgetState: WidgetState): PhaseContext {
         return {
@@ -3497,7 +3505,7 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
                 spec: ''
             } as PhaseContext
 
-            await composePhase().run(deps as never, pc)
+            await runPhaseRow(composePhase(), deps as never, pc)
 
             // The context's refined task no longer requires the refuted token —
             // this is what critique is handed as GROUND TRUTH one phase later.
@@ -3528,7 +3536,7 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
                 spec: ''
             } as PhaseContext
 
-            await composePhase().run(deps as never, pc)
+            await runPhaseRow(composePhase(), deps as never, pc)
 
             const gates = await readSection(cwd, 'TASK_0001', 'gates')
             expect(gates).toContain(
@@ -3556,7 +3564,7 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
                 spec: ''
             } as PhaseContext
 
-            await composePhase().run(deps as never, pc)
+            await runPhaseRow(composePhase(), deps as never, pc)
 
             expect(pc.refined).toBe(refinedText)
             expect(await readSection(cwd, 'TASK_0001', 'gates')).toBeNull()
@@ -3661,5 +3669,100 @@ describe('PhaseResearchDeps.runWorker seam', () => {
                     :   result()
             )
         ).rejects.toThrow(/TOOLING/i)
+    })
+})
+
+// ─── The grill transcript's two renderings ──────────────────────────────────
+//
+// phaseGrill kept two arrays whose only documented difference was provenance
+// stamping — and the YOLO branch pushed `${answer} (YOLO)` into the array the
+// rule forbade it in, twelve lines above the comment stating the rule. These
+// drive the loop and read what the NEXT grill-gen call was actually handed.
+
+describe('phaseGrill transcript', () => {
+    const REFINED = 'GOAL\nBuild it.\n'
+    const RESEARCH = 'CONTEXT\n- nothing special\n'
+
+    test('a YOLO answer is stamped in the record and UNSTAMPED to grill-gen', async () => {
+        const cfg = getConfig()
+        const prev = cfg.yoloMode
+        cfg.yoloMode = true
+        try {
+            const seen: string[] = []
+            const deps = {
+                cwd: '/tmp/x',
+                taskId: 'TASK_0001',
+                signal: new AbortController().signal,
+                runChild: (name: string, _t: string, prompt: string) => {
+                    if (name === 'grill-gen') {
+                        seen.push(prompt)
+                        return Promise.resolve(seen.length === 1 ? '1. Which store?' : 'NONE')
+                    }
+                    // UNKNOWN + a recommendation: the auto-answer abstains, so the
+                    // YOLO branch is what takes the green card. This is the branch
+                    // that pushed the stamp into the generator feedback.
+                    return Promise.resolve('UNKNOWN: postgres')
+                }
+            } as unknown as PhaseDeps
+            const out = await phaseGrill(
+                deps,
+                {ui: {theme: {}}} as never,
+                {} as WidgetState,
+                REFINED,
+                RESEARCH
+            )
+            // The record carries the provenance…
+            expect(out).toContain(`A1: postgres ${YOLO_STAMP}`)
+            // …and the SECOND grill-gen prompt — the feedback — carries none.
+            expect(seen).toHaveLength(2)
+            expect(seen[1]).toContain('A1: postgres')
+            expect(seen[1]).not.toContain(YOLO_STAMP)
+            expect(seen[1]).not.toContain('(auto)')
+        } finally {
+            cfg.yoloMode = prev
+        }
+    })
+
+    test('a research-backed auto answer is (auto) in the record, bare to grill-gen', async () => {
+        const seen: string[] = []
+        const deps = {
+            cwd: '/tmp/x',
+            taskId: 'TASK_0001',
+            signal: new AbortController().signal,
+            runChild: (name: string, _t: string, prompt: string) => {
+                if (name === 'grill-gen') {
+                    seen.push(prompt)
+                    return Promise.resolve(seen.length === 1 ? '1. Which store?' : 'NONE')
+                }
+                return Promise.resolve('ANSWER: postgres')
+            }
+        } as unknown as PhaseDeps
+        const out = await phaseGrill(
+            deps,
+            {ui: {theme: {}}} as never,
+            {} as WidgetState,
+            REFINED,
+            RESEARCH
+        )
+        expect(out).toContain('A1: postgres (auto)')
+        expect(seen[1]).toContain('A1: postgres')
+        expect(seen[1]).not.toContain('(auto)')
+    })
+
+    test('no questions → the sentinel, unchanged', async () => {
+        const deps = {
+            cwd: '/tmp/x',
+            taskId: 'TASK_0001',
+            signal: new AbortController().signal,
+            runChild: () => Promise.resolve('NONE')
+        } as unknown as PhaseDeps
+        const out = await phaseGrill(
+            deps,
+            {ui: {theme: {}}} as never,
+            {} as WidgetState,
+            REFINED,
+            RESEARCH
+        )
+        expect(out).toBe('(no questions produced)')
     })
 })

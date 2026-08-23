@@ -690,6 +690,51 @@ describe('runWorker', () => {
             expect(r.salvagedFromDiscardedAttempt).toBe(false)
             expect(prompts[0]).not.toContain('WORK ALREADY DONE')
         })
+
+        // `finalAttemptFailed` used to be an inline eight-term disjunction — a
+        // fifth statement of the taxonomy `worker-failure.ts` owns — and it was
+        // missing two of FAILURE_RULES' rows. A crashed final attempt with a
+        // non-empty tail counted as NOT failed, so salvage was skipped and a good
+        // discarded partial was overwritten by the crash's leftovers.
+        test('a CRASHED final attempt still admits salvage (the missing `exit` rung)', async () => {
+            const long = [
+                'openDb  (path: string) => Database — open the sqlite handle',
+                'migrate  (db: Database) => void — apply pending migrations',
+                'listingsTable  table name constant used by the query helpers'
+            ].join('\n')
+            const spawn = fakeSpawnQueue([
+                partialThenTimeout(long),
+                // Non-zero exit, nothing killed it, and the text is NOT empty —
+                // the one combination the old disjunction had no term for.
+                agentEndResponse('error: could not open module graph', 1)
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.text).toBe(long)
+            expect(r.salvagedFromDiscardedAttempt).toBe(true)
+        })
+
+        test('a clean non-zero-exit run with no salvage in hand is unchanged', async () => {
+            // The rung must not invent an answer: with nothing discarded worth
+            // keeping, the crash's own text still comes back.
+            const spawn = fakeSpawnQueue([
+                agentEndResponse('error: could not open module graph', 1)
+            ])
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                timeoutMs: 15,
+                carryForward: true
+            })
+            expect(r.text).toBe('error: could not open module graph')
+            expect(r.salvagedFromDiscardedAttempt).toBe(false)
+        })
     })
 
     /**

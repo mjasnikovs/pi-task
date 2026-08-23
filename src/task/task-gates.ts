@@ -31,7 +31,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {RunSingleTaskResult} from './orchestrator.js'
 import type {CommitResult} from './auto-commit.js'
-import type {VerifyOutcome} from './verify-work.js'
+import {verifyFailClass, type VerifyOutcome} from './verify-work.js'
 import type {EnforceOutcome} from './enforce-guidelines.js'
 import {
     resolutionOptions,
@@ -477,7 +477,8 @@ export async function resolveVerifyGate(
             // bounded fix attempt before the picker — smallest tool first. Applied →
             // re-verify and re-enter the loop on the fresh verdict; not applied (guard
             // trip, no convergence) → fall through to the ordinary picker unchanged.
-            if (!lintFixAttempted && deps.lintFix && failReason.startsWith('repo health:')) {
+            const failClass = verifyFailClass(verified)
+            if (!lintFixAttempted && deps.lintFix && failClass === 'repo-health') {
                 lintFixAttempted = true
                 active.ui.notify(
                     `${p.tag}: static findings on "${p.title}" — attempting bounded lint fix…`,
@@ -512,8 +513,7 @@ export async function resolveVerifyGate(
             // records the (already-recorded) defect as the human's call. Applies
             // only while the FAIL is still the repo-health one the contradiction
             // explains — a later, different FAIL gets the ordinary resolution path.
-            const isFrozenBlocked =
-                frozenContradiction !== null && failReason.startsWith('repo health:')
+            const isFrozenBlocked = frozenContradiction !== null && failClass === 'repo-health'
             const recOutcome: ResolutionOutcome =
                 isUnobserved ? {recommend: 'autofix', rationale: failReason}
                 : isFrozenBlocked ?

@@ -102,6 +102,7 @@ import {
 import {findMissingServeEntry, serveEntryGateFailureText} from './serve-entry.js'
 import {makefileRecipe} from './command-shrink.js'
 import {GateTally, observabilityGapFailure, unobservedVerdict} from './gate-tally.js'
+import {VERIFY_FAIL_PREFIX} from './verify-work.js'
 
 export interface FinalGateOutcome {
     /** true → statics and every runnable integration command passed (or nothing to run). */
@@ -700,7 +701,11 @@ export async function runFinalIntegrationGate(
     // dynamic counters, the notes) and the verdict is assembled ONCE at the end —
     // see gate-tally.ts for what each method means.
     const tally = new GateTally()
-    if (!stat.ok) tally.fail(`static checks: ${stat.reason}`)
+    // The prefix comes from VERIFY_FAIL_PREFIX so this run-level mint and the
+    // task-level `repo health:` one stay linked: both are the deterministic
+    // whole-repo static check, and `isStaticClassDebt` must recognise a debt that
+    // entered the ledger through EITHER altitude.
+    if (!stat.ok) tally.fail(`${VERIFY_FAIL_PREFIX['static-checks']} ${stat.reason}`)
     // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
     // scripts that fell through decompose and shipped missing, unchecked. Diff the
     // plan-time-extracted declared scripts against the manifest; a missing one is a

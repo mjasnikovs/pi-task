@@ -374,3 +374,20 @@ export interface ScoredPlan {
      */
     judgeMissing: string[]
 }
+
+/**
+ * Normalise a missing-area string for cross-round identity — lowercased alnum
+ * words, punctuation and quote-wrapping collapsed. Used only to tell whether an
+ * adopted plan introduced a NEW gap versus re-surfacing the same one (the bonus
+ * round); intentionally coarse, so trivial rewording of the same area does not
+ * read as new and buy an extra round.
+ *
+ * Lives here rather than in `auto-orchestrator.ts` because its only consumer is
+ * `CoverageLedger.consider`, which is the adoption rule this file owns.
+ */
+export function normMissingArea(s: string): string {
+    return s
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+}

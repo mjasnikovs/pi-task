@@ -327,12 +327,23 @@ export function ensureDocsModulesDir(dir: string): void {
     }
 }
 
+/**
+ * Options rather than a positional tail: `signal` and `versionRange` sat adjacent,
+ * and reaching the range meant writing `undefined` into the signal slot — which is
+ * exactly how the primary acquisition path lost its abort signal while the hop path
+ * kept it.
+ */
+export interface AutoInstallOptions {
+    signal?: AbortSignal | undefined
+    versionRange?: string | undefined
+}
+
 export async function runAutoInstall(
     spawn: SpawnFn,
     packageName: string,
-    signal: AbortSignal | undefined,
-    versionRange?: string
+    opts: AutoInstallOptions = {}
 ): Promise<{success: boolean; installDir: string; stderr: string}> {
+    const {signal, versionRange} = opts
     const installDir = getDocsModulesDir()
     ensureDocsModulesDir(installDir)
     // `shell: false` in runChild, so a `^`/`~`/space in the range stays a single
@@ -366,6 +377,89 @@ export async function runAutoInstall(
     return {success: result.exitCode === 0 && !result.aborted, installDir, stderr: result.stderr}
 }
 
+/** What acquiring one package produced, or the stage at which it failed. */
+export type AcquireOutcome =
+    | {ok: true; pkg: ResolvedPackage; autoInstalled: boolean; pin?: AutoInstallPin}
+    | {ok: false; stage: 'resolve'; err: unknown}
+    | {ok: false; stage: 'install'; stderr: string; pin: AutoInstallPin; asked: string}
+    | {ok: false; stage: 'reresolve'; err: unknown; pin: AutoInstallPin}
+
+export interface AcquireInput {
+    /** The specifier to resolve. May be a subpath (`pkg/sub`) — the INSTALL always
+     *  targets its parent package. */
+    name: string
+    cwd: string
+    spawn: SpawnFn
+    resolvePackage: typeof defaultResolvePackage
+    signal: AbortSignal | undefined
+}
+
+/**
+ * Get a package onto disk and resolved: resolve from `cwd`, and on
+ * `not_installed` install it — at the range the PROJECT declares when it declares
+ * one — then resolve again from the install dir.
+ *
+ * One statement of the ladder, for both callers. It was written twice: inline in
+ * `docsRaw` for the requested package, and in `tryResolveOrInstall` for each hop
+ * of the type-redirect chain — and the copies had drifted on all three things
+ * that matter.
+ *
+ *  - The abort signal. The hop copy passed it; the primary copy passed a bare
+ *    `undefined` placeholder to reach the fourth positional, while
+ *    `DocsRawInput.signal` was honoured on either side of that call. So a user
+ *    cancel during the MAIN `npm install` of a model-chosen package was not
+ *    delivered. `runAutoInstall` takes an options object now, so a hole like that
+ *    cannot be typed.
+ *  - The version pin. `findDeclaredRange` had exactly one call site — the primary
+ *    copy. The hop copy installed `latest` unconditionally, on the hop most likely
+ *    to be the declared one: `declarationChain` exists precisely because "a
+ *    project that uses Bun declares `@types/bun`, not `bun`".
+ *  - The provenance. `autoInstalled`/`autoInstallPin` were locals of `docsRaw`, so
+ *    a package acquired only through a hop reported neither and got no version
+ *    banner.
+ *
+ * CONTEXT.md records the redirect WALK as unified (`resolveTypeSource`) and its
+ * `resolveHop` seam as "the one thing its two call sites disagree about". They
+ * should disagree only about WHETHER to install, never about HOW.
+ */
+export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcome> {
+    const {name, cwd, spawn, resolvePackage, signal} = input
+    try {
+        return {ok: true, pkg: resolvePackage(name, cwd), autoInstalled: false}
+    } catch (firstErr) {
+        if (!(firstErr instanceof ResolveError) || firstErr.kind !== 'not_installed') {
+            return {ok: false, stage: 'resolve', err: firstErr}
+        }
+        // Auto-install — but FIRST honour the version the project intends. If the
+        // dep is declared in the project's package.json, install that range so a
+        // scaffolding answer is grounded in the project's major, not whatever npm
+        // currently tags `latest`.
+        const asked = extractParentPackage(name)
+        const declaredRange = findDeclaredRange(asked, cwd)
+        const pin: AutoInstallPin =
+            declaredRange ?
+                {source: 'declared-range', range: declaredRange, asked}
+            :   {source: 'npm-latest', asked}
+        const install = await runAutoInstall(spawn, asked, {
+            signal,
+            versionRange: declaredRange ?? undefined
+        })
+        if (!install.success) {
+            return {ok: false, stage: 'install', stderr: install.stderr, pin, asked}
+        }
+        try {
+            return {
+                ok: true,
+                pkg: resolvePackage(name, install.installDir),
+                autoInstalled: true,
+                pin
+            }
+        } catch (retryErr) {
+            return {ok: false, stage: 'reresolve', err: retryErr, pin}
+        }
+    }
+}
+
 /** Resolve `name` from cwd; on `not_installed`, auto-install it and resolve from
  *  the install dir. Returns null on any failure (caller keeps its fallback). */
 async function tryResolveOrInstall(
@@ -373,36 +467,39 @@ async function tryResolveOrInstall(
     cwd: string,
     spawn: SpawnFn,
     resolvePackage: typeof defaultResolvePackage,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    onAcquired?: (pin: AutoInstallPin | undefined) => void
 ): Promise<ResolvedPackage | null> {
-    try {
-        return resolvePackage(name, cwd)
-    } catch (err) {
-        if (!(err instanceof ResolveError) || err.kind !== 'not_installed') return null
-        const install = await runAutoInstall(spawn, extractParentPackage(name), signal)
-        if (!install.success) return null
-        try {
-            return resolvePackage(name, install.installDir)
-        } catch {
-            return null
-        }
-    }
+    const got = await acquirePackage({name, cwd, spawn, resolvePackage, signal})
+    if (!got.ok) return null
+    if (got.autoInstalled) onAcquired?.(got.pin)
+    return got.pkg
 }
 
 /** The docs pipeline's adapter over the shared redirect walk (docs-resolve.ts):
  *  hops resolve through the auto-installing lookup, so a declaration package that is
  *  declared but not yet on disk is fetched rather than abandoned. */
-function resolveTypeSourceForDocs(
+async function resolveTypeSourceForDocs(
     pkg: ResolvedPackage,
     requested: string,
     cwd: string,
     spawn: SpawnFn,
     resolvePackage: typeof defaultResolvePackage,
     signal: AbortSignal | undefined
-): Promise<ResolvedPackage> {
-    return resolveTypeSource(pkg, extractParentPackage(requested), next =>
-        tryResolveOrInstall(next, cwd, spawn, resolvePackage, signal)
+): Promise<{pkg: ResolvedPackage; installed: boolean; pin?: AutoInstallPin}> {
+    // A package acquired ONLY through a hop used to report neither `autoInstalled`
+    // nor a pin, so `pi-worker-docs` emitted no version banner for it — while the
+    // banner's own text ("only its types are, as `@types/bun` `^1.2`") claims a
+    // range as provenance. Report the last hop that actually installed.
+    let installed = false
+    let pin: AutoInstallPin | undefined
+    const out = await resolveTypeSource(pkg, extractParentPackage(requested), next =>
+        tryResolveOrInstall(next, cwd, spawn, resolvePackage, signal, hopPin => {
+            installed = true
+            pin = hopPin
+        })
     )
+    return pin ? {pkg: out, installed, pin} : {pkg: out, installed}
 }
 
 export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
@@ -426,77 +523,64 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         signal: input.signal
     }).catch<NpmVersionInfo | null>(() => null)
 
-    // Step 1: resolve package
-    let pkg: ResolvedPackage
-    let autoInstalled = false
-    let autoInstallPin: AutoInstallPin | undefined
-    try {
-        pkg = resolvePackage(requested, input.cwd)
-    } catch (firstErr) {
-        if (firstErr instanceof ResolveError && firstErr.kind === 'not_installed') {
-            // auto-install — but FIRST honour the version the project intends.
-            // If the dep is declared in the project's package.json, install that
-            // range so a scaffolding answer is grounded in the project's major,
-            // not whatever npm currently tags `latest`.
-            const parentPkg = extractParentPackage(requested)
-            const declaredRange = findDeclaredRange(parentPkg, input.cwd)
-            autoInstallPin =
-                declaredRange ?
-                    {source: 'declared-range', range: declaredRange, asked: parentPkg}
-                :   {source: 'npm-latest', asked: parentPkg}
-            const installResult = await runAutoInstall(
-                spawn,
-                parentPkg,
-                undefined,
-                declaredRange ?? undefined
-            )
-            if (!installResult.success) {
-                return {
-                    kind: 'error',
-                    message: `Package "${parentPkg}" is not installed and auto-install failed.\n${installResult.stderr}`,
-                    resolveError: 'not_installed',
-                    installError: installResult.stderr,
-                    autoInstallPin,
-                    npmVersion: await npmVersionPromise
-                }
-            }
-            autoInstalled = true
-            try {
-                pkg = resolvePackage(requested, installResult.installDir)
-            } catch (retryErr) {
-                if (retryErr instanceof ResolveError) {
-                    return {
-                        kind: 'error',
-                        message: retryErr.message,
-                        resolveError: retryErr.kind,
-                        autoInstalled,
-                        autoInstallPin,
-                        npmVersion: await npmVersionPromise
-                    }
-                }
-                return {
-                    kind: 'error',
-                    message: `Could not resolve "${input.pkg}" after install: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
-                    autoInstalled,
-                    autoInstallPin,
-                    npmVersion: await npmVersionPromise
-                }
-            }
-        } else if (firstErr instanceof ResolveError) {
+    // Step 1: acquire the package — resolve, or install-at-the-declared-range and
+    // resolve again. The ladder is `acquirePackage`; this maps its stages onto the
+    // rich error results the docs tool reports. `input.signal` now reaches the
+    // install, which it never did while the range was a fourth positional.
+    const got = await acquirePackage({
+        name: requested,
+        cwd: input.cwd,
+        spawn,
+        resolvePackage,
+        signal: input.signal
+    })
+    if (!got.ok) {
+        if (got.stage === 'install') {
             return {
                 kind: 'error',
-                message: firstErr.message,
-                resolveError: firstErr.kind,
-                npmVersion: await npmVersionPromise
-            }
-        } else {
-            return {
-                kind: 'error',
-                message: `Could not resolve "${input.pkg}": ${firstErr instanceof Error ? firstErr.message : String(firstErr)}`,
+                message: `Package "${got.asked}" is not installed and auto-install failed.\n${got.stderr}`,
+                resolveError: 'not_installed',
+                installError: got.stderr,
+                autoInstallPin: got.pin,
                 npmVersion: await npmVersionPromise
             }
         }
+        if (got.stage === 'reresolve') {
+            if (got.err instanceof ResolveError) {
+                return {
+                    kind: 'error',
+                    message: got.err.message,
+                    resolveError: got.err.kind,
+                    autoInstalled: true,
+                    autoInstallPin: got.pin,
+                    npmVersion: await npmVersionPromise
+                }
+            }
+            return {
+                kind: 'error',
+                message: `Could not resolve "${input.pkg}" after install: ${got.err instanceof Error ? got.err.message : String(got.err)}`,
+                autoInstalled: true,
+                autoInstallPin: got.pin,
+                npmVersion: await npmVersionPromise
+            }
+        }
+        if (got.err instanceof ResolveError) {
+            return {
+                kind: 'error',
+                message: got.err.message,
+                resolveError: got.err.kind,
+                npmVersion: await npmVersionPromise
+            }
+        }
+        return {
+            kind: 'error',
+            message: `Could not resolve "${input.pkg}": ${got.err instanceof Error ? got.err.message : String(got.err)}`,
+            npmVersion: await npmVersionPromise
+        }
     }
+    let pkg: ResolvedPackage = got.pkg
+    let autoInstalled = got.autoInstalled
+    let autoInstallPin: AutoInstallPin | undefined = got.pin
 
     // Step 1b: if the resolved package ships no usable type declarations (e.g.
     // the `bun` runtime launcher, which is just a binary + install README), or is
@@ -504,7 +588,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
     // @types/<name> + triple-slash `<reference types>` chain to the package that
     // actually holds the declarations (e.g. bun -> @types/bun -> bun-types).
     // Best-effort: any failure leaves the original resolution untouched.
-    pkg = await resolveTypeSourceForDocs(
+    const viaTypes = await resolveTypeSourceForDocs(
         pkg,
         requested,
         input.cwd,
@@ -512,6 +596,11 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
         resolvePackage,
         input.signal
     )
+    pkg = viaTypes.pkg
+    if (viaTypes.installed) {
+        autoInstalled = true
+        autoInstallPin ??= viaTypes.pin
+    }
 
     // Step 2: open cache
     let cache: CacheHandle | null = null

@@ -24,6 +24,7 @@ import {
 } from '../shared/leaked-tool-call.js'
 import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
 import {streamStallHint} from '../shared/stream-watchdog.js'
+import {classifyWorkerFailure} from './worker-failure.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -1078,15 +1079,29 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // worker that finished cleanly has answered, and a short answer is a
         // legitimate answer — length would let a long half-finished fragment
         // override a concise correct one, which is the opposite of the fix.
+        // ASK THE LADDER — do not restate it. This was an eight-term disjunction,
+        // a fifth hand-written statement of the taxonomy `worker-failure.ts` exists
+        // to own, and it had already drifted: `leakedToolCall` and a plain non-zero
+        // `exitCode` are rows in FAILURE_RULES and were missing here. Both are cases
+        // where an attempt that produced nothing usable counted as NOT failed, so
+        // salvage was skipped and a good earlier partial was overwritten — the exact
+        // outcome the comment above forbids.
+        //
+        // The two non-kill terms stay explicit because `worker-failure.ts`
+        // deliberately excludes them as CONSUMER policy: an empty answer and a
+        // reported `modelError` on a run that still produced text are not kills.
+        const killCause = classifyWorkerFailure({
+            exitCode: result.exitCode,
+            aborted: result.aborted,
+            timedOut,
+            ...(result.stalled === true ? {stalled: true} : {}),
+            ...(loopHit ? {loopHit} : {}),
+            ...(leaked ? {leakedToolCall: leaked} : {}),
+            ...(commandKill ? {commandTimedOut: commandKill} : {}),
+            ...(streamStalled ? {streamStalled} : {})
+        })
         const finalAttemptFailed =
-            timedOut === true
-            || result.aborted
-            || result.modelError !== undefined
-            || result.stalled === true
-            || streamStalled !== undefined
-            || commandKill !== undefined
-            || loopHit !== undefined
-            || text.trim().length === 0
+            killCause !== undefined || result.modelError !== undefined || text.trim().length === 0
         const answer =
             (
                 finalAttemptFailed

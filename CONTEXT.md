@@ -21,6 +21,33 @@ concept get that concept recorded here.
   > detach (`resolveOwnedFreezeForThisTask`) reads, and a critique-time probe once
   > measured 0/40 because the stamp did not exist yet. `owned-freeze-wiring.test.ts`
   > drives the row now, and reversing the two inside it fails.
+- **Phase carry** — the pure, idempotent transform a phase performs on
+  `PhaseContext` fields OTHER than its own `field` (`PhaseConfig.carry`). It runs
+  on BOTH arms of the orchestrator loop: before `run` on the live path
+  (`runPhaseRow`), and in place of `run` on the resume path (`replayPhaseCarry`).
+  It mutates `pc` and RETURNS its trail lines rather than writing them, so a
+  replay cannot duplicate a `## gates` line the live run already recorded. Compose
+  is the only row that has one (`composeCarry`).
+  > A row's `section` restores exactly ONE field on resume, and compose settled
+  > two: it dropped constraints research REFUTED from `refined` while its `field`
+  > is `spec`. So a resume past compose restored `## refined prompt` — deliberately
+  > left as refine WROTE it — and never re-applied the drop, handing critique the
+  > refuted constraint back under a prompt that calls the refined task GROUND TRUTH
+  > whose CONSTRAINTS "MUST be preserved in spirit". That is the mx5 run-19 defect
+  > (`argon2` shipped as a dependency of a repo that never imports it), restored by
+  > the machinery that closed it. `dropRefutedConstraints`' own doc comment claimed
+  > "a resumed run re-deriving `refined` from the task file lands in the same
+  > place"; it did not, because the skip branch never ran the body that said so.
+  > Reachable on the ORDINARY path: `cancelCheckpoint('phase:compose')` exists to
+  > land a resume at critique, the costliest phase. The single resume test resumed
+  > at `grill`.
+  > **`postCommit` is a row field for the same reason** — it was a
+  > `phase.name !== 'refine'` string test inside one function, so the compiler
+  > could not say which rows have a post-commit effect, and `phases.test.ts` drove
+  > it through a hand-retyped `{name: 'refine', …} as PhaseConfig` literal that
+  > would have asserted nothing once the effect moved onto the row.
+  > **`runPhaseRow` is the row's test surface.** Calling `row.run` alone tests PAST
+  > the interface and is exactly what missed the carry.
 - **Orchestrator** — drives a task through its phases, spawning child pi
   sessions, tracking context/widget state, and persisting for resumability.
   `task/orchestrator.ts` runs a single task; `task/auto-orchestrator.ts` plans a
@@ -122,6 +149,24 @@ concept get that concept recorded here.
   `/task`'s `announce` and `/task-plan`'s two endings each hand-rolled;
   `/task-plan` opts out of the push because a plan is a conversation, not a task —
   the run it hands off to pushes its own ending.
+- **Task attempt bracket** — the pre-task facts and post-task integrity checks of
+  ONE `/task-auto` iteration, paired structurally. The stash ref is captured before
+  the task and `reportStashDrift` runs in a `finally`, so every exit — the two
+  mid-attempt returns and a throw included — passes through it once.
+  > It was a captured local and a check ~120 lines and THREE returns apart, sitting
+  > at the very end of the clean fall-through. So the orphan-stash guard — whose own
+  > message says "an orphan stash later pops as an unresolvable conflict", and whose
+  > reason for existing is mx5 run 6 — ran only when the task SUCCEEDED and the gate
+  > said `done`. On a failed or interrupted task the user is told to run
+  > `/task-auto-resume` and walks straight onto the landmine the guard exists to
+  > name. Nothing in the parts was wrong; the bug was where they were composed.
+  > No test could tell "the guard ran and found nothing" from "the guard never ran",
+  > because the only path that reached it was the clean one.
+  > The FULL `withTaskAttempt(cwd, deps, {…}, fn)` — folding in the checkpoint
+  > commit and the unmerged-paths refusal, `withRun`'s shape one altitude down — was
+  > NOT built: it means restructuring ~180 lines of the hot loop to turn two `return`s
+  > into a sentinel. The `finally` gets the pairing property that mattered; the rest
+  > is open.
 - **Plan stage** — one step of `planAuto`, the `/task-auto` planning pipeline:
   ORIENT → ELICIT → DECOMPOSE → COVER → persist. Each is its own function in
   `task/auto-orchestrator.ts`, taking what the earlier stages settled and
@@ -142,6 +187,95 @@ concept get that concept recorded here.
   > it now runs BEFORE the extractions, which used to spend two children and
   > append to two run-level artifacts for a plan that was discarded one line
   > later.
+- **Q&A transcript** — what one adaptive dialog RECORDS: numbering, formatting and
+  the provenance table, in one value. `QaTranscript` (`task/qa-transcript.ts`)
+  takes a `QaPolicy` and offers two renderings — `forRecord()` (persisted, handed
+  on) and `forGenerator()` (fed back into the next question-generation prompt).
+  An entry states its KIND (`auto`, `auto-resolved`, `host-set`, `yolo`,
+  `yolo-skip`, `accepted`, `typed`); `QA_PROVENANCE` gives each kind a suffix, so a
+  new kind is a compile error until it has one.
+  > `question-dialog.ts` unified the ANSWER side of these loops. What the loop
+  > RECORDS was eight retyped push sites across two files, each choosing a suffix by
+  > hand according to which branch of an `if/else` it stood in. `phases.ts` stated
+  > the invariant in a comment — *"No provenance stamp here… this string is fed back
+  > VERBATIM into the next grill-gen prompt, so a `(accepted recommendation)` suffix
+  > would become model input"* — and TWELVE LINES ABOVE it, the YOLO branch pushed
+  > `${answer} ${YOLO_STAMP}` into that very array. The rule lived in prose; the
+  > decision lived at each push.
+  > **`generatorSeesProvenance` is an option, not a unification.** The two dialogs
+  > genuinely disagree and both say so: grill's feedback is verbatim model input, so
+  > a suffix there describes how an answer was obtained rather than what it was;
+  > clarify deliberately shows its generator the provenance, so a question the
+  > triage already settled reads as settled and is not re-asked. Observable either
+  > way — the `makeLedger` `onNoop` shape.
+  > Grill's `accepted` is deliberately NOT in its record set while clarify's is.
+  > Whether the two should agree is a prompt question with its own A/B; today's
+  > answer is preserved rather than harmonised.
+  > `plan-session`'s `PlanEntry` is NOT folded in: decisions vs advisory notes,
+  > its own persistence, no `Qn:`/`An:` numbering.
+- **Question source** — where the NEXT question comes from:
+  `makeQuestionSource` (`task/question-source.ts`). One method, `next()`, returning
+  a question or an `exhausted` reason (`none | cap | dups`). Behind it: the cap, the
+  duplicate backstop and its strike budget, the NONE-vs-unparseable distinction,
+  `pickQuestion`, the one-shot re-prompt budget shared by every quality rule, and
+  the hint precedence between a format re-prompt and a duplicate one. `generate` is
+  the **seam** — each site's own child and prompt. `reopen()` clears the strike
+  budget when the caller supplies new context (`/task-plan` lets the user ask
+  mid-session).
+  > The other half of `question-dialog.ts`, whose own docstring makes the argument:
+  > *"It was written three times… the two mirrors were never converted, and they had
+  > already drifted apart in three ways."* Clarify and plan use the SAME parser on
+  > the SAME prompt format and had drifted five ways — clarify took `parsed[0]`
+  > blindly (so a numbered analysis note became the question and the `SUGGESTED`
+  > attached further down was lost), treated an UNPARSEABLE reply as "no questions
+  > left" (one formatting slip ⇒ the whole feature decomposed with ZERO
+  > clarifications), re-typed the NONE regex in a second file, spent no re-prompt on
+  > a missing `SUGGESTED`, and had no deferral guard at all.
+  > **Only the DEFERRAL rule crosses to clarify.** `PLAN_QUALITY_RULES` has three;
+  > `CLARIFY_QUALITY_RULES` has one. The other two were MEASURED on the plan path
+  > (10/15 fork-shaped questions shipped one option) but each costs an extra child
+  > call every time it fires, and clarify is the most A/B'd path here — moving them
+  > is its own experiment, not a side effect of sharing a state machine. The
+  > deferral rule crosses because it costs nothing on the happy path and because its
+  > bug is the same bug one command over: an accepted "clarify with the user before
+  > proceeding" rode into `/task`'s handoff as an AUTHORITATIVE decision, and
+  > clarify's answers reach decompose with the same authority.
+  > **Grill's loop is NOT folded in.** It uses `parseGrillQuestions` (bare strings)
+  > and has no `SUGGESTED` at generation time — its recommendation comes from
+  > `phaseAutoAnswer` one step later — so every quality rule is inapplicable. A
+  > generic over the parsed shape with one consumer opting out of the whole table is
+  > a wider interface for less behaviour.
+  > `exhausted.why` has FOUR members, not three: a second unreadable reply exhausts
+  > as `unparseable`, never as `none`. Recording it as a NONE would put "model has
+  > no further questions" on the trail for a run where the model emitted two
+  > malformed replies — the same conflation, one level down.
+  > `CLARIFY_QUALITY_RULES` references `DEFERRAL_RULE` directly, not
+  > `PLAN_QUALITY_RULES.find(r => r.id === '…')!` — a rename of that `id` would
+  > otherwise yield `[undefined]` with no compile error and throw on the first
+  > clarify question of every run.
+- **Coverage ledger** — what the COVER loop records and the decisions that record
+  makes: `CoverageLedger` (`task/plan-rounds.ts`), `GateTally`'s twin one phase
+  earlier. `consider(cand)` compares, replaces the plan WHOLE, and grants the
+  one-shot bonus round IN THE SAME CALL that adopts; `mayRetry`, `startRound`,
+  `best`, `unresolved` are the rest. No I/O — no `logPlanDebug`, no notify — for the
+  same reason `GateTally` performs none.
+  > Five locals threaded by closure through a ~90-line loop, plus a
+  > snapshot-before-overwrite pair (`priorCovered`, `priorMissing`) that existed
+  > ONLY because the bonus-round decision was made downstream from the evidence it
+  > needed. The last real bug here says the shape out loud in the loop's own
+  > comment: *"This used to be two assignments, and the second one kept the OLD
+  > plan's accounting whenever the new plan's coverage-map child faulted — binding
+  > requirements to titles they were never mapped against."* `AutofixLedger`'s
+  > indictment verbatim. `consider` closes it by construction rather than by comment.
+  > The suite could previously observe the bonus-round policy only by grepping a
+  > debug string through `planAuto` with a temp dir, a fake ctx and four scripted
+  > children (`expect(log).toContain('bonus round granted')`).
+  > `normMissingArea` moved to `coverage-loop.ts`, beside the adoption rule that is
+  > its only consumer.
+  > **DECOMPOSE's two retry budgets are deliberately NOT here.** They look like this
+  > shape and are not: that loop keys on `isSuspectPlan`, a predicate over the SPEC
+  > LENGTH rather than a title-count floor. A class that does not model
+  > `isSuspectPlan` would move the code without concentrating the decision.
 - **Plan session** — the interactive planning loop `/task-plan` runs before a task
   exists (`task/plan-session.ts`). Same adaptive one-question-at-a-time shape as
   grill and clarify, and it reuses their parser, duplicate backstop, picker and
@@ -279,6 +413,98 @@ concept get that concept recorded here.
   mid-scan fault. Only the three uniform scans are in the table; repo-health,
   launch-contract, launch-config-gap and the boot check are deliberately outside
   it, because each would need its own escape hatch in the row type.
+- **Shipped source** — what counts as the authored, shipping tree every run-level
+  closure scan reads. `task/shipped-source.ts`: one skip policy
+  (`isSkippedDir`/`isSkippedFile`), one bounded deterministic walk
+  (`shippedSources`, 3000 files / 400 KB), one comment strip. `serve-entry` and
+  `artifact-closure` are **adapters** over it, differing only in the extension set
+  and in artifact-closure's per-run `excludeRoots` (a produced tree re-referencing
+  its own chunks is noise, and which dirs are produced is discovered per run).
+  > `CLOSURE_SCANS` deepened the DRIVER — fault isolation, rank, stage — and left
+  > the INPUT triplicated. `scanCandidates` existed TWICE, near-byte-identical, and
+  > the two skip sets had drifted: serve-entry carried `bench|benchmarks` and
+  > `*.bench.*`, artifact-closure did not, so a dangling artifact reference in a
+  > benchmark was a run-level finding while the same file was invisible to the
+  > sibling scan. The same extension regex was declared under two names (`SCAN_RE`,
+  > `SCAN_JS_RE`) and `stripCommentLines` was byte-identical in both. `.pi-tasks`
+  > was hardcoded rather than derived from `TASKS_DIR_NAME`.
+  > The locality proof is the suite: `artifact-closure.test.ts` had 28 references
+  > to the pure extractors and 5 calls to the driver, and NO test in the cluster
+  > asserted a skip set at all — the `resolveTypeSource` shape, pure functions
+  > extracted for testability while the real logic stayed in how they are CALLED.
+  > **`env-template-closure` is deliberately NOT an adapter.** It asks a different
+  > question — which TRACKED files could read an env var, including `.py`/`.go`,
+  > including tests — and its comment rule is a per-line predicate that also treats
+  > `#` as an opener, which it must and which would be wrong for JS/TS. Answering
+  > it over this walk would silently change which env findings a run produces.
+  > Recorded as a real divergence; changing it is an env-policy change with its own
+  > A/B.
+- **Fix-child ladder** — the four rungs every bounded fix pass applies to its
+  child: a cancel THROWS (so the caller's `USER_CANCELLED` path is unchanged), a
+  thrown child is an `error`, a self-declared marker is `blocked`, anything else is
+  `done`. `runFixChild` (`task/fix-child.ts`), with `parseFixMarker` owning the
+  last-match-wins rule; `parseFinalFixMarker` is now one line over it.
+  > Not the rejected sharing: "the two resolution loops stay two" is
+  > `runGatesForTask` vs `runFinalGateStage`, the LOOPS. This is the single child
+  > invocation inside each, where they had actually drifted.
+  > **BLOCKED supplies a REASON; the CHECK still decides.** The marker is scraped
+  > last-match-wins out of arbitrary child output and the fix child carries bash, so
+  > its own command output is in that text — and a child can genuinely converge and
+  > THEN block (`eslint --fix` clears the last finding, the model still reports
+  > BLOCKED). Returning not-applied on the marker alone sent the gate to
+  > `deps.recommend(...)` with a `failReason` that no longer described the tree,
+  > skipping the re-verify and burning an implementation re-run on findings already
+  > gone, while the child's edits sat in the working tree. So the re-run is NOT
+  > skipped; only the reported reason changes. Skipping it was the other half of the
+  > win and is not worth that.
+  > **The lint-fix marker was a DEAD protocol.** `buildLintFixPrompt` instructed the
+  > child to end with `LINT-FIX: DONE` / `BLOCKED <why>`, and the call site was
+  > `await deps.runChild(...)` with the return value DISCARDED — nothing in `src/`
+  > or `scripts/` parsed it, while the twin parsed its own marker to skip the
+  > expensive re-run. So a BLOCKED lint-fix child still paid a whole repo-health run
+  > (15–69s measured) to be told `did not converge: <health.reason>` instead of its
+  > own stated reason. The suite fed `'LINT-FIX: DONE'` as fake output, so it stayed
+  > green whether the marker was parsed or deleted.
+  > **The BLOCKED rung is consulted AFTER the guards, not instead of them** — a
+  > child can discard work and then block, and an early return would have made
+  > blocking a way to leave destroyed work in the tree.
+  > `lint-fix.ts` was also the ONE production site in `src/` re-typing
+  > `'__user_cancelled__'` instead of importing `USER_CANCELLED`, and `LintFixDeps`
+  > had no `log` field at all, so all four of its guard trips were invisible while
+  > the twin logged three of its own.
+  > **A `WriteGuard` row table over the post-child guard stacks was examined and
+  > REJECTED**, for the reason repo-health and boot stay outside `CLOSURE_SCANS`:
+  > the revert guard restores a snapshot and notes, the frozen-path guard reverts
+  > WITHOUT rejecting, and the deletion guard restores from HEAD — each needs its
+  > own escape hatch in the row type.
+- **Verify fail class** — WHICH KIND of verify FAIL this is, as data.
+  `VerifyOutcome.failClass` (`task/verify-work.ts`), a union whose members each
+  declare a display prefix in `VERIFY_FAIL_PREFIX`, so a new class is a compile
+  error until it has one. `verifyFailClass(outcome)` prefers the field;
+  `failClassOfReason(text)` is the ONE surviving prefix match, for a debt read back
+  off disk as a bare string.
+  > `unobserved: true` was already carried as a typed field and read as one. Its
+  > sibling was not: `verify-work.ts` minted `` `repo health: ${reason}` `` and THREE
+  > independent production sites recovered the class by re-typing the literal with
+  > two different matchers — the graduated lint-fix gate, the frozen-blocked
+  > contradiction test, and `isStaticClassDebt`, the only auto-closing debt class. A
+  > reword of the mint disabled all three, with no compile error and a green suite.
+  > This is the `observedFailures` finding one altitude down: the outcome CLASS
+  > never travelled with the failure TEXT, so every classifier downstream had to
+  > guess.
+  > `static-checks` is the RUN-level twin of `repo-health` — `final-gate.ts` minted
+  > `static checks: …` for the same concept at the other altitude, so
+  > `isStaticClassDebt` was structurally blind to every run-level static failure
+  > that reached the ledger. Both mints now read the registry, and `isStaticClass`
+  > pairs them. The `reason` WORDING is byte-frozen: the debt ledger stores it
+  > verbatim, so the registry exists to keep minting and matching from drifting,
+  > not to make the wording editable.
+  > **Every mint reads the registry, and a test pins that.** The first cut shipped
+  > ALREADY drifted — the `harness-fault` prefix read `verify pass could not run:`
+  > while the only site minting that class emitted `verification pass could not
+  > run:`, so `failClassOfReason` returned `undefined` for it. Asserting the
+  > prefixes are non-empty did not catch it; asserting a minted reason classifies
+  > back to its own class does.
 - **Gate tally** — what the run-end gate's sections RECORD, and the one pure
   function that turns the record into a `FinalGateOutcome`. `GateTally`
   (`task/gate-tally.ts`) replaces the twelve mutable locals
@@ -300,6 +526,40 @@ concept get that concept recorded here.
   > boot `else` branch and the post-boot closure scans: `stage` is a statement
   > about when a scan is meaningful, and this did not change it. Repo-health,
   > launch-contract, config-gap and boot remain outside `CLOSURE_SCANS`.
+- **`BootChild` (seam)** — the boot child, defined from what `runBootCheck` CALLS:
+  a pid, two output streams, an `error` event and an `exit` event carrying
+  `(status, signal)`. `BootDeps.spawnBoot` and `BootDeps.killGroup` inject it and
+  its teardown; both default to the real `spawn` / group kill, and
+  `runBootCheck`'s exported signature is unchanged, so the seven harnesses under
+  `scripts/` that drive it are untouched.
+  > `BootDeps` injected NINE things the check LOOKS AT — `findPortHolder`, `reap`,
+  > `groupHasListener`, `groupListeningPort`, `renderProbe`, `deepRenderProbe`,
+  > `enumerationCapable`, `pickPort`, `preferredPort`, `httpProbe` — and not the
+  > thing it looks THROUGH. `spawn` was a direct import, so a ~220-line
+  > `new Promise` body carrying seven closure locals, four `BootOutcome` kinds and a
+  > five-armed exit ladder was reachable only through a real process on a real
+  > clock: 52 tests / 13.6s, with 300–5000ms grace windows scripted as real
+  > `process.execPath -e` children.
+  > Defined from the CONSUMER, exactly as `driveSession(cdp: CdpLike, …)` was
+  > defined from the two `Cdp` methods it calls rather than from `Cdp`. A scripted
+  > fake is a dozen lines, and `boot-probe.child.test.ts` covers the exit ladder,
+  > the listener rules, both render probes and the orphan-port branch in 5s.
+  > **The `probing` re-arm is the branch this was for.** A browser session outlives
+  > the grace window by design; settling there would kill the server under it and
+  > discard its verdict. It is a race between a 500ms interval, a re-armed grace
+  > timer and an async probe, and nothing could drive it deterministically before.
+  > The pid guard stays TRUTHINESS (`if (!child.pid) return`), deliberately:
+  > `process.kill(-0, sig)` signals the CALLER's own process group, so a pid of 0
+  > would turn a best-effort teardown into self-termination. Node's `spawn` never
+  > yields 0 — but `spawnBoot` is a seam now, and a fake can.
+  > **Timers are NOT injected.** The existing `deepRenderProbe` seam already decides
+  > when a session resolves, which is enough to drive the re-arm against a short
+  > `graceMs`; a timer port would be a wider interface for behaviour already
+  > reachable.
+  > The ANTI-PATTERN avoided: extracting three pure classifiers
+  > (`classifyBootExit`, `classifyGraceEnd`, `renderVerdict`) would be the
+  > no-locality shape CONTEXT.md indicts under `resolveTypeSource` — the ORDERING is
+  > what has bugs, so the seam goes UNDER it, not beside it.
 - **Deep-render driver halves** — `deep-render-check.ts`'s `drive()` is launch →
   session → close, split at the `Cdp` seam it already had. `launchBrowser(bin,
   userDataDir, {signal})` is everything that touches a process or a socket:
@@ -518,6 +778,43 @@ concept get that concept recorded here.
   > was written and read by nothing, which is what let it hide.
   > `reason` comes from `childFailureReason`, which asks `classifyWorkerFailure` — the
   > one ordered ladder — rather than re-deriving the precedence.
+- **Kill-cause ladder (one author, four consumers)** — `classifyWorkerFailure`
+  (`workers/worker-failure.ts`) is the ONLY statement of kill-cause precedence,
+  and `runWorker`'s `finalAttemptFailed` asks it rather than restating it.
+  > It was an inline eight-term disjunction 990 lines below `RESTART_RULES` and in
+  > a different file from the ladder — a fifth author of a taxonomy the module
+  > exists to own — and it was missing two of `FAILURE_RULES`' rows:
+  > `leakedToolCall` and a plain non-zero `exitCode`. Both are cases where an
+  > attempt that produced nothing usable counted as NOT failed, so SALVAGE was
+  > skipped and a good discarded partial was overwritten by the crash's leftovers —
+  > the exact outcome the salvage comment forbids ("a restart budget is meant to
+  > buy more chances at an answer, not to overwrite a good attempt with a worse
+  > one"). The two non-kill terms — an empty answer and a `modelError` on a run
+  > that still produced text — stay explicit, because `worker-failure.ts`
+  > deliberately excludes them as CONSUMER policy.
+- **Package acquisition** — getting one package onto disk and resolved:
+  `acquirePackage` (`workers/docs-core.ts`) resolves from `cwd` and, on
+  `not_installed`, installs at the range the PROJECT declares before resolving
+  again from the install dir. It returns a discriminated outcome naming the STAGE
+  it failed at (`resolve` | `install` | `reresolve`), so `docsRaw` shapes its own
+  rich error results and the redirect-hop adapter (`tryResolveOrInstall`) just
+  returns `null`.
+  > CONTEXT.md already recorded the redirect WALK as unified (`resolveTypeSource`)
+  > and its `resolveHop` seam as "the one thing its two call sites disagree about".
+  > The acquisition UNDER it was still written twice, and the copies had drifted on
+  > all three things that matter. **Signal**: the hop copy passed it; the primary
+  > copy wrote a bare `undefined` into the slot to reach the fourth positional,
+  > while `DocsRawInput.signal` was honoured on either side of that call — so a
+  > user cancel during the MAIN `npm install` of a model-chosen package was not
+  > delivered. `runAutoInstall` takes `AutoInstallOptions` now, so that hole cannot
+  > be typed. **Pin**: `findDeclaredRange` had exactly ONE call site, the primary
+  > copy; the hop installed `latest` unconditionally, on the hop most likely to be
+  > the declared one — `declarationChain` exists precisely because "a project that
+  > uses Bun declares `@types/bun`, not `bun`". **Provenance**: `autoInstalled` and
+  > `autoInstallPin` were `docsRaw` locals, so a package acquired only through a
+  > hop got no version banner. The suite asserted the pinning property on the
+  > primary path, and no test in the repo named `tryResolveOrInstall` — the copy
+  > silently doing the opposite.
 - **Child-failure** — the standard outcome of a worker's child pi failing
   (aborted, or non-zero exit with an stderr tail). Formatted in exactly one
   place, `formatChildFailure` (`workers/shared.ts`), so the rule never drifts
@@ -616,3 +913,34 @@ concept get that concept recorded here.
 
 > `pi-worker-search` is the outlier: it is a direct Brave API call with **no
 > child pi**, so it registers through `makeWorkerTool` but has no child-failure.
+
+## Settings
+
+- **Config loader** — how one setting's STORED value becomes a safe in-memory
+  value. `CONFIG_LOADERS` (`config/config.ts`) is a mapped type over
+  `PiTaskConfig` — one loader per key, keyed on the config's own type — and
+  `loadConfig(raw)` is the pure function that applies the whole table. The
+  module-eval read is now `readFileSync → JSON.parse → loadConfig`.
+  > `ConfigItem` (`config/register.ts`) already made this argument and stopped one
+  > edit short. Its own header: *"Adding one enum setting meant FOUR coordinated
+  > edits (row, format arm, parse arm, sanitizer) and NONE of them failed to
+  > compile if you forgot it."* Three were absorbed; the sanitizer stayed in
+  > another directory as a hand-ordered statement ladder covering 7 of 14 keys,
+  > then spreading `parsed` wholesale. Of the EIGHT booleans exactly one —
+  > `yoloMode` — was guarded, and its guard's comment (*"a hand-edited
+  > `"yoloMode": "false"` is a truthy string"*) was true verbatim of the other
+  > seven: a stale `"verifyWork": "off"` read as truthy, `"autoCommit": 0` as
+  > falsy. `booleanItem` already knew every one of those keys was a boolean and was
+  > not consulted at load. A new field on `PiTaskConfig` is now a compile error
+  > until it declares a loader (verified: adding one breaks the build at both
+  > `DEFAULT_CONFIG` and `CONFIG_LOADERS`).
+  > The spread also had a shape bug the seam closes: `{...DEFAULT_CONFIG, ...'ab'}`
+  > produces numeric index keys, so a config file holding a bare JSON string
+  > reached `getConfig()` as junk. `loadConfig` answers a non-object with the
+  > defaults, and drops keys the table does not know rather than carrying them.
+  > **The seam is why the composition is testable at all.** Every sanitizer was
+  > covered in isolation; WHICH keys got one, and what the trailing spread did to
+  > the rest, had zero coverage — `config.test.ts` says so twice ("asserted through
+  > the sanitizer, not getConfig, so a developer's own ~/.config/pi-task/config.json
+  > cannot flip the test"). `loadConfig` takes parsed JSON, so the hostile-value
+  > property runs over the whole table without reading this machine.

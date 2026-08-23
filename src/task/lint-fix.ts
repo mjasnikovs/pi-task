@@ -58,6 +58,7 @@
  * `currentTaskId` and `introducedBy` are wired.
  */
 import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-path-guard.js'
+import {runFixChild} from './fix-child.js'
 import {parseTreeChanges, type TreeChangeSummary} from './write-guard.js'
 import {findCrossTaskDeletions} from './task-provenance.js'
 
@@ -99,6 +100,13 @@ export interface LintFixDeps {
      * deletion guard is disarmed (prior behavior).
      */
     introducedBy?: (rel: string) => Promise<string | null>
+    /**
+     * Debug-log sink. This dep did not exist, so all four of this pass's guard
+     * trips were invisible in the trail while the twin (`FinalFixDeps.log`) logged
+     * three of its own — and a guard whose firing leaves no record cannot be
+     * distinguished from one that never armed.
+     */
+    log?: (msg: string) => void
 }
 
 /** The fix child edits and runs the checker; bash exists to RUN the check, not git. */
@@ -252,18 +260,27 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     const deletionGuardArmed = Boolean(deps.currentTaskId && deps.introducedBy)
     const preChanges = deletionGuardArmed ? await treeChanges(deps) : null
 
-    try {
-        await deps.runChild(
-            LINT_FIX_TOOLS,
-            buildLintFixPrompt(deps.failReason, frozen),
-            deps.signal
-        )
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        // A cancel must propagate so the caller's USER_CANCELLED path runs.
-        if (msg === '__user_cancelled__') throw err
-        return {ok: false, reason: `fix child failed: ${msg}`}
+    // The four-rung ladder lives in task/fix-child.ts. A cancel still propagates
+    // (it THROWS, so the caller's USER_CANCELLED path is unchanged); what is new
+    // here is the BLOCKED rung, which this pass instructed in its prompt and then
+    // discarded the reply of — so a child that reported BLOCKED still paid the
+    // whole guard stack and a repo-health re-run (15–69s measured) to be told
+    // `did not converge`, instead of its own stated reason.
+    const end = await runFixChild({
+        runChild: deps.runChild,
+        tools: LINT_FIX_TOOLS,
+        prompt: buildLintFixPrompt(deps.failReason, frozen),
+        signal: deps.signal,
+        marker: 'LINT-FIX'
+    })
+    if (end.kind === 'error') {
+        deps.log?.(`lint-fix child failed — ${end.msg}`)
+        return {ok: false, reason: `fix child failed: ${end.msg}`}
     }
+    // A BLOCKED child is NOT an early return from here: the guards below exist to
+    // catch a child that discarded work, and a child can discard work and then
+    // block. The marker is consulted after them, in place of the re-run — which is
+    // where the twin consults its own.
 
     // REVERT-GUARD: every pre-existing work file must still differ from HEAD, and
     // every pre-existing untracked file must still exist. Trip → restore snapshot.
@@ -300,6 +317,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             await deps.git(['checkout', snapshot, '--', '.', EXCLUDE_TASKS_DIR])
             await deps.git(['reset'])
         }
+        deps.log?.(`lint-fix REVERT-GUARD — discarded ${violations.length} work file(s)`)
         return {
             ok: false,
             reason:
@@ -333,6 +351,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             if (crossDeletions.length > 0) {
                 await deps.git(['checkout', '-f', 'HEAD', '--', ...crossDeletions.map(d => d.path)])
                 const named = crossDeletions.map(d => `${d.path} — ${d.owner}'s deliverable`)
+                deps.log?.(`lint-fix CROSS-TASK-DELETION GUARD — ${named[0]}`)
                 return {
                     ok: false,
                     reason:
@@ -358,6 +377,9 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             const frozenViolations = [...postFrozenDirty].filter(f => !preFrozenDirty.has(f))
             if (frozenViolations.length > 0) {
                 const reverted = await revertFrozenPaths(frozenViolations, deps.git)
+                deps.log?.(
+                    `lint-fix FROZEN-PATH GUARD — ${frozenViolations.slice(0, 3).join(', ')}`
+                )
                 return {
                     ok: false,
                     reason:
@@ -371,8 +393,28 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         }
     }
 
+    if (end.kind === 'blocked') deps.log?.(`lint-fix BLOCKED — ${end.note}`)
+
+    // The CHECK is the arbiter, including after a BLOCKED marker.
+    //
+    // The marker is scraped last-match-wins out of arbitrary child output, and
+    // LINT_FIX_TOOLS carries bash — so the child's own command output is in that
+    // text. A child can also genuinely converge and THEN block: `eslint --fix`
+    // silently clears the last finding, and the model still reports
+    // `LINT-FIX: BLOCKED the generated file is frozen`. Returning not-applied on
+    // the marker alone would send the gate to `deps.recommend(...)` with a
+    // failReason that no longer describes the tree, skipping the re-verify and
+    // burning a full implementation re-run on findings that are already gone —
+    // while the child's edits sit in the working tree.
+    //
+    // So BLOCKED does not decide; it only supplies a better REASON when the check
+    // agrees nothing converged. That was the durable half of the win. Skipping the
+    // re-run was the other half, and it is not worth this.
     const health = await deps.repoHealth()
     if (!health.ok) {
+        if (end.kind === 'blocked') {
+            return {ok: false, reason: `fix child blocked: ${end.note}`}
+        }
         // FROZEN-PATH TRACE on non-convergence (PROMPT 1 layer B): when the child
         // was honest — it did NOT touch the frozen path, so the guard above never
         // tripped — but the check is still red and its own output NAMES a frozen
@@ -386,6 +428,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
             pathNamedIn(`${health.reason}\n${health.output ?? ''}`, p)
         )
         if (implicated.length > 0) {
+            deps.log?.(`lint-fix FROZEN-PATH TRACE — ${implicated.slice(0, 3).join(', ')}`)
             return {
                 ok: false,
                 reason:

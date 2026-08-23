@@ -2388,6 +2388,53 @@ test('runAutoLoop: stash stack changed during a task → loud warning names the 
     })
 })
 
+// The guard's own message says an orphan stash "later pops as an unresolvable
+// conflict" — and a FAILED task is exactly when the user is told to run
+// /task-auto-resume and walk onto it. The check used to sit ~120 lines and three
+// returns below its capture, so it ran only when the task SUCCEEDED and the gate
+// said `done`. No test could tell "the guard ran and found nothing" from "the
+// guard never ran", because the only path that reached it was the clean one.
+test('runAutoLoop: a stash left by a FAILED task is still reported', async () => {
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        let stashCalls = 0
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () =>
+                Promise.resolve({
+                    taskId: 'TASK_0006',
+                    end: {kind: 'failed', reason: 'implementation error'}
+                }),
+            commit: () => Promise.resolve({committed: true}),
+            stashRef: () => Promise.resolve(stashCalls++ === 0 ? null : 'abc123')
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(
+            captured.notifies.some(
+                n => n.level === 'warning' && /stash stack changed during "A"/.test(n.msg)
+            )
+        ).toBe(true)
+    })
+})
+
+test('runAutoLoop: a stash left by a task cancelled pre-flight is NOT reported', async () => {
+    // The negative half: the bracket must not turn every exit into a warning.
+    // Nothing ran, so the two refs match and the guard stays quiet.
+    await withTmpTaskDir(async dir => {
+        const {ctx, captured} = makeFakeCtx(dir)
+        await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
+        const d: AutoDeps = {
+            runChild: () => Promise.resolve(''),
+            runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'completed'}}),
+            commit: () => Promise.resolve({committed: true}),
+            stashRef: () => Promise.resolve('same-ref')
+        }
+        await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
+        expect(captured.notifies.some(n => /stash stack changed/.test(n.msg))).toBe(false)
+    })
+})
+
 test('runAutoLoop: final gate FAIL + dismissed picker → run left failed, resume re-runs the gate', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)

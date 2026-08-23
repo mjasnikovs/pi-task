@@ -109,6 +109,83 @@ export interface VerifyOutcome {
      *  can record each as a durable debt if the user ACCEPTs anyway — the deletion
      *  then ships in the next commit and the final gate must re-check it. */
     crossTaskDeletions?: CrossTaskDeletion[]
+    /**
+     * WHICH KIND of FAIL this is, as data. Only meaningful when ok === false.
+     *
+     * `unobserved` was already carried as a typed field and read as one. Its
+     * siblings were not: the repo-health class travelled only as the `repo health:`
+     * PREFIX of `reason`, and three independent production sites recovered it by
+     * re-typing that literal with two different matchers — the graduated lint-fix
+     * gate, the frozen-blocked contradiction test, and the ONE auto-closing debt
+     * class. A reword of the mint disabled all three, with no compile error and a
+     * green suite. This is the `observedFailures` finding one altitude down: the
+     * outcome CLASS never travelled with the failure TEXT, so every classifier
+     * downstream had to guess.
+     */
+    failClass?: VerifyFailClass
+}
+
+/**
+ * The kinds of verify FAIL. A new member is a compile error until it declares a
+ * display prefix below.
+ *
+ * `static-checks` is the RUN-level twin of `repo-health`: `final-gate.ts` mints
+ * `static checks: …` for the same concept at the other altitude, which is why
+ * `isStaticClassDebt` was structurally blind to every run-level static failure
+ * that reached the ledger.
+ */
+export type VerifyFailClass =
+    | 'repo-health'
+    | 'static-checks'
+    | 'unobserved'
+    | 'model-verdict'
+    | 'harness-fault'
+
+/**
+ * The prefix each class MINTS, stated once.
+ *
+ * These strings are byte-frozen: the debt ledger stores `reason` verbatim, so a
+ * reword would orphan every debt already on disk. The registry exists so minting
+ * and matching cannot drift apart, not to make the wording editable.
+ */
+export const VERIFY_FAIL_PREFIX: Record<VerifyFailClass, string> = {
+    'repo-health': 'repo health:',
+    'static-checks': 'static checks:',
+    unobserved: 'work unobserved:',
+    'model-verdict': 'work did not verify:',
+    'harness-fault': 'verification pass could not run:'
+}
+
+/**
+ * The class of a FAIL — from the typed field when it is there, else from the
+ * prefix the registry above owns.
+ *
+ * The prefix test survives in exactly ONE place instead of three. It has to
+ * survive somewhere: `GateDeps.verify` is a seam, a debt read back off disk is a
+ * bare string with no outcome attached, and the run-level gate mints its own
+ * `static checks:` line through a different path entirely.
+ */
+export function verifyFailClass(
+    o: Pick<VerifyOutcome, 'failClass' | 'reason'>
+): VerifyFailClass | undefined {
+    if (o.failClass) return o.failClass
+    return failClassOfReason(o.reason ?? '')
+}
+
+/** The class a recorded reason STRING belongs to, by its minted prefix. */
+export function failClassOfReason(reason: string): VerifyFailClass | undefined {
+    const head = reason.trimStart().toLowerCase()
+    for (const [cls, prefix] of Object.entries(VERIFY_FAIL_PREFIX) as Array<
+        [VerifyFailClass, string]
+    >) {
+        if (head.startsWith(prefix.toLowerCase())) return cls
+    }
+    return undefined
+}
+
+/** Does this class name a deterministic whole-repo static check, at either altitude? */
+export function isStaticClass(cls: VerifyFailClass | undefined): boolean {
+    return cls === 'repo-health' || cls === 'static-checks'
 }
 
 /**
@@ -987,7 +1064,9 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
     if (deps.repoHealth) {
         stage('repo health')
         const h = await deps.repoHealth()
-        if (!h.ok) return {ok: false, reason: `repo health: ${h.reason}`}
+        if (!h.ok) {
+            return {ok: false, failClass: 'repo-health', reason: `repo health: ${h.reason}`}
+        }
     }
     if (!deps.spec || deps.spec.trim().length === 0) {
         return {ok: true, reason: 'no spec to verify'}
@@ -1042,7 +1121,11 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
         } catch (err) {
             if (err instanceof Error && err.message === USER_CANCELLED) throw err
             const msg = err instanceof Error ? err.message : String(err)
-            return {ok: false, reason: `verification pass could not run: ${msg}`}
+            return {
+                ok: false,
+                failClass: 'harness-fault',
+                reason: `${VERIFY_FAIL_PREFIX['harness-fault']} ${msg}`
+            }
         }
         // Capture the environment facts the child shared — regardless of verdict
         // (a FAIL run's discoveries are just as reusable).
@@ -1081,12 +1164,14 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             return {
                 ok: false,
                 unobserved: true,
+                failClass: 'unobserved',
                 reason: `work unobserved: ${verdict.detail}`,
                 ...deletions
             }
         }
         return {
             ok: false,
+            failClass: 'model-verdict',
             reason: `work did not verify: ${verdict.detail}${
                 verdict.detail === 'no verdict emitted' ? ' (after verify retry)' : ''
             }`,

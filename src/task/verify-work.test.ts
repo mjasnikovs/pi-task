@@ -4,7 +4,12 @@ import {
     extractSpecForVerification,
     parseVerifyVerdict,
     runWorkVerification,
-    VERIFY_TOOLS
+    VERIFY_TOOLS,
+    VERIFY_FAIL_PREFIX,
+    verifyFailClass,
+    failClassOfReason,
+    isStaticClass,
+    type VerifyFailClass
 } from './verify-work.js'
 import {USER_CANCELLED} from './child-runner.js'
 
@@ -775,7 +780,11 @@ describe('runWorkVerification', () => {
             spec: 'GOAL\nx',
             runChild: async () => 'WORK-VERIFIED: FAIL the build is broken'
         })
-        expect(out).toEqual({ok: false, reason: 'work did not verify: the build is broken'})
+        expect(out).toEqual({
+            ok: false,
+            failClass: 'model-verdict',
+            reason: 'work did not verify: the build is broken'
+        })
     })
 
     test('no-verdict child → verify retried once, second verdict wins', async () => {
@@ -934,7 +943,11 @@ describe('runWorkVerification', () => {
             repoHealth: async () => ({ok: true, reason: 'static checks passed'}),
             runChild: async () => 'WORK-VERIFIED: FAIL behavior wrong'
         })
-        expect(out).toEqual({ok: false, reason: 'work did not verify: behavior wrong'})
+        expect(out).toEqual({
+            ok: false,
+            failClass: 'model-verdict',
+            reason: 'work did not verify: behavior wrong'
+        })
     })
 
     test('repoHealth FAIL blocks even a spec-less task (no VERIFY block to lean on)', async () => {
@@ -1019,5 +1032,92 @@ describe('runWorkVerification', () => {
         expect(out.ok).toBe(false)
         expect(out.crossTaskDeletions).toBeUndefined()
         expect(prompt).not.toContain('CROSS-TASK DELETION NOTICE')
+    })
+})
+
+// ─── The failure CLASS, as data ─────────────────────────────────────────────
+//
+// `unobserved` was always a typed field. Its siblings travelled as the PREFIX of
+// `reason`, recovered at three production sites by re-typing the literal with two
+// different matchers — so a reword of the mint disabled the graduated lint-fix
+// path AND the only auto-closing debt class, with no compile error.
+
+describe('verify failure class', () => {
+    // The gap that let this registry ship ALREADY DRIFTED: the harness-fault
+    // prefix read `verify pass could not run:` while the only site minting that
+    // class emitted `verification pass could not run:`, so `failClassOfReason`
+    // returned undefined for it. Asserting the prefixes are non-empty did not
+    // catch that; asserting they round-trip does.
+    test('every declared prefix is recognised back as its own class', () => {
+        for (const [cls, prefix] of Object.entries(VERIFY_FAIL_PREFIX)) {
+            expect(failClassOfReason(`${prefix} something went wrong`)).toBe(cls as VerifyFailClass)
+        }
+    })
+
+    test('a harness fault carries its class and the registry prefix', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: () => Promise.reject(new Error('spawn ENOENT'))
+        })
+        expect(out.ok).toBe(false)
+        expect(out.failClass).toBe('harness-fault')
+        expect(failClassOfReason(out.reason ?? '')).toBe('harness-fault')
+    })
+
+    test('every class declares a display prefix', () => {
+        const classes: VerifyFailClass[] = [
+            'repo-health',
+            'static-checks',
+            'unobserved',
+            'model-verdict',
+            'harness-fault'
+        ]
+        for (const c of classes) expect(VERIFY_FAIL_PREFIX[c]).toBeTruthy()
+        expect(Object.keys(VERIFY_FAIL_PREFIX).sort()).toEqual([...classes].sort())
+    })
+
+    test('a repo-health FAIL carries its class, not just its prefix', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            repoHealth: async () => ({ok: false, reason: '`bun run lint` exited 1'}),
+            runChild: async () => 'WORK-VERIFIED: PASS'
+        })
+        expect(out.ok).toBe(false)
+        expect(out.failClass).toBe('repo-health')
+        // The wording is byte-frozen — the debt ledger stores it verbatim.
+        expect(out.reason).toBe('repo health: `bun run lint` exited 1')
+    })
+
+    test('an UNOBSERVED FAIL keeps both its flag and its class', async () => {
+        const out = await runWorkVerification({
+            cwd: '/x',
+            spec: 'GOAL\nx',
+            runChild: async () => 'WORK-VERIFIED: UNOBSERVED playwright is not installed'
+        })
+        expect(out.unobserved).toBe(true)
+        expect(out.failClass).toBe('unobserved')
+    })
+
+    test('verifyFailClass prefers the field and falls back to the minted prefix', () => {
+        expect(verifyFailClass({failClass: 'repo-health', reason: 'anything at all'})).toBe(
+            'repo-health'
+        )
+        // A debt read back off disk is a bare string with no outcome attached.
+        expect(verifyFailClass({reason: 'repo health: `make lint` exited 2'})).toBe('repo-health')
+        expect(verifyFailClass({reason: 'work did not verify: nope'})).toBe('model-verdict')
+        expect(verifyFailClass({reason: 'boot check: no listener'})).toBeUndefined()
+        expect(verifyFailClass({})).toBeUndefined()
+    })
+
+    // The run-level twin mints a DIFFERENT literal for the same concept, which is
+    // why `isStaticClassDebt` was structurally blind to every run-level static
+    // failure that reached the ledger.
+    test('the run-level and task-level static failures are the same class', () => {
+        expect(isStaticClass(failClassOfReason('repo health: `bun run lint` exited 1'))).toBe(true)
+        expect(isStaticClass(failClassOfReason('static checks: `make lint` exited 2'))).toBe(true)
+        expect(isStaticClass(failClassOfReason('work did not verify: behavior wrong'))).toBe(false)
+        expect(isStaticClass(failClassOfReason('work unobserved: no playwright'))).toBe(false)
     })
 })

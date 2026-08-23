@@ -38,8 +38,9 @@
  *
  * Ground truth is the file tree only. No model, no network.
  */
-import {readdirSync, readFileSync, statSync} from 'node:fs'
+import {readFileSync} from 'node:fs'
 import * as path from 'node:path'
+import {shippedSources, stripCommentLines, SOURCE_JS_RE} from './shipped-source.js'
 
 export interface ServeEntryFinding {
     /** Repo-relative module that constructs the app and is the natural home for the bind. */
@@ -208,57 +209,10 @@ export function opaqueLauncher(cwd: string): string | null {
     return null
 }
 
-// Directories never scanned: VCS/dep trees, build output (bundled copies of the
-// same sources), and test/fixture/example/doc trees — a test that stands up a
-// throwaway listener is not the app's launch, and a doc snippet is not code.
-const SKIP_DIR_RE =
-    /^(?:\.git|node_modules|\.pi-tasks|dist|build|out|coverage|target|vendor|__pycache__|\.venv|venv|tmp|test|tests|__tests__|__mocks__|__fixtures__|fixtures|e2e|examples|example|docs|doc|bench|benchmarks)$/
-const SKIP_FILE_RE = /\.(?:test|spec|stories|bench)\.[a-z]+$|\.d\.[mc]?ts$/i
-const SCAN_RE = /\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i
-const MAX_SCAN_FILES = 3000
-const MAX_FILE_BYTES = 400_000
-
-/** Authored sources, bounded and in deterministic order. */
-function scanCandidates(cwd: string): string[] {
-    const out: string[] = []
-    const walk = (rel: string): void => {
-        if (out.length >= MAX_SCAN_FILES) return
-        let entries: string[]
-        try {
-            entries = readdirSync(path.join(cwd, rel)).sort()
-        } catch {
-            return
-        }
-        for (const name of entries) {
-            if (out.length >= MAX_SCAN_FILES) return
-            const relPath = rel === '' ? name : `${rel}/${name}`
-            let st
-            try {
-                st = statSync(path.join(cwd, relPath))
-            } catch {
-                continue
-            }
-            if (st.isDirectory()) {
-                if (name.startsWith('.') || SKIP_DIR_RE.test(name)) continue
-                walk(relPath)
-            } else if (st.isFile() && st.size <= MAX_FILE_BYTES) {
-                if (SKIP_FILE_RE.test(name)) continue
-                if (SCAN_RE.test(name)) out.push(relPath)
-            }
-        }
-    }
-    walk('')
-    return out
-}
-
-/** Strip comment-only lines — a `Bun.serve` quoted in a comment is not a bind, and
- *  a commented-out catch-all is not a route. Inline comments are left alone. */
-function stripCommentLines(src: string): string {
-    return src
-        .split('\n')
-        .filter(l => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
-        .join('\n')
-}
+// The tree walk, the caps, the skip sets and the comment strip live in
+// task/shipped-source.ts — this scan and artifact-closure's were the same walker
+// written twice, and their skip sets had drifted apart on `bench`/`benchmarks`.
+const scanCandidates = (cwd: string): string[] => shippedSources(cwd, {ext: SOURCE_JS_RE})
 
 /** A `/…/flags` literal whose body carries a regex METACHARACTER — `[`, `\`, `+`,
  *  `?`, `|`, a group. A path string like `'/api/admin'` has none, so it survives. */

@@ -3,6 +3,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
+    acquirePackage,
     docsRaw,
     docsFocused,
     findDeclaredRange,
@@ -337,6 +338,142 @@ describe('docsRaw auto-install version pinning', () => {
         const npmInstall = h.installArgs.find(a => a.includes('install'))
         expect(npmInstall).toBeDefined()
         expect(npmInstall).toContain('--ignore-scripts')
+        cache.close()
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+})
+
+// ─── acquirePackage: the ladder both call sites now share ────────────────────
+//
+// Package acquisition was written twice — inline in docsRaw for the requested
+// package, and in the redirect-hop path — and the copies disagreed on the
+// abort signal, the version pin and the provenance. These pin the shared ladder
+// directly, which the hop copy's behaviour was never covered by: no test in the
+// repo named `tryResolveOrInstall`, and the suite's pinning assertion held for
+// the primary path only, while the hop silently installed `latest`.
+describe('acquirePackage', () => {
+    function harness() {
+        const installArgs: string[][] = []
+        let calls = 0
+        return {
+            installArgs,
+            resolvePackage: ((name: string, cwd: string) => {
+                calls++
+                if (calls === 1) {
+                    throw new ResolveError('not_installed', `"${name}" not installed in ${cwd}`)
+                }
+                return realResolvePackage('tiny-pkg', FIXTURES)
+            }) as typeof realResolvePackage,
+            spawn: fakeSpawnByPrompt(args => {
+                installArgs.push([...args])
+                return {stdout: '', exitCode: 0}
+            })
+        }
+    }
+
+    test('a HOP install honours the project-declared range, not latest', async () => {
+        // The declaration hop is the one most likely to be declared:
+        // "a project that uses Bun declares `@types/bun`, not `bun`".
+        const dir = makeProjectDir({devDependencies: {'@types/bun': '^1.2.0'}})
+        const h = harness()
+        const got = await acquirePackage({
+            name: '@types/bun',
+            cwd: dir,
+            spawn: h.spawn,
+            resolvePackage: h.resolvePackage,
+            signal: undefined
+        })
+        const npmInstall = h.installArgs.find(a => a.includes('install'))
+        expect(npmInstall).toContain('@types/bun@^1.2.0')
+        expect(got.ok).toBe(true)
+        if (got.ok) {
+            expect(got.autoInstalled).toBe(true)
+            expect(got.pin).toEqual({
+                source: 'declared-range',
+                range: '^1.2.0',
+                asked: '@types/bun'
+            })
+        }
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('reports the acquisition as already-present when no install was needed', async () => {
+        const dir = makeProjectDir({dependencies: {}})
+        const installArgs: string[][] = []
+        const got = await acquirePackage({
+            name: 'tiny-pkg',
+            cwd: dir,
+            spawn: fakeSpawnByPrompt(args => {
+                installArgs.push([...args])
+                return {stdout: '', exitCode: 0}
+            }),
+            resolvePackage: (() => realResolvePackage('tiny-pkg', FIXTURES)) as never,
+            signal: undefined
+        })
+        expect(got.ok).toBe(true)
+        if (got.ok) {
+            expect(got.autoInstalled).toBe(false)
+            expect(got.pin).toBeUndefined()
+        }
+        expect(installArgs).toHaveLength(0)
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    test('names the stage it failed at, so the caller can shape its own error', async () => {
+        const dir = makeProjectDir({dependencies: {}})
+        const failing = await acquirePackage({
+            name: 'left-pad',
+            cwd: dir,
+            spawn: fakeSpawnByPrompt(() => ({stdout: '', stderr: 'E404 not found', exitCode: 1})),
+            resolvePackage: ((name: string) => {
+                throw new ResolveError('not_installed', `"${name}" not installed`)
+            }) as never,
+            signal: undefined
+        })
+        expect(failing.ok).toBe(false)
+        if (!failing.ok) {
+            expect(failing.stage).toBe('install')
+            if (failing.stage === 'install') expect(failing.asked).toBe('left-pad')
+        }
+
+        const badName = await acquirePackage({
+            name: 'Bad Name',
+            cwd: dir,
+            spawn: fakeSpawnByPrompt(() => ({stdout: '', exitCode: 0})),
+            resolvePackage: ((name: string) => {
+                throw new ResolveError('invalid_name', `"${name}" is not a package name`)
+            }) as never,
+            signal: undefined
+        })
+        expect(badName.ok).toBe(false)
+        if (!badName.ok) expect(badName.stage).toBe('resolve')
+        fs.rmSync(dir, {recursive: true, force: true})
+    })
+
+    // docsRaw used to write a bare `undefined` into the signal slot to reach the
+    // fourth positional, so a user cancel during the MAIN npm install of a
+    // model-chosen package was not delivered — while a redirect-hop install
+    // honoured it. Driven through docsRaw because that is the call site that
+    // lost it.
+    test('a cancelled run does not silently complete docsRaw’s own install', async () => {
+        const dir = makeProjectDir({dependencies: {}})
+        const cache = openCache(':memory:')
+        const ac = new AbortController()
+        ac.abort()
+        const h = harness()
+        const r = await docsRaw({
+            pkg: 'left-pad',
+            query: 'x',
+            cwd: dir,
+            signal: ac.signal,
+            openCache: () => cache,
+            npmVersionLookup: async () => null,
+            resolvePackage: h.resolvePackage,
+            spawn: h.spawn
+        })
+        // The fake npm exits 0, so ONLY the delivered abort can fail this install.
+        expect(r.kind).toBe('error')
+        if (r.kind === 'error') expect(r.resolveError).toBe('not_installed')
         cache.close()
         fs.rmSync(dir, {recursive: true, force: true})
     })

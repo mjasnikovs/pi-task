@@ -246,7 +246,7 @@ async function main(): Promise<void> {
         const cache = fs.mkdtempSync(path.join(PROBE_CACHE, 'c-'))
         process.env.XDG_CACHE_HOME = cache
         const t0 = Date.now()
-        const res = await runAutoInstall(spawn as never, t.target, undefined)
+        const res = await runAutoInstall(spawn as never, t.target)
         t.installMs = Date.now() - t0
         t.installOk = res.success
         if (res.success) {

@@ -11,7 +11,7 @@ import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {gateRunTask, markResumable} from './orchestrator.js'
 import {RUN_END_POLICY, runSucceeded} from './run-end.js'
-import {parseClarifyList, parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
+import {parseAutoAnswer, autoAnswerHasTag, deriveTitle} from './parsers.js'
 import {renderInlineMarkdown, stripInlineMarkdown} from './inline-markdown.js'
 import {
     AUTO_CLARIFY_PROMPT,
@@ -19,7 +19,6 @@ import {
     DECOMPOSE_COVERAGE_PROMPT
 } from './auto-prompts.js'
 import {GRILL_AUTO_ANSWER_PROMPT, GRILL_AUTO_FORMAT_HINT} from './prompts.js'
-import {isDuplicateQuestion, MAX_DUP_STRIKES, DUP_REPROMPT_HINT} from './question-dedup.js'
 import {
     allocateAutoId,
     buildAutoBody,
@@ -67,7 +66,11 @@ import {runFinalIntegrationGate, deriveOpenDebts} from './final-gate.js'
 import {spawnCommand} from './command-run.js'
 import {getConfig} from '../config/config.js'
 import {debugLogLevel, shouldLogDebug} from './debug-log.js'
-import {isYoloMode, yoloPickAnswer, YOLO_STAMP} from './yolo.js'
+import {isYoloMode, yoloPickAnswer} from './yolo.js'
+import {QaTranscript, CLARIFY_QA_POLICY} from './qa-transcript.js'
+import {makeQuestionSource} from './question-source.js'
+import {CoverageLedger} from './plan-rounds.js'
+import {CLARIFY_QUALITY_RULES, PLAN_FORMAT_HINT} from './plan-session.js'
 import {configureResearchRun, resumeResearchRun} from '../workers/research-cache.js'
 import {
     CONTRACT_EXTRACT_PROMPT,
@@ -103,7 +106,7 @@ import {
     type RequirementEntry,
     type CoverageAccounting
 } from './requirements.js'
-import {decideAdoption, groundedCoverage, type ScoredPlan} from './coverage-loop.js'
+import {groundedCoverage, type ScoredPlan} from './coverage-loop.js'
 import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
 import {TERMINAL_OUTCOMES, formatAt, formatWhy} from './terminal-outcome.js'
 import {
@@ -267,18 +270,6 @@ function logPlanDebug(cwd: string, msg: string): void {
     fsp.mkdir(dir, {recursive: true})
         .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
         .catch(() => {})
-}
-
-/** Normalise a missing-area string for cross-round identity — lowercased alnum
- *  words, punctuation and quote-wrapping collapsed. Used only to tell whether an
- *  adopted plan introduced a NEW gap versus re-surfacing the same one (#2 bonus
- *  round); intentionally coarse, so trivial rewording of the same area does not
- *  read as new and buy an extra round. */
-function normMissingArea(s: string): string {
-    return s
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim()
 }
 
 /**
@@ -705,42 +696,47 @@ export async function elicitClarifications(
     const {featureForModel, existingFilesBlock, ownableRequirements} = oriented
     const theme = ctx.ui.theme
     const ui = new SessionUI(ctx)
-    const answers: string[] = []
-    // Plain text of every question already shown, for the duplicate backstop.
-    const askedQuestions: string[] = []
+    // ONE record, one numbering, one provenance table (task/qa-transcript.ts).
+    // Clarify's generator DOES see provenance — a question the triage already
+    // settled must read as settled so it is not re-asked — which is the one thing
+    // it and grill genuinely disagree about, and is now a named policy field.
+    const transcript = new QaTranscript(CLARIFY_QA_POLICY)
     // Deterministic guard against a model that ignores "never re-ask": consecutive
     // near-duplicate questions are reprompted with an explicit hint, and once it
     // strikes out (can't produce anything novel) we stop instead of barraging the
     // user with the same decision worded N ways. Also caps the absolute count.
-    let dupStrikes = 0
-    let dupHint: string | null = null
-    // Open-ended: keep asking until the model emits NONE or the user dismisses —
-    // but never past MAX_CLARIFY_QUESTIONS distinct questions.
-    while (askedQuestions.length < MAX_CLARIFY_QUESTIONS) {
-        const qRaw = await deps.runChild(
-            'auto-clarify',
-            'read',
-            prependHint(dupHint, AUTO_CLARIFY_PROMPT(featureForModel, answers.join('\n')))
-        )
-        const parsed = parseClarifyList(qRaw)
-        if (parsed.length === 0) break // NONE / nothing left to ask
-        // Backstop: if the model re-asked a topic already settled, don't surface it.
-        // Reprompt it to move on or finish; give up after MAX_DUP_STRIKES so a model
-        // stuck on one fork can't loop forever.
-        if (isDuplicateQuestion(askedQuestions, stripInlineMarkdown(parsed[0].question))) {
-            dupStrikes++
-            if (dupStrikes >= MAX_DUP_STRIKES) break
-            dupHint = DUP_REPROMPT_HINT
-            continue
-        }
-        dupStrikes = 0
-        dupHint = null
-        const {question, suggested, alt} = parsed[0]
+    // The generate → parse → pick → dedupe → re-prompt state machine is
+    // task/question-source.ts, shared with the plan session. Clarify used to write
+    // its own, and it had drifted from the sibling in five ways — every one of
+    // which the shared source closes for free: `parsed[0]` became `pickQuestion`
+    // (an analysis note is no longer shown as the question, and the SUGGESTED
+    // attached further down is no longer lost), and an unparseable reply now buys
+    // one format re-prompt instead of ending the whole clarify — and decomposing
+    // the feature with ZERO clarifications — on a formatting slip.
+    //
+    // Of plan's three quality rules only the DEFERRAL guard crosses. The other two
+    // cost an extra child call every time they fire, and clarify is the most A/B'd
+    // path here; moving them is its own experiment. See CLARIFY_QUALITY_RULES.
+    const source = makeQuestionSource({
+        generate: hint =>
+            deps.runChild(
+                'auto-clarify',
+                'read',
+                prependHint(hint, AUTO_CLARIFY_PROMPT(featureForModel, transcript.forGenerator()))
+            ),
+        formatHint: PLAN_FORMAT_HINT,
+        rules: CLARIFY_QUALITY_RULES,
+        cap: MAX_CLARIFY_QUESTIONS,
+        log: msg => logPlanDebug(cwd, `clarify: ${msg}`)
+    })
+    for (;;) {
+        const drawn = await source.next()
+        if (drawn.kind === 'exhausted') break
+        const {question, suggested, alt} = drawn.q
         // Render markdown (bold/code) for the displayed prompt; keep plain text
         // for the editable default and the persisted file.
         const shownQ = renderInlineMarkdown(question, theme)
-        const plainQ = stripInlineMarkdown(question)
-        askedQuestions.push(plainQ)
+        const plainQ = drawn.plain
         // PLAN SHAPE is the host's call, not the triage's (mx5 41→11 tasks on the
         // same spec, same base commit, same code — see decompose-granularity.ts).
         // The triage answers this fork for itself in 8/8 live reps and stamps it
@@ -753,10 +749,7 @@ export async function elicitClarifications(
                 cwd,
                 `plan-shape question answered host-side (not the triage): ${plainQ.replace(/\s+/g, ' ').slice(0, 120)}`
             )
-            answers.push(
-                `Q${answers.length + 1}: ${plainQ}\n`
-                    + `A${answers.length + 1}: ${PLAN_SHAPE_ANSWER} (host-set — plan granularity is not left to chance)`
-            )
+            transcript.add('host-set', plainQ, PLAN_SHAPE_ANSWER)
             continue
         }
         // Answer-side triage (grill parity): if the inlined spec already settles
@@ -771,10 +764,7 @@ export async function elicitClarifications(
             plainQ
         )
         if (autoResolved !== null) {
-            answers.push(
-                `Q${answers.length + 1}: ${plainQ}\n`
-                    + `A${answers.length + 1}: ${autoResolved} (auto-resolved — already settled by the spec)`
-            )
+            transcript.add('auto-resolved', plainQ, autoResolved)
             continue
         }
         const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
@@ -788,11 +778,8 @@ export async function elicitClarifications(
             ...(plainAlt !== undefined && {alt: plainAlt})
         })
         if (yolo !== null) {
-            const auto = yolo.kind === 'answer' ? yolo.answer : `(skipped — ${yolo.note})`
-            answers.push(
-                `Q${answers.length + 1}: ${plainQ}\n`
-                    + `A${answers.length + 1}: ${auto} ${YOLO_STAMP}`
-            )
+            if (yolo.kind === 'answer') transcript.add('yolo', plainQ, yolo.answer)
+            else transcript.add('yolo-skip', plainQ, `(skipped — ${yolo.note})`)
             continue
         }
         // The picker cards and the reply mapping are shared with /task's grill
@@ -824,22 +811,19 @@ export async function elicitClarifications(
             announceDone(ctx, '/task-auto cancelled.', 'warning')
             return null
         }
-        const resolved = resolveAnswer(pending, a)
-        // Clarify's transcript records PROVENANCE; grill's deliberately does not,
-        // because grill's is fed back verbatim into the next grill-gen prompt. That
-        // is now the only difference between the two dialogs, and it is one line.
         // An accept covers both routes to it: submitting empty, and pressing the
-        // single green card.
-        const answer =
-            resolved.source === 'accepted' ?
-                `${resolved.answer} (accepted recommendation)`
-            :   resolved.answer
-        answers.push(`Q${answers.length + 1}: ${plainQ}\nA${answers.length + 1}: ${answer}`)
+        // single green card. The suffix is the policy's, not this call site's.
+        const resolved = resolveAnswer(pending, a)
+        transcript.add(
+            resolved.source === 'accepted' ? 'accepted' : 'typed',
+            plainQ,
+            resolved.answer
+        )
     }
-    if (answers.length === 0) {
+    if (transcript.length === 0) {
         ctx.ui.notify('No clarifying questions needed — planning tasks…', 'info')
     }
-    return answers.join('\n')
+    return transcript.forRecord()
 }
 
 /**
@@ -1128,20 +1112,16 @@ export async function coverPlan(
     // It is also the ONLY handle on the accounting. There used to be a second,
     // `let accounting`, carried alongside — see the ScoredPlan doc comment for the
     // requirement-to-wrong-task bug that cost us.
-    let best = await scorePlan(planTitles)
-    let round = 0
-    // #2: the round cap can be lifted ONCE. An adoption is a fresh whole-plan roll,
-    // so the plan that gets adopted can expose an uncovered area the pre-adoption
-    // plan never had — and if that adoption lands on the last allowed round, the
-    // loop breaks before the new gap ever gets a reprompt (mx5 2026-07-16: the
-    // 55-title plan was adopted on the final round AND was the first to reveal §10's
-    // test-infra gap; the cap fired the same instant, so it was never chased). Grant
-    // exactly one bonus round when — and only when — an adoption introduces a NEW
-    // missing area at the cap. Bounded to one so a judge that flags forever still
-    // cannot loop the plan phase; a persistent (non-new) gap never re-triggers it.
-    let roundCap = MAX_COVERAGE_ROUNDS
-    let bonusRoundUsed = false
+    // The record, and the decisions it makes: task/plan-rounds.ts. This was five
+    // locals threaded by closure through a ~90-line loop, plus a
+    // snapshot-before-overwrite pair that existed only because the bonus-round
+    // decision was made downstream from the evidence it needed.
+    const rounds = new CoverageLedger(await scorePlan(planTitles), {
+        cap: MAX_COVERAGE_ROUNDS,
+        hasRequirements
+    })
     for (;;) {
+        const best = rounds.best()
         if (best.plan.titles.length === 0) break
         if (best.plan.missing.length === 0) {
             logPlanDebug(
@@ -1163,8 +1143,8 @@ export async function coverPlan(
             }
             break
         }
-        if (round >= roundCap) break
-        round++
+        if (!rounds.mayRetry()) break
+        const round = rounds.startRound()
         logPlanDebug(
             cwd,
             `decompose-coverage round ${round}: INCOMPLETE — missing: `
@@ -1178,35 +1158,12 @@ export async function coverPlan(
             )
         )
         logPlanDebug(cwd, `decompose retry produced ${retryTitles.length} title(s)`)
-        const cand = await scorePlan(retryTitles)
-        const decision = decideAdoption(best.plan, cand.plan, hasRequirements)
-        if (decision.adopt) {
-            // Snapshot the pre-adoption plan to decide whether this adoption earns a
-            // bonus round. Two guards keep the bonus off generic judge churn: it must
-            // be a real coverage GAIN (grounded covered-set strictly grew — a flaky
-            // judge that just relabels the same-shaped plan's gap does not qualify),
-            // and it must expose a NEW area (a gap already present is one we have or
-            // will reprompt against anyway). Requirements-path only: without grounded
-            // requirements "missing" is pure holistic-judge free-text that can change
-            // every round, so there is no trustworthy "grew"/"new" signal to gate on.
-            const priorCovered = best.plan.covered.size
-            const priorMissing = new Set(best.plan.missing.map(normMissingArea))
-            // The WHOLE scored plan is adopted, titles and accounting together.
-            // This used to be two assignments, and the second one kept the OLD
-            // plan's accounting whenever the new plan's coverage-map child faulted
-            // (`cand.accounting ?? accounting`) — binding requirements to titles
-            // they were never mapped against. See the ScoredPlan doc comment.
-            best = cand
-            logPlanDebug(cwd, `decompose retry ADOPTED — ${decision.reason}`)
-            if (
-                !bonusRoundUsed
-                && round >= roundCap
-                && hasRequirements
-                && cand.plan.covered.size > priorCovered
-                && cand.plan.missing.some(m => !priorMissing.has(normMissingArea(m)))
-            ) {
-                bonusRoundUsed = true
-                roundCap++
+        // Compare, replace the plan WHOLE, and decide the bonus round — one call,
+        // so there is no window in which a snapshot and a replacement disagree.
+        const outcome = rounds.consider(await scorePlan(retryTitles))
+        if (outcome.adopted) {
+            logPlanDebug(cwd, `decompose retry ADOPTED — ${outcome.decision.reason}`)
+            if (outcome.grantedBonusRound) {
                 logPlanDebug(
                     cwd,
                     'decompose-coverage: bonus round granted — adoption grew coverage and '
@@ -1219,9 +1176,9 @@ export async function coverPlan(
             // never sacrificed to a worse regeneration.
             logPlanDebug(
                 cwd,
-                `decompose retry REJECTED — ${decision.reason}`
-                    + (decision.dropped.length > 0 ?
-                        ` [would drop: ${decision.dropped
+                `decompose retry REJECTED — ${outcome.decision.reason}`
+                    + (outcome.decision.dropped.length > 0 ?
+                        ` [would drop: ${outcome.decision.dropped
                             .map(i => `"${reqEntries[i].quote}"`)
                             .join('; ')
                             .slice(0, 200)}]`
@@ -1229,11 +1186,13 @@ export async function coverPlan(
             )
         }
     }
+    const best = rounds.best()
+    const round = rounds.round()
     planTitles = best.plan.titles
     // Exhausted still INCOMPLETE: the best plan ships (the gate is best-effort), but
     // silently shipping a KNOWN-gapped plan is how mx5 run 5 lost its whole test
     // suite — tell the user what is still uncovered.
-    const unresolvedMissing = best.plan.missing.length > 0 ? best.plan.missing : null
+    const unresolvedMissing = rounds.unresolved()
     if (unresolvedMissing !== null) {
         logPlanDebug(
             cwd,
@@ -1599,6 +1558,37 @@ export function requestAutoCancel(): void {
 }
 
 /**
+ * Report a stash pushed during one task and left behind.
+ *
+ * An orphan stash later pops as an unresolvable conflict (mx5 run 6), so the
+ * capture before the task and this check after it are ONE fact. They were a local
+ * and a check ~120 lines and three returns apart, which is how the check came to
+ * run only on the success path. Best-effort: never throws, so it cannot mask the
+ * outcome of the attempt it closes.
+ */
+async function reportStashDrift(
+    active: ExtensionCommandContext,
+    deps: Pick<AutoDeps, 'stashRef'>,
+    cwd: string,
+    id: string,
+    title: string,
+    before: string | null | undefined
+): Promise<void> {
+    if (!deps.stashRef || before === undefined) return
+    try {
+        const after = await deps.stashRef(cwd)
+        if (after === before) return
+        active.ui.notify(
+            `${id}: the git stash stack changed during "${title}" and was left that way — `
+                + 'inspect `git stash list`; an orphan stash later pops as an unresolvable conflict.',
+            'warning'
+        )
+    } catch {
+        // a git failure here is inconclusive, never a report
+    }
+}
+
+/**
  * Announce a terminal /task-auto-overall outcome both in the terminal and to
  * subscribed devices. The push body reuses the exact terminal message, so a
  * backgrounded phone learns the same thing the TUI shows. Used ONLY at the
@@ -1721,136 +1711,135 @@ export async function runAutoLoop(
             // during the task (impl model or any child) and left behind is called
             // out instead of silently waiting to detonate in a later task.
             const stashBefore = deps.stashRef ? await deps.stashRef(cwd) : undefined
-            // SAFE CHECKPOINT (pre-task): the tree is committed and no inner task
-            // is stamped yet, so stopping here just leaves this entry unchecked —
-            // a resume restarts it from scratch. Cheapest possible stop, and the
-            // last one before we commit to a ~30-minute task.
-            if (cancelCheckpoint('pre-task')) {
-                announceDone(
-                    active,
-                    `${id} cancelled before "${next.title}" — resume with /task-auto-resume.`,
-                    'warning'
-                )
-                return
-            }
-            const res = await deps.runTask(active, cwd, next.title, {
-                resumeId,
-                // Fence this step against re-expanding the whole referenced spec:
-                // name the sibling steps so refine bounds this step's slice. Only
-                // matters when refine runs fresh (a resumed task past refine ignores
-                // it), but always supplied so a resume that restarts at refine is
-                // fenced too.
-                planContext: buildStepFence(
-                    entries.map(e => e.title),
-                    next.index
-                ),
-                onStart:
-                    resumeId ? undefined : (
-                        innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)
-                    )
-            })
-            active = res.ctx ?? active
-            // One dispatch over the named ending. The five-branch ladder this
-            // replaces had to ask `isCancelRequested()` — a module global
-            // `/task-cancel` never sets — to tell a user stop from a fault, so a
-            // cancel during a task was announced in red as "stopped … fix and
-            // resume" and the inner file's `cancelled` was overwritten with
-            // `failed`. The runner names the ending now; resumability is
-            // RUN_END_POLICY's; only the wording is this command's.
-            if (!runSucceeded(res.end)) {
-                const policy = RUN_END_POLICY[res.end.kind]
-                // Demote the INNER task file: it reads `completed` from
-                // spec-handoff, and leaving it that way is how a failed run's task
-                // file claimed success in the run 6 audit.
-                if (policy.resumable) await markResumable(cwd, res.taskId)
-                // The PLAN fails only on a fault. A declined-steer interrupt leaves
-                // it in progress so /task-auto-resume re-delivers this task's spec.
-                if (policy.failsRun) await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                const why =
-                    res.end.kind === 'failed' && res.end.reason ?
-                        ` — ${res.end.reason.slice(0, 160)}`
-                    :   ''
-                const msg =
-                    res.end.kind === 'no-session' ?
-                        `${id} paused — could not start a session. Run /task-auto-resume to retry.`
-                    : res.end.kind === 'cancelled' ?
-                        `${id} cancelled during "${next.title}" — resume with /task-auto-resume.`
-                    : res.end.kind === 'interrupted' ?
-                        // The user interrupted implementation (ESC) and then declined
-                        // to steer — they want to stop here. Paused without checking
-                        // the task off, so /task-auto-resume re-delivers this task's
-                        // spec. (A plain ESC followed by steering text never reaches
-                        // here — that loops inside runSingleTask until a turn ends.)
-                        `${id} paused at "${next.title}" — resume with /task-auto-resume.`
-                    :   `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`
-                announceDone(active, msg, policy.level)
-                return
-            }
-            // GATE: actually RUN the task's verification against the just-finished
-            // work, then hold the committed result to AGENTS.md / CLAUDE.md. Shared
-            // verbatim with /task so both commands gate identically — see
-            // runGatesForTask. `done` means the work verified (or was accepted),
-            // was checked off + committed, and enforcement ran; every other kind is
-            // a terminal stop this loop announces with its own /task-auto-resume
-            // wording (the shared gate is command-agnostic).
-            const gate = await runGatesForTask(active, deps, {
-                cwd,
-                taskId: res.taskId,
-                title: next.title,
-                tag: id,
-                // Fence an AUTOFIX re-run against re-expanding the whole spec.
-                planContext: buildStepFence(
-                    entries.map(e => e.title),
-                    next.index
-                ),
-                // res.ok === true means runner.run() completed, so res.taskId is the
-                // allocated TASK_NNNN id (never empty here). The parent task-list
-                // check-off runs after verify passes/accepts and before the commit,
-                // so the commit captures the checked box too.
-                onVerified: () => checkOffTask(cwd, id, next.index, res.taskId, next.title)
-            })
-            active = gate.ctx
-            // Every terminal gate outcome — what to demote, what to fail, what to
-            // say — comes from TERMINAL_OUTCOMES, shared verbatim with /task's
-            // loop. `done` alone is not terminal here: it falls through to the
-            // next task.
-            if (gate.kind !== 'done') {
-                const outcome = TERMINAL_OUTCOMES[gate.kind]
-                if (outcome.markResumable) await markResumable(cwd, res.taskId)
-                if (outcome.failParent) {
-                    await updateTaskFrontMatter(cwd, id, {state: 'failed'})
-                }
-                announceDone(
-                    active,
-                    outcome.message({
-                        tag: id,
-                        at: formatAt(next.title),
-                        why: formatWhy(gate.kind === 'failed' ? gate.reason : undefined),
-                        resumeCmd: '/task-auto-resume'
-                    }),
-                    outcome.level
-                )
-                return
-            }
-            // ROOT-CAUSE REPAIR (mx5 run 14 item 5): the gate may have attributed a
-            // FAIL to a pre-existing defect in a file some OTHER task created. It can
-            // only QUEUE that finding — mutating the plan is this loop's job. Drain
-            // the queue and splice a scoped repair step in right after the step that
-            // just finished, so the defect is fixed BEFORE the next dependent task
-            // trips over it too (run 14 recorded the same `test/teardown.ts` cause
-            // twice, scheduled nothing, and the bug outlived ~24h of the run).
-            await schedulePendingRepairs(cwd, id, next.index, active, deps)
-            // gate.kind === 'done' → fall through to the next task, after checking
-            // no landmine stash was left behind by anything that ran in between.
-            if (deps.stashRef && stashBefore !== undefined) {
-                const stashAfter = await deps.stashRef(cwd)
-                if (stashAfter !== stashBefore) {
-                    active.ui.notify(
-                        `${id}: the git stash stack changed during "${next.title}" and was left that way — `
-                            + 'inspect `git stash list`; an orphan stash later pops as an unresolvable conflict.',
+            try {
+                // SAFE CHECKPOINT (pre-task): the tree is committed and no inner task
+                // is stamped yet, so stopping here just leaves this entry unchecked —
+                // a resume restarts it from scratch. Cheapest possible stop, and the
+                // last one before we commit to a ~30-minute task.
+                if (cancelCheckpoint('pre-task')) {
+                    announceDone(
+                        active,
+                        `${id} cancelled before "${next.title}" — resume with /task-auto-resume.`,
                         'warning'
                     )
+                    return
                 }
+                const res = await deps.runTask(active, cwd, next.title, {
+                    resumeId,
+                    // Fence this step against re-expanding the whole referenced spec:
+                    // name the sibling steps so refine bounds this step's slice. Only
+                    // matters when refine runs fresh (a resumed task past refine ignores
+                    // it), but always supplied so a resume that restarts at refine is
+                    // fenced too.
+                    planContext: buildStepFence(
+                        entries.map(e => e.title),
+                        next.index
+                    ),
+                    onStart:
+                        resumeId ? undefined : (
+                            innerId => stampTaskInProgress(cwd, id, next.index, innerId, next.title)
+                        )
+                })
+                active = res.ctx ?? active
+                // One dispatch over the named ending. The five-branch ladder this
+                // replaces had to ask `isCancelRequested()` — a module global
+                // `/task-cancel` never sets — to tell a user stop from a fault, so a
+                // cancel during a task was announced in red as "stopped … fix and
+                // resume" and the inner file's `cancelled` was overwritten with
+                // `failed`. The runner names the ending now; resumability is
+                // RUN_END_POLICY's; only the wording is this command's.
+                if (!runSucceeded(res.end)) {
+                    const policy = RUN_END_POLICY[res.end.kind]
+                    // Demote the INNER task file: it reads `completed` from
+                    // spec-handoff, and leaving it that way is how a failed run's task
+                    // file claimed success in the run 6 audit.
+                    if (policy.resumable) await markResumable(cwd, res.taskId)
+                    // The PLAN fails only on a fault. A declined-steer interrupt leaves
+                    // it in progress so /task-auto-resume re-delivers this task's spec.
+                    if (policy.failsRun) await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                    const why =
+                        res.end.kind === 'failed' && res.end.reason ?
+                            ` — ${res.end.reason.slice(0, 160)}`
+                        :   ''
+                    const msg =
+                        res.end.kind === 'no-session' ?
+                            `${id} paused — could not start a session. Run /task-auto-resume to retry.`
+                        : res.end.kind === 'cancelled' ?
+                            `${id} cancelled during "${next.title}" — resume with /task-auto-resume.`
+                        : res.end.kind === 'interrupted' ?
+                            // The user interrupted implementation (ESC) and then declined
+                            // to steer — they want to stop here. Paused without checking
+                            // the task off, so /task-auto-resume re-delivers this task's
+                            // spec. (A plain ESC followed by steering text never reaches
+                            // here — that loops inside runSingleTask until a turn ends.)
+                            `${id} paused at "${next.title}" — resume with /task-auto-resume.`
+                        :   `${id} stopped at "${next.title}"${why} — fix and run /task-auto-resume.`
+                    announceDone(active, msg, policy.level)
+                    return
+                }
+                // GATE: actually RUN the task's verification against the just-finished
+                // work, then hold the committed result to AGENTS.md / CLAUDE.md. Shared
+                // verbatim with /task so both commands gate identically — see
+                // runGatesForTask. `done` means the work verified (or was accepted),
+                // was checked off + committed, and enforcement ran; every other kind is
+                // a terminal stop this loop announces with its own /task-auto-resume
+                // wording (the shared gate is command-agnostic).
+                const gate = await runGatesForTask(active, deps, {
+                    cwd,
+                    taskId: res.taskId,
+                    title: next.title,
+                    tag: id,
+                    // Fence an AUTOFIX re-run against re-expanding the whole spec.
+                    planContext: buildStepFence(
+                        entries.map(e => e.title),
+                        next.index
+                    ),
+                    // res.ok === true means runner.run() completed, so res.taskId is the
+                    // allocated TASK_NNNN id (never empty here). The parent task-list
+                    // check-off runs after verify passes/accepts and before the commit,
+                    // so the commit captures the checked box too.
+                    onVerified: () => checkOffTask(cwd, id, next.index, res.taskId, next.title)
+                })
+                active = gate.ctx
+                // Every terminal gate outcome — what to demote, what to fail, what to
+                // say — comes from TERMINAL_OUTCOMES, shared verbatim with /task's
+                // loop. `done` alone is not terminal here: it falls through to the
+                // next task.
+                if (gate.kind !== 'done') {
+                    const outcome = TERMINAL_OUTCOMES[gate.kind]
+                    if (outcome.markResumable) await markResumable(cwd, res.taskId)
+                    if (outcome.failParent) {
+                        await updateTaskFrontMatter(cwd, id, {state: 'failed'})
+                    }
+                    announceDone(
+                        active,
+                        outcome.message({
+                            tag: id,
+                            at: formatAt(next.title),
+                            why: formatWhy(gate.kind === 'failed' ? gate.reason : undefined),
+                            resumeCmd: '/task-auto-resume'
+                        }),
+                        outcome.level
+                    )
+                    return
+                }
+                // ROOT-CAUSE REPAIR (mx5 run 14 item 5): the gate may have attributed a
+                // FAIL to a pre-existing defect in a file some OTHER task created. It can
+                // only QUEUE that finding — mutating the plan is this loop's job. Drain
+                // the queue and splice a scoped repair step in right after the step that
+                // just finished, so the defect is fixed BEFORE the next dependent task
+                // trips over it too (run 14 recorded the same `test/teardown.ts` cause
+                // twice, scheduled nothing, and the bug outlived ~24h of the run).
+                await schedulePendingRepairs(cwd, id, next.index, active, deps)
+            } finally {
+                // EVERY exit from this attempt passes here — the two mid-attempt
+                // returns and a throw included. The check used to sit at the very
+                // end of the fall-through, ~120 lines and three returns below the
+                // capture, so it ran only when the task SUCCEEDED and the gate said
+                // `done`. On a failed or interrupted task the user is told to run
+                // /task-auto-resume, straight onto the landmine the guard exists to
+                // name. The pairing is structural now, not positional.
+                await reportStashDrift(active, deps, cwd, id, next.title, stashBefore)
             }
         }
     } catch (err) {

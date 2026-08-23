@@ -263,6 +263,82 @@ export function sanitizeExtensionWhitelist(value: unknown): string[] {
     return value.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 }
 
+/** The keys whose stored value is a boolean — derived, so a retype is a compile error. */
+type BooleanConfigKey = {
+    [K in keyof PiTaskConfig]: PiTaskConfig[K] extends boolean ? K : never
+}[keyof PiTaskConfig]
+
+/**
+ * A boolean setting's loader. Only a REAL boolean counts; anything else falls
+ * back to the shipped default.
+ *
+ * This is `yoloMode`'s guard, generalised. Its comment — *"a hand-edited
+ * `"yoloMode": "false"` is a truthy string"* — was true verbatim of the other
+ * seven booleans, none of which had it, so a stale `"verifyWork": "off"` reached
+ * `getConfig().verifyWork` as truthy and a `"autoCommit": 0` reached it as falsy.
+ */
+function asBoolean(key: BooleanConfigKey): (raw: unknown) => boolean {
+    return raw => (typeof raw === 'boolean' ? raw : DEFAULT_CONFIG[key])
+}
+
+/**
+ * How each setting's STORED value becomes a safe in-memory value — one loader per
+ * key, keyed on the config's own type.
+ *
+ * `ConfigItem` (config/register.ts) already absorbed three of the four edits its
+ * own header names: *"Adding one enum setting meant four coordinated edits (row,
+ * format arm, parse arm, sanitizer) and NONE of them failed to compile if you
+ * forgot it."* The sanitizer was the fourth, and it stayed behind in this file as
+ * a hand-ordered statement ladder covering 7 of 14 keys. This is the mapped type
+ * that closes it: a new field on `PiTaskConfig` is a compile error until it
+ * declares how a hostile value becomes a safe one.
+ */
+export const CONFIG_LOADERS: {
+    [K in keyof PiTaskConfig]: (raw: unknown) => PiTaskConfig[K]
+} = {
+    remote: asBoolean('remote'),
+    autoCommit: asBoolean('autoCommit'),
+    orientation: asBoolean('orientation'),
+    enforceGuidelines: asBoolean('enforceGuidelines'),
+    verifyWork: asBoolean('verifyWork'),
+    parallelResearchWorkers: asBoolean('parallelResearchWorkers'),
+    researchCache: asBoolean('researchCache'),
+    yoloMode: asBoolean('yoloMode'),
+    // A hand-edited or stale enum value must not leak an unknown provider into
+    // the dispatch switch — fall back to the default.
+    searchProvider: raw => (isSearchProvider(raw) ? raw : DEFAULT_CONFIG.searchProvider),
+    extensionWhitelist: sanitizeExtensionWhitelist,
+    requestTimeoutMs: sanitizeRequestTimeoutMs,
+    commandTimeoutExemptTools: sanitizeCommandTimeoutExemptTools,
+    streamInactivityMs: sanitizeStreamInactivityMs,
+    debugLogs: sanitizeDebugLogs
+}
+
+/**
+ * Turn parsed config JSON into a `PiTaskConfig`. Pure — this is the seam the load
+ * block used to have none of, so every hostile-value case was reachable only
+ * through `getConfig()`, which reads the developer's own machine.
+ *
+ * A non-object `raw` yields the defaults. That is not merely defensive: the old
+ * block spread `parsed` directly, and `{...DEFAULT_CONFIG, ...'ab'}` produces
+ * numeric index keys. Keys absent from the table are dropped rather than carried
+ * into the config object.
+ */
+export function loadConfig(raw: unknown): PiTaskConfig {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        return {...DEFAULT_CONFIG}
+    }
+    const stored = raw as Record<string, unknown>
+    const out = {...DEFAULT_CONFIG}
+    for (const key of Object.keys(CONFIG_LOADERS) as Array<keyof PiTaskConfig>) {
+        // `undefined` reaches the loader like any other hostile value: every
+        // loader answers a missing key with its own default, which is what the
+        // old `delete parsed.X` + spread did.
+        ;(out as Record<string, unknown>)[key] = CONFIG_LOADERS[key](stored[key])
+    }
+    return out
+}
+
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')
 
 type ConfigGlobal = {config: PiTaskConfig; loaded: boolean}
@@ -276,23 +352,7 @@ const G = _g.__piTaskConfig!
 // before any session_start handler fires.
 if (!G.loaded) {
     try {
-        const raw = fs.readFileSync(CONFIG_PATH, 'utf8')
-        const parsed = JSON.parse(raw) as Partial<PiTaskConfig>
-        // A hand-edited or stale enum value must not leak an unknown provider
-        // into the dispatch switch — fall back to the default.
-        if (!isSearchProvider(parsed.searchProvider)) delete parsed.searchProvider
-        parsed.extensionWhitelist = sanitizeExtensionWhitelist(parsed.extensionWhitelist)
-        parsed.requestTimeoutMs = sanitizeRequestTimeoutMs(parsed.requestTimeoutMs)
-        parsed.commandTimeoutExemptTools = sanitizeCommandTimeoutExemptTools(
-            parsed.commandTimeoutExemptTools
-        )
-        parsed.streamInactivityMs = sanitizeStreamInactivityMs(parsed.streamInactivityMs)
-        // A hand-edited `"yoloMode": "false"` is a truthy string — it must not
-        // silently switch a watched run into unattended auto-pick. Only a real
-        // boolean counts; anything else falls back to the OFF default.
-        if (typeof parsed.yoloMode !== 'boolean') delete parsed.yoloMode
-        parsed.debugLogs = sanitizeDebugLogs(parsed.debugLogs)
-        G.config = {...DEFAULT_CONFIG, ...parsed}
+        G.config = loadConfig(JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')))
     } catch {
         G.config = {...DEFAULT_CONFIG}
     }

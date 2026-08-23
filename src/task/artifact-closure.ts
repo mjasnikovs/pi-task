@@ -40,8 +40,9 @@
  * c.notFound()`): an existence guard is exactly how the bug presents (permanent
  * 404), so guarded reads deliberately do NOT step aside.
  */
-import {existsSync, readdirSync, readFileSync, statSync} from 'node:fs'
+import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
+import {shippedSources, stripCommentLines, SOURCE_HTML_RE, SOURCE_JS_RE} from './shipped-source.js'
 
 export interface RuntimeRef {
     /** Repo-relative normalized path (posix separators, no leading ./). */
@@ -116,15 +117,6 @@ const hasExt = (p: string): boolean => /\.[A-Za-z0-9]{1,8}$/.test(path.posix.bas
 /** Source-only extensions nothing ships un-built: a missing one of these is hard
  *  evidence on its own (a script entrypoint like `bun src/server/index.ts`). */
 const SOURCE_ONLY_EXT_RE = /\.(?:ts|tsx|mts|cts|jsx)$/i
-
-/** Strip comment-only lines (`// …`, `* …`) — a ref quoted in a comment is not a
- *  runtime read. Inline comments are left alone (strings may contain `//`). */
-function stripCommentLines(src: string): string {
-    return src
-        .split('\n')
-        .filter(l => !/^\s*(?:\/\/|\*|\/\*)/.test(l))
-        .join('\n')
-}
 
 interface Pattern {
     re: RegExp
@@ -279,7 +271,7 @@ export function collectEmittedHtml(source: string): EmittedHtml[] {
         /\b(?:Bun\.write|writeFileSync|writeFile|fs\.promises\.writeFile)\(\s*(['"`])([^'"`\n]+)\1\s*,\s*/g
     for (let m = writeRe.exec(src); m !== null; m = writeRe.exec(src)) {
         const docPath = normalizeRefPath(m[2])
-        if (docPath === null || !SCAN_HTML_RE.test(docPath)) continue
+        if (docPath === null || !SOURCE_HTML_RE.test(docPath)) continue
         const at = m.index + m[0].length
         let html: string | undefined
         const lit = readLiteral(src, at)
@@ -829,53 +821,22 @@ export function resolveDanglingRefs(
     }
 }
 
-// Directories never scanned for referencing sources: VCS/dep/artifact trees,
-// every discovered produced dir (bundled output re-referencing its own chunks is
-// noise), and test/fixture/doc trees — those reference fixture paths and quoted
-// examples freely and are not the runtime serving surface this guard protects.
-const SKIP_DIR_RE =
-    /^(?:\.git|node_modules|\.pi-tasks|dist|build|out|coverage|target|vendor|__pycache__|\.venv|venv|tmp|test|tests|__tests__|__fixtures__|fixtures|e2e|examples|example|docs|doc)$/
-const SKIP_FILE_RE = /\.(?:test|spec|stories)\.[a-z]+$|\.d\.[mc]?ts$/i
-const SCAN_JS_RE = /\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i
-const SCAN_HTML_RE = /\.html?$/i
-const MAX_SCAN_FILES = 3000
-const MAX_FILE_BYTES = 400_000
-
-/** Walk the tree for scannable sources (bounded, deterministic order). */
+// The tree walk, the caps and the skip sets live in task/shipped-source.ts —
+// this was serve-entry's walker written a second time, and the two skip sets had
+// drifted: `bench`/`benchmarks` and `*.bench.*` were skipped there and scanned
+// here, so a dangling reference in a benchmark was a run-level finding while the
+// same file was invisible to the sibling scan.
+//
+// `producedDirs` stays this scan's own: bundled output re-referencing its own
+// chunks is noise, and which dirs are produced is discovered per run.
 function scanCandidates(cwd: string, prod: ProducedOutputs): string[] {
-    const out: string[] = []
-    const producedDirs = new Set(
+    const producedRoots = new Set(
         [...prod.dirs, ...prod.opaque, ...prod.enumerable.keys()].map(d => d.split('/')[0])
     )
-    const walk = (rel: string): void => {
-        if (out.length >= MAX_SCAN_FILES) return
-        let entries: string[]
-        try {
-            entries = readdirSync(path.join(cwd, rel)).sort()
-        } catch {
-            return
-        }
-        for (const name of entries) {
-            if (out.length >= MAX_SCAN_FILES) return
-            const relPath = rel === '' ? name : `${rel}/${name}`
-            let st
-            try {
-                st = statSync(path.join(cwd, relPath))
-            } catch {
-                continue
-            }
-            if (st.isDirectory()) {
-                if (name.startsWith('.') || SKIP_DIR_RE.test(name)) continue
-                if (rel === '' && producedDirs.has(name)) continue
-                walk(relPath)
-            } else if (st.isFile() && st.size <= MAX_FILE_BYTES) {
-                if (SKIP_FILE_RE.test(name)) continue
-                if (SCAN_JS_RE.test(name) || SCAN_HTML_RE.test(name)) out.push(relPath)
-            }
-        }
-    }
-    walk('')
-    return out
+    return shippedSources(cwd, {
+        ext: new RegExp(`${SOURCE_JS_RE.source}|${SOURCE_HTML_RE.source}`, 'i'),
+        excludeRoots: producedRoots
+    })
 }
 
 /**
@@ -902,7 +863,7 @@ export function findDanglingArtifacts(cwd: string): DanglingRef[] {
         } catch {
             continue
         }
-        if (SCAN_HTML_RE.test(rel)) {
+        if (SOURCE_HTML_RE.test(rel)) {
             refs.push(...extractHtmlRefs(src, rel))
         } else {
             refs.push(...extractJsRefs(src, rel))
@@ -966,7 +927,7 @@ export function collectGeneratedHtmlRefs(cwd: string): {
     const production = discoverProducers(cwd, {excludeDevScripts: true})
     const sources: Array<{rel: string; src: string}> = []
     for (const rel of scanCandidates(cwd, full)) {
-        if (SCAN_HTML_RE.test(rel)) continue
+        if (SOURCE_HTML_RE.test(rel)) continue
         let src: string
         try {
             src = readFileSync(path.join(cwd, rel), 'utf8')

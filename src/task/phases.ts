@@ -111,7 +111,8 @@ import {
     type PhaseDeps
 } from './child-runner.js'
 import {SessionUI} from '../remote/bridge.js'
-import {isYoloMode, yoloPickAutoAnswer, YOLO_STAMP} from './yolo.js'
+import {isYoloMode, yoloPickAutoAnswer} from './yolo.js'
+import {QaTranscript, GRILL_QA_POLICY} from './qa-transcript.js'
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
@@ -144,7 +145,34 @@ export interface PhaseConfig {
     name: PhaseName
     section: string
     field: OutputField
+    /**
+     * The pure, idempotent transform this phase performs on `PhaseContext` fields
+     * OTHER than its own `field` — the phase's CARRY. Mutates `pc` and returns the
+     * trail lines the decision produced; it performs no I/O of its own.
+     *
+     * A carry runs on BOTH arms of the orchestrator loop: before `run` on the live
+     * path, and in place of `run` on the resume path. That is the whole point. A
+     * row's `section` is what resume restores from disk, and it restores exactly
+     * ONE field — so a phase that settles a second field and does not declare it
+     * here silently loses that work on every resume past it. Compose is the case
+     * that matters: it drops constraints research REFUTED from `refined`, critique
+     * re-reads `refined` as GROUND TRUTH under a prompt that says CONSTRAINTS "MUST
+     * be preserved", and `## refined prompt` on disk is deliberately left as refine
+     * wrote it. A resume at critique used to hand the refuted constraint straight
+     * back — the mx5 run-19 defect, restored by the very machinery that closed it.
+     *
+     * The trail is returned rather than written so the replay cannot duplicate a
+     * gate line the live run already recorded.
+     */
+    carry?: (deps: PhaseDeps, pc: PhaseContext) => Promise<string[]>
     run: (deps: PhaseDeps, pc: PhaseContext) => Promise<string>
+    /**
+     * What this phase must do once its output is PERSISTED — after the section
+     * write, so a fault here cannot lose the output. A row field rather than a
+     * `phase.name !== 'refine'` test inside one function, so the compiler can tell
+     * you which rows have a post-commit effect.
+     */
+    postCommit?: (deps: PhaseDeps, pc: PhaseContext, out: string) => Promise<void>
 }
 
 // ─── Tooling helpers ─────────────────────────────────────────────────────────
@@ -1509,8 +1537,11 @@ export async function phaseGrill(
     // nothing ambiguous remains. Kept in sync with /task-auto's clarify dialog.
     const theme = ctx.ui.theme
     const ui = new SessionUI(ctx)
-    const out: string[] = [] // human-facing Q&A transcript (with auto-worker debug lines)
-    const qa: string[] = [] // compact Q&A fed back into the next question
+    // ONE record, two renderings (task/qa-transcript.ts): `forRecord()` is what
+    // compose and critique are handed, `forGenerator()` is what the next grill-gen
+    // call sees. The provenance rule below used to be a comment 12 lines under a
+    // push that broke it.
+    const transcript = new QaTranscript(GRILL_QA_POLICY)
     const askedQuestions: string[] = [] // plain text of each question, for the dup backstop
     // Deterministic backstop against a model that ignores "never re-ask": a
     // near-duplicate question is reprompted (not auto-answered or shown), and after
@@ -1528,7 +1559,7 @@ export async function phaseGrill(
             deps,
             'grill-gen',
             'read',
-            prependHint(genHint, GRILL_GEN_PROMPT(refined, research, qa.join('\n'))),
+            prependHint(genHint, GRILL_GEN_PROMPT(refined, research, transcript.forGenerator())),
             {verb: 'restart'}
         )
         deps.recordSubStep?.('gen', Date.now() - tGenStart)
@@ -1556,12 +1587,9 @@ export async function phaseGrill(
         // for the editable default and the persisted file.
         const shownQ = renderInlineMarkdown(q, theme)
         const plainQ = stripInlineMarkdown(q)
-        out.push(`Q${n + 1}: ${plainQ}`)
 
-        let answer: string
         if (auto.kind === 'answered') {
-            answer = stripInlineMarkdown(auto.text)
-            out.push(`A${n + 1}: ${answer} (auto)`)
+            transcript.add('auto', plainQ, stripInlineMarkdown(auto.text))
         } else {
             const plainSuggested =
                 auto.suggested === undefined ? undefined : stripInlineMarkdown(auto.suggested)
@@ -1573,12 +1601,14 @@ export async function phaseGrill(
             // guard direction, promoting a hallucination is not.
             const yolo = yoloPickAutoAnswer(isYoloMode(), auto)
             if (yolo !== null) {
-                answer =
-                    yolo.kind === 'answer' ?
-                        stripInlineMarkdown(yolo.answer)
-                    :   `(skipped — ${yolo.note})`
-                out.push(`A${n + 1}: ${answer} ${YOLO_STAMP}`)
-                qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer} ${YOLO_STAMP}`)
+                // The YOLO stamp is a RECORD fact. It used to be pushed into the
+                // generator feedback too, against the rule stated a dozen lines
+                // below — the policy now decides, so the two cannot disagree.
+                if (yolo.kind === 'answer') {
+                    transcript.add('yolo', plainQ, stripInlineMarkdown(yolo.answer))
+                } else {
+                    transcript.add('yolo-skip', plainQ, `(skipped — ${yolo.note})`)
+                }
                 continue
             }
             // The picker cards and the reply mapping are shared with /task-auto's
@@ -1608,16 +1638,20 @@ export async function phaseGrill(
                 ...(options && {options})
             })
             if (a === undefined) throw new Error(USER_CANCELLED)
-            // No provenance stamp here, unlike clarify's transcript: this string is
-            // fed back VERBATIM into the next grill-gen prompt, so a
-            // "(accepted recommendation)" suffix would become model input.
-            answer = resolveAnswer(pending, a).answer
-            out.push(`A${n + 1}: ${answer}`)
+            // Grill's generator sees NO provenance — its feedback is fed verbatim
+            // into the next grill-gen prompt, where a suffix would describe how the
+            // answer was obtained rather than what it was. That is
+            // `GRILL_QA_POLICY.generatorSeesProvenance: false`, stated once.
+            const resolved = resolveAnswer(pending, a)
+            transcript.add(
+                resolved.source === 'accepted' ? 'accepted' : 'typed',
+                plainQ,
+                resolved.answer
+            )
         }
-        qa.push(`Q${n + 1}: ${plainQ}\nA${n + 1}: ${answer}`)
     }
-    if (out.length === 0) return '(no questions produced)'
-    return out.join('\n')
+    if (transcript.length === 0) return '(no questions produced)'
+    return transcript.forRecord()
 }
 
 /**
@@ -1647,11 +1681,37 @@ export async function dropRefutedConstraints(
 ): Promise<string> {
     const refuted = applyRefutations(refined, research)
     if (refuted.trail.length === 0) return refined
-    for (const line of refuted.trail) {
-        deps.logDebug?.(`compose: ${line}`)
+    await recordPhaseTrail(deps, 'compose', refuted.trail)
+    return refuted.refined
+}
+
+/**
+ * COMPOSE's carry: the refutation drop, as a `PhaseConfig.carry`.
+ *
+ * Same transform as `dropRefutedConstraints` over the same pure core, minus the
+ * recording — the caller decides whether this application is the live one or a
+ * resume replay. `dropRefutedConstraints` stays exported and unchanged for the
+ * harnesses under `scripts/` that drive the drop directly.
+ */
+export function composeCarry(_deps: PhaseDeps, pc: PhaseContext): Promise<string[]> {
+    // Not `async`, and that is the shape rather than an oversight: this carry
+    // performs no I/O at all, which is what lets the resume path replay it.
+    const refuted = applyRefutations(pc.refined, pc.research)
+    if (refuted.trail.length === 0) return Promise.resolve([])
+    pc.refined = refuted.refined
+    return Promise.resolve(refuted.trail)
+}
+
+/** Write a carry's trail to the debug log and the task file's `## gates` section. */
+export async function recordPhaseTrail(
+    deps: PhaseDeps,
+    phaseName: string,
+    trail: string[]
+): Promise<void> {
+    for (const line of trail) {
+        deps.logDebug?.(`${phaseName}: ${line}`)
         await appendGateRecord(deps.cwd, deps.taskId, line).catch(() => {})
     }
-    return refuted.refined
 }
 
 export async function phaseCompose(
@@ -1912,14 +1972,14 @@ export function grillPhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
 }
 
 /**
- * COMPOSE — drop constraints research REFUTED before composing, then compose.
+ * COMPOSE — compose the spec from the refined task, the research and the Q&A.
  *
- * The drop mutates `p.refined` in place on purpose: the refuted constraint must be
- * gone from every later reader of the refined spec, not just from this call's
- * argument. Critique re-reads it.
+ * The refutation drop that must happen first is compose's declared `carry`
+ * (`composeCarry`), not a line at the top of this function. It settles `p.refined`,
+ * which is not compose's own `field`, so the orchestrator has to replay it on the
+ * resume path too — and a `run` body cannot be replayed.
  */
 export async function composePhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
-    p.refined = await dropRefutedConstraints(d, p.refined, p.research)
     return await phaseCompose(d, p.refined, p.research, p.qa)
 }
 
@@ -1961,12 +2021,49 @@ export async function critiquePhase(d: PhaseDeps, p: PhaseContext): Promise<stri
  * they run in is now asserted by driving the row rather than retyped in a test.
  */
 export const PHASES: PhaseConfig[] = [
-    {name: 'refine', section: 'refined prompt', field: 'refined', run: refinePhase},
+    {
+        name: 'refine',
+        section: 'refined prompt',
+        field: 'refined',
+        run: refinePhase,
+        postCommit: refinePostCommit
+    },
     {name: 'research', section: 'research', field: 'research', run: researchPhase},
     {name: 'grill', section: 'grill Q&A', field: 'qa', run: grillPhase},
-    {name: 'compose', section: 'spec', field: 'spec', run: composePhase},
+    {name: 'compose', section: 'spec', field: 'spec', carry: composeCarry, run: composePhase},
     {name: 'critique', section: 'spec', field: 'spec', run: critiquePhase}
 ]
+
+/**
+ * Run one phase row the way the orchestrator does: carry, then run.
+ *
+ * The row is the interface, so this is the surface a row-driving test crosses —
+ * calling `row.run` alone tests past it and would not have caught a carry that the
+ * resume path drops. The orchestrator adds only persistence, timings and the
+ * checkpoint around this.
+ */
+export async function runPhaseRow(
+    row: PhaseConfig,
+    deps: PhaseDeps,
+    pc: PhaseContext
+): Promise<string> {
+    if (row.carry) await recordPhaseTrail(deps, row.name, await row.carry(deps, pc))
+    return await row.run(deps, pc)
+}
+
+/**
+ * Re-apply one phase row's carry on the RESUME path, where `run` is skipped.
+ *
+ * The trail is discarded: the live run that produced this phase's output already
+ * recorded it on `## gates`, and a replay must not append a second copy.
+ */
+export async function replayPhaseCarry(
+    row: PhaseConfig,
+    deps: PhaseDeps,
+    pc: PhaseContext
+): Promise<void> {
+    await row.carry?.(deps, pc)
+}
 
 // INTEGRATION-DEPTH APPEND (2026-07-27): the lever proposed for this exact site —
 // deterministically append a known-runnable integration command to the VERIFY block
@@ -2013,13 +2110,26 @@ export const PHASES: PhaseConfig[] = [
 // Durable assets kept: both rigs above and their unit tests. Do NOT wire an append here
 // without a command source that satisfies all four properties at once.
 
+/** Dispatch a row's declared post-commit effect. Rows with none do nothing. */
 export async function postCommitPhase(
     phase: PhaseConfig,
     deps: PhaseDeps,
     pc: PhaseContext,
     out: string
 ): Promise<void> {
-    if (phase.name !== 'refine') return
+    await phase.postCommit?.(deps, pc, out)
+}
+
+/**
+ * REFINE's post-commit: derive the task title from the refined prompt, then a short
+ * display label. Runs after the section write, so a fault here cannot lose the
+ * output it reads.
+ */
+export async function refinePostCommit(
+    deps: PhaseDeps,
+    pc: PhaseContext,
+    out: string
+): Promise<void> {
     const title = deriveTitle(out)
     pc.widgetState.title = title
     // Compress the (often paragraph-long) title into a short display label. This

@@ -43,7 +43,7 @@
  * legitimate whole-repo fix that run needed (migrate.ts — frozen by its own
  * producing task). It activates only when a run-GLOBAL freeze source exists.
  */
-import {USER_CANCELLED} from './child-runner.js'
+import {parseFixMarker, runFixChild} from './fix-child.js'
 import type {FinalGateOutcome} from './final-gate.js'
 import {
     findForbiddenDeletions,
@@ -170,14 +170,7 @@ export function buildFinalFixPrompt(failReason: string): string {
  * early-out on a self-declared BLOCKED.
  */
 export function parseFinalFixMarker(text: string): {blocked: boolean; note?: string} {
-    const re = /FINAL-GATE-FIX:\s*(DONE|BLOCKED)\b[ \t]*(.*)/gi
-    let last: RegExpExecArray | null = null
-    for (let m = re.exec(text); m !== null; m = re.exec(text)) last = m
-    if (!last) return {blocked: false}
-    if (last[1].toUpperCase() === 'BLOCKED') {
-        return {blocked: true, note: last[2].trim() || 'no reason given'}
-    }
-    return {blocked: false, note: last[2].trim() || undefined}
+    return parseFixMarker('FINAL-GATE-FIX', text)
 }
 
 /**
@@ -352,18 +345,15 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     // from one that was already sitting in the worktree.
     const ignoredBefore = deps.ignoredSnapshot ? await deps.ignoredSnapshot() : null
 
-    let text: string
-    try {
-        text = await deps.runChild(
-            FINAL_FIX_TOOLS,
-            buildFinalFixPrompt(deps.failReason),
-            deps.signal
-        )
-    } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (msg === USER_CANCELLED) throw err
-        return {ok: false, reason: `fix child failed: ${msg}`}
-    }
+    // The four-rung ladder is task/fix-child.ts, shared with the per-task pass.
+    const end = await runFixChild({
+        runChild: deps.runChild,
+        tools: FINAL_FIX_TOOLS,
+        prompt: buildFinalFixPrompt(deps.failReason),
+        signal: deps.signal,
+        marker: 'FINAL-GATE-FIX'
+    })
+    if (end.kind === 'error') return {ok: false, reason: `fix child failed: ${end.msg}`}
 
     // What the child wrote to gitignored paths. Recorded on the trail IMMEDIATELY —
     // before any guard can reject the attempt — because `discard` reverts tracked
@@ -475,10 +465,9 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         }
     }
 
-    const marker = parseFinalFixMarker(text)
-    if (marker.blocked) {
+    if (end.kind === 'blocked') {
         // Self-declared blocked: skip the (expensive) gate re-run; nothing converged.
-        return withIgnored({ok: false, reason: `fix child blocked: ${marker.note}`})
+        return withIgnored({ok: false, reason: `fix child blocked: ${end.note}`})
     }
 
     const fin = await deps.gate(deps.cwd)

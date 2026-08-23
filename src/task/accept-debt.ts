@@ -29,6 +29,7 @@ import {existsSync} from 'node:fs'
 import * as path from 'node:path'
 import * as fsp from 'node:fs/promises'
 import {runVerifyCommandLine, spawnCommand, type CommandRunner} from './command-run.js'
+import {failClassOfReason, isStaticClass} from './verify-work.js'
 import {taskThatIntroduced} from './task-provenance.js'
 import {makeLedger} from './ledger.js'
 import {parseVerifyBlockStrict} from './spec-validation.js'
@@ -349,7 +350,7 @@ export async function writeAcceptDebts(cwd: string, debts: AcceptDebt[]): Promis
  * behavioral and cannot be proven resolved without re-running the model.
  */
 export function isStaticClassDebt(reason: string): boolean {
-    return /^\s*repo health:/i.test(reason)
+    return isStaticClass(failClassOfReason(reason))
 }
 
 /**

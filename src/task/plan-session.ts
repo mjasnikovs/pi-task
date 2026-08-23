@@ -31,9 +31,8 @@
  */
 
 import type {AskSpec} from '../remote/bridge.js'
-import {parseClarifyList} from './parsers.js'
+import {makeQuestionSource, type QuestionRule} from './question-source.js'
 import {stripInlineMarkdown} from './inline-markdown.js'
-import {isDuplicateQuestion, DUP_REPROMPT_HINT, MAX_DUP_STRIKES} from './question-dedup.js'
 import {yoloPickAnswer} from './yolo.js'
 import {formatPlanTranscript, type PlanEntry} from './plan-io.js'
 import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
@@ -85,30 +84,13 @@ export const PLAN_FORMAT_HINT =
     + 'If nothing is left to ask, output the single token NONE and nothing else. No preamble, '
     + 'no analysis, no other text.]'
 
-/** True when the reply is the deliberate "nothing left to ask" sentinel, as
- *  opposed to output the parser simply could not read. */
-export function isNoneReply(raw: string): boolean {
-    return /^\s*NONE\s*$/m.test(raw)
-}
-
-/**
- * Which of the parsed entries is the actual question.
- *
- * parseClarifyList turns EVERY numbered line into an entry, and the local model
- * sometimes writes a numbered analysis note or two before the question it was
- * asked for (measured live: the first numbered line was a note like
- * "1. gateDebugWriter in orchestrator.ts — wraps a raw append function"). Taking
- * entry 0 blindly then shows the note as the question and loses the SUGGESTED
- * line that was attached further down.
- *
- * The SUGGESTED line is the reliable marker of the real question — the prompt
- * requires exactly one, and parseClarifyList attaches it to the entry it follows.
- * So: prefer the first entry that has one; fall back to the first entry when none
- * does, which is the case the format re-prompt then covers.
- */
-export function pickQuestion<T extends {suggested?: string}>(parsed: T[]): T | undefined {
-    return parsed.find(q => q.suggested !== undefined && q.suggested.length > 0) ?? parsed[0]
-}
+// Re-exported, NOT re-implemented. After the state machine moved to
+// question-source.ts these were byte-identical copies: production read THAT
+// module's, while plan-session.test.ts and four `scripts/live-*.ts` A/B harnesses
+// read these — so a fix to `pickQuestion`'s heuristic would land in one copy while
+// the harnesses kept measuring the other, and the measurement would silently stop
+// describing shipped behaviour. That is the drift class this pass removes.
+export {isNoneReply, pickQuestion} from './question-source.js'
 
 /**
  * Does the question offer the user a choice between two named alternatives?
@@ -198,6 +180,80 @@ export function planForkHint(question: string): string {
         + 'Nothing else.]'
     )
 }
+
+/**
+ * A default that DEFERS decides nothing, and an accepted deferral reaches the
+ * consumer dressed as an authoritative decision.
+ *
+ * Declared as its own constant because it is the one rule BOTH dialogs use, and
+ * `CLARIFY_QUALITY_RULES` referencing it by `id` string would be the retyped
+ * literal with no compile link that this pass exists to remove — a rename would
+ * silently yield `[undefined]` and throw on the first clarify question of every
+ * run.
+ */
+const DEFERRAL_RULE: QuestionRule = {
+    id: 'SUGGESTED deferred the decision',
+    detect: (q, plain) =>
+        q.suggested !== undefined && isDeferralSuggestion(q.suggested) ?
+            planDecisiveHint(plain, q.suggested)
+        :   null,
+    // When only the recommendation defers, the ALT is still a real commitment:
+    // promote it so the question keeps a usable default. With no ALT the option is
+    // DROPPED rather than shown, so an empty submit records an unanswered question
+    // instead of a decision the user never made.
+    repair: q => {
+        const {alt: _alt, suggested: _suggested, ...rest} = q
+        return q.alt !== undefined ? {...rest, suggested: q.alt} : {...rest}
+    }
+}
+
+/**
+ * PLAN's quality rules, in order.
+ *
+ * Each is worth exactly one corrective re-prompt (the child is stateless, so each
+ * hint quotes the question back), and each DEGRADES rather than discards when the
+ * defect survives — a question with a weak default still beats no question.
+ *
+ * Only {@link CLARIFY_QUALITY_RULES} is shared with `/task-auto`, and only the
+ * deferral rule is in it. The other two were MEASURED here (10/15 fork-shaped
+ * questions shipped one option; the SUGGESTED requirement is in both prompts) but
+ * each costs one extra child call every time it fires, and clarify is the most
+ * A/B'd path in the codebase — moving them there is its own experiment, not a
+ * side effect of sharing a state machine. Recorded rather than done.
+ */
+export const PLAN_QUALITY_RULES: ReadonlyArray<QuestionRule> = [
+    {
+        // A question with no SUGGESTED leaves the picker with nothing to
+        // recommend, which is the one thing the prompt says must never happen.
+        id: 'no SUGGESTED',
+        detect: q => (q.suggested === undefined ? PLAN_FORMAT_HINT : null)
+    },
+    DEFERRAL_RULE,
+    {
+        // A fork-shaped question that ships one option leaves the user typing out
+        // the alternative the model itself just named (10/15 measured live).
+        id: 'fork-shaped question with no ALT',
+        detect: (q, plain) =>
+            q.alt === undefined && q.suggested !== undefined && looksLikeFork(plain) ?
+                planForkHint(plain)
+            :   null
+    }
+]
+
+/**
+ * The deferral rule alone — the one clarify shares.
+ *
+ * It exists because an accepted "clarify with the user before proceeding" rode
+ * into `/task`'s handoff AS AN AUTHORITATIVE DECISION and produced a task whose
+ * ACCEPTANCE was "a planning document with placeholder sections" and whose VERIFY
+ * asserted that no source file had changed. Clarify's answers ride into the
+ * decompose prompt and the AUTO file with exactly the same authority and had no
+ * guard at all — the same bug, one command over, waiting.
+ *
+ * It is also the only one of the three that costs nothing on the happy path: a
+ * decisive default never triggers it.
+ */
+export const CLARIFY_QUALITY_RULES: ReadonlyArray<QuestionRule> = [DEFERRAL_RULE]
 
 // ─── Deps ────────────────────────────────────────────────────────────────────
 
@@ -309,12 +365,7 @@ export const ASK_QUESTION =
 
 export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome> {
     const entries: PlanEntry[] = []
-    const asked: string[] = []
     const render = (s: string): string => deps.renderMarkdown?.(s) ?? s
-    let dupStrikes = 0
-    let dupHint: string | null = null
-    /** Set for exactly one corrective re-prompt after a malformed reply. */
-    let formatHint: string | null = null
     /** The model has nothing (more) to ask: NONE, the cap, or the dup backstop. */
     let exhausted = false
     let pending: PendingQuestion | null = null
@@ -324,108 +375,34 @@ export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome
         await deps.onEntries?.(entries)
     }
 
+    const questions = makeQuestionSource({
+        generate: hint => deps.generateQuestion(formatPlanTranscript(entries), hint),
+        formatHint: PLAN_FORMAT_HINT,
+        rules: PLAN_QUALITY_RULES,
+        cap: MAX_PLAN_QUESTIONS,
+        log: msg => deps.logDebug?.(`plan: ${msg}`)
+    })
+
     for (;;) {
         if (pending === null && !exhausted) {
-            if (asked.length >= MAX_PLAN_QUESTIONS) {
-                deps.logDebug?.(`plan: question cap (${MAX_PLAN_QUESTIONS}) reached`)
-                exhausted = true
-                continue
-            }
-            deps.setStatus?.(`thinking of question ${asked.length + 1}…`)
-            const raw = await deps.generateQuestion(
-                formatPlanTranscript(entries),
-                formatHint ?? dupHint
-            )
+            deps.setStatus?.(`thinking of question ${questions.asked().length + 1}…`)
+            const drawn = await questions.next()
             deps.setStatus?.(undefined)
-            const parsed = parseClarifyList(raw)
-            // parseClarifyList returns [] both for a deliberate NONE and for
-            // output it could not parse at all — treating the second as "no
-            // questions left" would end the planning session on a formatting
-            // slip. Tell them apart, and give a malformed reply exactly one
-            // corrective re-prompt (the same one-shot recovery the grill
-            // auto-answer does with GRILL_AUTO_FORMAT_HINT).
-            if (parsed.length === 0) {
-                if (!isNoneReply(raw) && formatHint === null) {
-                    deps.logDebug?.('plan: unparseable question reply — one format re-prompt')
-                    formatHint = PLAN_FORMAT_HINT
-                    continue
-                }
-                deps.logDebug?.('plan: model has no further questions (NONE)')
-                formatHint = null
+            if (drawn.kind === 'exhausted') {
                 exhausted = true
                 continue
             }
-            const picked = pickQuestion(parsed)!
-            const {question, suggested, alt} = picked
-            const plain = stripInlineMarkdown(question)
-            // The duplicate backstop runs BEFORE either quality re-prompt: a
-            // question that is about to be discarded as a re-ask must not first
-            // buy itself an extra child call to be polished.
-            if (isDuplicateQuestion(asked, plain)) {
-                dupStrikes++
-                deps.logDebug?.(`plan: duplicate question, strike ${dupStrikes}/${MAX_DUP_STRIKES}`)
-                formatHint = null
-                if (dupStrikes >= MAX_DUP_STRIKES) {
-                    exhausted = true
-                    continue
-                }
-                dupHint = DUP_REPROMPT_HINT
-                continue
-            }
-            // A question with no SUGGESTED line leaves the picker with nothing to
-            // recommend, which is the one thing the prompt says must never happen.
-            // One-shot recovery; if it still comes back bare we show the question
-            // anyway — a question with no default beats no question.
-            if (suggested === undefined && formatHint === null) {
-                deps.logDebug?.('plan: question had no SUGGESTED — one format re-prompt')
-                formatHint = PLAN_FORMAT_HINT
-                continue
-            }
-            // A default that defers decides nothing, and an accepted deferral
-            // reaches /task dressed as an authoritative decision. One re-prompt to
-            // make it decisive; if it comes back deferring anyway the option is
-            // DROPPED rather than shown, so an empty submit records "(skipped)" —
-            // an unanswered question — instead of a decision the user never made.
-            const defers = suggested !== undefined && isDeferralSuggestion(suggested)
-            if (defers && formatHint === null) {
-                deps.logDebug?.('plan: SUGGESTED deferred the decision — one re-prompt')
-                formatHint = planDecisiveHint(plain, suggested!)
-                continue
-            }
-            // When only the recommendation defers, the ALT is still a real
-            // commitment: promote it so the question keeps a usable default.
-            const usableSuggested = defers ? alt : suggested
-            const usableAlt = defers ? undefined : alt
-            if (defers) {
-                deps.logDebug?.(
-                    usableSuggested === undefined ?
-                        'plan: SUGGESTED still deferred — question shown with no recommendation'
-                    :   'plan: SUGGESTED still deferred — promoted the ALT to the recommendation'
-                )
-            }
-            // A question that offers a choice but ships one option leaves the
-            // user typing out the alternative the model just named. Same one-shot
-            // budget, quoting the question back so the (stateless) child re-asks
-            // this one instead of a new one.
-            if (usableAlt === undefined && formatHint === null && !defers && looksLikeFork(plain)) {
-                deps.logDebug?.('plan: fork-shaped question with no ALT — one re-prompt')
-                formatHint = planForkHint(plain)
-                continue
-            }
-            formatHint = null
-            dupStrikes = 0
-            dupHint = null
-            asked.push(plain)
+            const {question, suggested, alt} = drawn.q
             pending = {
-                plain,
+                plain: drawn.plain,
                 shown: render(question),
-                ...(usableSuggested !== undefined && {
-                    suggested: stripInlineMarkdown(usableSuggested),
-                    shownSuggested: render(usableSuggested)
+                ...(suggested !== undefined && {
+                    suggested: stripInlineMarkdown(suggested),
+                    shownSuggested: render(suggested)
                 }),
-                ...(usableAlt !== undefined && {
-                    alt: stripInlineMarkdown(usableAlt),
-                    shownAlt: render(usableAlt)
+                ...(alt !== undefined && {
+                    alt: stripInlineMarkdown(alt),
+                    shownAlt: render(alt)
                 })
             }
         }
@@ -478,7 +455,7 @@ export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome
             // had run out of questions may now have one. Re-open the generator.
             if (exhausted) {
                 exhausted = false
-                dupStrikes = 0
+                questions.reopen()
             }
             continue // the pending question, if any, is still unanswered
         }
@@ -492,7 +469,7 @@ export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome
             await commit({kind: 'stated', text})
             if (exhausted) {
                 exhausted = false
-                dupStrikes = 0
+                questions.reopen()
             }
             continue
         }

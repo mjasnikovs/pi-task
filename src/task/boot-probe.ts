@@ -295,6 +295,55 @@ export interface BootDeps {
     preferredPort?: () => Promise<number | null>
     /** Does anything answer HTTP on 127.0.0.1:`port`? Injected for tests. */
     httpProbe?: (port: number) => boolean
+    /**
+     * Spawn the boot child. THE SUBJECT of this check, and the one thing `BootDeps`
+     * did not seam.
+     *
+     * Nine fields above inject something the check LOOKS AT; `spawn` was imported
+     * directly, so the ~220-line state machine below — seven locals threaded by
+     * closure, four `BootOutcome` kinds, five exit arms — was reachable only through
+     * a real process on a real clock. Measured: 52 tests / 13.6s, with 300–5000ms
+     * grace windows scripted as real `process.execPath -e` children.
+     *
+     * `BootChild` is defined from what this function CALLS, not from Node's
+     * `ChildProcess` — the same way `driveSession(cdp: CdpLike, …)` was defined from
+     * the two `Cdp` methods it uses. A scripted fake is a dozen lines.
+     */
+    spawnBoot?: (bin: string, args: string[], opts: BootSpawnOptions) => BootChild
+    /**
+     * Tear down the child's whole process group. Injected with `spawnBoot`, because
+     * a fake child has no group to kill and a real `process.kill(-pid)` against a
+     * fake pid would signal something else entirely.
+     */
+    killGroup?: (pid: number, signal: NodeJS.Signals) => void
+}
+
+/** What `runBootCheck` passes to its spawn. */
+export interface BootSpawnOptions {
+    cwd: string
+    detached: true
+    stdio: ['ignore', 'pipe', 'pipe']
+    env: Record<string, string | undefined>
+}
+
+/** A stream the boot check reads output from. */
+export interface BootStream {
+    on: (event: 'data', cb: (chunk: Buffer | string) => void) => void
+}
+
+/**
+ * The boot child, as the check actually uses it: a pid, two output streams, an
+ * `error` event and an `exit` event carrying (status, signal).
+ */
+export interface BootChild {
+    pid?: number | undefined
+    unref?: () => void
+    stdout?: BootStream | null
+    stderr?: BootStream | null
+    on: {
+        (event: 'error', cb: (err: Error) => void): void
+        (event: 'exit', cb: (status: number | null, signal: NodeJS.Signals | null) => void): void
+    }
 }
 
 /** Stamped on a PASS the boot check could not actually observe, so the trail says
@@ -600,6 +649,30 @@ function holderIsOurs(command: string, boot: HealthCommand): boolean {
     )
 }
 
+/** The real spawn. Kept beside the seam so the default is one line to read. */
+function defaultSpawnBoot(bin: string, args: string[], o: BootSpawnOptions): BootChild {
+    return spawn(bin, args, o) as unknown as BootChild
+}
+
+/**
+ * The real group teardown, best-effort. A group already gone is not an error.
+ *
+ * Windows has no process groups / negative-pid kill: `taskkill /T` tears down the
+ * whole tree (the detached child plus any grandchildren it spawned) and `/F`
+ * forces it, so the SIGTERM→SIGKILL escalation collapses to one idempotent call.
+ */
+function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
+    try {
+        if (process.platform === 'win32') {
+            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'])
+        } else {
+            process.kill(-pid, sig)
+        }
+    } catch {
+        // group already gone
+    }
+}
+
 /**
  * Exercise the start command ONCE. For a CLI project (`expectServer` false) the
  * command's own fate within the grace window decides:
@@ -668,8 +741,9 @@ export async function runBootCheck(
     // the runner and carry its directory on PATH so the boot script's own chain
     // can re-invoke it.
     const runner = resolveRunner(bin)
+    const spawnBoot = opts.deps?.spawnBoot ?? defaultSpawnBoot
     return new Promise(resolve => {
-        const child = spawn(runner.bin, args, {
+        const child = spawnBoot(runner.bin, args, {
             cwd,
             detached: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -683,13 +757,17 @@ export async function runBootCheck(
         // runner where the group-kill did not take, hanging the whole `bun test
         // --isolate` run on the leaked child's piped stdio). unref() so a child
         // we already tried to kill can never itself keep this process alive.
-        child.unref()
+        child.unref?.()
         let out = ''
         let err = ''
         let listenerSeen = false
         const cap = (s: string) => (s.length > 8000 ? s.slice(-8000) : s)
-        child.stdout?.on('data', (d: Buffer) => (out = cap(out + String(d))))
-        child.stderr?.on('data', (d: Buffer) => (err = cap(err + String(d))))
+        child.stdout?.on('data', d => {
+            out = cap(out + String(d))
+        })
+        child.stderr?.on('data', d => {
+            err = cap(err + String(d))
+        })
         let settled = false
         const settle = (r: BootOutcome) => {
             if (settled) return
@@ -698,21 +776,14 @@ export async function runBootCheck(
             if (poll) clearInterval(poll)
             resolve(r)
         }
+        const reapGroup = opts.deps?.killGroup ?? defaultKillGroup
         const killGroup = (sig: NodeJS.Signals) => {
-            try {
-                if (!child.pid) return
-                if (process.platform === 'win32') {
-                    // Windows has no process groups / negative-pid kill. taskkill
-                    // /T tears down the whole tree (the detached child plus any
-                    // grandchildren it spawned); /F forces it, so the SIGTERM→
-                    // SIGKILL escalation collapses to one idempotent call.
-                    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'])
-                } else {
-                    process.kill(-child.pid, sig)
-                }
-            } catch {
-                // group already gone
-            }
+            // Truthiness, deliberately: `process.kill(-0, sig)` signals the
+            // CALLER's own process group, so a pid of 0 turns a best-effort
+            // teardown into self-termination. Node's spawn never yields 0, but
+            // `spawnBoot` is a seam now and a fake or future child could.
+            if (!child.pid) return
+            reapGroup(child.pid, sig)
         }
         const passAndKill = (renderNote?: string) => {
             settle(renderNote ? {outcome: 'pass', renderNote} : {outcome: 'pass'})

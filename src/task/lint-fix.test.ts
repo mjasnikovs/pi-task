@@ -6,6 +6,7 @@ import {
     LINT_FIX_TOOLS,
     type LintFixDeps
 } from './lint-fix.js'
+import {USER_CANCELLED} from './child-runner.js'
 
 describe('buildLintFixPrompt', () => {
     test('names the failure, demands smallest edits, and bans discarding work', () => {
@@ -464,4 +465,114 @@ test('runBoundedLintFix: frozen-path trace matches whole path tokens only (tscon
     )
     expect(r.ok).toBe(false)
     expect(r.reason).toMatch(/^did not converge/)
+})
+
+// ─── The BLOCKED rung, and the guard trail ──────────────────────────────────
+//
+// `buildLintFixPrompt` has always instructed the child to end with
+// `LINT-FIX: DONE` / `LINT-FIX: BLOCKED <why>`, and the call site discarded the
+// reply — nothing in src/ or scripts/ parsed it. These tests could not exist
+// while that was true, and the suite's own habit of feeding `'LINT-FIX: DONE'`
+// as fake output is exactly what kept it invisible.
+
+test('a BLOCKED child that did NOT converge reports its OWN reason', async () => {
+    const {git} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            runChild: () =>
+                Promise.resolve('LINT-FIX: BLOCKED the only fix edits a frozen tsconfig'),
+            repoHealth: () => Promise.resolve({ok: false, reason: '`bun run lint` exited 1'})
+        })
+    )
+    expect(r.ok).toBe(false)
+    // The child's own reason, not `did not converge: <health.reason>`.
+    expect(r.reason).toBe('fix child blocked: the only fix edits a frozen tsconfig')
+})
+
+// The marker is scraped last-match-wins from arbitrary child output, and the fix
+// child has bash — so its own command output is in that text. A child can also
+// genuinely converge and THEN block (`eslint --fix` clears the last finding, the
+// model still says BLOCKED). Deciding on the marker alone would send the gate to
+// the picker with a failReason that no longer describes the tree, skipping the
+// re-verify and burning an implementation re-run on findings already gone.
+test('a BLOCKED child whose fix DID converge is still applied — the check decides', async () => {
+    const {git} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    let healthCalls = 0
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            runChild: () => Promise.resolve('LINT-FIX: BLOCKED the generated file is frozen'),
+            repoHealth: () => {
+                healthCalls++
+                return Promise.resolve({ok: true, reason: 'clean'})
+            }
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(healthCalls).toBe(1)
+})
+
+test('BLOCKED is consulted AFTER the guards — a blocked child that discarded work still trips', async () => {
+    // A child can block AND discard. The revert-guard must win, or a blocked
+    // early-out would become a way to leave destroyed work in the tree.
+    const {git} = fakeGit({
+        diff: ['src/a.ts', ''],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    const r = await runBoundedLintFix(
+        makeDeps({git, runChild: () => Promise.resolve('LINT-FIX: BLOCKED gave up')})
+    )
+    expect(r.ok).toBe(false)
+    expect(r.reason).toMatch(/^revert-guard:/)
+})
+
+test('a missing marker is DONE — the re-run stays the arbiter', async () => {
+    const {git} = fakeGit({
+        diff: ['src/a.ts', 'src/a.ts'],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    let healthCalls = 0
+    const r = await runBoundedLintFix(
+        makeDeps({
+            git,
+            runChild: () => Promise.resolve('I fixed the two unused imports.'),
+            repoHealth: () => {
+                healthCalls++
+                return Promise.resolve({ok: true, reason: 'clean'})
+            }
+        })
+    )
+    expect(r.ok).toBe(true)
+    expect(healthCalls).toBe(1)
+})
+
+test('every guard trip writes exactly one log line', async () => {
+    const logs: string[] = []
+    const {git} = fakeGit({
+        diff: ['src/a.ts', ''],
+        'ls-files': ['', ''],
+        'write-tree': ['abc123']
+    })
+    await runBoundedLintFix(makeDeps({git, log: m => logs.push(m)}))
+    expect(logs.filter(l => l.includes('REVERT-GUARD'))).toHaveLength(1)
+})
+
+test('a cancel still propagates rather than becoming a child error', async () => {
+    const {git} = fakeGit({diff: ['', ''], 'ls-files': ['', ''], 'write-tree': ['abc123']})
+    await expect(
+        runBoundedLintFix(
+            makeDeps({git, runChild: () => Promise.reject(new Error(USER_CANCELLED))})
+        )
+    ).rejects.toThrow(USER_CANCELLED)
 })

@@ -19,7 +19,13 @@
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {PHASES, postCommitPhase, type PhaseContext} from './phases.js'
+import {
+    PHASES,
+    postCommitPhase,
+    replayPhaseCarry,
+    runPhaseRow,
+    type PhaseContext
+} from './phases.js'
 import {handleFailure} from './failure-classifier.js'
 import {
     PHASE_INDEX,
@@ -372,6 +378,13 @@ export class TaskRunner {
                 const idx = PHASE_INDEX[phase.name]
                 if (idx < resumeIdx) {
                     this._pc[phase.field] = (await readSection(cwd, id, phase.section)) ?? ''
+                    // A row's `section` restores exactly ONE field. A phase that also
+                    // settles another one declares that as its `carry`, and the replay
+                    // is the only thing standing between a resume and losing it — the
+                    // task file deliberately stores the PRE-carry text for the field
+                    // compose rewrites. Trail lines are discarded: the live run that
+                    // wrote this section already recorded them.
+                    await replayPhaseCarry(phase, this._deps, this._pc)
                     continue
                 }
                 await advance(phase.name)
@@ -381,7 +394,7 @@ export class TaskRunner {
                 const phaseStart = Date.now()
                 let out: string
                 try {
-                    out = await phase.run(this._deps, this._pc)
+                    out = await runPhaseRow(phase, this._deps, this._pc)
                 } finally {
                     const phaseMs = Date.now() - phaseStart
                     this._timings.push({label: phase.name, ms: phaseMs, children})

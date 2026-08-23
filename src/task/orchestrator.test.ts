@@ -390,6 +390,156 @@ VERIFIED-TOOLING
             expect(frontMatter.state).toBe('completed')
         })
     })
+
+    // A resume past COMPOSE replays compose's `carry`. Without it, `p.refined` is
+    // whatever `## refined prompt` holds — which is deliberately the text refine
+    // wrote, refuted constraint and all — and CRITIQUE_PROMPT calls that GROUND
+    // TRUTH whose CONSTRAINTS "MUST be preserved in spirit". The drop that closed
+    // the mx5 run-19 defect was reachable only on the live path.
+    test('resume at critique replays compose’s refutation drop', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const refinedWithRefuted = `GOAL
+Scaffold the project.
+
+CONSTRAINTS
+- Use bun.
+- Add only new entries the task requires (e.g., \`hono\`, \`argon2\`, \`sharp\`).
+
+KNOWN-UNKNOWNS
+- (none)
+`
+            const researchRefuting = `FILES
+${RESEARCH_FILES}
+
+APIS
+${RESEARCH_APIS}
+
+CONTEXT
+- Password hashing uses \`Bun.password\` (built-in argon2id) — no external \`argon2\` dependency needed despite the task's mention of it.
+
+VERIFIED-TOOLING
+  bun run lint
+`
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'critique',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 'Scaffold'
+                },
+                `
+## raw prompt
+
+scaffold
+
+## refined prompt
+
+${refinedWithRefuted.trim()}
+
+## research
+
+${researchRefuting.trim()}
+
+## grill Q&A
+
+(no questions produced)
+
+## spec
+
+${COMPOSE_SPEC.trim()}
+`
+            )
+            let critiquePrompt = ''
+            let composeCalled = false
+            await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: '',
+                resumeId: 'TASK_0001',
+                sendSpec: async () => {},
+                runChild: scriptedChildren({
+                    compose: () => {
+                        composeCalled = true
+                        return COMPOSE_SPEC
+                    },
+                    critique: prompt => {
+                        critiquePrompt = prompt
+                        return COMPOSE_SPEC
+                    }
+                })
+            }).run()
+
+            expect(composeCalled).toBe(false)
+            expect(critiquePrompt).not.toBe('')
+            // The refuted constraint is gone from what critique is handed…
+            expect(critiquePrompt).not.toContain('`argon2`')
+            // …and the rest of that same constraint line survived, so this is the
+            // surgical drop, not a missing refined task.
+            expect(critiquePrompt).toContain('`sharp`')
+            expect(critiquePrompt).toContain('`hono`')
+        })
+    })
+
+    // The live run already wrote the drop to `## gates`. A replay must not append
+    // a second copy — which is why a carry returns its trail instead of writing it.
+    test('the replayed carry does not duplicate the gates trail', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'critique',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 'Scaffold'
+                },
+                `
+## raw prompt
+
+scaffold
+
+## refined prompt
+
+GOAL
+Scaffold.
+
+CONSTRAINTS
+- Add \`argon2\`.
+
+## research
+
+CONTEXT
+- Password hashing uses \`Bun.password\` (built-in argon2id) — no external \`argon2\` dependency needed despite the task's mention of it.
+
+## grill Q&A
+
+(no questions produced)
+
+## spec
+
+${COMPOSE_SPEC.trim()}
+`
+            )
+            await new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: '',
+                resumeId: 'TASK_0001',
+                sendSpec: async () => {},
+                runChild: scriptedChildren({critique: COMPOSE_SPEC})
+            }).run()
+
+            const gates = (await readSection(cwd, 'TASK_0001', 'gates')) ?? ''
+            const drops = gates.match(/constraint refuted by research/g) ?? []
+            expect(drops).toHaveLength(0)
+        })
+    })
 })
 
 describe('runSingleTask', () => {
