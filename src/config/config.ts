@@ -339,7 +339,20 @@ export function loadConfig(raw: unknown): PiTaskConfig {
     return out
 }
 
-const CONFIG_PATH = path.join(os.homedir(), '.config', 'pi-task', 'config.json')
+/**
+ * Where the saved config lives. `PI_TASK_CONFIG_PATH` overrides it.
+ *
+ * The override exists because this module loads the real file at import time,
+ * which made every test that reads a config value depend on the developer's own
+ * `~/.config/pi-task/config.json` — a machine-local `"debugLogs": "off"` failed
+ * 12 tests here while CI (no config file at all) stayed green. The test preload
+ * points this at a path under the tmp dir that never exists, so tests always see
+ * DEFAULT_CONFIG. Read once at module eval: the preload runs before any import.
+ */
+export const CONFIG_PATH_ENV = 'PI_TASK_CONFIG_PATH'
+const CONFIG_PATH =
+    process.env[CONFIG_PATH_ENV]?.trim()
+    || path.join(os.homedir(), '.config', 'pi-task', 'config.json')
 
 type ConfigGlobal = {config: PiTaskConfig; loaded: boolean}
 const _g = globalThis as unknown as Record<string, ConfigGlobal | undefined>
