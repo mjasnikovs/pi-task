@@ -18,7 +18,7 @@ export function getParentContextWindow(ctx: ExtensionCommandContext): number {
 }
 
 /**
- * Fold a raw context_usage snapshot into a display snapshot: prefer the child's
+ * Fold a raw context snapshot into a display snapshot: prefer the child's
  * own contextWindow, else the last known one, else the parent session's; then
  * derive percent against it — falling back to the child's reported percent when
  * no window is known at all.

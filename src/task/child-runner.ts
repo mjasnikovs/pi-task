@@ -234,7 +234,13 @@ export async function runChild(
      * needs the size of what actually entered the child's context, which the
      * CALL alone does not carry (task/stall-detector.ts).
      */
-    onToolResult?: (text: string, isError: boolean) => void
+    onToolResult?: (text: string, isError: boolean) => void,
+    /**
+     * The child's context window in tokens. Nothing in pi's event stream reports
+     * one (issue #16), so the parent hands its own down — children carry no `-m`
+     * and resolve the same default model. 0 / omitted = unknown, as before.
+     */
+    contextWindow?: number
 ): Promise<PhaseRunResult> {
     const invocation = getPiInvocation(childArgs(tools, extensions), prompt)
     let loopHit: LoopHit | undefined
@@ -253,6 +259,7 @@ export async function runChild(
             streamInactivityMs: getConfig().streamInactivityMs,
             onLine,
             onContextUsage,
+            ...(contextWindow && contextWindow > 0 ? {contextWindow} : {}),
             onToolResult: onToolResult ? r => onToolResult(r.text, r.isError) : undefined,
             onToolCall: call => {
                 if (!onToolCall) return null
@@ -303,6 +310,17 @@ interface PhaseDeps {
     signal: AbortSignal
     onChildOutput?: (line: string) => void
     onContextUsage?: (snapshot: ContextSnapshot) => void
+    /**
+     * The parent session's context window in tokens, handed down to every child.
+     *
+     * pi's `--mode json` stream reports token counts but no window (issue #16),
+     * so without this the gauge shows a bare number and — worse — the
+     * StallDetector's CONTEXT CHURN rule, which is gated on a positive window,
+     * can never fire. Children are spawned without `-m` (CHILD_BASE_ARGS) and so
+     * run the parent's own default model; its window is the honest value.
+     * Absent = unknown, and both consumers degrade exactly as they did before.
+     */
+    contextWindow?: number
     /**
      * Record a sub-step duration under the currently running top-level phase.
      * The orchestrator rebinds this between phases so each call lands in the
@@ -532,6 +550,11 @@ export async function runPhaseChild(
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
         const stall = new StallDetector()
+        // Arm the churn rule BEFORE the first tool call. The window used to reach
+        // the detector only through a context snapshot, and pi's stream never
+        // carries one, so it was always 0 and rule 2 never fired (issue #16). The
+        // parent knows the value at spawn time — say it then, not later.
+        stall.noteContext(deps.contextWindow ?? 0)
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
         try {
@@ -542,13 +565,17 @@ export async function runPhaseChild(
                 clock.signal,
                 deps.onChildOutput,
                 snapshot => {
+                    // Real window or nothing: noteContext ignores 0, and until
+                    // deps.contextWindow existed 0 was all it ever saw, which
+                    // left the churn rule permanently disarmed (issue #16).
                     stall.noteContext(snapshot.contextWindow)
                     deps.onContextUsage?.(snapshot)
                 },
                 call => detector.record(call) ?? stall.record(call),
                 deps.spawn,
                 deps.childExtensions,
-                (text, isError) => stall.noteResult(text, isError)
+                (text, isError) => stall.noteResult(text, isError),
+                deps.contextWindow
             )
         } finally {
             clock.cleanup()
@@ -719,7 +746,10 @@ async function runDegradedFinalAttempt(
         deps.onChildOutput,
         deps.onContextUsage,
         undefined,
-        deps.spawn
+        deps.spawn,
+        undefined,
+        undefined,
+        deps.contextWindow
     )
     if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
         throw new LoopExhaustedError(name, loopHistory)

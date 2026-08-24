@@ -234,6 +234,10 @@ export class TaskRunner {
             onChildOutput: (line: string) => {
                 this._widgetState.lastLine = line
             },
+            // Handed DOWN so the child's own snapshot carries a window and the
+            // StallDetector's churn rule can arm; resolveContextUsage below stays
+            // as the fallback for a child that still reports none (issue #16).
+            contextWindow: parentContextWindow,
             onContextUsage: snapshot => {
                 this._widgetState.contextUsage = resolveContextUsage(
                     snapshot,

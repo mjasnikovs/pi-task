@@ -194,12 +194,19 @@ export interface RunWorkerInput {
         toolCallId?: string
     }) => void
     /**
-     * Called for each context_usage snapshot the child emits (same `--mode json`
-     * stream the phase children parse). Lets a caller's status widget show the
-     * tokens/window progress bar for the worker exactly like the phase widget,
-     * instead of omitting it.
+     * Called for each context snapshot derived from the child's `message_end`
+     * events (same `--mode json` stream the phase children parse). Lets a
+     * caller's status widget show the tokens/window progress bar for the worker
+     * exactly like the phase widget, instead of omitting it.
      */
     onContextUsage?: (snapshot: ContextSnapshot) => void
+    /**
+     * The worker child's context window in tokens. pi's event stream carries no
+     * window (issue #16), so a caller that wants a progress bar rather than a
+     * bare token count has to supply the parent session's — which is the child's
+     * too, since workers are spawned without `-m`.
+     */
+    contextWindow?: number
     /**
      * Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS.
      * Pass 0 to disable the timeout entirely (run until the child exits on its
@@ -985,7 +992,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         cmdWatch?.onEnd(r.toolCallId)
                         input.onToolResult?.(r)
                     },
-                    onContextUsage: input.onContextUsage
+                    onContextUsage: input.onContextUsage,
+                    ...(input.contextWindow && input.contextWindow > 0 ?
+                        {contextWindow: input.contextWindow}
+                    :   {})
                 },
                 input.spawn
             )

@@ -21,7 +21,7 @@ import {
     makeProc,
     type SpawnResponse
 } from '../test-utils/fake-spawn.js'
-import type {ProcLike, SpawnFn} from '../shared/child-process.js'
+import type {ContextSnapshot, ProcLike, SpawnFn} from '../shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile, readSection} from './task-io.js'
 import {EventEmitter} from 'node:events'
@@ -553,6 +553,107 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                     {verb: 'restart'}
                 )
             ).rejects.toBeInstanceOf(LoopExhaustedError)
+        })
+    })
+
+    // ─── Context window reaches the child (GitHub issue #16) ────────────────
+    //
+    // pi's `--mode json` stream carries NO context window (verified against the
+    // 0.80.2 and 0.84.2 tarballs and pi's docs/json.md — see
+    // shared/json-event-sink.test.ts). The window is therefore something the
+    // PARENT must hand down, and until it did, every snapshot reported
+    // `contextWindow: 0`. Two things depended on it and both were dead.
+
+    test('the caller-supplied context window reaches the onContextUsage snapshot', async () => {
+        const seen: ContextSnapshot[] = []
+        const spawn = fakeSpawnQueue([
+            {
+                events: [
+                    {
+                        type: 'message_end',
+                        message: {
+                            role: 'assistant',
+                            usage: {input: 900, cacheRead: 100, cacheWrite: 0, output: 0}
+                        }
+                    },
+                    {
+                        type: 'agent_end',
+                        messages: [{role: 'assistant', content: [{type: 'text', text: 'ok'}]}]
+                    }
+                ]
+            }
+        ])
+        const text = await runPhaseChild(
+            {
+                cwd: '/tmp',
+                taskId: 'TASK_TEST',
+                signal: new AbortController().signal,
+                spawn,
+                contextWindow: 10_000,
+                onContextUsage: snap => void seen.push(snap)
+            },
+            'refine',
+            'read',
+            'PROMPT'
+        )
+        expect(text).toBe('ok')
+        expect(seen).toEqual([{tokens: 1000, contextWindow: 10_000, percent: 10}])
+    })
+
+    // StallDetector's CONTEXT CHURN rule (task/stall-detector.ts rule 2) is
+    // gated on `contextWindow > 0`. Fed only zeros it could never fire, so the
+    // documented runaway backstop for a child that keeps re-reading a window it
+    // cannot hold was inert. Window 1000 tokens × CONTEXT_CHURN_FACTOR 2 ×
+    // 4 chars/token = 8000 chars of tool output before it must trip.
+    test('the context-churn stall rule arms once the child knows its window', async () => {
+        await withTmpTaskDir(async cwd => {
+            await writeTaskFile(
+                cwd,
+                {
+                    id: 'TASK_0001',
+                    state: 'in_progress',
+                    phase: 'refine',
+                    created_at: '2026-01-01T00:00:00Z',
+                    updated_at: '2026-01-01T00:00:00Z',
+                    title: 't'
+                },
+                '\n'
+            )
+            // Every call reads a DIFFERENT path returning DIFFERENT bytes, so
+            // rule 1 (no-new-ground) and the LoopDetector both stay silent —
+            // only the churn rule can explain a kill here.
+            const events: Array<Record<string, unknown>> = []
+            for (let i = 0; i < 4; i++) {
+                events.push({
+                    type: 'tool_execution_start',
+                    toolName: 'read',
+                    args: {path: `/f${i}.ts`}
+                })
+                events.push({
+                    type: 'tool_execution_end',
+                    toolName: 'read',
+                    isError: false,
+                    result: {content: [{type: 'text', text: `${i}`.repeat(4000)}]}
+                })
+            }
+            const debug: string[] = []
+            const spawn = fakeSpawnQueue([{events}])
+            await expect(
+                runPhaseChild(
+                    {
+                        cwd,
+                        taskId: 'TASK_0001',
+                        signal: new AbortController().signal,
+                        spawn,
+                        contextWindow: 1000,
+                        logDebug: (msg: string) => void debug.push(msg)
+                    },
+                    'refine',
+                    'read',
+                    'PROMPT'
+                )
+            ).rejects.toBeInstanceOf(LoopExhaustedError)
+            expect(debug.some(l => l.includes('stalled (context-churn)'))).toBe(true)
         })
     })
 

@@ -155,11 +155,29 @@ describe('JsonEventSink', () => {
         expect(s.text).toBe('final')
     })
 
-    test('reports context usage from context_usage events', () => {
+    // ─── Context usage (GitHub issue #16) ────────────────────────────────────
+    //
+    // `context_usage` is NOT, and never was, a pi event. Verified against the
+    // published tarballs: zero occurrences of the string in
+    // @earendil-works/pi-coding-agent AND @earendil-works/pi-agent-core at BOTH
+    // 0.80.2 (the devDependency this handler was written against) and 0.84.2.
+    // pi's own docs/json.md prints the whole wire union — session, agent_*,
+    // turn_*, message_*, tool_execution_*, queue_update, compaction_*,
+    // auto_retry_* — and none of its members carries a context window; the
+    // session header is {type,version,id,timestamp,cwd,parentSession}, and
+    // `contextUsage` exists only as the IN-PROCESS `ctx.getContextUsage()`
+    // extension API, which a `--mode json` child never speaks to its parent.
+    //
+    // So the branch that read `context_usage` was unreachable from the day it
+    // was written, and that is what hid the real defect: the ONLY live path
+    // (`message_end`) reported `contextWindow: 0`, which left
+    // StallDetector.churnTripped() permanently disabled and the widget's gauge
+    // reliant on a downstream substitution.
+    test('ignores a phantom context_usage event — no pi version has ever emitted one', () => {
         const seen: ContextSnapshot[] = []
-        const s = sink({onContextUsage: snap => seen.push(snap)})
-        s.feed(line({type: 'context_usage', tokens: 120, contextWindow: 1000, percent: 12}))
-        expect(seen).toEqual([{tokens: 120, contextWindow: 1000, percent: 12}])
+        const s = sink({contextWindow: 1000, onContextUsage: snap => seen.push(snap)})
+        s.feed(line({type: 'context_usage', tokens: 120, contextWindow: 999, percent: 12}))
+        expect(seen).toEqual([])
     })
 
     test('sums token usage from an assistant message_end', () => {
@@ -175,6 +193,71 @@ describe('JsonEventSink', () => {
             })
         )
         expect(seen).toEqual([{tokens: 22, contextWindow: 0, percent: 0}])
+    })
+
+    test('message_end carries the caller-supplied context window and a derived percent', () => {
+        const seen: ContextSnapshot[] = []
+        const s = sink({contextWindow: 1000, onContextUsage: snap => seen.push(snap)})
+        s.feed(
+            line({
+                type: 'message_end',
+                message: {
+                    role: 'assistant',
+                    usage: {input: 100, cacheRead: 40, cacheWrite: 10, output: 50}
+                }
+            })
+        )
+        expect(seen).toEqual([{tokens: 200, contextWindow: 1000, percent: 20}])
+    })
+
+    test('percent is capped at 100 when reported tokens exceed the window', () => {
+        const seen: ContextSnapshot[] = []
+        const s = sink({contextWindow: 100, onContextUsage: snap => seen.push(snap)})
+        s.feed(
+            line({
+                type: 'message_end',
+                message: {role: 'assistant', usage: {input: 500, output: 0}}
+            })
+        )
+        expect(seen).toEqual([{tokens: 500, contextWindow: 100, percent: 100}])
+    })
+
+    // The exact event sequence pi 0.84.2 puts on stdout for one tool-free turn
+    // (docs/json.md "Output Format"). No `context_usage` anywhere in it — this is
+    // the whole point: the readout must come out of THIS stream, not a phantom.
+    test('a real pi 0.84.2 turn yields a windowed snapshot with no context_usage event', () => {
+        const seen: ContextSnapshot[] = []
+        const s = sink({contextWindow: 250_000, onContextUsage: snap => seen.push(snap)})
+        for (const evt of [
+            {type: 'session', version: 3, id: 'uuid', timestamp: 'ts', cwd: '/repo'},
+            {type: 'agent_start'},
+            {type: 'turn_start'},
+            {type: 'message_start', message: {role: 'assistant', content: []}},
+            {
+                type: 'message_update',
+                usage: {input: 4900, output: 22},
+                assistantMessageEvent: {type: 'text_delta', contentIndex: 0, delta: 'hi'}
+            },
+            {
+                type: 'message_end',
+                message: {
+                    role: 'assistant',
+                    usage: {input: 4900, cacheRead: 0, cacheWrite: 0, output: 22}
+                }
+            },
+            {type: 'turn_end', message: {role: 'assistant'}, toolResults: []},
+            {
+                type: 'agent_end',
+                messages: [{role: 'assistant', content: [{type: 'text', text: 'hi'}]}]
+            },
+            {type: 'agent_settled'}
+        ]) {
+            s.feed(line(evt))
+        }
+        expect(seen).toEqual([
+            {tokens: 4922, contextWindow: 250_000, percent: (4922 / 250_000) * 100}
+        ])
+        expect(s.text).toBe('hi')
     })
 
     test('emits onLine for tool calls with summarized args', () => {

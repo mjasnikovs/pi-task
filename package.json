@@ -32,9 +32,9 @@
         "ws": "8.21.0"
     },
     "devDependencies": {
-        "@earendil-works/pi-agent-core": "0.80.2",
-        "@earendil-works/pi-coding-agent": "0.80.2",
-        "@earendil-works/pi-tui": "0.80.2",
+        "@earendil-works/pi-agent-core": "0.84.2",
+        "@earendil-works/pi-coding-agent": "0.84.2",
+        "@earendil-works/pi-tui": "0.84.2",
         "@eslint/js": "10.0.1",
         "@types/bun": "1.3.12",
         "@types/qrcode": "1.5.6",

@@ -46,13 +46,21 @@ export class ChildStatus {
         this._startLoader = deps.startLoader ?? startAutoLoader
     }
 
+    /**
+     * The parent session's window — the value handed DOWN to each child so its
+     * own readout carries one, and the last fallback when a child reports none.
+     */
+    get parentContextWindow(): number {
+        return this._parentContextWindow
+    }
+
     /** The child's latest stream line. Bind as `onChildOutput` / `onLine`. */
     onLine(line: string): void {
         this._lastLine = line
     }
 
     /**
-     * Fold a raw context_usage snapshot into the gauge: the child's own window,
+     * Fold a raw context snapshot into the gauge: the child's own window,
      * else the last known one, else the parent's (`resolveContextUsage`).
      */
     onContextUsage(snapshot: ContextSnapshot): void {
@@ -144,12 +152,16 @@ export async function runPlanningChild(opts: {
     )
 }
 
-/** Wire a `ChildStatus` as a phase child's stream callbacks. */
+/**
+ * Wire a `ChildStatus` as a phase child's stream callbacks — plus the window the
+ * child must be TOLD, since pi's event stream never reports one (issue #16).
+ */
 export function statusCallbacks(
     status: ChildStatus
-): Pick<PhaseDeps, 'onChildOutput' | 'onContextUsage'> {
+): Pick<PhaseDeps, 'onChildOutput' | 'onContextUsage' | 'contextWindow'> {
     return {
         onChildOutput: line => status.onLine(line),
-        onContextUsage: snapshot => status.onContextUsage(snapshot)
+        onContextUsage: snapshot => status.onContextUsage(snapshot),
+        contextWindow: status.parentContextWindow
     }
 }

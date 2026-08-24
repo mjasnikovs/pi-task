@@ -107,18 +107,31 @@ describe('runChild json-events mode', () => {
         expect(lines).toContain('bash: ls -la')
     })
 
-    test('emits onContextUsage on context_usage event', async () => {
-        const events = [{type: 'context_usage', tokens: 1000, contextWindow: 200000, percent: 0.5}]
+    // Issue #16: this used to feed a `context_usage` event, which no released pi
+    // has ever emitted. `message_end` is the real (and only) readout, and the
+    // window comes from the caller because the stream carries none.
+    test('emits onContextUsage from message_end, windowed by the caller', async () => {
+        const events = [
+            {
+                type: 'message_end',
+                message: {
+                    role: 'assistant',
+                    usage: {input: 900, cacheRead: 100, cacheWrite: 0, output: 0}
+                }
+            }
+        ]
         const stdout = events.map(e => JSON.stringify(e) + '\n').join('')
         const spawn = fakeSpawnSimple(stdout)
         const snapshots: Array<{tokens: number; contextWindow: number; percent: number}> = []
         await runChild(spawn, noopInvocation, '/tmp', undefined, {
             mode: 'json-events',
+            contextWindow: 200_000,
             onContextUsage: s => snapshots.push(s)
         })
         expect(snapshots).toHaveLength(1)
         expect(snapshots[0].tokens).toBe(1000)
-        expect(snapshots[0].contextWindow).toBe(200000)
+        expect(snapshots[0].contextWindow).toBe(200_000)
+        expect(snapshots[0].percent).toBe(0.5)
     })
 
     test('parses an event whose JSON is split across two data chunks', async () => {

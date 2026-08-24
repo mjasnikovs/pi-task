@@ -146,6 +146,25 @@ export interface RunChildJsonEventsOptions {
     mode: 'json-events'
     onLine?: (line: string) => void
     onContextUsage?: (snapshot: ContextSnapshot) => void
+    /**
+     * The child's context window in tokens, supplied BY THE CALLER — pi's event
+     * stream does not carry one (GitHub issue #16).
+     *
+     * Verified against the published tarballs of @earendil-works/pi-coding-agent
+     * and @earendil-works/pi-agent-core at 0.80.2 and 0.84.2, and against pi's
+     * own docs/json.md: the wire union is session / agent_* / turn_* / message_*
+     * / tool_execution_* / queue_update / compaction_* / auto_retry_*, the
+     * session header is {type,version,id,timestamp,cwd,parentSession}, and no
+     * member of either carries a window or even a model id. `contextUsage`
+     * exists ONLY as the in-process `ctx.getContextUsage()` extension API, which
+     * a `--mode json` child never speaks back to its parent.
+     *
+     * The parent therefore has to say. Children are spawned without `-m`
+     * (CHILD_BASE_ARGS), so they resolve the same default model the parent runs
+     * and the parent session's window is the honest answer. 0 / omitted keeps
+     * the old behaviour: report the token count with no window.
+     */
+    contextWindow?: number
     onToolCall?: (call: ToolCall) => LoopHit | null
     /**
      * Fires when a tool call finishes, carrying its RESULT (mx5 run 10 item 6: the
@@ -260,16 +279,12 @@ export class JsonEventSink {
         const opts = this.opts
         const t = typeof evt.type === 'string' ? evt.type : ''
 
-        if (t === 'context_usage' && opts.onContextUsage) {
-            const tokens = Number(evt.tokens ?? 0)
-            const contextWindow = Number(evt.contextWindow ?? 0)
-            const percent = Number(evt.percent ?? 0)
-            if (tokens > 0 || contextWindow > 0) {
-                opts.onContextUsage({tokens, contextWindow, percent})
-            }
-            return
-        }
-
+        // `message_end` is the ONLY context readout pi gives a `--mode json`
+        // child's parent. There used to be a `context_usage` branch above this
+        // one that was preferred over it; no released pi has ever emitted such
+        // an event (see `contextWindow` on RunChildJsonEventsOptions), so it was
+        // unreachable, and its presence is what made the zero window below look
+        // like a harmless fallback rather than the only path. Issue #16.
         if (t === 'message_end' && opts.onContextUsage) {
             const msg = evt.message as Record<string, unknown> | undefined
             if (msg?.role === 'assistant') {
@@ -281,7 +296,9 @@ export class JsonEventSink {
                         + Number(usage.cacheWrite ?? 0)
                         + Number(usage.output ?? 0)
                     if (tokens > 0) {
-                        opts.onContextUsage({tokens, contextWindow: 0, percent: 0})
+                        const cw = Math.max(0, Number(opts.contextWindow ?? 0))
+                        const percent = cw > 0 ? Math.min(100, (tokens / cw) * 100) : 0
+                        opts.onContextUsage({tokens, contextWindow: cw, percent})
                     }
                 }
             }

@@ -200,7 +200,10 @@ export function makeGateChild(
                                 )
                         }
                     :   {}),
-                    onContextUsage: snapshot => deps.status.onContextUsage(snapshot)
+                    onContextUsage: snapshot => deps.status.onContextUsage(snapshot),
+                    // The gate child has to be TOLD its window: nothing in pi's
+                    // event stream reports one (issue #16).
+                    contextWindow: deps.status.parentContextWindow
                 })
             } finally {
                 // Restore whatever the child moved BEFORE any verdict or failure is

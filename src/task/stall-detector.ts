@@ -38,6 +38,11 @@
  *      rule 1 alone would not have caught it. The bound scales with the model's
  *      OWN window, so a 1M-context model gets a 1M-context allowance.
  *
+ *      The window is supplied by the PARENT at spawn (`PhaseDeps.contextWindow`),
+ *      not read off the child's event stream: pi emits no context event at all,
+ *      which is why this rule sat disarmed from the day it was written until
+ *      GitHub issue #16.
+ *
  * Neither rule can fire on a child that is thinking rather than calling tools:
  * that case is bounded by the model's max tokens (server-enforced) and by the
  * stream watchdog if the stream goes silent. Between the three there is no
