@@ -144,20 +144,33 @@ export function startWidget(
     getState: () => WidgetState | null
 ): () => void {
     if (!ctx.hasUI) return () => {}
+    // `ctx.ui` THROWS once the ctx goes stale (/reload, session replacement), so
+    // the theme read belongs INSIDE the guard, not one line above it. render()
+    // runs from a timer, where an unguarded throw is an uncaughtException that
+    // kills the whole pi process — and a swallowed one would throw again on
+    // every tick, so a stale ctx latches and stops the timer. Issue #15.
+    let stale = false
     const render = () => {
+        if (stale) return
         const s = getState()
-        const lines = s ? buildWidgetLines(s, ctx.ui.theme) : undefined
-        const plain = s ? buildWidgetLines(s, undefined) : undefined // un-themed for the wire
+        const plain = s ? buildWidgetLines(s, undefined) : undefined // un-themed for the wire; needs no ctx
         try {
+            const lines = s ? buildWidgetLines(s, ctx.ui.theme) : undefined
             ctx.ui.setWidget(WIDGET_KEY, lines)
         } catch {
-            /* stale ctx */
+            stale = true
+            clearInterval(timer)
+            return
         }
         setTaskWidget(plain, s ? buildWidgetData(s) : null)
     }
-    render()
+    // The timer is created BEFORE the first render so `timer` is always bound
+    // when render's catch reaches for it: a ctx already stale on the very first
+    // paint now stops the loop there, instead of arming an interval that wakes
+    // up and returns early forever.
     const timer = setInterval(render, WIDGET_REFRESH_MS)
     ;(timer as unknown as {unref?: () => void}).unref?.()
+    render()
     return () => {
         clearInterval(timer)
         try {
@@ -251,20 +264,30 @@ export function startAutoLoader(
     getState: () => AutoLoaderState | null
 ): () => void {
     if (!ctx.hasUI) return () => {}
+    // Same staleness hazard as startWidget: the theme read must sit inside the
+    // guard, and a stale ctx stops the timer rather than throwing every tick.
+    let stale = false
     const render = () => {
+        if (stale) return
         const s = getState()
-        const lines = s ? buildAutoLoaderLines(s, ctx.ui.theme) : undefined
-        const plain = s ? buildAutoLoaderLines(s, undefined) : undefined
+        const plain = s ? buildAutoLoaderLines(s, undefined) : undefined // needs no ctx
         try {
+            const lines = s ? buildAutoLoaderLines(s, ctx.ui.theme) : undefined
             ctx.ui.setWidget(AUTO_WIDGET_KEY, lines)
         } catch {
-            /* stale ctx */
+            stale = true
+            clearInterval(timer)
+            return
         }
         setTaskWidget(plain, s ? buildAutoLoaderData(s) : null)
     }
-    render()
+    // The timer is created BEFORE the first render so `timer` is always bound
+    // when render's catch reaches for it: a ctx already stale on the very first
+    // paint now stops the loop there, instead of arming an interval that wakes
+    // up and returns early forever.
     const timer = setInterval(render, WIDGET_REFRESH_MS)
     ;(timer as unknown as {unref?: () => void}).unref?.()
+    render()
     return () => {
         clearInterval(timer)
         try {
@@ -327,7 +350,13 @@ export function flashTerminalWidget(
     reason: string | undefined
 ): void {
     if (!ctx.hasUI) return
-    const theme = ctx.ui.theme
+    // Same staleness hazard as the render timers: bail rather than throw.
+    let theme: WidgetTheme
+    try {
+        theme = ctx.ui.theme
+    } catch {
+        return
+    }
     let line: string
     let clearMs: number
     if (state === 'cancelled') {
