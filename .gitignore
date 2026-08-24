@@ -22,3 +22,7 @@ nexttask*.md
 # scripts/boot-skip-verdict-ab.ts writes next to the real one so the baseline
 # arm's relative imports resolve. Created and deleted per run; never committed.
 src/task/final-gate.baseline.gen.ts
+
+# Run state written by /task INTO this repo when pi-task is developed on
+# itself. Specs, debug logs, and env notes for a run — never source.
+.pi-tasks/
