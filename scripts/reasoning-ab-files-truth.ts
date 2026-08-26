@@ -86,22 +86,48 @@ import {isEntryLine} from '../src/workers/pi-worker-core.js'
 import {MX5, type ImplTask, implTasks} from './impl-ab-corpus.js'
 
 /**
+ * A `<path>: <one-line purpose>` entry — ONE space after a colon.
+ *
+ * The prompt specifies TWO spaces, and the recorded corpus obeys it on all 470
+ * paths across 56 tasks. A LIVE child does not: in the 12-rep run three `off`
+ * trials wrote every entry as `src/client/main.tsx: App root`, and the two-space
+ * splitter took the description with it. TASK_0053 scored 0/19 with all 19 paths
+ * real. This is BLOCKER 5 item 1 a second time — the screen reads a CLEAN
+ * recorded section and the trial reads the child's raw turn, and a rule tuned on
+ * one input is not a rule until it has met the other.
+ *
+ * NARROW ON PURPOSE, in the strict direction. The first token must LOOK like a
+ * path — contain a `/` or a `.` — so `Note: this matters` stays prose instead of
+ * becoming an invented path called `Note`. A colon-and-space is a common prose
+ * shape, and a scorer that reads prose as a path is the loose failure that is
+ * harder to spot than a strict one.
+ */
+const COLON_ENTRY = /^((?=[^\s:]*[/.])[A-Za-z0-9._@][\w./@+-]*(?::\d+)?):\s+\S/
+
+/**
  * Every path a FILES section names, one per line.
  *
  * The format its own prompt specifies is `<path>[:<line>]  <one-line purpose>`,
  * so the path is everything up to the first run of whitespace, minus a trailing
  * `:<digits>` line anchor. A bare `:` suffix that is NOT digits is left alone —
  * TASK_0001 emitted `package.json:/workspace`, and silently trimming that would
- * turn a malformed entry into a passing one.
+ * turn a malformed entry into a passing one. {@link COLON_ENTRY} handles the
+ * one-space variant a live child really emits.
  */
 export function filesPaths(section: string): string[] {
     const out: string[] = []
     for (const raw of section.split('\n')) {
-        const line = raw.trim()
-        if (line === '') continue
+        const trimmed = raw.trim()
+        if (trimmed === '') continue
         // A bare section heading is not an entry. FILES output carries none by
         // contract ("No section header"), but a recorded section keeps its own.
-        if (/^[A-Z][A-Z -]*$/.test(line)) continue
+        if (/^[A-Z][A-Z -]*$/.test(trimmed)) continue
+        const line = trimmed.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
+        const colon = COLON_ENTRY.exec(line)
+        if (colon) {
+            out.push(colon[1]!.replace(/:\d+$/, ''))
+            continue
+        }
         // AND NEITHER IS PROSE. The screen reads a CLEAN recorded section; the
         // live child returns its whole raw turn, preamble and leaked tool-call
         // tags included. Taking every line's first field made `</tool_call>` and
@@ -110,10 +136,7 @@ export function filesPaths(section: string): string[] {
         // Production's own entry test decides it, so the two inputs are read by
         // one rule — see [[ab-scorer-must-match-the-real-prompt]].
         if (!isEntryLine(line)) continue
-        const first = line
-            .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
-            .split(/\s{2,}|\t|\s+[—–-]\s+/)[0]
-            ?.trim()
+        const first = line.split(/\s{2,}|\t|\s+[—–-]\s+/)[0]?.trim()
         if (!first) continue
         out.push(first.replace(/:\d+$/, ''))
     }

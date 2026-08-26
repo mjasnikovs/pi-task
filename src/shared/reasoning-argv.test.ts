@@ -104,7 +104,7 @@ describe('what the shipped table puts on the wire', () => {
      * the point: it is the diff a reader wants to see beside a new measurement.
      */
     const EXPECTED: Readonly<Record<string, string[]>> = {
-        research: [],
+        research: ['--thinking', 'off'],
         phase: [],
         planning: [],
         plan: [],

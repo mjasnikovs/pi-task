@@ -138,40 +138,57 @@ export const REASONING_ON_LEVEL: GroupSetting = 'medium'
  * the Qwen3.8 result generalises.
  */
 export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetting>> = {
-    // MEASURED 2026-08-26 and DELIBERATELY NOT WRITTEN. n=10/arm, same model and
-    // build as `gate`. The axis is "every path the FILES answer names exists in
-    // the tree the task shipped", which the recorded answers clear on 50 of 56
-    // tasks — a bar real work meets. Both arms scored 10/10, and the ladder now
-    // bars a saturated axis from reaching rung 2.
+    // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
+    // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=12/arm over 12
+    // distinct mx5 tasks. off 10/12 vs medium 11/12 (p=1.0000); neither arm
+    // failed to answer. Wall clock, PAIRED by stimulus over the 10 pairs usable
+    // in both arms: p=0.7090, mean off 79.4s vs medium 59.3s.
+    // off real+edited-named 95% CI [0.55, 0.95].
+    // RUNG 3 — a DECISION, not a finding. Nothing separated the arms on either
+    // axis, and off carries it by the stated prior: thinking that buys nothing
+    // measurable is not worth its tokens. At 12 pairs an absent effect and an
+    // undetected one look the same from here. Ledger: ledger-research.jsonl.
     //
-    // Barring it was right, and here is what the ceiling was hiding. The clock,
-    // paired, says medium is 1.65x faster (p=0.0215) — which would have been
-    // rung 2 for medium. But the axis is PRECISION ONLY: off named 119 real
-    // paths to medium's 70, more in 9 of 10 tasks and never fewer, both arms
-    // 100% precise. Medium is faster because it says less, and this scorer
-    // cannot weigh that. Whether saying less is worse is also unsettled — both
-    // arms name far more than the recorded answers' 37 — so there is no finding
-    // here in either direction, only a confound.
+    // THE AXIS IS THE CONJUNCTION, built for this run: every path the answer
+    // names is real AND every pre-existing file the task edited is named
+    // (`filesAnswered`, scripts/reasoning-ab-files-truth.ts). Recall truth is
+    // the shipped tree, not the recorded answer. Screened offline: restricted
+    // to pre-existing files the recorded answers score 86.6% (71/82 paths, 29
+    // of 38 tasks perfect); counting CREATED files instead drops them to 49.0%
+    // and the CHECK loses, so a file that does not exist yet is not truth.
+    // It is NOT saturated here — 10/12 and 11/12, with genuine judgement errors
+    // in both arms — so the clock was allowed to decide and declined to.
     //
-    // THE AXIS NOW WEIGHS RECALL TOO, and the ledger above CANNOT be rescored
-    // onto it. Built 2026-08-26: `filesAnswered` is the conjunction of "every
-    // path named is real" and "every pre-existing file the task edited is
-    // named", the second half taken from the shipped tree rather than from the
-    // recorded answer. Screened offline with no GPU — restricted to
-    // pre-existing files the recorded answers score 86.6% (71/82 paths, 29 of
-    // 38 tasks perfect), a bar real work meets; counting CREATED files instead
-    // drops them to 49.0% and the CHECK loses, so a file that does not exist
-    // yet is not truth.
-    // The stimuli had to move with it. The precision screen kept the first ten
-    // passing tasks — TASK_0002..0012, the greenfield head of the mx5 run — and
-    // SEVEN OF THOSE TEN EDIT NO PRE-EXISTING FILE AT ALL. That run measured
-    // recall where recall does not exist, which is why rescoring it abstains
-    // rather than returning a number. 12 tasks clear both halves with >=2
-    // edited files (27 with >=1); 8 more are dropped because the recorded
-    // answer itself misses an edited file, which is where the headroom is.
-    // STILL `inherit`: the axis is built and screened, not yet run. Ledger:
-    // ledger-research.jsonl, precision-only, `--axis precision` to reproduce.
-    research: 'inherit',
+    // THE STIMULI ARE HALF THE AXIS. The superseded precision-only run
+    // (ledger-research.PRECISION-ONLY-10rep.jsonl, `--axis precision` to
+    // reproduce) tied 10/10 on TASK_0002..0012, the greenfield head of the mx5
+    // run — SEVEN OF THOSE TEN EDIT NO PRE-EXISTING FILE AT ALL, so it measured
+    // recall where recall does not exist. `filesRecallStimuli` screens for it;
+    // these 12 tasks each edit >=2 pre-existing files. That ledger CANNOT be
+    // rescored onto this axis and the rescorer abstains rather than return a
+    // number.
+    //
+    // INSTRUMENT NOTE, because this cell read `off 8/12` before it. `filesPaths`
+    // split an entry on TWO spaces, which is what the prompt specifies and what
+    // all 470 recorded paths use. Three live `off` trials wrote
+    // `src/client/main.tsx: App root` — one space after a colon — so the
+    // description was taken as part of the path and TASK_0053 scored 0/19 with
+    // all 19 paths real. Fixed by `COLON_ENTRY`; rescored from stored text with
+    // no GPU, 2 of 24 trials changed side, and the known-good answer is
+    // unmoved (53/56 whole-corpus precision, identical path counts). This is
+    // [[ab-scorer-must-see-the-same-input]] a second time in one function.
+    //
+    // THE CONFOUND THE PRECISION RUN EXPOSED IS STILL VISIBLE and still points
+    // the other way: off named 212 real paths to medium's 153, while medium
+    // named 27/27 edited files to off's 26/27. Off says more and is slower for
+    // it. The conjunction was built so that neither half can be gamed alone,
+    // and on these numbers it separates neither arm.
+    //
+    // MEASURED UNDER THE SERVER'S GLOBAL SAMPLER, which is the THINKING preset,
+    // so the `off` arm decodes on sampling tuned for the `on` arm. That is the
+    // regime this machine really runs pi-task in, so the result is
+    // ecologically valid — it is NOT a clean comparison.
+    research: 'off',
     // NOT MEASURED, and that is a finding rather than an omission. Three
     // candidate axes were each scored against refine's OWN RECORDED OUTPUT and
     // rejected before any GPU: `validateRefineShape` scores 55/56 — saturated;
