@@ -68,6 +68,7 @@
  * Exit: 0 a verdict, 2 ABSTAIN — preconditions unmet, the model changed mid-run,
  * the corpus is missing, or neither arm produced anything usable.
  */
+import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -310,6 +311,20 @@ interface Trial {
      * scored on text alone.
      */
     truth?: string
+    /**
+     * A fingerprint of the exact content the child was shown, when the trial's
+     * axis is "the answer is grounded in that content".
+     *
+     * Only `extraction` sets it, and it exists because a rescore of this group
+     * RE-RETRIEVES rather than re-reads. MEASURED 2026-08-26: two trials that
+     * verified inside the container failed when rescored on the host, both
+     * quoting real `bun` type declarations — the sandbox image and the host ship
+     * different bun versions, so `docsRaw` returned different chunks for the
+     * same query. Retrieval is deterministic within one environment and NOT
+     * across two, so a rescorer must be able to tell that it is holding
+     * different material rather than a different verdict.
+     */
+    verifyHash?: string
     /** The child never produced a usable answer within its own guards. */
     nonTerminating: boolean
     /** The phase's own parser accepted what came back. */
@@ -344,6 +359,11 @@ interface Trial {
  * Real answers here run a few KB; only a loop-killed child approaches this.
  */
 const CAPTURE_LIMIT = 200_000
+
+/** Short, stable fingerprint of a verify target — see {@link Trial.verifyHash}. */
+function contentHash(text: string): string {
+    return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16)
+}
 
 function capture(text: string): {output: string; truncated: boolean} {
     return text.length > CAPTURE_LIMIT ?
@@ -981,17 +1001,47 @@ async function buildExperiments(group: ReasoningGroup): Promise<GroupExperiment 
                 // carries no `answer` at all, and the capture field needs the
                 // text on both branches.
                 const answer = r.ok ? r.answer : ''
+                // THE AXIS IS THE CONJUNCTION: a non-empty answer AND a
+                // citation that is really in the content the child was shown.
+                //
+                // Production gates on the first half only and carries
+                // `excerptVerified` as metadata, so this is a HARDER bar than
+                // production's own — legitimate for an A/B, and necessary
+                // because the shape half is a ceiling. SCREENED offline with no
+                // GPU over all 190 recorded docs answers: production's own
+                // replies clear it 189/190, one of which cited no excerpt at
+                // all. A known-good answer that could not clear the bar would
+                // mean the CHECK loses, which is what killed phase's three
+                // candidate axes and both grounding rules tried here (every
+                // backticked span in the content scores the recorded answers
+                // 51/190, code-shaped identifiers only 123/190 — real type
+                // names like `ResponseInit` are simply not in the chunks).
+                //
+                // WHETHER IT HAS HEADROOM IS NOT KNOWABLE OFFLINE. 189/190 is
+                // the production baseline, not both arms; if `off` fabricates
+                // quotes it drops and if it does not the axis saturates and the
+                // ladder bars rung 2. Pilot it at low reps before paying for n.
+                const cited = ok && GROUP_SCORERS.extraction!(answer)
+                    && r.excerptVerified === true
                 return {
                     arm,
                     source: src,
+                    verifyHash: contentHash(verifyTargets.get(src) ?? ''),
                     nonTerminating: !ok,
-                    usable: ok && GROUP_SCORERS.extraction!(answer),
+                    usable: cited,
                     ms: Date.now() - t0,
                     note:
                         !ok ? 'child failed'
                         : r.excerptVerified === true ? 'ok (excerpt verified)'
-                        : 'answered, excerpt unverified',
-                    ...capture(answer)
+                        : r.excerpt === undefined ? 'answered, NO excerpt cited'
+                        : 'answered, excerpt UNVERIFIED — not in the content shown',
+                    // THE RAW CHILD TURN, not the parsed answer. `excerptVerified`
+                    // is computed from the `<excerpt>` tag, which the answer body
+                    // does not contain — storing only the answer would make this
+                    // axis unrescorable, the exact failure that voided 28 phase
+                    // trials. A rescorer recovers the verify target by replaying
+                    // `docsRaw` for this row's `source`, which needs no GPU.
+                    ...capture(r.stdout)
                 }
             }
         }

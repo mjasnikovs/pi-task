@@ -47,12 +47,22 @@ import {
     treePaths
 } from './reasoning-ab-files-truth.js'
 import {GROUP_SCORERS, gateVerdictCorrect} from './reasoning-ab-scorers.js'
+import {extractionStimuli} from './reasoning-ab-extraction-truth.js'
+import crypto from 'node:crypto'
+import {parseChildOutput, verifyExcerpt} from '../src/shared/child-output.js'
+
+/** Must stay byte-identical to live-reasoning-group-ab.ts's own `contentHash`. */
+function contentHash(text: string): string {
+    return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16)
+}
 
 interface Row {
     arm?: unknown
     usable?: unknown
     truth?: unknown
     source?: unknown
+    /** extraction only — the fingerprint of the content the child was shown. */
+    verifyHash?: unknown
     nonTerminating?: unknown
     pass?: unknown
     dead?: unknown
@@ -267,9 +277,106 @@ if (fromText) {
         }
         console.log('')
     }
+    /**
+     * `extraction` is the THIRD group whose quality is not a property of the
+     * text alone, and the one where reaching the text scorer would be silently
+     * WRONG rather than merely wrong.
+     *
+     * Its axis is "the citation is really in the content the child was shown",
+     * so the row stores the child's RAW STDOUT — the `<excerpt>` tag lives
+     * outside the answer body. `GROUP_SCORERS.extraction` is
+     * `text.trim().length > 0`, which raw stdout passes unconditionally: falling
+     * through to it would rescore every row, including the fabricated ones, as
+     * usable. A loose scorer that always says yes is the failure that is harder
+     * to spot than a strict one.
+     *
+     * The verify target is recoverable with no GPU: `source` is `<pkg>::<query>`
+     * and `extractionStimuli` replays it through production's own retrieval.
+     */
+    if (group === 'extraction') {
+        const noSource = rows.filter(r => typeof r.source !== 'string')
+        if (noSource.length > 0) {
+            console.error(
+                `ABSTAIN — ${noSource.length}/${rows.length} extraction rows carry no "source".`
+                    + ' An excerpt is verified against the content ITS OWN query retrieved, and'
+                    + ' without the `<pkg>::<query>` id there is nothing to check it against.'
+            )
+            process.exit(2)
+        }
+        const {stimuli} = await extractionStimuli({cwd: MX5, limitTasks: rows.length})
+        const content = new Map(stimuli.map(s => [s.id, s.content]))
+        const missing = [
+            ...new Set(rows.map(r => String(r.source)).filter(id => !content.has(id)))
+        ]
+        if (missing.length > 0) {
+            console.error(
+                `ABSTAIN — ${missing.length} query(ies) in ${path} do not replay at ${MX5}:`
+                    + ` ${missing.slice(0, 3).join(', ')}. Point AB_CORPUS at the corpus copy`
+                    + ' whose node_modules holds those packages; do not score against a'
+                    + ' different retrieval than the trial saw.'
+            )
+            process.exit(2)
+        }
+        /**
+         * REFUSE TO SCORE MATERIAL THE TRIAL NEVER SAW.
+         *
+         * This group's rescore RE-RETRIEVES, and retrieval is deterministic
+         * within one environment but not across two. MEASURED 2026-08-26: two
+         * trials that verified inside the container failed when rescored on the
+         * host, both quoting a real `bun` type declaration
+         * (`@deprecated Prefer {@link Bun.sql}`) that the host's newer bun
+         * simply does not have. Scoring them would have moved the cell from
+         * rung 1 to rung 2 on an artefact of WHERE the rescorer ran.
+         *
+         * A row from before this field existed cannot prove it holds the same
+         * material, so it is refused rather than guessed at — the live run's own
+         * judgement stands for those.
+         */
+        const noHash = rows.filter(r => typeof r.verifyHash !== 'string')
+        if (noHash.length > 0) {
+            console.error(
+                `ABSTAIN — ${noHash.length}/${rows.length} extraction rows carry no`
+                    + ' "verifyHash", so there is no way to tell whether this machine\'s'
+                    + ' retrieval returns the same content the child was shown. Retrieval is'
+                    + ' deterministic within an environment and NOT across two: the sandbox'
+                    + ' image and this host ship different bun versions. The live run\'s own'
+                    + ' verdict stands for those rows.'
+            )
+            process.exit(2)
+        }
+        const drifted = rows.filter(
+            r => contentHash(content.get(String(r.source))!) !== String(r.verifyHash)
+        )
+        if (drifted.length > 0) {
+            const ids = [...new Set(drifted.map(r => String(r.source).slice(0, 50)))]
+            console.error(
+                `ABSTAIN — ${drifted.length}/${rows.length} rows replay to DIFFERENT content`
+                    + ` than the trial was shown: ${ids.slice(0, 3).join(', ')}. Rescore where`
+                    + ' the run happened, or against the same installed packages; do not score'
+                    + ' a citation against material the child never saw.'
+            )
+            process.exit(2)
+        }
+        good = (r: Row): boolean => {
+            if (dead(r)) return false
+            const parsed = parseChildOutput(String(r.output))
+            if (!GROUP_SCORERS.extraction!(parsed.answer ?? '')) return false
+            if (parsed.excerpt === undefined) return false
+            return verifyExcerpt(parsed.excerpt, content.get(String(r.source))!).verified
+        }
+        const moved = rows.filter(r => good(r) !== stored(r)).length
+        console.log(
+            'rescored from the raw child turn against each query\'s replayed content:'
+                + ` ${moved}/${rows.length} trial(s) changed side`
+                + (moved === 0 ? ' — the stored judgements already agree with it' : '')
+        )
+        console.log('')
+    }
     const scorer =
-        group === 'gate' || group === 'research' ? undefined : GROUP_SCORERS[group]
-    if (group !== 'gate' && group !== 'research' && !scorer) {
+        group === 'gate' || group === 'research' || group === 'extraction' ?
+            undefined
+        :   GROUP_SCORERS[group]
+    if (group !== 'gate' && group !== 'research' && group !== 'extraction' && !scorer) {
         console.error(
             `ABSTAIN — no text scorer for group "${group}".`
                 + ` Known: ${Object.keys(GROUP_SCORERS).join(', ')}.`
@@ -297,10 +404,10 @@ if (fromText) {
     if (group === 'gate') {
         good = (r: Row): boolean =>
             !dead(r) && gateVerdictCorrect(String(r.output), String(r.truth))
-    } else if (group !== 'research') {
+    } else if (group !== 'research' && group !== 'extraction') {
         good = (r: Row): boolean => !dead(r) && scorer!(String(r.output))
     }
-    if (group !== 'research') {
+    if (group !== 'research' && group !== 'extraction') {
         const moved = rows.filter(r => good(r) !== stored(r)).length
         console.log(
             `rescored from text with the "${group}" production scorer:`

@@ -248,22 +248,67 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // Superseded ledgers kept beside it: VOID-synthetic-prompt (hand-written
     // prompt, prose-matching scorer) and VOID-saturated-shape-axis.
     gate: 'off',
-    // NEVER MEASURED. The PROMPT blocker is closed as of 2026-08-26; the AXIS
-    // one is not.
-    // The harness used to hand-write this group's prompt, because the two
-    // production builders frame their content as an npm package's docs or an
-    // anchored web page and the material it had — a recorded `## research`
+    // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
+    // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=20/arm over 20
+    // recorded docs queries across 10 packages. off 20/20 usable vs medium
+    // 15/20 (p=0.0471); neither arm failed to answer. off usable 95% CI
+    // [0.84, 1.00]. Wall clock, PAIRED over the 15 stimuli usable in both arms:
+    // off 5.2s vs medium 11.1s, p=0.0010.
+    // RUNG 1 — the ONLY cell in this table decided by a quality difference, and
+    // the clock agrees with it rather than carrying it. Ledger:
+    // ledger-extraction.jsonl.
+    //
+    // THE PROMPT IS PRODUCTION'S. The harness used to hand-write it, because
+    // the two production builders frame content as a named npm package's docs
+    // or an anchored web page and the material it had — a recorded `## research`
     // section — is neither. The fix was the right MATERIAL, not a better frame:
-    // `.pi-tasks/research-cache.json` records 190 real `pi-worker-docs` queries
-    // over 31 packages, all installed in the corpus copy, and all 190 replay
-    // through production's own `docsRaw` + `buildPrompt` with no model and no
-    // network (median prompt 17.3 KB). See scripts/reasoning-ab-extraction-truth.ts.
-    // WHAT STILL BLOCKS IT: the scorer. `GROUP_SCORERS.extraction` is "ok plus a
-    // non-empty answer" — production's own gate, and a SHAPE check of exactly
-    // the class that returned 10/10 in both arms for gate, research and
-    // planning. `excerptVerified` is the nearest candidate with headroom and is
-    // already carried down this path; screen it before writing a cell.
-    extraction: 'inherit',
+    // `.pi-tasks/research-cache.json` records 190 distinct `pi-worker-docs`
+    // (package, query) pairs the run really asked, over 31 packages installed in
+    // the corpus copy, and all 190 replay through `docsRaw` + `buildPrompt` with
+    // no model and no network. See scripts/reasoning-ab-extraction-truth.ts.
+    //
+    // THE AXIS IS THE CONJUNCTION: a non-empty answer AND a citation that is
+    // really in the content the child was shown. Production gates on the first
+    // half only and carries `excerptVerified` as metadata, so this is a HARDER
+    // bar than production's own — legitimate for an A/B, and necessary because
+    // the shape half is the ceiling that returned 10/10 in both arms for gate,
+    // research and planning. SCREENED offline over all 190 recorded answers
+    // before any GPU:
+    //     production's own excerptVerified        189/190  — clears the bar
+    //     every backticked SPAN in the content     51/190  — the CHECK loses
+    //     code-shaped identifiers only            123/190  — the CHECK loses
+    // Both grounding rules die the way phase's three did, for a nameable reason:
+    // real type names the model correctly knows — `ResponseInit`,
+    // `ArrayBufferView`, `DataTransfer` — are simply not in the retrieved
+    // chunks, so a correct answer is marked wrong.
+    //
+    // WHAT MEDIUM ACTUALLY DOES WRONG, audited row by row rather than trusted.
+    // All five failures are genuine and none is a normaliser gap: re-checked
+    // with whitespace and case squashed out, ZERO of them appear in the content.
+    // The failure mode is STITCHING — the arm concatenates non-contiguous
+    // passages into one quote block that reads as verbatim and is not. One
+    // matched 457 of its 522 squashed characters before diverging; another glued
+    // three separate `ts fences and a trailing `export type` line. It is not
+    // inventing the package, it is inventing the CONTIGUITY, which is exactly
+    // what a citation asserts.
+    //
+    // A RESCORE OF THIS GROUP RE-RETRIEVES, and that is a trap the ledger now
+    // guards. Two trials that verified in the container failed when rescored on
+    // the host, both quoting a real bun declaration (`@deprecated Prefer
+    // {@link Bun.sql}`) the host's newer bun does not ship — enough to move the
+    // cell from rung 1 to rung 2 on an artefact of WHERE the rescorer ran.
+    // Retrieval is deterministic within one environment and NOT across two, so
+    // the row now carries `verifyHash` and rescore-reasoning-ledger.ts ABSTAINS
+    // on a mismatch. This ledger predates the field, so the live judgements —
+    // made against exactly the bytes each child was shown — are authoritative.
+    //
+    // MEASURED UNDER THE SERVER'S GLOBAL SAMPLER, which is the THINKING preset,
+    // so the `off` arm decodes on sampling tuned for the `on` arm. That is the
+    // regime this machine really runs pi-task in, so the result is
+    // ecologically valid — it is NOT a clean comparison. Here it makes the
+    // finding CONSERVATIVE: the arm that wins is the one running on the other
+    // arm's sampler.
+    extraction: 'off',
     // A/B 2026-08-25, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10618-1efd800e9), scripts/live-implementation-thinking-ab.ts, n=20/arm
     // over 20 distinct mx5 specs, scored by each task's OWN recorded VERIFY

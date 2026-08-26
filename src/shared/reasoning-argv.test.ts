@@ -79,11 +79,17 @@ describe('focusedChildArgs', () => {
         expect(focusedChildArgs()).toEqual([...childBaseArgs(), '--no-tools'])
     })
 
-    test('the shipped default resolves to no fragment', () => {
-        // The property that makes an all-`inherit` install byte-identical,
-        // asserted against DEFAULT_CONFIG rather than the live singleton.
-        expect(DEFAULT_REASONING_TABLE.extraction).toBe('inherit')
-        expect(thinkingArgs(resolveReasoning('extraction', DEFAULT_CONFIG))).toEqual([])
+    test('the shipped default puts the measured level on the wire', () => {
+        // WAS "resolves to no fragment", asserting the all-`inherit` property.
+        // That property is gone for this group: extraction was measured at
+        // n=20/arm on 2026-08-26 and is the table's one RUNG 1 cell. Asserted
+        // against DEFAULT_CONFIG rather than the live singleton, so the test is
+        // about the code and not about whoever is running it.
+        expect(DEFAULT_REASONING_TABLE.extraction).toBe('off')
+        expect(thinkingArgs(resolveReasoning('extraction', DEFAULT_CONFIG))).toEqual([
+            '--thinking',
+            'off'
+        ])
     })
 
     test('a fragment lands before --no-tools', () => {
@@ -109,7 +115,7 @@ describe('what the shipped table puts on the wire', () => {
         planning: [],
         plan: [],
         gate: ['--thinking', 'off'],
-        extraction: [],
+        extraction: ['--thinking', 'off'],
         implementation: ['--thinking', 'off']
     }
 
