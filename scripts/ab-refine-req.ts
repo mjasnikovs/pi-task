@@ -1,4 +1,14 @@
 /**
+ * NOTE (reasoning profiles): this harness used to append Qwen3's `/no_think`
+ * soft switch to its prompts, matching what the pipeline did at the time. That
+ * switch has since been measured INERT — with server thinking on and
+ * `/no_think` still in the prompt, Qwen3.8 emitted a median 17k-char trace
+ * anyway (n=25) — and removed in favour of the `--thinking` flag
+ * (src/config/reasoning.ts). Any number this file recorded BEFORE that change
+ * was taken with the suffix present, and therefore at whatever thinking level
+ * the session default happened to be — not at "no thinking".
+ */
+/**
  * NOT A VERDICT HARNESS — a RECORDER (see scripts/ab-planning.ts's header). It
  * writes per-rep JSONL for a human to compare across arms and exits 0 regardless.
  *
@@ -13,7 +23,7 @@
  *
  * Usage: PI_BIN=pi bun scripts/ab-refine-req.ts <old|new> [reps=5]
  */
-import {REFINE_PROMPT, appendNoThink} from '../src/task/prompts.js'
+import {REFINE_PROMPT} from '../src/task/prompts.js'
 import {buildScopeFence} from '../src/task/auto-orchestrator.js'
 import {buildRequirementsBlock} from '../src/task/requirements.js'
 import {loadPlanningFixture, runPlanningChild, recordRep} from './ab-planning.js'
@@ -57,7 +67,7 @@ async function main(): Promise<void> {
         const raw = await runPlanningChild(
             fx.cwd,
             'read',
-            appendNoThink(REFINE_PROMPT(title, fence, '', carried, ''))
+            REFINE_PROMPT(title, fence, '', carried, '')
         )
         const ms = Date.now() - t0
         // Metric: does the refined spec obligate tests for this slice?

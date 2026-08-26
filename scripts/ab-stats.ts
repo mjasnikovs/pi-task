@@ -267,3 +267,95 @@ export function permutationP(a: number[], b: number[]): number {
     // impossible one, and 0 would read as infinite confidence.
     return (ge + 1) / (SAMPLED_PERMUTATIONS + 1)
 }
+
+/** Exact sign-enumeration is 2^n arrangements; beyond this the sampler takes over. */
+const EXACT_PAIRED_MAX_N = 20
+
+/**
+ * Paired permutation test on the RATIO of two matched durations.
+ *
+ * WHY A SEPARATE TEST FROM {@link permutationP}. A reasoning A/B runs every
+ * stimulus once in each arm, which is a MATCHED design, but `permutationP` pools
+ * both arms and shuffles freely. That throws the pairing away, and in these runs
+ * the stimulus is the dominant variance source: a gate child on a before-tree
+ * finishes in ~25s and the same child on an after-tree takes ~100-500s. Pooling
+ * those buries an arm effect under a stimulus effect the design had already
+ * cancelled. Measured on the 2026-08-26 gate ledger, n=20 pairs: unpaired
+ * p=0.3408, paired p=0.0649 on the same numbers.
+ *
+ * WHY THE LOG RATIO rather than the difference. Durations are right-skewed and a
+ * single 576s trial dominates any mean of differences — on that same ledger the
+ * paired test on raw differences reads p=0.2586 while the direction is consistent
+ * in 16 of 20 pairs. The arm effect is multiplicative (thinking scales a turn, it
+ * does not add a constant), so the log ratio is the scale the effect lives on.
+ * The permutation is over SIGN FLIPS, which is the exact randomisation a matched
+ * design licenses.
+ *
+ * Callers pass arms already aligned pair-by-pair; this function does not know
+ * which stimulus is which. `a` and `b` must be the same length.
+ */
+export function pairedPermutationP(a: number[], b: number[]): number {
+    if (a.length !== b.length) throw new Error('pairedPermutationP: arms are not aligned')
+    // A zero or negative duration has no logarithm. Clamp to 1ms rather than
+    // dropping the pair: a dropped pair silently changes n, and a 0ms trial is a
+    // clock resolution artefact, not a measurement worth discarding.
+    const d = a.map((x, i) => Math.log(Math.max(x, 1) / Math.max(b[i]!, 1)))
+    const n = d.length
+    if (n === 0) return 1
+    const obs = Math.abs(d.reduce((s, x) => s + x, 0))
+    const EPS = 1e-9
+
+    if (n <= EXACT_PAIRED_MAX_N) {
+        let ge = 0
+        const total = 1 << n
+        for (let mask = 0; mask < total; mask++) {
+            let s = 0
+            for (let i = 0; i < n; i++) s += (mask >> i) & 1 ? d[i]! : -d[i]!
+            if (Math.abs(s) >= obs - EPS) ge++
+        }
+        return ge / total
+    }
+
+    let seed = 0x9e3779b9
+    const next = (): number => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+        return seed / 0x1_0000_0000
+    }
+    let ge = 0
+    for (let s = 0; s < SAMPLED_PERMUTATIONS; s++) {
+        let sum = 0
+        for (let i = 0; i < n; i++) sum += next() < 0.5 ? d[i]! : -d[i]!
+        if (Math.abs(sum) >= obs - EPS) ge++
+    }
+    return (ge + 1) / (SAMPLED_PERMUTATIONS + 1)
+}
+
+/**
+ * Pair two arms by stimulus, or refuse.
+ *
+ * Returns aligned arrays only when the design is genuinely MATCHED: every id
+ * appears at most once per arm. When an arm repeats an id — `planning` runs one
+ * fixture ten times — the k-th replicate has no partner, pairing them by position
+ * is arbitrary, and the honest answer is to fall back to the unpaired test.
+ * Stimuli missing from either arm are dropped, so the caller must report the pair
+ * count rather than assume it equals n.
+ */
+export function pairByStimulus(
+    aIds: readonly string[],
+    aMs: readonly number[],
+    bIds: readonly string[],
+    bMs: readonly number[]
+): {a: number[]; b: number[]} | null {
+    if (aIds.length !== aMs.length || bIds.length !== bMs.length) return null
+    if (new Set(aIds).size !== aIds.length || new Set(bIds).size !== bIds.length) return null
+    const bBy = new Map(bIds.map((id, i) => [id, bMs[i]!]))
+    const a: number[] = []
+    const b: number[] = []
+    for (const [i, id] of aIds.entries()) {
+        const partner = bBy.get(id)
+        if (partner === undefined) continue
+        a.push(aMs[i]!)
+        b.push(partner)
+    }
+    return a.length > 0 ? {a, b} : null
+}

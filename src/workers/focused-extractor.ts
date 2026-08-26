@@ -38,7 +38,11 @@ import {formatChildFailure} from './shared.js'
  * `--no-tools` is the contract, not a default: the child is given all the content it may use
  * inside its prompt, so a tool call could only reach for something unsourced.
  */
-export const focusedChildArgs = (): string[] => [...childBaseArgs(), '--no-tools']
+export const focusedChildArgs = (thinking: readonly string[] = []): string[] => [
+    ...childBaseArgs(),
+    ...thinking,
+    '--no-tools'
+]
 
 export interface FocusedRequest {
     /** The fully assembled prompt, including the content block. Delivered on stdin. */
@@ -64,6 +68,17 @@ export interface FocusedRequest {
     spawn?: SpawnFn
     /** The message reported when the child was aborted, e.g. `'Docs lookup aborted.'`. */
     abortedMessage: string
+    /**
+     * An already-resolved `['--thinking', level]` fragment, or `[]`/omitted to
+     * inherit the session default.
+     *
+     * Supplied by the CALLER even though all three call sites are the same
+     * `extraction` group. Resolving it inside this module would make
+     * `focusedChildArgs` read ambient config, and a function that reads config
+     * internally cannot be tested without the developer's own machine state —
+     * which is exactly how a `getConfig()` assertion got into a unit test.
+     */
+    thinking?: readonly string[]
 }
 
 /** What every outcome carries, success or failure — the raw child evidence. */
@@ -107,7 +122,7 @@ export type FocusedResult = FocusedFailure | FocusedAnswer
  */
 export async function runFocusedExtraction(req: FocusedRequest): Promise<FocusedResult> {
     const spawn = req.spawn ?? (defaultSpawn as unknown as SpawnFn)
-    const invocation = getPiInvocation(focusedChildArgs(), req.prompt)
+    const invocation = getPiInvocation(focusedChildArgs(req.thinking), req.prompt)
     const child = await runChild(spawn, invocation, req.cwd, req.signal)
 
     const evidence: FocusedChildEvidence = {

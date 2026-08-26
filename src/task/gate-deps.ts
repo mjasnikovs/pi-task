@@ -63,6 +63,7 @@ import {assessRunnerGlobs, runnerGlobVerifyFindings} from './runner-globs.js'
 import {captureGitState, reconcileGitState, type ReconcileResult} from './git-state-guard.js'
 import {runWorker} from '../workers/pi-worker-core.js'
 import {getConfig} from '../config/config.js'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
 import {makeDebugAppender} from './debug-log.js'
 import {startAutoLoader} from './widget.js'
 import {ChildStatus} from './child-status.js'
@@ -711,6 +712,9 @@ export function buildGateDeps(params: {
             ...(opts.loader === undefined ? {} : {loader: opts.loader}),
             commandTimeoutMs: getConfig().requestTimeoutMs,
             streamInactivityMs: getConfig().streamInactivityMs,
+            // Read per gateChild() call, like its two neighbours, so a
+            // /task-config change lands on the next gate without a restart.
+            thinking: groupThinkingArgs('gate'),
             status,
             runWorker,
             makeDebugAppender,

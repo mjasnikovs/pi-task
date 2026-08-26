@@ -58,3 +58,63 @@ export async function probeModelEndpoints(urls: string[], timeoutMs = 5_000): Pr
     )
     return results.some(Boolean)
 }
+
+/**
+ * What a llama.cpp server's own chat template can actually do about reasoning,
+ * as reported by `GET /props`.
+ *
+ * This is the only source of truth that does NOT come from models.json. It
+ * answers the one question the host-side clamp cannot: *is models.json lying
+ * about the server?* — the case that matters being pi's built-in llama.cpp
+ * provider, which hardcodes `reasoning: false`, so anyone who reached their
+ * server through `/login llama.cpp` rather than a hand-written provider entry
+ * has a dead knob and nothing to tell them so.
+ */
+export interface ChatTemplateCaps {
+    /** The template reads `reasoning_effort` — i.e. levels, not just on/off. */
+    supportsReasoningEffort: boolean
+    /** The template reads `preserve_thinking` / `preserve_reasoning`. */
+    supportsPreserveReasoning: boolean
+    /** The template mentions `enable_thinking` at all — i.e. thinking can be switched. */
+    mentionsEnableThinking: boolean
+}
+
+/**
+ * Probe one base URL for its chat-template capabilities, or `null` for "no
+ * answer worth having" — not a llama.cpp server, unreachable, or a body in a
+ * shape this does not recognise.
+ *
+ * `null` is a first-class result, not an error: every non-llama.cpp backend
+ * returns it, and the caller must degrade to the models.json view rather than
+ * warn about a server it could not read. Never throws.
+ *
+ * The LEADING SLASH in `/props` is load-bearing. A configured baseUrl normally
+ * ends in `/v1` (llama-server's OpenAI-compatible prefix) while `/props` lives at
+ * the server root, so a relative `'props'` would resolve to `/v1/props` and 404 —
+ * which this would report as `null`, i.e. as a silent loss of the better signal.
+ */
+export async function probeChatTemplateCaps(
+    baseUrl: string,
+    timeoutMs = 2_000
+): Promise<ChatTemplateCaps | null> {
+    try {
+        const res = await fetch(new URL('/props', baseUrl), {
+            signal: AbortSignal.timeout(timeoutMs)
+        })
+        if (!res.ok) return null
+        const body = (await res.json()) as {
+            chat_template?: unknown
+            chat_template_caps?: Record<string, unknown>
+        }
+        const caps = body.chat_template_caps
+        if (typeof caps !== 'object' || caps === null) return null
+        const template = typeof body.chat_template === 'string' ? body.chat_template : ''
+        return {
+            supportsReasoningEffort: caps.supports_reasoning_effort === true,
+            supportsPreserveReasoning: caps.supports_preserve_reasoning === true,
+            mentionsEnableThinking: template.includes('enable_thinking')
+        }
+    } catch {
+        return null
+    }
+}

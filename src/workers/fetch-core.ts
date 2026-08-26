@@ -3,6 +3,7 @@ import type {SpawnFn} from '../shared/child-process.js'
 import {runFocusedExtraction} from './focused-extractor.js'
 import {abstentionSentence} from './abstention.js'
 import {type ExcerptVerification} from '../shared/child-output.js'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
 
 const CONTENT_BUDGET = 30_000
 const HEAD_CHARS = 25_000
@@ -165,6 +166,9 @@ export async function fetchFocused(input: FetchFocusedInput): Promise<FetchFocus
         cwd: input.cwd,
         signal: input.signal,
         spawn: input.spawn,
+        // The `extraction` group's level. Resolved at the call site so the
+        // extractor itself never reads ambient config.
+        thinking: groupThinkingArgs('extraction'),
         abortedMessage: 'Fetch aborted.'
     })
 

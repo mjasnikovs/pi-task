@@ -7,7 +7,11 @@ import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import {discoverModelEndpoints, probeModelEndpoints} from './model-endpoint.js'
+import {
+    discoverModelEndpoints,
+    probeChatTemplateCaps,
+    probeModelEndpoints
+} from './model-endpoint.js'
 
 function makeAgentDir(modelsJson?: unknown): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-agent-dir-'))
@@ -91,5 +95,107 @@ describe('probeModelEndpoints', () => {
         } finally {
             void srv.stop(true)
         }
+    })
+})
+
+describe('probeChatTemplateCaps', () => {
+    /** A /props body in the shape llama-server b10618 actually returns. */
+    const PROPS = (caps: Record<string, boolean>, template: string): string =>
+        JSON.stringify({
+            build_info: 'b10618-1efd800e9',
+            model_path: '/models/some.gguf',
+            chat_template: template,
+            chat_template_caps: caps
+        })
+
+    test('reads the capability flags and the template', async () => {
+        const srv = Bun.serve({
+            port: 0,
+            fetch: req =>
+                new URL(req.url).pathname === '/props' ?
+                    new Response(
+                        PROPS(
+                            {supports_reasoning_effort: true, supports_preserve_reasoning: true},
+                            '{%- if enable_thinking is defined %}'
+                        )
+                    )
+                :   new Response('nope', {status: 404})
+        })
+        try {
+            const caps = await probeChatTemplateCaps(`http://127.0.0.1:${srv.port}`)
+            expect(caps).toEqual({
+                supportsReasoningEffort: true,
+                supportsPreserveReasoning: true,
+                mentionsEnableThinking: true
+            })
+        } finally {
+            void srv.stop(true)
+        }
+    })
+
+    test('a /v1 base URL still reaches /props, not /v1/props', async () => {
+        // THE PATH TRAP. Every configured llama.cpp baseUrl ends in /v1 (the
+        // OpenAI-compatible prefix) while /props lives at the server root, so a
+        // relative 'props' would resolve to /v1/props, 404, and report `null` —
+        // a silent loss of the better signal rather than a visible bug.
+        const seen: string[] = []
+        const srv = Bun.serve({
+            port: 0,
+            fetch: req => {
+                const p = new URL(req.url).pathname
+                seen.push(p)
+                return p === '/props' ?
+                        new Response(PROPS({supports_reasoning_effort: false}, ''))
+                    :   new Response('nope', {status: 404})
+            }
+        })
+        try {
+            const caps = await probeChatTemplateCaps(`http://127.0.0.1:${srv.port}/v1`)
+            expect(seen).toEqual(['/props'])
+            expect(caps?.supportsReasoningEffort).toBe(false)
+        } finally {
+            void srv.stop(true)
+        }
+    })
+
+    test('a template with no enable_thinking reports the model cannot switch', async () => {
+        const srv = Bun.serve({
+            port: 0,
+            fetch: () => new Response(PROPS({supports_reasoning_effort: false}, '{{ bos_token }}'))
+        })
+        try {
+            const caps = await probeChatTemplateCaps(`http://127.0.0.1:${srv.port}`)
+            expect(caps?.mentionsEnableThinking).toBe(false)
+        } finally {
+            void srv.stop(true)
+        }
+    })
+
+    test('null — never a throw — for every backend that is not llama.cpp', async () => {
+        // `null` is a first-class result, not an error: it is what EVERY other
+        // server returns, and the caller must degrade to the models.json view
+        // rather than warn about a server it could not read.
+        const notFound = Bun.serve({port: 0, fetch: () => new Response('x', {status: 404})})
+        const notJson = Bun.serve({port: 0, fetch: () => new Response('<html>')})
+        const noCaps = Bun.serve({port: 0, fetch: () => new Response(JSON.stringify({a: 1}))})
+        try {
+            expect(await probeChatTemplateCaps(`http://127.0.0.1:${notFound.port}`)).toBeNull()
+            expect(await probeChatTemplateCaps(`http://127.0.0.1:${notJson.port}`)).toBeNull()
+            expect(await probeChatTemplateCaps(`http://127.0.0.1:${noCaps.port}`)).toBeNull()
+        } finally {
+            void notFound.stop(true)
+            void notJson.stop(true)
+            void noCaps.stop(true)
+        }
+    })
+
+    test('null for an unreachable endpoint, without hanging the caller', async () => {
+        const srv = Bun.serve({port: 0, fetch: () => new Response('x')})
+        const port = srv.port
+        // AWAITED, not voided: the point of the test is that the port is closed
+        // before the probe runs. A backgrounded stop would race the probe
+        // against a still-listening socket and pass for the wrong reason.
+        await srv.stop(true)
+        expect(await probeChatTemplateCaps(`http://127.0.0.1:${port}`, 500)).toBeNull()
     })
 })

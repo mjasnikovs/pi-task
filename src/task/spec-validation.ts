@@ -109,3 +109,49 @@ export function validateSpecShape(spec: string): string | null {
     }
     return null
 }
+
+// ─── Refine shape gate ───────────────────────────────────────────────────────
+
+/** The four sections REFINE_PROMPT demands, in the order it demands them. */
+export const REFINE_SECTIONS = [
+    'GOAL',
+    'CONSTRAINTS',
+    'KNOWN-UNKNOWNS',
+    'EXTERNAL-DEPENDENCIES'
+] as const
+
+/**
+ * Is a refine child's output shaped like a refined prompt?
+ *
+ * Refine shipped with NO shape check at all — `phaseRefine` passes no validator,
+ * unlike compose and critique — and every downstream reader of a refined prompt
+ * is a PARTIAL parser that tolerates a missing section SILENTLY:
+ * `extractCapsSection` (refuted-constraint.ts) returns null, `scopedToolingGoal`
+ * (phases.ts) returns the whole text, `deriveTitle` and `extractEnrichTargets`
+ * fall back. So a refine answer that dropped a heading degrades four features at
+ * once and says nothing. This names the contract in one place.
+ *
+ * WHAT IT CHECKS, and why it is only this. Every one of those consumers looks
+ * for a BARE ALL-CAPS heading alone on its own line — `l.trim() === heading`,
+ * `/^GOAL[ \t]*\n/m`. That is the operative contract, so that is the test.
+ *
+ * It does NOT require the text to START with GOAL, even though REFINE_PROMPT
+ * says "four sections, exact headings, in this order" and forbids a preamble.
+ * Measured over the 57-task mx5 corpus: 55/56 non-empty refined prompts carry
+ * all four bare headings, but only 25/56 open with one — a preamble is what real
+ * refine output usually looks like, and production has always consumed it fine.
+ * A validator stricter than its consumers would reject work that works.
+ *
+ * Returns a problem string, or null when the shape is good — same contract as
+ * `validateSpecShape` above.
+ */
+export function validateRefineShape(refined: string): string | null {
+    const trimmed = refined.trim()
+    if (trimmed.length === 0) return 'refined prompt is empty'
+    const lines = trimmed.split('\n').map(l => l.trim())
+    const missing = REFINE_SECTIONS.filter(s => !lines.includes(s))
+    if (missing.length > 0) {
+        return `refined prompt missing required section(s): ${missing.join(', ')}`
+    }
+    return null
+}

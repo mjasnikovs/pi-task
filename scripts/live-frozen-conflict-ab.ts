@@ -1,4 +1,14 @@
 /**
+ * NOTE (reasoning profiles): this harness used to append Qwen3's `/no_think`
+ * soft switch to its prompts, matching what the pipeline did at the time. That
+ * switch has since been measured INERT — with server thinking on and
+ * `/no_think` still in the prompt, Qwen3.8 emitted a median 17k-char trace
+ * anyway (n=25) — and removed in favour of the `--thinking` flag
+ * (src/config/reasoning.ts). Any number this file recorded BEFORE that change
+ * was taken with the suffix present, and therefore at whatever thinking level
+ * the session default happened to be — not at "no thinking".
+ */
+/**
  * LIVE A/B against the real local model (llama-server @ 127.0.0.1:8080 via pi):
  * the compose/critique pipeline vs the UNSATISFIABLE freeze/requires-edit pair
  * (mx5 run 12 root cause, PROMPT 1 layer A).
@@ -51,7 +61,7 @@ import {
     runWithEmphasisRetry,
     type PhaseDeps
 } from '../src/task/child-runner.js'
-import {CRITIQUE_PROMPT, CRITIQUE_TRIAGE_PROMPT, appendNoThink} from '../src/task/prompts.js'
+import {CRITIQUE_PROMPT, CRITIQUE_TRIAGE_PROMPT} from '../src/task/prompts.js'
 import {
     parseVerifyBlock,
     stripSpecPreamble,
@@ -238,7 +248,7 @@ async function critiqueBaseline(
                 deps,
                 'critique-triage',
                 '',
-                appendNoThink(CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, ''))
+                CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, '')
             )
         } catch {
             verdict = null

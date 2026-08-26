@@ -3,6 +3,14 @@ import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import {isSearchProvider, type SearchProvider} from '../workers/search-types.js'
+import {
+    DEFAULT_REASONING_TABLE,
+    sanitizeReasoningLevels,
+    sanitizeReasoningMode,
+    type GroupSetting,
+    type ReasoningGroup,
+    type ReasoningMode
+} from './reasoning.js'
 import {DEFAULT_STREAM_INACTIVITY_MS} from '../shared/stream-watchdog.js'
 
 export interface PiTaskConfig {
@@ -140,6 +148,24 @@ export interface PiTaskConfig {
      * cannot be recovered after the fact.
      */
     debugLogs: DebugLogLevel
+    /**
+     * Which reasoning profile is in force. See config/reasoning.ts for the four
+     * modes and the group vocabulary.
+     *
+     * DEFAULT `default`, whose table ships all-`inherit` — so installing this
+     * version changes no child's argv until the user opts in.
+     */
+    reasoningMode: ReasoningMode
+    /**
+     * The per-group thinking levels, consulted ONLY when
+     * `reasoningMode === 'custom'`.
+     *
+     * Kept populated in every mode so switching to `custom` and back does not
+     * lose the user's table — the same reason `commandTimeoutExemptTools`
+     * survives the watchdog being turned off. Its sanitizer always returns a
+     * complete record, so no consumer needs a per-key fallback.
+     */
+    reasoningLevels: Record<ReasoningGroup, GroupSetting>
 }
 
 /** How verbose the `.pi-tasks/*-debug.log` trail is. See {@link PiTaskConfig.debugLogs}. */
@@ -251,7 +277,12 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     yoloMode: false,
     // EVENTS: the model chatter is 85% of the bytes and nobody reads it; the
     // guard/verdict markers are the 15% that explains a failed run.
-    debugLogs: DEFAULT_DEBUG_LOGS
+    debugLogs: DEFAULT_DEBUG_LOGS,
+    // DEFAULT: the measured per-group table, which currently holds `inherit` in
+    // every cell. Every child's argv is byte-identical to the version before
+    // reasoning profiles existed until a cell is filled in by an A/B.
+    reasoningMode: 'default',
+    reasoningLevels: {...DEFAULT_REASONING_TABLE}
 }
 
 /**
@@ -311,7 +342,9 @@ export const CONFIG_LOADERS: {
     requestTimeoutMs: sanitizeRequestTimeoutMs,
     commandTimeoutExemptTools: sanitizeCommandTimeoutExemptTools,
     streamInactivityMs: sanitizeStreamInactivityMs,
-    debugLogs: sanitizeDebugLogs
+    debugLogs: sanitizeDebugLogs,
+    reasoningMode: sanitizeReasoningMode,
+    reasoningLevels: sanitizeReasoningLevels
 }
 
 /**

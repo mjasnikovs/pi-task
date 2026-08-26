@@ -8,7 +8,12 @@
  */
 import {describe, expect, test} from 'bun:test'
 import {EXIT_CODE} from './ab-verdict.js'
-import {requirePreconditions, abstainMidRun, type PreflightDeps} from './ab-preflight.js'
+import {
+    requirePreconditions,
+    abstainMidRun,
+    llamaModelIdentity,
+    type PreflightDeps
+} from './ab-preflight.js'
 import {RESEARCH_RUN_ID_ENV} from '../src/workers/research-cache.js'
 
 class Exited extends Error {
@@ -207,5 +212,69 @@ describe('abstainMidRun', () => {
         ).toBe(EXIT_CODE.ABSTAIN)
         expect(h.lines.join('\n')).toContain('restarted at rep 12')
         expect(h.lines.join('\n')).toContain('exit 2, NOT exit 1')
+    })
+})
+
+describe('llamaModelIdentity', () => {
+    /** The two bodies that were compared after the 2026-08-26 gate run died. */
+    const props = (marker: string): string =>
+        JSON.stringify({
+            model_path: '/models/Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf',
+            build_info: 'b10620-0f3b51e03',
+            chat_template: '{%- if tools %}...{%- endif %}',
+            media_marker: marker,
+            // WHERE llama-server actually publishes n_ctx. A top-level read
+            // returned null on every real body.
+            default_generation_settings: {n_ctx: 120064, params: {seed: 4294967295}}
+        })
+
+    test('a reboot of the same model and build is NOT a swap', () => {
+        // The whole-body fingerprint called this a swap and threw away 10 finished
+        // gate trials plus the research and phase groups behind them.
+        expect(llamaModelIdentity(props('<__media_Bhyl3ZaB__>'))).toBe(
+            llamaModelIdentity(props('<__media_fE1HPh6g__>'))
+        )
+    })
+
+    test('a different model file IS a swap', () => {
+        const other = JSON.parse(props('m')) as Record<string, unknown>
+        other.model_path = '/models/Gemma4-12B.gguf'
+        expect(llamaModelIdentity(JSON.stringify(other))).not.toBe(llamaModelIdentity(props('m')))
+    })
+
+    test('a llama.cpp rebuild IS a swap', () => {
+        // Accepted as a real difference on purpose: the table records the build
+        // per cell, so two builds inside ONE cell is the thing to stop.
+        const other = JSON.parse(props('m')) as Record<string, unknown>
+        other.build_info = 'b10618-1efd800e9'
+        expect(llamaModelIdentity(JSON.stringify(other))).not.toBe(llamaModelIdentity(props('m')))
+    })
+
+    test('a changed chat template IS a swap', () => {
+        // The template decides whether a thinking level is readable at all.
+        const other = JSON.parse(props('m')) as Record<string, unknown>
+        other.chat_template = '{%- if tools %}... longer ...{%- endif %}'
+        expect(llamaModelIdentity(JSON.stringify(other))).not.toBe(llamaModelIdentity(props('m')))
+    })
+
+    test('a changed sampler setting is not a swap', () => {
+        // Samplers are server-global and move without the model moving. The run
+        // header already records that the arms decode under one preset.
+        const other = JSON.parse(props('m')) as Record<string, unknown>
+        other.default_generation_settings = {n_ctx: 120064, params: {seed: 7}}
+        expect(llamaModelIdentity(JSON.stringify(other))).toBe(llamaModelIdentity(props('m')))
+    })
+
+    test('a changed context window IS a swap, read from where it is published', () => {
+        // Regression: n_ctx was read from the top level, where llama-server does
+        // not put it, so this projection was blind to a resized context.
+        const other = JSON.parse(props('m')) as Record<string, unknown>
+        other.default_generation_settings = {n_ctx: 32768, params: {seed: 4294967295}}
+        expect(llamaModelIdentity(JSON.stringify(other))).not.toBe(llamaModelIdentity(props('m')))
+        expect(llamaModelIdentity(props('m'))).toContain('120064')
+    })
+
+    test('a body that is not JSON throws, so probe() falls back to whole-body', () => {
+        expect(() => llamaModelIdentity('not json')).toThrow()
     })
 })

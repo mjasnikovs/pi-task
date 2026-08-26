@@ -95,6 +95,16 @@ export interface GateChildDeps {
     /** Hung-stream bound; the probe-based stall guard cannot supply it. */
     streamInactivityMs: number
     /**
+     * The resolved `['--thinking', level]` fragment for the `gate` reasoning
+     * group, or `[]` to inherit the session default.
+     *
+     * REQUIRED, like its two neighbours above: gate-child takes resolved config
+     * values and gate-deps supplies them. Optional-with-a-default would let a new
+     * gate wiring silently run at a level nobody chose, which is the failure the
+     * whole profile feature exists to end.
+     */
+    thinking: readonly string[]
+    /**
      * The live widget state this child feeds and its loader reads. SHARED with
      * the caller — the verify gate's own loader reads the same status while this
      * child runs with `loader: false` — so it is the caller's object, not a copy.
@@ -168,6 +178,7 @@ export function makeGateChild(
                     timeoutMs: 0,
                     commandTimeoutMs: deps.commandTimeoutMs,
                     streamInactivityMs: deps.streamInactivityMs,
+                    thinking: deps.thinking,
                     // Exact-match loop guard only: pathThreshold Infinity disables
                     // the path-revisit heuristic, so revisiting one file (which IS
                     // the job) never trips — only a literally-identical call

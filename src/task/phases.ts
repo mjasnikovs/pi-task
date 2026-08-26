@@ -50,8 +50,7 @@ import {
     CRITIQUE_PROMPT,
     CRITIQUE_TRIAGE_PROMPT,
     VERIFY_TOOLING_PROMPT,
-    MAX_GRILL_QUESTIONS,
-    appendNoThink
+    MAX_GRILL_QUESTIONS
 } from './prompts.js'
 import {
     appendGateRecord,
@@ -78,6 +77,7 @@ import {compressTitle} from './title-label.js'
 import {
     parseVerifyBlock,
     validateSpecShape,
+    validateRefineShape,
     stripSpecPreamble,
     isCritiqueClean
 } from './spec-validation.js'
@@ -113,6 +113,7 @@ import {
 import {SessionUI} from '../remote/bridge.js'
 import {isYoloMode, yoloPickAutoAnswer} from './yolo.js'
 import {QaTranscript, GRILL_QA_POLICY} from './qa-transcript.js'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
@@ -404,7 +405,7 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         deps,
         'refine',
         'read',
-        appendNoThink(REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock)),
+        REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock),
         // refine's deliverable is a 4-section text rewrite that never strictly
         // needs a successful read — on a test-writing task against a large
         // existing codebase the model over-explores (re-reads source hunting for
@@ -414,6 +415,15 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         // from the title + design doc alone.
         {degradeOnExhaustion: true, verb: 'restart'}
     )
+    // Shape check, REPORTED not enforced. Refine's four sections are what
+    // extractCapsSection, scopedToolingGoal, deriveTitle and extractEnrichTargets
+    // each look for, and all four fail SILENTLY when one is missing — so the loss
+    // was previously invisible. Deliberately not a retry or a throw: refine's
+    // output is usable prose even when a heading is gone (the four consumers
+    // degrade, they do not break), and a run must not die over a heading. This
+    // puts the miss in the debug log where an audit can find it.
+    const shape = validateRefineShape(refined)
+    if (shape) deps.logDebug?.(`refine: ${shape}`)
     // Deterministic backstop: if the refined spec still dropped a directive, append
     // it verbatim rather than trusting the paraphrase. No model in this path.
     const {text, appended} = enforceDirectives(refined, directives)
@@ -439,7 +449,7 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
             deps,
             'verify-tooling',
             'read,bash',
-            appendNoThink(VERIFY_TOOLING_PROMPT(toolingList))
+            VERIFY_TOOLING_PROMPT(toolingList)
         )
     } catch {
         return replaceToolingWithVerified(research, commands)
@@ -933,26 +943,33 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         })
 
     // Run the four workers ONE AT A TIME. Settled by an A/B on the local
-    // llama.cpp backend (single GPU, same task/model) — and the answer flips
+    // llama.cpp backend (single GPU, same task/model) — and the answer FLIPS
     // with thinking:
-    //   - thinking ON → parallel wins: long decodes batch well, 4 concurrent
+    //   - thinking ON  → parallel wins: long decodes batch well, 4 concurrent
     //     finish in ~max(worker), not the sum.
-    //   - /no_think   → sequential wins: with short decodes the batching upside
+    //   - thinking OFF → sequential wins: with short decodes the batching upside
     //     is gone, but 4 concurrent streams still split the one GPU and slow
     //     each other ~4x (context worker measured 27s solo vs 128s under load),
     //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
-    // Every worker runs /no_think (below), so sequential is the faster regime.
-    // Do NOT switch the DEFAULT back to concurrent without re-running that A/B;
-    // the opt-in `parallelResearchWorkers` config flag exists for backends that
-    // genuinely serve parallel streams.
     //
-    // `/no_think` is the big win: these are agentic exploration loops, and on a
-    // reasoning model the child would otherwise emit a full <think> trace at
-    // every tool step ("let me read X next…") — the single largest decode sink
-    // in the pipeline. Stripping it cut each worker's decode 3-8x in the A/B.
-    // The worker still calls as many tools as it wants; it just stops narrating
-    // between them. See appendNoThink. Result order (files, apis, context,
-    // tooling) is preserved for assembly.
+    // KNOWN-OPEN, AND THIS IS THE HONEST STATE OF IT. That A/B was run when
+    // every worker carried Qwen3's `/no_think` prompt suffix, so "thinking OFF"
+    // was assumed and sequential followed. The suffix has since been measured
+    // INERT — with server thinking on and `/no_think` still in the prompt,
+    // Qwen3.8 emitted a median 17k-char trace anyway (n=25) — and it has been
+    // removed in favour of the `research` reasoning group (config/reasoning.ts).
+    // So the arm this default was chosen under may never have been the arm that
+    // ran, and the group's level is now a user-visible setting rather than a
+    // constant.
+    //
+    // The default stays SEQUENTIAL because that is the measured-safe arm on a
+    // single-GPU box and because flipping a shipped default on an invalidated
+    // premise would be replacing one unmeasured claim with another. The
+    // parallel x reasoning-level interaction is unmeasured; re-run the A/B
+    // before changing this, and treat `parallelResearchWorkers` as the opt-in
+    // for backends that genuinely serve parallel streams.
+    //
+    // Result order (files, apis, context, tooling) is preserved for assembly.
     // Resolved once: `searchConfigured()` reads the environment, and the tools
     // string and the `-e` paths must be derived from the SAME answer.
     const apisChannels = apisWorkerChannels()
@@ -992,7 +1009,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             section: 'FILES',
             label: 'worker:files',
             // Read-heavy: gets the orientation core (see note above).
-            prompt: appendNoThink(orientation.block + promptHeader + RESEARCH_FILES_PROMPT(refined))
+            prompt: orientation.block + promptHeader + RESEARCH_FILES_PROMPT(refined)
         },
         {
             section: 'APIS',
@@ -1004,20 +1021,18 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // queries the FILES worker just answered (run-7 F7: up to 10
             // duplicate `.`-decodes per task through the serial bottleneck).
             prompt: prior =>
-                appendNoThink(
-                    orientation.block
-                        + promptHeader
-                        + RESEARCH_APIS_PROMPT(
-                            refined,
-                            prior.find(s => s.name === 'FILES')?.text || undefined
-                        )
-                        + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
-                        // 5B CAP arm — empty unless PI_TASK_PROJECT_DOCS_BUDGET is
-                        // set. The tool-side half lives in pi-worker-docs.ts; a
-                        // budget enforced without being announced would just read
-                        // to the worker as a broken tool.
-                        + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget))
-                ),
+                orientation.block
+                + promptHeader
+                + RESEARCH_APIS_PROMPT(
+                    refined,
+                    prior.find(s => s.name === 'FILES')?.text || undefined
+                )
+                + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+                // 5B CAP arm — empty unless PI_TASK_PROJECT_DOCS_BUDGET is
+                // set. The tool-side half lives in pi-worker-docs.ts; a
+                // budget enforced without being announced would just read
+                // to the worker as a broken tool.
+                + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget)),
             // The tools string and the `-e` paths are ONE fact — which worker
             // channels this research worker is given — and used to be two literals
             // kept in step by eye. `channelSet` derives both from the same rows.
@@ -1051,7 +1066,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         {
             section: 'CONTEXT',
             label: 'worker:context',
-            prompt: appendNoThink(promptHeader + RESEARCH_CONTEXT_PROMPT(refined)),
+            prompt: promptHeader + RESEARCH_CONTEXT_PROMPT(refined),
             // Context owns architectural understanding, not path discovery —
             // FILES handles that. Dropping `find`/`ls` keeps the worker from
             // spawning long enumeration loops whose output then inflates
@@ -1098,9 +1113,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             label: 'worker:tooling',
             // Scope to the goal prose only — not the per-file edit checklist that
             // makes a weak model spelunk source and loop. See scopedToolingGoal.
-            prompt: appendNoThink(
-                promptHeader + RESEARCH_TOOLING_PROMPT(scopedToolingGoal(refined))
-            ),
+            prompt: promptHeader + RESEARCH_TOOLING_PROMPT(scopedToolingGoal(refined)),
             // Block re-reads in-process so a weak model that wants to re-read the
             // same file is told to answer from what it has instead of looping.
             extensions: [SINGLE_READ_EXTENSION_PATH]
@@ -1149,6 +1162,11 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                     cwd: deps.cwd,
                     signal: deps.signal,
                     spawn: deps.spawn,
+                    // All four research workers share one group: they are the same
+                    // job (read-only exploration of the repo) run over four
+                    // questions, and a table that could set them apart would be
+                    // four cells nobody has the trials to fill.
+                    thinking: groupThinkingArgs('research'),
                     ...(spec.tools ? {tools: spec.tools} : {}),
                     ...(spec.extensions ? {extensions: spec.extensions} : {}),
                     // 5B SCALE arm — null unless both env vars are set. Only the
@@ -1822,7 +1840,7 @@ export async function phaseCritique(
                 deps,
                 'critique-triage',
                 '',
-                appendNoThink(CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, contractsBlock))
+                CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, contractsBlock)
             )
         } catch {
             verdict = null

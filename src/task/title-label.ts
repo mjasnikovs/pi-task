@@ -14,7 +14,7 @@
 import type {PhaseDeps} from './child-runner.js'
 import {runPhaseChild} from './child-runner.js'
 import {LABEL_MAX, truncateLabel} from './parsers.js'
-import {COMPRESS_LABEL_PROMPT, appendNoThink} from './prompts.js'
+import {COMPRESS_LABEL_PROMPT} from './prompts.js'
 
 /**
  * Reduce a raw model completion to a single clean label line: first non-empty
@@ -44,7 +44,7 @@ export async function compressTitle(deps: PhaseDeps, title: string): Promise<str
             deps,
             'compress-label',
             '',
-            appendNoThink(COMPRESS_LABEL_PROMPT(title, LABEL_MAX))
+            COMPRESS_LABEL_PROMPT(title, LABEL_MAX)
         )
         const cleaned = sanitizeLabel(raw)
         if (cleaned.length === 0) return fallback

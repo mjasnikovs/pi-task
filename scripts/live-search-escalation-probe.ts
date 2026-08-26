@@ -1,4 +1,14 @@
 /**
+ * NOTE (reasoning profiles): this harness used to append Qwen3's `/no_think`
+ * soft switch to its prompts, matching what the pipeline did at the time. That
+ * switch has since been measured INERT — with server thinking on and
+ * `/no_think` still in the prompt, Qwen3.8 emitted a median 17k-char trace
+ * anyway (n=25) — and removed in favour of the `--thinking` flag
+ * (src/config/reasoning.ts). Any number this file recorded BEFORE that change
+ * was taken with the suffix present, and therefore at whatever thinking level
+ * the session default happened to be — not at "no thinking".
+ */
+/**
  * LIVE PROBE against the real local model (llama-server @ 127.0.0.1:8080 via pi):
  * does a research worker actually escalate from pi-worker-docs to pi-worker-search
  * when the installed docs do not contain the answer?
@@ -40,7 +50,6 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {runWorker} from '../src/workers/pi-worker-core.js'
 import {RESEARCH_SEARCH_HINT} from '../src/task/phases.js'
-import {appendNoThink} from '../src/task/prompts.js'
 import {reportArm} from './ab-verdict.js'
 
 if (!process.env.PI_BIN || process.env.PI_BIN.trim().length === 0) {
@@ -164,7 +173,7 @@ if (!(fixture in FIXTURES)) {
     console.error(`unknown FIXTURE=${fixture}; expected one of ${Object.keys(FIXTURES).join('|')}`)
     process.exit(1)
 }
-const PROMPT = appendNoThink(FIXTURES[fixture] + RESEARCH_SEARCH_HINT)
+const PROMPT = FIXTURES[fixture] + RESEARCH_SEARCH_HINT
 
 async function trial(n: number): Promise<{searched: boolean; docs: number}> {
     const dir = path.join(ROOT, `${fixture}-${n}`)

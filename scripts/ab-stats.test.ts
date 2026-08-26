@@ -14,6 +14,8 @@ import {
     logChoose,
     mean,
     minAttainableP,
+    pairByStimulus,
+    pairedPermutationP,
     pct,
     permutationP,
     wilson
@@ -274,5 +276,68 @@ describe('logChoose', () => {
     test('out of range is impossible, not an error', () => {
         expect(logChoose(4, 5)).toBe(-Infinity)
         expect(logChoose(4, -1)).toBe(-Infinity)
+    })
+})
+
+describe('pairedPermutationP', () => {
+    test('matches the exact sign-flip distribution at small n', () => {
+        // n=3 with every pair in the same direction: only the all-negative and
+        // all-positive arrangements reach |sum|, so p = 2/8 exactly.
+        expect(pairedPermutationP([10, 10, 10], [20, 20, 20])).toBeCloseTo(0.25, 12)
+        // n=4, same shape: 2/16.
+        expect(pairedPermutationP([10, 10, 10, 10], [20, 20, 20, 20])).toBeCloseTo(0.125, 12)
+    })
+
+    test('identical arms cannot be separated', () => {
+        expect(pairedPermutationP([1, 2, 3], [1, 2, 3])).toBe(1)
+    })
+
+    test('empty is 1, not NaN', () => {
+        expect(pairedPermutationP([], [])).toBe(1)
+    })
+
+    test('misaligned arms are a caller bug, not a silent truncation', () => {
+        expect(() => pairedPermutationP([1, 2], [1])).toThrow()
+    })
+
+    test('a zero duration is clamped, not dropped — n must not move silently', () => {
+        // Dropping the pair would change n and so change every p-value the run
+        // reports, for a clock-resolution artefact.
+        expect(pairedPermutationP([0, 10, 10], [20, 20, 20])).toBeCloseTo(0.25, 12)
+    })
+
+    test('it sees the effect the unpaired test loses to the stimulus spread', () => {
+        // The gate design: stimuli spanning three orders of magnitude, off
+        // uniformly 0.6x on every one of them.
+        const on = [1000, 4000, 16_000, 64_000, 256_000, 512_000]
+        const off = on.map(x => x * 0.6)
+        expect(pairedPermutationP(off, on)).toBeLessThan(0.05)
+        expect(permutationP(off, on)).toBeGreaterThan(0.05)
+    })
+})
+
+describe('pairByStimulus', () => {
+    test('aligns on the shared ids, in the first arm\'s order', () => {
+        const got = pairByStimulus(['b', 'a'], [2, 1], ['a', 'b'], [10, 20])
+        expect(got).toEqual({a: [2, 1], b: [20, 10]})
+    })
+
+    test('drops a stimulus only one arm has', () => {
+        const got = pairByStimulus(['a', 'b'], [1, 2], ['a'], [10])
+        expect(got).toEqual({a: [1], b: [10]})
+    })
+
+    test('refuses when an arm repeats an id', () => {
+        // Pairing the k-th replicate with the k-th is arbitrary. An arbitrary
+        // pairing is a measurement nobody made.
+        expect(pairByStimulus(['a', 'a'], [1, 2], ['a', 'a'], [3, 4])).toBeNull()
+    })
+
+    test('refuses a ragged arm rather than pairing by position', () => {
+        expect(pairByStimulus(['a', 'b'], [1], ['a', 'b'], [1, 2])).toBeNull()
+    })
+
+    test('no overlap is null, not an empty pairing', () => {
+        expect(pairByStimulus(['a'], [1], ['b'], [2])).toBeNull()
     })
 })

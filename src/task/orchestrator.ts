@@ -60,6 +60,7 @@ import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-
 import {titleForDisplay} from './parsers.js'
 import {USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
+import {holdImplementationThinking, type ThinkingControl} from './implementation-thinking.js'
 import {rearmCancelListener} from './cancel-input.js'
 import {takeHeldInput} from './mid-run-input.js'
 import {withRun, announceTerminal} from './run-bracket.js'
@@ -91,6 +92,21 @@ function clearActiveTask(runner: TaskRunner): void {
 
 // Captured from the factory so command handlers can call pi.sendUserMessage.
 let piApi: ExtensionAPI | null = null
+
+/**
+ * The live session's thinking level, as a {@link ThinkingControl}.
+ *
+ * Goes through `piApi` rather than the command ctx because
+ * `ExtensionCommandContext` exposes `thinkingLevel` READ-ONLY; the setter lives
+ * on the extension API. Before `registerTask(pi)` has run there is nothing to
+ * control, so this degrades to a no-op pair rather than throwing — a task that
+ * cannot move the level should still run.
+ */
+function piThinkingControl(): ThinkingControl {
+    const api = piApi
+    if (!api) return {get: () => 'off', set: () => {}}
+    return {get: () => api.getThinkingLevel(), set: level => api.setThinkingLevel(level)}
+}
 
 // ─── TaskRunner options ──────────────────────────────────────────────────────
 
@@ -561,6 +577,12 @@ export interface RunSingleTaskOptions extends Pick<
      * internal per-task runs, which must stay silent. Default false.
      */
     notifyFinish?: boolean
+    /**
+     * How the implementation turn's thinking level is read and written. Defaults
+     * to the live pi session; injected by tests, which must be able to assert
+     * the restore without a real session to restore.
+     */
+    thinkingControl?: ThinkingControl
 }
 
 export interface RunSingleTaskResult {
@@ -629,20 +651,33 @@ export async function runSingleTask(
                 rawPrompt,
                 resumeId: opts.resumeId,
                 sendSpec: async spec => {
-                    // Queue-or-run: never throws, whatever else is on the session (issue #8).
-                    await newCtx.sendUserMessage(spec, {deliverAs: 'followUp'})
-                    if (opts.waitForImplementation) {
-                        await newCtx.waitForIdle()
-                        // A threshold auto-compaction parks the turn at idle WITHOUT
-                        // auto-continuing, and a user ESC ends it "aborted": the
-                        // first idle is not the turn's real end. superviseImplementation
-                        // resumes across compactions, steers across interrupts, and
-                        // reads how the turn ACTUALLY ended.
-                        const outcome = await superviseImplementation(newCtx as SteerCtx, {
-                            promptSteer: opts.promptSteer
-                        })
-                        interrupted = outcome.interrupted
-                        implError = outcome.error
+                    // The implementation turn is the one "child" that is not a
+                    // child: it runs in the user's own session, so its reasoning
+                    // group is applied by moving pi's level and moving it back.
+                    // The autofix re-runner (gateRunTask) re-enters runSingleTask
+                    // and so re-enters this closure, which is why the hold lives
+                    // here rather than at either call site.
+                    const release = holdImplementationThinking(
+                        opts.thinkingControl ?? piThinkingControl()
+                    )
+                    try {
+                        // Queue-or-run: never throws, whatever else is on the session (issue #8).
+                        await newCtx.sendUserMessage(spec, {deliverAs: 'followUp'})
+                        if (opts.waitForImplementation) {
+                            await newCtx.waitForIdle()
+                            // A threshold auto-compaction parks the turn at idle WITHOUT
+                            // auto-continuing, and a user ESC ends it "aborted": the
+                            // first idle is not the turn's real end. superviseImplementation
+                            // resumes across compactions, steers across interrupts, and
+                            // reads how the turn ACTUALLY ended.
+                            const outcome = await superviseImplementation(newCtx as SteerCtx, {
+                                promptSteer: opts.promptSteer
+                            })
+                            interrupted = outcome.interrupted
+                            implError = outcome.error
+                        }
+                    } finally {
+                        release()
                     }
                 },
                 spawnFn: opts.spawnFn,

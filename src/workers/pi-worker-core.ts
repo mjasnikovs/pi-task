@@ -139,11 +139,23 @@ const CARRY_FORWARD_REASONS: ReadonlySet<WorkerRestartReason> = new Set([
  * at no particular column and does not repeat that shape.
  */
 export function hasAnswerContent(text: string): boolean {
-    const entryish = text
-        .split('\n')
-        .map(l => l.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim())
-        .filter(l => /^\S.*?(?:\s{2,}|\s+[—–-]\s+)\S/.test(l) && !/[.:]$/.test(l))
-    return entryish.length >= 2
+    return text.split('\n').filter(isEntryLine).length >= 2
+}
+
+/**
+ * Is ONE line an entry — a name, a gap, then a description — rather than prose?
+ *
+ * Split out of `hasAnswerContent` so the same rule can decide what a line IS,
+ * not just how many of them there are. A FILES section's paths are read back
+ * with it, and a scorer that used its own idea of an entry counted a preamble
+ * sentence and a leaked `</tool_call>` as invented paths.
+ *
+ * Prose wraps at no particular column, so it carries no two-space gap and no
+ * spaced dash; when it does, it ends in `.` or `:` and an entry does not.
+ */
+export function isEntryLine(raw: string): boolean {
+    const l = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim()
+    return /^\S.*?(?:\s{2,}|\s+[—–-]\s+)\S/.test(l) && !/[.:]$/.test(l)
 }
 
 /**
@@ -295,6 +307,16 @@ export interface RunWorkerInput {
      * restart whose partial had no answer content injects nothing.
      */
     onCarryForward?: (info: {attempt: number; chars: number; promptCharsBefore: number}) => void
+    /**
+     * An already-resolved `['--thinking', level]` fragment, or `[]`/omitted to
+     * inherit the session default exactly as before.
+     *
+     * Resolved by the CALLER because runWorker serves three different reasoning
+     * groups — the research workers, the post-implementation gates, and the
+     * ad-hoc `pi-worker` tool — and has nothing in its input that tells them
+     * apart. Guessing here would give a verify gate the research workers' level.
+     */
+    thinking?: readonly string[]
     /**
      * Called once per DISCARDED attempt, at the moment the worker decides to
      * re-spawn — the only window in which a restart is observable at all.
@@ -846,7 +868,14 @@ function commandWatch(timeoutMs: number): {
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
     const tools = input.tools ?? DEFAULT_TOOLS
-    const baseArgs = [...childBaseArgs(input.extensions ?? []), '--mode', 'json', '--tools', tools]
+    const baseArgs = [
+        ...childBaseArgs(input.extensions ?? []),
+        ...(input.thinking ?? []),
+        '--mode',
+        'json',
+        '--tools',
+        tools
+    ]
     const timeoutMs = input.timeoutMs ?? RESEARCH_WORKER_TIMEOUT_MS
     let hint: string | null = null
     // Loop-kill and timeout share one restart budget, mirroring

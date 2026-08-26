@@ -68,6 +68,9 @@ function harness(over: Partial<GateChildDeps> = {}): {
         logPath: '/repo/.pi-tasks/verify-debug.log',
         commandTimeoutMs: 900_000,
         streamInactivityMs: 120_000,
+        // Default harness runs at 'inherit' — the shipped state, so every
+        // existing assertion still describes the argv it was written against.
+        thinking: [],
         status: status(() => () => order.push('loader-stopped')),
         runWorker: () => {
             order.push('worker')

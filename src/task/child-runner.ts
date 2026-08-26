@@ -26,6 +26,8 @@ import {
 import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 import {getConfig} from '../config/config.js'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {reasoningGroupForChild} from './reasoning-groups.js'
 import type {DebugLine} from './debug-log.js'
 // Type-only: `PhaseDeps` declares the research/auto-answer seams, and a seam is
 // declared by the shape of the thing it stands in for. Erased at compile time,
@@ -183,7 +185,17 @@ export interface PhaseRunResult {
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
 
-export function childArgs(tools: string, extensions: readonly string[] = []): string[] {
+export function childArgs(
+    tools: string,
+    extensions: readonly string[] = [],
+    /**
+     * An already-resolved `['--thinking', level]`, or `[]` for "emit no flag".
+     * Resolved by the CALLER, never here: the level is a property of the child's
+     * ROLE, and this function is handed tools and extensions, not a name.
+     * Omitted ⇒ byte-identical argv to the version before reasoning profiles.
+     */
+    thinking: readonly string[] = []
+): string[] {
     // `--mode json` puts the child into the structured event stream the
     // unified runner parses in `mode: 'json-events'`. Without it the child
     // emits plain text, every line fails JSON.parse, finalText stays empty,
@@ -204,7 +216,7 @@ export function childArgs(tools: string, extensions: readonly string[] = []): st
     // one — the guards all hang off pi's `tool_call` hook.
     const toolFlags = tools === '' ? ['--no-tools'] : ['--tools', tools]
     const internal = tools === '' ? [] : extensions
-    return [...childBaseArgs(internal), '--mode', 'json', ...toolFlags]
+    return [...childBaseArgs(internal), ...thinking, '--mode', 'json', ...toolFlags]
 }
 
 // Sentinel error thrown when the user dismisses a grill-me dialog.
@@ -240,9 +252,19 @@ export async function runChild(
      * one (issue #16), so the parent hands its own down — children carry no `-m`
      * and resolve the same default model. 0 / omitted = unknown, as before.
      */
-    contextWindow?: number
+    contextWindow?: number,
+    /**
+     * The resolved `['--thinking', level]` fragment for this child's reasoning
+     * group, or `[]`/omitted to inherit the session default as before.
+     *
+     * A 13th trailing positional is not pretty. It is how `contextWindow` (the
+     * 12th) was added, and an options-bag refactor of this signature is a
+     * separate change from wiring one flag — doing both at once would put a
+     * behaviour change inside a mechanical one. DEBT: convert to an options bag.
+     */
+    thinking?: readonly string[]
 ): Promise<PhaseRunResult> {
-    const invocation = getPiInvocation(childArgs(tools, extensions), prompt)
+    const invocation = getPiInvocation(childArgs(tools, extensions, thinking), prompt)
     let loopHit: LoopHit | undefined
 
     const result = await runChildUnified(
@@ -533,6 +555,20 @@ async function triageChildResult(
  * All three are checked BEFORE the triage ladder: we killed the child, so its
  * exit status describes our SIGTERM and says nothing about its verdict.
  */
+/**
+ * The `--thinking` fragment for a named child, or `[]` when the name is unmapped.
+ *
+ * An unmapped name INHERITS rather than throwing: a child that reaches the model
+ * with today's argv is always safe, and aborting a user's task over a missing
+ * table row would be a worse failure than the one it reports. The guard that
+ * makes the table complete is `reasoning-groups.test.ts`, which fails the BUILD —
+ * where someone can actually fix it.
+ */
+function thinkingForChild(name: string): string[] {
+    const group = reasoningGroupForChild(name)
+    return group ? groupThinkingArgs(group) : []
+}
+
 export async function runPhaseChild(
     deps: PhaseDeps,
     name: string,
@@ -541,6 +577,12 @@ export async function runPhaseChild(
     opts: PhaseChildOptions = {}
 ): Promise<string> {
     if (deps.runChild) return await deps.runChild(name, tools, prompt)
+    // Resolved ONCE per call, not per attempt: a /task-config change landing
+    // between a loop-kill and its retry would otherwise make the two attempts
+    // different experiments, and the retry exists to repeat the first one with a
+    // hint. An unmapped name inherits, which is today's argv — the build-time
+    // guard for that is reasoning-groups.test.ts, not a throw in a user's run.
+    const thinking = thinkingForChild(name)
     const verb = opts.verb ?? 'retry'
     let hint: string | null = null
     const loopHistory: LoopHit[] = []
@@ -575,7 +617,8 @@ export async function runPhaseChild(
                 deps.spawn,
                 deps.childExtensions,
                 (text, isError) => stall.noteResult(text, isError),
-                deps.contextWindow
+                deps.contextWindow,
+                thinking
             )
         } finally {
             clock.cleanup()
@@ -749,7 +792,11 @@ async function runDegradedFinalAttempt(
         deps.spawn,
         undefined,
         undefined,
-        deps.contextWindow
+        deps.contextWindow,
+        // Same group as the attempts that led here. The degrade changes the
+        // TOOLS, not the role — running it at a different thinking level would
+        // make the fallback a different experiment from the thing it rescues.
+        thinkingForChild(name)
     )
     if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
         throw new LoopExhaustedError(name, loopHistory)

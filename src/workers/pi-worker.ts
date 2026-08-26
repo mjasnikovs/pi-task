@@ -10,6 +10,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
 import {runWorker} from './pi-worker-core.js'
 import {
     childFailureReason,
@@ -55,7 +56,16 @@ export function registerPiWorker(pi: ExtensionAPI): void {
         parameters: WorkerParams,
 
         async run(params, signal, ctx) {
-            const result = await runWorker({prompt: params.prompt, cwd: ctx.cwd, signal})
+            // Grouped with `research`: this is the same read-only exploration
+            // loop the four research workers run, just dispatched by a model
+            // rather than by the pipeline. Left ungrouped it would be the one
+            // child that never honoured a profile.
+            const result = await runWorker({
+                prompt: params.prompt,
+                cwd: ctx.cwd,
+                signal,
+                thinking: groupThinkingArgs('research')
+            })
             const details: WorkerDetails = {exitCode: result.exitCode}
 
             const failure = formatChildFailure(result, 'Worker aborted.')

@@ -4,7 +4,8 @@ import {
     parseVerifyBlockStrict,
     isCritiqueClean,
     stripSpecPreamble,
-    validateSpecShape
+    validateSpecShape,
+    validateRefineShape
 } from './spec-validation.js'
 
 describe('isCritiqueClean', () => {
@@ -159,5 +160,57 @@ describe('validateSpecShape', () => {
         const s =
             'GOAL\nx\nCONSTRAINTS\n- a\nPLAN-OF-ATTACK\nstrategy\nACCEPTANCE\n- z\nVERIFY:\n```sh\nls\n```'
         expect(validateSpecShape(s)).toBeNull()
+    })
+})
+
+describe('validateRefineShape', () => {
+    const FOUR =
+        'GOAL\nDo the thing.\n\nCONSTRAINTS\n- keep x\n\n'
+        + 'KNOWN-UNKNOWNS\n- which y\n\nEXTERNAL-DEPENDENCIES\n- Twitch  twitch helix api'
+
+    test('accepts the four bare headings', () => {
+        expect(validateRefineShape(FOUR)).toBeNull()
+    })
+
+    test('accepts a preamble before GOAL — 31/56 of the real corpus has one', () => {
+        expect(validateRefineShape('Here is the rewritten task.\n\n' + FOUR)).toBeNull()
+    })
+
+    test('accepts an EXTERNAL-DEPENDENCIES section with zero bullets, as the prompt allows', () => {
+        const s = 'GOAL\nx\nCONSTRAINTS\n- a\nKNOWN-UNKNOWNS\n- q\nEXTERNAL-DEPENDENCIES\n'
+        expect(validateRefineShape(s)).toBeNull()
+    })
+
+    test('reports an empty answer', () => {
+        expect(validateRefineShape('   \n')).toBe('refined prompt is empty')
+    })
+
+    test('reports one missing section', () => {
+        const s = 'GOAL\nx\nCONSTRAINTS\n- a\nEXTERNAL-DEPENDENCIES\n- Twitch  helix'
+        expect(validateRefineShape(s)).toBe(
+            'refined prompt missing required section(s): KNOWN-UNKNOWNS'
+        )
+    })
+
+    test('reports every missing section at once', () => {
+        expect(validateRefineShape('GOAL\njust a paragraph')).toBe(
+            'refined prompt missing required section(s):'
+                + ' CONSTRAINTS, KNOWN-UNKNOWNS, EXTERNAL-DEPENDENCIES'
+        )
+    })
+
+    test('rejects a heading that is not alone on its line — the consumers need it bare', () => {
+        // extractCapsSection compares `l.trim() === heading`, so `## GOAL` and
+        // `GOAL: do the thing` are both invisible to it.
+        const s = '## GOAL\nx\nCONSTRAINTS\n- a\nKNOWN-UNKNOWNS\n- q\nEXTERNAL-DEPENDENCIES\n'
+        expect(validateRefineShape(s)).toBe('refined prompt missing required section(s): GOAL')
+    })
+
+    test('is not fooled by the heading word appearing in prose', () => {
+        const s =
+            'GOAL\nRecord the CONSTRAINTS and KNOWN-UNKNOWNS somewhere.\nEXTERNAL-DEPENDENCIES\n'
+        expect(validateRefineShape(s)).toBe(
+            'refined prompt missing required section(s): CONSTRAINTS, KNOWN-UNKNOWNS'
+        )
     })
 })

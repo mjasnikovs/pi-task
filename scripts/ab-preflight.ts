@@ -32,8 +32,19 @@ import {RESEARCH_RUN_ID_ENV} from '../src/workers/research-cache.js'
 export const DEFAULT_MODEL_HEALTH_URL = 'http://127.0.0.1:8080/health'
 
 export interface Preconditions {
-    /** The model endpoint must answer before the run starts. */
-    model?: {url?: string; timeoutMs?: number}
+    /**
+     * The model endpoint must answer before the run starts.
+     *
+     * `identity` narrows the published body to the part that says WHICH model
+     * this is. Without it the whole body is the fingerprint, and llama-server's
+     * `/props` carries a `media_marker` regenerated on every boot — MEASURED:
+     * restarting the container with a byte-identical command line changes that
+     * one field and nothing else. A whole-body fingerprint therefore reports
+     * every crash-restart as a model swap, which is how a 56-minute run threw
+     * away ten completed pairs. Default stays whole-body so existing harnesses
+     * are unaffected.
+     */
+    model?: {url?: string; timeoutMs?: number; identity?: (body: string) => string}
     /**
      * `PI_BIN` must be set. An unset PI_BIN makes a child re-invoke this process,
      * which is a fork bomb that has taken this machine down twice.
@@ -137,8 +148,9 @@ export async function requirePreconditions(
     let fingerprint: string | null = null
     const url = p.model?.url ?? DEFAULT_MODEL_HEALTH_URL
     const timeoutMs = p.model?.timeoutMs ?? 3000
+    const identity = p.model?.identity ?? ((b: string) => b)
     if (p.model !== undefined) {
-        fingerprint = await probe(deps, url, timeoutMs)
+        fingerprint = await probe(deps, url, timeoutMs, identity)
         if (fingerprint === null) {
             reasons.push(
                 `the model endpoint at ${url} did not answer within ${timeoutMs}ms. `
@@ -154,9 +166,9 @@ export async function requirePreconditions(
     return {
         fingerprint,
         watch: {
-            stillAlive: async () => (await probe(deps, url, timeoutMs)) !== null,
+            stillAlive: async () => (await probe(deps, url, timeoutMs, identity)) !== null,
             unchanged: async () => {
-                const now = await probe(deps, url, timeoutMs)
+                const now = await probe(deps, url, timeoutMs, identity)
                 if (now === null) return false
                 // No fingerprint to compare ⇒ report unchanged rather than invent a
                 // restart. An endpoint that publishes nothing cannot be caught here,
@@ -171,7 +183,8 @@ export async function requirePreconditions(
 async function probe(
     deps: Required<PreflightDeps>,
     url: string,
-    timeoutMs: number
+    timeoutMs: number,
+    identity: (body: string) => string = b => b
 ): Promise<string | null> {
     try {
         const r = await deps.fetch(url, {signal: AbortSignal.timeout(timeoutMs)})
@@ -179,7 +192,15 @@ async function probe(
         // The body is whatever the server publishes. It is used only for equality
         // across ticks, so its shape does not matter — only that it is stable while
         // the process is, which llama-server's /health and /v1/models both are.
-        return await r.text().catch(() => '')
+        const body = await r.text().catch(() => '')
+        try {
+            return identity(body)
+        } catch {
+            // A projection that cannot read this body must not be reported as a
+            // dead endpoint: fall back to the raw text, which is the old
+            // behaviour, rather than abstaining on a parse error.
+            return body
+        }
     } catch {
         return null
     }
@@ -200,4 +221,36 @@ export function abstainMidRun(name: string, detail: string, overrides: Preflight
         exit: overrides.exit ?? ((c: number) => process.exit(c))
     }
     return abstain(name, [detail], deps)
+}
+
+/**
+ * WHICH model llama-server is running, from `/props`, and nothing that changes
+ * without the model changing.
+ *
+ * MEASURED, not assumed: restarting the container with a byte-identical command
+ * line leaves every field alone EXCEPT `media_marker`, which is regenerated per
+ * boot. Fingerprinting the whole body therefore calls every crash-restart a
+ * model swap. That has now cost two runs: the 2026-08-25 implementation run
+ * died at pair 10 of 12, and the 2026-08-26 group run died in `gate` at trial
+ * 10 of 40 and took `research` and `phase` down with it — five GPU hours for a
+ * restart that a diff of the two bodies proved was the same model and build.
+ *
+ * Pass this as `model.identity`. The default stays whole-body so harnesses
+ * pointed at endpoints that are not llama-server are unaffected.
+ */
+export function llamaModelIdentity(body: string): string {
+    const j = JSON.parse(body) as Record<string, unknown>
+    const gen = (j.default_generation_settings ?? {}) as Record<string, unknown>
+    // MEASURED against a live /props: `n_ctx` is published at
+    // `default_generation_settings.n_ctx`, NOT at the top level, so the original
+    // `j.n_ctx` read null on every body and a context-window change was invisible.
+    // The top-level read stays as a fallback for a server that moves it back.
+    return JSON.stringify({
+        model_path: j.model_path ?? null,
+        build_info: j.build_info ?? null,
+        n_ctx: gen.n_ctx ?? j.n_ctx ?? null,
+        // The template decides whether a thinking level is even readable, so a
+        // change to it changes what an A/B on reasoning is measuring.
+        chat_template: typeof j.chat_template === 'string' ? j.chat_template.length : null
+    })
 }

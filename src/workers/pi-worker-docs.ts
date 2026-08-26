@@ -33,6 +33,7 @@ import {normalizeQuery} from './research-cache.js'
 import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
 import {isAbstention} from './abstention.js'
+import {groupThinkingArgs} from '../config/reasoning-args.js'
 
 const RENDER_QUERY_MAX = 100
 
@@ -219,6 +220,9 @@ export function registerPiWorkerDocs(
                     cwd: ctx.cwd,
                     signal,
                     spawn,
+                    // The `extraction` group's level. Resolved at the call site so the
+                    // extractor itself never reads ambient config.
+                    thinking: groupThinkingArgs('extraction'),
                     abortedMessage
                 })
 

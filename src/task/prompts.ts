@@ -11,33 +11,6 @@
 export const MAX_GRILL_QUESTIONS = 20
 
 /**
- * Qwen3 "soft switch": placing `/no_think` in the prompt disables the model's
- * <think> reasoning trace for that turn and persists across the tool-call loop
- * within the same child session.
- *
- * On a local reasoning model decode is the bottleneck (~50 t/s here) while
- * prefill is ~10x faster, so cost is dominated by *generated* tokens. A runaway
- * think trace can be 10k+ tokens — minutes — even when the phase's real output
- * is a short list or a one-word verdict (an observed triage spent ~384s
- * thinking to emit "CLEAN"). Stripping the monologue does NOT limit the model's
- * exploration: it still calls every tool it wants and takes every step it
- * needs — it just stops narrating between actions.
- *
- * We strip thinking from the mechanical / exploration phases (refine, the four
- * research workers, verify-tooling, triage) and keep it ON for the judgment
- * phases (compose, grill, critique rewrite) where the reasoning earns its
- * decode cost. pi's `--thinking off` flag is a no-op for this provider
- * (`supportsReasoningEffort: false` in models.json), so the in-prompt soft
- * switch is the reliable control.
- */
-export const NO_THINK = '/no_think'
-
-/** Append the Qwen3 `/no_think` soft switch to a prompt. See {@link NO_THINK}. */
-export function appendNoThink(prompt: string): string {
-    return `${prompt}\n\n${NO_THINK}`
-}
-
-/**
  * Compress a verbose task title into a short status-bar label. Pure judgment, no
  * tools — the child reads only the title we hand it. The output is sanitised and
  * length-clamped by the caller (title-label.ts), so the prompt optimises for the

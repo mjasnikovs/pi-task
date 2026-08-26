@@ -19,6 +19,16 @@ import {
 } from './config.js'
 import {listInstalledExtensions, type InstalledExtension} from './extension-list.js'
 import {listGuardableTools, type GuardableTool} from './tool-list.js'
+import {
+    REASONING_GROUPS,
+    REASONING_MODES,
+    sanitizeReasoningMode,
+    REASONING_GROUP_HELP,
+    REASONING_SETTINGS,
+    resolveReasoning,
+    type GroupSetting,
+    type ReasoningGroup
+} from './reasoning.js'
 
 type Theme = ExtensionCommandContext['ui']['theme']
 
@@ -107,6 +117,13 @@ class BorderedBox implements Component {
  */
 export interface ConfigItem {
     id: keyof PiTaskConfig
+    /**
+     * Which titled block of the menu this row sits under. Rows are grouped by
+     * section in {@link panelItems}, in the order the sections first appear in
+     * {@link ITEMS} — so moving a row between sections is a one-word edit and
+     * the header follows it.
+     */
+    section: Section
     label: string
     description: string
     /** Offered values. Omitted for a boolean, which is always on/off. */
@@ -118,13 +135,64 @@ export interface ConfigItem {
 }
 
 /**
+ * The titled blocks the settings menu is divided into.
+ *
+ * A flat list of ~30 rows — twelve settings, seven reasoning groups, one row per
+ * live tool and one per installed extension — reads as a wall, and the rows that
+ * belong together (a mode and the seven groups it controls; a timeout and the
+ * per-tool exemptions from it) end up separated by rows that have nothing to do
+ * with them. The headers are inert rows: no `values`, so Enter does nothing on
+ * them.
+ */
+export type Section =
+    | 'session'
+    | 'checks'
+    | 'research'
+    | 'reasoning'
+    | 'timeouts'
+    | 'unattended'
+    | 'logging'
+    | 'extensions'
+
+/** Section order, and the label each header renders. */
+export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
+    {key: 'session', title: 'session'},
+    {key: 'checks', title: 'after each task'},
+    {key: 'research', title: 'research'},
+    {key: 'reasoning', title: 'reasoning'},
+    {key: 'timeouts', title: 'timeouts'},
+    {key: 'unattended', title: 'unattended'},
+    {key: 'logging', title: 'logging'},
+    {key: 'extensions', title: 'child extensions'}
+]
+
+/** Marks a header row, so onChange can ignore one and tests can find them. */
+export const SECTION_ID_PREFIX = 'section:'
+
+/** An inert titled row. No `values` ⇒ SettingsList's Enter handler no-ops on it. */
+function sectionHeader(title: string): PanelItem {
+    return {
+        id: SECTION_ID_PREFIX + title,
+        label: `── ${title} ──`,
+        description: '',
+        currentValue: ''
+    }
+}
+
+/**
  * The shared pair for a boolean setting: shown as on/off, stored as a boolean.
  * Every non-enum row uses this, so a boolean cannot be given a bespoke parser by
  * accident.
  */
-function booleanItem(id: keyof PiTaskConfig, label: string, description: string): ConfigItem {
+function booleanItem(
+    section: Section,
+    id: keyof PiTaskConfig,
+    label: string,
+    description: string
+): ConfigItem {
     return {
         id,
+        section,
         label,
         description,
         format: cfg => (cfg[id] ? 'on' : 'off'),
@@ -143,18 +211,21 @@ function booleanItem(id: keyof PiTaskConfig, label: string, description: string)
  */
 export const ITEMS: ConfigItem[] = [
     booleanItem(
+        'session',
         'remote',
         'remote control',
         'Serve the task UI on your local network so you can follow and steer a run from '
             + 'your phone. Prints a QR code to scan when it starts'
     ),
     booleanItem(
+        'checks',
         'autoCommit',
         'auto-commit',
         'Make a git commit before and after every sub-task, so each step is a checkpoint '
             + 'you can read back or roll back to'
     ),
     booleanItem(
+        'checks',
         'verifyWork',
         'verify work',
         'When a task says it is done, actually run the checks its spec asks for and report '
@@ -162,6 +233,7 @@ export const ITEMS: ConfigItem[] = [
             + '"enforce guidelines" fix things safely. /task waits for the work to finish'
     ),
     booleanItem(
+        'checks',
         'enforceGuidelines',
         'enforce guidelines',
         'Check what each task committed against your AGENTS.md / CLAUDE.md rules. With '
@@ -169,6 +241,7 @@ export const ITEMS: ConfigItem[] = [
             + 'checks; on its own it only reports. /task waits for the work to finish'
     ),
     booleanItem(
+        'research',
         'orientation',
         'project tour',
         'Show the research workers the shape of the project first — package manifest, '
@@ -176,6 +249,7 @@ export const ITEMS: ConfigItem[] = [
             + 'their way around'
     ),
     booleanItem(
+        'research',
         'parallelResearchWorkers',
         'parallel research',
         'Run the 4 research workers at once instead of one after another. Only faster if '
@@ -183,6 +257,7 @@ export const ITEMS: ConfigItem[] = [
             + 'local GPU it is measurably slower, so leave it off there'
     ),
     booleanItem(
+        'research',
         'researchCache',
         'research cache',
         'Remember docs and web pages for the length of one run, so later tasks reuse what '
@@ -191,6 +266,7 @@ export const ITEMS: ConfigItem[] = [
     ),
     {
         id: 'searchProvider',
+        section: 'research',
         label: 'search engine',
         description:
             'Which engine backs web search. Exa and DuckDuckGo work with no setup; Brave needs '
@@ -205,6 +281,7 @@ export const ITEMS: ConfigItem[] = [
     },
     {
         id: 'requestTimeoutMs',
+        section: 'timeouts',
         label: 'command timeout',
         description:
             'Give up on any single command that runs this long, and tell the model to set its '
@@ -223,6 +300,7 @@ export const ITEMS: ConfigItem[] = [
     },
     {
         id: 'streamInactivityMs',
+        section: 'timeouts',
         label: 'stuck reply retry',
         description:
             'Give up on a model reply that has sent nothing for this long and ask again. A '
@@ -241,6 +319,7 @@ export const ITEMS: ConfigItem[] = [
         }
     },
     booleanItem(
+        'unattended',
         'yoloMode',
         'yolo mode',
         'Stop asking you anything: every question takes the option pi recommends, a failed '
@@ -249,7 +328,26 @@ export const ITEMS: ConfigItem[] = [
             + 'For throwaway projects you are not watching'
     ),
     {
+        id: 'reasoningMode',
+        section: 'reasoning',
+        label: 'reasoning',
+        description:
+            'How much the helper sessions think before answering. "default" uses the '
+            + 'per-step table pi-task has measured, "on" and "off" force one answer '
+            + 'everywhere, and "custom" is whatever you set in the "think:" rows below. '
+            + 'Those rows always show what each step actually runs at, and changing one '
+            + 'switches this to custom. A step left on "inherit" uses whatever thinking '
+            + 'level pi itself is set to, which is what every step did before this setting '
+            + 'existed',
+        values: [...REASONING_MODES],
+        format: cfg => String(cfg.reasoningMode),
+        apply: (cfg, chosen) => {
+            cfg.reasoningMode = sanitizeReasoningMode(chosen)
+        }
+    },
+    {
         id: 'debugLogs',
+        section: 'logging',
         label: 'debug logs',
         description:
             'How much of a run gets written to .pi-tasks/*-debug.log. "events" keeps the '
@@ -341,6 +439,78 @@ export function applyToolToggle(
     return watched ? rest : [...rest, toolName]
 }
 
+/**
+ * One /task-config row per reasoning group, so a group's thinking level can be
+ * set without hand-editing config.json.
+ *
+ * SHOWN IN EVERY MODE, not only `custom`. Two reasons, and the second is the
+ * real one:
+ *  - `SettingsList` fixes the overlay's body height from the descriptions it was
+ *    constructed with (see createSettingsPanel), so rows that appear and vanish
+ *    would leave the box sized for the wrong list.
+ *  - The value displayed is what the group ACTUALLY runs at — resolveReasoning,
+ *    not the stored custom table. That makes the measured `default` table
+ *    readable from the menu instead of hidden in a source file, which is the
+ *    whole point of having measured it.
+ */
+const REASON_ID_PREFIX = 'reason:'
+
+export function reasoningItems(
+    cfg: PiTaskConfig
+): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+    return REASONING_GROUPS.map(group => ({
+        id: REASON_ID_PREFIX + group,
+        label: `think: ${group}`,
+        description: REASONING_GROUP_HELP[group],
+        // The EFFECTIVE level, not cfg.reasoningLevels[group]: in default/on/off
+        // the stored table is not what runs, and a row that shows a value the
+        // run does not use is worse than no row.
+        currentValue: resolveReasoning(group, cfg),
+        values: [...REASONING_SETTINGS]
+    }))
+}
+
+/**
+ * Apply one group row's new value.
+ *
+ * Setting any group necessarily means "custom" — there is nowhere else to store
+ * a per-group choice. The seeding step is what stops that from being a trap: on
+ * the way out of `default`/`on`/`off` every OTHER group is first pinned to the
+ * level it was already running at, so changing one row changes one row. Without
+ * it, nudging `research` while in `off` would silently return the other six to
+ * whatever the stored table happened to hold.
+ */
+/**
+ * Write every `think:` row's displayed value back from the config.
+ *
+ * Called after ANY change, not just a reasoning one, because the mode row and
+ * the seven group rows are one control split across eight lines: cycling
+ * `reasoning` to `off` changes what all seven of them run at, and cycling one
+ * group row flips the mode, which changes the other six. A row showing a level
+ * the run will not use is worse than no row.
+ */
+export function refreshReasoningRows(cfg: PiTaskConfig, list: SettingsList): void {
+    for (const group of REASONING_GROUPS) {
+        list.updateValue(REASON_ID_PREFIX + group, resolveReasoning(group, cfg))
+    }
+    list.updateValue('reasoningMode', cfg.reasoningMode)
+}
+
+export function applyReasoningLevel(
+    cfg: PiTaskConfig,
+    group: ReasoningGroup,
+    chosen: string
+): void {
+    if (!REASONING_SETTINGS.includes(chosen as GroupSetting)) return
+    if (cfg.reasoningMode !== 'custom') {
+        const seeded = {} as Record<ReasoningGroup, GroupSetting>
+        for (const g of REASONING_GROUPS) seeded[g] = resolveReasoning(g, cfg)
+        cfg.reasoningLevels = seeded
+        cfg.reasoningMode = 'custom'
+    }
+    cfg.reasoningLevels = {...cfg.reasoningLevels, [group]: chosen as GroupSetting}
+}
+
 /** Overlay width; the list gets `- 4` of it, the description `- 4` again. */
 const OVERLAY_WIDTH = 68
 /** Settings rows shown at once before the list scrolls. */
@@ -390,7 +560,12 @@ export type PanelItem = {
     label: string
     description: string
     currentValue: string
-    values: string[]
+    /**
+     * Omitted ONLY by a section header. SettingsList cycles a row on Enter when
+     * this is a non-empty array, so leaving it off is what makes a header inert
+     * — the header does not need its own branch anywhere.
+     */
+    values?: string[]
 }
 
 /**
@@ -401,10 +576,25 @@ export type PanelItem = {
 export function createSettingsPanel(
     items: PanelItem[],
     theme: Theme,
-    onChange: (id: string, newValue: string) => void,
+    /**
+     * Called with the row's id, its new value, and the LIST ITSELF.
+     *
+     * The list is handed back because some rows change what OTHER rows display:
+     * flipping `reasoning` to off means all seven `think:` rows now run at off,
+     * and a row's `currentValue` is a snapshot taken when the panel was built.
+     * Without a way to write the others back, the menu shows `reasoning off`
+     * beside seven rows still claiming `inherit` — which is what it did.
+     */
+    onChange: (id: string, newValue: string, list: SettingsList) => void,
     onCancel: () => void
 ): BorderedBox {
-    const list = new SettingsList(items, MAX_VISIBLE, makeTheme(theme), onChange, onCancel)
+    const list: SettingsList = new SettingsList(
+        items,
+        MAX_VISIBLE,
+        makeTheme(theme),
+        (id, newValue) => onChange(id, newValue, list),
+        onCancel
+    )
     return new BorderedBox(
         list,
         CONFIG_TITLE,
@@ -424,17 +614,34 @@ export function panelItems(
     installed: InstalledExtension[],
     tools: readonly GuardableTool[] = []
 ): PanelItem[] {
-    return [
-        ...ITEMS.map(({id, label, description, values, format}) => ({
-            id: id as string,
-            label,
-            description,
-            currentValue: format(cfg),
-            values: values ?? ['on', 'off']
-        })),
-        ...toolItems(tools, cfg.commandTimeoutExemptTools),
-        ...extensionItems(installed, cfg.extensionWhitelist)
-    ]
+    // The discovered rows belong to a section too — the per-tool watchdog
+    // exemptions under `timeouts` (they are exemptions FROM that timeout), and
+    // the per-extension toggles under their own heading.
+    const extra: Partial<Record<Section, PanelItem[]>> = {
+        reasoning: reasoningItems(cfg),
+        timeouts: toolItems(tools, cfg.commandTimeoutExemptTools),
+        extensions: extensionItems(installed, cfg.extensionWhitelist)
+    }
+    const out: PanelItem[] = []
+    for (const {key, title} of SECTIONS) {
+        const rows = [
+            ...ITEMS.filter(i => i.section === key).map(
+                ({id, label, description, values, format}) => ({
+                    id: id as string,
+                    label,
+                    description,
+                    currentValue: format(cfg),
+                    values: values ?? ['on', 'off']
+                })
+            ),
+            ...(extra[key] ?? [])
+        ]
+        // An empty section prints no header. `extensions` has no fixed rows at
+        // all, so with nothing installed the heading would otherwise sit alone.
+        if (rows.length === 0) continue
+        out.push(sectionHeader(title), ...rows)
+    }
+    return out
 }
 
 async function handleTaskConfig(
@@ -445,7 +652,11 @@ async function handleTaskConfig(
     const cfg = {
         ...getConfig(),
         extensionWhitelist: [...getConfig().extensionWhitelist],
-        commandTimeoutExemptTools: [...getConfig().commandTimeoutExemptTools]
+        commandTimeoutExemptTools: [...getConfig().commandTimeoutExemptTools],
+        // Copied for the same reason as the two arrays above: the panel mutates
+        // its own draft, and sharing the live object would apply half-made
+        // choices to running children before the user finished choosing.
+        reasoningLevels: {...getConfig().reasoningLevels}
     }
 
     // Enumerated live at open so an installed extension appears and an
@@ -460,15 +671,14 @@ async function handleTaskConfig(
     if (ctx.mode !== 'tui') {
         // Reads the SAME `format` the panel does, so the two renderings cannot
         // disagree about what a setting currently says.
-        const lines = ITEMS.map(({label, format}) => `${label.padEnd(22)} ${format(cfg)}`)
-        for (const t of tools) {
-            const state = cfg.commandTimeoutExemptTools.includes(t.name) ? 'off' : 'on'
-            lines.push(`${('watch: ' + t.name).padEnd(22)} ${state}`)
-        }
-        for (const e of installed) {
-            const state = cfg.extensionWhitelist.includes(e.path) ? 'on' : 'off'
-            lines.push(`${('ext: ' + e.label).padEnd(22)} ${state}`)
-        }
+        // Built from panelItems, not a second hand-written walk of the same
+        // tables: the two renderings used to be able to disagree about what a
+        // setting said, and a headless run is the one place nobody would notice.
+        const lines = panelItems(cfg, installed, tools).map(i =>
+            i.values === undefined ?
+                `[${i.label.replace(/─/g, '').trim()}]`
+            :   `${i.label.padEnd(22)} ${i.currentValue}`
+        )
         ctx.ui.notify(lines.join('  |  '), 'info')
         return
     }
@@ -478,12 +688,21 @@ async function handleTaskConfig(
             createSettingsPanel(
                 panelItems(cfg, installed, tools),
                 theme,
-                (id, newValue) => {
+                (id, newValue, list) => {
+                    // Header rows carry no `values`, so SettingsList never
+                    // cycles them and this can only be a real setting.
+                    if (id.startsWith(SECTION_ID_PREFIX)) return
                     if (id.startsWith(EXT_ID_PREFIX)) {
                         cfg.extensionWhitelist = applyExtensionToggle(
                             cfg.extensionWhitelist,
                             id.slice(EXT_ID_PREFIX.length),
                             newValue === 'on'
+                        )
+                    } else if (id.startsWith(REASON_ID_PREFIX)) {
+                        applyReasoningLevel(
+                            cfg,
+                            id.slice(REASON_ID_PREFIX.length) as ReasoningGroup,
+                            newValue
                         )
                     } else if (id.startsWith(TOOL_ID_PREFIX)) {
                         cfg.commandTimeoutExemptTools = applyToolToggle(
@@ -499,6 +718,12 @@ async function handleTaskConfig(
                         // until someone noticed.
                         ITEMS.find(item => item.id === id)?.apply(cfg, newValue)
                     }
+                    // The reasoning rows describe each other, so they are
+                    // re-read from the config after every change — including
+                    // changes to unrelated rows, which costs nothing and means
+                    // there is no list of "changes that need a refresh" to keep
+                    // correct.
+                    refreshReasoningRows(cfg, list)
                     saveConfig(cfg).catch(() => {})
                 },
                 () => done(undefined)
