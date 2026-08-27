@@ -234,6 +234,34 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // of GPU. ledger-phase.VOID-wrong-scorer.jsonl stores no output text, so its
     // apparent off 2/14 vs medium 6/14 is an artefact that cannot be rescored.
     // DO NOT READ A RESULT INTO IT.
+    //
+    // THE THIRD AXIS WAS RE-AUDITED 2026-08-27, because planning's citation axis
+    // was rejected the same way at 59.2% and reached 97.1% once four adjudicator
+    // bugs were fixed. THE CHECK WAS INDEED LOSING, and by a lot.
+    // scripts/phase-path-axis-audit.ts walks the ladder:
+    //
+    //     NAIVE            60.1% of paths,  5/55 tasks perfect
+    //     CATEGORY-CLEAN   83.8% of paths, 34/52 tasks perfect
+    //     FINAL-TREE       93.4% of paths, 43/52 tasks perfect
+    //
+    // CATEGORY-CLEAN drops the spans that were never repo paths: npm specifiers
+    // (`@hono/zod-validator`, `hono/client`), doc URLs, MIME types, dotted code
+    // expressions (`c.var.user` — nine of them), bare filenames with no
+    // directory, and `./`/`../` import specifiers. FINAL-TREE additionally counts
+    // a path real if it exists anywhere in the tree the RUN shipped, which stops
+    // marking a CORRECT PREDICTION wrong — 16 of the 27 remaining misses are
+    // files a later task really creates, which is [[reasoning-research-recall-
+    // axis-built]]'s "a file that does not exist yet is not truth" seen from the
+    // precision side.
+    //
+    // IT IS STILL NOT A USABLE AXIS, and the reason has changed. At 93.4% the
+    // ELEVEN residual misses are almost all PATH-PREFIX ELISIONS — `server/
+    // index.ts` for `src/server/index.ts`, `client/main.tsx` for
+    // `src/client/main.tsx`, `routes/auth.ts` for `src/server/routes/auth.ts`.
+    // Loosen enough to accept a suffix match and the axis saturates; keep them
+    // and the A/B measures whether refine writes the `src/` prefix. That is
+    // formatting, not reasoning, and neither arm should be paid for it.
+    // The finding stands — with a much better-established reason than "56.2%".
     phase: 'inherit',
     // A/B 2026-08-27, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm over the
