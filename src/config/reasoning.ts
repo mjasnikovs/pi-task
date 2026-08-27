@@ -328,28 +328,25 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // clean comparison could only widen off's quality margin — which the clock
     // then has to overcome. Ecologically valid, not clean.
     planning: 'medium',
-    // NOT MEASURED. SET BY THE OWNER, 2026-08-27, and this comment exists so
-    // nobody later mistakes it for a run.
+    // `inherit` ON PURPOSE, and this is the one cell where that is an ANSWER
+    // rather than an absence of one.
     //
-    // /task-plan has never executed inside the A/B corpus, so there is no
-    // recorded child turn to replay and no stimulus to build a ladder on. The
-    // rest of this table's rule — "a cell filled in from intuition is WORSE
-    // than `inherit`" — is deliberately overruled here, and the reason is that
-    // `inherit` is not neutral either: it silently means whatever
-    // ~/.pi/agent/settings.json happens to hold, which is a setting nobody in
-    // this table chose.
+    // /task-plan is INTERACTIVE. The user is sitting in the loop, reading each
+    // question and steering the next one, and how much thinking that wants is
+    // theirs to judge per session — a quick sketch and a hard architectural
+    // plan are the same command. Every other group in this table runs
+    // unattended, where nobody is there to turn a knob and the table has to
+    // decide. Here there is, and it should not be overridden.
     //
-    // THE ARGUMENT, such as it is: `plan` is /task-plan's question and answer
-    // children, and its nearest measured neighbour is `planning` — /task-auto's
-    // clarify/decompose/extract children, the same job on the same kind of
-    // input. `planning` measured `medium` at rung 2. Extending a neighbour's
-    // cell is a GUESS, not a finding, and it is recorded as one.
+    // `inherit` means the child gets whatever `~/.pi/agent/settings.json` holds
+    // — that is the general objection to it, and here it is exactly the point:
+    // the setting the user chose is the setting the user gets.
     //
-    // TO REPLACE THIS WITH A MEASUREMENT: record a /task-plan run so its
-    // question and answer children have stored turns, then build an axis its
-    // own recorded output cannot already clear. That last clause is where
-    // `phase` died — see the note on that cell.
-    plan: 'medium',
+    // It is also unmeasured: /task-plan has never executed inside the A/B
+    // corpus, so there is no recorded child turn to replay. But that is not why
+    // the cell reads `inherit`. Recording a run and measuring the group would
+    // not change it.
+    plan: 'inherit',
     // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm.
     //

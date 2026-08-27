@@ -113,7 +113,7 @@ describe('what the shipped table puts on the wire', () => {
         research: ['--thinking', 'off'],
         phase: [],
         planning: ['--thinking', 'medium'],
-        plan: ['--thinking', 'medium'],
+        plan: [],
         gate: ['--thinking', 'off'],
         extraction: ['--thinking', 'off'],
         implementation: ['--thinking', 'off']
