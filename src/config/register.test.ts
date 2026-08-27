@@ -51,6 +51,44 @@ describe('extensionItems', () => {
     })
 })
 
+/** The row the cursor is on, stripped of the frame and the cursor itself. */
+function selectedRow(steps: number): string {
+    const line = renderPanel(steps).find(l => l.includes('❯'))
+    return (line ?? '').replace(/^[│\s]*❯\s/, '').trimEnd()
+}
+
+describe('the cursor steps over the section decoration', () => {
+    test('the menu opens on a setting, not on the first heading', () => {
+        // The first row of the list is a header. Left alone, SettingsList opens
+        // with the cursor parked on it and no description to show.
+        expect(selectedRow(0)).toContain('remote control')
+    })
+
+    test('no heading and no blank row is ever the selected row', () => {
+        const rows = panelItems(getConfig(), [], []).length
+        // Once round the list and a little past, in both directions.
+        for (let steps = 0; steps <= rows + 2; steps++) {
+            const row = selectedRow(steps)
+            // Every real row shows a value; a header and a gap show nothing.
+            expect(row, `after ${steps} steps`).toMatch(/(● on|○ off|\S+ +\S)/)
+            expect(row.trim(), `after ${steps} steps`).not.toBe('')
+            expect(row, `after ${steps} steps`).not.toMatch(/^[A-Z][A-Z ]+$/)
+        }
+    })
+
+    test('up from the first setting wraps to the last one, not to the frame', () => {
+        const panel = createSettingsPanel(
+            panelItems(getConfig(), [], []),
+            plainTheme,
+            () => {},
+            () => {}
+        )
+        panel.handleInput('\x1b[A')
+        const line = panel.render(68).find(l => l.includes('❯')) ?? ''
+        expect(line).toContain('stuck reply retry')
+    })
+})
+
 describe('settings panel layout', () => {
     test('the box keeps one height as the selection (and its description) changes', () => {
         const heights = [0, 4, 9, 10, 11].map(steps => renderPanel(steps).length)
@@ -58,8 +96,8 @@ describe('settings panel layout', () => {
     })
 
     test('the selected label sits in the same column as the unselected ones', () => {
-        // Cursor on "verify work" (index 3). A one-cell cursor would pull the
-        // selected label a column left of every other row.
+        // A one-cell cursor would pull the selected label a column left of
+        // every other row.
         const lines = renderPanel(3)
         const selected = lines.find(l => l.includes('verify work'))
         const unselected = lines.find(l => l.includes('project tour'))

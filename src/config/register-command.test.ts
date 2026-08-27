@@ -76,6 +76,15 @@ describe('/task-config with no TUI', () => {
         for (const {label} of ITEMS) expect(notified[0].msg).toContain(label)
     })
 
+    test('no empty bracket where the TUI has a blank row', async () => {
+        // The section gaps are TUI spacing. On one `|`-joined line they used to
+        // come out as a stray `[]` between two headings.
+        await taskConfig()('', headlessCtx())
+
+        expect(notified[0].msg).not.toContain('[]')
+        expect(notified[0].msg).toContain('[SESSION]')
+    })
+
     test('reports the CURRENT value, not a default', async () => {
         const label = ITEMS.find(i => i.id === 'verifyWork')!.label
 

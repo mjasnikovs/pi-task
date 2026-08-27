@@ -1,5 +1,5 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
-import {SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
+import {getKeybindings, SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
 import type {Component, SettingsListTheme} from '@earendil-works/pi-tui'
 import {registerBridgeCommand} from '../remote/bridge.js'
 import {readPkgVersion} from '../shared/pkg-version.js'
@@ -160,23 +160,45 @@ export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
     {key: 'checks', title: 'after each task'},
     {key: 'research', title: 'research'},
     {key: 'reasoning', title: 'reasoning'},
-    {key: 'timeouts', title: 'timeouts'},
     {key: 'unattended', title: 'unattended'},
     {key: 'logging', title: 'logging'},
-    {key: 'extensions', title: 'child extensions'}
+    {key: 'extensions', title: 'child extensions'},
+    // Last on purpose. It is the longest block (a fixed timeout plus one row
+    // per live tool, so it grows with the host) and the least often changed —
+    // in front of `unattended` it pushed every short section off the screen.
+    {key: 'timeouts', title: 'timeouts'}
 ]
 
 /** Marks a header row, so onChange can ignore one and tests can find them. */
 export const SECTION_ID_PREFIX = 'section:'
 
-/** An inert titled row. No `values` ⇒ SettingsList's Enter handler no-ops on it. */
+/**
+ * An inert titled row. No `values` ⇒ SettingsList's Enter handler no-ops on it,
+ * and {@link SkipInertRows} steps the cursor straight over it.
+ *
+ * Upper case, and styled muted by {@link makeTheme}, because the dashed
+ * lower-case form it replaces was the same case, colour and weight as the
+ * setting labels underneath it — eight headings that read as nine more rows.
+ */
 function sectionHeader(title: string): PanelItem {
     return {
         id: SECTION_ID_PREFIX + title,
-        label: `── ${title} ──`,
+        label: title.toUpperCase(),
         description: '',
         currentValue: ''
     }
+}
+
+/**
+ * A blank row between two sections.
+ *
+ * `SettingsList` renders exactly one line per item, so the only way to put air
+ * above a heading is to hand it an empty row. It carries the header prefix so
+ * everything that already treats a header as scenery — the inert check, the
+ * cursor skip, the headless rendering — covers it with no second rule.
+ */
+function sectionGap(title: string): PanelItem {
+    return {id: `${SECTION_ID_PREFIX}gap:${title}`, label: '', description: '', currentValue: ''}
 }
 
 /**
@@ -514,7 +536,7 @@ export function applyReasoningLevel(
 /** Overlay width; the list gets `- 4` of it, the description `- 4` again. */
 const OVERLAY_WIDTH = 68
 /** Settings rows shown at once before the list scrolls. */
-const MAX_VISIBLE = 9
+const MAX_VISIBLE = 11
 
 /**
  * Tallest body the settings list can render, so {@link BorderedBox} can pad
@@ -534,10 +556,18 @@ export function settingsBodyHeight(
     return 1 + maxVisible + 1 + 1 + tallestDescription + 1 + 1
 }
 
-function makeTheme(theme: Theme): SettingsListTheme {
+function makeTheme(theme: Theme, isHeader: (label: string) => boolean): SettingsListTheme {
     return {
-        label: (text, selected) =>
-            selected ? theme.fg('accent', theme.bold(text)) : theme.fg('text', text),
+        label: (text, selected) => {
+            // Headers are scenery, so they are rendered quieter than the rows
+            // they title rather than louder. `isHeader` is asked by text
+            // because SettingsListTheme only ever sees the padded label —
+            // matching on the text is what keeps the styling in one place
+            // instead of pre-colouring the string back in panelItems, which
+            // has no theme to colour it with.
+            if (isHeader(text)) return theme.fg('muted', theme.bold(text))
+            return selected ? theme.fg('accent', theme.bold(text)) : theme.fg('text', text)
+        },
         // A filled/hollow dot makes the on/off column scannable at a glance
         // without reading a word on every row. Enum values (an engine name, a
         // duration) are real content, so they stay readable rather than muted.
@@ -568,6 +598,73 @@ export type PanelItem = {
     values?: string[]
 }
 
+/** The arrow key SettingsList moves down on, under the default bindings. */
+const DOWN_KEY = '\x1b[B'
+
+/**
+ * Moves the cursor over the section headers and the blank rows between them.
+ *
+ * Those rows are decoration: they carry no `values`, so Enter already does
+ * nothing on them. Without this they were still stops on the way down — with a
+ * heading AND a blank line per section that is sixteen dead keypresses in a
+ * thirty-row menu, and the panel opens with the cursor parked on a heading that
+ * has no description to show.
+ *
+ * It drives the list through its own public `handleInput` — pressing the very
+ * key the user pressed, N times — rather than reaching for the private
+ * `selectedIndex`. The mirror it keeps cannot drift: with search off and no
+ * submenus, up and down are the only two things that move that index.
+ */
+class SkipInertRows implements Component {
+    private index = 0
+
+    constructor(
+        private readonly list: SettingsList,
+        /** True where a row can be selected, in the list's own order. */
+        private readonly selectable: boolean[]
+    ) {
+        // The first row is a header, so the panel would open on it. Only
+        // synthesise the keypress if it is actually bound to "down" — feeding
+        // a key the list ignores would move the mirror and not the cursor.
+        if (!getKeybindings().matches(DOWN_KEY, 'tui.select.down')) return
+        while (this.index < selectable.length && !selectable[this.index]) {
+            this.list.handleInput(DOWN_KEY)
+            this.index++
+        }
+    }
+
+    render(width: number): string[] {
+        return this.list.render(width)
+    }
+
+    invalidate(): void {
+        this.list.invalidate()
+    }
+
+    handleInput(data: string): void {
+        const kb = getKeybindings()
+        const step =
+            kb.matches(data, 'tui.select.down') ? 1
+            : kb.matches(data, 'tui.select.up') ? -1
+            : 0
+        if (step === 0) {
+            this.list.handleInput(data)
+            return
+        }
+        const n = this.selectable.length
+        let target = this.index
+        for (let moved = 1; moved <= n; moved++) {
+            target = (target + step + n) % n
+            if (this.selectable[target]) {
+                for (let i = 0; i < moved; i++) this.list.handleInput(data)
+                this.index = target
+                return
+            }
+        }
+        // Every row is scenery. Nothing to select, so nothing to move.
+    }
+}
+
 /**
  * Builds the framed settings panel. Split out of the command handler so the
  * exact component the overlay shows can be rendered to a string in a test or a
@@ -588,15 +685,20 @@ export function createSettingsPanel(
     onChange: (id: string, newValue: string, list: SettingsList) => void,
     onCancel: () => void
 ): BorderedBox {
+    // A row with no `values` is a header or the blank line above one.
+    const headerLabels = new Set(items.filter(i => i.values === undefined).map(i => i.label))
     const list: SettingsList = new SettingsList(
         items,
         MAX_VISIBLE,
-        makeTheme(theme),
+        makeTheme(theme, label => headerLabels.has(label.trimEnd())),
         (id, newValue) => onChange(id, newValue, list),
         onCancel
     )
     return new BorderedBox(
-        list,
+        new SkipInertRows(
+            list,
+            items.map(i => (i.values?.length ?? 0) > 0)
+        ),
         CONFIG_TITLE,
         s => theme.fg('borderMuted', s),
         s => theme.fg('accent', theme.bold(s)),
@@ -639,6 +741,7 @@ export function panelItems(
         // An empty section prints no header. `extensions` has no fixed rows at
         // all, so with nothing installed the heading would otherwise sit alone.
         if (rows.length === 0) continue
+        if (out.length > 0) out.push(sectionGap(title))
         out.push(sectionHeader(title), ...rows)
     }
     return out
@@ -674,11 +777,16 @@ async function handleTaskConfig(
         // Built from panelItems, not a second hand-written walk of the same
         // tables: the two renderings used to be able to disagree about what a
         // setting said, and a headless run is the one place nobody would notice.
-        const lines = panelItems(cfg, installed, tools).map(i =>
-            i.values === undefined ?
-                `[${i.label.replace(/─/g, '').trim()}]`
-            :   `${i.label.padEnd(22)} ${i.currentValue}`
-        )
+        const lines = panelItems(cfg, installed, tools)
+            // The blank rows between sections are there to give the TUI air.
+            // One line of `|`-joined text has none to give, and an empty label
+            // would print as a stray `[]`.
+            .filter(i => i.label !== '')
+            .map(i =>
+                i.values === undefined ?
+                    `[${i.label.trim()}]`
+                :   `${i.label.padEnd(22)} ${i.currentValue}`
+            )
         ctx.ui.notify(lines.join('  |  '), 'info')
         return
     }

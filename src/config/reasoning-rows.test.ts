@@ -211,9 +211,10 @@ describe('the rows do not go stale (the bug you saw)', () => {
 })
 
 describe('the menu is divided into titled sections', () => {
+    /** Titled headers only — the blank rows between sections carry the same id. */
     const headers = (): string[] =>
         panelItems(draft(), [], [])
-            .filter(i => i.id.startsWith(SECTION_ID_PREFIX))
+            .filter(i => i.id.startsWith(SECTION_ID_PREFIX) && i.label !== '')
             .map(i => i.label)
 
     test('every non-header row sits under a header', () => {
@@ -235,14 +236,35 @@ describe('the menu is divided into titled sections', () => {
 
     test('an empty section prints no header', () => {
         // Nothing installed ⇒ no extension rows ⇒ the heading would sit alone.
-        expect(headers().some(h => h.includes('child extensions'))).toBe(false)
+        expect(headers().some(h => h.includes('CHILD EXTENSIONS'))).toBe(false)
         const withExt = panelItems(draft(), [{path: '/x.js', label: 'x', origin: 'user'}], [])
         expect(
             withExt
                 .filter(i => i.id.startsWith(SECTION_ID_PREFIX))
                 .map(i => i.label)
                 .join()
-        ).toContain('child extensions')
+        ).toContain('CHILD EXTENSIONS')
+    })
+
+    test('a blank row separates the sections, and never opens the menu', () => {
+        const rows = panelItems(draft(), [], [])
+        const gaps = rows.filter(i => i.label === '')
+        // One per boundary — never before the first section, which would put a
+        // blank line under the title where the frame already leaves one.
+        expect(gaps).toHaveLength(headers().length - 1)
+        expect(rows[0]!.label).not.toBe('')
+        for (const gap of gaps) expect(gap.values).toBeUndefined()
+        // Each one sits directly above a heading, not adrift among the rows.
+        const labels = rows.map(i => i.label)
+        labels.forEach((label, i) => {
+            if (label === '') expect(headers()).toContain(labels[i + 1]!)
+        })
+    })
+
+    test('timeouts is the last section', () => {
+        // The longest block (it grows with the host's tool list) and the least
+        // often changed, so it sits below everything short.
+        expect(headers().at(-1)).toBe('TIMEOUTS')
     })
 
     test('the reasoning mode and its seven groups are in one section', () => {
