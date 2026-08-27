@@ -29,28 +29,96 @@
  */
 import {normalise} from './contracts.js'
 
-/** Trailing `[source: "…"]` clause a decompose line may carry (prompt asks for it last). */
-const SOURCE_RE = /\s*\[source:\s*"(.+)"\s*\]\s*$/i
+/** One trailing `[source: "…"]` clause, anchored so it is the WHOLE remainder. */
+const SOURCE_RE = /^\[source:\s*"([\s\S]*)"\s*\]$/i
 
-export interface SourcedTitle {
-    /** The title with any source clause stripped. */
-    base: string
-    /** The cited spec line, when present and grounded in the source doc. */
-    source?: string
+/**
+ * Markdown MARKUP dropped before grounding — emphasis runs, list and heading
+ * markers, table pipes and CODE BACKTICKS. Not content: no word, number or
+ * punctuation inside a sentence is touched, so this cannot make an invented
+ * quote match.
+ *
+ * WHY. A model copies a spec line as it READS, and what it reads is rendered:
+ * `2. **Auth** — sessions, login/logout/me, guards + tests.` comes back as
+ * `Auth — sessions, login/logout/me, guards + tests.` That is a verbatim copy of
+ * the line's TEXT, and the exact-substring test called it fabricated and threw
+ * it away — including, as here, the "+ tests" line that is this module's own
+ * worked example.
+ *
+ * BACKTICKS ARE THE SAME CLASS and were the larger half. A code span renders as
+ * bare text, so `3. **Invites** — create/validate/redeem, \`/join/:token\` page.`
+ * comes back as `Invites — create/validate/redeem, /join/:token page.` Measured
+ * on the mx5 fixture, screening every spec line in its RENDERED form:
+ * 107/216 grounded with backticks kept, 216/216 with them dropped.
+ *
+ * MEASURED 2026-08-27 over the 20 recorded decompose runs in
+ * ab-grouplab/ledger-planning.jsonl, and screened both ways first:
+ *   FLOOR   real spec lines with ONE content word altered: 0/216 pass.
+ *   CEILING real spec lines quoted without their markup: 209/257 = 81.3% passed
+ *           before, 257/257 after. 48 genuine lines were being rejected.
+ * Re-screened by scripts/decompose-fidelity-screen.ts, which is the standing
+ * check: CEILING raw 216/216, CEILING rendered 216/216, FLOOR 0/216.
+ */
+function demark(s: string): string {
+    return s
+        .replace(/\*\*|__/g, '')
+        .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '')
+        .replace(/^#+\s*/gm, '')
+        .replace(/`/g, '')
+        .replace(/\|/g, ' ')
 }
 
-/** Split a decompose title into its base and its GROUNDED source citation.
- *  An absent clause yields no source; a fabricated (ungrounded) one is stripped
- *  and dropped — exactly like keepGroundedContracts rejects a paraphrased quote. */
+/**
+ * Undo the backslash-escaping a model applies to a quote it is putting INSIDE a
+ * double-quoted clause. `[source: "… \`import { sql } from \\"bun\\"\` gotcha …"]`
+ * is a faithful copy of a line the document stores with plain quotes; the
+ * backslashes are an artefact of the delimiter, not content. Measured live: 4 of
+ * the 19 ungrounded clauses in the n=30/arm planning run were this and nothing
+ * else. Only `\"` is undone — no other escape sequence is interpreted, so this
+ * cannot rewrite a quote into something the document happens to contain.
+ */
+function unescapeQuotes(s: string): string {
+    return s.replace(/\\"/g, '"')
+}
+
+export interface SourcedTitle {
+    /** The title with every source clause stripped. */
+    base: string
+    /** The cited spec lines, in order, keeping only those GROUNDED in the doc. */
+    sources: string[]
+}
+
+/**
+ * Split a decompose title into its base and its GROUNDED source citations.
+ *
+ * PLURAL, because the model emits plural. The prompt asks for one trailing
+ * citation and a quarter of real titles carry more — 62 of 244 across the 20
+ * recorded runs. The old pattern was `\[source:\s*"(.+)"\]$`: greedy `.+`
+ * against an end anchor, so on `[source: "A"] [source: "B"]` it matched from the
+ * FIRST clause to the LAST quote and produced the superstring `A"] [source: "B`,
+ * which of course is not in the document. Two real citations became one
+ * fabricated one, and both were discarded. Peeling from the end with
+ * lastIndexOf is the fix; a lazy quantifier is NOT, because leftmost-first
+ * matching plus the `$` anchor expands it across the later clauses just the same.
+ *
+ * An absent clause yields no sources; a fabricated (ungrounded) one is dropped
+ * — exactly like keepGroundedContracts rejects a paraphrased quote.
+ */
 export function extractTitleSource(title: string, sourceDoc: string): SourcedTitle {
-    const m = SOURCE_RE.exec(title)
-    if (!m) return {base: title.trim()}
-    const base = title.slice(0, m.index).trim()
-    const quote = m[1].trim()
-    if (quote.length === 0 || !normalise(sourceDoc).includes(normalise(quote))) {
-        return {base}
+    const ref = normalise(demark(sourceDoc))
+    let base = title.trim()
+    const sources: string[] = []
+    for (;;) {
+        const at = base.toLowerCase().lastIndexOf('[source:')
+        if (at === -1) break
+        const m = SOURCE_RE.exec(base.slice(at).trim())
+        if (!m) break
+        const quote = m[1].trim()
+        base = base.slice(0, at).trim()
+        if (quote.length > 0 && ref.includes(normalise(demark(unescapeQuotes(quote)))))
+            sources.unshift(quote)
     }
-    return {base, source: quote}
+    return {base, sources}
 }
 
 /** Word tokens for presence checks: alphanumeric runs, lowercased. */
@@ -104,8 +172,8 @@ export interface TitleRestoration {
     index: number
     /** The verbatim fragments re-attached to the title. */
     fragments: string[]
-    /** The grounded source line they came from. */
-    source: string
+    /** The grounded source lines they came from, in citation order. */
+    sources: string[]
 }
 
 export interface ReconciledPlan {
@@ -127,18 +195,31 @@ export function reconcileTitleSources(titles: string[], sourceDoc: string): Reco
     const restored: TitleRestoration[] = []
     let sourced = 0
     for (let i = 0; i < titles.length; i++) {
-        const {base, source} = extractTitleSource(titles[i], sourceDoc)
-        if (source === undefined) {
+        const {base, sources} = extractTitleSource(titles[i], sourceDoc)
+        if (sources.length === 0) {
             out.push(base)
             continue
         }
         sourced++
-        const missing = findDroppedPlusFragments(source, base)
+        // EVERY grounded citation is checked, not just the first. A title that
+        // cites three spec lines can drop a constraint from any of them, and the
+        // fragments are deduped because two cited lines routinely share one
+        // ("+ tests" appears on four §12 milestones).
+        const seen = new Set<string>()
+        const missing: string[] = []
+        for (const src of sources) {
+            for (const f of findDroppedPlusFragments(src, base)) {
+                const k = f.toLowerCase()
+                if (seen.has(k)) continue
+                seen.add(k)
+                missing.push(f)
+            }
+        }
         if (missing.length === 0) {
             out.push(base)
             continue
         }
-        restored.push({index: i, fragments: missing, source})
+        restored.push({index: i, fragments: missing, sources})
         out.push(`${base} — MUST also cover (restored from its spec line): ${missing.join(', ')}`)
     }
     return {titles: out, restored, sourced}

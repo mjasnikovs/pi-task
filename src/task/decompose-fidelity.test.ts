@@ -38,24 +38,25 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
         const t = `Implement auth [source: "${AUTH_LINE}"]`
         expect(extractTitleSource(t, MX5_DOC)).toEqual({
             base: 'Implement auth',
-            source: AUTH_LINE
+            sources: [AUTH_LINE]
         })
     })
 
     test('a fabricated/paraphrased citation is stripped and NOT trusted', () => {
         const t = 'Implement auth [source: "Auth milestone: build sessions and tests"]'
-        expect(extractTitleSource(t, MX5_DOC)).toEqual({base: 'Implement auth'})
+        expect(extractTitleSource(t, MX5_DOC)).toEqual({base: 'Implement auth', sources: []})
     })
 
     test('grounding is whitespace- and case-insensitive (line-wrapped quote still counts)', () => {
         const wrapped = '2. **auth** — sessions,   login/logout/me, guards + tests.'
-        const {source} = extractTitleSource(`x [source: "${wrapped}"]`, MX5_DOC)
-        expect(source).toBe(wrapped)
+        const {sources} = extractTitleSource(`x [source: "${wrapped}"]`, MX5_DOC)
+        expect(sources).toEqual([wrapped])
     })
 
     test('no clause ⇒ title passes through untouched', () => {
         expect(extractTitleSource('Implement auth — guards', MX5_DOC)).toEqual({
-            base: 'Implement auth — guards'
+            base: 'Implement auth — guards',
+            sources: []
         })
     })
 
@@ -63,7 +64,78 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
         const t = `Build shell [decisions: use bun] [source: "${AUTH_LINE}"]`
         const r = extractTitleSource(t, MX5_DOC)
         expect(r.base).toBe('Build shell [decisions: use bun]')
-        expect(r.source).toBe(AUTH_LINE)
+        expect(r.sources).toEqual([AUTH_LINE])
+    })
+
+    // THE GREEDY-REGEX REGRESSION. The prompt asks for one trailing citation and
+    // a quarter of real titles carry more (62 of 244 across the 20 recorded
+    // decompose runs). `\[source: "(.+)"\]$` matched from the FIRST clause to the
+    // LAST quote and produced the superstring `A"] [source: "B`, which grounds
+    // nowhere — so two real citations became zero.
+    test('MULTIPLE trailing clauses each ground separately', () => {
+        const t = `Build it [source: "${AUTH_LINE}"] [source: "${LISTINGS_LINE}"]`
+        const r = extractTitleSource(t, MX5_DOC)
+        expect(r.base).toBe('Build it')
+        expect(r.sources).toEqual([AUTH_LINE, LISTINGS_LINE])
+    })
+
+    test('among several clauses, only the fabricated one is dropped', () => {
+        const t = `Build it [source: "${AUTH_LINE}"] [source: "invented requirement line"]`
+        expect(extractTitleSource(t, MX5_DOC).sources).toEqual([AUTH_LINE])
+    })
+
+    // THE MARKUP REGRESSION. A model copies the line as RENDERED, without its
+    // list number and bold runs. That is still a verbatim copy of the text, and
+    // the exact-substring test called it fabricated — on this module's own
+    // worked example.
+    test('a quote copied without its markdown markup still grounds', () => {
+        const rendered = 'Auth — sessions, login/logout/me, guards + tests.'
+        expect(extractTitleSource(`x [source: "${rendered}"]`, MX5_DOC).sources).toEqual([rendered])
+    })
+
+    test('stripping markup does NOT let an altered line through', () => {
+        const altered = 'Auth — sessions, login/logout/me, firewalls + tests.'
+        expect(extractTitleSource(`x [source: "${altered}"]`, MX5_DOC).sources).toEqual([])
+    })
+
+    // THE BACKTICK REGRESSION, the larger half of the same class. A code span
+    // renders as bare text, so the model copies `/join/:token` without its
+    // backticks. Measured on the n=30/arm planning run: 8 of 19 ungrounded
+    // clauses were this and nothing else.
+    test('a quote copied without its code backticks still grounds', () => {
+        const rendered = 'Invites — create/validate/redeem, /join/:token page.'
+        expect(extractTitleSource(`x [source: "${rendered}"]`, MX5_DOC).sources).toEqual([rendered])
+    })
+
+    test('a backtick-stripped quote does NOT collapse the spacing around it', () => {
+        // `hono` `4.12.27` — dropping the backticks must not leave a gap that a
+        // faithful copy no longer matches. Backtick → nothing, pipe → space.
+        const rendered = 'hono 4.12.27 — HTTP framework, RPC (hono/client)'
+        expect(extractTitleSource(`x [source: "${rendered}"]`, MX5_DOC).sources).toEqual([rendered])
+    })
+
+    test('stripping backticks does NOT let an altered line through', () => {
+        const altered = 'Invites — create/validate/revoke, /join/:token page.'
+        expect(extractTitleSource(`x [source: "${altered}"]`, MX5_DOC).sources).toEqual([])
+    })
+
+    // THE ESCAPE REGRESSION. The clause is double-quoted, so a spec line that
+    // itself contains a double quote comes back backslash-escaped. The
+    // backslashes are the delimiter's artefact, not content.
+    test('a quote whose inner double quotes are backslash-escaped still grounds', () => {
+        const withQuotes =
+            'Verify Bun/Hono/Tailwind/Playwright API names against current docs '
+            + '(e.g. the `import { sql } from \\"bun\\"` gotcha — there is no '
+            + '`bun:sql` module).'
+        expect(extractTitleSource(`x [source: "${withQuotes}"]`, MX5_DOC).sources.length).toBe(1)
+    })
+
+    test('unescaping does NOT let an altered line through', () => {
+        const altered =
+            'Verify Bun/Hono/Tailwind/Playwright API names against outdated docs '
+            + '(e.g. the `import { sql } from \\"bun\\"` gotcha — there is no '
+            + '`bun:sql` module).'
+        expect(extractTitleSource(`x [source: "${altered}"]`, MX5_DOC).sources).toEqual([])
     })
 })
 
