@@ -202,6 +202,22 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // it. The conjunction was built so that neither half can be gamed alone,
     // and on these numbers it separates neither arm.
     //
+    // AXIS RE-AUDITED 2026-08-27, after planning's adjudicator turned out to
+    // have four bugs. One more was found here and it is the SAME-INPUT rule
+    // broken a third time: `filesPaths` read the child's whole raw turn, while
+    // the SCREEN sliced the recorded `## research` down to its FILES block
+    // precisely because APIS is symbols and would score as 100% invented. One
+    // `off` trial emitted its own `APIS` heading despite the prompt's "No other
+    // sections", and three symbols under it — `cn` and two `--*` token lists —
+    // were counted as invented paths, failing a trial whose FILES block was
+    // 20/20 real. The slice now lives in `filesPaths`, where both callers reach
+    // it. The cell is UNCHANGED: that trial still fails, on a genuine recall
+    // miss (`src/client/types.d.ts`), and the counts are identical.
+    // The other two failures were checked by hand and are genuine — both arms
+    // put `AdminPage.spec.tsx` / `.story.tsx` under `src/client/routes/` when
+    // they ship under `src/client/pages/`, a wrong-directory prediction made
+    // from a real sibling.
+    //
     // MEASURED UNDER THE SERVER'S GLOBAL SAMPLER, which is the THINKING preset,
     // so the `off` arm decodes on sampling tuned for the `on` arm. That is the
     // regime this machine really runs pi-task in, so the result is
@@ -312,7 +328,28 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // clean comparison could only widen off's quality margin — which the clock
     // then has to overcome. Ecologically valid, not clean.
     planning: 'medium',
-    plan: 'inherit',
+    // NOT MEASURED. SET BY THE OWNER, 2026-08-27, and this comment exists so
+    // nobody later mistakes it for a run.
+    //
+    // /task-plan has never executed inside the A/B corpus, so there is no
+    // recorded child turn to replay and no stimulus to build a ladder on. The
+    // rest of this table's rule — "a cell filled in from intuition is WORSE
+    // than `inherit`" — is deliberately overruled here, and the reason is that
+    // `inherit` is not neutral either: it silently means whatever
+    // ~/.pi/agent/settings.json happens to hold, which is a setting nobody in
+    // this table chose.
+    //
+    // THE ARGUMENT, such as it is: `plan` is /task-plan's question and answer
+    // children, and its nearest measured neighbour is `planning` — /task-auto's
+    // clarify/decompose/extract children, the same job on the same kind of
+    // input. `planning` measured `medium` at rung 2. Extending a neighbour's
+    // cell is a GUESS, not a finding, and it is recorded as one.
+    //
+    // TO REPLACE THIS WITH A MEASUREMENT: record a /task-plan run so its
+    // question and answer children have stored turns, then build an axis its
+    // own recorded output cannot already clear. That last clause is where
+    // `phase` died — see the note on that cell.
+    plan: 'medium',
     // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm.
     //
@@ -347,6 +384,21 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     //     pairing stays within-run) the axis has headroom and n=30/arm.
     // Superseded ledgers kept beside it: VOID-synthetic-prompt (hand-written
     // prompt, prose-matching scorer) and VOID-saturated-shape-axis.
+    //
+    // AXIS RE-AUDITED 2026-08-27, all four mismatches read by hand. The PARSER
+    // is clean — `verdictWord` extracted the stated word correctly every time.
+    // THE TRUTH IS NOT, on one stimulus. TASK_0009/after is `PASS` because its
+    // own VERIFY script passes there, and BOTH arms answered FAIL with the same
+    // checkable reason: the acceptance list requires phone validation to REJECT
+    // `+1234567`, while the spec's own mandated regex `/^\+[1-9]\d{6,14}$/`
+    // accepts it (`+` `1` then six digits, and the range starts at six), and the
+    // shipped test omits the case. Verified by reading the regex, not by
+    // trusting the model. So "the task's VERIFY passes" is not the same fact as
+    // "the acceptance criteria are met", and on that stimulus the child was
+    // right and the axis was wrong.
+    // THE CELL IS UNCHANGED: both arms fail it identically, so dropping it
+    // leaves off 28/29 vs medium 28/29 — still level, still rung 2. Recorded
+    // because the next axis built on executed VERIFY should expect this gap.
     gate: 'off',
     // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=20/arm over 20

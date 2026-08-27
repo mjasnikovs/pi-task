@@ -116,12 +116,31 @@ const COLON_ENTRY = /^((?=[^\s:]*[/.])[A-Za-z0-9._@][\w./@+-]*(?::\d+)?):\s+\S/
  */
 export function filesPaths(section: string): string[] {
     const out: string[] = []
+    // ONLY THE FILES BLOCK, and this is the same rule for both inputs.
+    //
+    // The recorded `## research` holds FILES, APIS, CONTEXT and
+    // VERIFIED-TOOLING under bare ALL-CAPS headings, and only FILES is a path
+    // list — the harness sliced it off before screening, because APIS is
+    // symbols and scores as 100% invented. The LIVE child is told "No section
+    // header. No other sections", and mostly obeys — but not always: measured
+    // on the 12-rep ledger, one `off` trial emitted its own `APIS` heading and
+    // three of its symbols (`cn`, a `--font-*` token list, a `--radius-*` token
+    // list) were read as invented paths, which alone failed the trial.
+    //
+    // Slicing on ONE side and not the other is [[ab-scorer-must-see-the-same-
+    // input]] again: the screen read a clean FILES block while the trial read
+    // the whole raw turn. So the slice lives here, where both callers reach it.
+    let inFiles = true
     for (const raw of section.split('\n')) {
         const trimmed = raw.trim()
         if (trimmed === '') continue
-        // A bare section heading is not an entry. FILES output carries none by
-        // contract ("No section header"), but a recorded section keeps its own.
-        if (/^[A-Z][A-Z -]*$/.test(trimmed)) continue
+        // A bare section heading is not an entry, and it decides whether the
+        // lines after it are paths at all.
+        if (/^[A-Z][A-Z -]*$/.test(trimmed)) {
+            inFiles = trimmed === 'FILES'
+            continue
+        }
+        if (!inFiles) continue
         const line = trimmed.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
         const colon = COLON_ENTRY.exec(line)
         if (colon) {

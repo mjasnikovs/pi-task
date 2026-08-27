@@ -40,6 +40,29 @@ describe('filesPaths', () => {
         expect(filesPaths('FILES\npackage.json  manifest\n')).toEqual(['package.json'])
     })
 
+    // THE SECTION SLICE. Measured on the 12-rep research ledger: one `off`
+    // trial emitted its own `APIS` heading despite the prompt's "No other
+    // sections", and three of the symbols under it — `cn` and two `--*` token
+    // lists — were read as invented paths, failing the trial on its own
+    // correct FILES block. The harness sliced the RECORDED section this way
+    // and the trial did not, which is the same-input rule broken a third time.
+    test('entries under a NON-FILES heading are not paths', () => {
+        expect(
+            filesPaths(
+                'src/client/index.css  brand tokens\n'
+                    + 'APIS\n'
+                    + 'cn  the class-name merge helper\n'
+                    + '--font-display / --font-body  Tailwind v4 font tokens\n'
+            )
+        ).toEqual(['src/client/index.css'])
+    })
+
+    test('a FILES heading after another section turns entries back on', () => {
+        expect(
+            filesPaths('APIS\ncn  helper\nFILES\npackage.json  manifest\n')
+        ).toEqual(['package.json'])
+    })
+
     test('a non-numeric colon suffix is left alone, not trimmed into a real path', () => {
         // MEASURED: TASK_0001 emitted `package.json:/workspace`. Trimming that
         // would turn a malformed entry into a passing one and hide the very

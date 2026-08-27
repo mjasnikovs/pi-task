@@ -75,11 +75,41 @@ describe('every shipped cell is measured or inherit', () => {
         return out.join(' ')
     }
 
+    /**
+     * THE ONE WAY OUT, and it is deliberately loud.
+     *
+     * A cell may name a level with no A/B behind it only if it SAYS SO in the
+     * comment, in these words, and says how to replace itself with a real
+     * measurement. That keeps the invariant sharp — the exemption is itself
+     * auditable, and a reader who greps for it finds every guess in the table
+     * — while admitting the thing `inherit` cannot express: `inherit` is not
+     * neutral, it silently means whatever the user's settings.json holds.
+     *
+     * Used once, by `plan`, whose children have never run inside the A/B corpus.
+     */
+    const DECLARED_UNMEASURED = 'NOT MEASURED. SET BY THE OWNER'
+
+    test('an unmeasured cell says so in those words, and says how to fix it', () => {
+        for (const g of REASONING_GROUPS) {
+            const c = commentAbove(g)
+            if (!c.includes(DECLARED_UNMEASURED)) continue
+            expect(c, `${g} declares itself unmeasured but cites an A/B anyway`).not.toMatch(
+                /n=\d+\/arm/
+            )
+            expect(c, `${g} declares itself unmeasured with no route to a measurement`).toMatch(
+                /TO REPLACE THIS WITH A MEASUREMENT/
+            )
+        }
+    })
+
     test('a cell that names a level cites its A/B', () => {
         for (const g of REASONING_GROUPS) {
             const cell = DEFAULT_REASONING_TABLE[g]
             if (cell === 'inherit') continue
             const c = commentAbove(g)
+            // A cell that declares itself a guess is exempt from the citation
+            // and held to the rule above instead.
+            if (c.includes(DECLARED_UNMEASURED)) continue
             // The four facts that make a cell auditable: that it was an A/B,
             // on how many trials, against which model file, and — because the
             // harness returns a forced two-way verdict — down which rung. A
