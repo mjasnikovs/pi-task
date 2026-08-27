@@ -111,7 +111,7 @@ describe('what the shipped table puts on the wire', () => {
      */
     const EXPECTED: Readonly<Record<string, string[]>> = {
         research: ['--thinking', 'off'],
-        phase: [],
+        phase: ['--thinking', 'off'],
         planning: ['--thinking', 'medium'],
         plan: [],
         gate: ['--thinking', 'off'],
@@ -148,9 +148,11 @@ describe('what the shipped table puts on the wire', () => {
 
     test('an inherit group is still byte-identical to the pre-feature argv', () => {
         // The half of the original claim that survives, now asserted where it
-        // is actually true: for a group the table leaves alone.
-        expect(DEFAULT_REASONING_TABLE.phase).toBe('inherit')
-        const fragment = thinkingArgs(resolveReasoning('phase', DEFAULT_CONFIG))
+        // is actually true: for a group the table leaves alone. `plan` is the
+        // only one left — /task-plan is interactive, so the level is the user's
+        // to pick and the table must not override it.
+        expect(DEFAULT_REASONING_TABLE.plan).toBe('inherit')
+        const fragment = thinkingArgs(resolveReasoning('plan', DEFAULT_CONFIG))
         expect(childArgs('read', [], fragment)).toEqual([
             ...childBaseArgs([]),
             '--mode',

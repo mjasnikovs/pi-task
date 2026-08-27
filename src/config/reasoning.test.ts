@@ -75,11 +75,42 @@ describe('every shipped cell is measured or inherit', () => {
         return out.join(' ')
     }
 
+    /**
+     * THE ONE WAY OUT, and it is deliberately loud.
+     *
+     * A cell may name a level with no A/B behind it only if it SAYS SO in the
+     * comment, in these words, and says how to replace itself with a real
+     * measurement. The exemption is itself asserted, so a reader who greps for
+     * the phrase finds every cell in the table that no run stands behind.
+     *
+     * It exists because `inherit` cannot express a DECISION. For an unattended
+     * child, `inherit` does not defer to a judgement — it defers to whatever
+     * settings.json holds, which is the case this table exists to remove. Used
+     * once, by `phase`, whose four candidate axes are all dead.
+     */
+    const DECLARED_UNMEASURED = 'NOT MEASURED. DECIDED BY PRIOR'
+
+    test('an unmeasured cell says so in those words, and says how to fix it', () => {
+        for (const g of REASONING_GROUPS) {
+            const c = commentAbove(g)
+            if (!c.includes(DECLARED_UNMEASURED)) continue
+            expect(c, `${g} declares itself unmeasured but cites a trial count`).not.toMatch(
+                /n=\d+\/arm/
+            )
+            expect(c, `${g} declares itself unmeasured with no route to a measurement`).toMatch(
+                /TO REPLACE THIS WITH A MEASUREMENT/
+            )
+        }
+    })
+
     test('a cell that names a level cites its A/B', () => {
         for (const g of REASONING_GROUPS) {
             const cell = DEFAULT_REASONING_TABLE[g]
             if (cell === 'inherit') continue
             const c = commentAbove(g)
+            // A cell that declares itself unmeasured is exempt from the
+            // citation and held to the rule above instead.
+            if (c.includes(DECLARED_UNMEASURED)) continue
             // The four facts that make a cell auditable: that it was an A/B,
             // on how many trials, against which model file, and — because the
             // harness returns a forced two-way verdict — down which rung. A

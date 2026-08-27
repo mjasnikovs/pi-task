@@ -223,21 +223,39 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // regime this machine really runs pi-task in, so the result is
     // ecologically valid — it is NOT a clean comparison.
     research: 'off',
-    // NOT MEASURED, and that is a finding rather than an omission. Three
-    // candidate axes were each scored against refine's OWN RECORDED OUTPUT and
-    // rejected before any GPU: `validateRefineShape` scores 55/56 — saturated;
-    // "EXTERNAL-DEPENDENCIES names a real package" finds 4 distinct packages
-    // across all 56 tasks — no signal; "every backticked path exists" scores
-    // the recorded answers at 56.2%, 6/56 perfect — the CHECK loses, not the
-    // answer, and a scorer the known-good answer cannot clear may not judge
-    // anything. Running phase on the shape axis would buy a rung 3 for an hour
-    // of GPU. ledger-phase.VOID-wrong-scorer.jsonl stores no output text, so its
-    // apparent off 2/14 vs medium 6/14 is an artefact that cannot be rescored.
-    // DO NOT READ A RESULT INTO IT.
+    // NOT MEASURED. DECIDED BY PRIOR, 2026-08-27 — the same prior that carries
+    // every rung-3 cell in this table: thinking that buys nothing measurable is
+    // not worth its tokens. `off`.
     //
-    // THE THIRD AXIS WAS RE-AUDITED 2026-08-27, because planning's citation axis
-    // was rejected the same way at 59.2% and reached 97.1% once four adjudicator
-    // bugs were fixed. THE CHECK WAS INDEED LOSING, and by a lot.
+    // WHY A DECISION AND NOT `inherit`. All eight phase children run UNATTENDED
+    // — refine, grill-gen, grill-auto, verify-tooling, compose, critique,
+    // critique-triage, compress-label. Nobody is watching to turn a knob, so
+    // `inherit` does not defer to a judgement, it defers to whatever
+    // ~/.pi/agent/settings.json happens to hold. That is the one case this
+    // table exists to remove. (`plan` is the opposite case and keeps `inherit`
+    // for exactly the opposite reason — see that cell.)
+    //
+    // WHY `off` RATHER THAN `medium`. The one cell decided on QUALITY is
+    // extraction at rung 1, where off beat medium 20/20 vs 15/20 and medium's
+    // failure mode was STITCHING — concatenating non-contiguous passages into
+    // something that reads verbatim. refine, compose and critique all emit prose
+    // that downstream phases consume as fact, which is the same hazard.
+    // `planning` went `medium`, and it is the nearest neighbour by job, but it
+    // is NOT evidence that thinking helps this class: off led that cell on
+    // quality too, 28/30 vs 26/30, and lost only the clock, because it wrote
+    // more. Nothing measured anywhere in this table shows thinking improving a
+    // synthesis child's output.
+    //
+    // WHY IT COULD NOT BE MEASURED. Three candidate axes were each scored
+    // against refine's OWN RECORDED OUTPUT and rejected before any GPU:
+    // `validateRefineShape` scores 55/56 — saturated; "EXTERNAL-DEPENDENCIES
+    // names a real package" finds 4 distinct packages across all 56 tasks — no
+    // signal; "every backticked path exists" scored 56.2%, 6/56 perfect — a bar
+    // the known-good answer could not clear.
+    //
+    // THAT THIRD AXIS WAS RE-AUDITED 2026-08-27, because planning's citation
+    // axis was rejected the same way at 59.2% and reached 97.1% once four
+    // adjudicator bugs were fixed. THE CHECK WAS INDEED LOSING.
     // scripts/phase-path-axis-audit.ts walks the ladder:
     //
     //     NAIVE            60.1% of paths,  5/55 tasks perfect
@@ -250,19 +268,25 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // directory, and `./`/`../` import specifiers. FINAL-TREE additionally counts
     // a path real if it exists anywhere in the tree the RUN shipped, which stops
     // marking a CORRECT PREDICTION wrong — 16 of the 27 remaining misses are
-    // files a later task really creates, which is [[reasoning-research-recall-
-    // axis-built]]'s "a file that does not exist yet is not truth" seen from the
-    // precision side.
+    // files a later task really creates.
     //
-    // IT IS STILL NOT A USABLE AXIS, and the reason has changed. At 93.4% the
-    // ELEVEN residual misses are almost all PATH-PREFIX ELISIONS — `server/
-    // index.ts` for `src/server/index.ts`, `client/main.tsx` for
-    // `src/client/main.tsx`, `routes/auth.ts` for `src/server/routes/auth.ts`.
-    // Loosen enough to accept a suffix match and the axis saturates; keep them
-    // and the A/B measures whether refine writes the `src/` prefix. That is
-    // formatting, not reasoning, and neither arm should be paid for it.
-    // The finding stands — with a much better-established reason than "56.2%".
-    phase: 'inherit',
+    // AND IT IS STILL NOT A USABLE AXIS. At 93.4% the eleven residual misses are
+    // almost all PATH-PREFIX ELISIONS — `server/index.ts` for
+    // `src/server/index.ts`, `client/main.tsx` for `src/client/main.tsx`.
+    // Loosen enough to accept a suffix match and it saturates; keep them and the
+    // A/B measures whether refine writes the `src/` prefix. Formatting, not
+    // reasoning. DO NOT RE-DERIVE THIS.
+    //
+    // ledger-phase.VOID-wrong-scorer.jsonl stores no output text, so its apparent
+    // off 2/14 vs medium 6/14 is an artefact that cannot be rescored. DO NOT READ
+    // A RESULT INTO IT.
+    //
+    // TO REPLACE THIS WITH A MEASUREMENT: find a bar refine's own recorded output
+    // clears while still leaving headroom, and that is not a property of its
+    // formatting. Four candidates are now dead; a fifth needs a different kind of
+    // truth — an EXECUTION, the way gate and implementation are scored, not a
+    // property of the text.
+    phase: 'off',
     // A/B 2026-08-27, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm over the
     // committed mx5 fixture replayed 30 times. Ledger: ledger-planning.jsonl.
