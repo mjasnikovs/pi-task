@@ -19,6 +19,70 @@ describe('stableStringify', () => {
     })
 })
 
+/**
+ * The mx5-n 2026-08-27 shape, and the reason StallDetector had to be wired into
+ * runWorker: a rotation whose CYCLE LENGTH equals the detector's WINDOW is
+ * invisible to both rules, because every key occurs exactly once per window and
+ * neither count can ever reach the threshold.
+ *
+ * Observed: worker:tooling made 550 tool calls over 20 distinct files, ~36 reads
+ * each, read -> answer -> read -> answer, for 20 minutes. Neither the exact rule
+ * nor the path rule fired. It died on the absolute progress ceiling having done
+ * 25s of useful work. This test is the blind spot, asserted, so nobody "fixes"
+ * it by widening the window — a wider window just moves the cycle that defeats
+ * it. See stall-detector.test.ts for the guard that does catch it.
+ */
+describe('LoopDetector — the window-length rotation it cannot see', () => {
+    const ROTATION = [
+        'package.json',
+        'docker-compose.dev.yml',
+        'docker-dev-init.sql',
+        'tsconfig.json',
+        'src/server/index.test.ts',
+        'test/scaffold.test.ts',
+        'src/server/migrate.ts',
+        'src/server/db.ts',
+        '.env.example',
+        'src/server/migrate.test.ts',
+        'DESIGN/PROJECT.md',
+        'src/server/index.ts',
+        'src/server/seed.ts',
+        'eslint.config.js',
+        'src/server/migrations/0001_init.sql',
+        'src/server/seed.test.ts',
+        'AGENTS.md',
+        'bunfig.toml',
+        'playwright-ct.config.ts',
+        'test/helpers/test-db.ts'
+    ]
+
+    test('the rotation is exactly one window long', () => {
+        expect(ROTATION.length).toBe(20)
+        expect(new Set(ROTATION).size).toBe(20)
+    })
+
+    test('550 calls cycling 20 distinct files never trip either rule', () => {
+        const d = new LoopDetector(20, 5, 5)
+        let hits = 0
+        for (let n = 0; n < 550; n++) {
+            if (d.record({name: 'read', args: {path: ROTATION[n % ROTATION.length]}})) hits++
+        }
+        expect(hits).toBe(0)
+    })
+
+    test('shorten the cycle below the window and the exact rule does fire', () => {
+        // The same reader, 19 files instead of 20. Proof the miss above is the
+        // window arithmetic and not something about the paths.
+        const d = new LoopDetector(20, 5, 5)
+        const short = ROTATION.slice(0, 4)
+        let firstHit = -1
+        for (let n = 0; n < 550 && firstHit < 0; n++) {
+            if (d.record({name: 'read', args: {path: short[n % short.length]}})) firstHit = n
+        }
+        expect(firstHit).toBeGreaterThan(0)
+    })
+})
+
 describe('LoopDetector', () => {
     test('empty buffer never hits', () => {
         const _d = new LoopDetector(20, 5)

@@ -189,6 +189,194 @@ describe('runWorker', () => {
         expect(r.loopHit?.count).toBeGreaterThanOrEqual(5)
     })
 
+    /**
+     * mx5-n 2026-08-27: worker:tooling made 550 tool calls over exactly 20
+     * distinct files, ~36 reads each, for 20 minutes, and LoopDetector(20,5,5)
+     * returned null on every one of them — a cycle as long as the window leaves
+     * every key occurring once per window (asserted in loop-detector.test.ts).
+     * It died on the absolute progress ceiling having done 25s of useful work.
+     *
+     * The 240s worker timeout could not save it either: with a progress ceiling
+     * configured that 240s is a NO-PROGRESS deadline that re-arms on every tool
+     * call, and a looping worker is calling tools the whole time.
+     */
+    const ROTATION_20 = [
+        'package.json',
+        'docker-compose.dev.yml',
+        'docker-dev-init.sql',
+        'tsconfig.json',
+        'src/server/index.test.ts',
+        'test/scaffold.test.ts',
+        'src/server/migrate.ts',
+        'src/server/db.ts',
+        '.env.example',
+        'src/server/migrate.test.ts',
+        'DESIGN/PROJECT.md',
+        'src/server/index.ts',
+        'src/server/seed.ts',
+        'eslint.config.js',
+        'src/server/migrations/0001_init.sql',
+        'src/server/seed.test.ts',
+        'AGENTS.md',
+        'bunfig.toml',
+        'playwright-ct.config.ts',
+        'test/helpers/test-db.ts'
+    ]
+
+    /** The recorded shape: read a file, get its bytes back, move to the next. */
+    const rotationResponse = (laps: number, trailingText?: string) => {
+        const events: Array<Record<string, unknown>> = []
+        for (let n = 0; n < laps * ROTATION_20.length; n++) {
+            const path = ROTATION_20[n % ROTATION_20.length]!
+            events.push({type: 'tool_execution_start', toolName: 'read', args: {path}})
+            events.push({
+                type: 'tool_execution_end',
+                toolName: 'read',
+                result: {content: [{type: 'text', text: `contents of ${path}`}]}
+            })
+        }
+        if (trailingText !== undefined) {
+            events.push({
+                type: 'agent_end',
+                messages: [{role: 'assistant', content: [{type: 'text', text: trailingText}]}]
+            })
+        }
+        return {events, exitCode: 0}
+    }
+
+    test('kills a 20-file rotation the loop detector cannot see', async () => {
+        const spawn = fakeSpawnQueue([rotationResponse(28), agentEndResponse('clean output')])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.text).toBe('clean output')
+        expect(r.restarts).toHaveLength(1)
+        expect(r.restarts[0]?.reason).toBe('loop')
+        // Named as a stall, not as a loop shape: a stall hit has no meaningful
+        // windowSize, so `read ×8/0` would misreport why the attempt died.
+        expect(r.restarts[0]?.detail).toContain('no-new-ground')
+    })
+
+    test('surfaces the stall when every attempt rotates', async () => {
+        const spawn = fakeSpawnByPrompt(() => rotationResponse(28))
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.loopHit?.stall).toBe('no-new-ground')
+        expect(r.loopHit?.call.name).toBe('read')
+    })
+
+    test('a single honest lap through 20 files is never killed', async () => {
+        // The false positive that would make this guard unusable: a research
+        // worker legitimately reading twenty files once each.
+        const spawn = fakeSpawnQueue([rotationResponse(1, 'the answer')])
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        expect(r.text).toBe('the answer')
+        expect(r.loopHit).toBeUndefined()
+        expect(r.restarts).toHaveLength(0)
+    })
+
+    /**
+     * The gate path (task/gate-child.ts) reaches the model through runWorker, so
+     * it inherits this guard. That is DELIBERATE and it closes the worst hole in
+     * the tree: a gate child runs with `timeoutMs: 0` and
+     * `pathThreshold: Infinity`, so before this guard existed a varied-args
+     * thrash there had no bound at all — not a clock, not a path rule, and the
+     * stream watchdog is suspended for the duration of every tool call.
+     *
+     * The reason gate-child.ts disabled the OTHER guards does not apply here.
+     * They mislabelled an edit pass because they judge ARGUMENTS, and re-reading
+     * one file IS the job (mx5 TASK_0002). This one judges RESULTS: an edit
+     * changes the bytes, so the read that follows it is new ground and the streak
+     * resets. This test is that claim, asserted.
+     *
+     * The reads below carry an offset so they are DISTINCT calls. That is not
+     * cosmetic: a gate child re-reading one file with byte-identical args five
+     * times in a 20-call window is killed by the loop detector's EXACT rule,
+     * which `pathThreshold: Infinity` does not disable. Pre-existing behaviour,
+     * unrelated to this guard, and isolating it here is what makes the assertion
+     * below about the stall guard rather than about that.
+     */
+    test('an edit pass revisiting one file is never killed by the stall guard', async () => {
+        const events: Array<Record<string, unknown>> = []
+        for (let n = 0; n < 60; n++) {
+            // read the same file, edit it, read it back — 120 calls on one path.
+            events.push({
+                type: 'tool_execution_start',
+                toolName: 'read',
+                args: {path: 'a.ts', offset: n}
+            })
+            events.push({
+                type: 'tool_execution_end',
+                toolName: 'read',
+                result: {content: [{type: 'text', text: `a.ts revision ${n}`}]}
+            })
+            events.push({
+                type: 'tool_execution_start',
+                toolName: 'edit',
+                args: {path: 'a.ts', n}
+            })
+            events.push({
+                type: 'tool_execution_end',
+                toolName: 'edit',
+                result: {content: [{type: 'text', text: `applied edit ${n}`}]}
+            })
+        }
+        events.push({
+            type: 'agent_end',
+            messages: [{role: 'assistant', content: [{type: 'text', text: 'PASS'}]}]
+        })
+        const spawn = fakeSpawnQueue([{events, exitCode: 0}])
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            // The gate's own options, verbatim (gate-child.ts:178-186).
+            timeoutMs: 0,
+            loop: {pathThreshold: Number.POSITIVE_INFINITY}
+        })
+        expect(r.text).toBe('PASS')
+        expect(r.loopHit).toBeUndefined()
+        expect(r.restarts).toHaveLength(0)
+    })
+
+    test('a gate child thrashing varied greps is now bounded, where it was not', async () => {
+        // No `path` key, so the loop detector's path rule cannot participate even
+        // when enabled; a varying pattern defeats the exact rule; timeoutMs 0
+        // means no clock. Before the stall guard this ran forever.
+        const events: Array<Record<string, unknown>> = []
+        for (let n = 0; n < 200; n++) {
+            events.push({
+                type: 'tool_execution_start',
+                toolName: 'grep',
+                args: {pattern: `attempt-${n}`}
+            })
+            events.push({
+                type: 'tool_execution_end',
+                toolName: 'grep',
+                isError: true,
+                result: {content: [{type: 'text', text: 'no matches'}]}
+            })
+        }
+        const spawn = fakeSpawnByPrompt(() => ({events, exitCode: 0}))
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            timeoutMs: 0,
+            loop: {pathThreshold: Number.POSITIVE_INFINITY}
+        })
+        expect(r.loopHit?.stall).toBe('no-new-ground')
+    })
+
+    test('stallGuard: false restores the old unbounded behaviour', async () => {
+        const spawn = fakeSpawnByPrompt(() => rotationResponse(28, 'never killed'))
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            stallGuard: false
+        })
+        expect(r.text).toBe('never killed')
+        expect(r.loopHit).toBeUndefined()
+    })
+
     test('loop: false disables the detector — a thrashing worker runs to completion', async () => {
         // 8 identical greps would trip LoopDetector(20,5) and get SIGTERMed; with
         // the guard off the worker is left alone and returns its own result. This

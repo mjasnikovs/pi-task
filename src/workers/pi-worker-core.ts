@@ -2,13 +2,15 @@ import {getPiInvocation} from '../shared/pi-invocation.js'
 import {
     runChildDefault,
     type ContextSnapshot,
+    type LoopHit,
     type SpawnFn,
     type ToolCall
 } from '../shared/child-process.js'
 import {CommandWatchdog, commandTimeoutHint, realTimerDeps} from '../shared/command-watchdog.js'
 import {isGroundingRetrieval as isGrounding, workerChannel} from './worker-channels.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
-import {LoopDetector, type LoopHit} from '../task/loop-detector.js'
+import {LoopDetector} from '../task/loop-detector.js'
+import {StallDetector, formatStallHint} from '../task/stall-detector.js'
 import {
     LOOP_WINDOW,
     LOOP_THRESHOLD,
@@ -253,6 +255,24 @@ export interface RunWorkerInput {
      * entirely — no tool-call pattern will ever kill the worker.
      */
     loop?: {window?: number; threshold?: number; pathThreshold?: number} | false
+    /**
+     * Whole-run progress guard (task/stall-detector.ts). Default ON.
+     *
+     * WHY BOTH. LoopDetector judges ARGUMENTS over a 20-call window, so a child
+     * that rotates through MORE DISTINCT CALLS THAN THE WINDOW HOLDS is invisible
+     * to it — every key occurs once per window and the count never reaches the
+     * threshold. Measured: mx5-n 2026-08-27, worker:tooling made 550 calls over
+     * exactly 20 distinct files, ~36 reads each, and neither the exact rule nor
+     * the path rule ever tripped. It died 20 minutes later on the absolute
+     * progress ceiling, having done 25s of useful work.
+     *
+     * StallDetector judges RESULTS, which a rotating reader cannot vary. It was
+     * written for exactly this class and was wired only into phase children
+     * (task/child-runner.ts) until this option existed.
+     *
+     * Pass `false` to disable, or override the thresholds (tests, harnesses).
+     */
+    stallGuard?: {limit?: number; churnFactor?: number} | false
     /**
      * Dead-backend stall guard override. Default ON: no output for
      * STALL_AFTER_MS → probe the model endpoints pi is configured with →
@@ -692,9 +712,18 @@ const RESTART_RULES: readonly RestartRule[] = [
         reason: 'loop',
         detect: s =>
             s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
-                {detail: `${s.loopHit.call.name} ×${s.loopHit.count}/${s.loopHit.windowSize}`}
+                {
+                    // A stall hit carries no meaningful windowSize (rule 1 sets
+                    // it to 0), so printing the loop shape would misname why the
+                    // attempt died.
+                    detail:
+                        s.loopHit.stall ?
+                            `${s.loopHit.call.name} ${s.loopHit.stall} ×${s.loopHit.count}`
+                        :   `${s.loopHit.call.name} ×${s.loopHit.count}/${s.loopHit.windowSize}`
+                }
             :   null,
-        hint: s => formatLoopHint(s.loopHit!),
+        hint: s =>
+            s.loopHit!.stall ? formatStallHint(s.loopHit!.stall) : formatLoopHint(s.loopHit!),
         counters: {shared: true}
     },
     {
@@ -941,6 +970,17 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         input.loop?.pathThreshold ?? threshold
                     )
                 })()
+        // Reset EACH attempt, like the loop detector: a restart discards the
+        // previous attempt's calls along with its text, so a fresh child must not
+        // inherit a dead streak it did not earn.
+        const stallDetector =
+            input.stallGuard === false ?
+                null
+            :   new StallDetector(input.stallGuard?.limit, input.stallGuard?.churnFactor)
+        // Arm the churn rule BEFORE the first tool call. pi's stream carries no
+        // context event (issue #16), so waiting for one leaves the rule
+        // permanently disarmed. The parent knows the window at spawn time.
+        stallDetector?.noteContext(input.contextWindow ?? 0)
         // Capture the hit the detector reports (it also returns it to the unified
         // runner, which kills the child on a hit). Without capturing it here the
         // SIGTERM that kill produces would surface as a bare non-zero exit the
@@ -999,8 +1039,12 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                             )
                         }
                         if (isGrounding(call.name)) groundingRetrievalCount++
-                        if (!loopDetector) return null
-                        const hit = loopDetector.record(call)
+                        // Loop detector first: it names the offending call and its
+                        // hint is the more specific one. The stall detector is the
+                        // backstop for the thrash shapes a 20-call argument window
+                        // cannot see.
+                        const hit =
+                            loopDetector?.record(call) ?? stallDetector?.record(call) ?? null
                         if (hit && !loopHit) loopHit = hit
                         return hit
                     },
@@ -1019,9 +1063,15 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                     onToolResult: r => {
                         timeout.progress()
                         cmdWatch?.onEnd(r.toolCallId)
+                        // The RESULT is what entered the child's context, so it —
+                        // not the arguments — decides whether it learned anything.
+                        stallDetector?.noteResult(r.text, r.isError)
                         input.onToolResult?.(r)
                     },
-                    onContextUsage: input.onContextUsage,
+                    onContextUsage: snapshot => {
+                        stallDetector?.noteContext(snapshot.contextWindow)
+                        input.onContextUsage?.(snapshot)
+                    },
                     ...(input.contextWindow && input.contextWindow > 0 ?
                         {contextWindow: input.contextWindow}
                     :   {})

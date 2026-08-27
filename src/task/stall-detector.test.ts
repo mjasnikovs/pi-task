@@ -136,3 +136,77 @@ describe('formatStallHint', () => {
         expect(churn.toLowerCase()).not.toContain('time')
     })
 })
+
+/**
+ * The case that put this detector into runWorker (mx5-n, 2026-08-27).
+ *
+ * worker:tooling rotated through 20 distinct files, ~36 reads each, 550 calls,
+ * for 20 minutes. LoopDetector(20, 5, 5) returned null on every one of them —
+ * asserted in loop-detector.test.ts — because a cycle as long as the window
+ * leaves every key occurring once per window.
+ *
+ * This detector cannot be fooled that way: the second lap returns bytes the
+ * child has already been handed, and dead ground is dead ground whatever path
+ * it came from.
+ */
+describe('StallDetector — the window-length rotation LoopDetector cannot see', () => {
+    const ROTATION = [
+        'package.json',
+        'docker-compose.dev.yml',
+        'docker-dev-init.sql',
+        'tsconfig.json',
+        'src/server/index.test.ts',
+        'test/scaffold.test.ts',
+        'src/server/migrate.ts',
+        'src/server/db.ts',
+        '.env.example',
+        'src/server/migrate.test.ts',
+        'DESIGN/PROJECT.md',
+        'src/server/index.ts',
+        'src/server/seed.ts',
+        'eslint.config.js',
+        'src/server/migrations/0001_init.sql',
+        'src/server/seed.test.ts',
+        'AGENTS.md',
+        'bunfig.toml',
+        'playwright-ct.config.ts',
+        'test/helpers/test-db.ts'
+    ]
+
+    test('kills the rotation early in the second lap', () => {
+        const d = new StallDetector()
+        let killedAt = -1
+        for (let n = 0; n < 550 && killedAt < 0; n++) {
+            const path = ROTATION[n % ROTATION.length]!
+            if (d.record(read(path))) killedAt = n
+            // A file re-read returns the same bytes. That is the whole signal.
+            else d.noteResult(`contents of ${path}`)
+        }
+        // First lap is all new ground. The kill lands NO_PROGRESS_LIMIT calls
+        // into the second, long before the 20-minute ceiling the real run hit.
+        expect(killedAt).toBeGreaterThanOrEqual(ROTATION.length)
+        expect(killedAt).toBeLessThan(ROTATION.length + NO_PROGRESS_LIMIT + 2)
+    })
+
+    test('names the rule so the restart hint can be the right one', () => {
+        const d = new StallDetector()
+        let hit = null
+        for (let n = 0; n < 550 && !hit; n++) {
+            const path = ROTATION[n % ROTATION.length]!
+            hit = d.record(read(path))
+            if (!hit) d.noteResult(`contents of ${path}`)
+        }
+        expect(hit?.stall).toBe('no-new-ground')
+    })
+
+    test('a rotation that keeps returning NEW bytes is never killed', () => {
+        // The false positive to guard against: 20 files legitimately re-read
+        // after edits, each returning something different every time.
+        const d = new StallDetector()
+        for (let n = 0; n < 550; n++) {
+            const path = ROTATION[n % ROTATION.length]!
+            expect(d.record(read(path, n))).toBeNull()
+            d.noteResult(`revision ${n} of ${path}`)
+        }
+    })
+})
