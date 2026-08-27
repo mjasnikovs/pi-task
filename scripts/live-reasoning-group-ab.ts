@@ -79,6 +79,7 @@ import {REFINE_PROMPT, RESEARCH_FILES_PROMPT} from '../src/task/prompts.js'
 import {buildVerifyPrompt, VERIFY_TOOLS} from '../src/task/verify-work.js'
 import {AUTO_DECOMPOSE_PROMPT} from '../src/task/auto-prompts.js'
 import {buildRequirementsLedger} from '../src/task/requirements.js'
+import {SINGLE_READ_EXTENSION_PATH} from '../src/task/phases.js'
 import {REASONING_GROUPS, REASONING_ON_LEVEL, type ReasoningGroup} from '../src/config/reasoning.js'
 import {loadPlanningFixture, extractRequirementsNew} from './ab-planning.js'
 import {openRecordedRun, type TaskRecord} from './ab-corpus.js'
@@ -99,6 +100,7 @@ import type {ArmStats} from './reasoning-ab-decide.js'
 import {ARMS as ARMS_, decide} from './reasoning-ab-decide.js'
 import {
     GROUP_SCORERS,
+    planningPlanFaithful,
     verdictWord,
     gateVerdictCorrect,
     verdictParserContractProblem
@@ -402,13 +404,58 @@ interface GroupExperiment {
     run: (built: Built, arm: Arm) => Promise<Trial>
 }
 
-/** Real PhaseDeps — the real context window, no casts. */
-function phaseDeps(cwd: string): PhaseDeps {
+/**
+ * Real PhaseDeps — the real context window, no casts.
+ *
+ * `childExtensions` IS PART OF THE CHILD UNDER TEST, not decoration. Production
+ * hands every PLANNING child `[SINGLE_READ_EXTENSION_PATH]`
+ * (auto-orchestrator.ts, the planning deps beside `runChild`), so an
+ * auto-decompose spawned without it is a DIFFERENT child from the one that
+ * ships — and the guard it drops is precisely the one whose old form caused the
+ * thrash this group was meant to measure (197 of 200 calls were its own
+ * refusal). Measured with it missing, `planning` was scoring a child production
+ * does not run. Callers pass what production passes for that child and nothing
+ * else: `refine` and the research/gate children get no extensions in production
+ * and get none here.
+ */
+/**
+ * The single-read extension as a file `pi` can actually load.
+ *
+ * `SINGLE_READ_EXTENSION_PATH` is resolved relative to the MODULE that declares
+ * it, so production — running out of `dist/` — gets
+ * `dist/workers/single-read-extension.js` and it exists. This harness runs the
+ * TypeScript directly under bun, so the same constant points at
+ * `src/workers/single-read-extension.js`, which is not on disk: only the `.ts`
+ * is. And `pi` is a NODE bundle (`dist/bundle/cli.js`), so handing it the `.ts`
+ * is not a fallback, it is a second way to load nothing.
+ *
+ * So map src -> dist and REQUIRE the built file. Abstaining is the only honest
+ * option here: a missing extension does not fail loudly, it just silently
+ * measures a child with one fewer guard than production ships, which is the
+ * exact defect this whole wiring exists to remove.
+ */
+function loadableSingleReadExtension(): string {
+    if (fs.existsSync(SINGLE_READ_EXTENSION_PATH)) return SINGLE_READ_EXTENSION_PATH
+    const built = SINGLE_READ_EXTENSION_PATH.replace(`${path.sep}src${path.sep}`, `${path.sep}dist${path.sep}`)
+    if (fs.existsSync(built)) return built
+    console.error(
+        `ABSTAIN — the single-read extension is not on disk as loadable JS.\n`
+            + `  looked at: ${SINGLE_READ_EXTENSION_PATH}\n`
+            + `             ${built}\n`
+            + '  Production hands every PLANNING child this guard. Run `bun run build`'
+            + ' first: without it this run would measure a child with one fewer guard'
+            + ' than production ships, and would not say so.'
+    )
+    process.exit(EXIT_CODE.ABSTAIN)
+}
+
+function phaseDeps(cwd: string, extensions: readonly string[] = []): PhaseDeps {
     return {
         cwd,
         taskId: 'AB',
         signal: new AbortController().signal,
-        contextWindow: CONTEXT_WINDOW
+        contextWindow: CONTEXT_WINDOW,
+        childExtensions: extensions
     } as PhaseDeps
 }
 
@@ -426,11 +473,12 @@ async function phaseTrial(
     prompt: string,
     source: string,
     arm: Arm,
-    accept: (text: string) => boolean
+    accept: (text: string) => boolean,
+    extensions: readonly string[] = []
 ): Promise<Trial> {
     const t0 = Date.now()
     try {
-        const text = await runPhaseChild(phaseDeps(cwd), child, tools, prompt)
+        const text = await runPhaseChild(phaseDeps(cwd, extensions), child, tools, prompt)
         const usable = accept(text)
         return {
             arm,
@@ -674,7 +722,13 @@ async function buildExperiments(group: ReasoningGroup): Promise<GroupExperiment 
                     b.prompt,
                     b.source,
                     arm,
-                    GROUP_SCORERS.planning!
+                    // NOT the shape check — that one read 10/10 in both arms.
+                    // Every citation the plan makes must be real, adjudicated by
+                    // production's own grounding against the very text the child
+                    // was shown. See planningPlanFaithful.
+                    text => planningPlanFaithful(text, fx.featureForModel),
+                    // What production's planning deps pass. See phaseDeps.
+                    [loadableSingleReadExtension()]
                 )
         }
     }

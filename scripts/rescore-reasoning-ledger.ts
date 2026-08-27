@@ -46,7 +46,8 @@ import {
     namedRecall,
     treePaths
 } from './reasoning-ab-files-truth.js'
-import {GROUP_SCORERS, gateVerdictCorrect} from './reasoning-ab-scorers.js'
+import {GROUP_SCORERS, gateVerdictCorrect, planningPlanFaithful} from './reasoning-ab-scorers.js'
+import {loadPlanningFixture} from './ab-planning.js'
 import {extractionStimuli} from './reasoning-ab-extraction-truth.js'
 import crypto from 'node:crypto'
 import {parseChildOutput, verifyExcerpt} from '../src/shared/child-output.js'
@@ -111,6 +112,11 @@ const labels: AxisLabels =
             quality: precisionOnly ? 'every path real' : 'real + edited named',
             termination: 'non-termination'
         }
+        // Same reason as gate's: `planning` was moved off a SHAPE check that read
+        // 10/10 in both arms, and printing "usable output" beside the citation
+        // axis is how a reader mistakes one for the other.
+    : group === 'planning' && fromText ?
+        {quality: 'every citation grounded', termination: 'non-termination'}
     :   {quality: 'usable output', termination: 'non-termination'}
 const dead = (r: Row): boolean => (impl ? r.dead === true : r.nonTerminating === true)
 const stored = (r: Row): boolean => (impl ? r.pass === true : r.usable === true)
@@ -372,11 +378,56 @@ if (fromText) {
         )
         console.log('')
     }
+    /**
+     * `planning` is the FOURTH group whose text scorer is not `GROUP_SCORERS`.
+     * That entry is the saturated shape check (`>= 2 titles`), which every row
+     * passes, so falling through to it would rescore a fabricated plan as usable
+     * — extraction's failure mode, a LOOSE scorer, which is harder to spot than
+     * a strict one.
+     *
+     * The real axis needs the document the child was shown, and unlike gate or
+     * extraction that document is a COMMITTED FIXTURE, so no corpus and no
+     * retrieval are involved: it is reproduced by the same production
+     * @-expansion the run used. The drift assertion is the harness's own.
+     */
+    if (group === 'planning') {
+        const foreign = rows.filter(r => r.source !== 'mx5-fixture')
+        if (foreign.length > 0) {
+            console.error(
+                `ABSTAIN — ${foreign.length}/${rows.length} planning rows were not run on the`
+                    + ' mx5 fixture, so the document this rescore grounds against is not the'
+                    + ' one those children were shown.'
+            )
+            process.exit(2)
+        }
+        const fx = await loadPlanningFixture('mx5')
+        if (fx.featureForModel.length < 15_000) {
+            console.error(
+                `ABSTAIN — fixture drift: featureForModel is ${fx.featureForModel.length} chars,`
+                    + ' expected ~20 KB. The @-mention did not expand, so this would ground'
+                    + ' against a one-liner while claiming to replay the spec.'
+            )
+            process.exit(2)
+        }
+        const doc = fx.featureForModel
+        good = (r: Row): boolean => !dead(r) && planningPlanFaithful(String(r.output), doc)
+        const moved = rows.filter(r => good(r) !== stored(r)).length
+        console.log(
+            'rescored from text against the committed mx5 fixture with'
+                + ` planningPlanFaithful: ${moved}/${rows.length} trial(s) changed side`
+                + (moved === 0 ? ' — the stored judgements already agree with it' : '')
+        )
+        console.log('')
+    }
     const scorer =
-        group === 'gate' || group === 'research' || group === 'extraction' ?
+        group === 'gate' || group === 'research' || group === 'extraction'
+        || group === 'planning' ?
             undefined
         :   GROUP_SCORERS[group]
-    if (group !== 'gate' && group !== 'research' && group !== 'extraction' && !scorer) {
+    if (
+        group !== 'gate' && group !== 'research' && group !== 'extraction'
+        && group !== 'planning' && !scorer
+    ) {
         console.error(
             `ABSTAIN — no text scorer for group "${group}".`
                 + ` Known: ${Object.keys(GROUP_SCORERS).join(', ')}.`
@@ -404,10 +455,10 @@ if (fromText) {
     if (group === 'gate') {
         good = (r: Row): boolean =>
             !dead(r) && gateVerdictCorrect(String(r.output), String(r.truth))
-    } else if (group !== 'research' && group !== 'extraction') {
+    } else if (group !== 'research' && group !== 'extraction' && group !== 'planning') {
         good = (r: Row): boolean => !dead(r) && scorer!(String(r.output))
     }
-    if (group !== 'research' && group !== 'extraction') {
+    if (group !== 'research' && group !== 'extraction' && group !== 'planning') {
         const moved = rows.filter(r => good(r) !== stored(r)).length
         console.log(
             `rescored from text with the "${group}" production scorer:`

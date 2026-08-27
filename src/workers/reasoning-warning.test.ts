@@ -91,13 +91,30 @@ const GOOD_MODEL = {
 }
 
 describe('when it stays silent', () => {
-    test('the SHIPPED config warns about nothing, even on a model with no reasoning', () => {
-        // The real anti-nag: with every group on `inherit`, nobody who has not
-        // opted in ever sees this — not even on a model with no reasoning at all.
-        const ui = fakeCtx('tui', DEAD_MODEL)
+    test('the SHIPPED config warns about nothing on a model that can reason', () => {
+        // The anti-nag, on the machine the table was measured on: nobody who has
+        // not opted in ever sees this.
+        const ui = fakeCtx('tui', GOOD_MODEL)
         sessionStartHandler(DEFAULT_CONFIG)({}, ui.ctx)
         expect(ui.widgets).toHaveLength(0)
         expect(ui.listeners).toBe(0)
+    })
+})
+
+describe('when the shipped table itself is the mismatch', () => {
+    /**
+     * BEHAVIOUR DELTA, 2026-08-27. This used to assert silence on DEAD_MODEL
+     * too, and the reason it held was that every WRITTEN cell was `off` — a
+     * level a model without reasoning already honours, so there was nothing to
+     * warn about. `planning: 'medium'` is the first cell that ASKS for thinking,
+     * so on a model that cannot think the shipped default is now itself a
+     * mismatch the user never chose. Firing is correct: the plan child will
+     * silently get no thinking whatever the table says.
+     */
+    test('the SHIPPED config warns on a model with no reasoning at all', () => {
+        const ui = fakeCtx('tui', DEAD_MODEL)
+        sessionStartHandler(DEFAULT_CONFIG)({}, ui.ctx)
+        expect(ui.widgets).toHaveLength(1)
     })
 
     test('never paints outside a TUI', () => {

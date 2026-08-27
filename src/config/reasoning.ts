@@ -129,13 +129,31 @@ export const REASONING_ON_LEVEL: GroupSetting = 'medium'
  * run is only powered for large effects, so rung 3 is the common outcome and
  * an absent effect and an undetected one look identical from here.
  *
- * What is already on the record, and why it is not enough to fill a cell in:
- * magicknumbers.md measured the /task-auto decompose child (group `planning`) on
- * Qwen3.8-27B NVFP4 with one knob, `enable_thinking` — off answered 1/10, on
- * answered 8/8. But the same page records the controls at reasoning off:
- * Qwen3.6-27B 10/10 and Gemma4-12B 10/10. A cell that flips by model cannot be a
- * constant, so `planning` stays `inherit` until Stage 2 of the A/B says whether
- * the Qwen3.8 result generalises.
+ * NOTHING IS ALREADY ON THE RECORD, and the belief that something was is worth
+ * writing down. This docstring used to say magicknumbers.md had measured the
+ * decompose child "with one knob, `enable_thinking` — off answered 1/10, on
+ * answered 8/8", and treated that as the split the A/B had to reproduce.
+ *
+ * VERIFIED 2026-08-27: the string "8/8" does not appear in magicknumbers.md, and
+ * never has (`git log -S`; the phrase was introduced by THIS file's own commit,
+ * `0b91f71`). What that page records is
+ *
+ *     "Measured, captured decompose request, REASONING OFF, n=10 per cell:
+ *      1/10 → 7/10 (stall detector) → 8/9 (all three)."
+ *
+ * — a ladder over THREE GUARDS at CONSTANT reasoning off, from `fea7bbb`. Both
+ * endpoints are the same arm. `enable_thinking` is not its knob and never was,
+ * and the "8/8" is a misread of the ladder's last cell, `8/9`.
+ *
+ * So no reasoning effect on `planning` had ever been measured, and the 10/10 vs
+ * 10/10 read on the current tree was not a contradiction of a prior result — it
+ * was the only reading there had ever been. The controls that page DOES record
+ * (Qwen3.6-27B 10/10, Gemma4-12B 10/10) are likewise reasoning off, so they say
+ * nothing about a cell flipping by model either.
+ *
+ * The `planning` cell below is the FIRST measured reading of that knob, taken
+ * 2026-08-27 on a citation-fidelity axis built for it. It is also the first cell
+ * that is not `off`.
  */
 export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetting>> = {
     // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
@@ -201,17 +219,99 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // apparent off 2/14 vs medium 6/14 is an artefact that cannot be rescored.
     // DO NOT READ A RESULT INTO IT.
     phase: 'inherit',
-    // MEASURED 2026-08-26, n=10/arm, and NOT WRITTEN: off 10/10 vs medium 10/10
-    // on `parseDecomposeList >= 2 titles`, a SHAPE check, saturated in both
-    // arms. Its clock (p=0.1974) is the unpaired test on purpose — planning
-    // replays one fixture ten times, so there are no distinct stimuli to pair
-    // by and `pairByStimulus` refuses rather than invent a pairing.
-    // The old target for this cell — off ~1/10 vs on ~8/8 from magicknumbers.md
-    // — is STALE. It predates `fea7bbb`, which shipped three progress-based
-    // planning guards; the same page records 8/9 with reasoning off after them,
-    // which is what 10/10 reproduces. Reviving it as a positive control means
-    // measuring against the PRE-`fea7bbb` guards (parent `42359f8`).
-    planning: 'inherit',
+    // A/B 2026-08-27, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
+    // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm over the
+    // committed mx5 fixture replayed 30 times. Ledger: ledger-planning.jsonl.
+    //
+    // THE FIRST CELL THAT IS NOT `off`, and the only one where the two axes
+    // point in opposite directions. Read both.
+    //
+    // off 28/30 faithful plans vs medium 26/30 (p=0.6707); neither arm ever
+    // failed to terminate. Wall clock, UNPAIRED — one fixture, so there are no
+    // distinct stimuli to pair by and `pairByStimulus` refuses rather than
+    // invent a pairing: mean off 207.3s vs medium 143.6s, p=0.0241.
+    // off faithful-plan 95% CI [0.79, 0.98].
+    // RUNG 2 — quality is level on an axis with headroom, and medium is 1.4x
+    // faster at equal quality. The ladder is symmetric: `off` losing the clock
+    // is not privileged over `medium` losing it.
+    //
+    // THE CLOCK CAVEAT, because the direction is the opposite of every other
+    // cell. off's mean is tail-driven — medians are 157.6s vs 148.2s, ~6% apart
+    // — and off emits a LONGER plan for the same title count (median 6840 vs
+    // 4988 chars, 13 titles both arms). Per character off is the faster arm,
+    // 23.0 vs 29.7 ms/char. So what the clock records here is "off writes more",
+    // not "thinking is free". Production waits for the whole plan, so the cost
+    // is real; it is not evidence that thinking decodes faster.
+    //
+    // THE AXIS IS `planningPlanFaithful`, built for this run:
+    //   a plan is FAITHFUL when it lists >= 2 titles AND EVERY source clause it
+    //   emitted — counted in the RAW TITLE — comes back grounded.
+    // It is production's own adjudicator (`extractTitleSource`) with no model in
+    // the loop, and the source doc is a committed fixture, so every stored trial
+    // stays rescorable with no corpus:
+    //   bun run scripts/rescore-reasoning-ledger.ts \
+    //     ab-grouplab/ledger-planning.jsonl planning --from-text
+    // Counting the clauses in the RAW title is load-bearing: a malformed clause
+    // (a missing closing quote — measured live, 4 trials) stops the peel, and a
+    // scorer that counted only what it peeled reads everything before the break
+    // as a clean sweep.
+    //
+    // THE OLD AXIS WAS A SHAPE CHECK. `parseDecomposeList >= 2` read 10/10 in
+    // both arms at n=10/arm — saturated, the same death as gate's and phase's
+    // first scorers. ledger-planning.SHAPE-AXIS-no-extension-10rep.jsonl is that
+    // run; it is a PRIOR, NOT A REPLICATE, because it also ran a different child
+    // (no single-read extension). Do not pool it.
+    //
+    // THE ADJUDICATOR HAD TO BE FIXED FOUR TIMES BEFORE IT COULD JUDGE, and
+    // every fix was found by auditing failures row by row, not by reading code:
+    //   1. GREEDY REGEX across multi-clause titles (25% of real titles carry
+    //      more than one clause) — two real citations became one superstring.
+    //   2. MARKDOWN EMPHASIS/LIST MARKERS counted as content.
+    //   3. CODE BACKTICKS counted as content — the larger half of (2), and
+    //      found only after this run. A code span renders as bare text, so
+    //      `Invites — create/validate/redeem, /join/:token page.` is a verbatim
+    //      copy of a line the file stores with backticks. Screening EVERY spec
+    //      line of the fixture in its rendered form: 107/216 grounded before,
+    //      216/216 after, floor 0/216.
+    //   4. BACKSLASH-ESCAPED QUOTES. The clause is double-quoted, so a spec line
+    //      containing a double quote comes back as `\"`. The backslash is the
+    //      delimiter's artefact, not content.
+    // The live run scored off 21/30 vs medium 24/30 and printed `medium`; fixes
+    // 3 and 4 moved 9 of 60 trials and the QUALITY ORDER REVERSED, to off 28/30
+    // vs medium 26/30. The verdict survives only because the clock decides at
+    // rung 2. scripts/decompose-fidelity-screen.ts is the standing screen that
+    // would have caught 3 and 4 before the GPU ran.
+    //
+    // THE REMAINING 6 FAILURES ARE GENUINE, checked by hand: 4 malformed clauses
+    // (missing closing quote or bracket), 1 word substituted in a real line
+    // ("invokes" for "invites"), 1 single-quoted where the doc has double.
+    //
+    // THE HARNESS SPAWNS PRODUCTION'S CHILD. `phaseDeps()` passed no
+    // `childExtensions`, so auto-decompose ran WITHOUT the single-read guard
+    // production hands every planning child (auto-orchestrator.ts). Fixed before
+    // this run; `loadableSingleReadExtension()` maps src->dist and ABSTAINS if
+    // neither exists, so `bun run build` is a precondition.
+    //
+    // THE TARGET THIS CELL ONCE CHASED DOES NOT EXIST. "off ~1/10 vs on ~8/8
+    // from magicknumbers.md" was cited here and in this file's header as the
+    // split a positive control had to reproduce. Verified 2026-08-27: that page
+    // has no "8/8" in it and never did, and its `1/10 -> 7/10 -> 8/9` ladder is
+    // labelled REASONING OFF, n=10 per cell — three GUARDS from `fea7bbb`, one
+    // arm throughout. See the header.
+    //
+    // A pre-`fea7bbb` control tree WAS built and verified anyway
+    // (ab-grouplab/make-preguard-tree.sh + preguard-probe.ts, all four guard
+    // behaviours rolled back and asserted both ways). It is the only planning
+    // regime known to have headroom at reasoning off — 1/10 there — but it is a
+    // regime we deleted, so a cell decided in it would not be writable here.
+    // Left unrun on purpose.
+    //
+    // MEASURED UNDER THE SERVER'S GLOBAL SAMPLER, which is the THINKING preset.
+    // Here that cuts AGAINST the written cell rather than for it: the `off` arm
+    // decoded on sampling tuned for `medium` and still led on quality, so a
+    // clean comparison could only widen off's quality margin — which the clock
+    // then has to overcome. Ecologically valid, not clean.
+    planning: 'medium',
     plan: 'inherit',
     // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
     // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=30/arm.

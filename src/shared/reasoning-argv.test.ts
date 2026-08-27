@@ -112,7 +112,7 @@ describe('what the shipped table puts on the wire', () => {
     const EXPECTED: Readonly<Record<string, string[]>> = {
         research: ['--thinking', 'off'],
         phase: [],
-        planning: [],
+        planning: ['--thinking', 'medium'],
         plan: [],
         gate: ['--thinking', 'off'],
         extraction: ['--thinking', 'off'],

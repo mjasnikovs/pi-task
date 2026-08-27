@@ -40,6 +40,7 @@ import {validateRefineShape} from '../src/task/spec-validation.js'
 import {hasAnswerContent} from '../src/workers/pi-worker-core.js'
 import {parseVerifyVerdict} from '../src/task/verify-work.js'
 import {parseDecomposeList} from '../src/task/auto-io.js'
+import {extractTitleSource} from '../src/task/decompose-fidelity.js'
 
 /**
  * `parseVerifyVerdict`'s sentinel for "the child never stated a verdict".
@@ -136,8 +137,9 @@ export const GROUP_SCORERS: Readonly<Record<string, (text: string) => boolean>> 
     // TERMINATION ONLY. Saturated as a quality axis (10/10 both arms, 2026-08-26)
     // — the gate cell is scored by gateVerdictCorrect against a known tree.
     gate: emittedVerdict,
-    // Production's own decompose parser. A title list of one is what a thrashing
-    // child emits just before giving up, so a real plan is the bar.
+    // SHAPE ONLY, and kept for the record rather than used: this is the scorer
+    // that read 10/10 in BOTH arms. See planningPlanFaithful for the axis the
+    // planning cell is actually decided on.
     planning: text => parseDecomposeList(text).length >= 2,
     // fetch-core and docs-core both gate on the child succeeding AND a non-empty
     // `answer`; both carry `excerptVerified` as metadata, not as a gate. A failed
@@ -171,4 +173,65 @@ export const GROUP_SCORERS: Readonly<Record<string, (text: string) => boolean>> 
  */
 export function gateVerdictCorrect(text: string, truth: string): boolean {
     return verdictWord(text) === truth
+}
+
+/** How many `[source: "…"]` clauses a title carries, grounded or not. */
+function countSourceClauses(title: string): number {
+    return (title.match(/\[source:\s*"/gi) ?? []).length
+}
+
+/**
+ * THE PLANNING QUALITY AXIS: is every citation the plan makes REAL?
+ *
+ * WHY NOT THE SHAPE CHECK. `parseDecomposeList(text).length >= 2` read 10/10 in
+ * both arms — a bar a competent model clears every time, and a boolean at its
+ * ceiling carries no information. Same death as gate's and phase's first
+ * scorers. See [[ab-shape-axis-saturates]].
+ *
+ * WHAT REPLACES IT. The decompose prompt requires each derived title to end with
+ * `[source: "<spec line copied VERBATIM>"]`, and production ALREADY adjudicates
+ * those host-side: `extractTitleSource` keeps a citation only if it really is in
+ * the document and silently drops the rest, because a plan built on an invented
+ * requirement is worse than one built on none. So the axis is production's own
+ * verdict, with no model in the loop and nothing hand-written here:
+ *
+ *     a plan is FAITHFUL when it lists >= 2 titles AND EVERY source clause it
+ *     emitted — counted in the raw text — comes back grounded.
+ *
+ * Counting the clauses in the RAW TITLE rather than trusting the peel is the
+ * load-bearing half. A malformed clause (a missing closing quote, measured live:
+ * `[source: "…`hc<AppType>`)]`) stops the peel, and a scorer that counted only
+ * what it managed to peel would score the clauses BEFORE the break as a clean
+ * sweep. It read 10/10 for medium that way; the honest number is 8/10. A
+ * malformed citation is not a harmless slip either — reconcileTitleSources
+ * leaves it embedded, and the title is all a downstream /task run ever sees.
+ *
+ * SCREENED BOTH WAYS BEFORE USE, offline, over the 20 recorded decompose runs
+ * in ab-grouplab/ledger-planning.jsonl and the committed mx5 fixture:
+ *   CEILING  real spec lines, quoted as a model quotes them (markup dropped):
+ *            257/257 ground. The check does not lose against a known-good answer.
+ *   FLOOR    the same lines with ONE content word altered: 0/228 ground. It is
+ *            not a check that says yes to everything either.
+ *   HEADROOM off 6/10 vs medium 8/10 (Fisher p=0.6285). NOT a result — n=10/arm
+ *            cannot resolve a gap that size. What it establishes is that the
+ *            axis is ALIVE: neither arm sits at the ceiling or the floor, which
+ *            is exactly what the shape check could not say.
+ *
+ * Finding that headroom took fixing two bugs in the adjudicator first — a greedy
+ * `[source: …]` regex that glued multiple clauses into one fabricated
+ * superstring, and grounding that counted markdown markup as content. Together
+ * they cost production 154 grounded citations where 242 were available, and 17
+ * constraint restorations where 50 were. See decompose-fidelity.ts.
+ *
+ * `sourceDoc` is the expanded feature text the child was actually shown
+ * (`featureForModel`), which is what production grounds against too. It is a
+ * committed fixture, so a stored trial stays rescorable with no corpus.
+ */
+export function planningPlanFaithful(text: string, sourceDoc: string): boolean {
+    const titles = parseDecomposeList(text)
+    if (titles.length < 2) return false
+    for (const t of titles) {
+        if (extractTitleSource(t, sourceDoc).sources.length !== countSourceClauses(t)) return false
+    }
+    return true
 }
