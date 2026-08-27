@@ -222,7 +222,40 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // so the `off` arm decodes on sampling tuned for the `on` arm. That is the
     // regime this machine really runs pi-task in, so the result is
     // ecologically valid — it is NOT a clean comparison.
-    research: 'off',
+    //
+    // OVERRIDDEN TO `medium` BY USER DECISION, 2026-08-27. THIS IS NOT A NEW
+    // MEASUREMENT — the trials above are unchanged and still say the arms tied.
+    // What changed is the prior. Rung 3 says "no reason found to pay for
+    // thinking"; it does not say thinking is worthless, and at n=12 an absent
+    // effect and an undetected one look identical.
+    //
+    // WHAT THE SAME LEDGER SAYS ABOUT THE CLOCK, re-read for this decision:
+    // medium is the FASTER arm on the mean, 62.9s vs 105.6s over the 12 paired
+    // stimuli (median 51.7s vs 87.7s), and it is faster on 6 of 12 by 1-265s
+    // while slower on 6 by 0-43s. The mean gap is entirely `off`'s TAIL: off's
+    // two slowest trials are 289s and 367s, medium's slowest is 131s. So the
+    // typical trial is a coin flip worth under a minute and the difference the
+    // arms actually have is in the tail.
+    //
+    // AND THE TAIL IS THE PATHOLOGY THIS CHANGE IS AIMED AT. mx5-n 2026-08-27:
+    // 40.7 of the research phase's 81.4 wall-clock minutes were thrown away on
+    // restarts, all of them in `worker:tooling` and `worker:context` — `files`
+    // and `apis` never restarted once. The worst was 550 tool calls over 20
+    // distinct files in 20 minutes for 25s of useful work.
+    //
+    // THE HONEST LIMIT OF THIS DECISION: no axis in
+    // scripts/live-reasoning-group-ab.ts scores tool-call count or repetition —
+    // the Trial record has no such field and RunWorkerResult exposes no count —
+    // so the ledger CANNOT say whether thinking prevents the wander. It was
+    // never asked. And the ledger's stimuli are the FILES worker, not the two
+    // that looped. Anyone flipping this back should note that the evidence for
+    // `off` is equally silent on the question.
+    //
+    // The structural fix for the wander shipped separately and does not depend
+    // on this cell: StallDetector is now wired into runWorker (it was in phase
+    // children only), so a rotation is killed ~8 calls into its second lap
+    // rather than at the 20-minute ceiling.
+    research: 'medium',
     // NOT MEASURED. DECIDED BY PRIOR, 2026-08-27 — the same prior that carries
     // every rung-3 cell in this table: thinking that buys nothing measurable is
     // not worth its tokens. `off`.
@@ -527,7 +560,40 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // carry the cell. The value is unchanged; only its standing improved, from
     // a stated prior to a measured win. Rescored from the original ledger on 2026-08-25 when the harness
     // moved to a forced two-way verdict; the trials are unchanged.
-    implementation: 'off'
+    //
+    // OVERRIDDEN TO `medium` BY USER DECISION, 2026-08-27, AND THIS ONE
+    // OVERRIDES A MEASUREMENT RATHER THAN A PRIOR. Say so plainly: quality tied
+    // 12/20 in both arms, and the PAIRED clock — the statistic that matches this
+    // design — put `off` ahead in 9 of the 12 specs that pass in both arms,
+    // geometric mean 0.55x, p=0.0166. That is the rung-2 win that WROTE this
+    // cell `off`, and it is not withdrawn by anything measured since.
+    //
+    // WHAT THE DECISION COSTS, from those same numbers: expect implementation
+    // turns to take roughly 1.8x as long, for no measured quality gain. The
+    // quality CI is the widest in the table ([0.39, 0.78] at 12/20), so a real
+    // quality difference either way would have been invisible at n=20 — that is
+    // the room the decision is being made in, and it cuts both ways.
+    //
+    // THE STATED REASON FOR THE OVERRIDE is that the implementation turn was
+    // observed wandering in the same mx5-n run. That observation is NOT in this
+    // repo's evidence: the run's .pi-tasks logs were destroyed before they could
+    // be mined, so no loop was ever counted here and this cell must not claim
+    // one. It is the user's judgement, recorded as such.
+    //
+    // WHAT IS STRUCTURALLY TRUE, and checked: the implementation turn runs in
+    // the USER'S OWN SESSION (see task/implementation-thinking.ts and
+    // task/implementation-turn.ts), not as a child. It therefore has NO
+    // LoopDetector and NO StallDetector — only the per-tool-call command
+    // watchdog and the steer loop's resume cap. The 2026-08-27 fix that wired
+    // StallDetector into runWorker does NOT reach it. So of the groups in this
+    // table, `implementation` is the one where a rotation has no guard at all,
+    // and thinking is the only lever currently pointed at it.
+    //
+    // TO PUT THIS CELL BACK ON EVIDENCE, re-run
+    // scripts/live-implementation-thinking-ab.ts at a larger n. The ledger is
+    // /home/edgars/hub/ab-implab/impl-ledger.jsonl, 40 rows, b10618 — the odd
+    // build out, so a re-run on b10620 is not a replicate of it.
+    implementation: 'medium'
 }
 
 /**

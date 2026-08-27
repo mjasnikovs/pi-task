@@ -110,13 +110,13 @@ describe('what the shipped table puts on the wire', () => {
      * the point: it is the diff a reader wants to see beside a new measurement.
      */
     const EXPECTED: Readonly<Record<string, string[]>> = {
-        research: ['--thinking', 'off'],
+        research: ['--thinking', 'medium'],
         phase: ['--thinking', 'off'],
         planning: ['--thinking', 'medium'],
         plan: [],
         gate: ['--thinking', 'off'],
         extraction: ['--thinking', 'off'],
-        implementation: ['--thinking', 'off']
+        implementation: ['--thinking', 'medium']
     }
 
     test('every group is accounted for', () => {
