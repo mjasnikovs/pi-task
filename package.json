@@ -1,6 +1,6 @@
 {
     "name": "@mjasnikovs/pi-task",
-    "version": "0.38.19",
+    "version": "0.38.20",
     "description": "Deterministic task planning and spec-orchestration for local models — crash-safe /task pipelines with verify/enforce gates, a real-time remote web view, and web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
