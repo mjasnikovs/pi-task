@@ -710,6 +710,30 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > was 0, and `DocsDetails.aborted` was written and read by nothing, which is what let it hide.
     > `reason` comes from `childFailureReason`, which asks `classifyWorkerFailure` — the one ordered
     > ladder — rather than re-deriving the precedence.
+- **`adhoc` clock screen (STEP 1 / STEP 2)** — the two-part measurement of whether the `adhoc`
+  profile should take the `research` profile's progress deadline.
+  `scripts/live-adhoc-clock-ab.ts` screens; `scripts/live-adhoc-clock-step2.ts` pairs only what the
+  screen finds; `scripts/adhoc-clock-score.ts` is the shared scorer, unit-tested away from the GPU.
+    > **One arm, then two, and the split is the point.** Under a fixed cap no single attempt can
+    > exceed 240s, so "would the shipped profile have killed this?" is answered by the treatment arm
+    > ALONE — running a baseline to watch that is measuring arithmetic. What the baseline is
+    > genuinely needed for is the risk side, and only for the trials the screen finds over the line.
+    > **The corpus is recovered, not invented**: all 45 prompts are real `pi-worker` calls from pi's
+    > session transcripts, the only place the tool is recorded — it is unreachable from every
+    > pipeline child and appears in ZERO of ~119k logged child tool calls. Inventing prompts of the
+    > "right shape" would choose the answer, because breadth is what drives duration:
+    > `worker:files`, identical tool set but a fixed narrow prompt, exceeds 240s in 1 of 68 runs.
+    > Pinned to a NAMED SHA per repo, and the 23 prompts carrying absolute paths were rewritten to
+    > the copy — a prompt naming a live tree would have the worker reading a moving target through
+    > `read`. **The scorer is the part most likely to be wrong**, and this repo has rejected this
+    > exact axis once for being the thing that was losing (`phase-path-axis-audit.ts`, 56.2% on
+    > refine's OWN output). Its CATEGORY-CLEAN rules are lifted verbatim plus the one residual that
+    > audit named and did not fix, `src/` prefix elision. A first validation attempt scored
+    > known-good answers at 79.0% — and that was the VALIDATION SET failing, not the scorer: those
+    > answers were written against trees that have since moved, so the fit set is answers written
+    > against the pin. The statistic is paired because the design is
+    > (`mcnemarExact`), and the verdict is pre-registered in the STEP 2 header.
+
 - **Worker guard profile** — WHICH KIND of worker child a run is, as one word, and therefore the
   whole guard policy it runs under. `WORKER_PROFILES` (`workers/worker-profiles.ts`) has three rows
   — `research`, `gate`, `adhoc` — and `RunWorkerInput.profile` is required, so no caller can take a
