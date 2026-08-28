@@ -158,11 +158,14 @@ describe('gate/worker child A/B: hang then restart', () => {
         ])
         const r = await runWorker({
             prompt: 'inspect the repo',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'stream-stall': WINDOW_MS,
+                stalled: false
+            },
             cwd: '/tmp',
-            spawn: s.spawn,
-            timeoutMs: 0,
-            stall: false,
-            streamInactivityMs: WINDOW_MS
+            spawn: s.spawn
         })
         expect(r.text).toBe('WORKER DONE')
         expect(s.spawns).toBe(2)
@@ -177,11 +180,14 @@ describe('gate/worker child A/B: hang then restart', () => {
         const s = scriptedSpawn([{events: [THINKING], hang: true}])
         const r = await runWorker({
             prompt: 'inspect the repo',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'stream-stall': WINDOW_MS,
+                stalled: false
+            },
             cwd: '/tmp',
-            spawn: s.spawn,
-            timeoutMs: 0,
-            stall: false,
-            streamInactivityMs: WINDOW_MS
+            spawn: s.spawn
         })
         expect(r.streamStalled).toBeDefined()
         // Restart budget spent, then reported — never an unbounded wait.

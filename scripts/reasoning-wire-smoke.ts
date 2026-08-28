@@ -134,11 +134,14 @@ for (const group of REASONING_GROUPS) {
     await record(`runWorker ${group}`, group, () =>
         runWorker({
             prompt: PROMPT,
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 300_000, progressCeilingMs: null, fanout: null}
+            },
             cwd: process.cwd(),
             signal: new AbortController().signal,
             thinking: groupThinkingArgs(group),
             tools: 'read',
-            timeoutMs: 300_000
         })
     )
 }

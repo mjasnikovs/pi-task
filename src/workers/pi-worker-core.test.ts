@@ -16,6 +16,7 @@ import {
     makeProc,
     pacedSpawn
 } from '../test-utils/fake-spawn.js'
+import {DEFAULT_LOOP_DETECTOR, DEFAULT_LOOP_PROGRESS} from './worker-profiles.js'
 
 // A tool call the model wrote as text instead of invoking — never executed.
 const LEAKED =
@@ -29,6 +30,7 @@ describe('runWorker', () => {
         ctrl.abort()
         const result = await runWorker({
             prompt: 'unused',
+            profile: 'adhoc',
             cwd: process.cwd(),
             signal: ctrl.signal
         })
@@ -44,7 +46,7 @@ describe('runWorker', () => {
             receivedArgs = args
             return agentEndResponse('ok')
         })
-        const r = await runWorker({prompt: 'hello', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'hello', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('ok')
         expect(receivedArgs).toContain('--print')
         expect(receivedArgs).toContain('--no-skills')
@@ -57,13 +59,13 @@ describe('runWorker', () => {
 
     test('trims surrounding whitespace from the extracted assistant text', async () => {
         const spawn = fakeSpawnByPrompt(() => agentEndResponse('   spaced   '))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('spaced')
     })
 
     test('returns non-negative waitMs and workMs that sum to total elapsed', async () => {
         const spawn = fakeSpawnByPrompt(() => agentEndResponse('ok'))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.waitMs).toBeGreaterThanOrEqual(0)
         expect(r.workMs).toBeGreaterThanOrEqual(0)
     })
@@ -73,14 +75,14 @@ describe('runWorker', () => {
         // so all elapsed time is bucketed as wait, not work. This is the shape
         // we want when surfacing queue-vs-generation splits later.
         const spawn = fakeSpawnByPrompt(() => ({stdout: '', stderr: 'silent', exitCode: 1}))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.workMs).toBe(0)
         expect(r.waitMs).toBeGreaterThanOrEqual(0)
     })
 
     test('re-prompts on a leaked tool call and returns the clean retry', async () => {
         const spawn = fakeSpawnQueue([agentEndResponse(LEAKED), agentEndResponse('clean output')])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('clean output')
         expect(r.leakedToolCall).toBeUndefined()
     })
@@ -91,7 +93,7 @@ describe('runWorker', () => {
             agentEndResponse(LEAKED),
             agentEndResponse(LEAKED)
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.leakedToolCall).toBeTruthy()
     })
 
@@ -123,13 +125,13 @@ describe('runWorker', () => {
                 'find'
             ])
         )
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.groundingRetrievalCount).toBe(5)
     })
 
     test('groundingRetrievalCount is 0 for a section written with no tool calls (the failure)', async () => {
         const spawn = fakeSpawnByPrompt(() => agentEndResponse('an APIS section from memory'))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.groundingRetrievalCount).toBe(0)
     })
 
@@ -137,7 +139,7 @@ describe('runWorker', () => {
         // The anti-gaming property: a worker that lists a directory once and then
         // fabricates the rest has retrieved nothing an APIS signature can cite.
         const spawn = fakeSpawnByPrompt(() => withToolCalls(['ls']))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.groundingRetrievalCount).toBe(0)
     })
 
@@ -148,7 +150,7 @@ describe('runWorker', () => {
             agentEndResponse(LEAKED),
             withToolCalls(['pi-worker-docs'], 'clean output')
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('clean output')
         expect(r.groundingRetrievalCount).toBe(1)
     })
@@ -170,7 +172,7 @@ describe('runWorker', () => {
             loopResponse('grep', {pattern: 'glorptube'}, 6),
             agentEndResponse('clean output')
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('clean output')
         expect(r.loopHit).toBeUndefined()
     })
@@ -183,7 +185,7 @@ describe('runWorker', () => {
             loopResponse('grep', {pattern: 'glorptube'}, 6),
             loopResponse('grep', {pattern: 'glorptube'}, 6)
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.loopHit).toBeTruthy()
         expect(r.loopHit?.call.name).toBe('grep')
         expect(r.loopHit?.count).toBeGreaterThanOrEqual(5)
@@ -246,7 +248,7 @@ describe('runWorker', () => {
 
     test('kills a 20-file rotation the loop detector cannot see', async () => {
         const spawn = fakeSpawnQueue([rotationResponse(28), agentEndResponse('clean output')])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('clean output')
         expect(r.restarts).toHaveLength(1)
         expect(r.restarts[0]?.reason).toBe('loop')
@@ -257,7 +259,7 @@ describe('runWorker', () => {
 
     test('surfaces the stall when every attempt rotates', async () => {
         const spawn = fakeSpawnByPrompt(() => rotationResponse(28))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.loopHit?.stall).toBe('no-new-ground')
         expect(r.loopHit?.call.name).toBe('read')
     })
@@ -266,7 +268,7 @@ describe('runWorker', () => {
         // The false positive that would make this guard unusable: a research
         // worker legitimately reading twenty files once each.
         const spawn = fakeSpawnQueue([rotationResponse(1, 'the answer')])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
         expect(r.text).toBe('the answer')
         expect(r.loopHit).toBeUndefined()
         expect(r.restarts).toHaveLength(0)
@@ -325,11 +327,17 @@ describe('runWorker', () => {
         const spawn = fakeSpawnQueue([{events, exitCode: 0}])
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                loop: {
+                    detector: {...DEFAULT_LOOP_DETECTOR, pathThreshold: Number.POSITIVE_INFINITY},
+                    progress: {...DEFAULT_LOOP_PROGRESS}
+                }
+            },
             cwd: process.cwd(),
-            spawn,
+            spawn
             // The gate's own options, verbatim (gate-child.ts:178-186).
-            timeoutMs: 0,
-            loop: {pathThreshold: Number.POSITIVE_INFINITY}
         })
         expect(r.text).toBe('PASS')
         expect(r.loopHit).toBeUndefined()
@@ -357,10 +365,16 @@ describe('runWorker', () => {
         const spawn = fakeSpawnByPrompt(() => ({events, exitCode: 0}))
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                loop: {
+                    detector: {...DEFAULT_LOOP_DETECTOR, pathThreshold: Number.POSITIVE_INFINITY},
+                    progress: {...DEFAULT_LOOP_PROGRESS}
+                }
+            },
             cwd: process.cwd(),
-            spawn,
-            timeoutMs: 0,
-            loop: {pathThreshold: Number.POSITIVE_INFINITY}
+            spawn
         })
         expect(r.loopHit?.stall).toBe('no-new-ground')
     })
@@ -369,9 +383,12 @@ describe('runWorker', () => {
         const spawn = fakeSpawnByPrompt(() => rotationResponse(28, 'never killed'))
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
+            override: {
+                loop: {detector: {...DEFAULT_LOOP_DETECTOR}, progress: false}
+            },
             cwd: process.cwd(),
-            spawn,
-            stallGuard: false
+            spawn
         })
         expect(r.text).toBe('never killed')
         expect(r.loopHit).toBeUndefined()
@@ -384,7 +401,13 @@ describe('runWorker', () => {
         const spawn = fakeSpawnByPrompt(() =>
             loopResponse('grep', {pattern: 'glorptube'}, 8, {trailingText: 'all fixed'})
         )
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, loop: false})
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            profile: 'adhoc',
+            override: {loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}}
+        })
         expect(r.text).toBe('all fixed')
         expect(r.loopHit).toBeUndefined()
     })
@@ -396,7 +419,13 @@ describe('runWorker', () => {
             ...agentEndResponse('slow but done'),
             closeDelayMs: 50
         }))
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 0})
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            profile: 'adhoc',
+            override: {'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null}}
+        })
         expect(r.text).toBe('slow but done')
         expect(r.timedOut).toBeUndefined()
     })
@@ -408,7 +437,13 @@ describe('runWorker', () => {
             {events: [], closeDelayMs: 80},
             agentEndResponse('clean output')
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            profile: 'adhoc',
+            override: {'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null}}
+        })
         expect(r.text).toBe('clean output')
         expect(r.timedOut).toBeUndefined()
     })
@@ -425,6 +460,7 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
             cwd: process.cwd(),
             spawn,
             sleepFor: async ms => void slept.push(ms)
@@ -444,6 +480,7 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
             cwd: process.cwd(),
             spawn,
             sleepFor: async ms => void slept.push(ms)
@@ -460,9 +497,12 @@ describe('runWorker', () => {
         ])
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
+            override: {
+                'connection-error': 0
+            },
             cwd: process.cwd(),
             spawn,
-            connectionRetries: 0,
             sleepFor: async () => {
                 throw new Error('must not back off when the budget is 0')
             }
@@ -483,6 +523,7 @@ describe('runWorker', () => {
         }) as unknown as SpawnFn
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
             cwd: process.cwd(),
             spawn,
             sleepFor: async () => {
@@ -499,7 +540,13 @@ describe('runWorker', () => {
             {events: [], closeDelayMs: 60},
             {events: [], closeDelayMs: 60}
         ])
-        const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+        const r = await runWorker({
+            prompt: 'x',
+            cwd: process.cwd(),
+            spawn,
+            profile: 'adhoc',
+            override: {'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null}}
+        })
         expect(r.timedOut).toBe(true)
     })
 
@@ -520,10 +567,13 @@ describe('runWorker', () => {
         }) as unknown as SpawnFn
         const r = await runWorker({
             prompt: 'x',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                stalled: {afterMs: 50, probe: () => Promise.resolve(false)}
+            },
             cwd: process.cwd(),
-            spawn,
-            timeoutMs: 0,
-            stall: {afterMs: 50, probe: () => Promise.resolve(false)}
+            spawn
         })
         expect(r.stalled).toBe(true)
         expect(spawns).toBe(1)
@@ -537,6 +587,7 @@ describe('runWorker', () => {
         })
         await runWorker({
             prompt: 'hello',
+            profile: 'adhoc',
             cwd: process.cwd(),
             spawn,
             tools: 'read,grep'
@@ -554,6 +605,7 @@ describe('runWorker', () => {
             const spawn = fakeSpawnByPrompt(() => agentEndResponse('ok'))
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
                 cwd: process.cwd(),
                 spawn,
                 onRestart: rs => void seen.push(rs)
@@ -575,9 +627,12 @@ describe('runWorker', () => {
             const seen: WorkerRestart[] = []
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null}
+                },
                 cwd: process.cwd(),
                 spawn,
-                timeoutMs: 15,
                 onRestart: rs => void seen.push(rs)
             })
             expect(r.text).toBe('clean output')
@@ -600,7 +655,13 @@ describe('runWorker', () => {
                 {events: [], closeDelayMs: 60},
                 {events: [], closeDelayMs: 60}
             ])
-            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                profile: 'adhoc',
+                override: {'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null}}
+            })
             expect(r.timedOut).toBe(true)
             expect(r.attempts).toBe(3) // MAX_LOOP_RESTARTS = 2
             expect(r.restarts.map(x => x.attempt)).toEqual([1, 2])
@@ -612,7 +673,7 @@ describe('runWorker', () => {
                 loopResponse('grep', {pattern: 'glorptube'}, 8),
                 agentEndResponse('recovered')
             ])
-            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
             expect(r.text).toBe('recovered')
             expect(r.attempts).toBe(2)
             expect(r.restarts[0]!.reason).toBe('loop')
@@ -627,6 +688,7 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
                 cwd: process.cwd(),
                 spawn,
                 sleepFor: async ms => void slept.push(ms)
@@ -642,7 +704,7 @@ describe('runWorker', () => {
                 agentEndResponse(LEAKED),
                 agentEndResponse('clean output')
             ])
-            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
             expect(r.text).toBe('clean output')
             expect(r.attempts).toBe(2)
             expect(r.restarts.map(x => x.reason)).toEqual(['leaked-tool-call'])
@@ -676,10 +738,13 @@ describe('runWorker', () => {
             })
             const r = await runWorker({
                 prompt: 'ORIGINAL TASK',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.attempts).toBe(2)
             expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout'])
@@ -710,9 +775,12 @@ describe('runWorker', () => {
             })
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                carryForward: true
+                spawn
             })
             expect(r.restarts.map(x => x.reason)).toEqual(['loop'])
             expect(prompts[1]).not.toContain('WORK ALREADY DONE')
@@ -736,10 +804,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.attempts).toBe(3)
             expect(r.timedOut).toBe(true)
@@ -757,10 +828,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.attempts).toBe(2)
             expect(r.text).toBe('no exported API')
@@ -783,7 +857,13 @@ describe('runWorker', () => {
                 prompts.push(args.join(' '))
                 return call++ === 0 ? partialThenTimeout(long) : partialThenTimeout('tiny')
             })
-            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, timeoutMs: 15})
+            const r = await runWorker({
+                prompt: 'x',
+                cwd: process.cwd(),
+                spawn,
+                profile: 'adhoc',
+                override: {'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null}}
+            })
             expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout', 'worker-timeout'])
             expect(prompts[1]).not.toContain('WORK ALREADY DONE')
             expect(r.text).toBe('tiny')
@@ -801,10 +881,13 @@ describe('runWorker', () => {
             ])
             await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
                 spawn: withContent,
-                timeoutMs: 15,
-                carryForward: true,
                 onCarryForward: i => void seen.push({attempt: i.attempt, chars: i.chars})
             })
             expect(seen.length).toBe(1)
@@ -818,10 +901,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
                 spawn: noContent,
-                timeoutMs: 15,
-                carryForward: true,
                 onCarryForward: i => void preambleOnly.push({attempt: i.attempt, chars: i.chars})
             })
             expect(r.restarts.length).toBe(1) // it DID restart …
@@ -849,10 +935,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.attempts).toBe(3)
             // Nothing had answer content, so nothing is salvaged and the final
@@ -870,9 +959,12 @@ describe('runWorker', () => {
             })
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                carryForward: true
+                spawn
             })
             expect(r.text).toBe('ok')
             expect(r.salvagedFromDiscardedAttempt).toBe(false)
@@ -898,10 +990,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.text).toBe(long)
             expect(r.salvagedFromDiscardedAttempt).toBe(true)
@@ -915,10 +1010,13 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 15, progressCeilingMs: null, fanout: null},
+                    carryForward: true
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 15,
-                carryForward: true
+                spawn
             })
             expect(r.text).toBe('error: could not open module graph')
             expect(r.salvagedFromDiscardedAttempt).toBe(false)
@@ -951,12 +1049,14 @@ describe('runWorker', () => {
             const spawn = pacedSpawn(events, 30)
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                    stalled: false,
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 150,
-                progressTimeoutCeilingMs: 10_000,
-                stall: false,
-                loop: false
+                spawn
             })
             expect(r.text).toBe('answered')
             expect(r.timedOut).toBeUndefined()
@@ -971,12 +1071,14 @@ describe('runWorker', () => {
             const spawn = pacedSpawn([toolCall(0), toolCall(1)], 30, 900)
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 10_000, fanout: null},
+                    stalled: false,
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 150,
-                progressTimeoutCeilingMs: 10_000,
-                stall: false,
-                loop: false
+                spawn
             })
             expect(r.timedOut).toBe(true)
         })
@@ -990,12 +1092,14 @@ describe('runWorker', () => {
             )
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: 400, fanout: null},
+                    stalled: false,
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 150,
-                progressTimeoutCeilingMs: 400,
-                stall: false,
-                loop: false
+                spawn
             })
             expect(r.timedOut).toBe(true)
             expect(r.totalWallMs).toBeLessThan(2_000)
@@ -1010,11 +1114,14 @@ describe('runWorker', () => {
             )
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 150, progressCeilingMs: null, fanout: null},
+                    stalled: false,
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 150,
-                stall: false,
-                loop: false
+                spawn
             })
             expect(r.timedOut).toBe(true)
         })
@@ -1045,14 +1152,16 @@ describe('runWorker', () => {
             const started = Date.now()
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 60, progressCeilingMs: 300_000, fanout: null},
+                    stalled: {afterMs: 40, probe: () => Promise.resolve(false)},
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 60,
+                spawn
                 // The real ratio, scaled: the ceiling is ~5000x the no-progress
                 // window here, as 1_200_000 is ~5x the shipped 240_000.
-                progressTimeoutCeilingMs: 300_000,
-                stall: {afterMs: 40, probe: () => Promise.resolve(false)},
-                loop: false
             })
             expect(r.stalled).toBe(true)
             expect(Date.now() - started).toBeLessThan(5_000)
@@ -1071,12 +1180,14 @@ describe('runWorker', () => {
             const started = Date.now()
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 30, progressCeilingMs: 300_000, fanout: null},
+                    stalled: false,
+                    loop: {detector: false, progress: {...DEFAULT_LOOP_PROGRESS}}
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 30,
-                progressTimeoutCeilingMs: 300_000,
-                stall: false,
-                loop: false
+                spawn
             })
             expect(r.timedOut).toBe(true)
             expect(Date.now() - started).toBeLessThan(5_000)
@@ -1104,18 +1215,27 @@ describe('runWorker', () => {
             // Same child, same 40ms cap, twice: the only difference is the policy.
             const withoutPolicy = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 40, progressCeilingMs: null, fanout: null}
+                },
                 cwd: process.cwd(),
-                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')]),
-                timeoutMs: 40
+                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')])
             })
             expect(withoutPolicy.restarts.map(r => r.reason)).toEqual(['worker-timeout'])
 
             const withPolicy = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {
+                        timeoutMs: 40,
+                        progressCeilingMs: null,
+                        fanout: {perLookupMs: 400, ceilingMs: 10_000}
+                    }
+                },
                 cwd: process.cwd(),
-                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')]),
-                timeoutMs: 40,
-                fanoutTimeout: {perLookupMs: 400, ceilingMs: 10_000}
+                spawn: fakeSpawnQueue([late, agentEndResponse('second attempt')])
             })
             expect(withPolicy.text).toBe('answered')
             expect(withPolicy.attempts).toBe(1)
@@ -1141,10 +1261,16 @@ describe('runWorker', () => {
             ])
             const r = await runWorker({
                 prompt: 'x',
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {
+                        timeoutMs: 30,
+                        progressCeilingMs: null,
+                        fanout: {perLookupMs: 400, ceilingMs: 50}
+                    }
+                },
                 cwd: process.cwd(),
-                spawn,
-                timeoutMs: 30,
-                fanoutTimeout: {perLookupMs: 400, ceilingMs: 50}
+                spawn
             })
             expect(r.restarts.map(x => x.reason)).toEqual(['worker-timeout'])
             // The restart names the EFFECTIVE cap, which is what actually killed it.
@@ -1159,7 +1285,7 @@ describe('runWorker', () => {
                 agentEndResponse(LEAKED),
                 agentEndResponse('done')
             ])
-            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn})
+            const r = await runWorker({prompt: 'x', cwd: process.cwd(), spawn, profile: 'adhoc'})
             expect(r.attempts).toBe(r.restarts.length + 1)
             expect(r.restarts.map(x => x.reason)).toEqual(['loop', 'leaked-tool-call'])
         })

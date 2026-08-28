@@ -16,8 +16,7 @@ import {
 import {searchProviderKey, type SearchProvider} from '../workers/search-types.js'
 import {channelSet} from '../workers/worker-channels.js'
 import {
-    fanoutTimeoutPolicy,
-    workerCarryForward,
+    snapshotLeverEnv,
     workerProgressCeilingMs,
     projectDocsBudget,
     projectDocsBudgetNotice
@@ -670,10 +669,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // phase, so every worker in a run sees the same policy and a harness cannot
     // half-apply an arm. CAP, SCALE and carry-forward are null/false in the
     // shipped configuration; the progress deadline shipped ON (nexttask 9).
-    const fanoutBudget = projectDocsBudget()
-    const fanoutTimeout = fanoutTimeoutPolicy()
-    const carryForward = workerCarryForward()
-    const progressCeilingMs = workerProgressCeilingMs()
+    const leverEnv = snapshotLeverEnv()
+    const fanoutBudget = projectDocsBudget(leverEnv)
+    const progressCeilingMs = workerProgressCeilingMs(leverEnv)
     // Which deadline policy was in force is a fact about how every number below
     // was produced. Run 18's 120 discarded minutes were only recoverable because
     // 5A started writing down what the workers actually did; a run whose logs do
@@ -940,9 +938,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 readCached: async heading =>
                     (await readSection(deps.cwd, deps.taskId, heading)) ?? '',
                 persistSection,
-                carryForward,
-                fanoutTimeout,
-                progressCeilingMs
+                leverEnv
             },
             prior
         )

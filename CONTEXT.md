@@ -710,6 +710,40 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > was 0, and `DocsDetails.aborted` was written and read by nothing, which is what let it hide.
     > `reason` comes from `childFailureReason`, which asks `classifyWorkerFailure` — the one ordered
     > ladder — rather than re-deriving the precedence.
+- **Worker guard profile** — WHICH KIND of worker child a run is, as one word, and therefore the
+  whole guard policy it runs under. `WORKER_PROFILES` (`workers/worker-profiles.ts`) has three rows
+  — `research`, `gate`, `adhoc` — and `RunWorkerInput.profile` is required, so no caller can take a
+  policy by taking nothing. A `WorkerGuardPolicy` is keyed on `WorkerKillId`: one row per way a
+  worker can die, because a guard exists to prevent a specific death. The two facts a profile cannot
+  know are `policyInputs` — the gate's two config ceilings, and which research worker is
+  docs-capable — and `override` is whole-rows-only and TESTS ONLY.
+    > Ten guard knobs sat on `RunWorkerInput` in four different shapes, and three callers each
+    > hand-picked a different subset. "A gate child runs unbounded but with a per-command watchdog;
+    > a research worker is the reverse" existed only as three option literals in three files, and
+    > each literal carried whichever justification someone had needed to write down: `gate-child.ts`
+    > explained why it disables the path-revisit rule and said nothing about why it takes no
+    > progress deadline, and `pi-worker.ts` named nothing at all. That last one is the cost — the
+    > ad-hoc tool turns out to be the STRICTEST-clocked of the three children (a FIXED 240s cap,
+    > where a research worker doing the same read-only exploration gets 240s WITHOUT PROGRESS up to
+    > twenty minutes), and nobody chose that; it is the residue of never having had a place to write
+    > a choice down. It is preserved exactly and now says on its own row that it is unmeasured.
+    > **Keying on `WorkerKillId` is the leverage**: adding a tenth cause to `WORKER_KILLS` fails to
+    > compile in `worker-profiles.ts` until every profile decides about it, and the three causes with
+    > no dial (`leaked-tool-call`, `aborted`, `exit`) say `null` in the table instead of being
+    > absent from it. The key does NOT partition the knobs one-per-row and the row types say so:
+    > `worker-timeout` holds the cap, the progress ceiling and the fan-out extension because all
+    > three move the SAME timer, and `loop` holds both runaway detectors because a `StallDetector`
+    > hit IS a `LoopHit` and the restart ladder has one rule for both. **Deliberately NOT unified**:
+    > `carryForward` is not a row (it is one switch, and WHICH causes honour it is already derived
+    > from the roster as `CARRY_FORWARD_IDS`); the reasoning group is not the profile (`pi-worker`
+    > runs `adhoc` guards and the `research` thinking level, and folding them would silently re-level
+    > a gate child); `projectDocsBudget` stays out (it bounds what a worker ASKS FOR, not how it
+    > dies); and `RESTART_ORDER`/`FAILURE_ORDER` stay two. The proof is a chain, not a diff:
+    > `worker-profiles.test.ts` holds a hand-written literal per profile, `gate-child.test.ts` and
+    > `research-worker.test.ts` assert their call site still NAMES its profile, and `onPolicy`
+    > reports the resolved policy out of the real `runWorker` so "the profile resolved right" and
+    > "the body then read it right" are separately observable. Four wrong wirings were introduced and
+    > each turned a test red.
 - **Kill-cause ladder (one author, four consumers)** — `classifyWorkerFailure`
   (`workers/worker-failure.ts`) is the ONLY statement of kill-cause precedence, and `runWorker`'s
   `finalAttemptFailed` asks it rather than restating it.

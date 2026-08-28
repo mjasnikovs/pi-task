@@ -175,9 +175,12 @@ interface Outcome {
 async function baseline(): Promise<Outcome> {
     const r = await runWorker({
         prompt: PROMPT,
+        profile: 'adhoc',
+        override: {
+            'worker-timeout': {timeoutMs: 240_000, progressCeilingMs: null, fanout: null},
+            'connection-error': 0
+        },
         cwd: CWD,
-        timeoutMs: 240_000,
-        connectionRetries: 0
     })
     const text = r.text.trim()
     return {
@@ -190,7 +193,7 @@ async function baseline(): Promise<Outcome> {
  *  backoff as a phase child. runWorker reports only its final attempt, so how
  *  many spawns it took is read off the proxy's request log instead. */
 async function treatment(): Promise<Outcome> {
-    const r = await runWorker({prompt: PROMPT, cwd: CWD, timeoutMs: 240_000})
+    const r = await runWorker({prompt: PROMPT, cwd: CWD, profile: 'adhoc', override: {'worker-timeout': {timeoutMs: 240_000, progressCeilingMs: null, fanout: null}}})
     const text = r.text.trim()
     return {
         ok: text.length > 0,
@@ -209,9 +212,12 @@ async function probe(): Promise<void> {
         try {
             r = await runWorker({
                 prompt: PROMPT,
+                profile: 'adhoc',
+                override: {
+                    'worker-timeout': {timeoutMs: 240_000, progressCeilingMs: null, fanout: null},
+                    'connection-error': 0
+                },
                 cwd: CWD,
-                timeoutMs: 240_000,
-                connectionRetries: 0
             })
         } finally {
             proxy.kill('SIGKILL')

@@ -5,7 +5,7 @@ import {
     type GateChildDeps,
     type GateChildKind
 } from './gate-child.js'
-import type {RunWorkerResult} from '../workers/pi-worker-core.js'
+import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
 import type {ReconcileResult, GitStateSnapshot} from './git-state-guard.js'
 import {ChildStatus, type ChildStatusDeps} from './child-status.js'
 
@@ -50,10 +50,13 @@ function harness(over: Partial<GateChildDeps> = {}): {
     log: string[]
     notices: string[]
     order: string[]
+    /** Every `RunWorkerInput` this harness's child was handed, in order. */
+    seenInput: RunWorkerInput[]
 } {
     const log: string[] = []
     const notices: string[] = []
     const order: string[] = []
+    const seenInput: RunWorkerInput[] = []
     const deps: GateChildDeps = {
         ctx: {
             ui: {
@@ -72,8 +75,9 @@ function harness(over: Partial<GateChildDeps> = {}): {
         // existing assertion still describes the argv it was written against.
         thinking: [],
         status: status(() => () => order.push('loader-stopped')),
-        runWorker: () => {
+        runWorker: input => {
             order.push('worker')
+            seenInput.push(input)
             return Promise.resolve(workerResult())
         },
         makeDebugAppender: () => line => log.push(line),
@@ -89,7 +93,7 @@ function harness(over: Partial<GateChildDeps> = {}): {
         truncateToolResult: t => t,
         ...over
     }
-    return {deps, log, notices, order}
+    return {deps, log, notices, order, seenInput}
 }
 
 describe('GATE_CHILD_KINDS', () => {
@@ -367,5 +371,38 @@ describe('the live-state callbacks', () => {
         // No detail → no trailing em-dash clause.
         expect(restarts[1]).toContain('reason=loop')
         expect(restarts[1]).not.toContain('—')
+    })
+})
+
+/**
+ * THE CALL SITE NAMES THE PROFILE.
+ *
+ * The other half of the no-behaviour-change proof lives in
+ * `workers/worker-profiles.test.ts`, which checks that the `gate` profile
+ * RESOLVES to what this call site used to spell out inline. That says nothing
+ * about whether this call site still asks for `gate`, or still hands it the two
+ * config ceilings — which is the mistake a refactor actually makes. This closes
+ * the chain: call site -> profile -> policy -> behaviour.
+ */
+describe('gate child guard policy', () => {
+    test('asks for the `gate` profile and feeds it the two configured ceilings', async () => {
+        const h = harness({commandTimeoutMs: 900_000, streamInactivityMs: 600_000})
+        await makeGateChild(h.deps)('read,edit', 'do it')
+        const input = h.seenInput[0]!
+        expect(input.profile).toBe('gate')
+        expect(input.policyInputs).toEqual({
+            commandTimeoutMs: 900_000,
+            streamInactivityMs: 600_000
+        })
+    })
+
+    test('names no guard of its own — the profile IS the whole policy', async () => {
+        // An override here would be the hand-picked subset WORKER_PROFILES
+        // exists to stop. `worker-profiles.test.ts` fails the build if one
+        // appears anywhere in production source; this says it about the one
+        // call site that used to carry four guard literals.
+        const h = harness()
+        await makeGateChild(h.deps)('read,edit', 'do it')
+        expect(h.seenInput[0]!.override).toBeUndefined()
     })
 })

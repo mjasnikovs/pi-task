@@ -64,6 +64,12 @@ export function registerPiWorker(pi: ExtensionAPI): void {
                 prompt: params.prompt,
                 cwd: ctx.cwd,
                 signal,
+                // `adhoc` is every guard at its default — which is what this call
+                // site already got by naming none of them. Named now so it is a
+                // decision, and so the one asymmetry it carries (a FIXED 240s cap
+                // where a research worker gets 240s without progress) is written
+                // down. See the `adhoc` row in workers/worker-profiles.ts.
+                profile: 'adhoc',
                 thinking: groupThinkingArgs('research')
             })
             const details: WorkerDetails = {exitCode: result.exitCode}

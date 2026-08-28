@@ -7,6 +7,7 @@ import {
     fakeSpawnQueue,
     type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
+import {DEFAULT_LOOP_DETECTOR, DEFAULT_LOOP_PROGRESS} from './worker-profiles.js'
 
 /**
  * CHILD-side command watchdog (the gate-child half of shared/command-watchdog.ts).
@@ -71,11 +72,15 @@ describe('command watchdog — child side', () => {
         const prompts: string[] = []
         const r = await runWorker({
             prompt: 'verify the task',
+            // as the gate children run: unbounded worker
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 30,
+                stalled: false
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0, // as the gate children run: unbounded worker
-            commandTimeoutMs: 30,
-            stall: false,
             spawn: fakeSpawnKillable([hungCommand('bun run dev')], p => prompts.push(p))
         })
 
@@ -91,11 +96,14 @@ describe('command watchdog — child side', () => {
         const prompts: string[] = []
         await runWorker({
             prompt: 'verify the task',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 30,
+                stalled: false
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0,
-            commandTimeoutMs: 30,
-            stall: false,
             spawn: fakeSpawnKillable([hungCommand('bun run dev')], p => prompts.push(p))
         })
 
@@ -147,12 +155,23 @@ describe('command watchdog — child side', () => {
         const prompts: string[] = []
         const r = await runWorker({
             prompt: 'verify the task',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 40,
+                stalled: false,
+                loop: {
+                    detector: {
+                        ...DEFAULT_LOOP_DETECTOR,
+                        window: 4,
+                        threshold: 2,
+                        pathThreshold: Number.POSITIVE_INFINITY
+                    },
+                    progress: {...DEFAULT_LOOP_PROGRESS}
+                }
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0,
-            commandTimeoutMs: 40,
-            stall: false,
-            loop: {window: 4, threshold: 2, pathThreshold: Number.POSITIVE_INFINITY},
             spawn: fakeSpawnKillable(
                 [
                     // Two identical calls trip LoopDetector(4, 2) → loop kill.
@@ -190,11 +209,14 @@ describe('command watchdog — child side', () => {
     test('a command that finishes in time is never killed', async () => {
         const r = await runWorker({
             prompt: 'verify the task',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 60_000,
+                stalled: false
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0,
-            commandTimeoutMs: 60_000,
-            stall: false,
             spawn: fakeSpawnQueue([
                 {
                     events: [
@@ -224,8 +246,11 @@ describe('command watchdog — child side', () => {
     test('off by default: no ceiling is applied unless a caller asks for one', async () => {
         const r = await runWorker({
             prompt: 'research the thing',
+            profile: 'adhoc',
+            override: {
+                stalled: false
+            },
             cwd: '/tmp',
-            stall: false,
             spawn: fakeSpawnQueue([
                 {
                     events: [
@@ -251,11 +276,14 @@ describe('command watchdog — child side', () => {
         // still disarm on end, or a finished command would be killed retroactively.
         const r = await runWorker({
             prompt: 'verify',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 40,
+                stalled: false
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0,
-            commandTimeoutMs: 40,
-            stall: false,
             spawn: fakeSpawnQueue([
                 {
                     events: [
@@ -283,11 +311,14 @@ describe('command watchdog — child side', () => {
         const seen: string[] = []
         await runWorker({
             prompt: 'verify',
+            profile: 'adhoc',
+            override: {
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+                'command-timeout': 60_000,
+                stalled: false
+            },
             cwd: '/tmp',
             tools: 'read,bash',
-            timeoutMs: 0,
-            commandTimeoutMs: 60_000,
-            stall: false,
             onToolResult: ({name, text}) => seen.push(`${name}:${text}`),
             spawn: fakeSpawnQueue([
                 {

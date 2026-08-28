@@ -87,6 +87,37 @@ export const WORKER_PROGRESS_CEILING_ENV = 'PI_TASK_WORKER_PROGRESS_CEILING_MS'
 type Env = (key: string) => string | undefined
 const defaultEnv: Env = key => process.env[key]
 
+/**
+ * Every lever env var this module owns.
+ *
+ * Exists so `snapshotLeverEnv` cannot drift from the levers: adding a lever
+ * without adding it here would leave that one lever read LATE, which is the
+ * half-applied arm the snapshot exists to prevent.
+ */
+export const RESEARCH_LEVER_ENVS: readonly string[] = [
+    PROJECT_DOCS_BUDGET_ENV,
+    FANOUT_TIMEOUT_PER_LOOKUP_ENV,
+    FANOUT_TIMEOUT_CEILING_ENV,
+    WORKER_CARRY_FORWARD_ENV,
+    WORKER_PROGRESS_CEILING_ENV
+]
+
+/**
+ * The levers, read ONCE, as a reader the profile table can be handed.
+ *
+ * WHY A SNAPSHOT AND NOT `process.env`. Every worker in one research phase must
+ * see the same arm. The three lever values used to be resolved once in
+ * `phases.ts` and threaded down as three separate `ResearchWorkerRun` fields for
+ * exactly that reason; moving the resolution into the `research` profile would
+ * have moved the READ down to each worker with it, and a harness that flips a
+ * var mid-phase would then half-apply its own arm. Freezing the reader keeps the
+ * read-once property while letting the profile own what the values MEAN.
+ */
+export function snapshotLeverEnv(env: Env = defaultEnv): Env {
+    const snap = new Map<string, string | undefined>(RESEARCH_LEVER_ENVS.map(k => [k, env(k)]))
+    return key => snap.get(key)
+}
+
 function positiveInt(raw: string | undefined): number | null {
     if (raw === undefined) return null
     const n = Number(raw)

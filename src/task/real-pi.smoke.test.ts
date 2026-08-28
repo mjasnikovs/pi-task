@@ -78,8 +78,11 @@ describe('real pi smoke', () => {
                 // worker finishes well under the timeout — no false loopHit/timedOut.
                 const r = await runWorker({
                     prompt: 'Reply with the single word READY and nothing else.',
-                    cwd,
-                    timeoutMs: 90_000
+                    profile: 'adhoc',
+                    override: {
+                        'worker-timeout': {timeoutMs: 90_000, progressCeilingMs: null, fanout: null}
+                    },
+                    cwd
                 })
                 expect(r.exitCode).toBe(0)
                 expect(r.text.trim().length).toBeGreaterThan(0)

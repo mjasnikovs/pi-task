@@ -17,7 +17,7 @@ import {
     type ResearchWorkerRun,
     type ResearchWorkerSpec
 } from './research-worker.js'
-import type {RunWorkerResult} from '../workers/pi-worker-core.js'
+import type {RunWorkerInput, RunWorkerResult} from '../workers/pi-worker-core.js'
 
 /** A finished worker result: clean, with only the fields a gate reads set. */
 function result(over: Partial<RunWorkerResult> = {}): RunWorkerResult {
@@ -44,22 +44,27 @@ interface Harness {
     preambles: string[]
     persisted: Array<{heading: string; text: string}>
     done: number
+    /** Every `RunWorkerInput` the driver produced, in order. */
+    seenInput: RunWorkerInput[]
 }
 
 /** `attempts` is consumed in order; the last one repeats. */
 function harness(attempts: RunWorkerResult[], opts: {cached?: string} = {}): Harness {
     const preambles: string[] = []
     const persisted: Array<{heading: string; text: string}> = []
+    const seenInput: RunWorkerInput[] = []
     let i = 0
     const h: Harness = {
         preambles,
         persisted,
+        seenInput,
         done: 0,
         run: {
             runWorker: (_label, input) => {
                 // The prompt is `${preamble}\n\n${base}`; BASE is the last line.
                 const idx = input.prompt.lastIndexOf('\n\nBASE')
                 preambles.push(idx === -1 ? '' : input.prompt.slice(0, idx))
+                seenInput.push(input)
                 return Promise.resolve(attempts[Math.min(i++, attempts.length - 1)]!)
             },
             cwd: '/nowhere',
@@ -75,9 +80,9 @@ function harness(attempts: RunWorkerResult[], opts: {cached?: string} = {}): Har
                 persisted.push({heading, text})
                 return Promise.resolve()
             },
-            carryForward: false,
-            fanoutTimeout: null,
-            progressCeilingMs: null
+            // The shipped arm: no lever env var set. Was three hand-set nulls,
+            // which quietly tested a configuration production never runs.
+            leverEnv: () => undefined
         }
     }
     return h
@@ -250,5 +255,43 @@ describe('the outcome', () => {
         const out = await runResearchWorker(SPEC, h.run)
 
         expect(out.text).toContain('reported no entries')
+    })
+})
+
+/**
+ * THE CALL SITE NAMES THE PROFILE.
+ *
+ * `workers/worker-profiles.test.ts` proves the `research` profile RESOLVES to
+ * what the three lever spreads here used to produce. This proves the driver
+ * still asks for it, and still hands it the only two facts it owns: which worker
+ * is docs-capable, and the phase's FROZEN lever reader.
+ */
+describe('research worker guard policy', () => {
+    test('asks for the `research` profile and passes the phase lever reader', async () => {
+        const h = harness([result({text: 'ANSWER'})])
+        await runResearchWorker(SPEC, h.run)
+        const input = h.seenInput[0]!
+        expect(input.profile).toBe('research')
+        expect(input.policyInputs?.env).toBe(h.run.leverEnv)
+        expect(input.override).toBeUndefined()
+    })
+
+    test('only a fanoutBounded spec is marked docs-capable', async () => {
+        const plain = harness([result({text: 'A'})])
+        await runResearchWorker(SPEC, plain.run)
+        expect(plain.seenInput[0]!.policyInputs?.fanoutBounded).toBeUndefined()
+
+        const apis = harness([result({text: 'A'})])
+        await runResearchWorker({...SPEC, fanoutBounded: true}, apis.run)
+        expect(apis.seenInput[0]!.policyInputs?.fanoutBounded).toBe(true)
+    })
+
+    test('every attempt of one worker sees the SAME frozen lever reader', async () => {
+        // A restart must not re-read the environment: the whole point of the
+        // snapshot is that a harness cannot half-apply its own arm mid-phase.
+        const h = harness([result({text: ''}), result({text: 'ANSWER'})])
+        await runResearchWorker(SPEC, h.run)
+        expect(h.seenInput.length).toBeGreaterThan(1)
+        for (const input of h.seenInput) expect(input.policyInputs?.env).toBe(h.run.leverEnv)
     })
 })

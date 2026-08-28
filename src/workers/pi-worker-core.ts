@@ -12,8 +12,6 @@ import {childBaseArgs} from '../shared/child-extensions.js'
 import {LoopDetector} from '../task/loop-detector.js'
 import {StallDetector, formatStallHint} from '../task/stall-detector.js'
 import {
-    LOOP_WINDOW,
-    LOOP_THRESHOLD,
     MAX_LOOP_RESTARTS,
     formatLoopHint,
     isConnectionError,
@@ -28,6 +26,14 @@ import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpo
 import {streamStallHint} from '../shared/stream-watchdog.js'
 import {classifyWorkerFailure} from './worker-failure.js'
 import {CARRY_FORWARD_IDS, RESTART_ORDER, type WorkerKillId} from './worker-kill.js'
+import {
+    applyOverride,
+    WORKER_PROFILES,
+    type WorkerGuardOverride,
+    type WorkerGuardPolicy,
+    type WorkerPolicyInputs,
+    type WorkerProfileId
+} from './worker-profiles.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -55,26 +61,9 @@ const DEFAULT_TOOLS = 'read,grep,find,ls'
 // several call sites and tests import it from here.
 export {isGroundingRetrieval} from './worker-channels.js'
 
-/**
- * Hard wall-clock bound on a single research worker run (one spawn). The
- * exact-match LoopDetector only catches *identical* repeated tool calls; a model
- * that thrashes with slightly-varied calls (different grep patterns each time)
- * slips past it and would otherwise run unbounded. This is the backstop for that
- * case: after this long with no clean exit, abort and restart with a hint. Sized
- * well above a healthy worker's observed runtime (~25-130s on the local backend)
- * so it never trips a legitimately slow run.
- */
-const RESEARCH_WORKER_TIMEOUT_MS = 240_000
-
-/**
- * Output-stall window before the dead-backend probe fires (mx5 run 7: model
- * server died mid-gate-child, the child hung MUTE for 64 minutes). This is NOT
- * a wall-clock cap — output progress resets it, and even a fully stalled child
- * is only killed when the model endpoint is actually unreachable. Sized so a
- * long local prompt-processing pass (minutes of legitimate silence, server
- * alive) just gets probed and waits on.
- */
-const STALL_AFTER_MS = 180_000
+// RESEARCH_WORKER_TIMEOUT_MS and STALL_AFTER_MS live on the profile table now
+// (worker-profiles.ts): they are the default VALUES of two guard rows, and a
+// default that lives apart from the table stating it is a second place to look.
 
 /**
  * Restart hint after a WHOLE-WORKER wall-clock timeout — distinct from both the
@@ -218,103 +207,40 @@ export interface RunWorkerInput {
      */
     contextWindow?: number
     /**
-     * Per-worker wall-clock timeout in ms. Defaults to RESEARCH_WORKER_TIMEOUT_MS.
-     * Pass 0 to disable the timeout entirely (run until the child exits on its
-     * own) — for a pass that must be allowed to finish however long it takes.
+     * WHICH KIND of worker child this is — the whole guard policy, in one word.
+     *
+     * REQUIRED, and required on purpose. The ten guard knobs this replaces used
+     * to sit here as independent optionals, so a caller that named none of them
+     * still got a full policy and nobody could see which one. That is how the
+     * ad-hoc `pi-worker` tool came to run the strictest wall clock of the three
+     * children without anyone deciding it should. See worker-profiles.ts.
      */
-    timeoutMs?: number
+    profile: WorkerProfileId
     /**
-     * PER-TOOL-CALL wall-clock ceiling in ms — the child-side half of the command
-     * watchdog (see shared/command-watchdog.ts). Arms on each tool_execution_start
-     * and disarms on the matching end; on overrun the child is killed and, within
-     * the shared restart budget, re-spawned with commandTimeoutHint.
-     *
-     * WHY SEPARATE FROM `timeoutMs`: that one bounds the whole worker and is
-     * deliberately 0 (unbounded) for gate children, which must run to completion.
-     * Neither it nor the stall guard can catch a hung command — the stall guard
-     * treats a reachable model endpoint as proof of life, which it is, even while
-     * a `bun run dev` the model forgot to bound blocks the child forever.
-     *
-     * This is the ceiling for the FIRST attempt; each HANG-caused restart halves
-     * it (see commandCeilingForAttempt — loop-caused restarts don't count), so a
-     * model that ignores the hint cannot spend the full ceiling again on every
-     * retry.
-     *
-     * 0 / omitted = off, so every existing caller is unchanged.
+     * The facts the profile needs that are NOT policy: the gate's two watchdog
+     * ceilings (user config) and which research worker is docs-capable.
      */
-    commandTimeoutMs?: number
+    policyInputs?: WorkerPolicyInputs
     /**
-     * Per-worker loop-detector tuning. Defaults to the read-only research/impl
-     * guard (LOOP_WINDOW / LOOP_THRESHOLD, path threshold = exact threshold). An
-     * edit/fix pass legitimately revisits one file, so it can raise (or disable
-     * via Infinity) `pathThreshold`. Pass `false` to turn the detector OFF
-     * entirely — no tool-call pattern will ever kill the worker.
+     * Whole guard rows laid over the profile's. TESTS AND A/B HARNESSES ONLY —
+     * an override at a production call site is the hand-picked subset this
+     * design exists to stop, and `worker-profiles.test.ts` fails the build if
+     * one appears under src/ outside a test.
      */
-    loop?: {window?: number; threshold?: number; pathThreshold?: number} | false
+    override?: WorkerGuardOverride
     /**
-     * Whole-run progress guard (task/stall-detector.ts). Default ON.
+     * The resolved policy this run will use, reported once before the first
+     * attempt.
      *
-     * WHY BOTH. LoopDetector judges ARGUMENTS over a 20-call window, so a child
-     * that rotates through MORE DISTINCT CALLS THAN THE WINDOW HOLDS is invisible
-     * to it — every key occurs once per window and the count never reaches the
-     * threshold. Measured: mx5-n 2026-08-27, worker:tooling made 550 calls over
-     * exactly 20 distinct files, ~36 reads each, and neither the exact rule nor
-     * the path rule ever tripped. It died 20 minutes later on the absolute
-     * progress ceiling, having done 25s of useful work.
-     *
-     * StallDetector judges RESULTS, which a rotating reader cannot vary. It was
-     * written for exactly this class and was wired only into phase children
-     * (task/child-runner.ts) until this option existed.
-     *
-     * Pass `false` to disable, or override the thresholds (tests, harnesses).
+     * WHY: asserting that a profile RESOLVES correctly proves nothing about
+     * whether runWorker then READS it correctly — a rewiring that turns "0 means
+     * off" into "0 means on" leaves every profile assertion green. This hook is
+     * what lets a caller's own test (gate-child.test.ts) drive the REAL call
+     * site and check the REAL policy, instead of re-typing the table.
      */
-    stallGuard?: {limit?: number; churnFactor?: number} | false
-    /**
-     * Dead-backend stall guard override. Default ON: no output for
-     * STALL_AFTER_MS → probe the model endpoints pi is configured with →
-     * unreachable → kill + `stalled: true`. Pass `false` to disable, or
-     * override the window/probe (tests, harnesses).
-     */
-    stall?: {afterMs?: number; probe?: () => Promise<boolean>} | false
-    /**
-     * Stream-inactivity ceiling in ms (shared/stream-watchdog.ts). The stall guard
-     * above cannot catch a HUNG stream on a HEALTHY backend — it reads a reachable
-     * endpoint as proof of life, which is exactly what run 14's three hangs looked
-     * like. This one asks nothing of the backend: no output for this long (with
-     * tool executions excluded) ⇒ kill and restart the attempt with
-     * {@link streamStallHint}, inside the same shared restart budget.
-     * 0 / omitted = off.
-     */
-    streamInactivityMs?: number
+    onPolicy?: (policy: WorkerGuardPolicy) => void
     /** Backoff sleep, injectable so tests don't wait out the real delays. */
     sleepFor?: (ms: number) => Promise<void>
-    /**
-     * SCALE arm of nexttask 5B — OFF unless set, and set only by the harness that
-     * is measuring it (src/task/research-fanout-budget.ts explains both arms).
-     * Each project-source `pi-worker-docs` call pushes this attempt's deadline out
-     * by `perLookupMs`, never past `ceilingMs` from the attempt's start: a worker
-     * that is making retrieval progress is not killed for making it, while a
-     * worker that is thrashing still hits a hard bound.
-     */
-    fanoutTimeout?: {perLookupMs: number; ceilingMs: number}
-    /**
-     * Absolute backstop that turns `timeoutMs` from "total time allowed" into
-     * "time allowed WITHOUT PROGRESS". A tool call or a line of output re-arms
-     * the deadline; only a worker that goes quiet for `timeoutMs` — or exceeds
-     * this ceiling outright — is killed.
-     *
-     * This is the difference between "took too long" and "stopped working". The
-     * first is a property of the machine (a slower local model, a bigger file)
-     * and must not cost the user their answer; the second is a real fault, and
-     * one the output-stall probe already catches on its own terms.
-     */
-    progressTimeoutCeilingMs?: number
-    /**
-     * Carry a killed attempt's findings into the re-spawn, and never return less
-     * than the best attempt produced. OFF by default so the shipped path is
-     * unchanged while the A/B runs — see src/task/research-fanout-budget.ts.
-     */
-    carryForward?: boolean
     /**
      * Called when a carried-forward partial is INJECTED into an attempt's prompt
      * — once per attempt that receives one. Distinct from `onRestart`, which says
@@ -347,14 +273,6 @@ export interface RunWorkerInput {
      * of the `start` and `done` lines around it.
      */
     onRestart?: (restart: WorkerRestart) => void
-    /**
-     * Connection-error restart budget. Defaults to MAX_LOOP_RESTARTS, and even
-     * then the SHARED restart counter is what actually binds — a worker that
-     * already spent the budget looping does not get extra lives here. 0 turns the
-     * retry off, which is how scripts/connection-retry-ab.ts gets a baseline arm
-     * out of a build that already ships the retry.
-     */
-    connectionRetries?: number
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -895,7 +813,17 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         '--tools',
         tools
     ]
-    const timeoutMs = input.timeoutMs ?? RESEARCH_WORKER_TIMEOUT_MS
+    // ONE resolution, before the first attempt. Every guard read below goes
+    // through `policy`, so "which knobs is this child running" has exactly one
+    // answer and it is observable (`onPolicy`) rather than inferable.
+    const policy = applyOverride(
+        WORKER_PROFILES[input.profile].resolve(input.policyInputs ?? {}),
+        input.override
+    )
+    input.onPolicy?.(policy)
+    const guards = policy.guards
+    const clock = guards['worker-timeout']
+    const timeoutMs = clock.timeoutMs
     let hint: string | null = null
     // Loop-kill and timeout share one restart budget, mirroring
     // runPhaseChild: a runaway worker gets re-spawned with a corrective
@@ -949,24 +877,20 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // tool call is ever flagged); otherwise build a detector from the override
         // or the default research/impl thresholds.
         const loopDetector =
-            input.loop === false ?
+            guards.loop.detector === false ?
                 null
-            :   (() => {
-                    const window = input.loop?.window ?? LOOP_WINDOW
-                    const threshold = input.loop?.threshold ?? LOOP_THRESHOLD
-                    return new LoopDetector(
-                        window,
-                        threshold,
-                        input.loop?.pathThreshold ?? threshold
-                    )
-                })()
+            :   new LoopDetector(
+                    guards.loop.detector.window,
+                    guards.loop.detector.threshold,
+                    guards.loop.detector.pathThreshold
+                )
         // Reset EACH attempt, like the loop detector: a restart discards the
         // previous attempt's calls along with its text, so a fresh child must not
         // inherit a dead streak it did not earn.
         const stallDetector =
-            input.stallGuard === false ?
+            guards.loop.progress === false ?
                 null
-            :   new StallDetector(input.stallGuard?.limit, input.stallGuard?.churnFactor)
+            :   new StallDetector(guards.loop.progress.limit, guards.loop.progress.churnFactor)
         // Arm the churn rule BEFORE the first tool call. pi's stream carries no
         // context event (issue #16), so waiting for one leaves the rule
         // permanently disarmed. The parent knows the window at spawn time.
@@ -980,11 +904,11 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // discarded with its text, so the count must describe only the attempt
         // whose text this call returns.
         let groundingRetrievalCount = 0
-        const timeout = workerTimeout(input.signal, timeoutMs, input.progressTimeoutCeilingMs)
+        const timeout = workerTimeout(input.signal, timeoutMs, clock.progressCeilingMs ?? undefined)
         // Per-tool-call watchdog for this attempt (null when off). Its abort is
         // OR'd with the worker timeout / external cancel into the child's signal.
         const cmdWatch = commandWatch(
-            commandCeilingForAttempt(input.commandTimeoutMs ?? 0, hangKills)
+            commandCeilingForAttempt(guards['command-timeout'], hangKills)
         )
         const childSignal =
             cmdWatch ? AbortSignal.any([timeout.signal, cmdWatch.signal]) : timeout.signal
@@ -996,19 +920,20 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 childSignal,
                 {
                     mode: 'json-events',
-                    ...(input.stall === false ?
+                    ...(guards.stalled === false ?
                         {}
                     :   {
                             stall: {
-                                afterMs: input.stall?.afterMs ?? STALL_AFTER_MS,
+                                afterMs: guards.stalled.afterMs,
+                                // `null` in the policy means the built-in probe.
+                                // Kept as data so a resolved policy stays plain
+                                // comparable data — see StalledGuard.probe.
                                 probe:
-                                    input.stall?.probe
+                                    guards.stalled.probe
                                     ?? (() => probeModelEndpoints(discoverModelEndpoints()))
                             }
                         }),
-                    ...(input.streamInactivityMs ?
-                        {streamInactivityMs: input.streamInactivityMs}
-                    :   {}),
+                    ...(guards['stream-stall'] ? {streamInactivityMs: guards['stream-stall']} : {}),
                     onFirstByte: () => (tFirstByte = Date.now()),
                     onToolCall: call => {
                         cmdWatch?.onStart(call)
@@ -1018,15 +943,12 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         // The generic child runner used to name ONE tool and ONE of
                         // its parameters here. It asks the tool's own row now.
                         if (
-                            input.fanoutTimeout
+                            clock.fanout
                             && workerChannel(call.name)?.isProjectSourceLookup?.(
                                 (call.args as Record<string, unknown> | undefined) ?? {}
                             ) === true
                         ) {
-                            timeout.extend(
-                                input.fanoutTimeout.perLookupMs,
-                                input.fanoutTimeout.ceilingMs
-                            )
+                            timeout.extend(clock.fanout.perLookupMs, clock.fanout.ceilingMs)
                         }
                         if (isGrounding(call.name)) groundingRetrievalCount++
                         // Loop detector first: it names the offending call and its
@@ -1094,7 +1016,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             // path cannot be added that silently drops the attempt's work.
             // Longest-wins — a later attempt killed early should not replace a
             // fuller answer an earlier one had already reached.
-            if (input.carryForward === true && CARRY_FORWARD_REASONS.has(reason)) {
+            if (policy.carryForward && CARRY_FORWARD_REASONS.has(reason)) {
                 const partial = text.trim()
                 // Longest-with-CONTENT wins. Length alone let a preamble sentence
                 // become the answer — see hasAnswerContent.
@@ -1127,7 +1049,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             tools,
             restartBudgetSpent,
             connRetries,
-            connectionRetries: input.connectionRetries ?? MAX_LOOP_RESTARTS,
+            connectionRetries: guards['connection-error'],
             leakRetries
         }
         let restarted = false

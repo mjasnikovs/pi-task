@@ -45,6 +45,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {runWorker} from '../src/workers/pi-worker-core.js'
 import {reportAb} from './ab-verdict.js'
+import {workerPolicy} from '../src/workers/worker-profiles.js'
 
 const CAP_MS = Number(process.argv[2] ?? 240) * 1000
 /**
@@ -119,13 +120,20 @@ async function arm(
     try {
         const r = await runWorker({
             prompt: PROMPT,
+            profile: 'adhoc',
+            // NOT `profile: 'gate'`, on purpose. `timeoutMs` and
+            // `commandTimeoutMs` are this A/B's two ARMS — swept, not policy —
+            // so naming the gate profile would overwrite the experiment with
+            // config values and arm a stream watchdog no arm asked for. Only the
+            // loop row is borrowed from the gate, which is what it always was.
+            override: {
+                'worker-timeout': {timeoutMs, progressCeilingMs: null, fanout: null},
+                'command-timeout': commandTimeoutMs,
+                loop: workerPolicy('gate').guards.loop
+            },
             cwd: FIXTURE,
             signal: outer.signal,
             tools: 'read,bash',
-            timeoutMs,
-            ...(commandTimeoutMs > 0 ? {commandTimeoutMs} : {}),
-            // exactly as makeGateChild does
-            loop: {pathThreshold: Number.POSITIVE_INFINITY},
             onLine: line => console.log(`  [${elapsed(started)}] ${line.slice(0, 160)}`),
             onToolResult: ({name, isError, text}) => {
                 toolCalls++

@@ -172,18 +172,18 @@ export function makeGateChild(
                     cwd: deps.cwd,
                     ...(sig ? {signal: sig} : {}),
                     tools,
-                    // Run to completion: these passes legitimately read and edit the
-                    // same file many times, and the research-worker guards mislabel
-                    // that as a runaway and kill good work (mx5 TASK_0002).
-                    timeoutMs: 0,
-                    commandTimeoutMs: deps.commandTimeoutMs,
-                    streamInactivityMs: deps.streamInactivityMs,
+                    // The four guard literals that used to sit here — run to
+                    // completion, a per-command watchdog, a stream watchdog, and
+                    // the path rule disabled — are the `gate` row of
+                    // WORKER_PROFILES (workers/worker-profiles.ts), which carries
+                    // the reasoning for each. The two ceilings stay inputs
+                    // because they are user config, not policy.
+                    profile: 'gate',
+                    policyInputs: {
+                        commandTimeoutMs: deps.commandTimeoutMs,
+                        streamInactivityMs: deps.streamInactivityMs
+                    },
                     thinking: deps.thinking,
-                    // Exact-match loop guard only: pathThreshold Infinity disables
-                    // the path-revisit heuristic, so revisiting one file (which IS
-                    // the job) never trips — only a literally-identical call
-                    // repeated past threshold does.
-                    loop: {pathThreshold: Number.POSITIVE_INFINITY},
                     // A discarded attempt is otherwise invisible: the returned
                     // exitCode/text describe the FINAL attempt, so a child that
                     // burned two attempts reads exactly like one that ran clean.

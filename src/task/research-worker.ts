@@ -90,10 +90,16 @@ export interface ResearchWorkerRun {
     readCached: (heading: string) => Promise<string>
     /** Write one validated section to the task file. Serialised by the caller. */
     persistSection: (heading: string, text: string) => Promise<void>
-    /** 5B RESCUE / SCALE knobs, resolved once for the phase. */
-    carryForward: boolean
-    fanoutTimeout: {perLookupMs: number; ceilingMs: number} | null
-    progressCeilingMs: number | null
+    /**
+     * The 5B lever env vars, READ ONCE for the whole phase.
+     *
+     * Was three resolved values (`carryForward`, `fanoutTimeout`,
+     * `progressCeilingMs`). It is one frozen reader now because the `research`
+     * profile owns what those values mean; what this layer still owns is that
+     * every worker in a run sees the SAME arm, which a live `process.env` read
+     * per worker would lose. See `snapshotLeverEnv`.
+     */
+    leverEnv: (key: string) => string | undefined
 }
 
 /**
@@ -367,20 +373,17 @@ export async function runResearchWorker(
                 thinking: run.thinkingFor(spec.label),
                 ...(spec.tools ? {tools: spec.tools} : {}),
                 ...(spec.extensions ? {extensions: spec.extensions} : {}),
-                // 5B SCALE arm — null unless both env vars are set. Only the
-                // docs-capable worker can fan out, so only it can be scaled.
-                ...(spec.fanoutBounded && run.fanoutTimeout ?
-                    {fanoutTimeout: run.fanoutTimeout}
-                :   {}),
-                // 5B RESCUE. Applies to EVERY research worker, not just the
-                // docs-capable one: any worker that gets killed loses its work
-                // the same way. carry-forward stays OFF unless asked for
-                // (measured harmful on its own); the progress deadline SHIPPED
-                // ON in nexttask 9 and is null only when explicitly disabled.
-                ...(run.carryForward ? {carryForward: true} : {}),
-                ...(run.progressCeilingMs !== null ?
-                    {progressTimeoutCeilingMs: run.progressCeilingMs}
-                :   {}),
+                // The three 5B lever spreads that used to sit here are the
+                // `research` row of WORKER_PROFILES (workers/worker-profiles.ts).
+                // Two facts still come from here, and only these two: which of
+                // the four workers is docs-capable (only it can be scaled), and
+                // the phase's FROZEN lever reader, so every worker in one run
+                // sees the same arm.
+                profile: 'research',
+                policyInputs: {
+                    ...(spec.fanoutBounded ? {fanoutBounded: true} : {}),
+                    env: run.leverEnv
+                },
                 // One line per DISCARDED attempt. The `done` line below reports
                 // the final attempt only, so a worker that timed out twice at
                 // 240s and then answered used to log exactly like a clean one —

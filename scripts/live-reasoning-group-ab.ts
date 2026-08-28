@@ -758,6 +758,7 @@ async function workerTrial(
     const t0 = Date.now()
     const r = await runWorker({
         prompt,
+    profile: 'adhoc',
         cwd,
         signal: new AbortController().signal,
         ...(tools ? {tools} : {}),
