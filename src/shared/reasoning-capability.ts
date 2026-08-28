@@ -24,7 +24,7 @@
  * transitive package to get twenty lines of arithmetic. SOURCE OF TRUTH is that
  * module; `reasoning-capability.test.ts` is where a change upstream shows up.
  */
-import type {ReasoningGroup, GroupSetting} from '../config/reasoning.js'
+import {REASONING_GROUPS, type ReasoningGroup, type GroupSetting} from '../config/reasoning.js'
 
 /**
  * pi's own level ladder, in order. The order is the whole algorithm: an
@@ -111,15 +111,15 @@ export interface ReasoningMismatch {
  */
 export function reasoningMismatches(
     model: ReasoningModelFacts | undefined,
-    settings: ReadonlyArray<{group: ReasoningGroup; setting: GroupSetting}>
+    levels: Readonly<Record<ReasoningGroup, GroupSetting>>
 ): ReasoningMismatch[] {
     // No model resolved yet (session still starting, or none selected): say
     // nothing. A warning naming no model is noise, not information.
     if (!model) return []
     const out: ReasoningMismatch[] = []
-    for (const {group, setting} of settings) {
-        if (setting === 'inherit') continue
-        const wanted = setting as LadderLevel
+    for (const group of REASONING_GROUPS) {
+        const wanted = levels[group]
+        if (wanted === 'inherit') continue
         const actual = clampToModel(model, wanted)
         if (actual !== wanted) out.push({group, wanted, actual})
     }

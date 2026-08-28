@@ -21,7 +21,7 @@ import {
 } from './docs-retrieve.js'
 import {npmVersionLookup as defaultNpmVersionLookup, type NpmVersionInfo} from './npm-version.js'
 import {runChild, type SpawnFn} from '../shared/child-process.js'
-import {runFocusedExtraction} from './focused-extractor.js'
+import {docsLookup, type DocsCorpus} from './docs-lookup.js'
 import {buildExtractionPrompt} from './abstention.js'
 import {type ExcerptVerification} from '../shared/child-output.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
@@ -68,7 +68,6 @@ export type DocsRawResult =
           autoInstallPin?: AutoInstallPin
           npmVersion?: NpmVersionInfo | null
       }
-    | {kind: 'not_installed'; pkg: string; npmVersion?: NpmVersionInfo | null}
     | {
           kind: 'no_chunks'
           pkg: ResolvedPackage
@@ -617,7 +616,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
             docsRawCached(cache, pkg, input.query, ensureIndexed, retrieveChunks, autoInstalled)
         :   docsRawUncached(pkg, cacheError ?? 'unknown cache error', autoInstalled)
     result.npmVersion = await npmVersionPromise
-    if (autoInstallPin && result.kind !== 'not_installed') result.autoInstallPin = autoInstallPin
+    if (autoInstallPin) result.autoInstallPin = autoInstallPin
     return result
 }
 
@@ -781,9 +780,6 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     if (rawResult.kind === 'error') {
         throw new Error(rawResult.message)
     }
-    if (rawResult.kind === 'not_installed') {
-        throw new Error(`Package "${rawResult.pkg}" is not installed`)
-    }
     if (rawResult.kind === 'no_chunks') {
         throw new Error(
             `Package ${rawResult.pkg.name}@${rawResult.pkg.version} has no .d.ts files or README.`
@@ -791,20 +787,18 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     }
 
     const {pkg, chunks, hitCache, indexingMs} = rawResult
-    const concatenated = chunks.map(c => c.content).join('\n\n')
-    const extraction = await runFocusedExtraction({
-        prompt: buildPrompt(pkg, input.query, concatenated),
-        // Exactly what went into the prompt — this path prompts with the whole concatenation,
-        // so the verify target and the prompt content are the same text.
-        verifyAgainst: concatenated,
+    const r = await docsLookup({
+        corpus: packageCorpus(pkg),
+        chunks,
+        query: input.query,
         cwd: input.cwd,
         signal: input.signal,
         spawn,
-        // The `extraction` group's level. Resolved at the call site so the
-        // extractor itself never reads ambient config.
-        thinking: groupThinkingArgs('extraction'),
-        abortedMessage: 'Docs lookup aborted.'
+        // The `extraction` group's level. Resolved at the call site so neither
+        // the lookup nor the extractor reads ambient config.
+        thinking: groupThinkingArgs('extraction')
     })
+    const extraction = r.extraction
 
     const base = {
         pkg,
@@ -822,13 +816,13 @@ export async function docsFocused(input: DocsFocusedInput): Promise<DocsFocusedR
     // A failed child yields NO answer. The caller (phaseAutoAnswer) gates on `answer` being
     // non-empty, so an empty one keeps a dead child's output out of the spec entirely;
     // `failure` carries the reason for anyone who wants to report it.
-    if (!extraction.ok) return {answer: '', failure: extraction.failure, ...base}
+    if (r.kind === 'failed') return {answer: '', failure: r.extraction.failure, ...base}
 
     return {
-        answer: extraction.answer,
-        excerpt: extraction.excerpt,
-        excerptVerified: extraction.excerptVerified,
-        excerptCheck: extraction.excerptCheck,
+        answer: r.extraction.answer,
+        excerpt: r.extraction.excerpt,
+        excerptVerified: r.extraction.excerptVerified,
+        excerptCheck: r.extraction.excerptCheck,
         ...base
     }
 }
@@ -856,6 +850,21 @@ export function buildPrompt(pkg: ResolvedPackage, query: string, content: string
  */
 
 /** The header for an npm package answer. */
+/**
+ * The PACKAGE corpus row: an npm package's `.d.ts` + README chunks.
+ *
+ * A function of the resolved package rather than a constant, because both the
+ * prompt and the header name the exact `name@version` that was read.
+ */
+export function packageCorpus(pkg: ResolvedPackage): DocsCorpus {
+    return {
+        id: 'package',
+        buildPrompt: (query, content) => buildPrompt(pkg, query, content),
+        header: packageHeader(pkg),
+        abortedMessage: 'Docs lookup aborted.'
+    }
+}
+
 export function packageHeader(pkg: ResolvedPackage): string {
     return `Per ${pkg.name}@${pkg.version}:`
 }

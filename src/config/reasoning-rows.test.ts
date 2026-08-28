@@ -15,7 +15,8 @@ import {
     panelItems,
     reasoningItems,
     reasoningRowLabel,
-    refreshReasoningRows,
+    syncRows,
+    configRows,
     SECTION_ID_PREFIX
 } from './register.js'
 
@@ -83,15 +84,19 @@ describe('reasoningItems', () => {
         // `|`-joined on one line, a branch glyph names no parent. The panel
         // label and the headless label are allowed to differ; only the panel
         // has a row above to hang the branch from.
-        for (const row of reasoningItems(draft())) {
+        for (const row of reasoningItems()) {
             expect(row.headlessLabel).toBe(`think: ${row.id.slice('reason:'.length)}`)
         }
     })
 
     test('one row per group, in every mode', () => {
         for (const mode of ['default', 'on', 'off', 'custom'] as const) {
-            const rows = reasoningItems(draft({reasoningMode: mode}))
+            const cfg = draft({reasoningMode: mode})
+            const rows = reasoningItems()
             expect(rows).toHaveLength(REASONING_GROUPS.length)
+            for (const [i, row] of rows.entries()) {
+                expect(row.format(cfg)).toBe(resolveReasoning(REASONING_GROUPS[i]!, cfg))
+            }
         }
     })
 
@@ -102,14 +107,14 @@ describe('reasoningItems', () => {
             reasoningMode: 'on',
             reasoningLevels: {...DEFAULT_REASONING_TABLE, gate: 'off'}
         })
-        const gate = reasoningItems(cfg).find(r => r.id.endsWith('gate'))!
-        expect(gate.currentValue).toBe(REASONING_ON_LEVEL)
+        const gate = reasoningItems().find(r => r.id.endsWith('gate'))!
+        expect(gate.format(cfg)).toBe(REASONING_ON_LEVEL)
     })
 
     test('every offered value is one the config can store', () => {
-        for (const row of reasoningItems(draft())) {
+        for (const row of reasoningItems()) {
             expect(row.values).toEqual([...REASONING_SETTINGS])
-            expect(REASONING_SETTINGS).toContain(row.currentValue as never)
+            expect(REASONING_SETTINGS).toContain(row.format(draft()) as never)
         }
     })
 
@@ -155,8 +160,8 @@ describe('applyReasoningLevel', () => {
         for (const setting of REASONING_SETTINGS) {
             const cfg = draft({reasoningMode: 'default'})
             applyReasoningLevel(cfg, 'research', setting)
-            const row = reasoningItems(cfg).find(r => r.id === 'reason:research')!
-            expect(row.currentValue).toBe(setting)
+            const row = reasoningItems().find(r => r.id === 'reason:research')!
+            expect(row.format(cfg)).toBe(setting)
         }
     })
 
@@ -198,7 +203,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
         )
 
         cfg.reasoningMode = 'off'
-        refreshReasoningRows(cfg, list)
+        syncRows(cfg, configRows([], []), list)
 
         for (const g of REASONING_GROUPS) {
             const row = items.find(i => i.id === `reason:${g}`)!
@@ -220,7 +225,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
         )
 
         applyReasoningLevel(cfg, 'gate', 'medium')
-        refreshReasoningRows(cfg, list)
+        syncRows(cfg, configRows([], []), list)
 
         expect(items.find(i => i.id === 'reasoningMode')!.currentValue).toBe('custom')
         expect(items.find(i => i.id === 'reason:gate')!.currentValue).toBe('medium')
@@ -242,7 +247,7 @@ describe('the rows do not go stale (the bug you saw)', () => {
                 () => {},
                 () => {}
             )
-            refreshReasoningRows(cfg, list)
+            syncRows(cfg, configRows([], []), list)
             for (const g of REASONING_GROUPS) {
                 const row = items.find(i => i.id === `reason:${g}`)!
                 expect(row.currentValue, `${mode}/${g}`).toBe(resolveReasoning(g, cfg))

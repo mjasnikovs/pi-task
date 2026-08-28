@@ -190,12 +190,12 @@ async function live(design: string): Promise<void> {
     for (let rep = 1; rep <= REPS; rep++) {
         const started = Date.now()
         const once = async (hint: string | null): Promise<{raw: RequirementEntry[]; grounded: RequirementEntry[]}> => {
-            const r = await runChild(
+            const r = await runChild({
                 cwd,
-                '',
-                prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(design, passages)),
-                new AbortController().signal
-            )
+                tools: '',
+                prompt: prependHint(hint, REQUIREMENT_EXTRACT_PROMPT(design, passages)),
+                signal: new AbortController().signal
+            })
             if (r.exitCode !== 0) throw new Error(`child exit ${r.exitCode}: ${r.stderr.slice(-300)}`)
             const raw = parseRequirementLines(r.text)
             return {raw, grounded: keepGroundedRequirements(raw, design)}

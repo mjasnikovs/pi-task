@@ -9,7 +9,8 @@ import {
     childArgs,
     isConnectionError,
     connectionRetryBackoffMs,
-    LOOP_THRESHOLD
+    LOOP_THRESHOLD,
+    PhaseTimeoutError
 } from './child-runner.js'
 import {
     fakeSpawnSimple,
@@ -707,6 +708,61 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 expect(degradePrompt).toContain('PROMPT')
             })
         })
+
+        test('the degrade attempt runs under the same wall clock as the strikes', async () => {
+            // BEHAVIOUR DELTA, and the reason `runChild` stopped taking thirteen
+            // positionals. The degrade used to be handed `deps.signal` RAW — one
+            // of three drifts that came of writing bare `undefined`s to reach the
+            // later slots — so the single attempt made after a loop budget was
+            // spent was also the only attempt that could hang forever. Here it is
+            // killed by the same budget the strikes ran under.
+            const procs: Array<ReturnType<typeof makeProc>> = []
+            let i = 0
+            const spawn = (() => {
+                const p = makeProc()
+                procs.push(p)
+                const strike = i++ < 3
+                p.kill = () => {
+                    if (p.killed) return true
+                    p.killed = true
+                    p.emit('close', 143)
+                    return true
+                }
+                queueMicrotask(() => {
+                    if (strike) {
+                        for (let n = 0; n < 5; n++) {
+                            p.stdout!.emit(
+                                'data',
+                                Buffer.from(
+                                    JSON.stringify({
+                                        type: 'tool_execution_start',
+                                        toolName: 'Read',
+                                        args: {path: '/foo'}
+                                    }) + '\n'
+                                )
+                            )
+                        }
+                        p.emit('close', 0)
+                        return
+                    }
+                    // The degrade attempt: deliberately never closes.
+                })
+                return p
+            }) as unknown as SpawnFn
+
+            // And it reports the cause it ACTUALLY hit. A wall-clock kill is not a
+            // loop: reporting one as `LoopExhaustedError` hands the reader a loop
+            // history that did not cause the failure.
+            await expect(
+                runPhaseChild({...depsWith(spawn), timeoutMs: 100}, 'refine', 'read', 'PROMPT', {
+                    degradeOnExhaustion: true,
+                    verb: 'restart'
+                })
+            ).rejects.toBeInstanceOf(PhaseTimeoutError)
+
+            expect(procs.length).toBe(4)
+            expect(procs[3]!.killed).toBe(true)
+        }, 2000)
 
         test('records the degrade outcome (not "phase failed") in the loop events section', async () => {
             await withTmpTaskDir(async cwd => {

@@ -2,6 +2,7 @@ import {expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {
+    flushPlanDebug,
     planAuto,
     orientFeature,
     decomposePlan,
@@ -106,6 +107,7 @@ test('planAuto: strips phantom bun:sql out of the spec before clarify sees it', 
         expect(clarifyPrompt).not.toContain('bun:sql')
         expect(clarifyPrompt).toContain('from "bun"')
         // And it left a grep-able plan-phase debug line.
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('phantom specifiers rewritten in plan spec: bun:sql')
     })
@@ -1449,6 +1451,7 @@ test('coverage gate: INCOMPLETE verdict reprompts decompose with the missing are
             'Auth routes',
             'Admin page'
         ])
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('decompose produced 1 title(s)')
         expect(log).toContain('INCOMPLETE — missing: auth routes; admin page')
@@ -1468,6 +1471,7 @@ test('coverage gate: a flaky shorter retry never replaces the longer list', asyn
         const id = await planAuto(ctx, dir, 'build the app', d)
         const {body} = await readTaskFile(dir, id!)
         expect(parseTaskList(body).map(e => e.title)).toEqual(['Task A', 'Task B', 'Task C'])
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('decompose retry REJECTED — collapse floor (1 vs 3 titles)')
     })
@@ -1523,6 +1527,7 @@ test('coverage gate: rounds exhausted still INCOMPLETE → user is warned, not s
         const warn = captured.notifies.find(n => /no task fully owns/.test(n.msg))
         expect(warn).toBeDefined()
         expect(warn!.msg).toContain('test suite for auth')
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain(
             'exhausted 2 round(s) still INCOMPLETE — missing: test suite for auth'
@@ -1672,6 +1677,7 @@ test('coverage gate: a regeneration that DROPS a covered area is rejected, good 
         // The dropping retry WAS generated (regen happened) and was rejected by the
         // monotonic guard — the fix is the guard firing, not regeneration never running.
         expect(d.calls.decompose).toBeGreaterThan(1)
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('REJECTED — would drop 1 owned requirement(s)')
         // The un-ownable negative is CARRIED (cross-cutting), not chased forever…
@@ -1763,6 +1769,7 @@ test('#2: an adoption at the round cap that exposes a new area buys one bonus ro
         // initial + 2 base retries + 1 bonus retry (no granularity split — the
         // floor is off below MIN_REQUIREMENTS_FOR_PLAN_SHAPE).
         expect(d.calls.decompose).toBe(4)
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('bonus round granted')
         // Resolved on the bonus round ⇒ no exhaustion warning.
@@ -1778,6 +1785,7 @@ test('#2: the bonus round is granted at most once (a persistent judge cannot loo
         const d = pipelineDeps('COVERAGE: INCOMPLETE\nMISSING: test harness for the pipeline')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
         expect(d.calls.decompose).toBe(4) // never a 5th — bounded to exactly one bonus
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
     })
@@ -1857,6 +1865,7 @@ test('granularity floor: the floor is derived and logged, never put in the promp
         // titles, one context blowup) — the floor stays host-side.
         expect(d.calls.hints[0]).not.toContain('at least 3 tasks')
         expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('granularity floor: 5 ownable requirement(s) ⇒ at least 3 task(s)')
     })
@@ -1909,6 +1918,7 @@ test('plan-shape: the host answers the breakdown fork, the triage never sees it'
         // It is written into the AUTO file, so the decision is readable and overridable.
         const body = (await readTaskFile(dir, id!)).body
         expect(body).toContain('per-deliverable')
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('plan-shape question answered host-side')
     })
@@ -1926,6 +1936,7 @@ test('granularity floor: a plan under the floor is split once and the longer pla
         expect(d.calls.hints[1]).toContain('plan of 1 task(s) is too coarse')
         expect(d.calls.hints[1]).toContain('SPLIT')
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('plan under the granularity floor (1 < 3)')
         expect(log).toContain('granularity split-retry produced 3 title(s)')
@@ -1954,6 +1965,7 @@ test('granularity floor: no requirement signal ⇒ the old prompt, no floor, no 
         expect(d.calls.decompose).toBe(1)
         expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
         expect(d.calls.hints[0]).not.toContain('GRANULARITY')
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).not.toContain('granularity floor')
     })
@@ -2021,6 +2033,7 @@ test('distrust floor: a 1-title plan for a big spec is regenerated BEFORE the ju
         expect(d.calls.coverage).toBe(1)
         expect(d.calls.hints[1]).toContain('incomplete generation')
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(4)
+        await flushPlanDebug()
         const log = await fsp.readFile(path.join(dir, '.pi-tasks', 'plan-debug.log'), 'utf8')
         expect(log).toContain('decompose suspect (1 title(s)')
         expect(log).toContain('raw output: - [ ] Lone scaffold task')

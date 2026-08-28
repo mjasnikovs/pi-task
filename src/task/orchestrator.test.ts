@@ -7,7 +7,7 @@ import {makeFakeCtx, assistantEntry, compactionEntry} from '../test-utils/fake-c
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {_setSink, reset as resetSessionState} from '../remote/session-state.js'
 import {broadcast as wsBroadcast} from '../remote/broadcast.js'
-import type {PhaseDeps} from './child-runner.js'
+import type {PhaseDeps, PhaseSeams} from './child-runner.js'
 import type {RunWorkerResult} from '../workers/pi-worker-core.js'
 import {RUN_END_POLICY} from './run-end.js'
 
@@ -169,8 +169,8 @@ function happyWorkers(
     )
 }
 
-/** Both fakes for a full happy run, in the shape TaskRunner / runSingleTask take. */
-function happy(): Pick<TaskRunnerOptions, 'runChild' | 'runWorker'> {
+/** Both fakes for a full happy run, as the one seam bag TaskRunner / runSingleTask take. */
+function happy(): PhaseSeams {
     return {runChild: happyChildren(), runWorker: happyWorkers()}
 }
 
@@ -178,7 +178,7 @@ function happy(): Pick<TaskRunnerOptions, 'runChild' | 'runWorker'> {
 async function runOnce(
     ctx: TaskRunnerOptions['ctx'],
     cwd: string,
-    fakes: Partial<TaskRunnerOptions>
+    seams: PhaseSeams
 ): Promise<{runner: TaskRunner; sent: string[]}> {
     const sent: string[] = []
     const runner = new TaskRunner({
@@ -188,7 +188,7 @@ async function runOnce(
         sendSpec: async s => {
             sent.push(s)
         },
-        ...fakes
+        seams
     })
     await runner.run()
     return {runner, sent}
@@ -375,15 +375,17 @@ VERIFIED-TOOLING
                 rawPrompt: '',
                 resumeId: 'TASK_0001',
                 sendSpec: async () => {},
-                runChild: scriptedChildren({
-                    refine: () => {
-                        refineCalled = true
-                        return REFINED_FIXTURE
-                    },
-                    'grill-gen': NO_QUESTIONS,
-                    compose: COMPOSE_SPEC,
-                    critique: COMPOSE_SPEC
-                })
+                seams: {
+                    runChild: scriptedChildren({
+                        refine: () => {
+                            refineCalled = true
+                            return REFINED_FIXTURE
+                        },
+                        'grill-gen': NO_QUESTIONS,
+                        compose: COMPOSE_SPEC,
+                        critique: COMPOSE_SPEC
+                    })
+                }
             }).run()
             expect(refineCalled).toBe(false)
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -461,16 +463,18 @@ ${COMPOSE_SPEC.trim()}
                 rawPrompt: '',
                 resumeId: 'TASK_0001',
                 sendSpec: async () => {},
-                runChild: scriptedChildren({
-                    compose: () => {
-                        composeCalled = true
-                        return COMPOSE_SPEC
-                    },
-                    critique: prompt => {
-                        critiquePrompt = prompt
-                        return COMPOSE_SPEC
-                    }
-                })
+                seams: {
+                    runChild: scriptedChildren({
+                        compose: () => {
+                            composeCalled = true
+                            return COMPOSE_SPEC
+                        },
+                        critique: prompt => {
+                            critiquePrompt = prompt
+                            return COMPOSE_SPEC
+                        }
+                    })
+                }
             }).run()
 
             expect(composeCalled).toBe(false)
@@ -532,7 +536,7 @@ ${COMPOSE_SPEC.trim()}
                 rawPrompt: '',
                 resumeId: 'TASK_0001',
                 sendSpec: async () => {},
-                runChild: scriptedChildren({critique: COMPOSE_SPEC})
+                seams: {runChild: scriptedChildren({critique: COMPOSE_SPEC})}
             }).run()
 
             const gates = (await readSection(cwd, 'TASK_0001', 'gates')) ?? ''
@@ -549,7 +553,7 @@ describe('runSingleTask', () => {
             // on the shared call log rather than patching the (soon-stale) ctx.
             const {ctx, captured} = makeFakeCtx(cwd)
             const {end, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
-                ...happy()
+                seams: happy()
             })
             expect(end).toEqual({kind: 'completed'})
             expect(taskId).toBe('TASK_0001')
@@ -561,7 +565,7 @@ describe('runSingleTask', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured} = makeFakeCtx(cwd)
             const {end} = await runSingleTask(ctx, cwd, 'run lint', {
-                ...happy(),
+                seams: happy(),
                 fixInstruction: 'work did not verify: bun run build exited 1'
             })
             expect(end).toEqual({kind: 'completed'})
@@ -579,7 +583,7 @@ describe('runSingleTask', () => {
             const {ctx, captured} = makeFakeCtx(cwd)
             const {end} = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(end).toEqual({kind: 'completed'})
             expect(captured.calls).toEqual(['send', 'idle'])
@@ -596,7 +600,7 @@ describe('runSingleTask', () => {
             const {ctx, captured, setForeignTurnStreaming} = makeFakeCtx(cwd)
             setForeignTurnStreaming(true)
             const {end, taskId} = await runSingleTask(ctx, cwd, 'run lint', {
-                ...happy()
+                seams: happy()
             })
             expect(end).toEqual({kind: 'completed'})
             expect(taskId).toBe('TASK_0001')
@@ -615,7 +619,7 @@ describe('runSingleTask', () => {
             let asks = 0
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy(),
+                seams: happy(),
                 // The user steers once; that turn then completes naturally.
                 promptSteer: () => {
                     asks++
@@ -637,7 +641,7 @@ describe('runSingleTask', () => {
             setStopReason('aborted')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy(),
+                seams: happy(),
                 // The user declines to steer — pause the run.
                 promptSteer: () => Promise.resolve(undefined)
             })
@@ -657,7 +661,7 @@ describe('runSingleTask', () => {
             try {
                 const res = await runSingleTask(ctx, cwd, 'run lint', {
                     waitForImplementation: true,
-                    ...happy()
+                    seams: happy()
                     // no promptSteer → the production default (SessionUI.ask) runs
                 })
                 // Local half: the TUI input with the steer title and placeholder.
@@ -691,7 +695,7 @@ describe('runSingleTask', () => {
             let asks = 0
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy(),
+                seams: happy(),
                 promptSteer: () => {
                     asks++
                     return Promise.resolve(undefined)
@@ -710,7 +714,7 @@ describe('runSingleTask', () => {
             setStopReason('error', '400 request (124789 tokens) exceeds the available context size')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             // Must NOT read as ok despite the file saying "completed" — otherwise
             // /task-auto would check the task off and commit a dead turn.
@@ -728,7 +732,7 @@ describe('runSingleTask', () => {
             setStopReason('stop')
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res.end).toEqual({kind: 'completed'})
             expect(res.end.kind === 'failed' ? res.end.reason : undefined).toBeUndefined()
@@ -739,7 +743,7 @@ describe('runSingleTask', () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
             const res = await runSingleTask(ctx, cwd, 'run lint', {
-                ...happy()
+                seams: happy()
             })
             // The run replaced the session, so the handed-back ctx is a new, live
             // object — not the original, which now throws on use.
@@ -767,7 +771,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res.end).toEqual({kind: 'completed'})
             expect(res.end.kind).not.toBe('interrupted')
@@ -785,7 +789,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()], [assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res.end).toEqual({kind: 'completed'})
             expect(res.end.kind).not.toBe('interrupted')
@@ -801,7 +805,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()], [compactionEntry()], [assistantEntry('stop')]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res.end).toEqual({kind: 'completed'})
             expect(continueCount(captured.sentMessages)).toBe(2)
@@ -818,7 +822,7 @@ describe('compaction-aware implementation wait', () => {
             queueInput(undefined) // decline to steer → pause
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res.end.kind).toBe('interrupted')
             expect(continueCount(captured.sentMessages)).toBe(0)
@@ -833,7 +837,7 @@ describe('compaction-aware implementation wait', () => {
             setIdleEntries([[compactionEntry()]])
             const res = await runSingleTask(ctx, cwd, 'run lint', {
                 waitForImplementation: true,
-                ...happy()
+                seams: happy()
             })
             expect(res).toBeDefined()
             expect(continueCount(captured.sentMessages)).toBe(MAX_COMPACTION_RESUMES)
@@ -847,7 +851,7 @@ describe('TaskRunner — failure modes', () => {
             const {ctx} = makeFakeCtx(cwd)
             // Through `spawn`, not `runChild`: the ladder's empty-completion rung is
             // the subject here, and only a real (fake) process exercises it.
-            await runOnce(ctx, cwd, {spawnFn: fakeSpawnByPrompt(() => agentEndResponse(''))})
+            await runOnce(ctx, cwd, {spawn: fakeSpawnByPrompt(() => agentEndResponse(''))})
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.phase).toBe('refine')
@@ -990,7 +994,7 @@ ACCEPTANCE
             }
             // Through `spawn`: the loop detector only runs around a real (fake)
             // process, and refine is the first child, so every spawn IS refine.
-            await runOnce(ctx, cwd, {spawnFn: fakeSpawnByPrompt(() => loopRefine)})
+            await runOnce(ctx, cwd, {spawn: fakeSpawnByPrompt(() => loopRefine)})
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('failed')
             expect(frontMatter.reason).toMatch(/loop detected 3× in refine/)
@@ -1010,19 +1014,21 @@ ACCEPTANCE
                 cwd,
                 rawPrompt: 'run lint',
                 sendSpec: async () => {},
-                runWorker: happyWorkers(
-                    {
-                        files: () => {
-                            if (!cancelTriggered) {
-                                cancelTriggered = true
-                                queueMicrotask(() => runnerHolder.runner?.cancel())
+                seams: {
+                    runWorker: happyWorkers(
+                        {
+                            files: () => {
+                                if (!cancelTriggered) {
+                                    cancelTriggered = true
+                                    queueMicrotask(() => runnerHolder.runner?.cancel())
+                                }
+                                return RESEARCH_FILES
                             }
-                            return RESEARCH_FILES
-                        }
-                    },
-                    'noop'
-                ),
-                runChild: scriptedChildren({refine: REFINED_FIXTURE})
+                        },
+                        'noop'
+                    ),
+                    runChild: scriptedChildren({refine: REFINED_FIXTURE})
+                }
             })
             const end = await runnerHolder.runner.run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
@@ -1049,11 +1055,15 @@ ACCEPTANCE
                 cwd,
                 rawPrompt: 'run lint',
                 sendSpec: async () => {},
-                runChild: (name, _tools, _prompt) => {
-                    if (name === 'refine') queueMicrotask(() => runnerHolder.runner?.cancel())
-                    return Promise.resolve(REFINED_FIXTURE)
-                },
-                runWorker: happyWorkers()
+                seams: {
+                    runChild: (name, _tools, _prompt) => {
+                        if (name === 'refine') {
+                            queueMicrotask(() => runnerHolder.runner?.cancel())
+                        }
+                        return Promise.resolve(REFINED_FIXTURE)
+                    },
+                    runWorker: happyWorkers()
+                }
             })
             const end = await runnerHolder.runner.run()
             expect(end.kind).toBe('cancelled')
@@ -1064,5 +1074,44 @@ ACCEPTANCE
             expect(handle.captured.notifies.some(n => /fix and run/.test(n.msg))).toBe(false)
             expect(handle.captured.notifies.some(n => n.level === 'error')).toBe(false)
         })
+    })
+})
+
+describe('the phase-seam bag', () => {
+    /**
+     * `TaskRunnerOptions` used to declare four separate seam fields, and
+     * `runSingleTask` re-forwarded each by name. Four of `PhaseDeps`' seams had
+     * been left out of that list entirely, so nothing reached them from here.
+     * These two drive the ones that were unreachable.
+     */
+    test('a supplied logDebug seam receives the run trail', async () => {
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            const trail: string[] = []
+            await runOnce(ctx, cwd, {...happy(), logDebug: msg => trail.push(msg)})
+
+            // The ~39 trail decisions were observable only by reading the debug
+            // FILE off disk, because the runner overwrote any supplied writer.
+            expect(trail.some(l => l.startsWith('run: start phase='))).toBe(true)
+            expect(trail).toContain('phase:refine: start')
+            expect(trail.some(l => l.startsWith('phase:compose: done ms='))).toBe(true)
+        })
+    })
+
+    test('the seam roster is derived, so PhaseDeps and PhaseSeams cannot drift', () => {
+        // A compile-time property written as a runtime one: every key here is
+        // assignable BOTH ways. If a new PhaseDeps seam were added to a hand-kept
+        // list instead, this file would still compile and the seam would be
+        // unreachable — which is exactly what happened to timeoutMs, sleepFor,
+        // childExtensions and logDebug.
+        const seams: PhaseSeams = {
+            timeoutMs: 1,
+            sleepFor: () => Promise.resolve(),
+            childExtensions: ['/ext.js'],
+            logDebug: () => {}
+        }
+        const deps: Pick<PhaseDeps, keyof PhaseSeams> = seams
+        expect(deps.timeoutMs).toBe(1)
+        expect(deps.childExtensions).toEqual(['/ext.js'])
     })
 })

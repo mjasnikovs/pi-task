@@ -8,7 +8,7 @@
  * Read PER CALL, never cached at module scope, so a /task-config change lands on
  * the next child without a restart — the same contract childBaseArgs states.
  */
-import {getConfig} from './config.js'
+import {getConfig, type PiTaskConfig} from './config.js'
 import {resolveReasoning, thinkingArgs, type ReasoningGroup} from './reasoning.js'
 
 /**
@@ -19,6 +19,9 @@ import {resolveReasoning, thinkingArgs, type ReasoningGroup} from './reasoning.j
  * themselves — an argv builder that resolves its own policy is one that cannot
  * be told to do something else, which is how childBaseArgs became universal.
  */
-export function groupThinkingArgs(group: ReasoningGroup): string[] {
-    return thinkingArgs(resolveReasoning(group, getConfig()))
+export function groupThinkingArgs(group: ReasoningGroup, cfg?: PiTaskConfig): string[] {
+    // The default is EVALUATED HERE, per call, which is the contract this module
+    // exists to keep. Hoisting the read to module scope would leave every test
+    // green, so the parameter is what makes the contract assertable at all.
+    return thinkingArgs(resolveReasoning(group, cfg ?? getConfig()))
 }

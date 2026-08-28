@@ -27,6 +27,7 @@
  */
 
 import type {LoopHit} from '../task/loop-detector.js'
+import type {WorkerKillId} from './worker-kill.js'
 
 /**
  * The subset of a finished child result this classification reads.
@@ -70,6 +71,14 @@ export type WorkerFailure =
 export type WorkerFailureKind = WorkerFailure['kind']
 
 /**
+ * Every kind is a cause on the roster. A `kind` with no `WORKER_KILLS` row is a
+ * compile error here, not a discovery six months later.
+ */
+type _KindsAreKills = WorkerFailureKind extends WorkerKillId ? true : never
+const _kindsAreKills: _KindsAreKills = true
+void _kindsAreKills
+
+/**
  * The ordered ladder. FIRST MATCH WINS — row order IS the precedence, and it is
  * the only statement of it in the codebase.
  *
@@ -95,22 +104,39 @@ export type WorkerFailureKind = WorkerFailure['kind']
  *  7. `aborted` — no specific cause survived, so this really is a cancel.
  *  8. `exit` — a plain non-zero exit with no kill behind it: a crash.
  */
-const FAILURE_RULES: ReadonlyArray<(r: WorkerFailureInput) => WorkerFailure | null> = [
-    r => (r.stalled === true ? {kind: 'stalled'} : null),
-    r =>
-        r.commandTimedOut ?
-            {
-                kind: 'command-timeout',
-                toolName: r.commandTimedOut.toolName,
-                timeoutMs: r.commandTimedOut.timeoutMs
-            }
-        :   null,
-    r => (r.streamStalled ? {kind: 'stream-stall', idleMs: r.streamStalled.idleMs} : null),
-    r => (r.timedOut === true ? {kind: 'worker-timeout'} : null),
-    r => (r.loopHit ? {kind: 'loop', hit: r.loopHit as LoopHit} : null),
-    r => (r.leakedToolCall ? {kind: 'leaked-tool-call', text: String(r.leakedToolCall)} : null),
-    r => (r.aborted ? {kind: 'aborted'} : null),
-    r => (r.exitCode !== 0 ? {kind: 'exit', code: r.exitCode} : null)
+export const FAILURE_RULES: ReadonlyArray<{
+    /** The roster id this row matches. `worker-kill.test.ts` checks the sequence
+     *  against `FAILURE_ORDER`, so a reordering or an omission is a test failure
+     *  rather than a silently different precedence. */
+    id: WorkerKillId
+    match: (r: WorkerFailureInput) => WorkerFailure | null
+}> = [
+    {id: 'stalled', match: r => (r.stalled === true ? {kind: 'stalled'} : null)},
+    {
+        id: 'command-timeout',
+        match: r =>
+            r.commandTimedOut ?
+                {
+                    kind: 'command-timeout',
+                    toolName: r.commandTimedOut.toolName,
+                    timeoutMs: r.commandTimedOut.timeoutMs
+                }
+            :   null
+    },
+    {
+        id: 'stream-stall',
+        match: r =>
+            r.streamStalled ? {kind: 'stream-stall', idleMs: r.streamStalled.idleMs} : null
+    },
+    {id: 'worker-timeout', match: r => (r.timedOut === true ? {kind: 'worker-timeout'} : null)},
+    {id: 'loop', match: r => (r.loopHit ? {kind: 'loop', hit: r.loopHit as LoopHit} : null)},
+    {
+        id: 'leaked-tool-call',
+        match: r =>
+            r.leakedToolCall ? {kind: 'leaked-tool-call', text: String(r.leakedToolCall)} : null
+    },
+    {id: 'aborted', match: r => (r.aborted ? {kind: 'aborted'} : null)},
+    {id: 'exit', match: r => (r.exitCode !== 0 ? {kind: 'exit', code: r.exitCode} : null)}
 ]
 
 /**
@@ -120,7 +146,7 @@ const FAILURE_RULES: ReadonlyArray<(r: WorkerFailureInput) => WorkerFailure | nu
  */
 export function classifyWorkerFailure(r: WorkerFailureInput): WorkerFailure | undefined {
     for (const rule of FAILURE_RULES) {
-        const hit = rule(r)
+        const hit = rule.match(r)
         if (hit) return hit
     }
     return undefined

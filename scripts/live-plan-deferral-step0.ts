@@ -70,7 +70,7 @@ function isNone(raw: string): boolean {
 }
 
 async function ask(cwd: string, prompt: string, signal: AbortSignal): Promise<Draw | null> {
-    const res = await runChild(cwd, 'read', prompt, signal, undefined, undefined, () => null)
+    const res = await runChild({cwd, tools: 'read', prompt, signal, onToolCall: () => null})
     const q = pickQuestion(parseClarifyList(res.text))
     if (q === undefined)
         return isNone(res.text) ?

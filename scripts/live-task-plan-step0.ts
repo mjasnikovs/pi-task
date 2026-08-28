@@ -90,18 +90,16 @@ async function main() {
             let raw: string
             let toolCalls = 0
             try {
-                const res = await runChild(
+                const res = await runChild({
                     cwd,
-                    'read',
-                    PLAN_QUESTION_PROMPT(task, ''),
+                    tools: 'read',
+                    prompt: PLAN_QUESTION_PROMPT(task, ''),
                     signal,
-                    undefined,
-                    undefined,
-                    () => {
+                    onToolCall: () => {
                         toolCalls++
                         return null
                     }
-                )
+                })
                 raw = res.text
             } catch (err) {
                 failures.push(`THREW  ${task.slice(0, 40)}: ${(err as Error).message}`)

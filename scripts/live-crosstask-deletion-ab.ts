@@ -184,7 +184,13 @@ async function runLintFixTrial(mode: Mode, n: number): Promise<LintFixTrial> {
         failReason: FAIL_REASON,
         runChild: async (tools, prompt, signal) => {
             log(`=== child start (tools=${tools}) ===`)
-            const r = await runChild(dir, tools, prompt, signal ?? abort.signal, line => log(line))
+            const r = await runChild({
+                    cwd: dir,
+                    tools,
+                    prompt,
+                    signal: signal ?? abort.signal,
+                    onLine: line => log(line)
+                })
             log(`=== child end exit=${r.exitCode} ===`)
             if (r.exitCode !== 0) throw new Error(`child exited ${r.exitCode}: ${r.stderr}`)
             if (r.modelError) throw new Error(`model error: ${r.modelError}`)
@@ -277,9 +283,13 @@ async function runVerifyTrial(mode: Mode, n: number): Promise<VerifyTrial> {
                 log(
                     `--- prompt has deletion notice: ${prompt.includes('CROSS-TASK DELETION NOTICE')} ---`
                 )
-                const r = await runChild(dir, tools, prompt, signal ?? abort.signal, line =>
-                    log(line)
-                )
+                const r = await runChild({
+                    cwd: dir,
+                    tools,
+                    prompt,
+                    signal: signal ?? abort.signal,
+                    onLine: line => log(line)
+                })
                 log(`=== child end exit=${r.exitCode} ===`)
                 if (r.exitCode !== 0) throw new Error(`child exited ${r.exitCode}: ${r.stderr}`)
                 if (r.modelError) throw new Error(`model error: ${r.modelError}`)

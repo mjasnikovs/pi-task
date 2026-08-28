@@ -117,15 +117,13 @@ async function main() {
                     arm === 'BASE' ? baseHandoff(sc.entries) : buildHandoffPrompt(TASK, sc.entries)
                 let spec: string
                 try {
-                    const res = await runChild(
+                    const res = await runChild({
                         cwd,
-                        'read',
-                        REFINE_PROMPT(handoff),
+                        tools: 'read',
+                        prompt: REFINE_PROMPT(handoff),
                         signal,
-                        undefined,
-                        undefined,
-                        () => null
-                    )
+                        onToolCall: () => null
+                    })
                     spec = res.text
                 } catch (err) {
                     console.log(

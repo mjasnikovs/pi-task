@@ -58,7 +58,7 @@ import {runGatesForTask, type GateDeps} from './task-gates.js'
 import {parseVerifyBlock} from './spec-validation.js'
 import {findDeliveryPhantoms, formatApiOverrideBanner} from '../workers/phantom-imports.js'
 import {titleForDisplay} from './parsers.js'
-import {USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {USER_CANCELLED, type PhaseDeps, type PhaseSeams} from './child-runner.js'
 import {cancelCheckpoint} from './cancel-points.js'
 import {holdImplementationThinking, type ThinkingControl} from './implementation-thinking.js'
 import {rearmCancelListener} from './cancel-input.js'
@@ -67,7 +67,7 @@ import {withRun, announceTerminal} from './run-bracket.js'
 import {RUN_END_POLICY, runSucceeded, type RunEnd} from './run-end.js'
 import {formatTimings, type TimingEntry} from './timings.js'
 import {getParentContextWindow, resolveContextUsage} from './context-usage.js'
-import type {SpawnFn} from '../shared/child-process.js'
+
 import {
     superviseImplementation,
     type SteerCtx,
@@ -124,34 +124,20 @@ export interface TaskRunnerOptions {
     resumeId?: string
     /** Deliver the finished spec to the main session. Absent → nothing is sent. */
     sendSpec?: (spec: string) => Promise<void>
-    /** Test seam: spawn function forwarded into `PhaseDeps.spawn`. Keep for tests
-     *  that drive the Error-triage ladder or a real process. */
-    spawnFn?: SpawnFn
     /**
-     * Test seam: `PhaseDeps.runChild(name, tools, prompt)`. Present → every phase
-     * child is answered by name, with none of the ladder's guards. Use this when
-     * the child is a premise of the test, not its subject.
+     * Every injectable phase seam, in one field (`PhaseSeams`, child-runner.ts).
+     *
+     * `spawn` drives the Error-triage ladder or a real process. `runChild(name,
+     * tools, prompt)` answers every phase child BY NAME, with none of the
+     * ladder's guards — use it when the child is a premise of the test, not its
+     * subject. `runWorker(label, input)` answers every research worker by name,
+     * so the three Research retry gates are reachable without matching a marker
+     * sentence inside a prompt. The EXTERNAL CONTEXT lookups and the file
+     * inventory each default to the real implementation when absent. `timeoutMs`,
+     * `sleepFor`, `childExtensions` and `logDebug` are seams too, and were
+     * unreachable from here until this became one field.
      */
-    runChild?: PhaseDeps['runChild']
-    /**
-     * Test seam: `PhaseDeps.runWorker(label, input)`. Present → every research
-     * worker is answered BY NAME, so the three Research retry gates and the
-     * fatal/runaway/empty classification are reachable from a runner-driven test
-     * without matching a marker sentence inside the prompt.
-     */
-    runWorker?: PhaseDeps['runWorker']
-    /** Test seam: the four EXTERNAL CONTEXT lookups plus the file inventory. Each
-     *  defaults to the real implementation when absent. */
-    lookups?: Pick<
-        PhaseDeps,
-        | 'getFileInventory'
-        | 'docsRaw'
-        | 'fetchRaw'
-        | 'npmVersionLookup'
-        | 'docsFocused'
-        | 'fetchFocused'
-        | 'searchFn'
-    >
+    seams?: PhaseSeams
     /** Called with the resolved task id once its file exists, before any phase
      *  work. Lets callers record the id (e.g. stamp the /task-auto entry) so an
      *  interrupted run can be resumed instead of restarted. */
@@ -238,10 +224,7 @@ export class TaskRunner {
             cwd,
             taskId: '',
             signal: this._abort.signal,
-            spawn: opts.spawnFn,
-            runChild: opts.runChild,
-            runWorker: opts.runWorker,
-            ...opts.lookups,
+            ...opts.seams,
             // Deliberately NOT a ChildStatus (child-status.ts): the phase widget's
             // state is the whole-run WidgetState — task id, phase, label — shared by
             // reference with PhaseContext and written by the phases themselves
@@ -359,7 +342,10 @@ export class TaskRunner {
         const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
         // Left UNSET at level `off`, so the ~39 `logDebug?.(…)` sites downstream
         // short-circuit before they format a string and the file is never created.
-        this._deps.logDebug = gateDebugWriter((msg: string) => {
+        // A caller-supplied `logDebug` seam WINS: it is the only way to observe
+        // the ~39 trail decisions from a runner-driven test, and production never
+        // sets one, so the file writer is unaffected.
+        this._deps.logDebug ??= gateDebugWriter((msg: string) => {
             const line = `${new Date().toISOString()} ${msg}\n`
             fsp.appendFile(debugLogPath, line).catch(() => {
                 /* ignore */
@@ -549,14 +535,7 @@ export class TaskRunner {
 
 export interface RunSingleTaskOptions extends Pick<
     TaskRunnerOptions,
-    | 'resumeId'
-    | 'spawnFn'
-    | 'runChild'
-    | 'runWorker'
-    | 'lookups'
-    | 'onStart'
-    | 'planContext'
-    | 'fixInstruction'
+    'resumeId' | 'seams' | 'onStart' | 'planContext' | 'fixInstruction'
 > {
     /** Await the session going idle after the spec is delivered, so the caller
      *  blocks until the agent has implemented it. Default false. */
@@ -680,10 +659,7 @@ export async function runSingleTask(
                         release()
                     }
                 },
-                spawnFn: opts.spawnFn,
-                runChild: opts.runChild,
-                runWorker: opts.runWorker,
-                lookups: opts.lookups,
+                seams: opts.seams,
                 onStart: opts.onStart,
                 planContext: opts.planContext,
                 fixInstruction: opts.fixInstruction,
@@ -743,6 +719,12 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
         onStart: opts?.onStart,
         planContext: opts?.planContext,
         fixInstruction: opts?.fixInstruction
+        // NO `seams` here, deliberately. Threading them would need a field on
+        // `GateParams` and another on `GateDeps`, and nothing — production or
+        // test — would set either: the gate is reached through two orchestrators
+        // that build their params from a task file. An unused field on a seam
+        // roster is the `WorkerOutcome.reason` shape (written twelve times, read
+        // by nothing), so this stays unplumbed until a test actually needs it.
     })
 
 /**

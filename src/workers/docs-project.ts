@@ -11,6 +11,7 @@ import {
 import type {RetrievedChunk} from './docs-retrieve.js'
 import {buildExtractionPrompt} from './abstention.js'
 import {chunkDeclarations} from './docs-chunk.js'
+import type {DocsCorpus} from './docs-lookup.js'
 
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
@@ -279,4 +280,20 @@ export function buildProjectPrompt(projectName: string, query: string, content: 
         query,
         content
     })
+}
+
+/**
+ * The PROJECT corpus row: the current repo's own indexed `.ts`/`.tsx` source.
+ *
+ * Named after the project so a reader of the answer can tell a project-source
+ * citation from a package one at a glance — they are read and cited the same way
+ * and mean very different things.
+ */
+export function projectCorpus(projectName: string): DocsCorpus {
+    return {
+        id: 'project',
+        buildPrompt: (query, content) => buildProjectPrompt(projectName, query, content),
+        header: `Per ${projectName} (project source):`,
+        abortedMessage: 'Project docs lookup aborted.'
+    }
 }

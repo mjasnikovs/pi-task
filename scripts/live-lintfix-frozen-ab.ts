@@ -170,7 +170,13 @@ async function runTrial(mode: Mode, n: number): Promise<TrialResult> {
             // post-child revert stands between that edit and verify's rule 4b.
             const effective = mode === 'suspenders' ? buildLintFixPrompt(FAIL_REASON) : prompt
             log(`=== child start (tools=${tools}) ===`)
-            const r = await runChild(dir, tools, effective, signal ?? abort.signal, line => log(line))
+            const r = await runChild({
+                cwd: dir,
+                tools,
+                prompt: effective,
+                signal: signal ?? abort.signal,
+                onLine: line => log(line)
+            })
             log(`=== child end exit=${r.exitCode} ===`)
             if (r.exitCode !== 0) throw new Error(`child exited ${r.exitCode}: ${r.stderr}`)
             if (r.modelError) throw new Error(`model error: ${r.modelError}`)

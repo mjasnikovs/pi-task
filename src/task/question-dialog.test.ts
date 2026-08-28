@@ -3,7 +3,9 @@ import {
     resolveAnswer,
     buildOptionCards,
     isTwoOption,
-    type PendingQuestion
+    settleQuestion,
+    type PendingQuestion,
+    type SettleQuestionInput
 } from './question-dialog.js'
 
 // The mapping these cover used to exist in three places — grill, clarify and the
@@ -112,4 +114,173 @@ test('isTwoOption needs BOTH sides', () => {
     expect(isTwoOption(fork)).toBe(true)
     expect(isTwoOption(single)).toBe(false)
     expect(isTwoOption(open)).toBe(false)
+})
+
+describe('settleQuestion — the whole dialog, once', () => {
+    /**
+     * The COMPOSITION grill and clarify each used to write out at ~50 lines: YOLO
+     * short-circuit, cards, ask, cancel, record. The pieces were already shared;
+     * this is what was not, and the two copies had drifted on `recommended2`.
+     */
+    interface Recorded {
+        kind: string
+        question: string
+        answer: string
+    }
+
+    function harness(reply: string | undefined): {
+        asked: Array<Record<string, unknown>>
+        recorded: Recorded[]
+        ui: SettleQuestionInput['ui']
+        transcript: SettleQuestionInput['transcript']
+    } {
+        const asked: Array<Record<string, unknown>> = []
+        const recorded: Recorded[] = []
+        return {
+            asked,
+            recorded,
+            ui: {
+                ask: spec => {
+                    asked.push(spec as unknown as Record<string, unknown>)
+                    return Promise.resolve(reply)
+                }
+            },
+            transcript: {
+                add: (kind, question, answer) => recorded.push({kind, question, answer})
+            }
+        }
+    }
+
+    const base = {
+        plain: 'Which store?',
+        shown: 'Which store?',
+        render: (md: string) => `«${md}»`,
+        yolo: null
+    }
+
+    test('an empty submit is recorded as an acceptance of the recommendation', async () => {
+        const h = harness('')
+        const out = await settleQuestion({...base, ...h, suggested: 'postgres'})
+
+        expect(out).toBe('settled')
+        expect(h.recorded).toEqual([
+            {kind: 'accepted', question: 'Which store?', answer: 'postgres'}
+        ])
+    })
+
+    test('a typed reply is recorded verbatim', async () => {
+        const h = harness('sqlite, for now')
+        const out = await settleQuestion({...base, ...h, suggested: 'postgres'})
+
+        expect(out).toBe('settled')
+        expect(h.recorded[0]).toEqual({
+            kind: 'typed',
+            question: 'Which store?',
+            answer: 'sqlite, for now'
+        })
+    })
+
+    test('a bare "B" on a fork resolves to the alternative, not the letter', async () => {
+        const h = harness('B')
+        await settleQuestion({...base, ...h, suggested: 'postgres', alt: 'sqlite'})
+
+        expect(h.recorded[0]?.answer).toBe('sqlite')
+    })
+
+    test('a fork offers both recommendations and no skip', async () => {
+        const h = harness('')
+        await settleQuestion({...base, ...h, suggested: 'postgres', alt: 'sqlite'})
+
+        // `recommended2` was passed unconditionally by one caller and
+        // conditionally by the other; it is now conditional, once.
+        expect(h.asked[0]!.recommended).toBe('postgres')
+        expect(h.asked[0]!.recommended2).toBe('sqlite')
+        expect(h.asked[0]!.allowSkip).toBe(false)
+        expect(h.asked[0]!.options).toEqual([
+            {label: 'A: «postgres»', value: 'postgres'},
+            {label: 'B: «sqlite»', value: 'sqlite'}
+        ])
+    })
+
+    test('a question with nothing to recommend allows a skip and carries no second option', async () => {
+        const h = harness('whatever you think')
+        await settleQuestion({...base, ...h})
+
+        expect(h.asked[0]!.allowSkip).toBe(true)
+        expect('recommended2' in h.asked[0]!).toBe(false)
+        expect(h.asked[0]!.options).toBeUndefined()
+    })
+
+    test('a cancel is RETURNED, not thrown — the one thing the two callers disagree on', async () => {
+        const h = harness(undefined)
+        const out = await settleQuestion({...base, ...h, suggested: 'postgres'})
+
+        expect(out).toBe('cancelled')
+        expect(h.recorded).toEqual([])
+    })
+
+    test('a YOLO answer records without ever building the prompt', async () => {
+        const h = harness('never reached')
+        const out = await settleQuestion({
+            ...base,
+            ...h,
+            suggested: '`postgres`',
+            yolo: {kind: 'answer', answer: '`postgres`'}
+        })
+
+        expect(out).toBe('settled')
+        expect(h.asked).toEqual([])
+        // Stored plain: the transcript is model input, not display.
+        expect(h.recorded).toEqual([{kind: 'yolo', question: 'Which store?', answer: 'postgres'}])
+    })
+
+    test('a YOLO skip records the note and asks nothing', async () => {
+        const h = harness('never reached')
+        await settleQuestion({
+            ...base,
+            ...h,
+            yolo: {kind: 'skip', note: 'no recommended option to take'}
+        })
+
+        expect(h.asked).toEqual([])
+        expect(h.recorded[0]).toEqual({
+            kind: 'yolo-skip',
+            question: 'Which store?',
+            answer: '(skipped — no recommended option to take)'
+        })
+    })
+
+    test('onAsk runs before the ask, and never on the YOLO path', async () => {
+        // grill's "awaiting Qn" widget line. Firing it under YOLO would leave the
+        // widget claiming a prompt that was never shown.
+        const order: string[] = []
+        const h = harness('')
+        await settleQuestion({
+            ...base,
+            ui: {
+                ask: spec => {
+                    order.push('ask')
+                    h.asked.push(spec as unknown as Record<string, unknown>)
+                    return Promise.resolve('')
+                }
+            },
+            transcript: h.transcript,
+            suggested: 'postgres',
+            onAsk: () => order.push('onAsk')
+        })
+        expect(order).toEqual(['onAsk', 'ask'])
+
+        const y = harness('')
+        let fired = false
+        await settleQuestion({
+            ...base,
+            ...y,
+            suggested: 'postgres',
+            yolo: {kind: 'answer', answer: 'postgres'},
+            onAsk: () => {
+                fired = true
+            }
+        })
+        expect(fired).toBe(false)
+    })
 })

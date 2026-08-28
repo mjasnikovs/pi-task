@@ -240,12 +240,12 @@ async function main(): Promise<void> {
             let draft = ''
             let err = ''
             try {
-                const r = await runChild(
+                const r = await runChild({
                     cwd,
-                    'read',
-                    COMPOSE_PROMPT(armRefined, research, qa, null, carried),
-                    abort.signal
-                )
+                    tools: 'read',
+                    prompt: COMPOSE_PROMPT(armRefined, research, qa, null, carried),
+                    signal: abort.signal
+                })
                 draft = stripSpecPreamble(r.text)
                 spec = draft
                 if (r.exitCode !== 0) err = `exit ${r.exitCode}`

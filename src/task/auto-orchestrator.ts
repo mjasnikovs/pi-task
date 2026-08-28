@@ -107,7 +107,7 @@ import {
     type CoverageAccounting
 } from './requirements.js'
 import {groundedCoverage, type ScoredPlan} from './coverage-loop.js'
-import {buildOptionCards, resolveAnswer, type PendingQuestion} from './question-dialog.js'
+import {settleQuestion} from './question-dialog.js'
 import {TERMINAL_OUTCOMES, formatAt, formatWhy} from './terminal-outcome.js'
 import {
     findSpecDanglingArtifacts,
@@ -263,11 +263,29 @@ function mentionPath(token: string): string {
  * default level. It is also the only channel the plan phase has: it runs before
  * any task file, hence any `TASK_NNNN-debug.log`, exists.
  */
+/**
+ * Every plan-debug write not yet on disk, chained.
+ *
+ * Fire-and-forget is right for production — a plan must never wait on its own
+ * trail — but it leaves nothing to synchronise on, and the twelve tests that
+ * read `plan-debug.log` back were racing the append that writes it. They failed
+ * intermittently on ENOENT, ~4ms in, at a rate that moved with how many other
+ * files the suite was running beside them. Chaining also serialises concurrent
+ * appends, which is what keeps a line whole.
+ */
+let planDebugChain: Promise<unknown> = Promise.resolve()
+
+/** Wait for every plan-debug line written so far to reach disk. Tests only. */
+export function flushPlanDebug(): Promise<unknown> {
+    return planDebugChain
+}
+
 function logPlanDebug(cwd: string, msg: string): void {
     if (!shouldLogDebug('event', debugLogLevel())) return
     const line = `${new Date().toISOString()} ${msg}\n`
     const dir = tasksDir(cwd)
-    fsp.mkdir(dir, {recursive: true})
+    planDebugChain = planDebugChain
+        .then(() => fsp.mkdir(dir, {recursive: true}))
         .then(() => fsp.appendFile(path.join(dir, 'plan-debug.log'), line))
         .catch(() => {})
 }
@@ -767,58 +785,27 @@ export async function elicitClarifications(
             transcript.add('auto-resolved', plainQ, autoResolved)
             continue
         }
-        const plainSuggested = suggested === undefined ? undefined : stripInlineMarkdown(suggested)
-        const plainAlt = alt === undefined ? undefined : stripInlineMarkdown(alt)
         // YOLO: take the recommended option (index 0 / the green card) without ever
         // building the prompt. Clarify has no anti-synthesis channel — it runs before
         // any research — so the only step-aside here is a question that carries no
         // recommendation to take; that one is skipped rather than guessed.
-        const yolo = yoloPickAnswer(isYoloMode(), {
-            ...(plainSuggested !== undefined && {suggested: plainSuggested}),
-            ...(plainAlt !== undefined && {alt: plainAlt})
-        })
-        if (yolo !== null) {
-            if (yolo.kind === 'answer') transcript.add('yolo', plainQ, yolo.answer)
-            else transcript.add('yolo-skip', plainQ, `(skipped — ${yolo.note})`)
-            continue
-        }
-        // The picker cards and the reply mapping are shared with /task's grill
-        // phase and the plan session (question-dialog.ts) — all three used to
-        // write them out, and had drifted.
-        const pending: PendingQuestion = {
+        const outcome = await settleQuestion({
+            ui,
+            transcript,
             plain: plainQ,
             shown: shownQ,
-            ...(plainSuggested !== undefined && {
-                suggested: plainSuggested,
-                shownSuggested: renderInlineMarkdown(suggested!, theme)
-            }),
-            ...(plainAlt !== undefined && {
-                alt: plainAlt,
-                shownAlt: renderInlineMarkdown(alt!, theme)
+            ...(suggested !== undefined && {suggested}),
+            ...(alt !== undefined && {alt}),
+            render: md => renderInlineMarkdown(md, theme),
+            yolo: yoloPickAnswer(isYoloMode(), {
+                ...(suggested !== undefined && {suggested: stripInlineMarkdown(suggested)}),
+                ...(alt !== undefined && {alt: stripInlineMarkdown(alt)})
             })
-        }
-        const options = buildOptionCards(pending)
-        const a = await ui.ask({
-            localTitle: shownQ,
-            displayQuestion: shownQ,
-            question: plainQ,
-            recommended: plainSuggested,
-            ...(plainAlt !== undefined && {recommended2: plainAlt}),
-            allowSkip: plainSuggested === undefined && plainAlt === undefined,
-            ...(options && {options})
         })
-        if (a === undefined) {
+        if (outcome === 'cancelled') {
             announceDone(ctx, '/task-auto cancelled.', 'warning')
             return null
         }
-        // An accept covers both routes to it: submitting empty, and pressing the
-        // single green card. The suffix is the policy's, not this call site's.
-        const resolved = resolveAnswer(pending, a)
-        transcript.add(
-            resolved.source === 'accepted' ? 'accepted' : 'typed',
-            plainQ,
-            resolved.answer
-        )
     }
     if (transcript.length === 0) {
         ctx.ui.notify('No clarifying questions needed — planning tasks…', 'info')

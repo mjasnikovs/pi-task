@@ -258,7 +258,13 @@ async function runTrial(arm: Exclude<Arm, 'repro'>, n: number, logFile: string):
             spec: SPEC,
             runChild: async (tools, prompt, signal) => {
                 log(`=== trial ${n} child start (tools=${tools}) ===`)
-                const r = await runChild(dir, tools, prompt, signal ?? abort.signal, l => log(l))
+                const r = await runChild({
+                    cwd: dir,
+                    tools,
+                    prompt,
+                    signal: signal ?? abort.signal,
+                    onLine: l => log(l)
+                })
                 log(`=== trial ${n} child end exit=${r.exitCode} ===`)
                 if (r.exitCode !== 0) throw new Error(`child exited ${r.exitCode}: ${r.stderr}`)
                 if (r.modelError) throw new Error(`model error: ${r.modelError}`)

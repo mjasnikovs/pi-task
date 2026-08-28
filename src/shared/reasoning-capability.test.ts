@@ -18,7 +18,7 @@ import {
     THINKING_LADDER,
     type ReasoningModelFacts
 } from './reasoning-capability.js'
-import {REASONING_GROUPS} from '../config/reasoning.js'
+import {REASONING_GROUPS, type GroupSetting} from '../config/reasoning.js'
 
 /** The live models.json entry for Qwen3.8 on this box, verbatim. */
 const QWEN38: ReasoningModelFacts = {
@@ -113,17 +113,17 @@ describe('clampToModel', () => {
 
 describe('reasoningMismatches', () => {
     const every = (
-        setting: 'off' | 'medium'
-    ): Array<{
-        group: (typeof REASONING_GROUPS)[number]
-        setting: 'off' | 'medium'
-    }> => REASONING_GROUPS.map(group => ({group, setting}))
+        setting: GroupSetting
+    ): Record<(typeof REASONING_GROUPS)[number], GroupSetting> =>
+        Object.fromEntries(REASONING_GROUPS.map(group => [group, setting])) as Record<
+            (typeof REASONING_GROUPS)[number],
+            GroupSetting
+        >
 
     test('says nothing when every group inherits — the shipped state', () => {
         // This is the real anti-nag. With the shipped all-inherit table, a model
         // with no reasoning at all still produces no warning.
-        const inheriting = REASONING_GROUPS.map(group => ({group, setting: 'inherit' as const}))
-        expect(reasoningMismatches({reasoning: false}, inheriting)).toEqual([])
+        expect(reasoningMismatches({reasoning: false}, every('inherit'))).toEqual([])
     })
 
     test('says nothing when no model has resolved yet', () => {

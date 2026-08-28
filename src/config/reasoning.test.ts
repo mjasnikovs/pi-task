@@ -2,12 +2,12 @@ import {readFileSync} from 'node:fs'
 import {describe, expect, test} from 'bun:test'
 import {DEFAULT_CONFIG, type PiTaskConfig} from './config.js'
 import {
+    effectiveReasoning,
     DEFAULT_REASONING_TABLE,
     REASONING_GROUPS,
     REASONING_MODES,
     REASONING_ON_LEVEL,
     REASONING_SETTINGS,
-    RESEARCH_WORKER_GROUPS,
     resolveReasoning,
     sanitizeReasoningLevels,
     sanitizeReasoningMode,
@@ -178,35 +178,6 @@ describe('every shipped cell is measured or inherit', () => {
     })
 })
 
-describe('RESEARCH_WORKER_GROUPS', () => {
-    test('names a real group for each of the four research sections', () => {
-        expect(Object.keys(RESEARCH_WORKER_GROUPS).sort()).toEqual([
-            'APIS',
-            'CONTEXT',
-            'FILES',
-            'TOOLING'
-        ])
-        for (const g of Object.values(RESEARCH_WORKER_GROUPS)) {
-            expect(REASONING_GROUPS).toContain(g)
-        }
-    })
-
-    test('every worker spec in phases.ts has an entry', () => {
-        // The lookup falls back to `research` for an unknown section, so a fifth
-        // worker added without a cell would silently share the old group and
-        // nobody would see it. Read the section literals out of the source that
-        // declares them rather than restating them here.
-        const phases = readFileSync(new URL('../task/phases.ts', import.meta.url), 'utf8')
-        const specs = phases.slice(
-            phases.indexOf('const workerSpecs'),
-            phases.indexOf('let persistChain')
-        )
-        const sections = [...specs.matchAll(/^\s+section: '([A-Z]+)'/gm)].map(m => m[1]!)
-        expect(sections.length).toBe(4)
-        for (const s of sections) expect(RESEARCH_WORKER_GROUPS[s]).toBeDefined()
-    })
-})
-
 describe('thinkingArgs', () => {
     test('inherit is the empty fragment', () => {
         expect(thinkingArgs('inherit')).toEqual([])
@@ -304,5 +275,33 @@ describe('sanitizeReasoningLevels', () => {
         for (const hostile of [null, undefined, 'off', 7, ['off']]) {
             expect(sanitizeReasoningLevels(hostile)).toEqual({...DEFAULT_REASONING_TABLE})
         }
+    })
+})
+
+describe('effectiveReasoning', () => {
+    /**
+     * The whole-table question, which four callers used to answer by writing the
+     * same loop. It is `resolveReasoning` for every group and nothing else — that
+     * IS the property, because the moment it is anything else the settings menu,
+     * the mismatch warning and the custom-mode seeder start disagreeing.
+     */
+    test('answers every group, and answers each the way resolveReasoning does', () => {
+        for (const mode of REASONING_MODES) {
+            const cfg = {...DEFAULT_CONFIG, reasoningMode: mode}
+            const table = effectiveReasoning(cfg)
+            expect(Object.keys(table).sort()).toEqual([...REASONING_GROUPS].sort())
+            for (const group of REASONING_GROUPS) {
+                expect(table[group]).toBe(resolveReasoning(group, cfg))
+            }
+        }
+    })
+
+    test('is a fresh object, so a caller cannot write through it into the config', () => {
+        // `applyReasoningLevel` seeds custom mode from this. Handing back a live
+        // reference would make freezing the table an alias of it.
+        const cfg = {...DEFAULT_CONFIG, reasoningLevels: {...DEFAULT_CONFIG.reasoningLevels}}
+        const table = effectiveReasoning(cfg)
+        table.planning = 'high'
+        expect(cfg.reasoningLevels.planning).not.toBe('high')
     })
 })

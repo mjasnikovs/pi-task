@@ -7,6 +7,7 @@
 
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {getConfig} from '../config/config.js'
+import {registerSessionHint} from './session-hint.js'
 
 const WIDGET_KEY = 'pi-task-brave-warning'
 
@@ -21,34 +22,9 @@ function hasBraveKey(): boolean {
 }
 
 export function registerBraveKeyWarning(pi: ExtensionAPI): void {
-    pi.on('session_start', (_event, ctx) => {
-        // Terminal-only hint: needs an interactive TUI to render and to catch the
-        // keystroke that dismisses it. Only the brave provider can be misconfigured;
-        // skip whenever another provider is selected or a key is already present.
-        if (ctx.mode !== 'tui' || getConfig().searchProvider !== 'brave' || hasBraveKey()) return
-
-        let unsubscribe: (() => void) | null = null
-        const clear = (): void => {
-            try {
-                ctx.ui.setWidget(WIDGET_KEY, undefined)
-            } catch {
-                /* stale ctx after a session switch — nothing to clear */
-            }
-            unsubscribe?.()
-            unsubscribe = null
-        }
-
-        try {
-            ctx.ui.setWidget(WIDGET_KEY, [ctx.ui.theme.fg('warning', WARNING)])
-        } catch {
-            return
-        }
-
-        // Disappear on any interaction — the first raw keystroke clears it.
-        // Returning undefined leaves the input untouched (we only observe it).
-        unsubscribe = ctx.ui.onTerminalInput(() => {
-            clear()
-            return undefined
-        })
-    })
+    // Only the brave provider can be misconfigured; say nothing whenever another
+    // provider is selected or a key is already present.
+    registerSessionHint(pi, WIDGET_KEY, () =>
+        getConfig().searchProvider !== 'brave' || hasBraveKey() ? null : {text: WARNING}
+    )
 }

@@ -146,7 +146,7 @@ export async function runPlanningChild(
     onLine?: (line: string) => void
 ): Promise<string> {
     if (!process.env.PI_BIN) process.env.PI_BIN = 'pi' // never self-spawn
-    const r = await runChild(cwd, tools, prompt, new AbortController().signal, onLine)
+    const r = await runChild({cwd, tools, prompt, signal: new AbortController().signal, onLine})
     if (r.exitCode !== 0) {
         throw new Error(`child exit ${r.exitCode}: ${r.stderr.slice(-400)}`)
     }

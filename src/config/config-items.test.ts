@@ -1,5 +1,5 @@
 import {test, expect, describe} from 'bun:test'
-import {ITEMS} from './register.js'
+import {ITEMS, configRows, panelItems} from './register.js'
 import {DEFAULT_CONFIG} from './config.js'
 import type {PiTaskConfig} from './config.js'
 
@@ -82,4 +82,73 @@ test('a boolean setting stores a real boolean, not the string "on"', () => {
 test('ids are unique — the onChange lookup must resolve to exactly one row', () => {
     const ids = ITEMS.map(i => i.id)
     expect(new Set(ids).size).toBe(ids.length)
+})
+
+/**
+ * The same properties, over EVERY row this session shows — the seven reasoning
+ * groups and one row per live tool and installed extension included.
+ *
+ * Those three families used to bypass `ConfigItem` entirely: each had its own
+ * builder, its own apply function and its own arm in a four-way prefix ladder,
+ * and none of the properties above could see them. `reason:` rows had a
+ * hand-written round-trip test of their own; `ext:` and `tool:` had none at all.
+ */
+describe('every DISCOVERED row obeys the same contract', () => {
+    const tools = [
+        {name: 'bash', origin: 'built in'},
+        {name: 'fable_loop', origin: 'discovered (/x/fable/index.js)'}
+    ]
+    const installed = [
+        {path: '/x/pi-lmstudio/index.ts', label: 'pi-lmstudio', origin: 'npm:pi-lmstudio (user)'}
+    ]
+    const rows = configRows(installed, tools)
+
+    test('the discovered families are actually in there', () => {
+        // Guards against a vacuous suite: every assertion below iterates `rows`.
+        for (const prefix of ['reason:', 'tool:', 'ext:']) {
+            expect(
+                rows.some(r => r.id.startsWith(prefix)),
+                prefix
+            ).toBe(true)
+        }
+    })
+
+    test('format(apply(cfg, v)) === v for every offered value of every row', () => {
+        for (const item of rows) {
+            for (const value of item.values ?? ['on', 'off']) {
+                const cfg = fresh()
+                item.apply(cfg, value)
+                expect(item.format(cfg), `${item.id} := ${value}`).toBe(value)
+            }
+        }
+    })
+
+    test('a value the panel never offers can never become the stored value', () => {
+        for (const item of rows) {
+            const offered = item.values ?? ['on', 'off']
+            const cfg = fresh()
+            item.apply(cfg, 'not-an-offered-value')
+            expect(offered, item.id).toContain(item.format(cfg))
+        }
+    })
+
+    test('the default config renders as an offered value for every row', () => {
+        const cfg = fresh()
+        for (const item of rows) {
+            expect(item.values ?? ['on', 'off'], item.id).toContain(item.format(cfg))
+        }
+    })
+
+    test('ids are unique across every family', () => {
+        // The onChange lookup is now one `rows.find(r => r.id === id)`, so a
+        // collision between a fixed row and a discovered one would silently
+        // dispatch to whichever came first.
+        const ids = rows.map(i => i.id)
+        expect(new Set(ids).size).toBe(ids.length)
+    })
+
+    test('every row belongs to a section the menu actually renders', () => {
+        const shown = new Set(panelItems(fresh(), installed, tools).map(i => i.id))
+        for (const item of rows) expect(shown, item.id).toContain(item.id)
+    })
 })

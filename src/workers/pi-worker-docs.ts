@@ -6,20 +6,15 @@ import {openCache as defaultOpenCache} from './docs-cache.js'
 import {ensureIndexed as defaultEnsureIndexed} from './docs-index.js'
 import {resolvePackage as defaultResolvePackage} from './docs-resolve.js'
 import {retrieveChunks as defaultRetrieveChunks} from './docs-retrieve.js'
-import {formatResultText} from '../shared/child-output.js'
-import {
-    docsRaw,
-    packageHeader,
-    buildPrompt,
-    buildVersionBanner,
-    type AutoInstallPin
-} from './docs-core.js'
+import {docsLookup, type DocsCorpus, type DocsLookup} from './docs-lookup.js'
+import {projectCorpus} from './docs-project.js'
+import {docsRaw, packageCorpus, buildVersionBanner, type AutoInstallPin} from './docs-core.js'
 import {
     npmVersionLookup as defaultNpmVersionLookup,
     formatNpmVersionSection
 } from './npm-version.js'
 import type {SpawnFn} from '../shared/child-process.js'
-import {runFocusedExtraction, type FocusedFailure, type FocusedResult} from './focused-extractor.js'
+import type {FocusedFailure} from './focused-extractor.js'
 import {
     childFailureReason,
     makeWorkerTool,
@@ -30,7 +25,7 @@ import {
 import {isTypeOnlyAnswer} from '../task/type-only-answer.js'
 import {logDocsAnswer} from './typeonly-log.js'
 import {normalizeQuery} from './research-cache.js'
-import {projectDocsRaw, buildProjectPrompt} from './docs-project.js'
+import {projectDocsRaw} from './docs-project.js'
 import {projectDocsBudget, projectDocsBudgetExhausted} from '../task/research-fanout-budget.js'
 import {isAbstention} from './abstention.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
@@ -205,25 +200,22 @@ export function registerPiWorkerDocs(
             // (internals.spawn is always injected), i.e. untested, unreachable, and wrong.
             const spawn = internals.spawn ?? (defaultSpawn as unknown as SpawnFn)
 
-            // Both paths below run the SAME extraction against this call's cwd/signal/spawn
-            // and verify the citation against exactly the content they prompted with; only
-            // the prompt body and the abort wording differ. (fetch is the site that verifies
-            // against a superset — see FocusedRequest.verifyAgainst.)
-            const extract = (
-                prompt: string,
-                content: string,
-                abortedMessage: string
-            ): Promise<FocusedResult> =>
-                runFocusedExtraction({
-                    prompt,
-                    verifyAgainst: content,
+            // Both arms below run the SAME tail — concatenate, extract, verify,
+            // format — through `docsLookup`; only the CORPUS differs. The
+            // `extraction` group's level is resolved here so neither the lookup
+            // nor the extractor reads ambient config.
+            const lookup = (
+                corpus: DocsCorpus,
+                chunks: ReadonlyArray<{content: string}>
+            ): Promise<DocsLookup> =>
+                docsLookup({
+                    corpus,
+                    chunks,
+                    query: params.query,
                     cwd: ctx.cwd,
                     signal,
                     spawn,
-                    // The `extraction` group's level. Resolved at the call site so the
-                    // extractor itself never reads ambient config.
-                    thinking: groupThinkingArgs('extraction'),
-                    abortedMessage
+                    thinking: groupThinkingArgs('extraction')
                 })
 
             // ── Project source lookup ───────────────────────────────────────
@@ -283,20 +275,10 @@ export function registerPiWorkerDocs(
                     indexedFiles: filesIngested,
                     indexingMs
                 }
-                const concatenated = chunks.map(c => c.content).join('\n\n')
-                const extraction = await extract(
-                    buildProjectPrompt(projectName, params.query, concatenated),
-                    concatenated,
-                    'Project docs lookup aborted.'
-                )
-                if (!extraction.ok) return docsFailureResult(extraction, baseDetails, '')
+                const r = await lookup(projectCorpus(projectName), chunks)
+                if (r.kind === 'failed') return docsFailureResult(r.extraction, baseDetails, '')
 
-                const verified = extraction.excerptVerified
-                const text = formatResultText(
-                    `Per ${projectName} (project source):`,
-                    extraction,
-                    verified
-                )
+                const {extraction, excerptVerified: verified, body: text} = r
                 // SAME instrumentation channel as the package path below, extended to the
                 // project-source branch because that branch is the MAJORITY of what
                 // worker:apis asks — 13 of 17 docs calls in run 15's fatal task, 7 of 12 in
@@ -357,18 +339,15 @@ export function registerPiWorkerDocs(
                     hitCache: rawResult.hitCache,
                     cacheError: rawResult.cacheError,
                     autoInstalled: rawResult.autoInstalled,
+                    // BUG FIX. Both sibling arms carry the pin and this one dropped
+                    // it, so a package that WAS auto-installed and then failed to
+                    // re-resolve lost its `versionSource`/`declaredRange` — the
+                    // provenance the last defect in this area was about. `docsRaw`
+                    // sets `autoInstallPin` on three of its five error returns.
+                    ...pinDetails(rawResult.autoInstallPin),
                     ...npmDetails
                 }
                 return workerUnavailable(npmHeader + rawResult.message, details, 'docs-error')
-            }
-
-            if (rawResult.kind === 'not_installed') {
-                return workerUnavailable(
-                    npmHeader
-                        + `Package "${rawResult.pkg}" is not installed and auto-install failed.`,
-                    {resolveError: 'not_installed' as const, ...npmDetails},
-                    'not-installed'
-                )
             }
 
             if (rawResult.kind === 'no_chunks') {
@@ -415,18 +394,12 @@ export function registerPiWorkerDocs(
                 ...npmDetails
             }
 
-            const concatenated = chunks.map(c => c.content).join('\n\n')
-            const extraction = await extract(
-                buildPrompt(pkg, params.query, concatenated),
-                concatenated,
-                'Docs lookup aborted.'
-            )
-            if (!extraction.ok) {
-                return docsFailureResult(extraction, baseDetails, versionBanner + npmHeader)
+            const r = await lookup(packageCorpus(pkg), chunks)
+            if (r.kind === 'failed') {
+                return docsFailureResult(r.extraction, baseDetails, versionBanner + npmHeader)
             }
 
-            const verified = extraction.excerptVerified
-            const body = formatResultText(packageHeader(pkg), extraction, verified)
+            const {extraction, excerptVerified: verified, body, content: concatenated} = r
 
             // F-2: a TYPE-ONLY answer is the dangerous failure. "unclear from this package"
             // is honest and already escalates; a signature is a well-formed, confident,

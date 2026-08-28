@@ -176,18 +176,21 @@ async function main() {
     console.log('── full session (2 question children + 1 answer child)')
     const before = treeChanges(repo)
     const signal = new AbortController().signal
-    const q1 = await runChild(
-        repo,
-        PLAN_TOOLS,
-        PLAN_QUESTION_PROMPT('Add a --json flag to greet', ''),
+    const q1 = await runChild({
+        cwd: repo,
+        tools: PLAN_TOOLS,
+        prompt: PLAN_QUESTION_PROMPT('Add a --json flag to greet', ''),
         signal
-    )
-    const q2 = await runChild(
-        repo,
-        PLAN_TOOLS,
-        PLAN_QUESTION_PROMPT('Add a --json flag to greet', 'Q1: shape?\nA1: {"greeting": string}'),
+    })
+    const q2 = await runChild({
+        cwd: repo,
+        tools: PLAN_TOOLS,
+        prompt: PLAN_QUESTION_PROMPT(
+            'Add a --json flag to greet',
+            'Q1: shape?\nA1: {"greeting": string}'
+        ),
         signal
-    )
+    })
     const after = treeChanges(repo)
     const leaked = after.filter(l => !before.includes(l))
     console.log(`   children produced ${q1.text.length + q2.text.length} chars of question text`)

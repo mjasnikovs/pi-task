@@ -10,12 +10,21 @@
  * So the completeness check lives HERE, at build time, where someone can fix it.
  * It reads the source rather than a registry because the child name is a string
  * literal at the call site and there is no other place it is written down.
+ *
+ * It covers the four RESEARCH WORKERS too. Their groups used to live in a second
+ * table keyed on the section heading, guarded by a second scanner that sliced
+ * `phases.ts` between two string offsets — and whose failure mode was a SILENT
+ * fallback to `research` rather than a build failure. One roster, one scanner,
+ * one failure mode.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import {REASONING_GROUP_BY_CHILD, reasoningGroupForChild} from './reasoning-groups.js'
-import {REASONING_GROUPS} from '../config/reasoning.js'
+import {
+    REASONING_GROUP_BY_CHILD,
+    reasoningGroupForChild,
+    REASONING_GROUPS
+} from '../config/reasoning.js'
 
 const src = (f: string): string => fs.readFileSync(path.join(import.meta.dir, f), 'utf8')
 
@@ -42,9 +51,9 @@ function callSites(source: string, name: string): string[] {
  */
 function childNames(call: string): string[] {
     const out: string[] = []
-    const positional = /^\w+\(\s*(?:[\w.]+\s*,\s*)?'([a-z][a-z-]*)'/.exec(call)
+    const positional = /^\w+\(\s*(?:[\w.]+\s*,\s*)?'([a-z][a-z:-]*)'/.exec(call)
     if (positional?.[1]) out.push(positional[1])
-    for (const m of call.matchAll(/\bname:\s*'([a-z][a-z-]*)'/g)) {
+    for (const m of call.matchAll(/\bname:\s*'([a-z][a-z:-]*)'/g)) {
         if (m[1]) out.push(m[1])
     }
     return out
@@ -71,11 +80,17 @@ function discoveredChildNames(): Set<string> {
         // /task-auto and /task-plan reach the same runner through a local
         // indirection (`deps.runChild(name, …)` / `child(name, …)`), so the
         // literal never appears inside a `runPhaseChild(` call.
-        for (const m of source.matchAll(/\b(?:deps\.runChild|child)\(\s*'([a-z][a-z-]*)'/g)) {
+        for (const m of source.matchAll(/\b(?:deps\.runChild|child)\(\s*'([a-z][a-z:-]*)'/g)) {
             if (m[1]) found.add(m[1])
         }
         // runGroundedExtraction rows name their child on a `child:` key.
         for (const m of source.matchAll(/\bchild:\s*'([a-z][a-z-]*)'/g)) {
+            if (m[1]) found.add(m[1])
+        }
+        // Research workers name their child on a `label:` key in `workerSpecs`;
+        // `runWorker` resolves the group from it exactly as `runPhaseChild` does
+        // from a positional name.
+        for (const m of source.matchAll(/\blabel:\s*'(worker:[a-z-]+)'/g)) {
             if (m[1]) found.add(m[1])
         }
     }

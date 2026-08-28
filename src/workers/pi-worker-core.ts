@@ -27,6 +27,7 @@ import {
 import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
 import {streamStallHint} from '../shared/stream-watchdog.js'
 import {classifyWorkerFailure} from './worker-failure.js'
+import {CARRY_FORWARD_IDS, RESTART_ORDER, type WorkerKillId} from './worker-kill.js'
 
 // `--mode json` makes pi emit structured events as they happen instead of
 // buffering the assistant text and flushing on exit. That matters for the
@@ -114,12 +115,7 @@ const CARRY_FORWARD_LIMIT = 24_000
  * first is by definition the same call repeated, the second is malformed
  * protocol text, and replaying either would feed the failure back to itself.
  */
-const CARRY_FORWARD_REASONS: ReadonlySet<WorkerRestartReason> = new Set([
-    'worker-timeout',
-    'command-timeout',
-    'stream-stall',
-    'connection-error'
-])
+const CARRY_FORWARD_REASONS: ReadonlySet<WorkerKillId> = CARRY_FORWARD_IDS
 
 /**
  * Does this partial output carry ANSWER CONTENT, or is it the model clearing its
@@ -455,13 +451,7 @@ function workerTimeout(
  * Why an attempt was thrown away. One value per restart branch in runWorker, so
  * a log line naming the reason points at exactly one piece of code.
  */
-export type WorkerRestartReason =
-    | 'loop'
-    | 'command-timeout'
-    | 'stream-stall'
-    | 'worker-timeout'
-    | 'connection-error'
-    | 'leaked-tool-call'
+export type WorkerRestartReason = (typeof RESTART_ORDER)[number]
 
 /** One DISCARDED attempt: its cause and the wall clock it consumed and lost. */
 export interface WorkerRestart {
@@ -704,7 +694,7 @@ interface RestartRule {
  * `runWorker`, so a new failure mode is one row here and cannot be added without
  * becoming visible in `restarts`.
  */
-const RESTART_RULES: readonly RestartRule[] = [
+export const RESTART_RULES: readonly RestartRule[] = [
     {
         // A loop-kill gets the same restart-with-hint treatment every other phase
         // already gets (runPhaseChild) — name the offending call so the

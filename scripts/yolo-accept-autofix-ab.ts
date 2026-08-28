@@ -347,7 +347,13 @@ async function runTrial(arm: Arm, n: number, gates: RunGates): Promise<Trial> {
             trial.attempts += 1
             const prompt = `${reattemptBanner(opts?.fixInstruction ?? '')}\n\n${specBody}`
             log(`=== impl child ${trial.attempts} start ===`)
-            const r = await runChild(dir, 'read,edit,bash', prompt, abort.signal, line => log(line))
+            const r = await runChild({
+                cwd: dir,
+                tools: 'read,edit,bash',
+                prompt,
+                signal: abort.signal,
+                onLine: line => log(line)
+            })
             log(`=== impl child ${trial.attempts} end: exit ${r.exitCode} ===`)
             trial.childOk = r.exitCode === 0
             return {ctx: c, taskId: TASK_ID, end: r.exitCode === 0 ? {kind: 'completed'} : {kind: 'failed'}}

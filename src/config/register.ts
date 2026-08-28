@@ -25,6 +25,7 @@ import {
     sanitizeReasoningMode,
     REASONING_GROUP_HELP,
     REASONING_SETTINGS,
+    effectiveReasoning,
     resolveReasoning,
     type GroupSetting,
     type ReasoningGroup
@@ -116,7 +117,18 @@ class BorderedBox implements Component {
  * because both read `format`.
  */
 export interface ConfigItem {
-    id: keyof PiTaskConfig
+    /**
+     * The row's id. A `keyof PiTaskConfig` for a fixed setting; a prefixed
+     * string (`reason:`, `tool:`, `ext:`) for a DISCOVERED one.
+     *
+     * It is `string`, not `keyof PiTaskConfig`, and that is what lets the three
+     * dynamic families BE rows instead of bypassing them. While the id was
+     * narrow, each family re-invented both directions by hand — a builder, an
+     * apply function, and an arm in a four-way prefix ladder 300 lines away —
+     * and the round-trip property `config-items.test.ts` runs over `ITEMS`
+     * covered none of them.
+     */
+    id: string
     /**
      * Which titled block of the menu this row sits under. Rows are grouped by
      * section in {@link panelItems}, in the order the sections first appear in
@@ -132,6 +144,11 @@ export interface ConfigItem {
     format: (cfg: PiTaskConfig) => string
     /** Write the chosen label back. A value it does not recognise is ignored. */
     apply: (cfg: PiTaskConfig, chosen: string) => void
+    /**
+     * What the headless one-line rendering calls this row, when `label` reads
+     * only in the panel. See {@link PanelItem.headlessLabel}.
+     */
+    headlessLabel?: string
 }
 
 /**
@@ -394,20 +411,26 @@ export const ITEMS: ConfigItem[] = [
  */
 const EXT_ID_PREFIX = 'ext:'
 
-export function extensionItems(
-    extensions: InstalledExtension[],
-    whitelist: readonly string[]
-): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+export function extensionItems(extensions: InstalledExtension[]): ConfigItem[] {
     return extensions.map(e => ({
         id: EXT_ID_PREFIX + e.path,
+        section: 'extensions' as Section,
         label: `ext: ${e.label}`,
         description:
             `Load this ${e.origin} extension in the helper sessions pi-task spawns. They run `
             + 'with extensions off by default, so turn this on when the extension provides the '
             + 'model they need (pi-lmstudio, for example). They also inherit its tools and '
             + `hooks, so only enable ones you trust. ${e.path}`,
-        currentValue: whitelist.includes(e.path) ? 'on' : 'off',
-        values: ['on', 'off']
+        values: ['on', 'off'],
+        format: cfg => (cfg.extensionWhitelist.includes(e.path) ? 'on' : 'off'),
+        apply: (cfg, chosen) => {
+            if (chosen !== 'on' && chosen !== 'off') return
+            cfg.extensionWhitelist = applyExtensionToggle(
+                cfg.extensionWhitelist,
+                e.path,
+                chosen === 'on'
+            )
+        }
     }))
 }
 
@@ -432,22 +455,28 @@ export function applyExtensionToggle(
  */
 const TOOL_ID_PREFIX = 'tool:'
 
-export function toolItems(
-    tools: readonly GuardableTool[],
-    exempt: readonly string[]
-): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+export function toolItems(tools: readonly GuardableTool[]): ConfigItem[] {
     return tools.map(t => ({
         id: TOOL_ID_PREFIX + t.name,
+        section: 'timeouts' as Section,
         label: `watch: ${t.name}`,
         description:
             `Apply the command timeout to this tool. Leave it on unless the tool runs its own `
             + `bounded, cancellable work for longer than the timeout — turning it off means a `
             + `genuine hang in this tool will never be caught, and nothing else is watching `
             + `while a tool runs. ${t.origin}`,
+        values: ['on', 'off'],
         // Stored inverted: the config records the EXEMPTIONS, so an empty list
         // (and any tool pi-task has never heard of) stays guarded by default.
-        currentValue: exempt.includes(t.name) ? 'off' : 'on',
-        values: ['on', 'off']
+        format: cfg => (cfg.commandTimeoutExemptTools.includes(t.name) ? 'off' : 'on'),
+        apply: (cfg, chosen) => {
+            if (chosen !== 'on' && chosen !== 'off') return
+            cfg.commandTimeoutExemptTools = applyToolToggle(
+                cfg.commandTimeoutExemptTools,
+                t.name,
+                chosen === 'on'
+            )
+        }
     }))
 }
 
@@ -504,17 +533,20 @@ export function reasoningRowLabel(group: ReasoningGroup): string {
     return `   ${nextIsSibling ? '├─' : '└─'} ${group.slice(colon + 1)}`
 }
 
-export function reasoningItems(cfg: PiTaskConfig): PanelItem[] {
+export function reasoningItems(): ConfigItem[] {
     return REASONING_GROUPS.map(group => ({
         id: REASON_ID_PREFIX + group,
+        section: 'reasoning' as Section,
         label: reasoningRowLabel(group),
         headlessLabel: `think: ${group}`,
         description: REASONING_GROUP_HELP[group],
+        values: [...REASONING_SETTINGS],
         // The EFFECTIVE level, not cfg.reasoningLevels[group]: in default/on/off
         // the stored table is not what runs, and a row that shows a value the
-        // run does not use is worse than no row.
-        currentValue: resolveReasoning(group, cfg),
-        values: [...REASONING_SETTINGS]
+        // run does not use is worse than no row. As a FUNCTION rather than a
+        // snapshot, so `syncRows` can re-ask after any change.
+        format: cfg => resolveReasoning(group, cfg),
+        apply: (cfg, chosen) => applyReasoningLevel(cfg, group, chosen)
     }))
 }
 
@@ -528,22 +560,6 @@ export function reasoningItems(cfg: PiTaskConfig): PanelItem[] {
  * it, nudging `research` while in `off` would silently return the other six to
  * whatever the stored table happened to hold.
  */
-/**
- * Write every `think:` row's displayed value back from the config.
- *
- * Called after ANY change, not just a reasoning one, because the mode row and
- * the seven group rows are one control split across eight lines: cycling
- * `reasoning` to `off` changes what all seven of them run at, and cycling one
- * group row flips the mode, which changes the other six. A row showing a level
- * the run will not use is worse than no row.
- */
-export function refreshReasoningRows(cfg: PiTaskConfig, list: SettingsList): void {
-    for (const group of REASONING_GROUPS) {
-        list.updateValue(REASON_ID_PREFIX + group, resolveReasoning(group, cfg))
-    }
-    list.updateValue('reasoningMode', cfg.reasoningMode)
-}
-
 export function applyReasoningLevel(
     cfg: PiTaskConfig,
     group: ReasoningGroup,
@@ -551,9 +567,9 @@ export function applyReasoningLevel(
 ): void {
     if (!REASONING_SETTINGS.includes(chosen as GroupSetting)) return
     if (cfg.reasoningMode !== 'custom') {
-        const seeded = {} as Record<ReasoningGroup, GroupSetting>
-        for (const g of REASONING_GROUPS) seeded[g] = resolveReasoning(g, cfg)
-        cfg.reasoningLevels = seeded
+        // Freeze the table exactly as it runs today, then switch to custom, so
+        // opening one row cannot silently move the other six.
+        cfg.reasoningLevels = effectiveReasoning(cfg)
         cfg.reasoningMode = 'custom'
     }
     cfg.reasoningLevels = {...cfg.reasoningLevels, [group]: chosen as GroupSetting}
@@ -744,41 +760,76 @@ export function createSettingsPanel(
     )
 }
 
+/**
+ * Every settings row for this session, fixed and DISCOVERED, in menu order.
+ *
+ * One list of `ConfigItem`s — so a row's display, its write-back and its section
+ * are one object, the dispatch is a lookup by id, and the round-trip properties
+ * in `config-items.test.ts` cover the reasoning, tool and extension families
+ * that used to bypass the row type entirely.
+ *
+ * Fixed rows come before discovered ones within a section, which is the order
+ * the hand-written `extra` map produced.
+ */
+export function configRows(
+    installed: InstalledExtension[],
+    tools: readonly GuardableTool[] = []
+): ConfigItem[] {
+    // The discovered rows carry a section like every other row — the per-tool
+    // watchdog exemptions under `timeouts` (they are exemptions FROM that
+    // timeout), and the per-extension toggles under their own heading.
+    return [...ITEMS, ...reasoningItems(), ...toolItems(tools), ...extensionItems(installed)]
+}
+
+/** Render `rows` for the current config, grouped under their section headers. */
+export function renderRows(cfg: PiTaskConfig, rows: readonly ConfigItem[]): PanelItem[] {
+    const out: PanelItem[] = []
+    for (const {key, title} of SECTIONS) {
+        const inSection = rows
+            .filter(i => i.section === key)
+            .map(i => ({
+                id: i.id,
+                label: i.label,
+                description: i.description,
+                currentValue: i.format(cfg),
+                values: i.values ?? ['on', 'off'],
+                ...(i.headlessLabel === undefined ? {} : {headlessLabel: i.headlessLabel})
+            }))
+        // An empty section prints no header. `extensions` has no fixed rows at
+        // all, so with nothing installed the heading would otherwise sit alone.
+        if (inSection.length === 0) continue
+        if (out.length > 0) out.push(sectionGap(title))
+        out.push(sectionHeader(title), ...inSection)
+    }
+    return out
+}
+
 /** The full settings row list for the current config, in menu order. */
 export function panelItems(
     cfg: PiTaskConfig,
     installed: InstalledExtension[],
     tools: readonly GuardableTool[] = []
 ): PanelItem[] {
-    // The discovered rows belong to a section too — the per-tool watchdog
-    // exemptions under `timeouts` (they are exemptions FROM that timeout), and
-    // the per-extension toggles under their own heading.
-    const extra: Partial<Record<Section, PanelItem[]>> = {
-        reasoning: reasoningItems(cfg),
-        timeouts: toolItems(tools, cfg.commandTimeoutExemptTools),
-        extensions: extensionItems(installed, cfg.extensionWhitelist)
-    }
-    const out: PanelItem[] = []
-    for (const {key, title} of SECTIONS) {
-        const rows = [
-            ...ITEMS.filter(i => i.section === key).map(
-                ({id, label, description, values, format}) => ({
-                    id: id as string,
-                    label,
-                    description,
-                    currentValue: format(cfg),
-                    values: values ?? ['on', 'off']
-                })
-            ),
-            ...(extra[key] ?? [])
-        ]
-        // An empty section prints no header. `extensions` has no fixed rows at
-        // all, so with nothing installed the heading would otherwise sit alone.
-        if (rows.length === 0) continue
-        if (out.length > 0) out.push(sectionGap(title))
-        out.push(sectionHeader(title), ...rows)
-    }
-    return out
+    return renderRows(cfg, configRows(installed, tools))
+}
+
+/**
+ * Re-ask every row what it now displays, and write the answers back.
+ *
+ * A row's `currentValue` in the live list is a snapshot taken when the panel was
+ * built, and rows describe each other: cycling `reasoning` to `off` changes what
+ * all seven `think:` rows run at, and cycling one group row flips the mode,
+ * which changes the other six.
+ *
+ * This runs after ANY change, over EVERY row. Its predecessor,
+ * `refreshReasoningRows`, ran after any change too — but hard-coded the seven
+ * reasoning ids plus `reasoningMode` and touched none of the other ~30 rows, so
+ * the next cross-row dependency would have needed a fifth function. Re-reading a
+ * `format` costs nothing, which is why there is still no list of "changes that
+ * need a refresh" to keep correct.
+ */
+export function syncRows(cfg: PiTaskConfig, rows: readonly ConfigItem[], list: SettingsList): void {
+    for (const row of rows) list.updateValue(row.id, row.format(cfg))
 }
 
 async function handleTaskConfig(
@@ -825,47 +876,25 @@ async function handleTaskConfig(
         return
     }
 
+    // Built ONCE and shared by the renderer, the dispatch and the refresh, so
+    // all three necessarily agree about which rows exist.
+    const rows = configRows(installed, tools)
+
     await ctx.ui.custom<void>(
         (_tui, theme, _kb, done) =>
             createSettingsPanel(
-                panelItems(cfg, installed, tools),
+                renderRows(cfg, rows),
                 theme,
                 (id, newValue, list) => {
-                    // Header rows carry no `values`, so SettingsList never
-                    // cycles them and this can only be a real setting.
-                    if (id.startsWith(SECTION_ID_PREFIX)) return
-                    if (id.startsWith(EXT_ID_PREFIX)) {
-                        cfg.extensionWhitelist = applyExtensionToggle(
-                            cfg.extensionWhitelist,
-                            id.slice(EXT_ID_PREFIX.length),
-                            newValue === 'on'
-                        )
-                    } else if (id.startsWith(REASON_ID_PREFIX)) {
-                        applyReasoningLevel(
-                            cfg,
-                            id.slice(REASON_ID_PREFIX.length) as ReasoningGroup,
-                            newValue
-                        )
-                    } else if (id.startsWith(TOOL_ID_PREFIX)) {
-                        cfg.commandTimeoutExemptTools = applyToolToggle(
-                            cfg.commandTimeoutExemptTools,
-                            id.slice(TOOL_ID_PREFIX.length),
-                            newValue === 'on'
-                        )
-                    } else {
-                        // Every setting parses its own value. There is no generic
-                        // fallback: the ladder this replaces ended in one that
-                        // wrote `newValue === 'on'` into whatever field it was
-                        // handed, so a new enum setting silently became a boolean
-                        // until someone noticed.
-                        ITEMS.find(item => item.id === id)?.apply(cfg, newValue)
-                    }
-                    // The reasoning rows describe each other, so they are
-                    // re-read from the config after every change — including
-                    // changes to unrelated rows, which costs nothing and means
-                    // there is no list of "changes that need a refresh" to keep
-                    // correct.
-                    refreshReasoningRows(cfg, list)
+                    // Every row parses its own value. There is no generic
+                    // fallback and no prefix ladder: the ladder this replaces
+                    // ended in one that wrote `newValue === 'on'` into whatever
+                    // field it was handed, so a new enum setting silently became
+                    // a boolean until someone noticed. A header row carries no
+                    // `values`, so SettingsList never cycles it and it matches
+                    // no row here anyway.
+                    rows.find(row => row.id === id)?.apply(cfg, newValue)
+                    syncRows(cfg, rows, list)
                     saveConfig(cfg).catch(() => {})
                 },
                 () => done(undefined)

@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import type {AgentToolResult} from '@earendil-works/pi-agent-core'
 import {registerPiWorkerDocs, packageRootOf, type PiWorkerDocsInternals} from './pi-worker-docs.js'
 import {openCache} from './docs-cache.js'
+import {ResolveError} from './docs-resolve.js'
 import {fakeSpawnSimple, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {readTypeOnlyLog, TYPEONLY_LOG_ENV} from './typeonly-log.js'
 import {PROJECT_DOCS_BUDGET_ENV} from '../task/research-fanout-budget.js'
@@ -371,5 +372,42 @@ test('the budget counts ONLY project-source lookups — package docs are untouch
         cache.close()
         if (saved === undefined) delete process.env[PROJECT_DOCS_BUDGET_ENV]
         else process.env[PROJECT_DOCS_BUDGET_ENV] = saved
+    }
+})
+
+test('a docs ERROR still reports the auto-install provenance its siblings report', async () => {
+    // BUG FIX. `docsRaw` records `autoInstallPin` on three of its five error
+    // returns, and both the `no_chunks` and `ok` arms flatten it into details —
+    // the error arm did not. So a package that was auto-installed AT A DECLARED
+    // RANGE and then failed lost the `versionSource`/`declaredRange` that says
+    // which range was pulled: the provenance the last defect in this area was
+    // about, missing on the one path where it explains the failure.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-docs-pin-'))
+    fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({name: 'host', dependencies: {'never-installed-pkg': '^2.3.4'}})
+    )
+    try {
+        const result = await runTool(
+            {
+                openCache: () => openCache(':memory:'),
+                npmVersionLookup: async () => null,
+                resolvePackage: () => {
+                    throw new ResolveError('not_installed', 'not installed')
+                },
+                // The install attempt fails, so docsRaw returns its `install`-stage
+                // error — which carries the pin it read from package.json.
+                spawn: fakeSpawnSimple('', 1, 'E404 Not Found')
+            },
+            {module: 'never-installed-pkg', query: 'anything?'},
+            dir
+        )
+
+        const details = result.details as Record<string, unknown>
+        expect(details.resolveError).toBe('not_installed')
+        expect(details.declaredRange).toBe('^2.3.4')
+        expect(details.versionSource).toBeDefined()
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
     }
 })

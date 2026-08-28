@@ -35,17 +35,18 @@ describe('extensionItems', () => {
     ]
 
     test('one on/off toggle per installed extension, current state from the whitelist', () => {
-        const items = extensionItems(installed, ['/x/pi-lmstudio/index.ts'])
+        const cfg = {...getConfig(), extensionWhitelist: ['/x/pi-lmstudio/index.ts']}
+        const items = extensionItems(installed)
         expect(items).toHaveLength(2)
         expect(items[0]!.id).toBe('ext:/x/pi-lmstudio/index.ts')
         expect(items[0]!.label).toBe('ext: pi-lmstudio')
-        expect(items[0]!.currentValue).toBe('on')
-        expect(items[1]!.currentValue).toBe('off')
+        expect(items[0]!.format(cfg)).toBe('on')
+        expect(items[1]!.format(cfg)).toBe('off')
         expect(items[0]!.values).toEqual(['on', 'off'])
     })
 
     test('description carries provenance and the trust caveat', () => {
-        const items = extensionItems(installed, [])
+        const items = extensionItems(installed)
         expect(items[0]!.description).toContain('npm:pi-lmstudio (user)')
         expect(items[0]!.description).toContain('trust')
     })
@@ -134,20 +135,22 @@ describe('toolItems', () => {
     ]
 
     test('one toggle per live tool; ON is guarded, and the config stores the exemptions', () => {
-        const items = toolItems(tools, ['fable_loop'])
+        const cfg = {...getConfig(), commandTimeoutExemptTools: ['fable_loop']}
+        const items = toolItems(tools)
         expect(items).toHaveLength(2)
         expect(items[0]!.id).toBe('tool:bash')
         expect(items[0]!.label).toBe('watch: bash')
-        expect(items[0]!.currentValue).toBe('on')
-        expect(items[1]!.currentValue).toBe('off')
+        expect(items[0]!.format(cfg)).toBe('on')
+        expect(items[1]!.format(cfg)).toBe('off')
     })
 
     test('an empty exemption list guards everything — the default cannot unguard bash', () => {
-        expect(toolItems(tools, []).map(i => i.currentValue)).toEqual(['on', 'on'])
+        const cfg = {...getConfig(), commandTimeoutExemptTools: []}
+        expect(toolItems(tools).map(i => i.format(cfg))).toEqual(['on', 'on'])
     })
 
     test('description names the owner and states what turning it off costs', () => {
-        const items = toolItems(tools, [])
+        const items = toolItems(tools)
         expect(items[1]!.description).toContain('/x/fable/index.js')
         expect(items[1]!.description).toContain('never be caught')
     })

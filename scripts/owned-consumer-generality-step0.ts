@@ -267,7 +267,7 @@ async function child(cwd: string, prompt: string): Promise<string> {
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), TRIAL_TIMEOUT_MS)
     try {
-        const r = await runChild(cwd, '', prompt, abort.signal)
+        const r = await runChild({cwd, tools: '', prompt, signal: abort.signal})
         return r.text
     } finally {
         clearTimeout(timer)

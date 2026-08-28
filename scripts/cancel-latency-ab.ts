@@ -218,7 +218,7 @@ async function runTrial(seam: Seam): Promise<Trial> {
                 if (seam === 'impl') fire()
                 return Promise.resolve()
             },
-            spawnFn: spawn,
+            seams: {spawn},
             onStart: opts?.onStart
         })
         await runner.run()

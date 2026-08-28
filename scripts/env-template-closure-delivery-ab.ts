@@ -241,7 +241,7 @@ async function runTrial(arm: Arm, n: number): Promise<Trial> {
         failReason: first.reason,
         runChild: async (tools, prompt, signal) => {
             log(`=== child start (tools=${tools}) ===`)
-            const r = await runChild(dir, tools, prompt, signal ?? abort.signal, l => log(l))
+            const r = await runChild({cwd: dir, tools, prompt, signal: signal ?? abort.signal, onLine: l => log(l)})
             log(`=== child end exit=${r.exitCode} ===`)
             if (r.modelError) throw new Error(`model error: ${r.modelError}`)
             if (r.exitCode !== 0) throw new Error(`child exited ${r.exitCode}: ${r.stderr}`)

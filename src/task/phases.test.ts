@@ -12,8 +12,6 @@ import {
     postCommitPhase,
     refineExistingFilesBlock,
     searchConfigured,
-    emptySectionBody,
-    isBareNoneAnswer,
     PHASES,
     runPhaseRow,
     type PhaseConfig,
@@ -44,6 +42,7 @@ import {
 } from './research-fanout-budget.js'
 import type {SpawnFn} from '../shared/child-process.js'
 import type {RunWorkerResult} from '../workers/pi-worker-core.js'
+import {emptySectionBody, isBareNoneAnswer} from './research-worker.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {getConfig} from '../config/config.js'
 import {writeTaskFile} from './task-io.js'

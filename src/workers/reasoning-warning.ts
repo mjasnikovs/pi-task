@@ -21,29 +21,13 @@
  */
 
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
-import {getConfig, type PiTaskConfig} from '../config/config.js'
-import {REASONING_GROUPS, resolveReasoning} from '../config/reasoning.js'
+import {getConfig} from '../config/config.js'
+import {effectiveReasoning, type GroupSetting, type ReasoningGroup} from '../config/reasoning.js'
 import {reasoningMismatches, type ReasoningMismatch} from '../shared/reasoning-capability.js'
-import {probeChatTemplateCaps} from '../shared/model-endpoint.js'
+import {probeChatTemplateCaps, type ChatTemplateCaps} from '../shared/model-endpoint.js'
+import {registerSessionHint} from './session-hint.js'
 
 const WIDGET_KEY = 'pi-task-reasoning-warning'
-
-/** Every group's current setting, in the shape `reasoningMismatches` wants. */
-export type GroupSettings = Array<{
-    group: (typeof REASONING_GROUPS)[number]
-    setting: ReturnType<typeof resolveReasoning>
-}>
-
-/**
- * Read every group's effective setting from a config.
- *
- * Takes the config rather than calling `getConfig()` so the caller decides where
- * it comes from. A test that has to mutate the live singleton to drive this is a
- * test whose result depends on whatever the developer had saved before it ran.
- */
-export function settingsFrom(cfg: PiTaskConfig): GroupSettings {
-    return REASONING_GROUPS.map(group => ({group, setting: resolveReasoning(group, cfg)}))
-}
 
 /**
  * The warning line for a set of mismatches.
@@ -105,60 +89,36 @@ export function registerReasoningWarning(
      * `session_start` so a /task-config change since the last session counts.
      * Injected by tests, which must not depend on the developer's saved config.
      */
-    readSettings: () => GroupSettings = () => settingsFrom(getConfig())
+    readSettings: () => Readonly<Record<ReasoningGroup, GroupSetting>> = () =>
+        effectiveReasoning(getConfig()),
+    /**
+     * The server-side chat-template probe. Injected so the REFINE path — the
+     * only half of this hint that talks to a network — is drivable at all; with
+     * the real probe it is reachable only from a model entry carrying a
+     * `baseUrl`, which no test model has.
+     */
+    probe: (baseUrl: string) => Promise<ChatTemplateCaps | null> = probeChatTemplateCaps
 ): void {
-    pi.on('session_start', (_event, ctx) => {
-        // Terminal-only hint: needs an interactive TUI to render and to catch the
-        // keystroke that dismisses it.
-        if (ctx.mode !== 'tui') return
+    registerSessionHint(pi, WIDGET_KEY, ctx => {
         const model = ctx.model
         const mismatches = reasoningMismatches(model, readSettings())
-        if (mismatches.length === 0) return
+        if (mismatches.length === 0) return null
         const base = formatReasoningWarning(model?.name ?? model?.id ?? 'unknown', mismatches)
-        if (base === null) return
-
-        let unsubscribe: (() => void) | null = null
-        let cleared = false
-        const clear = (): void => {
-            cleared = true
-            try {
-                ctx.ui.setWidget(WIDGET_KEY, undefined)
-            } catch {
-                /* stale ctx after a session switch — nothing to clear */
-            }
-            unsubscribe?.()
-            unsubscribe = null
-        }
-        const render = (text: string): boolean => {
-            try {
-                ctx.ui.setWidget(WIDGET_KEY, [ctx.ui.theme.fg('warning', text)])
-                return true
-            } catch {
-                return false
-            }
-        }
-
-        if (!render(base)) return
-
-        unsubscribe = ctx.ui.onTerminalInput(() => {
-            clear()
-            return undefined
-        })
+        if (base === null) return null
 
         // Fire-and-forget: the server probe only ever REFINES the cause line, so
         // it must not delay the warning or be able to prevent it. A 2s budget and
         // a swallowed failure mean a non-llama.cpp backend costs nothing.
-        if (model?.baseUrl) {
-            void probeChatTemplateCaps(model.baseUrl)
-                .then(caps => {
-                    if (cleared || caps === null) return
-                    const extra = formatCapabilityConflict(
-                        caps.supportsReasoningEffort,
-                        model.reasoning
-                    )
-                    if (extra) render(base + extra)
-                })
-                .catch(() => {})
+        const baseUrl = model?.baseUrl
+        if (model === undefined || baseUrl === undefined || baseUrl === '') return {text: base}
+        const declares = model.reasoning
+        return {
+            text: base,
+            refine: probe(baseUrl).then(caps => {
+                if (caps === null) return null
+                const extra = formatCapabilityConflict(caps.supportsReasoningEffort, declares)
+                return extra === null ? null : base + extra
+            })
         }
     })
 }

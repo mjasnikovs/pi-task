@@ -213,12 +213,12 @@ async function main(): Promise<void> {
                 let spec = ''
                 let err = ''
                 try {
-                    const r = await runChild(
+                    const r = await runChild({
                         cwd,
-                        'read',
-                        COMPOSE_PROMPT(fx.refined, fx.research, fx.qa, null, blocks),
-                        abort.signal
-                    )
+                        tools: 'read',
+                        prompt: COMPOSE_PROMPT(fx.refined, fx.research, fx.qa, null, blocks),
+                        signal: abort.signal
+                    })
                     spec = stripSpecPreamble(r.text)
                     if (r.exitCode !== 0) err = `exit ${r.exitCode}`
                 } catch (e) {

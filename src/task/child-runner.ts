@@ -27,7 +27,7 @@ import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
 import {getConfig} from '../config/config.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
-import {reasoningGroupForChild} from './reasoning-groups.js'
+import {reasoningGroupForChild} from '../config/reasoning.js'
 import type {DebugLine} from './debug-log.js'
 // Type-only: `PhaseDeps` declares the research/auto-answer seams, and a seam is
 // declared by the shape of the thing it stands in for. Erased at compile time,
@@ -230,40 +230,62 @@ export const USER_CANCELLED = '__user_cancelled__'
  * context-usage tracking. This is the typed convenience wrapper used by
  * phase-level code.
  */
-export async function runChild(
-    cwd: string,
-    tools: string,
-    prompt: string,
-    signal: AbortSignal,
-    onLine?: (line: string) => void,
-    onContextUsage?: (snapshot: ContextSnapshot) => void,
-    onToolCall?: (call: ToolCall) => LoopHit | null,
-    spawnFn?: SpawnFn,
+/**
+ * One child-pi invocation, as a value.
+ *
+ * WHY A RECORD. This was thirteen ordered positionals, and the thirteenth
+ * carried its own DEBT note saying so. Two production callers reached it, and
+ * they had already drifted: the degrade attempt wrote three bare `undefined`s to
+ * reach the later slots and passed the RAW signal, so it escaped the wall clock
+ * its own strike siblings run under — the same defect class this file already
+ * recorded for `runAutoInstall` and for the deleted `runPhaseWithLoopGuard`.
+ * Adjacent optionals of the same type can no longer swap without a type error.
+ */
+export interface ChildRun {
+    cwd: string
+    /** `''` means `--no-tools`. See childArgs. */
+    tools: string
+    prompt: string
+    signal: AbortSignal
+    onLine?: (line: string) => void
+    onContextUsage?: (snapshot: ContextSnapshot) => void
+    onToolCall?: (call: ToolCall) => LoopHit | null
+    spawn?: SpawnFn
     /** Internal `-e` extension paths for in-run guards (see childArgs). */
-    extensions?: readonly string[],
+    extensions?: readonly string[]
     /**
      * Every finished tool call's result text. The StallDetector's churn rule
      * needs the size of what actually entered the child's context, which the
      * CALL alone does not carry (task/stall-detector.ts).
      */
-    onToolResult?: (text: string, isError: boolean) => void,
+    onToolResult?: (text: string, isError: boolean) => void
     /**
      * The child's context window in tokens. Nothing in pi's event stream reports
      * one (issue #16), so the parent hands its own down — children carry no `-m`
      * and resolve the same default model. 0 / omitted = unknown, as before.
      */
-    contextWindow?: number,
+    contextWindow?: number
     /**
      * The resolved `['--thinking', level]` fragment for this child's reasoning
      * group, or `[]`/omitted to inherit the session default as before.
-     *
-     * A 13th trailing positional is not pretty. It is how `contextWindow` (the
-     * 12th) was added, and an options-bag refactor of this signature is a
-     * separate change from wiring one flag — doing both at once would put a
-     * behaviour change inside a mechanical one. DEBT: convert to an options bag.
      */
     thinking?: readonly string[]
-): Promise<PhaseRunResult> {
+}
+
+export async function runChild({
+    cwd,
+    tools,
+    prompt,
+    signal,
+    onLine,
+    onContextUsage,
+    onToolCall,
+    spawn: spawnFn,
+    extensions,
+    onToolResult,
+    contextWindow,
+    thinking
+}: ChildRun): Promise<PhaseRunResult> {
     const invocation = getPiInvocation(childArgs(tools, extensions, thinking), prompt)
     let loopHit: LoopHit | undefined
 
@@ -326,7 +348,7 @@ export async function runChild(
 
 // ─── Phase-level wrappers ────────────────────────────────────────────────────
 
-interface PhaseDeps {
+export interface PhaseDeps {
     cwd: string
     taskId: string
     signal: AbortSignal
@@ -447,7 +469,30 @@ interface PhaseDeps {
     searchFn?: (input: SearchCoreInput) => Promise<SearchCoreResult>
 }
 
-export type {PhaseDeps}
+/**
+ * The subset of `PhaseDeps` a CALLER may supply — every injectable seam, derived
+ * by naming what the runner owns instead of by listing what it does not.
+ *
+ * `TaskRunnerOptions` used to declare `spawnFn`, `runChild`, `runWorker` and a
+ * seven-name `Pick` called `lookups` separately; `RunSingleTaskOptions` re-picked
+ * all four, `runSingleTask` re-forwarded each by name, and the constructor spread
+ * them back together. Four coordinated edits, none of which failed to compile if
+ * you skipped one — the exact indictment this codebase already recorded against
+ * `ConfigItem`. Four seams (`timeoutMs`, `sleepFor`, `childExtensions`,
+ * `logDebug`) had in fact been left behind, so a runner-driven test of the
+ * connection-error rung really slept and the debug trail could not be asserted at
+ * all. Derived by `Omit`, a NEW seam field joins this with no second edit.
+ */
+export type PhaseSeams = Omit<
+    PhaseDeps,
+    | 'cwd'
+    | 'taskId'
+    | 'signal'
+    | 'onChildOutput'
+    | 'onContextUsage'
+    | 'contextWindow'
+    | 'recordSubStep'
+>
 
 // ─── Shared error-triage ladder ──────────────────────────────────────────────
 
@@ -564,9 +609,34 @@ async function triageChildResult(
  * makes the table complete is `reasoning-groups.test.ts`, which fails the BUILD —
  * where someone can actually fix it.
  */
-function thinkingForChild(name: string): string[] {
+export function thinkingForChild(name: string): string[] {
     const group = reasoningGroupForChild(name)
     return group ? groupThinkingArgs(group) : []
+}
+
+/**
+ * What a PHASE child's invocation carries, said once.
+ *
+ * Both callers of `runChild` in this file are phase children — the strike
+ * attempts and the no-tools degrade that rescues them — and everything they
+ * disagree about is in `over`. Anything not there is the same by construction,
+ * which is what the degrade's own comment ("the degrade changes the TOOLS, not
+ * the role") claimed while three bare `undefined`s quietly made it false.
+ */
+function phaseChildRun(
+    deps: PhaseDeps,
+    over: Pick<ChildRun, 'tools' | 'prompt' | 'signal' | 'thinking'>
+        & Partial<Pick<ChildRun, 'onContextUsage' | 'onToolCall' | 'onToolResult'>>
+): ChildRun {
+    return {
+        cwd: deps.cwd,
+        onLine: deps.onChildOutput,
+        onContextUsage: deps.onContextUsage,
+        spawn: deps.spawn,
+        extensions: deps.childExtensions,
+        contextWindow: deps.contextWindow,
+        ...over
+    }
 }
 
 export async function runPhaseChild(
@@ -601,24 +671,21 @@ export async function runPhaseChild(
         let r: PhaseRunResult
         try {
             r = await runChild(
-                deps.cwd,
-                tools,
-                prependHint(hint, prompt),
-                clock.signal,
-                deps.onChildOutput,
-                snapshot => {
-                    // Real window or nothing: noteContext ignores 0, and until
-                    // deps.contextWindow existed 0 was all it ever saw, which
-                    // left the churn rule permanently disarmed (issue #16).
-                    stall.noteContext(snapshot.contextWindow)
-                    deps.onContextUsage?.(snapshot)
-                },
-                call => detector.record(call) ?? stall.record(call),
-                deps.spawn,
-                deps.childExtensions,
-                (text, isError) => stall.noteResult(text, isError),
-                deps.contextWindow,
-                thinking
+                phaseChildRun(deps, {
+                    tools,
+                    prompt: prependHint(hint, prompt),
+                    signal: clock.signal,
+                    thinking,
+                    onContextUsage: snapshot => {
+                        // Real window or nothing: noteContext ignores 0, and until
+                        // deps.contextWindow existed 0 was all it ever saw, which
+                        // left the churn rule permanently disarmed (issue #16).
+                        stall.noteContext(snapshot.contextWindow)
+                        deps.onContextUsage?.(snapshot)
+                    },
+                    onToolCall: call => detector.record(call) ?? stall.record(call),
+                    onToolResult: (text, isError) => stall.noteResult(text, isError)
+                })
             )
         } finally {
             clock.cleanup()
@@ -781,24 +848,37 @@ async function runDegradedFinalAttempt(
     loopHistory: LoopHit[]
 ): Promise<string> {
     deps.logDebug?.(`${name}: loop budget exhausted — degrading to a no-tools final attempt`)
-    const r = await runChild(
-        deps.cwd,
-        '', // --no-tools: the model cannot read/grep/list, only answer
-        prependHint(formatDegradeHint(hit), prompt),
-        deps.signal,
-        deps.onChildOutput,
-        deps.onContextUsage,
-        undefined,
-        deps.spawn,
-        undefined,
-        undefined,
-        deps.contextWindow,
-        // Same group as the attempts that led here. The degrade changes the
-        // TOOLS, not the role — running it at a different thinking level would
-        // make the fallback a different experiment from the thing it rescues.
-        thinkingForChild(name)
-    )
+    // BEHAVIOUR DELTA. This attempt now runs under the same wall clock as the
+    // strikes that led here. It used to pass `deps.signal` raw — one of the
+    // three drifts that came of reaching past bare `undefined`s to the later
+    // positionals — so the one attempt made after a loop budget was spent was
+    // also the one attempt that could hang forever.
+    const clock = phaseTimeout(deps.signal, deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS)
+    let r: PhaseRunResult
+    try {
+        r = await runChild(
+            phaseChildRun(deps, {
+                tools: '', // --no-tools: the model cannot read/grep/list, only answer
+                prompt: prependHint(formatDegradeHint(hit), prompt),
+                signal: clock.signal,
+                // Same group as the attempts that led here. The degrade changes the
+                // TOOLS, not the role — running it at a different thinking level would
+                // make the fallback a different experiment from the thing it rescues.
+                thinking: thinkingForChild(name)
+            })
+        )
+    } finally {
+        clock.cleanup()
+    }
     if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
+        // A wall-clock kill is NOT a loop. The clock above is new here, and
+        // without this check a degrade that outran its budget was reported as
+        // "loop budget exhausted", carrying a loop history that did not cause it
+        // — the same mislabel class the worker-kill roster exists to prevent, on
+        // the very path that clock was added to guard.
+        if (clock.timedOut()) {
+            throw new PhaseTimeoutError(name, deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS, 1)
+        }
         throw new LoopExhaustedError(name, loopHistory)
     }
     return r.text

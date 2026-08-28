@@ -800,17 +800,78 @@ export function sanitizeReasoningMode(value: unknown): ReasoningMode {
 }
 
 /**
- * The group each research worker reads its level from, keyed by the section
- * heading its output is assembled under (task/phases.ts `workerSpecs`).
+ * Child NAME → reasoning group, for every child that goes through
+ * `runPhaseChild` / `runPlanningChild`.
  *
- * Exported so the wiring is one table rather than four string literals spread
- * through the phase code, and so a test can assert every value is a real group.
+ * WHY KEYED ON THE NAME
+ * ---------------------
+ * The name is the only identifier in scope at all three spawn paths (phases,
+ * /task-auto planning, /task-plan), it is what the loader and the debug trail
+ * already print, and it is the one thing a reader can check against the phase
+ * list without following the call graph. Threading a group parameter through
+ * `PhaseDeps` / `AutoDeps` instead would touch both orchestrators' dep bags to
+ * express something the call site already says out loud.
+ *
+ * AN UNMAPPED NAME IS A BUILD FAILURE, not a silent `inherit`.
+ * `reasoning-groups.test.ts` scans every literal child name in src/ and fails if
+ * it is missing here. A defaulting lookup would let a phase added next year opt
+ * itself out of a measured setting without anyone deciding to — which is exactly
+ * how `/no_think` ended up applied to eight prompts and read by none of them.
+ *
+ * The gate and extraction groups are NOT here: those children reach the model
+ * through `runWorker` / `focusedChildArgs` at a site with no name in scope, so
+ * the group is passed directly. The four RESEARCH workers do have a name — their
+ * `spec.label` — and so they are here.
  */
-export const RESEARCH_WORKER_GROUPS: Readonly<Record<string, ReasoningGroup>> = {
-    FILES: 'research:files',
-    APIS: 'research:apis',
-    CONTEXT: 'research:context',
-    TOOLING: 'research:tooling'
+export const REASONING_GROUP_BY_CHILD: Readonly<Record<string, ReasoningGroup>> = {
+    // ── phase: task/phases.ts + task/title-label.ts ──────────────────────────
+    refine: 'phase',
+    'verify-tooling': 'phase',
+    'grill-auto': 'phase',
+    'grill-gen': 'phase',
+    compose: 'phase',
+    critique: 'phase',
+    'critique-triage': 'phase',
+    'compress-label': 'phase',
+
+    // ── planning: task/auto-orchestrator.ts ──────────────────────────────────
+    'clarify-triage': 'planning',
+    'auto-clarify': 'planning',
+    'auto-decompose': 'planning',
+    'requirement-extract': 'planning',
+    'decompose-coverage': 'planning',
+    'coverage-map': 'planning',
+    'contract-extract': 'planning',
+    'launch-extract': 'planning',
+
+    // ── plan: task/plan-orchestrator.ts ──────────────────────────────────────
+    'plan-question': 'plan',
+    'plan-answer': 'plan',
+
+    // ── research: task/phases.ts `workerSpecs`, keyed on the spec's LABEL ─────
+    // These were a second table (`RESEARCH_WORKER_GROUPS`) keyed on the section
+    // heading, with a silent `?? 'research'` fallback and a guard that sliced
+    // phases.ts source between two string offsets from the config directory.
+    // The label is the same name the loader, the debug trail and the A/B ledgers
+    // already print, so they belong here with every other named child.
+    'worker:files': 'research:files',
+    'worker:apis': 'research:apis',
+    'worker:context': 'research:context',
+    'worker:tooling': 'research:tooling'
+}
+
+/**
+ * The group a named child belongs to.
+ *
+ * Returns `undefined` for a name the table does not know, and the CALLER decides
+ * what that means. `runPhaseChild` treats it as `inherit` — a child that reaches
+ * the model with today's argv is always safe — while the test treats it as a
+ * failure. That split is deliberate: the guard belongs at build time, where
+ * someone can fix it, not at run time, where it would abort a user's task over a
+ * missing table row.
+ */
+export function reasoningGroupForChild(name: string): ReasoningGroup | undefined {
+    return REASONING_GROUP_BY_CHILD[name]
 }
 
 /**
@@ -887,6 +948,24 @@ export function resolveReasoning(group: ReasoningGroup, cfg: PiTaskConfig): Grou
         default:
             return DEFAULT_REASONING_TABLE[group]
     }
+}
+
+/**
+ * The WHOLE table, as this config will actually run it.
+ *
+ * This is the question every caller has — the settings menu when it repaints,
+ * the mismatch warning when it scans, the custom-mode seeder when it freezes the
+ * table — and each of them used to write the same loop over `resolveReasoning`.
+ * A per-key accessor with no whole-table companion is also how a THIRD shape got
+ * invented (`Array<{group, setting}>`) and leaked into `reasoningMismatches`.
+ *
+ * `resolveReasoning` stays: one group is still a fair question, and it is the
+ * only place the four modes are interpreted.
+ */
+export function effectiveReasoning(cfg: PiTaskConfig): Record<ReasoningGroup, GroupSetting> {
+    const out = {} as Record<ReasoningGroup, GroupSetting>
+    for (const group of REASONING_GROUPS) out[group] = resolveReasoning(group, cfg)
+    return out
 }
 
 /**

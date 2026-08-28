@@ -14,11 +14,10 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {
     formatCapabilityConflict,
     formatReasoningWarning,
-    registerReasoningWarning,
-    settingsFrom
+    registerReasoningWarning
 } from './reasoning-warning.js'
 import {DEFAULT_CONFIG, type PiTaskConfig} from '../config/config.js'
-import {REASONING_GROUPS} from '../config/reasoning.js'
+import {effectiveReasoning, REASONING_GROUPS} from '../config/reasoning.js'
 
 type SessionStart = (event: unknown, ctx: unknown) => void
 
@@ -36,7 +35,7 @@ function sessionStartHandler(cfg: PiTaskConfig): SessionStart {
             if (event === 'session_start') handler = h
         }
     }
-    registerReasoningWarning(pi as unknown as ExtensionAPI, () => settingsFrom(cfg))
+    registerReasoningWarning(pi as unknown as ExtensionAPI, () => effectiveReasoning(cfg))
     return handler!
 }
 
@@ -225,5 +224,85 @@ describe('formatCapabilityConflict', () => {
 
     test('names the reverse — a template that cannot do levels', () => {
         expect(formatCapabilityConflict(false, true)).toContain('on/off')
+    })
+})
+
+describe('the server probe that refines the cause line', () => {
+    /**
+     * This whole describe was unreachable before the hint became an adapter over
+     * `session-hint`: the probe was called inline on `model.baseUrl`, and no test
+     * model here carries one. `formatCapabilityConflict` had four pure tests
+     * while the branch that USES it had none.
+     */
+    const SERVED_MODEL = {...DEAD_MODEL, baseUrl: 'http://127.0.0.1:8080'}
+
+    /** The handler, with both seams supplied. */
+    function servedHandler(
+        probe: (baseUrl: string) => Promise<{supportsReasoningEffort: boolean} | null>
+    ): SessionStart {
+        let handler: SessionStart | undefined
+        const pi = {
+            on: (event: string, h: SessionStart) => {
+                if (event === 'session_start') handler = h
+            }
+        }
+        registerReasoningWarning(
+            pi as unknown as ExtensionAPI,
+            () => effectiveReasoning(DEFAULT_CONFIG),
+            probe as never
+        )
+        return handler!
+    }
+
+    const settle = async (): Promise<void> => {
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+    }
+
+    test('a server that DOES support reasoning names models.json as the culprit', async () => {
+        const ui = fakeCtx('tui', SERVED_MODEL)
+
+        servedHandler(async () => ({supportsReasoningEffort: true}))({}, ui.ctx)
+        await settle()
+
+        expect(ui.widgets).toHaveLength(2)
+        expect(String(ui.widgets[1].state)).toContain('reasoning:false')
+        expect(String(ui.widgets[1].state)).toContain('/login llama.cpp')
+    })
+
+    test('no probe runs when the model carries no baseUrl', async () => {
+        const ui = fakeCtx('tui', DEAD_MODEL)
+        let probed = 0
+
+        servedHandler(async () => {
+            probed += 1
+            return {supportsReasoningEffort: true}
+        })({}, ui.ctx)
+        await settle()
+
+        expect(probed).toBe(0)
+        expect(ui.widgets).toHaveLength(1)
+    })
+
+    test('a probe that fails leaves the warning exactly as painted', async () => {
+        const ui = fakeCtx('tui', SERVED_MODEL)
+
+        servedHandler(async () => {
+            throw new Error('connection refused')
+        })({}, ui.ctx)
+        await settle()
+
+        expect(ui.widgets).toHaveLength(1)
+        expect(String(ui.widgets[0].state)).toContain('will not run the reasoning levels')
+    })
+
+    test('a probe that agrees with models.json adds nothing', async () => {
+        const ui = fakeCtx('tui', SERVED_MODEL)
+
+        servedHandler(async () => ({supportsReasoningEffort: false}))({}, ui.ctx)
+        await settle()
+
+        expect(ui.widgets).toHaveLength(1)
     })
 })
