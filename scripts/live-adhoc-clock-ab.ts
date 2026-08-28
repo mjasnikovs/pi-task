@@ -37,6 +37,17 @@
  * 0.38.26 every kill cause printed "Worker aborted.", which is why this base
  * rate could not be taken from production in the first place.
  *
+ * ⚠ THE PROMPTS ARE RECORDED; THE DURATIONS ARE NOT. 44 of the 51 recorded calls
+ * were made by `Qwen3.6-27B-UD-Q4_K_XL`, and this machine now serves
+ * `Qwen3.8-27B-NVFP4-MTP-VERY-HIGH`. So the recorded elapsed times — from which
+ * "4 of 37 single-call dispatches exceeded 240s" was derived — are a PRIOR, not a
+ * baseline, and this run's rate may NOT be compared with them: that would be
+ * comparing two models. What this run measures is the only thing a ship decision
+ * needs: on the model actually being served, how often does a real `pi-worker`
+ * prompt need more than the 240s its profile allows. `recordedElapsedS` rides in
+ * the fixture for context and is deliberately not used in any verdict, and the
+ * ledger fingerprint carries the model identity so a resume cannot mix two.
+ *
  * Run:
  *   PI_BIN=<pi> bun run scripts/live-adhoc-clock-ab.ts [--limit N] [--repo gofer]
  */

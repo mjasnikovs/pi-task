@@ -183,6 +183,22 @@ async function main(): Promise<void> {
         process.exit(2)
     }
     console.log(`pairs:    ${rows.length} prompts x 2 arms  (STEP 1 found these over 240s)`)
+    // POWER, BEFORE THE GPU. Exact two-sided McNemar with every discordant pair
+    // falling one way gives p = 2 * 0.5^n, so n = 5 lands at 0.0625 and NO
+    // delivery result can reach 0.05 below six. Running anyway would buy a
+    // guaranteed ABSTAIN at full price; say so here instead of after.
+    const MIN_DISCORDANT = 6
+    if (rows.length < MIN_DISCORDANT) {
+        console.log(
+            `\n  ⚠ UNDERPOWERED for the delivery axis: ${rows.length} candidate pair(s), and even`
+                + ` if EVERY one fell the same way the best reachable p is`
+                + ` ${mcnemarExact(0, rows.length).toFixed(4)}.`
+        )
+        console.log(
+            '  The fidelity invariant is still worth measuring — a REJECT does not need the'
+                + '\n  delivery axis — so this continues, but a SHIP verdict is out of reach.'
+        )
+    }
     console.log(`ledger:   ${ledgerPath()}\n`)
 
     const trees = new Map<string, ReadonlySet<string>>()
