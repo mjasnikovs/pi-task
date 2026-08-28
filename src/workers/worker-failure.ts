@@ -144,6 +144,73 @@ export const FAILURE_RULES: ReadonlyArray<{
  * which is not the same as "it answered": the text may still be empty, and that
  * judgement belongs to the caller.
  */
+/**
+ * What a worker failure SAYS to the caller that asked for the work.
+ *
+ * WHY IT EXISTS. The ladder above already names the cause exactly, with its
+ * detail — which tool hung, how long the stream was idle, which exit code. None
+ * of that reached a human. `formatChildFailure` was handed a `ChildOutcome`
+ * (`{aborted, exitCode, stderr}`) and answered `if (aborted) return
+ * abortedMessage`, so a 240s wall-clock kill, a hung `bash`, a dead model
+ * backend, a loop kill and a user pressing ESC all printed the SAME four words.
+ * The discriminating value was computed a line later by `childFailureReason` and
+ * put in the debug trail, which a user reading a tool result never sees.
+ *
+ * That is not only unhelpful; it is why the `pi-worker` tool's 240s cap has no
+ * base rate. 53 recorded invocations across eight repos carry 14 failures, and
+ * NOTHING in the transcript says which of them ran out of time — the honest
+ * bound recoverable from timestamps alone is "somewhere between 0 and 8".
+ *
+ * A switch, not a table: `WorkerFailure` is a discriminated union carrying a
+ * different payload per arm, so the exhaustiveness check is the compiler's and a
+ * ninth arm cannot be added without a message.
+ */
+export function describeWorkerFailure(
+    f: WorkerFailure,
+    /** What a genuine user cancel says. The caller's wording — only this arm is theirs. */
+    abortedMessage: string,
+    /** stderr for the `exit` arm; ignored by every other. */
+    stderr = ''
+): string {
+    switch (f.kind) {
+        case 'stalled':
+            return (
+                'Worker stopped: it produced no output and the model backend was '
+                + 'unreachable. This is an infrastructure failure, not a bad question — '
+                + 'retrying the same request once the backend is back is reasonable.'
+            )
+        case 'command-timeout':
+            return (
+                `Worker killed: \`${f.toolName}\` ran past its `
+                + `${Math.round(f.timeoutMs / 1000)}s per-command limit and was still `
+                + 'running. A command that does not terminate on its own (a dev server, a '
+                + 'watcher) has to be bounded by the command itself.'
+            )
+        case 'stream-stall':
+            return (
+                `Worker killed: no output for ${Math.round(f.idleMs / 1000)}s while the `
+                + 'model backend was still reachable — a hung stream, not a slow one.'
+            )
+        case 'worker-timeout':
+            return (
+                'Worker ran out of time before answering, on every attempt, and returned '
+                + 'nothing. The question was too broad for one worker: narrow it to one '
+                + 'directory or one question, or split it across several workers.'
+            )
+        case 'loop':
+            return (
+                'Worker killed: it repeated the same tool call without making progress. '
+                + 'Nothing it had already read was answering the question as asked.'
+            )
+        case 'leaked-tool-call':
+            return 'Worker produced a malformed tool call instead of an answer.'
+        case 'aborted':
+            return abortedMessage
+        case 'exit':
+            return `Worker exited ${f.code}.\n${stderr.trim().slice(-500) || '(no stderr)'}`
+    }
+}
+
 export function classifyWorkerFailure(r: WorkerFailureInput): WorkerFailure | undefined {
     for (const rule of FAILURE_RULES) {
         const hit = rule.match(r)

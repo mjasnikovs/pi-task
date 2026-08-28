@@ -43,6 +43,71 @@ test('formatChildFailure caps the stderr tail at 500 chars', () => {
     expect(msg.length).toBe('Worker exited 1.\n'.length + 500)
 })
 
+/**
+ * THE DEFECT THESE PIN.
+ *
+ * `formatChildFailure` used to answer `if (aborted) return abortedMessage`, and
+ * every kill path also sets `aborted` — so a 240s wall-clock kill, a hung
+ * command, a dead model backend and a user pressing ESC all printed the same
+ * four words. Measured cost: across 53 recorded `pi-worker` invocations in eight
+ * repos, 14 failed and NOTHING in the transcript said which of them ran out of
+ * time. The bound recoverable from timestamps alone was "between 0 and 8".
+ *
+ * The cause was never missing — `classifyWorkerFailure` computed it exactly, one
+ * line later, into a debug trail a user never reads.
+ */
+test('a wall-clock kill says it ran out of time, not "aborted"', () => {
+    // A real timed-out RunWorkerResult: the kill path sets `aborted` TOO, which is
+    // precisely why the old `if (aborted)` first-line answer swallowed it.
+    const msg = formatChildFailure(
+        {aborted: true, exitCode: 143, stderr: '', timedOut: true},
+        'Worker aborted.'
+    )!
+    expect(msg).not.toBe('Worker aborted.')
+    expect(msg).toContain('ran out of time')
+})
+
+test('a user cancel still says exactly what the caller asked it to say', () => {
+    expect(formatChildFailure({aborted: true, exitCode: 143, stderr: ''}, 'Worker aborted.')).toBe(
+        'Worker aborted.'
+    )
+})
+
+test('each kill cause gets its OWN message, and names its detail', () => {
+    const at = (over: Record<string, unknown>): string =>
+        formatChildFailure({aborted: true, exitCode: 143, stderr: '', ...over}, 'Worker aborted.')!
+    const hung = at({commandTimedOut: {toolName: 'bash', timeoutMs: 900_000}})
+    expect(hung).toContain('bash')
+    expect(hung).toContain('900s')
+    expect(at({streamStalled: {idleMs: 600_000}})).toContain('600s')
+    expect(at({stalled: true})).toContain('unreachable')
+    expect(at({loopHit: {call: {name: 'read'}}})).toContain('repeated the same tool call')
+    expect(at({leakedToolCall: 'junk'})).toContain('malformed')
+    // All distinct — a message per cause is the whole point.
+    const all = [
+        at({timedOut: true}),
+        at({commandTimedOut: {toolName: 'bash', timeoutMs: 1000}}),
+        at({streamStalled: {idleMs: 1000}}),
+        at({stalled: true}),
+        at({loopHit: {}}),
+        at({leakedToolCall: 'j'}),
+        at({})
+    ]
+    expect(new Set(all).size).toBe(all.length)
+})
+
+test('a caller with only a ChildOutcome is unchanged — no kill flags, same words', () => {
+    // focused-extractor passes exactly this shape. The ladder falls through to
+    // aborted/exit, so its messages must be byte-identical to the old function's.
+    expect(formatChildFailure({aborted: true, exitCode: 0, stderr: 'x'}, 'Docs aborted.')).toBe(
+        'Docs aborted.'
+    )
+    expect(formatChildFailure({aborted: false, exitCode: 3, stderr: ' bad '}, 'x')).toBe(
+        'Worker exited 3.\nbad'
+    )
+    expect(formatChildFailure({aborted: false, exitCode: 0, stderr: ''}, 'x')).toBeNull()
+})
+
 test('formatChildFailure falls back to (no stderr) when empty', () => {
     expect(formatChildFailure({aborted: false, exitCode: 1, stderr: '   '}, 'aborted')).toBe(
         'Worker exited 1.\n(no stderr)'

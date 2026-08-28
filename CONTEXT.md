@@ -744,6 +744,26 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > reports the resolved policy out of the real `runWorker` so "the profile resolved right" and
     > "the body then read it right" are separately observable. Four wrong wirings were introduced and
     > each turned a test red.
+- **Worker failure message** — what a kill cause SAYS to whoever asked for the work.
+  `describeWorkerFailure` (`workers/worker-failure.ts`) is a compiler-exhaustive switch over the
+  `WorkerFailure` union, and `formatChildFailure` (`workers/shared.ts`) ASKS it instead of
+  re-deriving.
+    > `formatChildFailure` answered `if (aborted) return abortedMessage`, and every kill path also
+    > sets `aborted` — so a 240s wall-clock kill, a hung `bash`, a dead model backend, a loop kill
+    > and a user pressing ESC all printed the same four words. It was handed a `ChildOutcome`
+    > (`{aborted, exitCode, stderr}`) which cannot even REPRESENT the difference, while
+    > `childFailureReason` — one line later at the only caller holding the richer result — computed
+    > the cause exactly and put it in a debug trail no user reads. Same shape as the bug this
+    > module's own header records, one layer out: a second author of a taxonomy the module exists
+    > to own. **The cost was measured, not argued**: across 53 recorded `pi-worker` invocations in
+    > eight repos, 14 failed and nothing in the transcript said which of them ran out of time — the
+    > bound recoverable from timestamps alone was "between 0 and 8", so the `adhoc` profile's FIXED
+    > 240s cap has no production base rate and could not have one. A switch rather than a table
+    > because `WorkerFailure` carries a different payload per arm; a ninth arm fails to compile
+    > until it has a message. A caller holding only a `ChildOutcome` (`focused-extractor`) is
+    > unchanged: with no kill flags the ladder falls through to `aborted`/`exit`, which
+    > `shared.test.ts` pins byte-for-byte alongside the two tests that fail on the before-tree.
+
 - **Kill-cause ladder (one author, four consumers)** — `classifyWorkerFailure`
   (`workers/worker-failure.ts`) is the ONLY statement of kill-cause precedence, and `runWorker`'s
   `finalAttemptFailed` asks it rather than restating it.
