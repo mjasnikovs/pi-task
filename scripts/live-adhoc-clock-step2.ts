@@ -45,6 +45,7 @@ import * as path from 'node:path'
 import {requirePreconditions, llamaModelIdentity} from './ab-preflight.js'
 import {runWorker} from '../src/workers/pi-worker-core.js'
 import {groupThinkingArgs} from '../src/config/reasoning-args.js'
+import {getConfig} from '../src/config/config.js'
 import {workerPolicy, type WorkerGuardOverride} from '../src/workers/worker-profiles.js'
 import {delivered, mcnemarExact, scorePaths, treeEntries} from './adhoc-clock-score.js'
 
@@ -63,8 +64,20 @@ type Arm = 'baseline' | 'treatment'
  */
 const ARMS: Record<Arm, WorkerGuardOverride | undefined> = {
     baseline: undefined,
+    // NO WALL CLOCK, plus the user's own `stuck reply retry` — the gate profile's
+    // shape minus the command watchdog. NOT the research profile's progress
+    // deadline, which an earlier draft of this file tested: that one still keeps
+    // a 240s number and adds a 20-minute one, so it needs a NEW setting for a
+    // bound the user cannot see. `streamInactivityMs` already means exactly the
+    // right thing — "time since the LAST stream event of ANY kind… NOT
+    // wall-clock… one token every 30s is a working local model and must never be
+    // killed" — and it is already on the /task-config screen.
+    //
+    // The arm has to BE the shipping change. Measuring the progress deadline and
+    // then shipping this would be an A/B for a lever nobody wired.
     treatment: {
-        'worker-timeout': {timeoutMs: ADHOC_CAP_MS, progressCeilingMs: 1_200_000, fanout: null}
+        'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
+        'stream-stall': getConfig().streamInactivityMs
     }
 }
 
@@ -176,6 +189,7 @@ async function main(): Promise<void> {
         corpora: [path.join(CORPUS_ROOT, 'corpus')]
     })
     const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}\nthinking=${groupThinkingArgs('research').join(' ')}`
+        + `\ntreatment=${JSON.stringify(ARMS.treatment)}`
 
     // The baseline arm must BE the shipped profile, not a copy of it.
     const shipped = JSON.stringify(workerPolicy('adhoc').guards['worker-timeout'])

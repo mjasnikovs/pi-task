@@ -10,6 +10,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 import {Text} from '@earendil-works/pi-tui'
 import {Type} from '@sinclair/typebox'
+import {getConfig} from '../config/config.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
 import {runWorker} from './pi-worker-core.js'
 import {
@@ -64,12 +65,12 @@ export function registerPiWorker(pi: ExtensionAPI): void {
                 prompt: params.prompt,
                 cwd: ctx.cwd,
                 signal,
-                // `adhoc` is every guard at its default — which is what this call
-                // site already got by naming none of them. Named now so it is a
-                // decision, and so the one asymmetry it carries (a FIXED 240s cap
-                // where a research worker gets 240s without progress) is written
-                // down. See the `adhoc` row in workers/worker-profiles.ts.
                 profile: 'adhoc',
+                // The user's own `stuck reply retry` is what bounds this worker
+                // now — it kills on SILENCE, never on slowness. It is an INPUT and
+                // not policy for the same reason the gate's two ceilings are: the
+                // number is the user's, the decision to arm it is the profile's.
+                policyInputs: {streamInactivityMs: getConfig().streamInactivityMs},
                 thinking: groupThinkingArgs('research')
             })
             const details: WorkerDetails = {exitCode: result.exitCode}

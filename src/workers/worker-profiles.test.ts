@@ -27,15 +27,17 @@ import {runWorker} from './pi-worker-core.js'
 import {agentEndResponse, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 
 /**
- * THE NO-BEHAVIOUR-CHANGE PROOF.
+ * THE DEFAULTS, WRITTEN OUT LONGHAND.
  *
- * These three literals are what the three call sites resolved to BEFORE
- * WORKER_PROFILES existed, transcribed from the option literals they used to
- * carry plus the defaults `runWorker` filled in around them. Written out in full
- * — not built from a helper — because a literal is the only form that can
- * disagree with the table it is checking. Every guard the refactor could have
- * silently moved is named here, including the six that no call site ever
- * mentioned.
+ * What `runWorker` filled in around a caller that named no guards at all, back
+ * when `RunWorkerInput` carried the knobs. Written out in full — not built from a
+ * helper — because a literal is the only form that can disagree with the table it
+ * is checking.
+ *
+ * It is no longer any profile's resolved policy: `adhoc` deliberately departs
+ * from it on the clock (no wall clock, a silence bound instead). It stays as the
+ * reference the other rows are diffed against, so a change to any guard OTHER
+ * than the one we meant to change still fails a test.
  */
 const ADHOC: WorkerGuardPolicy = {
     guards: {
@@ -56,11 +58,30 @@ const ADHOC: WorkerGuardPolicy = {
 }
 
 describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
-    test('adhoc is every default: a FIXED 240s cap, no watchdogs', () => {
-        expect(workerPolicy('adhoc')).toEqual(ADHOC)
-        // Named separately because it is the asymmetry the table exposed: this
-        // child re-arms nothing, so 240s is total time, not idle time.
-        expect(workerPolicy('adhoc').guards['worker-timeout'].progressCeilingMs).toBeNull()
+    test('adhoc has NO WALL CLOCK, and is bounded by SILENCE instead', () => {
+        // The change of record. A fixed elapsed-time cap on a read-only worker is
+        // a hardware test, not a work test: it was sized against "~25-130s on the
+        // local backend", and a MODEL swap on the SAME machine put 14 of 37
+        // replayed real prompts above that and 8 past the 240s cap outright.
+        const g = workerPolicy('adhoc', {streamInactivityMs: 1_800_000}).guards
+        expect(g['worker-timeout']).toEqual({
+            timeoutMs: 0,
+            progressCeilingMs: null,
+            fanout: null
+        })
+        expect(g['stream-stall']).toBe(1_800_000)
+    })
+
+    test('adhoc arms NO silence bound when the caller hands it no setting', () => {
+        // 0 is off. A harness that names no config must not silently acquire a
+        // guard it never asked for — the same rule the gate row follows.
+        expect(workerPolicy('adhoc').guards['stream-stall']).toBe(0)
+        expect(workerPolicy('adhoc').guards['worker-timeout'].timeoutMs).toBe(0)
+    })
+
+    test('everything OTHER than the clock is still every default', () => {
+        const g = workerPolicy('adhoc').guards
+        expect({...g, 'worker-timeout': ADHOC.guards['worker-timeout']}).toEqual(ADHOC.guards)
     })
 
     test('gate: no wall clock, both watchdogs armed from config, path rule off', () => {
@@ -173,7 +194,9 @@ describe('applyOverride — whole rows, tests only', () => {
     test('lays one row over the profile and leaves the rest alone', () => {
         const out = applyOverride(workerPolicy('adhoc'), {'command-timeout': 42})
         expect(out.guards['command-timeout']).toBe(42)
-        expect({...out.guards, 'command-timeout': 0}).toEqual(ADHOC.guards)
+        // Diffed against the PROFILE, not the defaults literal: `adhoc` departs
+        // from the defaults on the clock, and this test is about the override.
+        expect({...out.guards, 'command-timeout': 0}).toEqual(workerPolicy('adhoc').guards)
     })
 
     test('carryForward overrides independently of the rows', () => {
@@ -236,6 +259,33 @@ describe('applyOverride — whole rows, tests only', () => {
      * — `profile` is required — but one that names the WRONG kind of thing, or a
      * fourth caller added without a profile row, is caught here.
      */
+    /**
+     * `adhoc` has no wall clock, so `stream-stall` is the ONLY thing bounding it.
+     * A call site that names the profile and forgets the setting gets a worker
+     * that can never be killed for going quiet — and `pi-worker.ts` registers a
+     * tool rather than exposing a seam, so no harness can drive it. Breaking that
+     * line by hand fails nothing without this test; it is the cover.
+     */
+    test('a production `adhoc` call site must pass the silence bound', () => {
+        const root = join(import.meta.dir, '..')
+        const offenders: string[] = []
+        const walk = (dir: string): void => {
+            for (const e of readdirSync(dir, {withFileTypes: true})) {
+                const full = join(dir, e.name)
+                if (e.isDirectory()) {
+                    if (e.name !== 'test-utils' && e.name !== '__fixtures__') walk(full)
+                    continue
+                }
+                if (!e.name.endsWith('.ts') || e.name.includes('.test.')) continue
+                const src = readFileSync(full, 'utf8')
+                if (!/^\s*profile: 'adhoc',?$/m.test(src)) continue
+                if (!/streamInactivityMs/.test(src)) offenders.push(full)
+            }
+        }
+        walk(root)
+        expect(offenders).toEqual([])
+    })
+
     test('every production runWorker call site names a profile', () => {
         const root = join(import.meta.dir, '..')
         const defs = new Set([

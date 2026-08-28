@@ -362,18 +362,37 @@ export const WORKER_PROFILES = {
     adhoc: {
         id: 'adhoc',
         why:
-            'The model-dispatched `pi-worker` tool. Every guard at its default, and '
-            + 'this row exists so that is a DECISION rather than the absence of one — '
-            + 'the call site passed nothing, and nobody could see what it therefore '
-            + 'got. What the table now makes visible is an asymmetry: this is the '
-            + 'strictest-clocked of the three children. It runs a FIXED 240s cap, '
-            + 'because `progressCeilingMs` is null and the deadline re-arm is inert '
-            + 'without one, while a research worker doing the same read-only '
-            + 'exploration gets 240s WITHOUT PROGRESS up to 20 minutes. That '
-            + 'difference is preserved exactly here and is NOT defended: the progress '
-            + 'deadline was measured for the research workers (nexttask 9) and has '
-            + 'never been measured for this tool. It is a candidate, not a bug.',
-        resolve: () => ({guards: baseGuards(), carryForward: false})
+            'The model-dispatched `pi-worker` tool: a read-only child with '
+            + '`read,grep,find,ls` and nothing else, asked a question the MODEL wrote. '
+            + 'It has NO WALL CLOCK, and that is a decision with evidence behind it. '
+            + 'It used to run a FIXED 240s cap — total elapsed, not idle — inherited by '
+            + 'naming no guards at all. A fixed wall clock on a read-only worker makes '
+            + "answer quality a function of the user's hardware: the same prompt on a "
+            + 'slower local model loses its work and degrades, which is the argument '
+            + 'research-fanout-budget.ts already records against every wall-clock lever '
+            + '("no constant fixes that"). It is worse than that — the constant was '
+            + 'sized against "~25-130s on the local backend", and MEASURED on 37 '
+            + 'replayed real prompts after only a MODEL swap on the SAME machine: '
+            + 'median 76s, p90 371s, max 442s, with 14/37 above the 130s it was '
+            + 'calibrated to and 8/37 (22%) past the cap outright. A bound that has to '
+            + 'be re-measured whenever the model changes is the wrong bound. '
+            + "What replaces it is `stream-stall`, armed from the user's own "
+            + '`stuck reply retry` setting: it kills on SILENCE, never on slowness — '
+            + '"one token every 30s is a working local model and must never be killed; '
+            + 'zero events for the whole window is a hang" — so it needs no calibration '
+            + 'and no new setting. Real thrash is still caught by the two runaway '
+            + 'detectors and the dead-backend probe, all of which stay on.',
+        resolve: inputs => {
+            const guards = baseGuards()
+            // No wall clock. See `why`: a fixed elapsed-time cap on a read-only
+            // worker is a hardware test, not a work test.
+            guards['worker-timeout'] = {timeoutMs: 0, progressCeilingMs: null, fanout: null}
+            // The silence bound that replaces it — the user's own setting, not a
+            // new one. 0 when the caller hands none, which is off, exactly as
+            // before: a harness must not silently acquire a guard.
+            guards['stream-stall'] = inputs.streamInactivityMs ?? 0
+            return {guards, carryForward: false}
+        }
         // `as const satisfies`, not an annotation — the same reason RESTART_ORDER
         // gives: an annotation widens each row back to `WorkerProfile`, and the
         // `why` strings and literal ids stop being visible to a reader or a test.

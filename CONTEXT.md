@@ -710,8 +710,30 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > was 0, and `DocsDetails.aborted` was written and read by nothing, which is what let it hide.
     > `reason` comes from `childFailureReason`, which asks `classifyWorkerFailure` — the one ordered
     > ladder — rather than re-deriving the precedence.
-- **`adhoc` clock screen (STEP 1 / STEP 2)** — the two-part measurement of whether the `adhoc`
-  profile should take the `research` profile's progress deadline.
+- **`adhoc` clock — SHIPPED as a silence bound** — the `pi-worker` tool has NO WALL CLOCK. What
+  bounds it is `stream-stall`, armed from the user's own `stuck reply retry` (`streamInactivityMs`)
+  setting: it kills on SILENCE, never on slowness.
+    > It ran a FIXED 240s cap, total elapsed, inherited by naming no guards at all. **A fixed wall
+    > clock on a read-only worker is a hardware test, not a work test**: the same prompt on a slower
+    > local model loses its work and degrades, which is the argument `research-fanout-budget.ts`
+    > already records against every wall-clock lever — *"no constant fixes that"*. And the constant
+    > was already stale. Its whole stated basis was one clause, `"~25-130s on the local backend"`,
+    > with no entry in `magicknumbers.md`; replaying 37 real recorded `pi-worker` prompts after only
+    > a MODEL swap on the SAME machine gave median 76s, p90 371s, max 442s, with **14/37 above the
+    > 130s it was calibrated to and 8/37 (22%) past the cap outright**. A bound that must be
+    > re-measured whenever the model changes is the wrong bound. The replacement needs no
+    > calibration and no new setting: `streamInactivityMs` already means exactly the right thing —
+    > *"time since the LAST stream event of ANY kind… NOT wall-clock… one token every 30s is a
+    > working local model and must never be killed"* — and is already on the `/task-config` screen.
+    > **NOT unified**: `requestTimeoutMs` (`command timeout`) was rejected as the source because it
+    > bounds ONE tool call, not the worker. Real thrash is still caught by the loop detector, the
+    > no-new-ground detector and the dead-backend probe, all of which stay on. The number is the
+    > user's and the decision to arm it is the profile's, so it arrives as `policyInputs` — and
+    > because `pi-worker.ts` registers a tool rather than exposing a seam, a test walks production
+    > source and fails the build if an `adhoc` call site omits it. That gap was found by breaking
+    > the line by hand and watching nothing go red.
+
+- **`adhoc` clock screen (the measurement)** — `scripts/live-adhoc-clock-ab.ts` and its scorer.
   `scripts/live-adhoc-clock-ab.ts` screens; `scripts/live-adhoc-clock-step2.ts` pairs only what the
   screen finds; `scripts/adhoc-clock-score.ts` is the shared scorer, unit-tested away from the GPU.
     > **One arm, then two, and the split is the point.** Under a fixed cap no single attempt can
@@ -747,10 +769,9 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > each literal carried whichever justification someone had needed to write down: `gate-child.ts`
     > explained why it disables the path-revisit rule and said nothing about why it takes no
     > progress deadline, and `pi-worker.ts` named nothing at all. That last one is the cost — the
-    > ad-hoc tool turns out to be the STRICTEST-clocked of the three children (a FIXED 240s cap,
-    > where a research worker doing the same read-only exploration gets 240s WITHOUT PROGRESS up to
-    > twenty minutes), and nobody chose that; it is the residue of never having had a place to write
-    > a choice down. It is preserved exactly and now says on its own row that it is unmeasured.
+    > ad-hoc tool turned out to be the STRICTEST-clocked of the three children — a FIXED 240s cap
+    > nobody chose, the residue of never having had a place to write a choice down. **The table is
+    > what made it visible enough to fix**; see the `adhoc` clock entry below.
     > **Keying on `WorkerKillId` is the leverage**: adding a tenth cause to `WORKER_KILLS` fails to
     > compile in `worker-profiles.ts` until every profile decides about it, and the three causes with
     > no dial (`leaked-tool-call`, `aborted`, `exit`) say `null` in the table instead of being
