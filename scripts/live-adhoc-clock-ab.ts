@@ -37,6 +37,17 @@
  * 0.38.26 every kill cause printed "Worker aborted.", which is why this base
  * rate could not be taken from production in the first place.
  *
+ * ⚠ NINE PROMPTS ARE UNANSWERABLE AGAINST THIS CORPUS, and they are skipped.
+ * The pin is a `git archive`, which strips `.git` and every uncommitted change,
+ * and nine of the 45 recorded prompts ask a reviewer to examine UNCOMMITTED
+ * working-tree changes. In the copy there are none and no `.git` to look in, so
+ * those workers hunt a diff that does not exist, run long, and are killed by the
+ * runaway detectors — not by the clock this run is about. Their answers are the
+ * model mid-sentence ("Let me check for a pre-generated diff..."), and including
+ * them turned a real 1/28 over-cap rate into a reported 8/37. They are marked
+ * `needsWorkingTree` in the fixture and excluded here; re-including them needs a
+ * corpus pinned as a real clone with a dirty tree, not an archive.
+ *
  * ⚠ THE HARNESS MUST RUN THE TOOL'S OWN REASONING LEVEL. The first 18 trials of
  * this run were thrown away because it did not: `pi-worker.ts` passes
  * `groupThinkingArgs('research')`, currently `--thinking medium`, and omitting
@@ -77,6 +88,8 @@ const ADHOC_CAP_MS = 240_000
 
 interface Row {
     id: string
+    /** Asks about uncommitted/working-tree state, which a `git archive` pin has not got. */
+    needsWorkingTree?: boolean
     repoKey: string
     cwd: string
     prompt: string
@@ -204,6 +217,11 @@ async function main(): Promise<void> {
     const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}\nthinking=${groupThinkingArgs('research').join(' ')}`
 
     let rows = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')) as Row[]
+    // See the header: these cannot be answered against a `git archive` pin, and
+    // including them measures the corpus rather than the clock.
+    const skipped = rows.filter(r => r.needsWorkingTree === true).length
+    rows = rows.filter(r => r.needsWorkingTree !== true)
+    if (skipped > 0) console.log(`skipped:  ${skipped} prompt(s) needing a working tree this pin has not got`)
     if (onlyRepo !== null) rows = rows.filter(r => r.repoKey === onlyRepo)
     rows = rows.slice(0, limit)
 

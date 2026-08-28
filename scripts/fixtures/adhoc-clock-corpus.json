@@ -8,7 +8,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T001",
@@ -19,7 +20,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T002",
@@ -30,7 +32,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T003",
@@ -41,7 +44,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T004",
@@ -52,7 +56,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T005",
@@ -63,7 +68,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T006",
@@ -74,7 +80,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T007",
@@ -85,7 +92,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-client",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T008",
@@ -96,7 +104,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T009",
@@ -107,7 +116,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T010",
@@ -118,7 +128,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T011",
@@ -129,7 +140,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T012",
@@ -140,7 +152,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T013",
@@ -151,7 +164,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/aiz-server",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T014",
@@ -162,7 +176,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T015",
@@ -173,7 +188,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T016",
@@ -184,7 +200,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T017",
@@ -195,7 +212,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T018",
@@ -206,7 +224,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T019",
@@ -217,7 +236,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T020",
@@ -228,7 +248,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T021",
@@ -239,7 +260,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T022",
@@ -250,7 +272,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T023",
@@ -261,7 +284,8 @@
   "recordedBatch": 2,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T024",
@@ -272,7 +296,8 @@
   "recordedBatch": 2,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T025",
@@ -283,7 +308,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T026",
@@ -294,7 +320,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T027",
@@ -305,7 +332,8 @@
   "recordedBatch": 2,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T028",
@@ -316,7 +344,8 @@
   "recordedBatch": 2,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T029",
@@ -327,7 +356,8 @@
   "recordedBatch": 2,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T030",
@@ -338,7 +368,8 @@
   "recordedBatch": 2,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T031",
@@ -349,7 +380,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/gofer",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": true
  },
  {
   "id": "T032",
@@ -360,7 +392,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/mx5",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T033",
@@ -371,7 +404,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/mx5",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T034",
@@ -382,7 +416,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/mx5",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T035",
@@ -393,7 +428,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/mx5",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T036",
@@ -404,7 +440,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/mx5",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T037",
@@ -415,7 +452,8 @@
   "recordedBatch": 1,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T038",
@@ -426,7 +464,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T039",
@@ -437,7 +476,8 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  },
  {
   "id": "T040",
@@ -448,7 +488,8 @@
   "recordedBatch": 4,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T041",
@@ -459,7 +500,8 @@
   "recordedBatch": 4,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T042",
@@ -470,7 +512,8 @@
   "recordedBatch": 4,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T043",
@@ -481,7 +524,8 @@
   "recordedBatch": 4,
   "recordedFailed": true,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": true
+  "promptRewritten": true,
+  "needsWorkingTree": false
  },
  {
   "id": "T044",
@@ -492,6 +536,7 @@
   "recordedBatch": 1,
   "recordedFailed": false,
   "cwd": "/home/edgars/.cache/pi-task-adhoc-clock-ab/corpus/pi-task",
-  "promptRewritten": false
+  "promptRewritten": false,
+  "needsWorkingTree": false
  }
 ]

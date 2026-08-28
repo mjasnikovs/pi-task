@@ -60,9 +60,10 @@ const ADHOC: WorkerGuardPolicy = {
 describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
     test('adhoc has NO WALL CLOCK, and is bounded by SILENCE instead', () => {
         // The change of record. A fixed elapsed-time cap on a read-only worker is
-        // a hardware test, not a work test: it was sized against "~25-130s on the
-        // local backend", and a MODEL swap on the SAME machine put 14 of 37
-        // replayed real prompts above that and 8 past the 240s cap outright.
+        // a hardware test, not a work test — the same prompt on slower hardware
+        // loses its work, and no constant fixes that. The replay corroborates
+        // rather than decides: after nothing but a MODEL swap on the same machine,
+        // 5 of 28 valid trials ran past the "~25-130s" this was sized against.
         const g = workerPolicy('adhoc', {streamInactivityMs: 1_800_000}).guards
         expect(g['worker-timeout']).toEqual({
             timeoutMs: 0,

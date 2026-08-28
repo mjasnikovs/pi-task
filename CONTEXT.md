@@ -716,12 +716,18 @@ these terms exactly. New deepened modules that name a concept get that concept r
     > It ran a FIXED 240s cap, total elapsed, inherited by naming no guards at all. **A fixed wall
     > clock on a read-only worker is a hardware test, not a work test**: the same prompt on a slower
     > local model loses its work and degrades, which is the argument `research-fanout-budget.ts`
-    > already records against every wall-clock lever — *"no constant fixes that"*. And the constant
-    > was already stale. Its whole stated basis was one clause, `"~25-130s on the local backend"`,
-    > with no entry in `magicknumbers.md`; replaying 37 real recorded `pi-worker` prompts after only
-    > a MODEL swap on the SAME machine gave median 76s, p90 371s, max 442s, with **14/37 above the
-    > 130s it was calibrated to and 8/37 (22%) past the cap outright**. A bound that must be
-    > re-measured whenever the model changes is the wrong bound. The replacement needs no
+    > already records against every wall-clock lever — *"no constant fixes that"*. **That argument
+    > decides it, and needs no measurement.** The constant was also already stale: its whole stated
+    > basis was one clause, `"~25-130s on the local backend"`, with no entry in `magicknumbers.md`,
+    > and replaying 28 real recorded `pi-worker` prompts after nothing but a MODEL swap on the SAME
+    > machine gave median 56s, p90 160s, max 280s, with **5/28 above the 130s it was calibrated
+    > to**. A bound that must be re-measured whenever the model changes is the wrong bound.
+    > ⚠ **The figures first published for this change — 14/37 and 8/37 — were wrong**, and the
+    > commit that carries them (`51625d3`) cannot be edited. The corpus is a `git archive`, which
+    > strips `.git` and every uncommitted change, and NINE of the 45 prompts ask a reviewer to
+    > examine uncommitted working-tree changes. Those workers hunted a diff that did not exist,
+    > ran long and were killed by the runaway detectors — seven of the eight over-cap trials were
+    > unanswerable by construction. The valid figures are above. The replacement needs no
     > calibration and no new setting: `streamInactivityMs` already means exactly the right thing —
     > *"time since the LAST stream event of ANY kind… NOT wall-clock… one token every 30s is a
     > working local model and must never be killed"* — and is already on the `/task-config` screen.
