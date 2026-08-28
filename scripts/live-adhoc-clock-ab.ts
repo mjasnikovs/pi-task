@@ -37,6 +37,15 @@
  * 0.38.26 every kill cause printed "Worker aborted.", which is why this base
  * rate could not be taken from production in the first place.
  *
+ * ⚠ THE HARNESS MUST RUN THE TOOL'S OWN REASONING LEVEL. The first 18 trials of
+ * this run were thrown away because it did not: `pi-worker.ts` passes
+ * `groupThinkingArgs('research')`, currently `--thinking medium`, and omitting
+ * `thinking` inherits the session default instead. That is a different
+ * configuration of the very thing being measured. The level now rides in the
+ * ledger fingerprint alongside the model identity and the corpus pins, so a
+ * resume cannot silently reuse a row produced at another level — which is
+ * exactly what would have happened here.
+ *
  * ⚠ THE PROMPTS ARE RECORDED; THE DURATIONS ARE NOT. 44 of the 51 recorded calls
  * were made by `Qwen3.6-27B-UD-Q4_K_XL`, and this machine now serves
  * `Qwen3.8-27B-NVFP4-MTP-VERY-HIGH`. So the recorded elapsed times — from which
@@ -57,6 +66,7 @@ import * as path from 'node:path'
 import {requirePreconditions} from './ab-preflight.js'
 import {llamaModelIdentity} from './ab-preflight.js'
 import {runWorker} from '../src/workers/pi-worker-core.js'
+import {groupThinkingArgs} from '../src/config/reasoning-args.js'
 import {workerPolicy} from '../src/workers/worker-profiles.js'
 
 const CORPUS_ROOT = '/home/edgars/.cache/pi-task-adhoc-clock-ab'
@@ -141,6 +151,13 @@ async function runOne(row: Row): Promise<Trial> {
         prompt: row.prompt,
         cwd: row.cwd,
         profile: 'adhoc',
+        // WHAT THE REAL TOOL PASSES. `pi-worker.ts` resolves the `research`
+        // group — it is the same read-only exploration loop, just dispatched by
+        // a model rather than the pipeline — and it currently resolves to
+        // `--thinking medium`. Omitting it here inherits the session default
+        // instead, which is a DIFFERENT configuration: reasoning level moves both
+        // wall clock and answer quality, the two things this run measures.
+        thinking: groupThinkingArgs('research'),
         override: {
             'worker-timeout': {
                 timeoutMs: ADHOC_CAP_MS,
@@ -184,7 +201,7 @@ async function main(): Promise<void> {
     })
     // The corpus pins ride INSIDE the fingerprint: a resume must not mix a trial
     // that read gofer@9bc345b with one that read a later gofer.
-    const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}`
+    const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}\nthinking=${groupThinkingArgs('research').join(' ')}`
 
     let rows = JSON.parse(fs.readFileSync(FIXTURE, 'utf8')) as Row[]
     if (onlyRepo !== null) rows = rows.filter(r => r.repoKey === onlyRepo)

@@ -44,6 +44,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {requirePreconditions, llamaModelIdentity} from './ab-preflight.js'
 import {runWorker} from '../src/workers/pi-worker-core.js'
+import {groupThinkingArgs} from '../src/config/reasoning-args.js'
 import {workerPolicy, type WorkerGuardOverride} from '../src/workers/worker-profiles.js'
 import {delivered, mcnemarExact, scorePaths, treeEntries} from './adhoc-clock-score.js'
 
@@ -136,6 +137,13 @@ async function runOne(row: Row, arm: Arm, tree: ReadonlySet<string>): Promise<Tr
         prompt: row.prompt,
         cwd: row.cwd,
         profile: 'adhoc',
+        // WHAT THE REAL TOOL PASSES. `pi-worker.ts` resolves the `research`
+        // group — it is the same read-only exploration loop, just dispatched by
+        // a model rather than the pipeline — and it currently resolves to
+        // `--thinking medium`. Omitting it here inherits the session default
+        // instead, which is a DIFFERENT configuration: reasoning level moves both
+        // wall clock and answer quality, the two things this run measures.
+        thinking: groupThinkingArgs('research'),
         ...(ARMS[arm] ? {override: ARMS[arm]} : {}),
         onRestart: () => {
             restarts++
@@ -167,7 +175,7 @@ async function main(): Promise<void> {
         cacheOff: true,
         corpora: [path.join(CORPUS_ROOT, 'corpus')]
     })
-    const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}`
+    const stamp = fingerprint === null ? null : `${fingerprint}\n${pins()}\nthinking=${groupThinkingArgs('research').join(' ')}`
 
     // The baseline arm must BE the shipped profile, not a copy of it.
     const shipped = JSON.stringify(workerPolicy('adhoc').guards['worker-timeout'])
