@@ -32,7 +32,16 @@ import type {PiTaskConfig} from './config.js'
  * thinking, while two that reach the model by different code paths (`refine` via
  * runPhaseChild, `compress-label` via the same) want the same.
  *
- * - `research`     the four research workers, plus the ad-hoc `pi-worker` tool
+ * - `research`     the ad-hoc `pi-worker` subagent tool, and the FALLBACK the four
+ *                  research workers use when their own cell is unset
+ * - `research:files` / `research:apis` / `research:context` / `research:tooling`
+ *                  one cell per research worker. They are FOUR CELLS, not one,
+ *                  because the four wander differently: over mx5-n 2026-08-27
+ *                  every one of the 40.7 wasted research minutes was a restart
+ *                  in `tooling` or `context`, and `files` and `apis` never
+ *                  restarted once. A single `research` cell cannot be set to
+ *                  pay for thinking where it is needed without also paying for
+ *                  it where it measurably is not.
  * - `phase`        refine, verify-tooling, grill, compose, critique, compress-label
  * - `planning`     /task-auto's clarify / decompose / extract children
  * - `plan`         /task-plan's question and answer children
@@ -42,6 +51,10 @@ import type {PiTaskConfig} from './config.js'
  */
 export type ReasoningGroup =
     | 'research'
+    | 'research:files'
+    | 'research:apis'
+    | 'research:context'
+    | 'research:tooling'
     | 'phase'
     | 'planning'
     | 'plan'
@@ -51,6 +64,10 @@ export type ReasoningGroup =
 
 export const REASONING_GROUPS: readonly ReasoningGroup[] = [
     'research',
+    'research:files',
+    'research:apis',
+    'research:context',
+    'research:tooling',
     'phase',
     'planning',
     'plan',
@@ -256,6 +273,180 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // children only), so a rotation is killed ~8 calls into its second lap
     // rather than at the 20-minute ceiling.
     research: 'medium',
+    // ── THE FOUR RESEARCH WORKERS, SPLIT OUT OF `research` 2026-08-28 ──
+    //
+    // WHY THE SPLIT EXISTS, from `research`'s own evidence. The override to
+    // `medium` above was aimed at ONE pathology — the restart tail — and that
+    // tail is not spread evenly. mx5-n 2026-08-27: 40.7 of the research phase's
+    // 81.4 wall-clock minutes were lost to restarts, ALL of them in
+    // `worker:tooling` and `worker:context`; `worker:files` and `worker:apis`
+    // never restarted once. With one cell, paying for thinking in the two that
+    // wander means paying for it in the two that do not.
+    //
+    // ── research:files — MEASURED, `off`. WRITTEN 2026-08-28 ──
+    //
+    // A/B 2026-08-26, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
+    // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=12/arm over 12
+    // distinct mx5 tasks. off 10/12 vs medium 11/12 (p=1.0000); clock PAIRED
+    // over the 10 usable pairs p=0.7090, mean off 79.4s vs medium 59.3s.
+    // off 95% CI [0.55, 0.95]. RUNG 3 — a DECISION, not a finding.
+    //
+    // THIS IS NOT A NEW RUN. It is ledger-research.jsonl, rescored under the
+    // group's new name:
+    //
+    //   AB_CORPUS=/home/edgars/hub/ab-grouplab/mx5-copy bun run \
+    //     scripts/rescore-reasoning-ledger.ts \
+    //     /home/edgars/hub/ab-grouplab/ledger-research.jsonl research:files --from-text
+    //
+    // That ledger was ALWAYS a FILES worker — `child: 'worker:files'`, prompt
+    // `RESEARCH_FILES_PROMPT`, run in each task's own before-tree — so the split
+    // did not strand it, it named it. The axis is the CONJUNCTION: every path
+    // named is real AND every pre-existing file the task edited is named. The
+    // full derivation, the stimulus screen, the parser fix and the confound sit
+    // on the `research` cell above; they are that ledger's, and this is that
+    // ledger.
+    //
+    // WHY THIS CELL DOES NOT FOLLOW `research`'s OVERRIDE. That override was
+    // aimed at the restart tail, and the tail is not here: `worker:files` never
+    // restarted once. The reason for paying does not apply to this worker, and
+    // its own ledger says the arms tied.
+    'research:files': 'off',
+    // NOT MEASURED. DECIDED BY PRIOR: a worker with no trial of its own keeps
+    // whatever `research` was decided to run at. No trial in this repo has ever
+    // run apis, context or tooling as its own arm, so a cell here that differed
+    // from `research` would be intuition wearing the authority of a default.
+    //
+    // AND AN AXIS IS THE HARD PART, not the GPU. Two candidates were screened
+    // offline and DIED there — scripts/research-worker-axes-step0.ts, no model,
+    // no GPU. For APIS: "every dotted symbol named is present in the tree"
+    // scores the recorded answers 28/28 tasks and 81/81 items. SATURATED, and
+    // loose with it — the check greps the symbol's LAST SEGMENT, so
+    // `Hono.c.json` passes on the word `json`. Tightening it has nothing to
+    // bite on, because APIS names are model-composed pseudo-symbols
+    // (`Hono.c.var`, `UUID regex`); that is the same wall
+    // [[apis-contract-stage3-refuted]] hit from the other side.
+    // TO REPLACE THIS WITH A MEASUREMENT, the axis must be an EXECUTION or a
+    // production adjudication, the way gate's and planning's are — not a
+    // property of the text.
+    //
+    // A COST RUN WAS DONE ANYWAY, 2026-08-28, and it found nothing to act on.
+    // n=20/arm on the same corpus and trees, production's tools, extensions,
+    // search hint and the task's own recorded FILES map: off 19/20 answered vs
+    // medium 20/20, and the PAIRED clock over 19 stimuli is off 127.2s vs
+    // medium 144.4s, p=0.5262. So thinking is neither better nor cheaper here
+    // by anything this run can see, and there is no cost argument for moving
+    // the cell either way. Ledger: ledger-research-apis.jsonl.
+    // THAT RUN CANNOT WRITE THIS CELL. Its axis is TERMINATION — "did it answer
+    // at all" — so its `off [rung 3]` line is the standing prior speaking with
+    // no quality reading behind it. See README-research-cost-runs.txt.
+    // ITS BUILD IS b10665-ca3d5a3e1, not the b10620-0f3b51e03 every other cell
+    // was measured on: llama.cpp was rebuilt mid-session. Internally paired, so
+    // off-vs-medium is fair within it; its SECONDS are not comparable to the
+    // files or tooling ledgers.
+    'research:apis': 'medium',
+    // NOT MEASURED. DECIDED BY PRIOR — see the block above `research:apis`.
+    // Its candidate axis died offline too: "every backticked project path in a
+    // CONTEXT bullet exists in the tree" scores the recorded answers 6/53 tasks
+    // and 213/391 items. THE CHECK LOSES, on exactly the residue the phase
+    // path-axis audit catalogued — npm specifiers (`@hono/zod-validator`),
+    // import paths (`hono/cookie`, `../server/auth`), bare filenames
+    // (`schema.ts`) and `src/` prefix elision.
+    // TO REPLACE THIS WITH A MEASUREMENT, note that this worker is one of the
+    // two the restart tail lives in, so the honest axis is the wander itself —
+    // and no Trial field records a tool-call count today.
+    //
+    // A COST RUN WAS DONE ANYWAY, 2026-08-28, n=20/arm, production's `read,grep`
+    // and no extensions. It found no clock difference — medians 81.2s vs 80.8s,
+    // paired p=0.8594 over 16 stimuli — but it did see the wander directly:
+    //
+    //     died in a loop        off 3/20  vs  medium 0/20   p=0.2308
+    //     emitted bullets       off 17/20 vs  medium 20/20  p=0.2308
+    //
+    // Neither reaches significance at n=20, and the second is TERMINATION, not
+    // quality. But this is the first time the restart tail has appeared INSIDE
+    // a measured run rather than in a production log, and it appeared only in
+    // the `off` arm. off's higher MEAN (97.8s vs 69.3s) is those three deaths,
+    // not slower work. THIS RUN CANNOT WRITE THIS CELL either: an underpowered
+    // termination signal is not a measurement, and its `off [rung 3]` verdict
+    // line is the prior, not a reading. THE CELL IS UNCHANGED. Ledger: ledger-research-context.jsonl,
+    // README-research-cost-runs.txt, build b10665-ca3d5a3e1.
+    //
+    // INSTRUMENT NOTE, because that run ABSTAINED first with 40 good answers
+    // already stored. It scored CONTEXT with `hasAnswerContent` — the FILES
+    // `name<gap>description` shape — and this worker emits a BULLET list of
+    // prose sentences, which `isEntryLine` rejects for ending in a full stop.
+    // Both arms read 0/20. Fixed by `contextEmittedBullets` and the stored
+    // trials rescored with no GPU. Fourth instance of
+    // [[ab-scorer-must-match-the-real-prompt]] in one harness.
+    // AND THE REPLACEMENT WAS WRONG BY ONE, found in review the same day: it
+    // asked for >=2 bullets where production's `classifyContextSilence` calls
+    // >=1 PRODUCTIVE, so a one-bullet answer production accepts read UNUSABLE
+    // in both arms. `countBullets` — production's own function, called not
+    // restated — moved 37/40 stored trials and the emitted-bullets line above
+    // from off 16/20 to off 17/20. The verdict, the cell and the clock are
+    // unchanged: still an underpowered termination signal, still a prior.
+    'research:context': 'medium',
+    // ── research:tooling — MEASURED, `medium`. RUNG 1. WRITTEN 2026-08-28 ──
+    //
+    // A/B 2026-08-28, Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf (llama.cpp
+    // b10620-0f3b51e03), scripts/live-reasoning-group-ab.ts, n=20/arm over 20
+    // distinct mx5 tasks, one rep each so the clock can pair.
+    //
+    //     every command runs   off 13/20  vs  medium 20/20   p=0.0083
+    //     wall clock (paired)  off 49.5s  vs  medium 15.9s   p=0.0400
+    //     off 95% CI [0.43, 0.82].  Ledger: ledger-research-tooling.jsonl.
+    //
+    // RUNG 1 — quality decided it, and this is only the SECOND cell in the table
+    // a quality axis has ever decided. THE FIRST WAS extraction, which went the
+    // other way. Note there is no trade here: medium is both better AND 3.1x
+    // faster, so the sampler caveat below cannot be what produced it.
+    //
+    // THE AXIS: every command the checker can adjudicate must RESOLVE in the
+    // tree the worker inspected (scripts/reasoning-ab-tooling-truth.ts). Not a
+    // property of the text — the same kind of truth as gate's executed VERIFY,
+    // which is why it lives where four `phase` text axes died. `unknown` is a
+    // first-class answer and is scored neither way: three of the four command
+    // shapes can only return `real` or `unknown`, because an undeclared binary
+    // may still be on PATH and `bun test` resolves through the runtime.
+    //
+    // OFF'S FAILURE IS ONE CLASS, AUDITED ROW BY ROW. All seven name a
+    // dev-server command against `src/server/index.ts` — a file that exists in
+    // NEITHER the before-tree nor the after-tree of any of those seven tasks;
+    // it first appears around TASK_0057. The worker's own prompt says "If a
+    // tool isn't present in the repo, omit it — don't invent." Medium omits it.
+    //
+    // THE CHECKER WAS WRONG THREE TIMES FIRST, and all three are pinned in
+    // reasoning-ab-tooling-truth.test.ts:
+    //   1. `bun run <file.ts>` is a file invocation, not a script lookup.
+    //      Caught offline; four of twelve reported failures were this bug.
+    //   2. `bun run <installed-bin>` falls back to `node_modules/.bin`.
+    //      VERIFIED BY EXECUTION: `bun run tsc --version` → `Version 6.0.3`,
+    //      exit 0; `bun run dev` → `error: Script not found "dev"`, exit 1.
+    //      Caught LIVE at trial 19. It cost two MEDIUM trials, and BOTH were
+    //      recovered by rescoring the stored text with no GPU — which is the
+    //      whole reason the ledger stores `output`.
+    //   3. `-f` is a compose file only when a compose token precedes it, and
+    //      `<runner> run <arg>` must be read for EVERY segment of a compound
+    //      line, not the first. Found in review: `curl -f <url>` and
+    //      `git clean -f -d` scored as invented paths (strict), while
+    //      `bun run lint && bun run dev` scored `real` on `lint` alone and let
+    //      `dev` — the exact class this cell turns on — through (LOOSE, and the
+    //      harder half to spot). Caught after the run; rescoring the stored text
+    //      moved 2/40 trials and left every number on this cell IDENTICAL.
+    // No fix moved the offline ceiling (32/45 tasks, 102/118 commands, before
+    // and after all three), so none loosened the check against known-good work.
+    //
+    // WHAT THIS CELL DOES NOT SAY. Medium sits at 20/20, so the axis has no
+    // headroom ABOVE it: a future run could not show medium getting worse. And
+    // the axis does not score the restart tail this worker is known for — no
+    // Trial field records a tool-call count — so "medium is better here" is
+    // about the ANSWER, not about the wander.
+    //
+    // REPRODUCE: `AB_SPECS=research:tooling:20 /abrun/run-group.sh`, then
+    //   AB_CORPUS=.../mx5-copy bun run scripts/rescore-reasoning-ledger.ts \
+    //     /home/edgars/hub/ab-grouplab/ledger-research-tooling.jsonl \
+    //     research:tooling --from-text
+    'research:tooling': 'medium',
     // NOT MEASURED. DECIDED BY PRIOR, 2026-08-27 — the same prior that carries
     // every rung-3 cell in this table: thinking that buys nothing measurable is
     // not worth its tokens. `off`.
@@ -561,39 +752,42 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
     // a stated prior to a measured win. Rescored from the original ledger on 2026-08-25 when the harness
     // moved to a forced two-way verdict; the trials are unchanged.
     //
-    // OVERRIDDEN TO `medium` BY USER DECISION, 2026-08-27, AND THIS ONE
-    // OVERRIDES A MEASUREMENT RATHER THAN A PRIOR. Say so plainly: quality tied
-    // 12/20 in both arms, and the PAIRED clock — the statistic that matches this
-    // design — put `off` ahead in 9 of the 12 specs that pass in both arms,
-    // geometric mean 0.55x, p=0.0166. That is the rung-2 win that WROTE this
-    // cell `off`, and it is not withdrawn by anything measured since.
+    // OVERRIDE WITHDRAWN 2026-08-28; THE CELL IS `off` AGAIN, ON ITS OWN
+    // MEASUREMENT. Between 2026-08-27 and 2026-08-28 this cell read `medium` by
+    // user decision, overriding the rung-2 result above rather than a prior. The
+    // decision's stated reason was an implementation turn observed wandering in
+    // the mx5-n run, and the cell recorded honestly that the run's .pi-tasks logs
+    // had been destroyed before anyone could count the loop.
     //
-    // WHAT THE DECISION COSTS, from those same numbers: expect implementation
-    // turns to take roughly 1.8x as long, for no measured quality gain. The
-    // quality CI is the widest in the table ([0.39, 0.78] at 12/20), so a real
-    // quality difference either way would have been invisible at n=20 — that is
-    // the room the decision is being made in, and it cuts both ways.
+    // A SECOND mx5-n RUN KEPT ITS LOGS, and they refute the reason. The run
+    // executed 10 tasks in 9h22 with this cell at `medium` — thinking ON for
+    // every implementation turn — and TASK_0004 wandered anyway: 167 assistant
+    // turns, 192 tool calls, 45 files and 2,355 lines committed against a
+    // one-file spec, and its own deliverable (src/server/migrate.ts) never
+    // written; it arrived four tasks later. Two single responses in that turn
+    // were 18,297 and 23,568 output tokens. Thinking did not prevent the
+    // rotation, so the lever the override was reaching for is not this one.
+    // Measured over the run's 15 implementation sessions: 441,399 output tokens,
+    // of which 59.3% by character was thinking (1,314,790 thinking chars vs
+    // 902,034 text chars).
     //
-    // THE STATED REASON FOR THE OVERRIDE is that the implementation turn was
-    // observed wandering in the same mx5-n run. That observation is NOT in this
-    // repo's evidence: the run's .pi-tasks logs were destroyed before they could
-    // be mined, so no loop was ever counted here and this cell must not claim
-    // one. It is the user's judgement, recorded as such.
-    //
-    // WHAT IS STRUCTURALLY TRUE, and checked: the implementation turn runs in
-    // the USER'S OWN SESSION (see task/implementation-thinking.ts and
-    // task/implementation-turn.ts), not as a child. It therefore has NO
+    // WHAT IS STRUCTURALLY TRUE, and still true, and checked: the implementation
+    // turn runs in the USER'S OWN SESSION (see task/implementation-thinking.ts
+    // and task/implementation-turn.ts), not as a child. It therefore has NO
     // LoopDetector and NO StallDetector — only the per-tool-call command
-    // watchdog and the steer loop's resume cap. The 2026-08-27 fix that wired
-    // StallDetector into runWorker does NOT reach it. So of the groups in this
-    // table, `implementation` is the one where a rotation has no guard at all,
-    // and thinking is the only lever currently pointed at it.
+    // watchdog and superviseImplementation's MAX_COMPACTION_RESUMES, which the
+    // runaway above came nowhere near (it took 2 compactions of an allowed 20).
+    // So `implementation` remains the one group in this table where a rotation
+    // has no guard at all. That is an argument for GIVING it a guard, not for
+    // paying 1.8x in thinking that has now been observed not to guard it.
     //
-    // TO PUT THIS CELL BACK ON EVIDENCE, re-run
-    // scripts/live-implementation-thinking-ab.ts at a larger n. The ledger is
-    // /home/edgars/hub/ab-implab/impl-ledger.jsonl, 40 rows, b10618 — the odd
-    // build out, so a re-run on b10620 is not a replicate of it.
-    implementation: 'medium'
+    // THE CELL IS STILL RUNG 2 AND STILL THE WIDEST CI IN THE TABLE ([0.39,
+    // 0.78] at 12/20), so it is carried by the clock, not by quality. Nothing
+    // measured since has withdrawn the paired-clock win. To put it on more
+    // evidence, re-run scripts/live-implementation-thinking-ab.ts at a larger n;
+    // the ledger is /home/edgars/hub/ab-implab/impl-ledger.jsonl, 40 rows,
+    // b10618 — the odd build out, so a re-run on b10620 is not a replicate.
+    implementation: 'off'
 }
 
 /**
@@ -603,6 +797,31 @@ export const DEFAULT_REASONING_TABLE: Readonly<Record<ReasoningGroup, GroupSetti
  */
 export function sanitizeReasoningMode(value: unknown): ReasoningMode {
     return REASONING_MODES.includes(value as ReasoningMode) ? (value as ReasoningMode) : 'default'
+}
+
+/**
+ * The group each research worker reads its level from, keyed by the section
+ * heading its output is assembled under (task/phases.ts `workerSpecs`).
+ *
+ * Exported so the wiring is one table rather than four string literals spread
+ * through the phase code, and so a test can assert every value is a real group.
+ */
+export const RESEARCH_WORKER_GROUPS: Readonly<Record<string, ReasoningGroup>> = {
+    FILES: 'research:files',
+    APIS: 'research:apis',
+    CONTEXT: 'research:context',
+    TOOLING: 'research:tooling'
+}
+
+/**
+ * For a `research:*` group, the group a stored config falls back to when its own
+ * key is missing. Every other group maps to `undefined`.
+ */
+const RESEARCH_SUBGROUP_PARENT: Readonly<Partial<Record<ReasoningGroup, ReasoningGroup>>> = {
+    'research:files': 'research',
+    'research:apis': 'research',
+    'research:context': 'research',
+    'research:tooling': 'research'
 }
 
 /**
@@ -618,13 +837,33 @@ export function sanitizeReasoningLevels(value: unknown): Record<ReasoningGroup, 
         typeof value === 'object' && value !== null && !Array.isArray(value) ?
             (value as Record<string, unknown>)
         :   {}
+    const valid = (v: unknown): v is GroupSetting => REASONING_SETTINGS.includes(v as GroupSetting)
     const out = {} as Record<ReasoningGroup, GroupSetting>
     for (const group of REASONING_GROUPS) {
         const stored_ = stored[group]
+        if (valid(stored_)) {
+            out[group] = stored_
+            continue
+        }
+        // A `research:*` key absent from the file falls back to the user's own
+        // `research`, NOT to the default table. This is the migration path: a
+        // config written before the split carries one `research` level and
+        // nothing else, and filling the four sub-cells from the table would
+        // silently overrule a choice the user had already made — the four
+        // workers are exactly the children that `research` used to set.
+        //
+        // IT CANNOT TELL A CHOICE FROM A SEED, and that is accepted. Leaving
+        // `default`/`on`/`off` for ANY reason makes `applyReasoningLevel` seed
+        // every group from `resolveReasoning`, so a user who only ever nudged
+        // `gate` still has a `research` on disk they never picked. Inheriting
+        // it pins the four workers to the old default and the measured
+        // `research:files: 'off'` never reaches them. That is what CUSTOM MODE
+        // MEANS: a frozen table, not a subscription to later measurements — the
+        // same is true of every other group in the file. `default` mode is
+        // where a new reading takes effect, and it takes effect there at once.
+        const parent = RESEARCH_SUBGROUP_PARENT[group]
         out[group] =
-            REASONING_SETTINGS.includes(stored_ as GroupSetting) ?
-                (stored_ as GroupSetting)
-            :   DEFAULT_REASONING_TABLE[group]
+            parent && valid(stored[parent]) ? stored[parent] : DEFAULT_REASONING_TABLE[group]
     }
     return out
 }
@@ -662,8 +901,20 @@ export function thinkingArgs(setting: GroupSetting): string[] {
 /** One honest sentence per group, for the /task-config rows. */
 export const REASONING_GROUP_HELP: Readonly<Record<ReasoningGroup, string>> = {
     research:
-        'The four research workers that read the codebase before a spec is written, '
-        + 'and the pi-worker subagent tool. Read-only exploration loops.',
+        'The pi-worker subagent tool, and the fallback for any research worker below '
+        + 'whose own level is unset. Read-only exploration loops.',
+    'research:files':
+        'Research worker 1 of 4: maps which files the task will touch. Read-heavy. '
+        + 'Measured: the two arms tie, so it runs without thinking.',
+    'research:apis':
+        'Research worker 2 of 4: the symbols and signatures the task must call. '
+        + 'Read-heavy, docs- and search-capable.',
+    'research:context':
+        'Research worker 3 of 4: how the project is put together. One of the two that '
+        + 'burned wall-clock on restarts in the last full run.',
+    'research:tooling':
+        'Research worker 4 of 4: the commands that build, test and run the project. '
+        + 'Measured: thinking wins on both quality and speed.',
     phase:
         'Refining your request, generating and answering the clarifying questions, '
         + 'writing the spec, and critiquing it.',

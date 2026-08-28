@@ -114,6 +114,7 @@ import {SessionUI} from '../remote/bridge.js'
 import {isYoloMode, yoloPickAutoAnswer} from './yolo.js'
 import {QaTranscript, GRILL_QA_POLICY} from './qa-transcript.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
+import {RESEARCH_WORKER_GROUPS} from '../config/reasoning.js'
 
 // ─── Re-export constants from their home modules ────────────────────────────
 
@@ -478,7 +479,7 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
  * Both halves of "given a channel" — the tools string and the `-e` path — come
  * from the same rows, so they cannot disagree.
  */
-function apisWorkerChannels(): {tools: string; extensions: string[]} {
+export function apisWorkerChannels(): {tools: string; extensions: string[]} {
     return channelSet([
         'pi-worker-docs',
         ...(searchConfigured() ? ['pi-worker-search', 'pi-worker-fetch'] : [])
@@ -974,7 +975,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // string and the `-e` paths must be derived from the SAME answer.
     const apisChannels = apisWorkerChannels()
     const workerSpecs: Array<{
-        /** Section heading this worker's output is assembled under. */
+        /** Section heading this worker's output is assembled under. Also the key
+         *  into {@link RESEARCH_WORKER_GROUPS}, so it decides the worker's own
+         *  reasoning cell. */
         section: string
         label: string
         /** Static, or built from the sections completed so far (serial mode
@@ -1162,11 +1165,18 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                     cwd: deps.cwd,
                     signal: deps.signal,
                     spawn: deps.spawn,
-                    // All four research workers share one group: they are the same
-                    // job (read-only exploration of the repo) run over four
-                    // questions, and a table that could set them apart would be
-                    // four cells nobody has the trials to fill.
-                    thinking: groupThinkingArgs('research'),
+                    // ONE CELL PER WORKER since 2026-08-28. They used to share
+                    // the `research` cell on the grounds that they are the same
+                    // job over four questions; the run logs disagree. All 40.7
+                    // wasted research minutes in mx5-n were restarts in
+                    // `tooling` and `context`, and `files`/`apis` never
+                    // restarted — so the level that pays for one pair is being
+                    // paid for the other. THE FOUR CELLS DO NOT SHIP IDENTICAL:
+                    // `research:files` is `off` on a measured tie while the
+                    // other three are `medium`, so this line changes what the
+                    // FILES worker runs at for every default-mode user. The
+                    // evidence is on each cell in reasoning.ts.
+                    thinking: groupThinkingArgs(RESEARCH_WORKER_GROUPS[spec.section] ?? 'research'),
                     ...(spec.tools ? {tools: spec.tools} : {}),
                     ...(spec.extensions ? {extensions: spec.extensions} : {}),
                     // 5B SCALE arm — null unless both env vars are set. Only the

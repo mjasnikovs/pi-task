@@ -477,12 +477,38 @@ export function applyToolToggle(
  */
 const REASON_ID_PREFIX = 'reason:'
 
-export function reasoningItems(
-    cfg: PiTaskConfig
-): {id: string; label: string; description: string; currentValue: string; values: string[]}[] {
+/**
+ * The label for one `think:` row.
+ *
+ * A group whose name carries a colon is a CHILD of the group before the colon —
+ * `research:files` is one of the four workers `research` fans out to. Rendered
+ * flat, those four read as four more peers of `research`, and the menu's one
+ * genuine hierarchy is invisible: the four are the only rows in the list whose
+ * parent is also a row.
+ *
+ * So a child is drawn as a tree branch under its parent and loses the repeated
+ * `think: research:` prefix, which is 15 columns of the same text on four
+ * consecutive lines. `└─` on the last child, `├─` on the rest, decided from the
+ * group's position in {@link REASONING_GROUPS} rather than a hand-kept list —
+ * adding a fifth worker moves the corner on its own.
+ *
+ * Leading spaces survive: SettingsList pads the label right, never trims it.
+ */
+export function reasoningRowLabel(group: ReasoningGroup): string {
+    const colon = group.indexOf(':')
+    if (colon < 0) return `think: ${group}`
+    const parent = group.slice(0, colon)
+    const nextIsSibling = REASONING_GROUPS[REASONING_GROUPS.indexOf(group) + 1]?.startsWith(
+        `${parent}:`
+    )
+    return `   ${nextIsSibling ? '├─' : '└─'} ${group.slice(colon + 1)}`
+}
+
+export function reasoningItems(cfg: PiTaskConfig): PanelItem[] {
     return REASONING_GROUPS.map(group => ({
         id: REASON_ID_PREFIX + group,
-        label: `think: ${group}`,
+        label: reasoningRowLabel(group),
+        headlessLabel: `think: ${group}`,
         description: REASONING_GROUP_HELP[group],
         // The EFFECTIVE level, not cfg.reasoningLevels[group]: in default/on/off
         // the stored table is not what runs, and a row that shows a value the
@@ -596,6 +622,14 @@ export type PanelItem = {
      * — the header does not need its own branch anywhere.
      */
     values?: string[]
+    /**
+     * What the headless one-line rendering calls this row, when `label` reads
+     * only in the panel. A tree branch means nothing on a line of `|`-joined
+     * rows: `├─ files` there names no parent, where `think: research:files`
+     * does. Set by the reasoning rows; every other row leaves it off and its
+     * `label` is used.
+     */
+    headlessLabel?: string
 }
 
 /** The arrow key SettingsList moves down on, under the default bindings. */
@@ -785,7 +819,7 @@ async function handleTaskConfig(
             .map(i =>
                 i.values === undefined ?
                     `[${i.label.trim()}]`
-                :   `${i.label.padEnd(22)} ${i.currentValue}`
+                :   `${(i.headlessLabel ?? i.label).padEnd(22)} ${i.currentValue}`
             )
         ctx.ui.notify(lines.join('  |  '), 'info')
         return

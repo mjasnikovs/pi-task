@@ -75,11 +75,23 @@ import * as path from 'node:path'
 import {runPhaseChild, type PhaseDeps} from '../src/task/child-runner.js'
 import {runWorker} from '../src/workers/pi-worker-core.js'
 import {runFocusedExtraction} from '../src/workers/focused-extractor.js'
-import {REFINE_PROMPT, RESEARCH_FILES_PROMPT} from '../src/task/prompts.js'
+import {
+    REFINE_PROMPT,
+    RESEARCH_APIS_PROMPT,
+    RESEARCH_CONTEXT_PROMPT,
+    RESEARCH_FILES_PROMPT,
+    RESEARCH_TOOLING_PROMPT
+} from '../src/task/prompts.js'
 import {buildVerifyPrompt, VERIFY_TOOLS} from '../src/task/verify-work.js'
 import {AUTO_DECOMPOSE_PROMPT} from '../src/task/auto-prompts.js'
 import {buildRequirementsLedger} from '../src/task/requirements.js'
-import {SINGLE_READ_EXTENSION_PATH} from '../src/task/phases.js'
+import {
+    RESEARCH_SEARCH_HINT,
+    SINGLE_READ_EXTENSION_PATH,
+    apisWorkerChannels,
+    scopedToolingGoal,
+    searchConfigured
+} from '../src/task/phases.js'
 import {REASONING_GROUPS, REASONING_ON_LEVEL, type ReasoningGroup} from '../src/config/reasoning.js'
 import {loadPlanningFixture, extractRequirementsNew} from './ab-planning.js'
 import {openRecordedRun, type TaskRecord} from './ab-corpus.js'
@@ -93,12 +105,19 @@ import {
     treePaths,
     type FilesStimulus
 } from './reasoning-ab-files-truth.js'
-import {extractTree} from './impl-ab-corpus.js'
+import {extractTree, implTasks} from './impl-ab-corpus.js'
 import {extractionStimuli} from './reasoning-ab-extraction-truth.js'
+import {
+    scoreTooling,
+    toolingRunnable,
+    toolingStimuli,
+    type ToolingStimulus
+} from './reasoning-ab-tooling-truth.js'
 import {minAttainableP} from './ab-stats.js'
 import type {ArmStats} from './reasoning-ab-decide.js'
 import {ARMS as ARMS_, decide} from './reasoning-ab-decide.js'
 import {
+    contextEmittedBullets,
     GROUP_SCORERS,
     planningPlanFaithful,
     verdictWord,
@@ -199,6 +218,12 @@ const EXTRACTION_TASK_LIMIT = Number(process.env.AB_EXTRACTION_TASK_LIMIT ?? 20)
 
 /** Where the research group extracts the before-trees its children work in. */
 const FILES_TREE_ROOT = path.join(os.tmpdir(), 'pi-task-files-trees')
+
+/** Where the tooling group extracts the before-trees its children inspect. */
+const TOOLING_TREE_ROOT = path.join(os.tmpdir(), 'pi-task-tooling-trees')
+
+/** Where the two clock-only research groups extract their before-trees. */
+const CLOCK_TREE_ROOT = path.join(os.tmpdir(), 'pi-task-clock-trees')
 
 /**
  * How long to wait for a model that has gone away, and how often to look.
@@ -393,6 +418,10 @@ interface Built {
     gate?: GateStimulus
     /** The screened task whose FILES answer is scored against its after-tree. */
     files?: FilesStimulus
+    /** The screened task whose TOOLING commands are resolved against its tree. */
+    tooling?: ToolingStimulus
+    /** The task a clock-only worker replays: `research:apis`, `research:context`. */
+    clockOnly?: {id: string; beforeCommit: string}
 }
 
 interface GroupExperiment {
@@ -415,8 +444,11 @@ interface GroupExperiment {
  * thrash this group was meant to measure (197 of 200 calls were its own
  * refusal). Measured with it missing, `planning` was scoring a child production
  * does not run. Callers pass what production passes for that child and nothing
- * else: `refine` and the research/gate children get no extensions in production
- * and get none here.
+ * else. `refine`, the gate children and three of the four research workers get
+ * no extensions in production and get none here — but `worker:tooling` DOES get
+ * `[SINGLE_READ_EXTENSION_PATH]` (phases.ts, the TOOLING worker spec), and the
+ * sentence that used to stand here said the research children get none. The
+ * `research:tooling` trial passes it.
  */
 /**
  * The single-read extension as a file `pi` can actually load.
@@ -434,19 +466,23 @@ interface GroupExperiment {
  * measures a child with one fewer guard than production ships, which is the
  * exact defect this whole wiring exists to remove.
  */
-function loadableSingleReadExtension(): string {
-    if (fs.existsSync(SINGLE_READ_EXTENSION_PATH)) return SINGLE_READ_EXTENSION_PATH
-    const built = SINGLE_READ_EXTENSION_PATH.replace(`${path.sep}src${path.sep}`, `${path.sep}dist${path.sep}`)
+function loadableExtension(entry: string): string {
+    if (fs.existsSync(entry)) return entry
+    const built = entry.replace(`${path.sep}src${path.sep}`, `${path.sep}dist${path.sep}`)
     if (fs.existsSync(built)) return built
     console.error(
-        `ABSTAIN — the single-read extension is not on disk as loadable JS.\n`
-            + `  looked at: ${SINGLE_READ_EXTENSION_PATH}\n`
+        `ABSTAIN — a child extension is not on disk as loadable JS.\n`
+            + `  looked at: ${entry}\n`
             + `             ${built}\n`
-            + '  Production hands every PLANNING child this guard. Run `bun run build`'
-            + ' first: without it this run would measure a child with one fewer guard'
-            + ' than production ships, and would not say so.'
+            + '  Production hands the child under test this extension. Run `bun run build`'
+            + ' first: without it this run would measure a child with one fewer tool or'
+            + ' guard than production ships, and would not say so.'
     )
     process.exit(EXIT_CODE.ABSTAIN)
+}
+
+function loadableSingleReadExtension(): string {
+    return loadableExtension(SINGLE_READ_EXTENSION_PATH)
 }
 
 function phaseDeps(cwd: string, extensions: readonly string[] = []): PhaseDeps {
@@ -616,6 +652,98 @@ async function filesTrial(b: Built, arm: Arm): Promise<Trial> {
     }
 }
 
+/**
+ * One `research:tooling` trial: the TOOLING worker in the task's BEFORE tree,
+ * scored on whether the commands it emits actually resolve in that tree.
+ *
+ * PRODUCTION'S CHILD, NOT A LOOKALIKE. worker:tooling is the one research worker
+ * that carries `[SINGLE_READ_EXTENSION_PATH]`, and its goal is `refined` put
+ * through `scopedToolingGoal` — the prose-only slice, deliberately not the
+ * per-file edit checklist that makes a weak model spelunk source and loop. Both
+ * are passed here. The prompt HEADER (external context + inventory) is not,
+ * which matches what the FILES trial already does and is the one difference from
+ * production worth naming.
+ *
+ * The tree is the BEFORE tree because that is the tree the real worker
+ * inspected, and the scripts it must not invent are the ones that tree declares.
+ */
+async function toolingTrial(b: Built, arm: Arm): Promise<Trial> {
+    const s = b.tooling
+    if (!s) throw new Error('toolingTrial called without a screened stimulus')
+    const dir = path.join(TOOLING_TREE_ROOT, `${s.id}-${arm}`)
+    try {
+        extractTree(s.beforeCommit, dir)
+        return await workerTrial(
+            dir,
+            b.prompt,
+            b.source,
+            arm,
+            undefined,
+            text => toolingRunnable(text, s.beforeCommit),
+            text => {
+                const sc = scoreTooling(text, s.beforeCommit)
+                if (sc.checkable === 0) return `no checkable command (${sc.unknown} unknown)`
+                return (
+                    `${sc.checkable - sc.invented.length}/${sc.checkable} runnable`
+                    + (sc.invented.length > 0 ? ` — invented ${sc.invented.join(', ')}` : '')
+                    + ` (${sc.unknown} unknown)`
+                )
+            },
+            [loadableSingleReadExtension()]
+        )
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+}
+
+/**
+ * One `research:apis` or `research:context` trial — a COST measurement, not a
+ * verdict.
+ *
+ * NEITHER WORKER HAS A QUALITY AXIS, and that is a finding, not an oversight.
+ * Both candidates were screened offline against the recorded answers
+ * (scripts/research-worker-axes-step0.ts) and both died:
+ *   APIS     "every dotted symbol is in the tree" — 28/28 tasks, 81/81 items.
+ *            Saturated, and loose: it greps the LAST SEGMENT, so `Hono.c.json`
+ *            passes on the word `json`. Tightening has nothing to bite on,
+ *            because APIS names are model-composed pseudo-symbols.
+ *   CONTEXT  "every backticked project path exists" — 6/53 tasks, 213/391
+ *            items. The CHECK loses, on the residue the phase path-axis audit
+ *            already catalogued.
+ *
+ * So the axis here is TERMINATION ONLY — production's own `hasAnswerContent`.
+ * It will saturate, the decision ladder will print NOT WRITABLE, and that is
+ * the CORRECT outcome: a cheaper arm may simply be saying less, and this
+ * scorer cannot tell. What the run is FOR is the ledger's clock, read as a
+ * cost number a human decides on — never as a verdict this file writes.
+ */
+async function clockOnlyWorkerTrial(
+    b: Built,
+    arm: Arm,
+    tools: string | undefined,
+    extensions: readonly string[],
+    accept: (text: string) => boolean
+): Promise<Trial> {
+    const t = b.clockOnly
+    if (!t) throw new Error('clockOnlyWorkerTrial called without a screened stimulus')
+    const dir = path.join(CLOCK_TREE_ROOT, `${t.id}-${arm}`)
+    try {
+        extractTree(t.beforeCommit, dir)
+        return await workerTrial(
+            dir,
+            b.prompt,
+            b.source,
+            arm,
+            tools,
+            accept,
+            text => `${text.trim().split('\n').filter(l => l.trim() !== '').length} line(s)`,
+            extensions
+        )
+    } finally {
+        fs.rmSync(dir, {recursive: true, force: true})
+    }
+}
+
 /** A worker-style trial (research and gate both go through runWorker). */
 async function workerTrial(
     cwd: string,
@@ -624,7 +752,8 @@ async function workerTrial(
     arm: Arm,
     tools: string | undefined,
     accept: (text: string) => boolean,
-    describe: (text: string) => string
+    describe: (text: string) => string,
+    extensions?: readonly string[]
 ): Promise<Trial> {
     const t0 = Date.now()
     const r = await runWorker({
@@ -632,6 +761,7 @@ async function workerTrial(
         cwd,
         signal: new AbortController().signal,
         ...(tools ? {tools} : {}),
+        ...(extensions && extensions.length > 0 ? {extensions: [...extensions]} : {}),
         thinking: ['--thinking', arm],
         contextWindow: CONTEXT_WINDOW
     })
@@ -801,7 +931,7 @@ async function buildExperiments(group: ReasoningGroup): Promise<GroupExperiment 
         }
     }
 
-    if (group === 'research') {
+    if (group === 'research:files') {
         /**
          * The FILES worker's real input, run in the tree it really ran in, and
          * scored on BOTH halves of the job: every path it names is real, and it
@@ -896,6 +1026,183 @@ async function buildExperiments(group: ReasoningGroup): Promise<GroupExperiment 
                 }
             },
             run: (b, arm) => filesTrial(b, arm)
+        }
+    }
+
+    if (group === 'research:tooling') {
+        /**
+         * The TOOLING worker, scored on whether its commands RUN.
+         *
+         * WHY THIS AXIS EXISTS AT ALL. `research` was one cell until 2026-08-28
+         * and its only ledger is a FILES worker. Three candidate axes were
+         * screened offline before any GPU was booked
+         * (scripts/research-worker-axes-step0.ts), and two died there:
+         *
+         *   CONTEXT  every backticked project path exists — the recorded
+         *            answers score 6/53 clean, 213/391 items. The CHECK loses,
+         *            on exactly the residue the phase path-axis audit already
+         *            catalogued: package specifiers, bare filenames, `src/`
+         *            prefix elision.
+         *   APIS     every dotted symbol is present in the tree — the recorded
+         *            answers score 28/28, 81/81. SATURATED, and loose with it:
+         *            the check greps the symbol's LAST SEGMENT, so `Hono.c.json`
+         *            passes on the word `json`. A tighter check has nothing to
+         *            bite on, because APIS names are model-composed pseudo-
+         *            symbols (`Hono.c.var`, `UUID regex`), which is the same
+         *            wall [[apis-contract-stage3-refuted]] hit.
+         *
+         * TOOLING survived: recorded answers 32/45 clean, 102/118 commands
+         * runnable, and the failures are one verified class. `bun run dev` was
+         * EXECUTED in an extracted TASK_0010 before-tree and printed `error:
+         * Script not found "dev"` — the tree's scripts are `lint` and `test` at
+         * every commit checked. So the check is right and the answer is wrong,
+         * which is headroom rather than a losing check.
+         */
+        const byId = new Map(corpusTasks().map(t => [t.id, t]))
+        const recordedTooling = (id: string): string | undefined => {
+            const research = byId.get(id)?.section('research')?.trim()
+            if (!research) return undefined
+            const re = /^(?:VERIFIED-)?TOOLING[ \t]*$([\s\S]*?)(?=^[A-Z][A-Z -]*[ \t]*$|(?![\s\S]))/m
+            return re.exec(research)?.[1]
+        }
+        const {stimuli, screened} = toolingStimuli({
+            tasks: implTasks(),
+            refinedPrompt: id => byId.get(id)?.section('refined prompt')?.trim(),
+            recordedTooling,
+            limitTasks: RESEARCH_TASK_LIMIT
+        })
+        if (stimuli.length === 0) {
+            console.error(
+                `ABSTAIN — no task at ${CORPUS_ROOT} has both a recorded refined prompt`
+                    + ' and a before-tree declaring a package.json script. Without a script'
+                    + ' to name, no command the worker emits is adjudicable either way and'
+                    + ' every trial would be vacuous.'
+            )
+            process.exit(EXIT_CODE.ABSTAIN)
+        }
+        for (const o of screened.filter(x => !x.usable)) {
+            console.log(`  dropped ${o.id}: ${o.detail}`)
+        }
+        const dirty = stimuli.filter(x => x.recorded.invented > 0).length
+        console.log(
+            `tooling stimuli: ${stimuli.length} task(s); the RECORDED answer already`
+                + ` carries an unrunnable command in ${dirty} of them`
+        )
+        return {
+            child: 'worker:tooling',
+            stimulus:
+                `## refined prompt from ${stimuli.length} screened tasks`
+                + ' — every command the checker can adjudicate must RUN in that tree',
+            build: rep => {
+                const t = stimuli[rep % stimuli.length]!
+                return {
+                    prompt: RESEARCH_TOOLING_PROMPT(scopedToolingGoal(t.refined)),
+                    source: t.id,
+                    tooling: t
+                }
+            },
+            run: (b, arm) => toolingTrial(b, arm)
+        }
+    }
+
+    if (group === 'research:apis' || group === 'research:context') {
+        /**
+         * A COST RUN. Read the note on `clockOnlyWorkerTrial` first: neither
+         * worker has a quality axis, so this run cannot and must not write a
+         * cell. It exists to put a NUMBER on what thinking costs these two, on
+         * the same corpus, the same trees and the same model as every other
+         * cell — so a human decision is made on measured seconds rather than on
+         * the assumption that `off` is cheaper.
+         *
+         * PRODUCTION'S CHILD IN BOTH CASES:
+         *   apis     tools `read,grep,find,ls` + the worker channels, the same
+         *            `-e` paths, the search hint when search is configured, and
+         *            the FILES map the serial default hands it — taken from the
+         *            task's OWN recorded FILES block, which is what the real
+         *            APIS worker was given.
+         *   context  tools `read,grep` and nothing else. Deliberately isolated;
+         *            production does not hand it the APIS section.
+         * WHAT THIS TRIAL DOES NOT SHIP, all of it the same for both arms:
+         *   - the prompt HEADER (external context + inventory), omitted as it
+         *     is for the FILES and TOOLING trials;
+         *   - apis: `orientation.block` (the pre-read core files) and the
+         *     `zeroRetrievalRetry` gate;
+         *   - context: `retryIfSilent` and the `demoteUnsourcedAttributions`
+         *     post-process.
+         * The context omission is the one that touches a headline number here:
+         * production retries a silent context worker ONCE before accepting the
+         * loss, so the "died in a loop off 3/20" this run recorded is what the
+         * child does UNGUARDED, and production's own rate is at most that.
+         * Read the numbers as an upper bound on the wander, not as production's.
+         */
+        const byId = new Map(corpusTasks().map(t => [t.id, t]))
+        const stimuli = implTasks()
+            .filter(t => (byId.get(t.id)?.section('refined prompt')?.trim() ?? '') !== '')
+            .slice(0, RESEARCH_TASK_LIMIT)
+            .map(t => ({
+                id: t.id,
+                beforeCommit: t.preCommit,
+                refined: byId.get(t.id)!.section('refined prompt')!.trim(),
+                filesMap: (() => {
+                    const research = byId.get(t.id)?.section('research')?.trim()
+                    if (!research) return undefined
+                    const m = /^FILES[ \t]*$([\s\S]*?)(?=^[A-Z][A-Z -]*[ \t]*$|(?![\s\S]))/m.exec(
+                        research
+                    )
+                    return m?.[1]?.trim() || undefined
+                })()
+            }))
+        if (stimuli.length === 0) {
+            console.error(`ABSTAIN — no task at ${CORPUS_ROOT} has a recorded refined prompt.`)
+            process.exit(EXIT_CODE.ABSTAIN)
+        }
+        const channels = apisWorkerChannels()
+        const withMap = stimuli.filter(x => x.filesMap).length
+        console.log(
+            `${group}: ${stimuli.length} stimuli`
+                + (group === 'research:apis' ?
+                    `; ${withMap} carry a recorded FILES map; search ${
+                        searchConfigured() ? 'IS' : 'is NOT'
+                    } configured`
+                :   '')
+        )
+        console.log(
+            'COST RUN — the quality axis here is TERMINATION ONLY and will saturate.'
+                + ' This run cannot write a cell; it measures what thinking costs.'
+        )
+        return {
+            child: group === 'research:apis' ? 'worker:apis' : 'worker:context',
+            stimulus:
+                `## refined prompt from ${stimuli.length} tasks`
+                + ' — TERMINATION ONLY, the clock is the deliverable',
+            build: rep => {
+                const t = stimuli[rep % stimuli.length]!
+                const prompt =
+                    group === 'research:apis' ?
+                        RESEARCH_APIS_PROMPT(t.refined, t.filesMap)
+                        + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
+                    :   RESEARCH_CONTEXT_PROMPT(t.refined)
+                return {
+                    prompt,
+                    source: t.id,
+                    clockOnly: {id: t.id, beforeCommit: t.beforeCommit}
+                }
+            },
+            run: (b, arm) =>
+                group === 'research:apis' ?
+                    clockOnlyWorkerTrial(
+                        b,
+                        arm,
+                        `read,grep,find,ls,${channels.tools}`,
+                        channels.extensions.map(loadableExtension),
+                        // APIS entries ARE the `name<gap>description` shape, so
+                        // production's own reader is the right termination check.
+                        GROUP_SCORERS.research!
+                    )
+                :   // CONTEXT is a BULLET list, and `hasAnswerContent` rejects a
+                    // prose bullet outright. Reusing it scored 40 good answers
+                    // UNUSABLE and abstained the first cost run.
+                    clockOnlyWorkerTrial(b, arm, 'read,grep', [], contextEmittedBullets)
         }
     }
 
@@ -1221,6 +1528,11 @@ async function main(): Promise<void> {
                 : group === 'plan' ?
                     '\n  /task-plan did not run at all in the recorded corpus (0% of wall'
                     + ' clock), so there is nothing to replay and nothing to gain.'
+                : group === 'research' ?
+                    '\n  Since the 2026-08-28 split this cell is the ad-hoc pi-worker TOOL'
+                    + ' plus the fallback for an unset worker. The tool is invoked by a'
+                    + ' model mid-turn with a free-text question, so there is no recorded'
+                    + ' stimulus to replay. Measure research:files or research:tooling.'
                 :   '')
         )
         process.exit(EXIT_CODE.ABSTAIN)
@@ -1360,8 +1672,10 @@ async function main(): Promise<void> {
         on,
         undefined,
         group === 'gate' ? {quality: 'correct verdict', termination: 'no verdict at all'}
-        : group === 'research' ?
+        : group === 'research:files' ?
             {quality: 'every path real', termination: 'no answer at all'}
+        : group === 'research:tooling' ?
+            {quality: 'every command runs', termination: 'no answer at all'}
         :   undefined
     )
     for (const l of lines) console.log(l)
@@ -1398,6 +1712,15 @@ async function main(): Promise<void> {
  * Declared rather than inferred, so the usage banner cannot advertise a group
  * that immediately abstains — which the previous version did.
  */
-const MEASURABLE: ReasoningGroup[] = ['planning', 'phase', 'research', 'gate', 'extraction']
+const MEASURABLE: ReasoningGroup[] = [
+    'planning',
+    'phase',
+    'research:files',
+    'research:apis',
+    'research:context',
+    'research:tooling',
+    'gate',
+    'extraction'
+]
 
 await main()

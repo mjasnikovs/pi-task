@@ -7,6 +7,7 @@ import {
     REASONING_MODES,
     REASONING_ON_LEVEL,
     REASONING_SETTINGS,
+    RESEARCH_WORKER_GROUPS,
     resolveReasoning,
     sanitizeReasoningLevels,
     sanitizeReasoningMode,
@@ -20,6 +21,10 @@ const cfgWith = (over: Partial<PiTaskConfig>): PiTaskConfig => ({...DEFAULT_CONF
 /** A table with a distinct, recognisable level per group. */
 const distinct = (): Record<ReasoningGroup, GroupSetting> => ({
     research: 'off',
+    'research:files': 'minimal',
+    'research:apis': 'low',
+    'research:context': 'high',
+    'research:tooling': 'medium',
     phase: 'low',
     planning: 'high',
     plan: 'medium',
@@ -65,7 +70,14 @@ describe('every shipped cell is measured or inherit', () => {
 
     /** The comment block immediately above a cell, '' when there is none. */
     const commentAbove = (group: string): string => {
-        const at = source.indexOf(`\n    ${group}: '`)
+        // Two spellings, because a group whose name carries a colon
+        // (`research:files`) is written as a QUOTED key. A helper that knew only
+        // the bare form returned '' for those four and read every one of them as
+        // an uncommented cell.
+        const at = Math.max(
+            source.indexOf(`\n    ${group}: '`),
+            source.indexOf(`\n    '${group}': '`)
+        )
         if (at < 0) return ''
         const before = source.slice(0, at).split('\n')
         const out: string[] = []
@@ -90,16 +102,49 @@ describe('every shipped cell is measured or inherit', () => {
      */
     const DECLARED_UNMEASURED = 'NOT MEASURED. DECIDED BY PRIOR'
 
+    /**
+     * THE ONE WAY AN UNMEASURED CELL MAY CITE A TRIAL COUNT.
+     *
+     * A COST RUN is a real artefact that decides nothing: it spends the same
+     * trials on the same trees, but its axis is TERMINATION, so it can report
+     * seconds and death rates and no quality reading at all. `research:apis`
+     * and `research:context` each have one, and suppressing their numbers to
+     * satisfy the rule above would hide evidence the next reader needs.
+     *
+     * The exemption is deliberately narrow and greppable: the comment must ALSO
+     * say, in these words, that the run cannot write the cell. A cell that cites
+     * n=NN/arm without that sentence is claiming a measurement it does not have,
+     * which is what the rule exists to stop.
+     */
+    const DECLARED_COST_ONLY = 'CANNOT WRITE THIS CELL'
+
     test('an unmeasured cell says so in those words, and says how to fix it', () => {
         for (const g of REASONING_GROUPS) {
             const c = commentAbove(g)
             if (!c.includes(DECLARED_UNMEASURED)) continue
-            expect(c, `${g} declares itself unmeasured but cites a trial count`).not.toMatch(
-                /n=\d+\/arm/
-            )
+            if (!c.includes(DECLARED_COST_ONLY)) {
+                expect(c, `${g} declares itself unmeasured but cites a trial count`).not.toMatch(
+                    /n=\d+\/arm/
+                )
+            }
             expect(c, `${g} declares itself unmeasured with no route to a measurement`).toMatch(
                 /TO REPLACE THIS WITH A MEASUREMENT/
             )
+        }
+    })
+
+    test('a cost-run exemption is only ever claimed by an unmeasured cell', () => {
+        // The exemption lets a cell carry trial counts. It must never appear on
+        // a cell that is claiming to be MEASURED, where it would read as a
+        // disclaimer on a real verdict.
+        for (const g of REASONING_GROUPS) {
+            const c = commentAbove(g)
+            if (!c.includes(DECLARED_COST_ONLY)) continue
+            expect(
+                c,
+                `${g} claims the cost-run exemption without declaring itself unmeasured`
+            ).toContain(DECLARED_UNMEASURED)
+            expect(c, `${g} claims a cost run but does not name it one`).toContain('COST RUN')
         }
     })
 
@@ -130,6 +175,35 @@ describe('every shipped cell is measured or inherit', () => {
             const args = thinkingArgs(resolveReasoning(g, DEFAULT_CONFIG))
             expect(args).toEqual(cell === 'inherit' ? [] : ['--thinking', cell])
         }
+    })
+})
+
+describe('RESEARCH_WORKER_GROUPS', () => {
+    test('names a real group for each of the four research sections', () => {
+        expect(Object.keys(RESEARCH_WORKER_GROUPS).sort()).toEqual([
+            'APIS',
+            'CONTEXT',
+            'FILES',
+            'TOOLING'
+        ])
+        for (const g of Object.values(RESEARCH_WORKER_GROUPS)) {
+            expect(REASONING_GROUPS).toContain(g)
+        }
+    })
+
+    test('every worker spec in phases.ts has an entry', () => {
+        // The lookup falls back to `research` for an unknown section, so a fifth
+        // worker added without a cell would silently share the old group and
+        // nobody would see it. Read the section literals out of the source that
+        // declares them rather than restating them here.
+        const phases = readFileSync(new URL('../task/phases.ts', import.meta.url), 'utf8')
+        const specs = phases.slice(
+            phases.indexOf('const workerSpecs'),
+            phases.indexOf('let persistChain')
+        )
+        const sections = [...specs.matchAll(/^\s+section: '([A-Z]+)'/gm)].map(m => m[1]!)
+        expect(sections.length).toBe(4)
+        for (const s of sections) expect(RESEARCH_WORKER_GROUPS[s]).toBeDefined()
     })
 })
 
@@ -187,6 +261,38 @@ describe('sanitizeReasoningLevels', () => {
         expect(out.research).toBe('medium')
         expect(out.gate).toBe(DEFAULT_REASONING_TABLE.gate)
         expect(out.phase).toBe(DEFAULT_REASONING_TABLE.phase)
+    })
+
+    test('a config written before the split carries `research` into its four workers', () => {
+        // THE MIGRATION. A file saved when `research` was one cell has no
+        // `research:*` keys at all. Filling them from the default table would
+        // silently overrule the user — those four children are exactly what
+        // their `research` setting used to control.
+        const out = sanitizeReasoningLevels({research: 'off', gate: 'high'})
+        expect(out['research:files']).toBe('off')
+        expect(out['research:apis']).toBe('off')
+        expect(out['research:context']).toBe('off')
+        expect(out['research:tooling']).toBe('off')
+        // And only the research family: everything else still falls to the table.
+        expect(out.phase).toBe(DEFAULT_REASONING_TABLE.phase)
+    })
+
+    test('an explicit worker level beats the inherited `research` one', () => {
+        const out = sanitizeReasoningLevels({research: 'off', 'research:tooling': 'medium'})
+        expect(out['research:tooling']).toBe('medium')
+        expect(out['research:files']).toBe('off')
+    })
+
+    test('with no stored `research` the workers fall to the default table', () => {
+        const out = sanitizeReasoningLevels({gate: 'high'})
+        for (const g of [
+            'research:files',
+            'research:apis',
+            'research:context',
+            'research:tooling'
+        ] as const) {
+            expect(out[g]).toBe(DEFAULT_REASONING_TABLE[g])
+        }
     })
 
     test('a group from a future version is dropped, not carried', () => {

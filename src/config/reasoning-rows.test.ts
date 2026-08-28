@@ -14,6 +14,7 @@ import {
     applyReasoningLevel,
     panelItems,
     reasoningItems,
+    reasoningRowLabel,
     refreshReasoningRows,
     SECTION_ID_PREFIX
 } from './register.js'
@@ -46,7 +47,47 @@ const draft = (over: Partial<PiTaskConfig> = {}): PiTaskConfig => ({
 // only state any of these tests has. Mutating the singleton and putting it back
 // still leaves the suite's result depending on what it was to begin with.
 
+describe('reasoningRowLabel', () => {
+    /**
+     * The four research workers are the only rows in the whole menu whose
+     * parent is also a row. Rendered flat they read as four more peers of
+     * `research`, which is what this shape exists to stop.
+     */
+    test('children are branches under their parent, last one cornered', () => {
+        expect(reasoningRowLabel('research')).toBe('think: research')
+        expect(reasoningRowLabel('research:files')).toBe('   \u251c\u2500 files')
+        expect(reasoningRowLabel('research:apis')).toBe('   \u251c\u2500 apis')
+        expect(reasoningRowLabel('research:context')).toBe('   \u251c\u2500 context')
+        expect(reasoningRowLabel('research:tooling')).toBe('   \u2514\u2500 tooling')
+    })
+
+    test('the corner is derived, not hand-kept', () => {
+        // Exactly one child per parent may carry the corner, and it must be the
+        // LAST one listed. A fifth worker appended to REASONING_GROUPS moves it
+        // without anyone editing this file.
+        const corners = REASONING_GROUPS.filter(g => reasoningRowLabel(g).includes('\u2514'))
+        const children = REASONING_GROUPS.filter(g => g.includes(':'))
+        expect(corners).toHaveLength(new Set(children.map(g => g.split(':')[0])).size)
+        expect(corners.at(-1)).toBe(children.at(-1))
+    })
+
+    test('a parentless group keeps the think: prefix', () => {
+        for (const group of REASONING_GROUPS.filter(g => !g.includes(':'))) {
+            expect(reasoningRowLabel(group)).toBe(`think: ${group}`)
+        }
+    })
+})
+
 describe('reasoningItems', () => {
+    test('the headless one-liner names the group in full', () => {
+        // `|`-joined on one line, a branch glyph names no parent. The panel
+        // label and the headless label are allowed to differ; only the panel
+        // has a row above to hang the branch from.
+        for (const row of reasoningItems(draft())) {
+            expect(row.headlessLabel).toBe(`think: ${row.id.slice('reason:'.length)}`)
+        }
+    })
+
     test('one row per group, in every mode', () => {
         for (const mode of ['default', 'on', 'off', 'custom'] as const) {
             const rows = reasoningItems(draft({reasoningMode: mode}))

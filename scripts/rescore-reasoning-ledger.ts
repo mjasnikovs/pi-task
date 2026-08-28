@@ -47,6 +47,8 @@ import {
     treePaths
 } from './reasoning-ab-files-truth.js'
 import {GROUP_SCORERS, gateVerdictCorrect, planningPlanFaithful} from './reasoning-ab-scorers.js'
+import {toolingRunnable} from './reasoning-ab-tooling-truth.js'
+import {contextEmittedBullets} from './reasoning-ab-scorers.js'
 import {loadPlanningFixture} from './ab-planning.js'
 import {extractionStimuli} from './reasoning-ab-extraction-truth.js'
 import crypto from 'node:crypto'
@@ -86,6 +88,42 @@ if (path === undefined) {
 }
 const group = positional[1] ?? 'group'
 
+/**
+ * The FILES axis answers to two names.
+ *
+ * `research` was ONE cell until 2026-08-28, when it split into a cell per
+ * worker. ledger-research.jsonl was written under the old name and is literally
+ * a FILES worker replayed in its own before-tree, so it must keep rescoring —
+ * a rename that stranded a ledger would throw away the only research trials
+ * this repo has.
+ */
+const filesAxis = group === 'research' || group === 'research:files'
+const toolingAxis = group === 'research:tooling'
+/**
+ * The two COST groups. Neither has a quality axis — both candidates died at
+ * STEP 0 — so what is rescored here is TERMINATION, and the clock is the
+ * deliverable. `research:context` needs its own reader: its contract is a
+ * BULLET list, and `hasAnswerContent` (the FILES entry shape) rejects a prose
+ * bullet outright. Reusing it scored 40 good answers UNUSABLE and abstained the
+ * first live run with the whole ledger intact.
+ */
+const contextAxis = group === 'research:context'
+/**
+ * `research:apis` HAS NO CELL-DECIDING AXIS EITHER, but it does have a ledger —
+ * and for a while it had no way back into this script: `GROUP_SCORERS` is keyed
+ * by the OLD group names, so `GROUP_SCORERS['research:apis']` is undefined and
+ * the run exited 2 with "no text scorer", while its sibling context ledger
+ * rescored fine. In a repo whose standing rule is "rescore ledgers, never
+ * re-measure" that made one recorded run unreadable.
+ *
+ * APIS entries ARE the `name<gap>description` shape, so production's own reader
+ * is the right TERMINATION check — the same one the live harness passes at the
+ * `research:apis` arm. Any future `research:<worker>` with no axis of its own
+ * lands here rather than on the error path.
+ */
+const apisAxis = group === 'research:apis'
+const scorerKey = apisAxis ? 'research' : group
+
 const rows = readFileSync(path, 'utf8')
     .split('\n')
     .filter(l => l.trim() !== '')
@@ -107,7 +145,7 @@ const labels: AxisLabels =
         // measurement for the ceiling that preceded it.
     : group === 'gate' && rows.some(r => typeof r.truth === 'string') ?
         {quality: 'correct verdict', termination: 'no verdict at all'}
-    : group === 'research' && fromText ?
+    : filesAxis && fromText ?
         {
             quality: precisionOnly ? 'every path real' : 'real + edited named',
             termination: 'non-termination'
@@ -115,6 +153,12 @@ const labels: AxisLabels =
         // Same reason as gate's: `planning` was moved off a SHAPE check that read
         // 10/10 in both arms, and printing "usable output" beside the citation
         // axis is how a reader mistakes one for the other.
+    : contextAxis && fromText ?
+        {quality: 'emitted bullets (TERMINATION ONLY)', termination: 'non-termination'}
+    : apisAxis && fromText ?
+        {quality: 'usable output (TERMINATION ONLY)', termination: 'non-termination'}
+    : toolingAxis && fromText ?
+        {quality: 'every command runs', termination: 'non-termination'}
     : group === 'planning' && fromText ?
         {quality: 'every citation grounded', termination: 'non-termination'}
     :   {quality: 'usable output', termination: 'non-termination'}
@@ -164,7 +208,7 @@ if (fromText) {
      * The row carries `source` — the task id — and the corpus supplies the
      * after-tree, so the trial is fully rescorable with the corpus present.
      */
-    if (group === 'research') {
+    if (filesAxis) {
         const noSource = rows.filter(r => typeof r.source !== 'string')
         if (noSource.length > 0) {
             console.error(
@@ -419,17 +463,13 @@ if (fromText) {
         )
         console.log('')
     }
-    const scorer =
-        group === 'gate' || group === 'research' || group === 'extraction'
-        || group === 'planning' ?
-            undefined
-        :   GROUP_SCORERS[group]
-    if (
-        group !== 'gate' && group !== 'research' && group !== 'extraction'
-        && group !== 'planning' && !scorer
-    ) {
+    const special =
+        group === 'gate' || filesAxis || toolingAxis || contextAxis
+        || group === 'extraction' || group === 'planning'
+    const scorer = special ? undefined : GROUP_SCORERS[scorerKey]
+    if (!special && !scorer) {
         console.error(
-            `ABSTAIN — no text scorer for group "${group}".`
+            `ABSTAIN — no text scorer for group "${scorerKey}".`
                 + ` Known: ${Object.keys(GROUP_SCORERS).join(', ')}.`
                 + ' Pass the group as the second argument.'
         )
@@ -455,14 +495,49 @@ if (fromText) {
     if (group === 'gate') {
         good = (r: Row): boolean =>
             !dead(r) && gateVerdictCorrect(String(r.output), String(r.truth))
-    } else if (group !== 'research' && group !== 'extraction' && group !== 'planning') {
+    } else if (contextAxis) {
+        good = (r: Row): boolean => !dead(r) && contextEmittedBullets(String(r.output))
+    } else if (toolingAxis) {
+        /**
+         * A command is runnable only against the tree ITS OWN task declared, so
+         * the row's `source` is what makes this rescorable — the same shape as
+         * the FILES axis one level up, and for the same reason.
+         */
+        const noSource = rows.filter(r => typeof r.source !== 'string')
+        if (noSource.length > 0) {
+            console.error(
+                `ABSTAIN — ${noSource.length}/${rows.length} tooling rows carry no "source".`
+                    + ' A command resolves against one tree, and without the task id there is'
+                    + ' no tree to resolve it in.'
+            )
+            process.exit(2)
+        }
+        let byId: Map<string, ImplTask>
+        try {
+            byId = new Map(implTasks().map(t => [t.id, t]))
+        } catch (e) {
+            console.error(
+                `ABSTAIN — the corpus at ${MX5} could not be read (${String(e).slice(0, 80)}).`
+            )
+            process.exit(2)
+        }
+        good = (r: Row): boolean => {
+            const t = byId.get(String(r.source))
+            if (!t) throw new Error(`ledger names ${String(r.source)}, not in the corpus`)
+            return !dead(r) && toolingRunnable(String(r.output), t.preCommit)
+        }
+    } else if (!filesAxis && group !== 'extraction' && group !== 'planning') {
         good = (r: Row): boolean => !dead(r) && scorer!(String(r.output))
     }
-    if (group !== 'research' && group !== 'extraction' && group !== 'planning') {
+    if (!filesAxis && group !== 'extraction' && group !== 'planning') {
         const moved = rows.filter(r => good(r) !== stored(r)).length
         console.log(
-            `rescored from text with the "${group}" production scorer:`
-                + ` ${moved}/${rows.length} trial(s) changed side`
+            `rescored from text with the "${group}" `
+                + (toolingAxis ? 'command checker'
+                  : contextAxis ? 'bullet reader (TERMINATION ONLY — not a verdict)'
+                  : apisAxis ? 'entry reader (TERMINATION ONLY — not a verdict)'
+                  : 'production scorer')
+                + `: ${moved}/${rows.length} trial(s) changed side`
                 + (moved === 0 ? ' — the stored judgements already agree with it' : '')
         )
         console.log('')

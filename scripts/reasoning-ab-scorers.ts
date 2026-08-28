@@ -41,6 +41,7 @@ import {hasAnswerContent} from '../src/workers/pi-worker-core.js'
 import {parseVerifyVerdict} from '../src/task/verify-work.js'
 import {parseDecomposeList} from '../src/task/auto-io.js'
 import {extractTitleSource} from '../src/task/decompose-fidelity.js'
+import {countBullets} from '../src/task/context-silence.js'
 
 /**
  * `parseVerifyVerdict`'s sentinel for "the child never stated a verdict".
@@ -234,4 +235,33 @@ export function planningPlanFaithful(text: string, sourceDoc: string): boolean {
         if (extractTitleSource(t, sourceDoc).sources.length !== countSourceClauses(t)) return false
     }
     return true
+}
+
+/**
+ * TERMINATION for `worker:context` — did it emit a bullet list at all?
+ *
+ * NOT A QUALITY AXIS, and the file's own history says why: no quality axis
+ * survived STEP 0 for this worker (path grounding scored the recorded answers
+ * 6/53 — the CHECK loses). This is the shape its prompt asks for, read with
+ * production's own `countBullets`, and nothing more.
+ *
+ * IT EXISTS BECAUSE THE OBVIOUS REUSE WAS WRONG. The first cost run scored
+ * CONTEXT with `hasAnswerContent` — production's ">=2 lines of
+ * `name<gap>description`", which is the FILES entry shape. A CONTEXT bullet is
+ * a prose sentence and ends in a full stop, and `isEntryLine` rejects exactly
+ * that. Every trial in both arms scored UNUSABLE and the run ABSTAINED with 40
+ * good answers in the ledger. That is [[ab-scorer-must-match-the-real-prompt]]
+ * for the fourth time in this file: the scorer must match the CONTRACT THE
+ * CHILD WAS GIVEN, not the contract of the nearest sibling.
+ *
+ * AND THEN IT WAS WRONG BY ONE. The replacement asked for `>= 2` bullets;
+ * production's `classifyContextSilence` calls `countBullets(text) >= 1`
+ * PRODUCTIVE and persists it. A one-bullet answer that production accepts
+ * scored UNUSABLE here, in both arms — the same failure class one notch
+ * smaller. It is now production's own gate, called rather than restated, so it
+ * cannot drift again: `countBullets`, not `splitBullets`, because `countBullets`
+ * is the function the contract is written in.
+ */
+export function contextEmittedBullets(text: string): boolean {
+    return countBullets(text) >= 1
 }
