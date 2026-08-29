@@ -3,24 +3,26 @@
  * `.pi-tasks/` (contracts, launch-contract, env-notes, accept-debt, repair-queue,
  * requirements, requirements-owned).
  *
- * Six modules each kept their own copy of the same seven steps: read the file
- * (ANY error → ''), parse it into records, key the records, drop an incoming item
- * whose key is already present, cap to the newest MAX (oldest dropped), mkdir the
- * tasks dir, write the whole file back (`lines.join('\n') + '\n'`, plain
- * `writeFile`, NOT atomic), and swallow every fault — a ledger is a sharpener or
- * an auditing aid, never a blocker of the phase or gate that calls it. What
- * genuinely varied per site is the DATA SHAPE (file name, cap, key, line format,
- * parser) and exactly one RULE — what an append does when it adds nothing new
- * (see `onNoop`). Everything else here is the ritual, so a module that keeps a
- * ledger is an ADAPTER: it declares its ledger and calls read/append/write.
+ * The ritual is seven steps: read the file (ANY error → ''), parse it into records,
+ * key the records, drop an incoming item whose key is already present, cap to the
+ * newest MAX (oldest dropped), mkdir the tasks dir, write the whole file back
+ * (`lines.join('\n') + '\n'`, plain `writeFile`, NOT atomic). Every fault is
+ * swallowed — a ledger is a sharpener or an auditing aid, never a blocker of the
+ * phase or gate that calls it.
+ *
+ * What varies per site is the DATA SHAPE (file name, cap, key, line format, parser)
+ * and exactly one RULE — what an append does when it adds nothing new (see
+ * `onNoop`). Everything else here is the ritual, so a module that keeps a ledger is
+ * an ADAPTER: it declares its ledger and calls read/append/write.
  *
  * Contract details a caller can rely on:
  *   • `readRaw` is the trimmed file text ('' when absent or unreadable). Prompt-block
  *     builders take this string.
- *   • `read` is `parse(readRaw)`; every parser skips blank lines and lines it cannot
- *     read, so a corrupt line is dropped, never thrown on.
- *   • `append` with an empty batch is a no-op (no read, no write). Within a batch
- *     the first item with a key wins; a key already stored wins over the batch.
+ *   • `read` is `parse(readRaw)`; every adapter's parser skips blank lines and lines
+ *     it cannot read, so a corrupt line is dropped, never thrown on.
+ *   • `append` with an empty batch is a no-op — it does not even create `.pi-tasks/`.
+ *     Within a batch the first item with a key wins; a key already stored wins over
+ *     the batch.
  *   • `write` overwrites with exactly these records; an empty list writes an empty
  *     file (this is how a drained queue and a fully-resolved debt ledger look).
  *   • Neither `append` nor `write` ever throws.
