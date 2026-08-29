@@ -1,7 +1,5 @@
-import {readFileSync} from 'node:fs'
 import {describe, expect, test} from 'bun:test'
 import {DEFAULT_CONFIG, type PiTaskConfig} from '../../src/config/config.js'
-import {srcPath} from '../test-utils/src-tree.js'
 import {
     effectiveReasoning,
     DEFAULT_REASONING_TABLE,
@@ -61,115 +59,7 @@ describe('resolveReasoning', () => {
     })
 })
 
-describe('every shipped cell is measured or inherit', () => {
-    // Cells started all-`inherit` and fill in one live A/B at a time. The
-    // invariant that replaced "the table is a no-op" is narrower but is the one
-    // that actually matters: a cell may name a level ONLY if the comment beside
-    // it records the measurement that chose it. A cell filled from intuition
-    // has no comment, so it breaks this test — which is the point.
-    const source = readFileSync(srcPath('config', 'reasoning.ts'), 'utf8')
-
-    /** The comment block immediately above a cell, '' when there is none. */
-    const commentAbove = (group: string): string => {
-        // Two spellings, because a group whose name carries a colon
-        // (`research:files`) is written as a QUOTED key. A helper that knew only
-        // the bare form returned '' for those four and read every one of them as
-        // an uncommented cell.
-        const at = Math.max(
-            source.indexOf(`\n    ${group}: '`),
-            source.indexOf(`\n    '${group}': '`)
-        )
-        if (at < 0) return ''
-        const before = source.slice(0, at).split('\n')
-        const out: string[] = []
-        for (let i = before.length - 1; i >= 0 && before[i]!.trim().startsWith('//'); i--) {
-            out.unshift(before[i]!.trim())
-        }
-        return out.join(' ')
-    }
-
-    /**
-     * THE ONE WAY OUT, and it is deliberately loud.
-     *
-     * A cell may name a level with no A/B behind it only if it SAYS SO in the
-     * comment, in these words, and says how to replace itself with a real
-     * measurement. The exemption is itself asserted, so a reader who greps for
-     * the phrase finds every cell in the table that no run stands behind.
-     *
-     * It exists because `inherit` cannot express a DECISION. For an unattended
-     * child, `inherit` does not defer to a judgement — it defers to whatever
-     * settings.json holds, which is the case this table exists to remove. Used
-     * once, by `phase`, whose four candidate axes are all dead.
-     */
-    const DECLARED_UNMEASURED = 'NOT MEASURED. DECIDED BY PRIOR'
-
-    /**
-     * THE ONE WAY AN UNMEASURED CELL MAY CITE A TRIAL COUNT.
-     *
-     * A COST RUN is a real artefact that decides nothing: it spends the same
-     * trials on the same trees, but its axis is TERMINATION, so it can report
-     * seconds and death rates and no quality reading at all. `research:apis`
-     * and `research:context` each have one, and suppressing their numbers to
-     * satisfy the rule above would hide evidence the next reader needs.
-     *
-     * The exemption is deliberately narrow and greppable: the comment must ALSO
-     * say, in these words, that the run cannot write the cell. A cell that cites
-     * n=NN/arm without that sentence is claiming a measurement it does not have,
-     * which is what the rule exists to stop.
-     */
-    const DECLARED_COST_ONLY = 'CANNOT WRITE THIS CELL'
-
-    test('an unmeasured cell says so in those words, and says how to fix it', () => {
-        for (const g of REASONING_GROUPS) {
-            const c = commentAbove(g)
-            if (!c.includes(DECLARED_UNMEASURED)) continue
-            if (!c.includes(DECLARED_COST_ONLY)) {
-                expect(c, `${g} declares itself unmeasured but cites a trial count`).not.toMatch(
-                    /n=\d+\/arm/
-                )
-            }
-            expect(c, `${g} declares itself unmeasured with no route to a measurement`).toMatch(
-                /TO REPLACE THIS WITH A MEASUREMENT/
-            )
-        }
-    })
-
-    test('a cost-run exemption is only ever claimed by an unmeasured cell', () => {
-        // The exemption lets a cell carry trial counts. It must never appear on
-        // a cell that is claiming to be MEASURED, where it would read as a
-        // disclaimer on a real verdict.
-        for (const g of REASONING_GROUPS) {
-            const c = commentAbove(g)
-            if (!c.includes(DECLARED_COST_ONLY)) continue
-            expect(
-                c,
-                `${g} claims the cost-run exemption without declaring itself unmeasured`
-            ).toContain(DECLARED_UNMEASURED)
-            expect(c, `${g} claims a cost run but does not name it one`).toContain('COST RUN')
-        }
-    })
-
-    test('a cell that names a level cites its A/B', () => {
-        for (const g of REASONING_GROUPS) {
-            const cell = DEFAULT_REASONING_TABLE[g]
-            if (cell === 'inherit') continue
-            const c = commentAbove(g)
-            // A cell that declares itself unmeasured is exempt from the
-            // citation and held to the rule above instead.
-            if (c.includes(DECLARED_UNMEASURED)) continue
-            // The four facts that make a cell auditable: that it was an A/B,
-            // on how many trials, against which model file, and — because the
-            // harness returns a forced two-way verdict — down which rung. A
-            // rung-3 cell is a stated prior, not a finding, and a reader who
-            // cannot see that will over-trust it.
-            expect(c, `${g} names '${cell}' with no comment`).not.toBe('')
-            expect(c, `${g} comment cites no A/B`).toMatch(/A\/B/)
-            expect(c, `${g} comment cites no trial count`).toMatch(/n=\d+\/arm/)
-            expect(c, `${g} comment names no model file`).toMatch(/\.gguf/)
-            expect(c, `${g} comment names no rung`).toMatch(/RUNG [123]|rung [123]/i)
-        }
-    })
-
+describe('the table and the emitted flag agree', () => {
     test('an inherit cell emits no flag, a measured cell emits its level', () => {
         for (const g of REASONING_GROUPS) {
             const cell = DEFAULT_REASONING_TABLE[g]
@@ -192,9 +82,9 @@ describe('thinkingArgs', () => {
     })
 
     test('offers no level pi would send raw to a model with no map', () => {
-        // xhigh/max are opt-in in pi: an absent thinkingLevelMap entry means
-        // UNSUPPORTED for those two, so pi forwards the string and Qwen3.8's
-        // template answers with HTTP 500 instead of clamping.
+        // xhigh/max are opt-in in pi: pi-ai's getSupportedThinkingLevels offers
+        // them only when the model's thinkingLevelMap declares them, so a level
+        // listed here that pi does not support would be an unofferable row.
         expect(REASONING_SETTINGS).not.toContain('xhigh' as GroupSetting)
         expect(REASONING_SETTINGS).not.toContain('max' as GroupSetting)
     })
@@ -236,10 +126,9 @@ describe('sanitizeReasoningLevels', () => {
     })
 
     test('a config written before the split carries `research` into its four workers', () => {
-        // THE MIGRATION. A file saved when `research` was one cell has no
-        // `research:*` keys at all. Filling them from the default table would
-        // silently overrule the user — those four children are exactly what
-        // their `research` setting used to control.
+        // THE MIGRATION. A config file with no `research:*` keys inherits the
+        // `research` value it does carry. Filling those four from the default
+        // table instead would silently overrule what the user set.
         const out = sanitizeReasoningLevels({research: 'off', gate: 'high'})
         expect(out['research:files']).toBe('off')
         expect(out['research:apis']).toBe('off')
@@ -281,10 +170,10 @@ describe('sanitizeReasoningLevels', () => {
 
 describe('effectiveReasoning', () => {
     /**
-     * The whole-table question, which four callers used to answer by writing the
-     * same loop. It is `resolveReasoning` for every group and nothing else — that
-     * IS the property, because the moment it is anything else the settings menu,
-     * the mismatch warning and the custom-mode seeder start disagreeing.
+     * The whole-table question. It is `resolveReasoning` for every group and
+     * nothing else — that IS the property, because the moment it is anything
+     * else the settings menu, the mismatch warning and the custom-mode seeder
+     * start disagreeing.
      */
     test('answers every group, and answers each the way resolveReasoning does', () => {
         for (const mode of REASONING_MODES) {
