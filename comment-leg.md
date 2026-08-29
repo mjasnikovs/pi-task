@@ -47,7 +47,7 @@ line counts as a comment line but opens no block.
 | `src/shared/child-process.ts` | 690 | 243 | 56 | true |
 | `src/shared/command-watchdog.ts` | 206 | 104 | 17 | true |
 | `src/shared/fs-text.ts` | 26 | 16 | 3 | true |
-| `src/shared/git-runner.ts` | 55 | 31 | 1 | false |
+| `src/shared/git-runner.ts` | 55 | 31 | 1 | true |
 | `src/shared/leaked-tool-call.ts` | 65 | 41 | 6 | false |
 | `src/shared/model-endpoint.ts` | 120 | 51 | 8 | false |
 | `src/shared/pi-invocation.ts` | 33 | 11 | 2 | false |
