@@ -1,6 +1,11 @@
 /**
- * Research enrichment — extract package names and URLs from text so the
- * orchestrator can fan out docs/URL lookups before the research phase.
+ * Research enrichment — extract package names, URLs and named external services
+ * from text so the orchestrator can fan out lookups before the research phase.
+ *
+ * Everything here is order-preserving and deduped. Run on a mixed input: the
+ * denylisted shell names are dropped, a URL's trailing sentence punctuation is
+ * stripped, docs targets stop at ENRICH_CAP while version targets continue to
+ * ENRICH_VERSION_CAP, and the version list is a strict superset of the docs list.
  */
 
 const ENRICH_PKG_RE = /`((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)`/g
@@ -22,12 +27,15 @@ const ENRICH_DENYLIST = new Set([
     'rm'
 ])
 const ENRICH_CAP = 3
-// Heavy docs/url fetches stay capped at ENRICH_CAP (each is a worker spawn +
-// page fetch). A live npm VERSION lookup is just one cheap registry GET, so it
-// can cover far more packages — every dependency a task explicitly names should
-// get a grounded latest-version block, not just the first ENRICH_CAP of them. A
-// a task naming several runtime deps leaves the later ones (e.g. tailwindcss)
-// with NO live version, so a version question fell back to stale training data.
+// Two different caps because the two lookups cost very different things. A docs
+// or URL fetch is a worker spawn plus a page fetch, so those stay at ENRICH_CAP.
+// A live npm VERSION lookup is one cheap registry GET, so it can cover far more:
+// every dependency a task explicitly names should get a grounded latest-version
+// block, not just the first ENRICH_CAP of them.
+//
+// With a single cap, a task naming several runtime deps leaves the later ones with
+// no live version at all, and a question about one of them falls back to whatever
+// the model remembers.
 const ENRICH_VERSION_CAP = 12
 const ENRICH_SERVICE_HEADER = 'EXTERNAL-DEPENDENCIES'
 const ENRICH_HEADER_LINE_RE = /^[A-Z][A-Z0-9 -]+$/
@@ -43,17 +51,21 @@ function parseServices(text: string): Array<{name: string; query: string}> {
         const line = lines[i]
         const trimmed = line.trim()
         if (trimmed === '') break
-        // The refine model sometimes emits the section header twice in a row.
-        // A repeated EXTERNAL-DEPENDENCIES line is not a section terminator —
-        // skip it and keep reading bullets. Any *other* all-caps header still
-        // ends the section.
+        // A repeated EXTERNAL-DEPENDENCIES line is not a section terminator: the
+        // model sometimes emits the header twice in a row, and treating the second
+        // one as the end would drop every bullet under it. Skip it and keep
+        // reading. Any OTHER all-caps header still ends the section, and so does a
+        // blank line — both confirmed.
         if (trimmed === ENRICH_SERVICE_HEADER) continue
         if (ENRICH_HEADER_LINE_RE.test(trimmed)) break
         const m = line.match(ENRICH_SERVICE_BULLET_RE)
         if (!m) continue
         const name = m[1].trim()
-        // Dedupe by name (case-insensitive); the model also duplicates bullets.
-        // Keep the first occurrence's query and count uniques against the cap.
+        // Dedupe by name, case-insensitively, because the model duplicates bullets
+        // as well as headers. The FIRST occurrence's query is kept, and only
+        // uniques count against the cap — so a duplicate cannot crowd out a real
+        // service. Confirmed: `Stripe` and a later `stripe` collapse to one entry
+        // carrying the first query.
         const key = name.toLowerCase()
         if (seen.has(key)) continue
         seen.add(key)

@@ -86,7 +86,7 @@ line counts as a comment line but opens no block.
 | `src/task/dropped-input.ts` | 40 | 13 | 3 | true |
 | `src/task/enforce-attribution.ts` | 236 | 109 | 25 | true |
 | `src/task/enforce-guidelines.ts` | 440 | 183 | 29 | true |
-| `src/task/enrichment.ts` | 95 | 4 | 1 | false |
+| `src/task/enrichment.ts` | 95 | 4 | 1 | true |
 | `src/task/env-notes.ts` | 222 | 83 | 14 | false |
 | `src/task/env-template-closure.ts` | 448 | 160 | 48 | false |
 | `src/task/external-context.ts` | 260 | 92 | 21 | false |
