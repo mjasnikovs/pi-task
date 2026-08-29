@@ -17,8 +17,10 @@ import {MAX_GRILL_QUESTIONS} from './phases.js'
  *     bare recommendation): a genuine open fork carrying a best-effort suggestion.
  *   - 'api-synthesis' — the answer was ANSWERED, then DEMOTED because it names an
  *     API identifier absent from the research and the question, in a namespace the
- *     research covers (an invented `Bun.mkdirSync` can reach requirements
- *     AND the VERIFY block). The suggestion rides along for a HUMAN to judge.
+ *     research covers. `Bun.mkdirSync` is the shape: bun-types declares no such
+ *     member, but an answer naming it reads as authoritative and can reach both
+ *     requirements and the VERIFY block. The suggestion rides along for a HUMAN
+ *     to judge.
  *   - 'integration' — an integration/build-wiring unknown no fetched doc grounded;
  *     a wrong guess is a structural landmine, so the model's answer is offered as
  *     a recommendation instead of being taken silently.
@@ -262,10 +264,10 @@ export function deriveTitle(refined: string): string {
 
 // ─── Display label ───────────────────────────────────────────────────────────
 //
-// `title` is stored in full (a refine GOAL paragraph can be 1000+ chars — see
-// the "no truncation at storage" contract in deriveTitle). These helpers shrink
-// it for status surfaces (widget head, /task list) WITHOUT touching what's
-// stored: the pipeline always reads the full title. A model-compressed `label`
+// `title` is stored in full: `deriveTitle` returns the GOAL line whole, however
+// long it is, and nothing clamps it on the way to disk. These helpers shrink it
+// for status surfaces (widget head, /task list) WITHOUT touching what is stored —
+// the pipeline always reads the full title. A model-compressed `label`
 // is preferred when present (see title-label.ts); otherwise we fall back to a
 // deterministic, word-boundary truncation so a label-less task still reads
 // cleanly.
