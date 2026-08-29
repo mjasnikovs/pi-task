@@ -3,24 +3,30 @@
  *
  * A cancel is a *request*, never a kill. It is honoured only where the on-disk
  * state is durable and /task-auto-resume provably continues from it. Killing a
- * child mid-phase would also stop the run (the abort signal already reaches
- * every child's process group) but throws away that phase's work and can leave
- * a half-written tree — so the flag is polled at boundaries instead.
+ * child mid-phase would also stop the run — the abort signal reaches every
+ * child's process group — but it throws away that phase's work and can leave a
+ * half-written tree, so the flag is polled at boundaries instead.
  *
- * The checkpoint set, and why each one is safe:
+ * The checkpoint set is exactly these four, one call site each:
  *
- *   loop-top       the previous task is checked off + committed and the next one
- *                  has not started. The original (and until now the ONLY) point.
- *   pre-task       after the pre-task checkpoint commit, before the runner is
- *                  constructed: tree committed, no inner id stamped yet, so the
- *                  entry is simply still unchecked and a resume restarts it.
- *   phase:<name>   inside the runner's phase loop, after setTaskSection +
- *                  postCommitPhase have persisted the phase output and
- *                  front-matter `phase` names the NEXT phase. This is exactly
- *                  the state /task-resume already resumes from (PHASE_INDEX
- *                  skip-forward), so a cancel here costs nothing.
- *   pre-final-gate every task is checked off and committed; the whole-repo gate
- *                  has not started. A resume re-enters the same branch.
+ *   loop-top       (auto-orchestrator) the previous task is checked off and
+ *                  committed and the next one has not started.
+ *   pre-task       (auto-orchestrator) after the pre-task checkpoint commit,
+ *                  before the runner is constructed: tree committed, no inner id
+ *                  stamped yet, so the entry is simply still unchecked and a
+ *                  resume restarts it.
+ *   phase:<name>   (orchestrator, inside the phase loop) after setTaskSection and
+ *                  postCommitPhase have persisted this phase's output. Front-matter
+ *                  `phase` still names the phase that JUST FINISHED, not the next
+ *                  one: `advance()` writes it at the TOP of each iteration and
+ *                  nothing moves it afterwards — postCommitPhase writes only
+ *                  `title` and `label`. Since the resume skip rule is
+ *                  `idx < resumeIdx`, a resume therefore RE-ENTERS this phase and
+ *                  runs it again. Nothing is lost, because its section is already
+ *                  on disk; the cost is repeating one phase, not zero.
+ *   pre-final-gate (run-final-gate) every task is checked off and committed; the
+ *                  whole-repo gate has not started. A resume re-enters the same
+ *                  branch.
  *
  * DELIBERATELY NOT checkpoints — stopping here is not safe:
  *   - mid implementation turn: uncommitted, half-applied edits. The user's ESC
@@ -30,14 +36,16 @@
  *     durable. Cancel is observed on the far side, at loop-top.
  */
 
-/** Every place the cancel flag is polled. Kept as a closed union so the tests
- *  enumerate the same set the loop does. */
+/** Every place the cancel flag is polled. A closed union so the tests enumerate
+ *  the same set the loop does — and they do: cancel-points.test.ts asserts on the
+ *  recorded trail rather than on the loop's own bookkeeping. */
 export type CancelCheckpoint = 'loop-top' | 'pre-task' | 'pre-final-gate' | `phase:${string}`
 
 let requested = false
 
 /** Checkpoints actually reached since the last reset, in order. Instrumentation
- *  for the tests — never read by the loop itself. */
+ *  only: `checkpointsCrossed` and `resetCheckpointTrail` have no caller anywhere
+ *  in src/ — every consumer is a test. */
 const crossed: CancelCheckpoint[] = []
 
 export function requestCancel(): void {
@@ -75,9 +83,10 @@ export function resetCheckpointTrail(): void {
  */
 export function cancelCheckpoint(where: CancelCheckpoint): boolean {
     crossed.push(where)
-    // CANCEL_AB_ARM=baseline reproduces the behaviour before these checkpoints
-    // existed: the flag is observed at the loop top and nowhere else. Set only by
-    // a measuring harness, so the two arms differ in exactly one thing.
+    // CANCEL_AB_ARM=baseline collapses the checkpoint set back to loop-top alone,
+    // so the two arms differ in exactly one thing. Nothing in src/ ever sets it;
+    // the only writer in the tree is cancel-points.test.ts, which uses it to pin
+    // that the extra checkpoints — and only they — are what the flag gates.
     if (process.env.CANCEL_AB_ARM === 'baseline' && where !== 'loop-top') return false
     return requested
 }
