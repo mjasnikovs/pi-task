@@ -57,14 +57,20 @@ export interface AskSpec {
     displayQuestion?: string
     /** Plain question text for the browser card. */
     question: string
-    /** Primary recommended option, prefilled in the local TUI. */
+    /**
+     * Primary recommended option. It is the remote card's "✓ Accept" answer.
+     * Locally it is handed to `ctx.ui.input` as the placeholder argument, which
+     * pi's interactive input component takes and never reads — so with no
+     * `options` the local box opens empty.
+     */
     recommended?: string
     /**
-     * Placeholder for the local TUI text input when there is NO recommended
-     * option. Local-only: the remote card must not see it, or it would render as
-     * an acceptable recommendation ("✓ Accept" answering with placeholder text).
-     * Used by the steer prompt, whose hint ("type guidance, or leave empty…") is
-     * instructional copy, not an answer.
+     * Instructional copy for the local TUI text input when there is NO
+     * recommended option. Local-only, and deliberately absent from the
+     * PromptMessage below: on the remote it would render as an acceptable
+     * recommendation ("✓ Accept" answering with instructional text). Its one
+     * producer is the steer prompt. Like `recommended` it reaches pi as the
+     * `input` placeholder, which pi's input component ignores.
      */
     localPlaceholder?: string
     /** Secondary recommended option shown as a second button on the remote. */
@@ -76,8 +82,10 @@ export interface AskSpec {
      * a bare text input — one option per line, arrow-key navigable. Each entry's
      * `label` is what the picker displays; its `value` is what ask() resolves to
      * when chosen. A built-in "type a different answer" entry is appended that
-     * falls back to a text input, preserving the free-text override. Used for the
-     * binary A/B grill/clarify fork. Remote browsers ignore this and keep
+     * falls back to a text input, preserving the free-text override. Produced by
+     * the two-option grill/clarify fork, whose cards are labelled `A:` and `B:`
+     * (buildOptionCards), and by /task-plan's picker. The PromptMessage built in
+     * ask() carries no `options` field, so remote browsers never see it and keep
      * rendering recommended/recommended2 as buttons.
      */
     options?: {label: string; value: string}[]
@@ -98,8 +106,9 @@ export interface AskSpec {
      * which the remote already covers with the recommended/recommended2 buttons —
      * these are ACTIONS that mean something other than "here is my answer", so
      * the remote cannot express them by any existing field. /task-plan's "ask the
-     * model" and "proceed to execution" are the only producers; every other call
-     * site omits this and the card is byte-for-byte what it was.
+     * model" and "proceed to execution" are the only producers; for every other
+     * prompt the list is empty, and the browser's makeActionBtns then appends
+     * nothing to the card.
      */
     actions?: {label: string; value: string}[]
 }
@@ -144,8 +153,9 @@ export class SessionUI {
         // so we always push and let delivery-time visibility decide.
         void pushNotify('pi needs your input', spec.question, 'pi-prompt').catch(() => {})
 
-        // Local: resolves to a value/undefined, or undefined on abort. Swallow
-        // the rejection some implementations throw on abort so it never leaks.
+        // Local: resolves to a value, or to undefined on cancel or abort. The
+        // catch is belt-and-braces — a rejection here would surface as an
+        // unhandled one rather than as a lost race.
         const local: Promise<string | undefined> =
             this.ctx.hasUI ?
                 this.askLocal(spec, ac.signal).catch(() => undefined)
