@@ -5,28 +5,24 @@
  * Five children run under the gates: `verify`, `recommend`, `lint-fix`,
  * `final-fix` and `enforce`. All five share one ritual — reset the widget state,
  * stamp the start, open a per-gate debug log, write a start marker, raise a
- * status loader, call `runWorker` unguarded (no wall clock, exact-match loop
- * guard only), warn on a surviving loop, classify the failure, write an end
- * marker, throw on failure, and stop the loader in a `finally`. That was ~85
- * lines, and it was written TWICE: once as `makeGateChild` and once as an inline
- * closure for `enforce`, whose comments repeated the originals verbatim.
+ * status loader, call `runWorker` on the `gate` profile (no wall clock; the
+ * path-revisit loop rule disabled, leaving the exact-match rule), warn on a
+ * surviving loop, classify the failure, write an end marker, throw on failure,
+ * and stop the loader — `ChildStatus.track` does that last one in a `finally`,
+ * so a throwing child never leaves the widget up.
  *
- * The enforce copy differed in exactly four things — no git-state guard, no
- * tool-result logging, no tree-change capture, and a different end marker — which
- * is why they are row data here rather than a forked body. Apply the deletion
- * test to that copy and it passes: routing enforce through this concentrates the
- * differences into a table instead of moving them.
+ * Only THREE of the differences between the kinds are row data below: the
+ * git-state guard, tool-result logging, and the end marker (plus the loader's
+ * step label). Tree-change capture is deliberately NOT a row — it is decided at
+ * the bottom of this file by a test on the child's TOOLS, so a future
+ * write-capable kind gets it without anyone remembering to set a flag.
  *
- * The second reason for the module is that all of it would otherwise live inside
- * `buildGateDeps`'s closure, so nothing about it was reachable from a test:
- * `buildGateDeps` is ~700 lines and is never called by the suite. The
- * git-state-guard wiring in particular — snapshot, restore-in-`finally`,
- * `verdictTainted` — is the mechanism that discards a verify verdict computed on
- * a tree the child mutated (a verify child can `git stash` the
- * task's uncommitted work and never popped it), and it could only be checked
- * indirectly through a fake `mutationCheck` one layer up. Here `runWorker` and
- * the git helpers are injected, so the ordering, the trail lines and the
- * throwing-child path are all directly assertable.
+ * The module exists so this is reachable from a test at all. It would otherwise
+ * live inside `buildGateDeps`'s closure, and the git-state-guard wiring in
+ * particular — snapshot, restore-in-`finally`, `verdictTainted` — is what
+ * discards a verify verdict computed on a tree the child itself mutated. Here
+ * `runWorker` and the git helpers are injected, so the ordering, the trail lines
+ * and the throwing-child path are directly assertable.
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -41,16 +37,17 @@ export type GateChildKind = 'verify' | 'recommend' | 'lint-fix' | 'final-fix' | 
 
 export interface GateChildRow {
     /**
-     * Snapshot the tree before and restore after. These children are read-only BY
-     * CONTRACT, but the contract is prompt-level and the live model breaks it.
-     * `lint-fix` and `final-fix` are excluded because editing is their job (they
-     * carry their own revert guards), and `enforce` because it edits too.
+     * Snapshot the tree before and restore after. `verify` and `recommend` are
+     * read-only BY CONTRACT, but that contract is only prompt-level — nothing
+     * stops the child mutating the tree, so the restore is what makes it hold.
+     * `lint-fix` and `final-fix` are excluded because editing is their job and
+     * they carry their own revert guards; `enforce` because it edits too.
      */
     guarded: boolean
     /**
-     * Log tool OUTPUTS, not just the calls: without the result,
-     * "verify claimed curl PASS on a server that cannot serve" is undecidable from
-     * the log. Off for `enforce`, whose log is a per-pass verdict trail.
+     * Log tool OUTPUTS, not just the calls. Without the result, a claim like
+     * "verify ran curl and it passed" cannot be checked against what the command
+     * actually printed. Off for `enforce`, whose log is a per-pass verdict trail.
      */
     logToolResults: boolean
     /** The loader's step label. */
@@ -90,7 +87,9 @@ export interface GateChildDeps {
      * verify gate does). Two loaders on one widget key only fight each other.
      */
     loader?: boolean
-    /** Per-command ceiling; pi's bash tool has no default timeout. */
+    /** Per-command ceiling. pi's bash tool has none of its own: its schema
+     *  describes `timeout` as "optional, no default timeout", and
+     *  `resolveTimeoutMs(undefined)` returns undefined. */
     commandTimeoutMs: number
     /** Hung-stream bound; the probe-based stall guard cannot supply it. */
     streamInactivityMs: number
@@ -147,9 +146,11 @@ export function makeGateChild(
         deps.status.reset()
         const startedAt = Date.now()
         // Every marker below (start/end, the guard's restore, the loop warning, a
-        // write-capable child's tree changes) is a guard record that survives at
-        // the default level. Only the child's own stdout and its tool results
-        // pass 'stream'.
+        // write-capable child's tree changes) goes through `log` with no kind, so
+        // it defaults to 'event'. The shipped default level is 'events', where
+        // shouldLogDebug keeps 'event' and drops 'stream' — so the audit trail
+        // survives while the child's own stdout and its tool results, the only
+        // things passed as 'stream', do not.
         const log = deps.makeDebugAppender(deps.logPath)
         log(`=== ${deps.kind} start: ${deps.taskTitle} ===`)
         const guardSnapshot = row.guarded ? await deps.captureGitState(deps.cwd, sig) : null
@@ -172,12 +173,13 @@ export function makeGateChild(
                     cwd: deps.cwd,
                     ...(sig ? {signal: sig} : {}),
                     tools,
-                    // The four guard literals — run to
-                    // completion, a per-command watchdog, a stream watchdog, and
-                    // the path rule disabled — are the `gate` row of
-                    // WORKER_PROFILES (workers/worker-profiles.ts), which carries
-                    // the reasoning for each. The two ceilings stay inputs
-                    // because they are user config, not policy.
+                    // The four guard literals — run to completion, a per-command
+                    // watchdog, a stream watchdog, and the path-revisit rule
+                    // disabled — are the `gate` row of WORKER_PROFILES
+                    // (workers/worker-profiles.ts), whose resolve() sets
+                    // worker-timeout to {timeoutMs: 0} and pathThreshold to
+                    // Infinity. The two ceilings stay inputs because they are user
+                    // config, not policy.
                     profile: 'gate',
                     policyInputs: {
                         commandTimeoutMs: deps.commandTimeoutMs,
@@ -213,8 +215,10 @@ export function makeGateChild(
                         }
                     :   {}),
                     onContextUsage: snapshot => deps.status.onContextUsage(snapshot),
-                    // The gate child has to be TOLD its window: nothing in pi's
-                    // event stream reports one (issue #16).
+                    // The gate child has to be TOLD its window. pi's session event
+                    // stream — what `--mode json` emits — carries token counts but
+                    // no context window; `contextWindow` appears nowhere in
+                    // agent-session.d.ts.
                     contextWindow: deps.status.parentContextWindow
                 })
             } finally {
@@ -264,10 +268,10 @@ export function makeGateChild(
                 :   `=== ${deps.kind} end: ${row.okMarker} ===`
             )
             if (failure) throw new Error(failure)
-            // CAPABILITY-LEVEL diff capture: any WRITE-capable child —
-            // decided by its TOOLS, not by which phase spawned it — gets its tree
-            // changes logged, so a future write-capable kind cannot run invisibly
-            // the way the final-fix child's `rm` did.
+            // CAPABILITY-LEVEL diff capture: any WRITE-capable child — decided by
+            // its TOOLS, not by which phase spawned it or by a row in the table
+            // above — gets its tree changes logged, so a future write-capable kind
+            // cannot run invisibly.
             if (/\b(?:edit|bash|write)\b/.test(tools)) {
                 log(
                     `=== ${deps.kind} tree changes: `
