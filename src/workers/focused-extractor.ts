@@ -49,7 +49,7 @@ export interface FocusedRequest {
     prompt: string
     /**
      * The text the cited excerpt is checked against — a NAMED knob, because the four call
-     * sites deliberately disagree and the disagreement used to be invisible.
+     * sites deliberately disagree, and unnamed the disagreement is invisible.
      *
      * `pi-worker-docs` and `docsFocused` pass exactly the concatenated chunks that went into
      * the prompt. `fetchFocused` passes the FULL cleaned page while prompting with only the

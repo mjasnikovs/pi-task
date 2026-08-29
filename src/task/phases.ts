@@ -161,8 +161,8 @@ export interface PhaseConfig {
      * that matters: it drops constraints research REFUTED from `refined`, critique
      * re-reads `refined` as GROUND TRUTH under a prompt that says CONSTRAINTS "MUST
      * be preserved", and `## refined prompt` on disk is deliberately left as refine
-     * wrote it. A resume at critique used to hand the refuted constraint straight
-     * back — the run-19 defect, restored by the very machinery that closed it.
+     * wrote it. A resume at critique hands the refuted constraint straight
+     * back — the defect, restored by the very machinery that closed it.
      *
      * The trail is returned rather than written so the replay cannot duplicate a
      * gate line the live run already recorded.
@@ -288,7 +288,7 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
  * requirement quotes travel INTO every task's spec generation, so a mandated
  * methodology ("a test lands in the same change as each new route") reaches the
  * task's GOAL/CONSTRAINTS and its VERIFY — a pointer back to the spec doc
- * recovered the dropped §10 in only 1 of ~6 applicable run-11 tasks; content
+ * recovered the dropped §10 in only 1 of ~6 applicable tasks; content
  * travels, pointers don't. Both blocks are '' outside their runs, so a bare
  * /task is byte-identical to before.
  */
@@ -304,7 +304,7 @@ export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
  * the plan title the coverage map keyed them to, which is the task's stored
  * `raw prompt` section verbatim. Empty outside /task-auto runs, for spliced
  * repair tasks, and when the plan recorded no mapping — all of which degrade to
- * the pre-run-16 behavior. This is the BELT (prompt block, into refine +
+ * the pre-behavior. This is the BELT (prompt block, into refine +
  * compose); appendOwnedConstraints on the final spec is the BRACES. The belt
  * alone rarely gets the clause folded in.
  */
@@ -493,7 +493,7 @@ export function searchConfigured(
     getEnv: (k: string) => string | undefined = k => process.env[k],
     provider: SearchProvider = getConfig().searchProvider
 ): boolean {
-    // Asks the SAME row `search()` asks. This used to re-state brave's env pair
+    // Asks the SAME row `search()` asks. Re-stating brave's env pair here
     // under a comment saying it "mirrors search-core's lookup" — two statements of
     // one fact, and the one that decides whether the APIS worker is even handed the
     // search tool.
@@ -791,7 +791,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // ride along only when a Brave key exists — see SEARCH_EXTENSION_PATH.
             // FILES' finished map rides along when available (serial default), so
             // the worker doesn't re-derive where-things-live via docs-"."
-            // queries the FILES worker just answered (run-7 F7: up to 10
+            // queries the FILES worker just answered (a F7: up to 10
             // duplicate `.`-decodes per task through the serial bottleneck).
             prompt: prior =>
                 orientation.block
@@ -807,12 +807,12 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 // to the worker as a broken tool.
                 + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget)),
             // The tools string and the `-e` paths are ONE fact — which worker
-            // channels this research worker is given — and used to be two literals
+            // channels this research worker is given — and would otherwise be two literals
             // kept in step by eye. `channelSet` derives both from the same rows.
             tools: `read,grep,find,ls,${apisChannels.tools}`,
             fanoutBounded: true,
             extensions: apisChannels.extensions,
-            // ZERO-RETRIEVAL GATE (run-15 F-1, distinct from the STAGE 1-3 stopping-point
+            // ZERO-RETRIEVAL GATE (a F-1, distinct from the STAGE 1-3 stopping-point
             // thread). In a MINORITY of reps worker:apis emits a complete, plausible APIS section
             // having made ZERO retrieval tool calls — the whole thing recalled from memory.
             // The output contract at RESEARCH_APIS_PROMPT already INSTRUCTS tool use and the
@@ -917,7 +917,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 taskId: deps.taskId,
                 signal: deps.signal,
                 spawn: deps.spawn,
-                // ONE CELL PER WORKER since 2026-08-28. The four workers used to
+                // ONE CELL PER WORKER. Sharing one cell, the four workers would
                 // share the `research` cell on the grounds that they are the same
                 // job over four questions; the run logs disagree. The cells DO NOT
                 // ship identical — the evidence is on each of them in reasoning.ts.
@@ -1129,7 +1129,7 @@ export async function phaseGrill(
     const ui = new SessionUI(ctx)
     // ONE record, two renderings (task/qa-transcript.ts): `forRecord()` is what
     // compose and critique are handed, `forGenerator()` is what the next grill-gen
-    // call sees. The provenance rule below used to be a comment 12 lines under a
+    // call sees. Stated as a comment a dozen lines under a
     // push that broke it.
     const transcript = new QaTranscript(GRILL_QA_POLICY)
     const askedQuestions: string[] = [] // plain text of each question, for the dup backstop
@@ -1229,7 +1229,7 @@ export async function phaseGrill(
  * refine wrote it; the drop is recorded on the `## gates` trail with both source
  * lines quoted, so the decision stays auditable after the fact.
  *
- * STEP 0 `scripts/refuted-constraint-baserate.ts`; A/B-1 `…-ab.ts` (PASS).
+ * Base rate first, then a two-armed A/B, which passed.
  */
 export async function dropRefutedConstraints(
     deps: PhaseDeps,
@@ -1344,7 +1344,7 @@ export async function phaseCritique(
     // model does not self-discover reliably, each forced into the rewrite and each
     // overriding a CLEAN triage. They live as rows in CRITIQUE_PROBES
     // (critique-probes.ts) so the override and the merge below are DERIVED from
-    // the table rather than retyped — a probe used to be listed by hand in three
+    // the table rather than retyped — a probe would otherwise be listed by hand in three
     // places, and forgetting the override term shipped the very defect it was
     // added to catch.
     //
@@ -1545,7 +1545,7 @@ export async function composePhase(d: PhaseDeps, p: PhaseContext): Promise<strin
  * must run after it in THIS ORDER.
  *
  * BRACES: append any owned design obligation the spec still omits as a
- * CONSTRAINTS bullet. The belt block upstream is obeyed ~25% (measured); a host-side
+ * CONSTRAINTS bullet. The belt block upstream is obeyed only sometimes; a host-side
  * append is obeyed by construction. Idempotent — quotes the spec already carries
  * (belt-obeying reps) are skipped.
  *

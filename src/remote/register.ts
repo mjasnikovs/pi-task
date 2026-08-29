@@ -55,9 +55,9 @@ export function routePlainLine(
 ): void {
     addUserTurn(plain)
     // Read the run flag from SessionState, which is the only thing that owns it.
-    // There used to be a mirror of it here (remote/state.ts: a module-level `let`
-    // plus a getter/setter, set alongside agentStart/agentEnd in events.ts). Two
-    // sources of truth for one boolean, and they disagreed twice over: SessionState
+    // A mirror of it here — a module-level `let` plus a getter/setter, set
+    // alongside agentStart/agentEnd — would be two sources of truth for one
+    // boolean, and they disagree in both directions: SessionState
     // also clears agentRunning in addError and reset, neither of which touched the
     // mirror — so an errored turn or a /new left this branch steering into a turn
     // SessionState already considered finished. And the mirror was a plain module

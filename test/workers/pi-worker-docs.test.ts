@@ -298,7 +298,7 @@ test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', asy
 /**
  * CAP arm of  (src/task/research-fanout-budget.ts) — UNWIRED: the
  * budget is off unless PI_TASK_PROJECT_DOCS_BUDGET is set, which only
- * scripts/live-research-fanout-budget-ab.ts does.
+ * a fan-out budget harness does.
  *
  * The property that matters is where the refusal happens: BEFORE the child spawn.
  * The cost this lever exists to remove is the summarising model pass each

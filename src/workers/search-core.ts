@@ -29,11 +29,11 @@ export type SearchCoreResult =
 /**
  * One engine, as an adapter: what to call, and what it needs.
  *
- * `SearchProvider` used to be a union with nothing behind it, so every consumer
- * branched on it by hand — `search()` had a brave special case plus a two-arm
- * ternary, the three engine functions arrived as three separate seams on
- * `SearchCoreInput`, the three error classes were reconciled by matching
- * `err.name` as a STRING, and brave's key requirement was stated a second time in
+ * As a union with nothing behind it, `SearchProvider` makes every consumer branch
+ * on it by hand — `search()` needs a brave special case plus a two-arm ternary,
+ * the three engine functions arrive as three separate seams on `SearchCoreInput`,
+ * the three error classes get reconciled by matching `err.name` as a STRING, and
+ * brave's key requirement is stated a second time in
  * phases.ts. Adding an engine meant finding all of that.
  *
  * The rows below are the whole of it. `key` is `''` for a keyless engine and the
@@ -105,10 +105,10 @@ export async function search(input: SearchCoreInput): Promise<SearchCoreResult> 
         return {kind: 'ok', results}
     } catch (err) {
         // Which throws already carry a finished user-facing message is the engine's
-        // own fact, so it is a row. This used to be an `err.name ===
-        // 'BraveSearchError'` STRING match in a brave-only branch — the check
-        // existed only because brave was reached down a different path from the
-        // other two, and it is the reason a subclass rename would have gone
+        // own fact, so it is a row. As an `err.name === 'BraveSearchError'` STRING
+        // match in a brave-only branch, the check exists only because brave is
+        // reached down a different path from the other two, and it is why a
+        // subclass rename would go
         // unnoticed.
         const message = err instanceof Error ? err.message : String(err)
         const known =

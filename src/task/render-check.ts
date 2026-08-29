@@ -16,7 +16,7 @@
  * only found), load the page once with `--headless --dump-dom` (which executes the
  * page's JS under a virtual-time budget), and judge the RENDERED body: it must
  * contain visible text or concrete visual/interactive elements. A blank mount
- * point after JS ran is the run-8 class — FAIL with the body's shape. What it
+ * point after JS ran is the class — FAIL with the body's shape. What it
  * deliberately does NOT judge: correctness of what rendered ('s 404-below-
  * login needs app knowledge no generic gate has).
  *
@@ -176,7 +176,7 @@ const MAX_CONSOLE_LINES = 12
 /**
  * The page's console output, as captured while the DOM was being rendered.
  *
- * MEASURED on this box (2026-08-14) against the shipped run-21 bundle, both
+ * MEASURED on this box (2026-08-14) against the shipped bundle, both
  * binaries the probe can discover:
  *
  *     /usr/bin/chromium              --dump-dom alone → 0 bytes of stderr

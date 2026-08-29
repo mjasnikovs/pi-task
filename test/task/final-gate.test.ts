@@ -1444,8 +1444,8 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
  * discovered and env-gap-skipped, while every other dynamic command ran and
  * passed — so dynObserved > 0, observabilityGapFailure stayed correctly quiet, and
  * "the app was never observed to boot" produced byte-identical output to "the app
- * booted fine". Harnesses: scripts/boot-skip-baserate.ts (base rate),
- * scripts/boot-skip-verdict-ab.ts (A/B), scripts/boot-skip-fp-suite.ts (zero-FP).
+ * booted fine". Backed by a base rate, a two-armed A/B, and a
+ * zero-false-positive suite.
  */
 describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
     /** A served app (hono in deps is what detectsServedApp reads) whose `dev`

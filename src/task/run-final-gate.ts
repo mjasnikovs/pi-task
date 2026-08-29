@@ -84,7 +84,7 @@ export interface FinalGateStageDeps {
     /**
      * Re-derive the still-open ACCEPT-debt ledger against the tree AS IT IS NOW
      * (final-gate.ts `deriveOpenDebts`). Needed because the run's "N recorded
-     * verify-FAIL defect(s) are STILL unresolved" report used to be built from the
+     * verify-FAIL defect(s) are STILL unresolved" report would otherwise be built from the
      * FIRST gate result and the converged-autofix path then rebuilt the gate outcome
      * as a bare `{ok, reason}` — so `openDebts` was not merely un-actioned, it was GONE
      * from the value, and no code path could ever clear, re-check or act on it (run
@@ -329,7 +329,7 @@ export async function runFinalGateStage(
     }
     /**
      * . The lines above are emitted from the FIRST gate result;
-     * the converged-autofix paths below used to rebuild `fin` as `{ok, reason}`, so
+     * the converged-autofix paths below rebuild `fin` as `{ok, reason}`, so
      * `openDebts` did not survive the fix pass — the run's last word on its own defects
      * was a snapshot of a tree that no longer existed, and no code path could clear,
      * re-check or act on it. Re-derive here, against the tree the run actually ends
@@ -407,7 +407,7 @@ export async function runFinalGateStage(
     // sub-fixes, the previous failure signature, the demoted set and the
     // rejected-edits flag. Six closure-threaded locals before, and the
     // non-progress rule applied downstream from the evidence it judges — the shape
-    // `final-gate-progress.ts`'s own comment names as the run-21 defect.
+    // `final-gate-progress.ts`'s own comment names as the defect.
     // `GateTally`'s twin, one altitude up (autofix-ledger.ts).
     const ledger = new AutofixLedger(MAX_FINAL_GATE_AUTOFIX)
     const refreshStranded = async (): Promise<void> => {
@@ -561,9 +561,9 @@ export async function runFinalGateStage(
                     fix.unobserved ? 'warning' : 'info'
                 )
                 // The gate's own outcome, whole, with this door's reason on it. It
-                // used to be a two-key literal, so `openDebts` and `observedFailures`
+                // as a two-key literal, `openDebts` and `observedFailures`
                 // were dropped and `reconcileDebts` was the only thing putting one of
-                // them back — the recorded run-18 defect.
+                // them back — the recorded defect.
                 fin = {...(fix.gate ?? fin), ok: true, reason: fix.reason}
                 // The gate itself just passed, statics included, so `staticOk` here is
                 // proof rather than assumption.
@@ -657,9 +657,9 @@ export async function runFinalGateStage(
             // Outcome to outcome. The base is the FRESH gate outcome when the fix
             // pass got as far as re-running it, otherwise the one we already hold —
             // and either way it arrives whole, so nothing (`openDebts`,
-            // `observedFailures`) is dropped by the assignment. This used to be a
+            // `observedFailures`) is dropped by the assignment. As a
             // literal with four keys, and the field it omitted is the recorded
-            // run-18 defect.
+            // defect.
             const base = fix.gate ?? fin
             const carried = base.failures === undefined ? undefined : ledger.remaining(base)
             fin = {

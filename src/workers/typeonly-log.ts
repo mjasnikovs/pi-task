@@ -6,8 +6,7 @@
  * broken for a reason this module fixes: the metric counted ALL research terminations while
  * the lever touches only TYPE-ONLY answers, and nothing anywhere recorded how often a
  * type-only answer actually occurs. The causal claim "workers stop BECAUSE of type-only
- * answers" was asserted from one static corpus (1 flag in 150 recorded answers, 0.7%) and
- * never measured live. You cannot size an arm, pick a metric, or decide whether the lever is
+ * answers" was asserted from one static corpus and never measured live. You cannot size an arm, pick a metric, or decide whether the lever is
  * a population fix or a single-case guard without that firing rate.
  *
  * WHAT IT DOES. When `PI_TASK_TYPEONLY_LOG` names a file, every pi-worker-docs answer — not
@@ -69,8 +68,8 @@ export interface TypeOnlyLogRecord {
      * says WHAT was claimed, and this says what it was checked against, so a false verdict can
      * be attributed to fabrication (the excerpt is nowhere near the content) rather than a
      * normaliser gap (a markdown-escape variant of text that IS present) without re-running
-     * the lookup. Only fetch's extractor used to keep it; all four focused-extractor call
-     * sites now can (workers/focused-extractor.ts). Optional — records predating it parse.
+     * the lookup. All four focused-extractor call sites can keep it
+     * (workers/focused-extractor.ts). Optional — older records still parse.
      */
     excerptCheck?: ExcerptVerification
     /**

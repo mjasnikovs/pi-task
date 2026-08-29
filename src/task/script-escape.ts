@@ -11,7 +11,7 @@
  * a human reading a green CI line — is reading a constant, not a measurement.
  *
  * It was harmless in a only by luck: tsc happened to be clean (validated). The
- * class is not harmless — this is the same defect as run-8's F2 skip-escape, moved
+ * class is not harmless — this is the same defect as a F2 skip-escape, moved
  * one level out. findSkipEscapes (skip-escape.ts) scans a spec's own VERIFY block;
  * nothing scanned the SCRIPT DEFINITIONS those VERIFY blocks then invoke by name, so
  * `bun run lint` could be authored into a no-op and every gate would salute it.

@@ -2,7 +2,7 @@
  * foreign-path — deterministic detection (and mechanical repair) of ABSOLUTE PATHS
  * a child leaked from its own sandbox into a committed source/config file.
  *
- * The failure this closes: TASK_0023 committed
+ * The failure this closes: one task committed
  * `playwright-ct.config.ts` carrying vite aliases pinned to the child's sandbox
  * mount —
  *     '../../shared': '/workspace/src/shared',
@@ -76,7 +76,7 @@ const SCANNABLE_EXT_RE = /\.(?:[cm]?[jt]sx?|json|jsonc|toml|ya?ml|ini|cfg|conf|e
 /**
  * Machine-generated files whose contents are not authored decisions: dependency
  * and build trees, lockfiles, and — the FP suite's first catch — TOOL CACHES and
- * REPORTS. mx5 ships a committed `.playwright-cache/metainfo.json` recording the
+ * REPORTS. ships a committed `.playwright-cache/metainfo.json` recording the
  * absolute path of every module the CT runner compiled inside the sandbox: 38
  * perfectly-real `/workspace/...` strings that faithfully record a past build
  * rather than expressing a decision anything will act on again.
@@ -109,7 +109,7 @@ const COMMENT_LINE_RE = /^\s*(?:\/\/|\/\*|\*(?!\/)|\*\/|#|<!--|--(?!\S)|;)/
  * `src/client/api.ts`). Returns the resolved repo-relative path, or null.
  *
  * This mirrors how the tools that CONSUME these paths (vite/tsconfig aliases,
- * bundler resolvers) look them up — without it the mx5 true positive
+ * bundler resolvers) look them up — without it the true positive
  * `/workspace/src/client/api` would be missed, since only `src/client/api.ts` exists.
  */
 export function resolveRepoPath(rel: string, exists: (rel: string) => boolean): string | null {

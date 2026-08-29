@@ -90,7 +90,7 @@ export interface ResearchWorkerRun {
      * Read one worker's cached output back, or '' when there is none.
      *
      * A SEAM, and the symmetric half of `persistSection`. The cache skip is one
-     * of the four outcomes this driver has, and reaching it used to require a
+     * of the four outcomes this driver has, and reaching it would otherwise require a
      * real task file on disk — which is most of why the gate tests needed a temp
      * dir at all.
      */
@@ -222,7 +222,7 @@ export function classifyResearchWorker(
         // point of this branch is to tell them apart:
         //
         //   FAILED, cause reported: pi delivers a failed turn as an empty assistant
-        //     message with stopReason "error" and exit 0, so the real cause used to be
+        //     message with stopReason "error" and exit 0, so the real cause would be
         //     discarded and reported as the useless "produced no output". Name it.
         //   FAILED, child never spoke: no stdout at all means the child died before it
         //     could run (unresolvable provider, missing key, bad argv) — it never
@@ -367,7 +367,7 @@ export async function runResearchWorker(
                 contextWindow: run.contextWindow,
                 signal: run.signal,
                 spawn: run.spawn,
-                // ONE CELL PER WORKER since 2026-08-28. They used to share
+                // ONE CELL PER WORKER. Sharing
                 // the `research` cell on the grounds that they are the same
                 // job over four questions; the run logs disagree. All 40.7
                 // wasted research minutes are restarts in
@@ -381,7 +381,7 @@ export async function runResearchWorker(
                 thinking: run.thinkingFor(spec.label),
                 ...(spec.tools ? {tools: spec.tools} : {}),
                 ...(spec.extensions ? {extensions: spec.extensions} : {}),
-                // The three 5B lever spreads that used to sit here are the
+                // The three lever spreads that would otherwise sit here are the
                 // `research` row of WORKER_PROFILES (workers/worker-profiles.ts).
                 // Two facts still come from here, and only these two: which of
                 // the four workers is docs-capable (only it can be scaled), and
@@ -394,7 +394,7 @@ export async function runResearchWorker(
                 },
                 // One line per DISCARDED attempt. The `done` line below reports
                 // the final attempt only, so a worker that timed out twice at
-                // 240s and then answered used to log exactly like a clean one —
+                // its ceiling and then answered logs exactly like a clean one —
                 // 8 minutes of burned compute recoverable only by subtracting
                 // its own wait+work from the start/done timestamps.
                 onCarryForward: ci => {
@@ -424,7 +424,7 @@ export async function runResearchWorker(
         )
     let r = await runOnce()
     // EMPTY-SECTION GATE (issue #10). A worker that returns zero bytes on a clean run
-    // used to fail the whole task ("Research APIS worker produced no output"), which is
+    // would fail the whole task ("Research APIS worker produced no output"), which is
     // exactly what an extremely simple task provokes: with nothing on disk to survey and
     // no external symbol in play, silence is the correct answer and the run died on it.
     // Retry ONCE — silence is genuinely ambiguous, and a worker that crashed before

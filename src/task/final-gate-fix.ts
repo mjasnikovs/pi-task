@@ -26,7 +26,7 @@
  * discoverable afterwards rejects the attempt and discards its edits. A fix may
  * change what a command DOES, never make it disappear.
  *
- * WRITE-GUARD STACK: this child was added after the run-8 guard
+ * WRITE-GUARD STACK: this child was added after the guard
  * generation and inherited none of them — it ran `rm` on a sibling task's
  * verified deliverable to satisfy a recorded debt claim and hand-copied a pinned
  * contract to green the lint, with free bash and no trace. Every attempt now
@@ -39,7 +39,7 @@
  *
  * The frozen-path deny is implemented but NOT wired by gate-deps: per-task
  * frozen fences are task-SCOPED (they fence a task off a sibling's territory),
- * and the measured union over the run-11 specs would have reverted the one
+ * and the measured union over the specs would have reverted the one
  * legitimate whole-repo fix that run needed (migrate.ts — frozen by its own
  * producing task). It activates only when a run-GLOBAL freeze source exists.
  */
@@ -287,7 +287,7 @@ export interface FinalFixDeps {
     discoverLabels: (cwd: string) => string[]
     /** The same commands' RESOLVED BODIES (`label → scripts[name]` / Makefile
      *  recipe), for the scope-shrink half of the guard. Absent → only the label
-     *  comparison runs, i.e. the pre-run-19 behaviour. */
+     *  comparison runs, i.e. the pre-behaviour. */
     discoverBodies?: (cwd: string) => Record<string, string>
     /** Discard the fix child's working-tree edits (guard trips only). Absent
      *  → the violation is still rejected, edits are left for inspection. */
@@ -383,7 +383,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     // (Diff capture — what the pass changed, durably — happens at the gate-deps
     // seam for every write-capable child; here only the guards act on it.)
 
-    // FROZEN-PATH WRITE-DENY: undo the child's edits to any path a task spec
+    // FROZEN-PATH WRITE-DENY: undo the child's edits to any path a task's spec
     // froze, before anything downstream can act on them — same mechanical deny
     // the enforce pass carries (prompt framing is A/B-proven insufficient).
     // Non-fatal: the rest of the fix survives, only the frozen edits are undone.

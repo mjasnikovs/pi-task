@@ -183,7 +183,7 @@ describe('findForeignPaths — false-positive guards', () => {
     })
 
     test('a `.`/`..` tail resolves to the repo root and is evidence of nothing (catch #2)', () => {
-        // pi-task's own scripts/ab-planning.ts documents a scratch dir as
+        // A harness under scripts/ can document a scratch dir as
         // `/tmp/pi-task-ab/.` — whose tail "resolves" to `.`, true of every repo.
         expect(scan('scripts/ab.ts', ' * /tmp/pi-task-ab/.')).toHaveLength(0)
         expect(scan('cfg.ts', "x: '/workspace/src/shared/..'")).toHaveLength(0)

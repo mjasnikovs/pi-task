@@ -208,7 +208,7 @@ interface WorkerGuardShapes {
      * Connection-error restart budget. The SHARED restart counter is what
      * actually binds — a worker that already spent the budget looping does not
      * get extra lives here. 0 turns the retry off, which is how
-     * `scripts/connection-retry-ab.ts` gets a baseline arm out of a build that
+     * a measuring harness gets a baseline arm out of a build that
      * already ships the retry.
      */
     'connection-error': number

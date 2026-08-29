@@ -64,7 +64,7 @@ export function splitAtMatches(text: string, re: RegExp): string[] {
  * character.
  *
  * The cut point is walked BACK to a UTF-8 lead byte first. Both copies of this
- * function used to cut at exactly `maxBytes` and rely on
+ * function must not cut at exactly `maxBytes` and rely on
  * `Buffer.toString('utf8')` to tidy up, which it does not: decoding a buffer that
  * ends mid-character yields a U+FFFD replacement character. That replacement is
  * 3 bytes wide, so measuring the advance by the decoded slice's byte length then

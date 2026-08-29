@@ -25,7 +25,7 @@
  *
  * ── *** NOT WIRED. THE LIVE A/B FAILED. READ THIS BEFORE RE-ENABLING IT. *** ─────────────
  *
- * scripts/live-spec-url-fetch-ab.ts, 2026-07-22, 40 reps, both arms in one process, real
+ * Both arms in one process, real
  * phaseResearch, offline fixture web, metric = WHICH URL WAS FETCHED at the tool layer:
  *
  *     Pointing the worker at the exact page that answers the question did not
@@ -45,7 +45,7 @@
  * pages; it almost never fetches at all (5 of 40 reps). A lever that improves URL RANKING is
  * aimed at a decision this worker rarely makes.
  *
- * The module is kept — deterministic, unit-tested against the real run-15 design text, and
+ * The module is kept — deterministic, unit-tested against the real design text, and
  * the A/B harness's string surgery targets it — so the experiment can be re-run cheaply if
  * the fetch rate itself is ever moved. It is NOT called from phases.ts, deliberately.
  */

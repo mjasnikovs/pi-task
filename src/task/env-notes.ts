@@ -113,7 +113,7 @@ export function extractEnvNotes(text: string): string[] {
  * EXCUSE-CLASS wording: a note that waves a problem off as someone else's or a
  * prior condition ("pre-existing … mismatch", "unrelated to this task",
  * "tree-shaken", "not applicable"). These are the notes that propagate across
- * slices as standing excuses — every one of the run-8 cache's
+ * slices as standing excuses — every one of the cache's
  * dozen such notes was either the false tree-shake fact or the schema mismatch
  * the final gate later proved was a REAL defect. Pure text, stack-agnostic; the
  * flag never drops or fails a note, it only marks it as needing live

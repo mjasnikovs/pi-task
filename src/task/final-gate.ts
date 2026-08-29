@@ -41,9 +41,8 @@
  * A skip is never silent, though. A DISCOVERED boot command that never ran is its
  * own verdict — nothing else the gate observed can
  * cancel it. Validation harnesses for that lever:
- *   scripts/boot-skip-baserate.ts      base rate, shipped gate, before the change
- *   scripts/boot-skip-verdict-ab.ts    two-armed deterministic A/B + invariants
- *   scripts/boot-skip-fp-suite.ts      zero-FP arms over every local repo
+ *   base rate on the shipped gate, a two-armed deterministic A/B with
+ *   invariants, and zero-false-positive arms over every local repo
  */
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
@@ -111,7 +110,7 @@ export interface FinalGateOutcome {
      * On a fail: the exact command(s), exit code(s), and output tail(s) — the
      * MECHANICAL failures only. The accept-debt note is deliberately NOT folded in
      * here: this string seeds the final-gate AUTOFIX child's prompt,
-     * and a debt included there is read as an instruction — the run-11 fix child
+     * and a debt included there is read as an instruction — the fix child
      * `rm`'d a sibling task's verified deliverable to satisfy a recorded claim. The
      * child cannot act on text it never receives; debts travel in `debtNote`.
      * With multiple failures this is the numbered, ranked list (see `failures`).
@@ -197,7 +196,7 @@ export interface FinalGateOutcome {
  * turns that project's PASS into a FAIL citing "No scene path provided", plus ~15
  * minutes of hang. Full numbers, the reproduction rig, and why no pre-execution
  * filter can separate a fabricated command from a real one:
- * scripts/harvest-verified-tooling-step0.ts. DO NOT re-propose the harvest without
+ * measurement below. DO NOT re-propose the harvest without
  * first fixing the PROVENANCE of `## verified tooling` (record cwd + exit code at
  * authoring time); widening this allowlist tool-by-tool is not the fix either.
  */
@@ -425,7 +424,7 @@ async function runGateCommand(
 // other command drivers; re-exported so existing importers keep working.
 export {runVerifyCommandLine, type VerifyRerunOutcome} from './command-run.js'
 
-// The two verdict predicates — the run-16 full-blindness FAIL and the third,
+// The two verdict predicates — the full-blindness FAIL and the third,
 // non-blocking UNOBSERVED verdict — live with the counters they read, in
 // gate-tally.ts (GateTally). Re-exported so every existing importer keeps working.
 export {observabilityGapFailure, unobservedVerdict}

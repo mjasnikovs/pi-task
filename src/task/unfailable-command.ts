@@ -5,7 +5,7 @@
  * WHY THIS EXISTS. `recheckAcceptDebts` may auto-close an accepted debt on exactly
  * one piece of evidence: the debt named a VERIFY command, that command was re-run,
  * and it exited ZERO (accept-debt.ts — "the debt named a command, the command was
- * run, and it passed"). `isStorableCommand` used to filter only on length and
+ * run, and it passed"). Filtering only on length and
  * control characters, so nothing asked whether a ZERO exit could ever mean
  * anything. Sixteen stored-eligible VERIFY lines in the corpus on this box cannot
  * exit non-zero no matter what the tree contains:
@@ -30,10 +30,10 @@
  * is untouched. Naming verbs is the mistake  already paid for
  * (command-shrink's guard compared NAMES) and 16B re-bought.
  *
- * OUT OF SCOPE BY DESIGN: bare `|| true`. skip-escape.ts:11-19 records the FP
- * measurement — of 45 `||` uses in the historical VERIFY blocks exactly one was a
- * real skip-escape; a blanket `|| true` rule is ~90% false positives (teardown,
- * setup, negative tests). `rm -rf build || true` classifies CAN-FAIL here and must
+ * OUT OF SCOPE BY DESIGN: bare `|| true`. skip-escape.ts records the measurement
+ * — across real historical VERIFY blocks almost every `||` use is teardown, setup
+ * or a negative test rather than a skip-escape, so a blanket rule is almost all
+ * false positives. `rm -rf build || true` classifies CAN-FAIL here and must
  * keep doing so.
  *
  * THREE OUTCOMES, and `unknown` is a first-class answer: a shape this cannot
@@ -139,7 +139,7 @@ function hasPipeline(seg: string): boolean {
  * `||` skips it when the status is zero. A chain that mixes the two after `c_i`
  * therefore always runs on past it. For `A && B || C`: A is never terminal (the
  * `||` picks C up after A fails), B is terminal when it succeeds, C is terminal —
- * so the status is always an echo's, which is the run-21 shape.
+ * so the status is always an echo's, which is the shape.
  */
 function terminalIndices(ops: readonly string[], n: number): number[] {
     const out: number[] = []

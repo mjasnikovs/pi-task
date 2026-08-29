@@ -2,14 +2,12 @@
  *  — the two candidate bounds on worker:apis's project-source fan-out.
  *
  * ⚠ ONE of the levers in this file is wired: the RESCUE progress deadline
- * (`workerProgressCeilingMs`) SHIPPED ON in, on a PASS measured over 42
- * trials per arm against an instrument whose own false-break rate is on record at
- * 1.5%. CAP, SCALE and RESCUE-CARRY remain OFF unless their env var is set — CAP
- * and SCALE were rejected on argument (see below), carry-forward was measured
- * HARMFUL on its own.
+ * (`workerProgressCeilingMs`) SHIPPED ON. CAP, SCALE and RESCUE-CARRY remain OFF
+ * unless their env var is set — CAP and SCALE were rejected on argument (see
+ * below), carry-forward measured harmful on its own.
  *
- * The OFF levers exist so `scripts/live-research-fanout-budget-ab.ts` can run them
- * against the shipped baseline in the SAME build — the alternative (dist surgery)
+ * The OFF levers exist so a harness can run them against the shipped baseline in
+ * the SAME build — the alternative (dist surgery)
  * measures a patched copy of the code and not the code. Nothing may read them
  * outside that harness until it reports PASS; a lever wired on argument rather
  * than measurement is the failure mode to avoid here.
@@ -106,7 +104,7 @@ export const RESEARCH_LEVER_ENVS: readonly string[] = [
  * The levers, read ONCE, as a reader the profile table can be handed.
  *
  * WHY A SNAPSHOT AND NOT `process.env`. Every worker in one research phase must
- * see the same arm. The three lever values used to be resolved once in
+ * see the same arm. Resolving the three lever values once in
  * `phases.ts` and threaded down as three separate `ResearchWorkerRun` fields for
  * exactly that reason; moving the resolution into the `research` profile would
  * have moved the READ down to each worker with it, and a harness that flips a

@@ -1,11 +1,11 @@
 /**
  * http-request — the one bounded HTTP request in this codebase.
  *
- * Five modules used to hand-roll the same ~12 lines: an internal
+ * Five modules would otherwise hand-roll the same dozen lines: an internal
  * `AbortController`, a `setTimeout` that aborts it, a `userAborted` flag set
  * from the caller's signal, and a `finally` that clears the timer and removes
- * the listener. Five copies of a rule is five chances to drift, and it HAD
- * drifted — `npm-version.ts` never grew the `userAborted` flag, so a user cancel
+ * the listener. Five copies of a rule is five chances to drift, and they DO
+ * drift — one copy never grew the `userAborted` flag, so a user cancel
  * came back as `null`, indistinguishable from a registry that is down.
  *
  * What is shared is the BOUNDING, not the interpretation. Each caller still owns

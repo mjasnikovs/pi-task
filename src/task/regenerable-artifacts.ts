@@ -21,10 +21,9 @@
  * deliverable, so it is narrower, and `dist/`, `build/`, `.next/`, `.turbo/` and
  * `.svelte-kit/` are deliberately NOT in it.
  *
- * MEASURED over 269 git work trees under ~/hub, ~/tmp, ~/.cache
- *:
+ * Measured over a few hundred git work trees on one machine:
  *
- *     trees tracking any artifact path      33   (33 of 33 have.pi-tasks)
+ *     trees tracking any artifact path      33   (all of them have .pi-tasks)
  *     test-results/                         33 trees / 33 files
  *.last-run.json                        33 trees / 33 files  ← the SAME 33 files
  *     dist/, build/,.next/,.turbo/,.svelte-kit/, playwright-report/,

@@ -155,11 +155,11 @@ ${refined}`
 // FAILED. It is the ONE lever of three that moved worker:apis's behaviour — behaviour-class
 // nearly every package query, where before it was almost none — completion is
 // set by the output CONTRACT, not the answer or the target). But it failed invariant 2a: the
-// ungrounded-symbol rate rose 1.0% -> 4.7% (p(rise) = 0.0010) and the semantics clause it adds
-// carried 15% ungrounded symbols with the mandatory `UNVERIFIED:` abstention used 0 times in 40
-// reps. The model obeys "ask a behaviour question" and ignores "abstain when you cannot verify",
-// so it manufactures semantics — the exact F-1 laundering the file exists to prevent. The module
-// and its tests are KEPT as the durable asset (like spec-urls.ts after PROMPT 4); only this
+// ungrounded-symbol rate rose several-fold, and a large share of the semantics clauses it adds
+// are ungrounded, with the mandatory `UNVERIFIED:` abstention never used once. The model obeys
+// "ask a behaviour question" and ignores "abstain when you cannot verify", so it manufactures
+// semantics — the exact laundering the file exists to prevent. The module and its tests are
+// KEPT as the durable asset (like spec-urls.ts); only this
 // interpolation is reverted. Full write-up: nexxtasks.txt "STAGE 2". Re-run: scripts/
 // live-apis-contract-ab.ts. Do NOT re-wire without a lever that closes the abstention gap.
 

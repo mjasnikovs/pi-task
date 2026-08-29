@@ -140,10 +140,9 @@ const LOCK_STALE_MS = 30_000
  * or it is EEXIST. Windows has a third. A directory that another process is removing
  * enters a DELETE-PENDING state, and a create against it fails with EPERM/EACCES/EBUSY
  * instead of EEXIST — so the exact moment the previous writer released the lock is a
- * window in which the next writer's `mkdir` fails with a code that used to be read as
- * fatal. The store was then silently skipped: no throw, no log, exit code 0, one entry
- * missing. That is the whole of CI's `39 of 40` on windows-latest; the same run's
- * ubuntu half is green because POSIX never produces the code.
+ * window in which the next writer's `mkdir` fails with a code a POSIX errno check
+ * reads as fatal. The store is then silently skipped: no throw, no log, exit code
+ * 0, one entry missing. Only Windows CI catches it; POSIX never produces the code.
  *
  * `rename` over an existing file has the same shape on Windows — it fails while any
  * other handle is open on the target, including a scanner's — so the cache write

@@ -150,7 +150,7 @@ export interface BulletSpan {
 /**
  * Split a CONTEXT section into bullets WITH their line ranges. Continuation lines are
  * folded into the bullet above so a hard-wrapped claim is judged as one sentence — which
- * is exactly how the fatal run-15 bullet was written.
+ * is exactly how the fatal bullet was written.
  */
 export function splitBulletSpans(context: string): BulletSpan[] {
     const spans: BulletSpan[] = []

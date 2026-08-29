@@ -23,7 +23,7 @@
  *   1. TEXT — the FAIL reason (or the resolution research's rationale) carries an
  *      explicit blame cue ("pre-existing", "created by TASK_nnnn", "bug in", "this
  *      task did not modify") and a path token near it. Merely MENTIONING a path is
- *      not blame: a a task FAIL lists `src/server/db.ts` inside the
+ *      not blame: a task FAIL lists `src/server/db.ts` inside the
  *      spec's own "Preserve all existing files on disk" quote, and must not spawn
  *      a repair task for it.
  *   2. PROVENANCE — the blamed file was introduced by a DIFFERENT task's commit
@@ -52,7 +52,7 @@ const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
  * Phrases that ATTRIBUTE a failure to something that predates the current task.
  * Each is a blame cue: the path token nearest a cue is the accused file. Kept
  * deliberately specific — a bare "existing" matches the spec boilerplate
- * "Preserve all existing files on disk" that a a task FAIL quotes.
+ * "Preserve all existing files on disk" that a task FAIL quotes.
  */
 const BLAME_CUE_RE =
     /pre-?\s?existing|existing (?:bug|defect|failure|issue|fault)|(?:created|introduced|added|written) (?:by|in) TASK_\d+|(?:bug|defect|fault|error) in\b|already (?:broken|failing|red)|(?:this task )?did not (?:modify|touch|create|change)|not (?:modified|touched|created|introduced) by this task|unrelated to this task/gi

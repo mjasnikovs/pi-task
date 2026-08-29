@@ -84,8 +84,8 @@ export function registerPiWorkerFetch(
                 })
 
                 // Child failure is decided and formatted once, inside the focused extractor
-                // (workers/focused-extractor.ts) — this used to re-map the result back into a
-                // ChildOutcome just to ask formatChildFailure the same question.
+                // (workers/focused-extractor.ts) — re-mapping the result back into a
+                // ChildOutcome here would just ask formatChildFailure the same question.
                 if (result.failure !== undefined) {
                     return workerUnavailable(
                         result.failure,
@@ -160,8 +160,8 @@ export function registerPiWorkerFetch(
  * tests, which a change to the shipped rule would leave green.
  */
 export function fetchCacheable(_d: Pick<FetchDetails, never>, text: string): boolean {
-    // Answer QUALITY only — see docsCacheable. `childExitCode === 0` used to lead
-    // this rule and was true of an aborted child, so `"Fetch aborted."` cached.
+    // Answer QUALITY only — see docsCacheable. `childExitCode === 0` leading this
+    // rule is true of an aborted child, so `"Fetch aborted."` would be cached.
     return !isAbstention(text)
 }
 

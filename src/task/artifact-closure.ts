@@ -1,6 +1,5 @@
 /**
- * artifact-closure — dangling runtime file references (the run-13 index.html
- * class, nexttask PROMPT 2).
+ * artifact-closure — dangling runtime file references.
  *
  * The failure this closes: a runtime file reference with
  * NO producer anywhere in the plan shipped silently. The server's SPA fallback
@@ -21,7 +20,7 @@
  *   • final gate: the shipped tree is scanned; a dangling reference is a ranked
  *     failure naming referencer + missing path (rides PROMPT 1's aggregation).
  *
- * FP discipline (the run-12 groundedCoverage lesson — ground in artifacts the
+ * FP discipline (the groundedCoverage lesson — ground in artifacts the
  * model can't fake, and the standing guard direction — inconclusive is NEVER
  * evidence):
  *   • literal string paths only; any dynamic expression steps aside.
@@ -36,7 +35,7 @@
  *   • existence is checked on the live tree (existsSync), so anything already
  *     present — committed, generated, or hand-made — is satisfied.
  *
- * Note the mx5 server GUARDED its read (`if (!(await htmlFile.exists())) return
+ * Note the server GUARDED its read (`if (!(await htmlFile.exists())) return
  * c.notFound()`): an existence guard is exactly how the bug presents (permanent
  * 404), so guarded reads deliberately do NOT step aside.
  */
@@ -189,7 +188,7 @@ export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[
 // ---------------------------------------------------------------------------
 // GENERATED HTML.
 //
-// The run-13 checker fired correctly on `src/server/index.ts → dist/index.html`;
+// The checker fired correctly on `src/server/index.ts → dist/index.html`;
 // the autofix satisfied it by appending an HTML template literal to `build.ts`
 // and `Bun.write`ing it — and that page pointed at `/app.css`, which `bun run
 // build` never emits (only the watch-mode `dev:css` does). The re-run gate saw
@@ -200,14 +199,14 @@ export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[
 // Scope discipline, the reason this does not become an FP machine: a literal is
 // scanned ONLY when it reaches a write whose destination is an HTML file inside a
 // directory a BUILD TOOL declared as its output (`prod.outdirs`). An email-body
-// template (`~/hub/aiz-server/src/connections/mailTemplate.ts` — `export default
+// template (a `mailTemplate.ts` whose body is `export default
 // \`<!doctype html>…\``) is never written to a build output and is therefore
 // never scanned, `<img src="cid:logo">` and all.
 // ---------------------------------------------------------------------------
 
 /** Asset attributes scanned in GENERATED HTML. Wider than HTML_PATTERNS (which
  *  keeps scanning on-disk .html files exactly as it always has) by the media
- *  tags nexttask 3 names. */
+ *  tags  names. */
 const GENERATED_HTML_PATTERNS: Pattern[] = [
     ...HTML_PATTERNS,
     {
@@ -976,12 +975,12 @@ export function specListsFile(spec: string, refPath: string): boolean {
 }
 
 /** Consuming-side prose verbs: a spec sentence that SERVES/READS/LOADS a
- *  backticked file is referencing it at runtime (mx5 run 13, the exact line:
+ *  backticked file is referencing it at runtime (the exact line:
  *  "**SPA fallback:** non-`/api` GETs serve the built `index.html`."). */
 const PROSE_CONSUME_RE = /\b(?:serves?|serving|served|fallback|reads?|loads?|renders?)\b/i
 /** Runtime-artifact extensions the prose channel accepts. Prose is the loosest
  *  signal, so it is whitelist-tight: a backticked dotted identifier (`c.var.user`,
- *  `Bun.password.hash` — measured FPs on the real mx5 spec) must never read as a
+ *  `Bun.password.hash` — measured FPs on the real spec) must never read as a
  *  file, and doc files a spec tells the READER to read (`README.md`) don't
  *  count either. Code-construct refs are not subject to this list. */
 const PROSE_ASSET_EXT_RE =

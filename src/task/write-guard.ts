@@ -3,7 +3,7 @@
  * children.
  *
  * The failure class: the final-gate autofix child (read,edit,bash) was added after
- * the run-8 guard generation and inherited NONE of the guards the other
+ * the guard generation and inherited NONE of the guards the other
  * write-capable passes carry — no diff capture, no frozen-path deny, no probe
  * scans, free `rm`. It will delete a file like `src/client/pages/admin.tsx` (a task
  * verified deliverable) to satisfy a recorded debt claim, and the deletion was
@@ -140,7 +140,7 @@ const basename = (p: string): string => {
  *
  * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT. The guard is pure git: no
  * ecosystem, no exemption list, so three Playwright FAILURE screenshots that
- * a task own `git add -A` had swept into a commit read as deliverables. Two
+ * a task's own `git add -A` had swept into a commit read as deliverables. Two
  * consecutive attempts were discarded whole over them — each taking a real
  * `src/client/api.test.tsx` repair with it, which attempt 3 then re-did and kept.
  * 6m14s of an 8m16s gate. And the pipeline committed those same three deletions at
@@ -179,11 +179,10 @@ export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
 // unobservedVerdict: zero reproducible observation is UNOBSERVED, not PASS).
 //
 // EXEMPT BY MECHANISM, not by hope: build output and dependency trees are
-// ignored too and a rule that fires on every `dist/` write is unusable. STEP 0
-// measured the real shape — over 68
-// recorded child logs in ~/hub the gate children announced 29 writes, 9 of them
-// to ignored paths, and 8 of those 9 are `.env` (the other is `node_modules`,
-// from `bun install`). Gate children do not hand-write build output; the
+// ignored too and a rule that fires on every `dist/` write is unusable. The real
+// shape, measured over recorded child logs: gate children announce a few dozen
+// writes, a minority to ignored paths, and nearly all of those are `.env` (the
+// rest `node_modules`, from an install). Gate children do not hand-write build output; the
 // COMMANDS they run do, and that never enters this channel because it is
 // attributed by a before/after snapshot of the child's own window.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,7 +316,7 @@ export function ignoredWriteUnobservedNote(paths: string[]): string {
 /**
  * One-line summary for the gate debug log — the diff capture every write-capable
  * child gets so "what did this pass change" is answerable from artifacts (the
- * run-11 `rm` left no trace outside the bash stream).
+ * a `rm` left no trace outside the bash stream).
  */
 export function formatTreeChanges(changes: TreeChangeSummary): string {
     if (

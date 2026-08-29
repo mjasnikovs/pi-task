@@ -223,7 +223,7 @@ describe('buildSpecUrlBlock', () => {
     })
 
     test('the A/B baseline surgery target is reachable: a non-empty input yields a block', () => {
-        // scripts/live-spec-url-fetch-ab.ts strips the lever by forcing this function to
+        // A harness strips the lever by forcing this function to
         // return ''. If this test ever fails, the harness's runtime verification would fail
         // too — and an A/B whose treatment arm has no lever is unreadable.
         expect(

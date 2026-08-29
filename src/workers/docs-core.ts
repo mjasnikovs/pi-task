@@ -109,9 +109,9 @@ export interface DocsRawInput {
 export interface DocsFocusedResult {
     /**
      * The child's answer — EMPTY when `failure` is set. A failed child's stdout is never
-     * parsed as an answer (it used to be: `parseChildOutput` returns the whole trimmed
-     * stdout when there is no `<answer>` tag, so a crashed child's error dump was handed
-     * to phaseAutoAnswer as if it were package documentation).
+     * parsed as an answer. `parseChildOutput` returns the whole trimmed stdout when
+     * there is no `<answer>` tag, so parsing one hands a crashed child's error dump
+     * to phaseAutoAnswer as if it were package documentation.
      */
     answer: string
     excerpt?: string
@@ -196,8 +196,8 @@ export function declarationChain(asked: string, resolved?: string): string[] {
  * dependency maps of `cwd`'s package.json. A USABLE declaration always wins;
  * only if none of the names has one does an unusable declaration (a dist-tag or
  * a non-registry protocol) come back, so the caller can tell "declared as
- * `latest`" apart from "not declared at all" — two different facts that used to
- * produce the same sentence. Returns null when no name appears anywhere, or the
+ * `latest`" apart from "not declared at all" — two different facts that would
+ * otherwise produce the same sentence. Returns null when no name appears anywhere, or the
  * package.json is missing or unparseable. Best-effort; never throws.
  */
 export function findDeclaration(names: string[], cwd: string): Declaration | null {
@@ -487,8 +487,8 @@ async function resolveTypeSourceForDocs(
     resolvePackage: typeof defaultResolvePackage,
     signal: AbortSignal | undefined
 ): Promise<{pkg: ResolvedPackage; installed: boolean; pin?: AutoInstallPin}> {
-    // A package acquired ONLY through a hop used to report neither `autoInstalled`
-    // nor a pin, so `pi-worker-docs` emitted no version banner for it — while the
+    // A package acquired ONLY through a hop reports neither `autoInstalled` nor a
+    // pin unless this runs, so `pi-worker-docs` emits no version banner for it — while the
     // banner's own text ("only its types are, as `@types/bun` `^1.2`") claims a
     // range as provenance. Report the last hop that actually installed.
     let installed = false
@@ -844,7 +844,7 @@ export function buildPrompt(pkg: ResolvedPackage, query: string, content: string
 /**
  * The provenance header a docs answer carries. Takes the HEADER, not a package:
  * the whole body is one string, and the project-source path — which has no
- * package — used to fabricate a `ResolvedPackage`
+ * package — would have to fabricate a `ResolvedPackage`
  * (`{name, version: 'local', root, entryDts: null, readme: null}`) purely to make
  * this call compile, with three of the five fields existing only for that.
  */

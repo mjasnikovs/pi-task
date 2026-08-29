@@ -11,7 +11,7 @@
  * needed, so the loop had to save a copy of `best` before replacing it.
  *
  * The last real bug here says the shape out loud, in the loop's own comment:
- * *"This used to be two assignments, and the second one kept the OLD plan's
+ * *"As two assignments, the second one keeps the OLD plan's
  * accounting whenever the new plan's coverage-map child faulted
  * (`cand.accounting ?? accounting`) — binding requirements to titles they were
  * never mapped against."* `AutofixLedger`'s indictment, verbatim: the decision was

@@ -3,12 +3,12 @@
  *
  * A skip-escape is a `||` fallback that lets a REQUIRED check pass SILENTLY when
  * its tool is absent or it fails — e.g. `playwright test … || echo "skipping"`.
- * run-8 shipped a blank/dead app partly because its only behavioral smoke
+ * shipped a blank/dead app partly because its only behavioral smoke
  * tests were wrapped this way: the tool was absent, the check silently skipped,
  * and the verify child blessed it as "correctly skipped".
  *
  * FP-MEASURED on the historical VERIFY blocks: a
- * blanket `|| true` flag is ~90% false positives — teardown (`kill … || true`,
+ * blanket `|| true` flag is almost all false positives — teardown (`kill … || true`,
  * `docker compose down … || true`), setup (`… install … || true`), and negative
  * tests (`… && exit 1 || true`, where `|| true` catches an EXPECTED failure). Of
  * 45 `||` uses, exactly one was the real F2 skip-escape, and it ANNOUNCED the skip

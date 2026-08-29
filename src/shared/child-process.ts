@@ -81,7 +81,7 @@ export interface ChildResult {
      * true when the STREAM watchdog killed the child: no output at all for the
      * configured inactivity window, regardless of whether the backend answers a
      * probe. Distinct from `stalled`, which requires an UNREACHABLE endpoint —
-     * the run-14 hangs had a perfectly healthy server and a dead stream, so the
+     * these hangs have a perfectly healthy server and a dead stream, so the
      * probe path could never fire. Callers must check this BEFORE `aborted`
      * (the kill sets aborted too) and route it into the connection-error retry.
      */
@@ -193,9 +193,9 @@ export interface RunChildJsonEventsOptions {
      * Stream-inactivity ceiling in ms (shared/stream-watchdog.ts). Unlike `stall`
      * this asks NOTHING of the backend: a stream that has produced no bytes for
      * this long is dead whether or not the server answers a health probe, which
-     * is exactly the run-14 shape (server Up(healthy), stream silent for hours).
-     * Any stdout/stderr chunk resets it, so a slow model emitting one token every
-     * 30s is never killed. 0 / omitted = off.
+     * is exactly the shape of a hung stream: server reporting healthy, nothing
+     * coming down the wire for hours. Any stdout/stderr chunk resets it, so a
+     * merely slow model is never killed, however slow it is. 0 / omitted = off.
      */
     streamInactivityMs?: number
 }
@@ -279,10 +279,10 @@ export class JsonEventSink {
         const t = typeof evt.type === 'string' ? evt.type : ''
 
         // `message_end` is the ONLY context readout pi gives a `--mode json`
-        // child's parent. There used to be a `context_usage` branch above this
-        // one that was preferred over it; no released pi has ever emitted such
-        // an event (see `contextWindow` on RunChildJsonEventsOptions), so it was
-        // unreachable, and its presence is what made the zero window below look
+        // child's parent. A `context_usage` branch preferred above this one is
+        // dead code: no released pi has ever emitted such an event (see
+        // `contextWindow` on RunChildJsonEventsOptions), and its presence is what
+        // makes the zero window below look
         // like a harmless fallback rather than the only path. Issue #16.
         if (t === 'message_end' && opts.onContextUsage) {
             const msg = evt.message as Record<string, unknown> | undefined
@@ -602,10 +602,10 @@ export function runChild(
         })
         // One idempotent settle path for close/error/abort. Detaching the abort
         // listener here is the point: `{once: true}` only fires-and-removes on an
-        // ACTUAL abort, so a child that finishes normally used to leave its
+        // ACTUAL abort, so a child that finishes normally would leave its
         // listener on the signal forever. A TaskRunner shares ONE AbortController
-        // across every child of a run, so those listeners accumulated linearly and
-        // each one retained, via `killProc`'s closure, the finished child process,
+        // across every child of a run, so those listeners accumulate linearly and
+        // each one retains, via `killProc`'s closure, the finished child process,
         // this invocation (including its full prompt), and `opts` — together with
         // everything the caller's callbacks close over. See GitHub issue #9.
         let settled = false
@@ -677,8 +677,8 @@ export function summarizeToolArgs(toolName: string, args: unknown): string {
         return a.command.replace(/\s+/g, ' ').trim()
     }
     // Each worker tool's argument shape is its own row's fact (worker-channels.ts);
-    // this used to be a third copy of the names AND a re-statement of each one's
-    // parameters. A row that has nothing to say falls through to the generic keys.
+    // without it this is a third copy of the names AND a re-statement of each
+    // one's parameters. A row that has nothing to say falls through to the generic keys.
     const channel = workerChannel(toolName)
     if (channel) {
         const summary = channel.summarize(a)

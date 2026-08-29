@@ -10,11 +10,11 @@
  * causes must be matched before the generic `aborted`/`exitCode` ones, or a dead
  * backend is reported to the user as "you cancelled".
  *
- * That rule used to live as prose in three doc comments and as the source order
- * of three hand-written ladders (`classifyEnforceChildFailure`,
- * `classifyResearchWorker`, and the gate's own reading). Three copies of an
- * ordering is three chances to drift, and it had already drifted: `streamStalled`
- * was added to the result and to `finalAttemptFailed`, but the enforce ladder
+ * As prose in three doc comments and as the source order of three hand-written
+ * ladders (`classifyEnforceChildFailure`, `classifyResearchWorker`, and the
+ * gate's own reading), that rule has three chances to drift — and it does:
+ * `streamStalled` gets added to the result and to `finalAttemptFailed`, but the
+ * enforce ladder
  * never grew an arm for it, so an enforcement child killed for a hung model
  * stream fell all the way through to `if (aborted) return USER_CANCELLED` — the
  * exact mislabel the comment above that line warns against.

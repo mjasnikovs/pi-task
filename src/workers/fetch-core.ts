@@ -19,7 +19,7 @@ export const NOT_COVERED_ANSWER = 'not covered by this page'
  * rule 5 tells the child to answer partially and say what is missing, and it says it in the
  * prompt's own words ("… `obs_add_raw_audio_callback` and `obs_remove_raw_audio_callback`
  * are not covered by this page"). That is a sourced answer, and the loose match filed it as
- * a coverage miss. Observed twice in 5 reps of scripts/fetch-url-normalise-ab.ts once the
+ * a coverage miss. Observed repeatedly once the
  * rewrite started delivering pages that could half-answer; never in the 84 recorded corpus
  * fetches, where 11 of 11 sentinel answers are the bare sentinel — so tightening it changes
  * no recorded verdict.

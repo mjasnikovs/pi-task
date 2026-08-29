@@ -110,11 +110,11 @@ function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | '
  * The paths differ only in `prefix`: the npm path leads every result, failures included, with
  * its version banner and npm-version header; the project path has neither.
  *
- * It says UNAVAILABLE, so the cache cannot take it. It used to say so by writing a
- * non-zero `childExitCode` and letting `docsCacheable` re-derive the verdict — a
- * derivation that failed on the case it mattered most for: a signal-killed child
- * reports exit code 0, so `"Docs lookup aborted."` was cached for the whole run.
- * `aborted` was written here and read by nothing, which is what let that hide.
+ * It says UNAVAILABLE, so the cache cannot take it. Saying so by writing a
+ * non-zero `childExitCode` and letting `docsCacheable` re-derive the verdict
+ * fails on the case it matters most for: a signal-killed child reports exit code
+ * 0, so `"Docs lookup aborted."` gets cached for the whole run. An `aborted` flag
+ * written here and read by nothing is what lets that hide.
  */
 function docsFailureResult(
     extraction: FocusedFailure,
@@ -409,9 +409,9 @@ export function registerPiWorkerDocs(
             //
             // The retrieved type is KEPT (it is real and useful) and an UNANSWERED banner
             // is prepended, naming the gap and — when the excerpt carries one — the `@see`
-            // URL that actually documents the semantics. That pointer is free: F-2(d) found
-            // hono.dev present in run-15 cache values ONLY inside these JSDoc links, never
-            // fetched. Prompting the escalation beats performing it here: this tool runs in
+            // URL that actually documents the semantics. That pointer is free: a
+            // documentation host is often present in cached values ONLY inside these
+            // JSDoc links, and never fetched. Prompting the escalation beats performing it here: this tool runs in
             // parallel execution mode and cannot cleanly spawn a fetch of its own.
             const typeOnly = isTypeOnlyAnswer(extraction.answer, params.query)
             let text = versionBanner + npmHeader + body
@@ -440,9 +440,9 @@ export function registerPiWorkerDocs(
             // is a RATE — how often this fires — and a log of firings alone has no
             // denominator. See typeonly-log.ts.
             //
-            // It sits AFTER `text` is final (it used to sit above `text`'s first assignment)
+            // It sits AFTER `text` is final, not above `text`'s first assignment,
             // so the record carries what the worker was actually handed, banner and cited
-            // excerpt included, not just the child's prose. Purely a move: logDocsAnswer
+            // excerpt included, not just the child's prose. Position only: logDocsAnswer
             // returns nothing and nothing between the two positions reads it, so the tool's
             // behaviour and its return value are unchanged.
             logDocsAnswer({
@@ -519,8 +519,8 @@ export function docsCacheable(
 ): boolean {
     // Answer QUALITY only. Whether there IS an answer is `WorkerOutcome.kind`, and
     // `makeWorkerTool` has already refused an `unavailable` before reaching here —
-    // this used to open with `childExitCode === 0`, which a signal-killed child
-    // satisfies, so an aborted lookup was memoised for the run.
+    // opening this with `childExitCode === 0` memoises an aborted lookup for the
+    // whole run, because a signal-killed child satisfies it.
     return d.typeOnly !== true && d.excerptVerified !== false && !isAbstention(text)
 }
 

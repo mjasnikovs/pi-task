@@ -10,9 +10,9 @@
  * showed the baseline child usually never LOOKS: it consults no
  * diff at all and several affirmatively claimed the forbidden file was untouched.
  *
- * So — like the substitution probe (see substitution-probe.ts, whose A/B proved
- * prompt language alone gets ~40% attention while a concrete deterministic
- * finding gets 100%) — the fix is a deterministic pre-check whose finding is
+ * So — like the substitution probe (see substitution-probe.ts, where prompt
+ * language alone gets a fraction of the model's attention and a concrete
+ * deterministic finding gets all of it) — the fix is a pre-check whose finding is
  * injected into the prompt: extract the concrete paths the spec forbids
  * modifying, intersect with the task's changed files (pure git shape, already
  * collected for the substitution probe), and hand the child each hit with the

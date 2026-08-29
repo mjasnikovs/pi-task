@@ -159,7 +159,7 @@ export interface VerifyCommandClass {
     /**
      * The command observes RUNTIME behaviour: an HTTP request, a port probe, a
      * process it starts and watches. This is the distinction 's M3
-     * turns on — a a task VERIFY is all `node -e "…package.json…"`,
+     * turns on — a task VERIFY is all `node -e "…package.json…"`,
      * which EXECUTES node yet can only assert that a string is present in a
      * config file, and the behavioural half of the owned requirement ("serves
      * `/api` + static `dist/`") is exactly what it cannot see.

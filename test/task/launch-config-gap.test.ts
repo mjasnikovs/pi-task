@@ -1,7 +1,7 @@
 /**
  * launch-config-gap tests — the four static conditions, one per test, plus the
  * shapes that must NOT fire. The dynamic fifth condition (the probe re-run) is
- * exercised end-to-end in scripts/launch-config-gap-ab.ts, where a real child
+ * exercised end-to-end by a harness, where a real child
  * process is the only honest arbiter of "did the absence cause the exit".
  */
 import {expect, test, describe} from 'bun:test'

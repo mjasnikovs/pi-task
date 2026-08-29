@@ -54,7 +54,7 @@ describe('the dead-air A/B arms differ', () => {
         // The arm was `Promise.resolve(runRepoHealthCheck(cwd2))` because
         // `runRepoHealthCheck` was SYNCHRONOUS and blocked the event loop — that
         // block was the thing being measured. It is async now, so both arms are
-        // non-blocking and `scripts/verify-deadair-ab.ts` compares treatment
+        // non-blocking and a dead-air harness compares treatment
         // against treatment. Worse, the baseline branch drops the signal and the
         // progress hook, so `DEADAIR_AB_ARM=baseline` silently makes repo-health
         // uncancellable and mute.

@@ -77,7 +77,7 @@ function probe<F>(row: CritiqueProbe<F>): CritiqueProbe<unknown> {
  */
 export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
     probe({
-        // run-8 F2: a required VERIFY check wrapped in a skip-announcing `||`
+        // a F2: a required VERIFY check wrapped in a skip-announcing `||`
         // fallback (`… || echo "skipping (tool absent)"`) lets the check pass
         // while never running.
         id: 'skip-escape',
@@ -86,12 +86,12 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
         log: f => `skip-escape flagged in VERIFY: ${f.length} line(s)`
     }),
     probe({
-        // run-8 F3, generation side. The registry alone is a WEAK catcher (live
+        // a F3, generation side. The registry alone is a WEAK catcher (live
         // — the model's attention goes to the obvious
         // VERIFY weakness and it rarely does the path-composition reasoning. The
         // scanner NAMES the inferred mount mappings and juxtaposes the verbatim
         // pinned facts, forcing focused reconciliation. (Narrow enough to stay clean on
-        // the run-8 trees). Grounding = the registry ∪ any design doc the
+        // the trees). Grounding = the registry ∪ any design doc the
         // spec/refined @-reference. No registry ⇒ nothing to contradict.
         id: 'synthesized-wiring',
         detect: ctx =>

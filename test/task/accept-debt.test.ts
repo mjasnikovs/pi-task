@@ -236,7 +236,7 @@ describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
 // The eight per-origin recorders (recordFinalGateUnobservedDebt, recordAcceptDebt, …)
 // carried their class in the NAME, so collapsing them into one recordDebt moved that
 // class into a parameter — and the parameter defaulted to 'accepted'. One migrated
-// call in scripts/ignored-writes-ab.ts lost its argument and the default absorbed it
+// call site loses its argument and the default absorbs it
 // silently: a run-level 'final-gate' demotion was written to the ledger as a human
 // 'accepted'. The two classes assert opposite things — 'accepted' says a person
 // weighed the failing artifact and shipped it anyway; 'final-gate' says the gate gave
@@ -511,7 +511,7 @@ describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades a
  * `work did not verify:` reason.
  *
  * The six invariants below are the whole safety argument. Each is also asserted over
- * the recorded corpus by scripts/debt-verify-close-ab.ts; these are the deterministic
+ * the recorded corpus; these are the deterministic
  * copies that cannot drift with a corpus tree.
  */
 describe('verify-command debt class', () => {

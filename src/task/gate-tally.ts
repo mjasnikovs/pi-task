@@ -2,7 +2,7 @@
  * The final gate's tally: everything its sections RECORD, and the one pure
  * function that turns the record into a `FinalGateOutcome`.
  *
- * `runFinalIntegrationGate` used to carry this as twelve mutable locals — the
+ * Carried inline, this is twelve mutable locals in `runFinalIntegrationGate` — the
  * ranked failure list, four dynamic counters, three note lists, a warning list,
  * the boot verdict — threaded through ~400 lines by closure, with three sections
  * hand-incrementing the same counters and one branch doing `dynObserved -= 1`.
@@ -65,7 +65,7 @@ export function observabilityGapFailure(args: {
  * The THIRD verdict. observabilityGapFailure above covers "commands were DISCOVERED
  * but every one failed to spawn" — a rank-0 FAIL. It deliberately returns null for
  * `attempted === 0`, and until now that silence fell straight through to
- * `PASS — no integration command found (statics passed)`: the run-16 blindness class
+ * `PASS — no integration command found (statics passed)`: the blindness class
  * entering through a different door, where "we never checked" reads exactly like "we
  * checked and it was fine". Measured 2026-07-27: one real project (C++/CMake, no package.json)
  * shipped that verdict TWICE while carrying 2 and 3 open verify-FAIL debts, and
@@ -236,7 +236,7 @@ export class GateTally {
         return this.attempts === 0 && this.failures.length === 0
     }
 
-    /** The run-16 blindness guard over this tally's own counters (see
+    /** The blindness guard over this tally's own counters (see
      *  observabilityGapFailure); the caller fails it at rank 0. */
     blindness(runnerResolvable: (bin: string) => boolean): string | null {
         return observabilityGapFailure({
@@ -262,10 +262,10 @@ export class GateTally {
      * Otherwise `ok: true`, with the UNOBSERVED note when the gate could not
      * observe something it meant to. Two independent notes, either or both of which
      * may apply: the boot never ran, and/or NOTHING dynamic ran at all
-     * (unobservedVerdict — commands WERE discovered, none spawn-failed so the run-16
-     * guard correctly stayed silent, and yet nothing ran: that used to be `statics
-     * passed (integration commands not runnable here)`, the identical "we never
-     * checked" silence wearing different words). The boot note leads because it
+     * (unobservedVerdict — commands WERE discovered, none spawn-failed so the
+     * blindness guard correctly stayed silent, and yet nothing ran. Reported as
+     * `statics passed (integration commands not runnable here)` that is the
+     * identical "we never checked" silence wearing different words). The boot note leads because it
      * names a concrete command and the trail line is sliced at 300 chars; then the
      * config-gap notes, then the inert-contract note. Unchanged when anything at all
      * was observed, so a project with runnable commands is byte-for-byte unaffected.

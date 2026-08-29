@@ -30,7 +30,7 @@
  * one borderline case. So this detector is tuned for HIGH PRECISION on real answers, accepting
  * low recall — "better to miss a borderline type-only answer than to flag a real one." Three
  * independent gates must ALL hold before an answer is called type-only; any one failing clears
- * it. Calibrated against the run-15 corpus: of the 149 valid (non-"unclear") pi-worker-docs
+ * it. Calibrated against the corpus: of the 149 valid (non-"unclear") pi-worker-docs
  * answers, this rule flags EXACTLY ONE — the recorded `hc` case — and clears the other 148,
  * including every legitimate signature answer to an explicit "give me the type/signature"
  * question (bun.password.hash, toBuffer, BuildOutput, …). See type-only-answer.test.ts.
@@ -56,7 +56,7 @@
  * already handled by the escalation path (PROMPT 2 DO item 2 escalates BOTH). It is cleared
  * here with a distinct reason so the caller can route it through the existing unclear channel.
  *
- * Pure and side-effect free; unit-tested in type-only-answer.test.ts against real run-15 text.
+ * Pure and side-effect free; unit-tested in type-only-answer.test.ts against real text.
  */
 
 import {isAbstention} from '../workers/abstention.js'

@@ -93,7 +93,7 @@ export function workerChannel(toolName: string): WorkerChannel | undefined {
 
 /**
  * The tools string and the `-e` paths for a set of channels, together — they are
- * one fact and used to be two literals. Entry paths are de-duplicated: search and
+ * one fact, and two literals would drift. Entry paths are de-duplicated: search and
  * fetch ship in one extension file.
  */
 export function channelSet(names: readonly string[]): {tools: string; extensions: string[]} {

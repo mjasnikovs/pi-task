@@ -195,7 +195,7 @@ export function missingDeclaredScripts(declared: string[], manifestScripts: stri
  *
  * `candidates` is enumerateScriptCandidates' mechanical checklist. It exists so the
  * model cannot MISS a declared script buried far from the design's summary list (the
- * run-11 `test:ct` hole); the model still classifies each candidate against the
+ * a `test:ct` hole); the model still classifies each candidate against the
  * design, and the host grounding still applies. Empty ⇒ the prompt is unchanged.
  */
 export const LAUNCH_EXTRACT_PROMPT = (feature: string, candidates: string[] = []): string =>

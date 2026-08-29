@@ -297,9 +297,9 @@ const MISSING_ROUTE_STATUS = new Set([404, 405, 501])
  * Judge a recorded session. The ONE thing that may FAIL is a session the SERVER
  * authenticated (2xx on the sign-in request) whose client then could not use it:
  *
- *   - never left the wall                → the run-17 signature exactly;
+ *   - never left the wall                → the signature exactly;
  *   - data calls attempted, none 2xx     → the same class one page deeper;
- *   - post-sign-in page renders blank    → the run-16 class behind the wall.
+ *   - post-sign-in page renders blank    → the class behind the wall.
  *
  * Everything else is an environment or shape gap and SKIPs. Note what is NOT a
  * failure: zero data calls attempted after sign-in. A server-rendered app that

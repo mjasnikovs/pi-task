@@ -5,9 +5,9 @@
  *
  * Why one module. The sentinel has two halves that MUST agree: the sentence a
  * prompt instructs the child to emit, and the predicate that later recognises it.
- * They used to be independent. Three prompts wrote three phrasings — two of them
- * as bare string literals buried in a template — and four regexes matched
- * different subsets of the three:
+ * Left independent, three prompts write three phrasings — two of them as bare
+ * string literals buried in a template — and four regexes match different
+ * subsets of the three:
  *
  *   pi-worker-docs   /unclear from this package/i          (package only)
  *   typeonly-log     /unclear from this (package|project)/i (no page)

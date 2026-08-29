@@ -168,18 +168,15 @@ export class StreamWatchdog {
  * cancels it on stop/fire, and runChild's cleanup() stops the watchdog on every
  * settle path (close, error, abort), so it cannot outlive the child it watches.
  *
- * The poll is REF'd, deliberately. It used to be unref'd, on the reasoning that a
- * pending watchdog poll should never keep the process alive at exit — but under
- * Bun on WINDOWS an unref'd timer does not fire at all once nothing ref'd is
- * pending. Measured on a windows-latest runner (bun 1.3.14): an unref'd interval
- * with nothing else pending never fired in 20s, while the identical ref'd one
- * fired at 101ms; on linux both fire at 100ms.
+ * The poll is REF'd, deliberately. Unref'd reads better — a pending watchdog
+ * poll should never keep the process alive at exit — but under Bun on WINDOWS an
+ * unref'd timer does not fire at all once nothing ref'd is pending. On Linux it
+ * fires either way, which is why only Windows CI catches this.
  *
  * That state — no ref'd work outstanding — is EXACTLY the state this watchdog
  * exists to police: a child whose model stream has gone silent. So the unref
  * disabled the guard precisely when it was needed, and every stream-stall
- * integration test hung forever on windows (CI runs 30476786365, 30477802633,
- * 30478455402 — it hangs at v0.24.1 too, so this predates that release).
+ * integration test hangs forever on windows.
  * A poll that can delay exit by one interval is the cheaper failure.
  */
 export const realStreamTimerDeps: Pick<StreamWatchdogDeps, 'now' | 'schedule' | 'cancel'> = {

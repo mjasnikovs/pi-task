@@ -1,7 +1,7 @@
 /**
  * env-template-closure tests — the six mechanical rules that decide REQUIRED, each
  * pinned by the real read that demanded it during STEP 0 (see
- * `scripts/env-template-closure-baserate.ts` for the corpus numbers).
+ * the base-rate measurement for the corpus numbers).
  */
 import {describe, expect, test} from 'bun:test'
 import {spawnSync} from 'node:child_process'

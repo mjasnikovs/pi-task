@@ -12,7 +12,7 @@
  *   - the lint-fix revert-guard checks only pre-DIRTY files reverted and
  *     pre-UNTRACKED files gone — a CLEAN tracked sibling file is in neither set;
  *   - the frozen-path guard covers only paths THIS task's spec froze;
- *   - the run-11 deletion guard covers only the final-fix child;
+ *   - the deletion guard covers only the final-fix child;
  *   - the impl turn legitimately deletes files (its own refactors), so a blanket
  *     ban is wrong — the discriminator must be PROVENANCE: who introduced the file.
  *

@@ -7,15 +7,14 @@
  * and-kill only re-spawns a model that deterministically re-thrashes.
  *
  *   - SingleReadGuard: "read each LINE of a file once". Validated against every
- *     recorded run — a healthy TOOLING worker reads each file exactly once
- *     (max same-file reads = 1 across 7 tasks). a task re-read one file 50×.
+ *     recorded run — a healthy TOOLING worker reads each file exactly once,
+ *     while a thrashing one re-reads a single file dozens of times.
  *
- *     It used to key on the resolved path alone, blocking any second read
- *     "regardless of offset". That made a file bigger than one read into a trap.
- *     Measured 2026-08-17 on a captured auto-decompose request: the planner asked
- *     for `DESIGN/marketplace.html` with `limit: 80` — the first 80 lines of 743,
- *     deliberately paging — and its request for offset 80 was refused. It never
- *     reached the end of the file, and spent the rest of the run asking for the
+ *     Keying on the resolved path alone, blocking any second read "regardless of
+ *     offset", makes a file bigger than one read into a trap. A planner asking
+ *     for the first 80 lines of a 743-line design document — deliberately paging
+ *     — has its request for offset 80 refused. It never
+ *     reaches the end of the file, and spends the rest of the run asking for the
  *     remainder: 197 of 200 tool calls were this guard's own refusal. The guard
  *     did not stop a thrash, it CAUSED one.
  *

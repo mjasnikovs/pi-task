@@ -1,13 +1,12 @@
 /**
  * test-assembly — deterministic detection of TEST-REBUILT PRODUCTION WIRING, feeding
- * the verify gate's prompt (run-8 F4; third recurrence of the test-the-copy class,
- * runs 3, 4, 8).
+ * the verify gate's prompt. A recurring shape, not a one-off.
  *
  * The failure class: a test file re-constructs wiring that ALSO exists in production
  * — it builds its own app assembly / its own entry point out of the same leaf modules
  * the production entry composes, then tests THAT private copy. The copy can be wired
- * differently from production and stay green while the shipped wiring is broken. Run-8
- * fixture: `test/photos.test.ts` imports the real `authRoutes` + `photosRoutes` leaves,
+ * differently from production and stay green while the shipped wiring is broken. A real
+ * example: `test/photos.test.ts` imports the real `authRoutes` + `photosRoutes` leaves,
  * mounts them into its OWN app at a DIFFERENT prefix than the production entry, and
  * runs green end to end — while the shipped upload path is dead because production mounts
  * the same leaf at the wrong prefix. The verify child, judging "do the tests pass",
@@ -34,7 +33,7 @@
  * shared-utility imports out: a test importing an api client + a schema module that
  * every page also imports is NOT re-assembly (those utilities have many production
  * importers); a test importing two route modules that only the server entry composes
- * IS re-assembly. Measured on the run-8 fixture tree: flags exactly the four backend
+ * IS re-assembly. Measured on the fixture tree: flags exactly the four backend
  * tests that rebuild the server entry's route composition (including the real
  * photos seam bug) and leaves clean the single-leaf direct test, the utility-sharing
  * page test, and the source-grepping test — 0 false positives.

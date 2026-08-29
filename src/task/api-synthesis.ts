@@ -36,7 +36,7 @@ export interface SynthesizedApiFinding {
 
 /**
  * `Namespace.member` where the namespace starts uppercase (Bun, React, Deno —
- * the global/imported-namespace API shape; run-13's TP is exactly this) and
+ * the global/imported-namespace API shape; a TP is exactly this) and
  * both sides are ≥2 chars (kills "U.S.", "e.G" prose shapes). Member may start
  * either case: `Bun.mkdirSync` and `React.StrictMode` are both API-shaped.
  */

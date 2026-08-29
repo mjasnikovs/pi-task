@@ -312,7 +312,7 @@ export interface BootDeps {
     spawnBoot?: (bin: string, args: string[], opts: BootSpawnOptions) => BootChild
     /**
      * Tear down the child's whole process group. Injected with `spawnBoot`, because
-     * a fake child has no group to kill and a real `process.kill(-pid)` against a
+     * a fake child has no group to kill and a real `process.kill(pid)` against a
      * fake pid would signal something else entirely.
      */
     killGroup?: (pid: number, signal: NodeJS.Signals) => void
@@ -778,7 +778,7 @@ export async function runBootCheck(
         }
         const reapGroup = opts.deps?.killGroup ?? defaultKillGroup
         const killGroup = (sig: NodeJS.Signals) => {
-            // Truthiness, deliberately: `process.kill(-0, sig)` signals the
+            // Truthiness, deliberately: `process.kill(0, sig)` signals the
             // CALLER's own process group, so a pid of 0 turns a best-effort
             // teardown into self-termination. Node's spawn never yields 0, but
             // `spawnBoot` is a seam now and a fake or future child could.
@@ -950,7 +950,7 @@ export async function runBootCheck(
  * every task green.
  *
  * The defect is that "the app was never observed to boot" and "the app booted
- * fine" produced BYTE-IDENTICAL gate output. That is the class scripts/ab-verdict.ts
+ * fine" produced BYTE-IDENTICAL gate output. That is the class the verdict check
  * exists to kill one layer up: absence of evidence rendered in the shape of
  * evidence. So a discovered-but-skipped boot now names itself, and — unlike every
  * other skip — it CANNOT be cancelled by observations from other commands.

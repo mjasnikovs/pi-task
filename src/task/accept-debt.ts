@@ -161,7 +161,7 @@ export interface AcceptDebt {
      * present byte-identically in the owning task's VERIFY block. Set at record
      * time by classifyVerifyCommand; absent whenever the
      * reason names no such command — which is most of them (measured: 2 of 19
-     * PROJECT-pool debts, `scripts/debt-verify-class-baserate.ts`).
+     * PROJECT-pool debts).
      *
      * It exists so the run-end re-check can settle the debt the way the debt was
      * created: by RUNNING the command and reading its exit status. Never
@@ -292,10 +292,10 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
  * Best-effort by construction (appendDebt swallows its own faults): the ledger is an
  * auditing aid and must never break the gate sequence that calls it.
  *
- * `origin` is REQUIRED and deliberately has no default. It used to default to
+ * `origin` is REQUIRED and deliberately has no default. Defaulting it to
  * 'accepted' (the legacy 2-field on-disk shape), and that default silently absorbed
  * a dropped argument: the eight-recorder collapse migrated one call in
- * scripts/ignored-writes-ab.ts without its origin, so a run-level 'final-gate'
+ * A debt recorded without its origin makes a run-level 'final-gate'
  * demotion was stamped as a human 'accepted'. The wrappers each carried their class
  * in the NAME, so no migration of them could lose it; a defaulted parameter can.
  * Making it explicit turns that whole class of slip into a compile error.
@@ -654,7 +654,7 @@ export function describeDebt(d: AcceptDebt): string {
  *
  * FACTORED OUT of runFinalIntegrationGate: the derivation has to be
  * runnable at a SECOND moment — after a converged final-gate autofix, where the
- * orchestrator used to rebuild its gate outcome as a bare `{ok, reason}` and drop
+ * orchestrator rebuilds its gate outcome as a bare `{ok, reason}` and drops
  * `openDebts` entirely. The report a run ends on has to be derived from the tree
  * the run ends with, not from the tree as it was before the fix pass.
  *

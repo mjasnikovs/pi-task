@@ -17,7 +17,7 @@ const escHtml = () => load<(t: string) => string>('escHtml')
 // Unlike ui.test.ts (which only string-matches the template), these tests EXECUTE
 // the shipped client JS — the missing test class that let the dead-fence bug ship.
 // (The .code-block DOM assertion is covered by the chromium harness --dump-dom
-// grep in scripts/remote-preview.ts, which reports the live .code-block count.)
+// grep against a rendered preview, which reports the live .code-block count.)
 const BT = String.fromCharCode(96)
 const FENCE = BT + BT + BT
 

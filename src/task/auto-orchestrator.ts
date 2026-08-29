@@ -1221,7 +1221,7 @@ export async function planAuto(
     // side and reported "0 unowned" while nothing ever CREATED the file — so
     // these ride the coverage loop's `missing` list as unowned areas until some
     // task title claims the artifact (grounded in titles, which the coverage-map
-    // model cannot fake — the run-12 lesson). Deterministic and best-effort.
+    // model cannot fake — the lesson). Deterministic and best-effort.
     let specDangling: DanglingRef[] = []
     try {
         specDangling = findSpecDanglingArtifacts(featureForModel, rel =>

@@ -686,7 +686,7 @@ describe('phaseResearch per-worker persistence', () => {
 
 describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', () => {
     // A plausible APIS section a real rep emitted having made ZERO tool calls — every
-    // signature recalled from memory. See scripts/live-apis-stopping-point.ts.
+    // signature recalled from memory.
     const FROM_MEMORY =
         'hono/client  hc<AppType> creates a typed client; $get/$post methods per route\n'
         + 'AppType  export type AppType = typeof app from src/index.ts'

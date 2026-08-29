@@ -290,7 +290,7 @@ function normalisedSections(doc: string): string[] {
  *  whose normalised text contains its quote (the same containment rule that
  *  grounded it), take each bucket's entries in in-section order, one per bucket
  *  per round. Entries that cannot be located (or no doc) go to a trailing
- *  bucket in given order — the pre-run-16 behavior, never worse. */
+ *  bucket in given order — the pre-behavior, never worse. */
 function sectionFairFill(
     entries: RequirementEntry[],
     budget: number,
@@ -538,7 +538,7 @@ export function accountCoverage(
         else if (m.kind === 'cross') acc.crossCutting.push(requirements[i])
         // NONE — but a prohibition/global-policy requirement can never be OWNED by
         // a task (it states an absence or a product-wide rule); the model maps it
-        // NONE every round, which used to force endless whole-plan regeneration.
+        // NONE every round, which forces endless whole-plan regeneration.
         // Carry it cross-cutting instead, so it stops driving the coverage loop.
         else if (isCrossCuttingRequirement(requirements[i].quote))
             acc.crossCutting.push(requirements[i])
@@ -627,7 +627,7 @@ export function buildRequirementsBlock(requirements: string): string {
     ].join('\n')
 }
 
-// ─── Owned (task-mapped) requirements — the run-16 channel gap ──────────────
+// ─── Owned (task-mapped) requirements — the channel gap ──────────────
 //
 // Of a 40 kept requirements only the 6 CROSS-CUTTING ones were persisted
 // and injected; the 33 TASK-MAPPED ones rode the decompose ledger (shaping the

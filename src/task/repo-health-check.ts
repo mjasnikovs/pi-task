@@ -44,9 +44,9 @@ export interface HealthOutcome {
     ecosystem: string | null
     /**
      * First lines of the failing command's combined stderr+stdout — captured so a
-     * FAIL is explainable from artifacts alone. Run-8 F8: five enforce passes were
-     * discarded on "`bun run lint` exited 2" and the cause was unreproducible
-     * post-run because only the exit code was recorded (exit 2 is the linter's
+     * FAIL is explainable from artifacts alone. Enforce passes get discarded on
+     * "`bun run lint` exited 2" and the cause is unreproducible after the run when
+     * only the exit code was recorded (exit 2 is the linter's
      * CRASH class; findings exit 1 — the captured output is what tells them apart).
      * Empty string on pass / skip.
      */
@@ -152,7 +152,7 @@ export type HealthProgress = (command: string) => void
  *  - A command that ran and exited non-zero → the first such failure is returned.
  *
  * This module owns DISCOVERY and its own output policy; running a command and
- * deciding what its ending MEANS is `command-run.ts`'s. It used to own those too —
+ * deciding what its ending MEANS is `command-run.ts`'s. Owning those too, it would —
  * `HealthRun`, `classifyHealthRun` and `spawnHealthCommand` were a second statement
  * of the gap ladder, with no injectable runner, so every classification case in the
  * suite spawned a real shell. `command-run.ts`'s own header notes that this module

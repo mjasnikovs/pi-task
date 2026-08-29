@@ -101,7 +101,7 @@ export interface GateDeps {
      * While the two shared one field the only way to answer them differently was to
      * count invocations — a `verifyCalls` state machine whose FIRST return existed
      * solely to unlock `mode === 'edit'`, re-invented in the suite and again in
-     * scripts/enforce-revert-attribution-replay-ab.ts.
+     * a replay of recorded enforce reverts.
      */
     reVerify?: (
         ctx: ExtensionCommandContext,
@@ -323,12 +323,11 @@ export interface YoloAcceptContext {
 /**
  * The reason an auto-ACCEPT is being written — NAMED, not assumed.
  *
- * The line this replaces asserted "autofix budget spent" on every branch. It was
- * measured false in 2709 of 2709 recorded accepts:
- * the budget has never once reached MAX_AUTO_AUTOFIX anywhere in the corpus — 30%
- * of accepts are UNOBSERVED (the research is never even consulted) and 70% are an
- * ACCEPT recommendation with the budget fully untouched. A durable trail that
- * misstates why a defect shipped is worse than no trail: a a task
+ * The line this replaces asserted "autofix budget spent" on every branch, and it
+ * was false on every recorded accept: the budget never reaches MAX_AUTO_AUTOFIX.
+ * Accepts are either UNOBSERVED, where the research is not consulted at all, or
+ * an ACCEPT recommendation with the budget fully untouched. A durable trail that
+ * misstates why a defect shipped is worse than no trail: a task
  * reads as an exhausted fixer when nothing was ever attempted.
  */
 export function yoloAcceptReason(c: YoloAcceptContext): string {
@@ -784,7 +783,7 @@ export async function runEnforcePass(
         // BASELINE repo health, captured BEFORE the edit pass touches the tree, so the
         // pre-commit gate below is DIFFERENTIAL: it can tell an enforce-CAUSED
         // regression (was clean, now fails) from a repo that was ALREADY unhealthy
-        // (run-8 F8: five enforce passes were discarded on a lint that was already
+        // (a F8: five enforce passes were discarded on a lint that was already
         // crashing — exit 2 — before enforce edited anything; the discard threw away
         // good work for a fault it did not cause). Only meaningful in edit mode (flag
         // makes no edits); the task's work is already committed so this reflects the

@@ -563,7 +563,7 @@ export async function collectTestAssemblyFindings(
  * section, and an unreadable task file is the same case — both are null, and every
  * caller already treats null as "nothing to hold the work to" (verify no-ops,
  * frozen paths are empty, recommend falls back to the title). Never throws. This
- * used to be the same four-line try/catch at four gate sites.
+ * would otherwise be the same four-line try/catch at four gate sites.
  */
 export async function readSpecForVerification(cwd: string, taskId: string): Promise<string | null> {
     try {
@@ -828,7 +828,7 @@ export function buildGateDeps(params: {
                 //. classifyEnforceChildFailure still blocks
                 // on a real failure (non-zero exit, leaked tool call) or a user cancel.
                 //
-                // This used to be an inline ~85-line copy of the gate-child ritual,
+                // Inline, this is an eighty-odd-line copy of the gate-child ritual,
                 // differing only in the four things GATE_CHILD_KINDS now carries as
                 // row data: no git-state guard (editing is this pass's job), no
                 // tool-result logging, no tree-change capture, and its own end
@@ -851,7 +851,7 @@ export function buildGateDeps(params: {
             // widget was cleared at `agent_end`, so until now the screen simply
             // stopped: no spinner, no clock, no line (the `verifying…` notify cannot
             // even paint, since pi-tui schedules renders on process.nextTick and the
-            // health check used to block the loop outright). MEASURED on real repos:
+            // health check would block the loop outright). On real repos:
             // 15s to 69s (aiz-client) per health run, 0 of 686 expected 100ms
             // timer ticks delivered. One loader now spans the WHOLE gate — the
             // deterministic stage and the child — so the run is never silent.
@@ -894,7 +894,7 @@ export function buildGateDeps(params: {
                     // own lint/typecheck and fails on a real non-zero exit, independent of
                     // the model-authored VERIFY block (which may not lint at all). ASYNC:
                     // the sync runner froze the event loop for the whole lint (see above).
-                    // ONE call, both arms. The baseline arm used to call this
+                    // ONE call, both arms. A baseline arm that calls this
                     // without the signal or the progress hook, because
                     // `runRepoHealthCheck` was SYNCHRONOUS and blocking the event
                     // loop was the thing being measured. It is async now, so that
@@ -1030,14 +1030,14 @@ export function buildGateDeps(params: {
                 discoverBodies: discoverGateCommandBodies,
                 discard: discardTreeEdits,
                 // WRITE-GUARD STACK (this child ran with free bash and
-                // none of the run-8 guards — it rm'd a sibling task's verified
+                // none of the guards — it rm'd a sibling task's verified
                 // deliverable and hand-copied a contract to green the lint). Diff
                 // capture happens at the makeGateChild seam; deletion guard +
                 // probe scan reject-and-discard here. The frozen-path deny
                 // (FinalFixDeps.frozenPaths/revertFrozen) is deliberately NOT
                 // wired: per-task fences are task-SCOPED ("this task must not
                 // touch a sibling's territory"), and the measured union over the
-                // run-11 specs would have reverted the one legitimate fix that
+                // specs would have reverted the one legitimate fix that
                 // run needed (migrate.ts, frozen by its own producing task). Wire
                 // it only when a run-GLOBAL freeze source exists (a design-level
                 // preserve registry), never a per-task union.

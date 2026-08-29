@@ -5,7 +5,7 @@
 // whole object with snapshot() and the client replaces its entire view. Because
 // the snapshot and the live deltas read/write the same object, they can never
 // disagree — which is what kills the duplicate-transcript / orphaned-widget /
-// two-task-widget drift the ad-hoc broadcasting used to cause.
+// two-task-widget drift that ad-hoc broadcasting causes.
 //
 // State lives on globalThis so it survives jiti module re-evaluation on session
 // switches, the same pattern broadcast.ts and bridge.ts use.

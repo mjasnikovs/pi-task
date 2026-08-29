@@ -216,12 +216,12 @@ export function extractSpecForVerification(taskBody: string): string | null {
 /**
  * ─────────────────────────── THE PROBE TABLE ───────────────────────────
  *
- * Every deterministic probe that sharpens this prompt used to cost the same
+ * Every deterministic probe that sharpens this prompt costs the same
  * ritual in four places: a `let x = []` + try/catch in runWorkVerification, a
  * positional parameter on buildVerifyPrompt, a `const xBlock =` ternary, and a
  * spread into the assembled prompt — plus its hand-numbered rule. Adding one
  * meant editing all of them and hoping none was missed; the ninth would not
- * even fit the signature (hence the `projectSurface` bag that used to group
+ * even fit the signature (hence a `projectSurface` bag to group
  * three of them).
  *
  * Each probe is now an ADAPTER: one row carrying only what is specific to it —

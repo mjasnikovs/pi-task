@@ -88,11 +88,11 @@ const WORKER_TIMEOUT_HINT =
 /**
  * How much of a discarded attempt's answer is carried into the next one.
  *
- * A restart used to hand the re-spawn nothing but a hint — which is why
+ * A restart that hands the re-spawn nothing but a hint is why
  * WORKER_TIMEOUT_HINT above can tell a worker "do not re-explore ground you have
- * already covered" while giving it no record of what that ground was. It could
- * not comply. a shows the cost: on tasks with >=46 project-source
- * lookups, 5 of 5 workers burned the FULL restart budget, because every attempt
+ * already covered" while giving it no record of what that ground was. It cannot
+ * comply. The cost shows on lookup-heavy tasks: workers burn the FULL restart
+ * budget, because every attempt
  * re-read the same files against the same clock and died in the same place.
  *
  * Carrying the partial answer forward is what makes a restart converge instead
@@ -560,9 +560,9 @@ export interface RunWorkerResult {
  * commandTimeoutHint, which tells the model in as many words to bound its
  * command; a SECOND hang means it ignored an explicit instruction, and a third
  * means it ignored it twice. Giving a non-complying child the full ceiling again
- * would put the worst case at 3 × 15 min = 45 minutes of dead time, resting
- * entirely on the model obeying prose. Halving bounds it at ~26 min while
- * costing a complying child nothing.
+ * makes the worst case three times the ceiling, resting entirely on the model
+ * obeying prose. Halving bounds it at under twice the ceiling while costing a
+ * complying child nothing.
  *
  * `priorHangs` counts watchdog kills specifically, NOT total restarts — the
  * restart budget is shared with loop kills, and a child restarted for LOOPING
@@ -744,7 +744,7 @@ export const RESTART_RULES: readonly RestartRule[] = [
         // helps nor costs there. Beyond ~46s
         // (three spawns' combined budget) both arms fail. The price is paid only on
         // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
-        // scripts/connection-retry-ab.ts.
+        // a controlled outage.
         //
         // Connection class ONLY. Auth, bad request and context overflow still fail
         // fast: re-issuing the same request cannot fix them, so spending the budget
@@ -982,8 +982,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         // A tool call is the worker working. Inert unless the
                         // caller opted into a progress-based deadline.
                         timeout.progress()
-                        // The generic child runner used to name ONE tool and ONE of
-                        // its parameters here. It asks the tool's own row now.
+                        // Naming ONE tool and ONE of its parameters here would put
+                        // that knowledge in the generic runner. It asks the tool's own row.
                         if (
                             clock.fanout
                             && workerChannel(call.name)?.isProjectSourceLookup?.(
@@ -1009,8 +1009,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         timeout.progress()
                         input.onLine?.(line)
                     },
-                    // Always wired now (it used to be conditional on the command
-                    // watchdog): the sink only emits tool_execution_end if a
+                    // Always wired, never conditional on the command watchdog: the
+                    // sink only emits tool_execution_end if a
                     // handler exists, and a completed tool call is the clearest
                     // progress signal there is. Without it a worker whose tool
                     // calls all succeed would still look idle to the deadline.
@@ -1079,7 +1079,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         const leaked = result.exitCode === 0 && !result.aborted ? detectLeakedToolCall(text) : null
 
         // THE RESTART LADDER. Precedence is RESTART_RULES' row order; this loop
-        // owns the ritual every rule used to repeat: budget, hint, counters,
+        // owns the ritual every rule would otherwise repeat: budget, hint, counters,
         // record-and-announce, backoff, re-spawn.
         const state: RestartState = {
             ...(loopHit ? {loopHit} : {}),
@@ -1112,10 +1112,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
             break
         }
         if (restarted) continue
-        // SALVAGE. The run used to return the LAST attempt's text unconditionally,
-        // so a worker whose final attempt was killed early reported nothing at all
-        // — even when a discarded attempt had produced a usable answer that was
-        // still in hand at the moment it was thrown away. A restart budget is
+        // SALVAGE. Returning the LAST attempt's text unconditionally makes a
+        // worker whose final attempt was killed early report nothing at all — even
+        // when a discarded attempt produced a usable answer that was still in hand
+        // at the moment it was thrown away. A restart budget is
         // meant to buy more chances at an answer, not to overwrite a good attempt
         // with a worse one.
         //

@@ -44,8 +44,8 @@
  * ── The critique-REWRITE seam FAILED its A/B, 2026-08-04. ────────────────────
  *
  * The detector is precise — 1 finding over 58 real composed specs, and it is the
- * true positive (scripts/owned-freeze-conflict-fp-suite.ts, PASS; STEP 0 in
- * scripts/owned-vs-freeze-baserate.ts). What failed is the LEVER built on it,
+ * true positive, with a false-positive suite and a base rate behind it. What
+ * failed is the LEVER built on it,
  * for two independent reasons, both measured:
  *
  *  1. THE SEAM IS BLIND IN PRODUCTION. `appendOwnedConstraints` — the BRACES that
@@ -88,7 +88,7 @@ export interface CategoryFreeze {
 /**
  * One unsatisfiable pair, keyed by the REQUIREMENT rather than by the path.
  *
- * Grouping matters for the resolution's size. a a task carries
+ * Grouping matters for the resolution's size. a task carries
  * two owned build-contract clauses that between them name three frozen paths;
  * per-path findings would demand three separate ownership grants (and the same
  * pair twice over, because that spec states its freeze in CONSTRAINTS and again
