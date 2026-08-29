@@ -88,10 +88,9 @@ test('ids are unique — the onChange lookup must resolve to exactly one row', (
  * The same properties, over EVERY row this session shows — the seven reasoning
  * groups and one row per live tool and installed extension included.
  *
- * Those three families used to bypass `ConfigItem` entirely: each had its own
- * builder, its own apply function and its own arm in a four-way prefix ladder,
- * and none of the properties above could see them. `reason:` rows had a
- * hand-written round-trip test of their own; `ext:` and `tool:` had none at all.
+ * Those three families are the ones a prefix ladder would leave out: with a
+ * builder, an apply function and a ladder arm each, none of the properties above
+ * can see them, and only one of the three would end up with a round-trip test.
  */
 describe('every DISCOVERED row obeys the same contract', () => {
     const tools = [

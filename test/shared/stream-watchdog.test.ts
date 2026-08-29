@@ -51,7 +51,7 @@ describe('StreamWatchdog', () => {
         expect(h.fires).toEqual([601_000])
     })
 
-    // The core distinction the run-14 audit demanded: a local model dribbling one
+    // The core distinction the audit demanded: a local model dribbling one
     // token every 30s is HEALTHY. Only total silence is a hang.
     test('a slow but steady stream never fires', () => {
         const h = harness(600_000)

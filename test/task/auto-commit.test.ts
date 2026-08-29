@@ -96,7 +96,7 @@ test('gitCommitAll: non-identity commit failure is reported, not thrown', async 
 })
 
 test('gitCommitAll: missing identity → retried with self-supplied fallback identity', async () => {
-    // The mx5 run-4 failure: a headless container with no gitconfig failed ALL 10
+    // The failure: a headless container with no gitconfig failed ALL 10
     // per-task commits ("Author identity unknown"), silently disabling enforce and
     // every commit-based guard. The fallback keeps the snapshot.
     const seen: string[][] = []
@@ -192,8 +192,8 @@ test('gitStashRef: sha when a stash exists, null when not', async () => {
     expect(await gitStashRef('/repo', undefined, noStash)).toBeNull()
 })
 
-// mx5 run 9 item 8: the enforce-revert path (`git reset --hard HEAD~1`) erased the
-// gate trail because .pi-tasks is TRACKED — TASK_0007/0008/0012 lost their whole
+// item 8: the enforce-revert path (`git reset --hard HEAD~1`) erased the
+// gate trail because .pi-tasks is TRACKED — several tasks lose their whole
 // post-snapshot trail (the "commit:"/"enforce(edit)"/resolution lines), so a
 // committed-then-reverted task looked as if it had never been committed. The revert
 // must undo CODE and preserve the forensic trail. Real repo — the reset touches
@@ -259,7 +259,7 @@ test('gitDropLastCommit preserves a nested .pi-tasks debug log across the reset'
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UNTRACKED TEST-RUNNER OUTPUT (mx5 run 20). TASK_0027's snapshot ran a bare
+// UNTRACKED TEST-RUNNER OUTPUT. a task's snapshot ran a bare
 // `git add -A` over a tree the Playwright run had just littered with three
 // `*-actual.png` FAILURE screenshots, committed them, and made them tracked
 // deliverables — after which two whole final-gate fix attempts were rejected for

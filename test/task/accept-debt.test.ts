@@ -1,8 +1,8 @@
 /**
  * accept-debt tests — the durable ledger of tasks the user ACCEPTED despite a
- * verify-FAIL (mx5 run 4 B3 / run 8 TASK_0012). Parsing, the FP-safe re-check, and
+ * verify-FAIL. Parsing, the FP-safe re-check, and
  * the report block are pure; record/read/write/prune run against a real throwaway
- * .pi-tasks dir (the artifact contract is the point).
+ *.pi-tasks dir (the artifact contract is the point).
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -31,7 +31,7 @@ function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-accept-debt-'))
 }
 
-// The verbatim mx5 run 10 TASK_0004 enforce re-verify FAIL — the terminal defect that
+// The verbatim one task enforce re-verify FAIL — the terminal defect that
 // was found 8.5h before run end and erased by the revert that found it.
 const TASK_0004_DIAGNOSIS =
     'work did not verify: Missing server entry point (src/server/index.ts) and dev script in '
@@ -189,7 +189,7 @@ describe('buildAcceptDebtNote', () => {
     })
 })
 
-// mx5 run 10 item 3: an enforce re-verify FAIL that indicts the ORIGINAL work must
+// item 3: an enforce re-verify FAIL that indicts the ORIGINAL work must
 // survive the revert as a durable, gate-re-checked defect.
 describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
     test('records a 3-field origin-tagged row that reads back with origin set', async () => {
@@ -269,12 +269,11 @@ describe("recordDebt origin 'final-gate' (the class a default must never absorb)
     })
 })
 
-// ─── Conflicting-claim classification (mx5 run 11) ───────────────────────────
+// ─── Conflicting-claim classification ───────────────────────────
 //
-// The three VERBATIM debts from the run-11 ledger (~/hub/mx5/.pi-tasks/
-// accept-debt.md). Only T9 is an existence-as-failure claim indicting a sibling's
+// Three VERBATIM debts off a real ledger. Only T9 is an existence-as-failure claim indicting a sibling's
 // deliverable — the final-gate autofix child, seeded with it, ran
-// `rm src/client/pages/admin.tsx` and destroyed TASK_0008's verified work.
+// `rm src/client/pages/admin.tsx` and destroyed a task's verified work.
 const RUN11_T1 =
     'work did not verify: src/server/db.ts imports {SQL} (uppercase class constructor) instead '
     + 'of the spec-mandated {sql} (lowercase tagged template function); the constraint '
@@ -360,7 +359,7 @@ describe('buildAcceptDebtNote — conflicting claims', () => {
     })
 })
 
-// mx5 run 12 / PROMPT 1 layer B: a repo-health FAIL whose only fix is an edit to a
+// a / PROMPT 1 layer B: a repo-health FAIL whose only fix is an edit to a
 // path this task's spec froze — recorded when the gate loop routes to the picker.
 describe("recordDebt origin 'frozen-blocked' / origin round-trip", () => {
     const REASON =
@@ -503,10 +502,10 @@ describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades a
 })
 
 /**
- * The VERIFY-COMMAND class (nexttask 5, mx5 run 19). A debt whose reason quotes —
+ * The VERIFY-COMMAND class. A debt whose reason quotes —
  * verbatim, in backticks — a line of its OWN task's VERIFY block carries that command
- * in the ledger, and the run-end re-check settles it by RUNNING it. run 19 reported
- * TASK_0009 "STILL OPEN" eleven minutes after the autofix fixed exactly the thing its
+ * in the ledger, and the run-end re-check settles it by RUNNING it. reported
+ * one task "STILL OPEN" eleven minutes after the autofix fixed exactly the thing its
  * reason named, and the gate's own re-run printed `121 pass 0 fail`; no reachable code
  * path could have closed it, because neither existing class can reach a
  * `work did not verify:` reason.
@@ -547,7 +546,7 @@ describe('verify-command debt class', () => {
         // A near-miss is a miss: no prefix, no paraphrase, no substring.
         expect(verifyCommandFromReason('… `bun test test/listings.test.ts` fails', cmds)).toBeNull()
         expect(verifyCommandFromReason('… `AGENT=1 bun test` fails', cmds)).toBeNull()
-        // Un-quoted mention is not a claim about a command (run 19's TASK_0001 reads
+        // Un-quoted mention is not a claim about a command ('s one task reads
         // exactly this way and must NOT classify).
         expect(verifyCommandFromReason('bunx tsc --noEmit could not run', cmds)).toBeNull()
         expect(verifyCommandFromReason(REASON, [])).toBeNull()
@@ -570,7 +569,7 @@ describe('verify-command debt class', () => {
     })
 
     test('inv-command-provenance — an UNCLOSED VERIFY fence stores nothing', async () => {
-        // mx5 run 19's TASK_0001.md opens ```sh and never closes it, so the lenient
+        // one task.md opens ```sh and never closes it, so the lenient
         // parser hands back the phase timings and every appended gate-trail line as
         // "commands" — including a sentence quoting `bun run lint`. Storing that would
         // be provenance this project invented.
@@ -585,12 +584,12 @@ describe('verify-command debt class', () => {
         expect(await classifyVerifyCommand(cwd, '', REASON)).toBeNull()
     })
 
-    // ─── nexttask 19C ────────────────────────────────────────────────────────
+    // ───  ────────────────────────────────────────────────────────
     //
     // The auto-close rests entirely on a ZERO exit meaning "the check passed". A
     // command whose exit status is destroyed by its own construction makes that
     // meaningless. 16 of the 612 store-eligible VERIFY lines on this box are that
-    // shape — 12 of them in IAR1, a CMake/C++ OBS plugin with no database, no
+    // shape — 12 of them in one real project, a CMake/C++ OBS plugin with no database, no
     // frontend and no HTTP server. Refusing to store one leaves the debt OPEN and
     // surfaced, which is strictly the smaller claim.
 
@@ -693,7 +692,7 @@ describe('verify-command debt class', () => {
     })
 
     test('inv-prohibition-never-closes — a prohibition debt stays open even when its VERIFY passes', async () => {
-        // run 19's TASK_0019: `main.tsx` was edited under a spec freeze. The violation
+        // one task: `main.tsx` was edited under a spec freeze. The violation
         // is permanent; the task's VERIFY (tsc, eslint, a CT spec) can pass all day.
         // It never classifies, because the reason quotes a PATH, not a command — and
         // even with the re-runner passing everything it is handed, it stays open.

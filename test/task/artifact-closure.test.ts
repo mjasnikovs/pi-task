@@ -199,7 +199,7 @@ describe('collectProducersFromSource', () => {
         expect(prod.dirs.has('dist')).toBe(true)
         expect(prod.files.has('dist/app.css')).toBe(true)
         expect(prod.enumerable.get('dist')?.has('main')).toBe(true)
-        // …and index is NOT among the enumerated stems: the run-13 evidence.
+        // …and index is NOT among the enumerated stems: the evidence.
         expect(prod.enumerable.get('dist')?.has('index')).toBe(false)
     })
 
@@ -407,10 +407,10 @@ describe('findDanglingArtifacts (tree seam)', () => {
     })
 })
 
-// The mx5 run-18 shape: the final-gate autofix closed `dist/index.html` by
+// The shape: the final-gate autofix closed `dist/index.html` by
 // APPENDING an HTML template literal to build.ts and Bun.write-ing it — and that
 // page pointed at `/app.css`, which only the watch-mode `dev:css` script emits.
-// Every test below pins one of nexttask 3's pre-registered invariants.
+// Every test below pins one of 's pre-registered invariants.
 describe('generated HTML (nexttask 3)', () => {
     const BUILD_HEAD = "await Bun.build({entrypoints: ['src/main.ts'], outdir: 'dist'})"
     const emit = (body: string): string =>
@@ -516,7 +516,7 @@ describe('generated HTML (nexttask 3)', () => {
     })
 
     test('inv-non-build-html-ignored: an email-body literal is never scanned', () => {
-        // The real shape: ~/hub/aiz-server/src/connections/mailTemplate.ts is
+        // The real shape: a `src/connections/mailTemplate.ts` that is
         // `export default \`<!doctype html>…\`` — an email body, written nowhere.
         // A cid: asset AND a root-relative one must both stay invisible.
         expect(

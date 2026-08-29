@@ -166,7 +166,7 @@ describe('the served-app listener rule', () => {
         expect(r.outcome).toBe('pass')
     })
 
-    // mx5 run 10: a watcher (`dev` = tailwind --watch) stays alive forever without
+    // A watcher (`dev` = tailwind --watch) stays alive forever without
     // ever listening, and "still alive after the grace window = PASS" blessed a
     // project that cannot serve a single request.
     testPosix('alive but never listening FAILs when enumeration works', async () => {
@@ -185,7 +185,7 @@ describe('the served-app listener rule', () => {
         if (r.outcome === 'fail') expect(r.detail).toContain('never opened a listening socket')
     })
 
-    // An observer limitation is not an app defect (mx5 run 14).
+    // An observer limitation is not an app defect.
     testPosix('alive, never listening, and BLIND passes UNOBSERVED instead', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 20, {

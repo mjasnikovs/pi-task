@@ -137,8 +137,8 @@ describe('runAutoLoop cancel checkpoints', () => {
                 // runner catches its own USER_CANCELLED, writes state 'cancelled'
                 // to the inner file — and NAMES the ending.
                 //
-                // Note what is NOT here: `requestAutoCancel()`. The loop used to
-                // see a plain `!ok` and had to consult `isCancelRequested()` — a
+                // Note what is NOT here: `requestAutoCancel()`. Seeing a plain
+                // `!ok`, the loop has to consult `isCancelRequested()` — a
                 // module global `/task-cancel` never sets — to tell a user stop
                 // from a fault, so a `/task-cancel` was announced in red as
                 // "stopped … fix and run", and `markResumable` overwrote the
@@ -205,8 +205,8 @@ describe('end-to-end: a typed /task-auto-cancel reaches a run that owns the main
                 commit: () => {
                     // The user types the command while the run owns the main
                     // loop and the host session is NOT streaming — the exact
-                    // window in which pi used to queue the line until after the
-                    // run, so the command was inert.
+                    // window in which pi would queue the line until after the
+                    // run, leaving the command inert.
                     if (ran.length === 0 && !consumed) consumed = typeLine('/task-auto-cancel')
                     return Promise.resolve({committed: false})
                 }

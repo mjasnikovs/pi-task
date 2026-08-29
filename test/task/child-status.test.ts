@@ -2,9 +2,9 @@
  * ChildStatus — the live line + context gauge a running child feeds and a
  * loader reads, and the loader ritual around one child.
  *
- * Every assertion here used to be reachable only through a site that owned its
- * own copy of this state (gate-child had it as `widget`; the two planning
- * `runChild`s had it as closure `let`s and were not covered at all).
+ * Without one owner for this state, every assertion here is reachable only
+ * through a site that keeps its own copy — one as a `widget` field, others as
+ * closure `let`s that nothing covers at all.
  */
 
 import {test, expect, describe, mock} from 'bun:test'

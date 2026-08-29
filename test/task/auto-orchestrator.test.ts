@@ -181,7 +181,7 @@ test('planAuto: renders markdown in the prompt but stores plain text', async () 
     })
 })
 
-// Regression: on the real mx5 run the local model ignored "never re-ask" and
+// Regression: on the real run the local model ignored "never re-ask" and
 // barraged the user with the same "how to build/serve the SPA (Bun bundler vs
 // Vite)" decision worded four ways (Q2/Q3/Q8/Q9 in TASK_AUTO_0001.md). The
 // duplicate backstop must suppress the re-asks and stop the loop, so the user is
@@ -1099,8 +1099,8 @@ test('runAutoLoop: resume skips already-checked tasks', async () => {
 test('runAutoLoop: resumes an in-progress inner task instead of starting fresh', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        // Task A was started (inner TASK_0006 stamped) but interrupted before it
-        // completed; B never started. Resume must continue TASK_0006, not spawn a
+        // Task A was started but interrupted before it
+        // completed; B never started. Resume must continue one task, not spawn a
         // brand-new inner task for A.
         const body =
             '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n- [ ] TASK_0006  A\n- [ ] B\n'
@@ -1142,7 +1142,7 @@ test('runAutoLoop: stamps the inner task id at start so an interruption is resum
         }
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         // The entry is left undone but now carries the inner id, so a later
-        // /task-auto-resume can continue TASK_0009 rather than start over.
+        // /task-auto-resume can continue one task rather than start over.
         const entries = parseTaskList((await readTaskFile(dir, 'TASK_AUTO_0001')).body)
         expect(entries[0]).toEqual({index: 0, title: 'A', done: false, producedId: 'TASK_0009'})
     })
@@ -1157,7 +1157,7 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
             buildAutoBody('feat', '(none)', ['A', 'B'])
         )
 
-        // ── Run 1: task A's inner pipeline starts (allocates TASK_0006, stamped)
+        // ── Run 1: task A's inner pipeline starts
         //    but the session dies before A completes. ──────────────────────────
         const seen1: Array<string | undefined> = []
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', {
@@ -1166,7 +1166,7 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
                 seen1.push(opts?.resumeId)
                 await opts?.onStart?.('TASK_0006')
                 // The runner writes the inner task file before the session dies;
-                // run 2's resume relies on that file being present on disk.
+                // a resume relies on that file being present on disk.
                 await writeTaskFile(dir, autoFm('TASK_0006'), '## prompt\n\nA\n')
                 return {taskId: '', end: {kind: 'no-session'}}
             },
@@ -1175,7 +1175,7 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
         expect(seen1).toEqual([undefined]) // A had no prior id -> fresh start, stamped
 
         // ── Run 2: /task-auto-resume picks up where it left off. A must resume
-        //    TASK_0006 (not a new id); then B runs fresh. ──────────────────────
+        //    one task (not a new id); then B runs fresh. ──────────────────────
         const seen2: Array<string | undefined> = []
         let fresh = 7
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', {
@@ -1202,9 +1202,9 @@ test('runAutoLoop: interrupt then resume continues the same inner task, never st
 test('runAutoLoop: a stamped inner task with a missing file restarts fresh, never crashes', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        // A was stamped TASK_0006 but its inner file is gone (never written, or
+        // A was stamped one task but its inner file is gone (never written, or
         // deleted out-of-band). Resuming a missing file throws ENOENT in the
-        // runner and used to crash pi; the loop must fall back to a fresh start.
+        // runner and would crash pi; the loop must fall back to a fresh start.
         const body =
             '## feature prompt\n\nfeat\n\n## clarifications\n\n(none)\n\n## tasks\n\n- [ ] TASK_0006  A\n'
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), body)
@@ -1237,7 +1237,7 @@ test('runAutoLoop: an unexpected throw is caught, marks failed, and never propag
             runTask: () => Promise.reject(new Error('boom')),
             commit: () => Promise.resolve({committed: true})
         }
-        // Must resolve, not reject — an escaping rejection used to take pi down.
+        // Must resolve, not reject — an escaping rejection takes pi down.
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('failed')
     })
@@ -1478,7 +1478,7 @@ test('coverage gate: a flaky shorter retry never replaces the longer list', asyn
 })
 
 test('coverage gate: an equal-length retry that closes the gap IS adopted', async () => {
-    // mx5 run 5 regression: the judge flagged the missing test-suite task, the hinted
+    // regression: the judge flagged the missing test-suite task, the hinted
     // retry ADDED it but came back 29 titles vs the original 30, and strictly-longer
     // retention discarded the better-informed list — round 2 then re-judged the same
     // unchanged plan. A non-degenerate retry must be adopted regardless of length;
@@ -1593,7 +1593,7 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
     })
 })
 
-// ─── Monotonic coverage replacement, end-to-end through planAuto (mx5 run 12) ──
+// ─── Monotonic coverage replacement, end-to-end through planAuto ──
 //
 // The wired proof for the A/B in coverage-loop.test.ts: a full-stack-shaped run
 // whose initial plan covers an area (the --json output) that a later coverage
@@ -1688,9 +1688,9 @@ test('coverage gate: a regeneration that DROPS a covered area is rejected, good 
     })
 })
 
-// ─── #1/#2: judge-flagged carry + bonus round on late-exposed gap (mx5 2026-07-16)
+// ─── #1/#2: judge-flagged carry + bonus round on late-exposed gap
 //
-// The mx5 failure this pair proves closed: the 55-title plan was ADOPTED on the
+// The failure this pair proves closed: the 55-title plan was ADOPTED on the
 // final coverage round AND was the first plan whose holistic judge flagged §10's
 // test-infra setup — an area requirement-extraction never captured as a tracked
 // entry. The round cap fired the same instant, so (a) there was no round left to
@@ -1808,7 +1808,7 @@ test('#1: a judge-flagged area with no owning task is carried into requirements.
     })
 })
 
-// ─── Granularity floor (mx5 41→11) ──────────────────────────────────────────
+// ─── Granularity floor ──────────────────────────────────────────
 
 // Four ownable requirements ⇒ floor 2. Verbatim-grounded in GRAN_FEATURE so
 // keepGroundedRequirements keeps them.
@@ -1861,8 +1861,9 @@ test('granularity floor: the floor is derived and logged, never put in the promp
         const d = granularityDeps(['- [ ] Parser\n- [ ] Exporter\n- [ ] Scheduler\n- [ ] Uploader'])
         await planAuto(ctx, dir, GRAN_FEATURE, d)
         expect(d.calls.decompose).toBe(1) // at the floor ⇒ no split reprompt
-        // A target count in the prompt made the model chase it (live: 66/81/85
-        // titles, one context blowup) — the floor stays host-side.
+        // A target count in the prompt makes the model chase it, into plans far
+        // larger than the spec needs and sometimes a context blowup — so the floor
+        // stays host-side.
         expect(d.calls.hints[0]).not.toContain('at least 3 tasks')
         expect(d.calls.hints[0]).toContain('Prefer a handful of substantial tasks')
         await flushPlanDebug()
@@ -2041,10 +2042,10 @@ test('distrust floor: a 1-title plan for a big spec is regenerated BEFORE the ju
     })
 })
 
-// An EMPTY decompose used to escape the floor entirely: the predicate opened with
-// `titles.length > 0`, so zero titles was not "suspect", no retry fired, the
-// coverage loop broke on `titles.length === 0`, and the run aborted with "no tasks
-// produced from the feature". One degenerate generation killed the whole run —
+// An EMPTY decompose escapes the floor entirely if the predicate opens with
+// `titles.length > 0`: zero titles is not "suspect", no retry fires, the coverage
+// loop breaks on `titles.length === 0`, and the run aborts with "no tasks produced
+// from the feature". One degenerate generation kills the whole run —
 // while one title higher got a retry. Measured recurring: 13 empty draws across 24
 // reps of a 20KB spec (2026-07-28 smoke), including two back-to-back in one rep,
 // which is why an empty plan gets more than one attempt.
@@ -2363,7 +2364,7 @@ test('runAutoLoop: gate failure demotes the INNER task file from its handoff "co
         const {ctx} = makeFakeCtx(dir)
         await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), buildAutoBody('feat', '(none)', ['A']))
         // The inner task file as spec-handoff leaves it: state 'completed' before
-        // any work is verified (the exact run 6 mismark).
+        // any work is verified.
         await writeTaskFile(dir, autoFm('TASK_0006', 'completed'), '## spec\nGOAL x\n')
         const d: AutoDeps = {
             runChild: () => Promise.resolve(''),
@@ -2403,9 +2404,9 @@ test('runAutoLoop: stash stack changed during a task → loud warning names the 
 
 // The guard's own message says an orphan stash "later pops as an unresolvable
 // conflict" — and a FAILED task is exactly when the user is told to run
-// /task-auto-resume and walk onto it. The check used to sit ~120 lines and three
-// returns below its capture, so it ran only when the task SUCCEEDED and the gate
-// said `done`. No test could tell "the guard ran and found nothing" from "the
+// /task-auto-resume and walk onto it. Sitting below its capture and three returns
+// down the fall-through, the check would run only when the task SUCCEEDED and the
+// gate said `done`. No test could tell "the guard ran and found nothing" from "the
 // guard never ran", because the only path that reached it was the clean one.
 test('runAutoLoop: a stash left by a FAILED task is still reported', async () => {
     await withTmpTaskDir(async dir => {
@@ -2520,13 +2521,13 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         expect(gateRuns).toBe(1)
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
         expect(captured.notifies.some(n => /complete — all 1 tasks done/.test(n.msg))).toBe(true)
-        // mx5 run 10 item 7: a PASS is trailed (distinct from a never-run gate) and
+        // item 7: a PASS is trailed (distinct from a never-run gate) and
         // names the commands that ran.
         expect(trail).toContain('final-gate: PASS — statics + `bun run test` passed')
     })
 })
 
-// IAR1 (validated 2026-07-27): a gate that discovered nothing shipped `PASS — no
+// one real project (validated 2026-07-27): a gate that discovered nothing shipped `PASS — no
 // integration command found (statics passed)` TWICE while the run carried 2 and 3
 // open verify-FAIL debts. The gate itself now labels that outcome UNOBSERVED; here
 // the RUN must stop presenting it as a pass — different trail word, a warning, a
@@ -2577,9 +2578,9 @@ test('runAutoLoop: an UNOBSERVED final gate completes the run but is never recor
     })
 })
 
-// mx5 run 13: the gate aggregates every section failure, ranked boot/render first.
+// The gate aggregates every section failure, ranked boot/render first.
 // The trail must carry EVERY entry and the picker question the full ranked list —
-// the user accepted run 13's FAIL having seen only the 1 failing CT test while the
+// the user accepted a FAIL having seen only the 1 failing CT test while the
 // shadowed boot + render probe would have shown the app 404ing on every GET.
 test('runAutoLoop: aggregated final-gate FAIL → every entry trailed, full list in the picker', async () => {
     await withTmpTaskDir(async dir => {
@@ -2686,16 +2687,16 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
     })
 })
 
-// ── Stranded sub-fixes (mx5 run 13 PROMPT 4 item 3) ──────────────────────────
+// ── Stranded sub-fixes ──────────────────────────
 // A non-converging fix attempt KEEPS its edits (only a guard trip discards) and
-// deps.commit runs only on fix.ok — so run 13's bunfig.toml repair, which made
-// `bun run test` pass 116/116, was still uncommitted when the user accepted the
+// deps.commit runs only on fix.ok — so a bunfig.toml repair, which made
+// the test command pass, was still uncommitted when the user accepted the
 // FAIL, leaving HEAD broken and the repair invisible.
 
 /** Deps for a run whose single autofix attempt does not converge but edits the tree.
  *  `commitResult` is what `deps.commit` reports back — a CommitResult and nothing
  *  else. It carries NO sha: `gitCommitAll` never returned one, and the trail line
- *  that interpolated this value printed `as [object Object]` in mx5 run 20. */
+ *  that interpolates this value prints `as [object Object]`. */
 function strandedDeps(
     commits: string[],
     pending: string[] = ['bunfig.toml'],
@@ -2770,8 +2771,8 @@ test('runAutoLoop: LEAVE-failed COMMITS the stranded changes (mx5 run 14 item 2b
         handle.queueSelect('Autofix — run a bounded fix pass and re-run the gate')
         handle.queueSelect('Leave failed — I will fix and /task-auto-resume')
         await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', strandedDeps(commits, ['bunfig.toml'], trail))
-        // Run 14 ended exactly here and left 13 real repairs dirty in the tree; the
-        // terminal LEAVE now commits them under the partial-fix subject, named in
+        // A run can end exactly here and leave real repairs dirty in the tree; the
+        // terminal LEAVE commits them under the partial-fix subject, named in
         // the trail, with the run still recorded as failed.
         expect(commits.some(m => /FINAL GATE PARTIAL FIX/.test(m))).toBe(true)
         expect(commits.some(m => /run left failed, repairs preserved/.test(m))).toBe(true)
@@ -2832,9 +2833,9 @@ test('runAutoLoop: a pendingChanges failure is inconclusive — nothing is claim
     })
 })
 
-// ── Non-progress / unfalsifiable check (mx5 run 14 item 2) ───────────────────
-// Run 14 burned all three attempts on a boot check that could not be observed in
-// that sandbox at ALL (no `ss`, no `lsof`), then left 13 real repairs uncommitted.
+// ── Non-progress / unfalsifiable check ───────────────────
+// A run can burn all three attempts on a boot check that cannot be observed in
+// its sandbox at ALL (no `ss`, no `lsof`), then leave real repairs uncommitted.
 // The A/B below is built on a SYNTHETIC always-failing check, deliberately not
 // coupled to the boot probe (whose own capability gap is fixed separately).
 
@@ -2932,7 +2933,7 @@ test('runAutoLoop: demotion honors the REMAINING checks — they still have to p
             'TASK_AUTO_0001',
             nonProgressDeps({
                 first: 'boot check: never opened a listening socket',
-                // Cleared by attempt 1 — the run-14 shape (2 of 3 checks were fixable).
+                // Cleared by attempt 1 — the shape (2 of 3 checks were fixable).
                 extra: ['`bun run test` exited 1 — 2 failing'],
                 commits,
                 trail,
@@ -3043,13 +3044,13 @@ test('runAutoLoop: free text typed at the final-gate picker becomes autofix guid
     })
 })
 
-// ─── open-debt carry + recompute across a converged autofix (nexttask 6) ─────
+// ─── open-debt carry + recompute across a converged autofix ─────
 //
-// mx5 run 18: four verify-FAIL defects were trailed STILL OPEN at 14:58:29 from
-// the FIRST gate result, the autofix converged at 15:03:16, and the converged
-// path rebuilt the gate outcome as a bare `{ok, reason}` — so `openDebts` was not
-// merely un-actioned, it was GONE from the value and nothing could ever clear,
-// re-check or act on it. One of the four had been fixed by that very autofix.
+// Defects trailed STILL OPEN from the FIRST gate result, an autofix that then
+// converges, and a converged path that rebuilds the gate outcome as a bare
+// `{ok, reason}` — `openDebts` is not merely un-actioned, it is GONE from the
+// value and nothing can clear, re-check or act on it. Some of those defects were
+// fixed by that very autofix.
 
 /** Deps for a run whose gate FAILs once, then converges on the first autofix. */
 function convergingDebtDeps(
@@ -3103,7 +3104,7 @@ test('runAutoLoop: a converged autofix RE-DERIVES the open debts and corrects th
         expect(trail.some(l => /^defect STILL OPEN — TASK_0007:/.test(l))).toBe(true)
         expect(
             // Not "resolved BY the autofix": a close can now also come from the
-            // debt's own VERIFY command being re-run (nexttask 5), and the trail
+            // debt's own VERIFY command being re-run, and the trail
             // line above it says which.
             trail.some(l => /^defect RESOLVED — TASK_0007:/.test(l))
         ).toBe(true)
@@ -3231,7 +3232,7 @@ test('runAutoLoop: without the recheck dep the converged path is byte-identical 
 })
 
 /**
- * IGNORED-PATH WRITES at the resolution loop (mx5 run 19). The fix pass reports
+ * IGNORED-PATH WRITES at the resolution loop. The fix pass reports
  * what it wrote to gitignored paths; this branch decides what the RUN does with
  * that — the gate record, the durable debt, and the set carried into the next
  * attempt. The A/B mirrors this branch rather than driving it, so these pin it
@@ -3348,11 +3349,12 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE STRANDED-FIX COMMIT REPORTS WHAT ACTUALLY HAPPENED (mx5 run 20).
+// THE STRANDED-FIX COMMIT REPORTS WHAT ACTUALLY HAPPENED.
 //
-//   grep -o 'as \[object Object\]' ~/hub/mx5/.pi-tasks/TASK_AUTO_0001.md → 1 hit
+// A run's own TASK_AUTO file can end up carrying the literal text
+// `as [object Object]`.
 //
-// The call bound the CommitResult to `sha` and interpolated it. Worse than
+// The call binds the CommitResult to `sha` and interpolates it. Worse than
 // cosmetic: `committed` was never read, and `gitCommitAll` returns
 // {committed:false} WITHOUT throwing on an unmerged index, so the catch could not
 // fire and the trail claimed a commit over changes still sitting in the tree.
@@ -3360,7 +3362,7 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
 // No A/B applies and this is why, recorded so nobody asks for one later: the
 // change has no behavioural arm. The commit succeeded or failed identically
 // before and after; only the sentence written about it changes. These two shapes
-// plus the run-20 line below are the complete proof available.
+// plus the line below are the complete proof available.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('runAutoLoop: a stranded commit that did NOT happen is reported as not committed', async () => {
@@ -3411,7 +3413,7 @@ test('runAutoLoop: a stranded commit that DID happen never prints `[object Objec
         )
         const line = trail.find(l => /committed 1 stranded fix-pass change\(s\)/.test(l))
         expect(line).toBeDefined()
-        // The run-20 trail line, reproduced under replay: it must not come back.
+        // The trail line, reproduced under replay: it must not come back.
         expect(line).not.toContain('[object Object]')
         expect(line).not.toMatch(/ as /)
         // The fallback identity is worth saying, and it is a thing commit DOES return.
@@ -3472,8 +3474,8 @@ test("coverage loop: an adopted plan whose coverage-map FAULTS does not inherit 
         expect(titles.length).toBe(3)
         expect(titles[1]).toContain('Scan a directory tree')
 
-        // THE BUG. `accounting` used to be a variable of its own, updated on adoption
-        // as `cand.accounting ?? accounting`, so plan A's mapping outlived plan A.
+        // THE BUG. As a variable of its own, updated on adoption as
+        // `cand.accounting ?? accounting`, plan A's mapping outlives plan A.
         // `ReqMapping.task` is a 1-based index into the titles that PRODUCED the
         // mapping, so `task: 2` then addressed plan B and bound the --json obligation
         // to the scan task. Nothing caught it: the write-site bounds filter checks

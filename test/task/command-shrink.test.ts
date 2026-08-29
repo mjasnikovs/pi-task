@@ -1,8 +1,8 @@
 /**
  * command-shrink tests — the resolved-body narrowing rules behind the final-gate
- * scope-shrink guard. Every case here is either the measured lead (mx5 run 19),
+ * scope-shrink guard. Every case here is either the measured lead,
  * a hand-read corpus hit, or one of the six pre-registered A/B invariants
- * (scripts/command-shrink-ab.ts). Pure: no fs, no git.
+ *. Pure: no fs, no git.
  */
 import {describe, expect, test} from 'bun:test'
 import {

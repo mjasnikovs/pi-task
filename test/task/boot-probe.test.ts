@@ -197,7 +197,7 @@ describe('runBootCheck', () => {
         expect(r.outcome).toBe('skip')
     })
 
-    // mx5 run 9 item 3: a bind collision is an environment condition, not an app
+    // item 3: a bind collision is an environment condition, not an app
     // crash — it must be classified distinctly (orphan-port), never a bare FAIL.
     test('EADDRINUSE bind failure → orphan-port with the port, not a FAIL', async () => {
         const r = await runBootCheck(
@@ -230,7 +230,7 @@ describe('runBootCheck', () => {
     })
 })
 
-// mx5 run 10 item 1: a watcher is not a server. For a served app the boot check must
+// item 1: a watcher is not a server. For a served app the boot check must
 // observe a LISTENER before it PASSes — mere survival (a CSS/bundler --watch) or a
 // quick exit 0 (a type-only entrypoint that serves nothing) is a FAIL. The listener
 // probe is injected so these are deterministic without binding a real socket. Skipped
@@ -240,7 +240,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
 
     // `enumerationCapable` is pinned in these cases: the FAIL is only legitimate on a
     // box that CAN observe listeners, and leaving it to discovery would silently flip
-    // these tests to the survival rule on a toolless runner (mx5 run 14's sandbox).
+    // these tests to the survival rule on a toolless runner.
     const canSee = {enumerationCapable: () => true, pickPort: async () => null}
 
     itPosix('watcher: stays alive but never listens → FAIL naming the missing socket', async () => {
@@ -281,7 +281,7 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     )
 })
 
-// mx5 run 14: the sandbox shipped no ss/netstat/lsof, so the listener requirement
+// A sandbox may ship no ss/netstat/lsof, so the listener requirement
 // was unfalsifiable — it failed a run whose app demonstrably served, three autofix
 // passes could not move it, and 13 real repairs were stranded uncommitted.
 describe('runBootCheck — unobservable listener degrades, never false-FAILs (run 14)', () => {
@@ -367,7 +367,7 @@ describe('listener enumeration parsers (run 14)', () => {
         expect(parseSsListeners(out)).toEqual([{pid: 1234, port: 3000}])
     })
 
-    // The tool the run-14 sandbox actually had.
+    // The tool the sandbox actually had.
     test('netstat -tlnp rows yield pid + port, skipping unattributed rows', () => {
         const out = [
             'Active Internet connections (only servers)',
@@ -397,7 +397,7 @@ describe('listener enumeration parsers (run 14)', () => {
     })
 })
 
-// mx5 runs 8/11: a served listener is not enough — the page must RENDER. The
+// A served listener is not enough — the page must RENDER. The
 // render probe is injected here so the flow is deterministic without a browser.
 describe('runBootCheck — render check on the served page (runs 8/11)', () => {
     const alive = nodeScript('setTimeout(()=>{},600000)')
@@ -470,7 +470,7 @@ describe('runBootCheck — render check on the served page (runs 8/11)', () => {
     })
 })
 
-// mx5 run 17: the page above renders and the app is still unusable — the server
+// The page above renders and the app is still unusable — the server
 // authenticates the login and the client never uses the session. The deep probe is
 // injected here so the flow is deterministic without a browser or an app.
 describe('runBootCheck — authenticated deep-render check (run 17)', () => {
@@ -685,10 +685,10 @@ describe('detectsServedApp (run 10 item 1)', () => {
 
 // ─── runBootSection: the boot CONCEPT, in one module ─────────────────────────
 //
-// These branches used to live in `final-gate.ts` — the four-armed BootOutcome
+// Left in `final-gate.ts`, these branches — the four-armed BootOutcome
 // destructure, the probe defaults, orphan-port recovery, the port-holder
-// diagnosis sentence, the skip verdict and the rejected-launch-script arm — so
-// reaching any of them meant driving the whole run-end gate over a temp tree.
+// diagnosis sentence, the skip verdict and the rejected-launch-script arm — are
+// reachable only by driving the whole run-end gate over a temp tree.
 describe('runBootSection', () => {
     test('no launch surface at all → nothing attempted, nothing observed, no note', async () => {
         const v = await runBootSection(makeDir({scripts: {test: 't'}}))
@@ -714,7 +714,7 @@ describe('runBootSection', () => {
     })
 
     test('a boot that FAILS is a rank-0 failure a probe OBSERVED', async () => {
-        // OBSERVED (nexttask 19A): the launch command itself exited non-zero, which
+        // OBSERVED: the launch command itself exited non-zero, which
         // is a probe having looked — distinct from the harness conditions below.
         const dir = makeDir({scripts: {start: 'echo boom 1>&2; exit 3'}})
         const v = await runBootSection(dir, {graceMs: 500})

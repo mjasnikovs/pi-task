@@ -88,8 +88,8 @@ test('/compact from the browser reaches ctx.compact', () => {
 })
 
 // The browser's suggestion list is a promise: picking an entry must do something.
-// It used to advertise /clear, /help and /fast — none of which are pi commands at
-// all — so every pick toasted "Unknown command: /x" (github issue #8).
+// Advertising /clear, /help or /fast — none of which are pi commands at all —
+// makes every pick toast "Unknown command: /x" (github issue #8).
 test('every command the web UI advertises is dispatchable', () => {
     const {pi} = fakePi()
     registerConfig(pi)

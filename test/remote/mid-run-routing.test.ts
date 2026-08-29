@@ -2,7 +2,7 @@
  * Where a plain browser line goes, per session state — exercising the SHIPPED
  * routePlainLine, not a copy of it. The three-way decision is the whole of issue
  * #8: before it, an idle-mid-run line opened a second turn beside the run and
- * killed it live on pi 0.82.1 ("TASK_0001 failed: Agent is already processing").
+ * killed it live on pi 0.82.1.
  */
 import {afterEach, expect, test} from 'bun:test'
 import {routePlainLine} from '../../src/remote/register.js'
@@ -18,10 +18,10 @@ import {
 import {beginRun, endRun, heldInput, resetMidRunInput} from '../../src/task/mid-run-input.js'
 
 /**
- * Drive the run flag through the SAME mutators the pi events do. There used to be
- * a `setAgentIdle` mirror to set here; it was a second source of truth for one
- * boolean and is gone. Going through agentStart/agentEnd means these tests
- * exercise the flag the shipped code actually reads.
+ * Drive the run flag through the SAME mutators the pi events do. A separate
+ * setter here would be a second source of truth for one boolean. Going through
+ * agentStart/agentEnd means these tests exercise the flag the shipped code
+ * actually reads.
  */
 const setAgentIdle = (idle: boolean): void => {
     if (idle) agentEnd({} as Parameters<typeof agentEnd>[0], undefined)

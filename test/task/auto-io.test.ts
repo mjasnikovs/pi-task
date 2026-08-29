@@ -118,7 +118,7 @@ test('checkOffTask: throws on out-of-range index', async () => {
 })
 
 // insertTaskAfter — the mid-run plan mutation the root-cause repair channel needs
-// (mx5 run 14 item 5). MONOTONIC: splice only, never rewrite/reorder/drop.
+//. MONOTONIC: splice only, never rewrite/reorder/drop.
 test('insertTaskAfter: splices a new entry directly after the given index', async () => {
     await withTmpTaskDir(async dir => {
         const body = buildAutoBody('feat', '(none)', ['Task A', 'Task B', 'Task C'])

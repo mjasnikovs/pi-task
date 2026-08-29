@@ -68,7 +68,7 @@ describe('STREAM_INACTIVITY_OPTIONS', () => {
     })
 
     // The one value that must not drift: a 60-120s ceiling would kill every long
-    // prompt-processing pass on a local backend (mx5 run 14 gray area). Asserted
+    // prompt-processing pass on a local backend. Asserted
     // through the sanitizer, not getConfig, so a developer's own config file
     // cannot flip the test.
     test('defaults to 10 minutes — generous enough for local first-token latency', () => {
@@ -126,7 +126,7 @@ describe('sanitizeDebugLogs', () => {
 
 describe('loadConfig', () => {
     test('a missing file-shape yields the shipped defaults', () => {
-        // `{...DEFAULT_CONFIG, ...'ab'}` used to produce numeric index keys.
+        // `{...DEFAULT_CONFIG, ...'ab'}` produces numeric index keys.
         for (const bad of [undefined, null, 'ab', 42, true, []]) {
             expect(loadConfig(bad)).toEqual(DEFAULT_CONFIG)
         }

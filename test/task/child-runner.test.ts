@@ -198,7 +198,7 @@ describe('runPhaseChild', () => {
     })
 
     test('retries a connection-class model error and returns the later clean output', async () => {
-        // The TASK_0012 grill-gen failure: one dropped fetch to a live single-slot
+        // The one task grill-gen failure: one dropped fetch to a live single-slot
         // local server reported as "Connection error.". It's transient — the
         // re-spawn succeeds. Fail-fast here would have killed the whole task.
         const {spawn, prompts} = capturingQueue([{error: 'Connection error.'}, 'recovered output'])
@@ -236,7 +236,7 @@ describe('runPhaseChild', () => {
 
 describe('isConnectionError', () => {
     test('matches the exact provider string the user hit', () => {
-        // This is the literal errorMessage pi surfaced on TASK_0012 grill-gen.
+        // This is the literal errorMessage pi surfaced on one task grill-gen.
         expect(isConnectionError('Connection error.')).toBe(true)
     })
 
@@ -369,7 +369,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 '\n'
             )
             // First strike yields no assistant text (transient empty turn); the
-            // re-spawn succeeds. This is the TASK_0005 refine failure mode.
+            // re-spawn succeeds. This is the one task refine failure mode.
             const {spawn, prompts} = ladderSpawn([
                 agentEndResponse(''),
                 agentEndResponse('refined content')
@@ -435,7 +435,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 },
                 '\n'
             )
-            // The TASK_0012 grill-gen failure: a single "Connection error." against
+            // The one task grill-gen failure: a single "Connection error." against
             // a live single-slot local server. Transient — the restart succeeds.
             const {spawn, prompts} = ladderSpawn([
                 agentErrorResponse('Connection error.'),
@@ -658,7 +658,7 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         })
     })
 
-    // ─── degradeOnExhaustion (TASK_0016 fix) ────────────────────────────────
+    // ─── degradeOnExhaustion ────────────────────────────────
     // refine on a "write tests" task against a large existing codebase made the
     // weak local model over-explore — re-reading source hunting for the impl
     // until the loop budget was spent — and a hard-fail there killed the whole
@@ -711,11 +711,11 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
 
         test('the degrade attempt runs under the same wall clock as the strikes', async () => {
             // BEHAVIOUR DELTA, and the reason `runChild` stopped taking thirteen
-            // positionals. The degrade used to be handed `deps.signal` RAW — one
-            // of three drifts that came of writing bare `undefined`s to reach the
-            // later slots — so the single attempt made after a loop budget was
-            // spent was also the only attempt that could hang forever. Here it is
-            // killed by the same budget the strikes ran under.
+            // positionals. Handed `deps.signal` RAW instead — the kind of drift
+            // that comes of writing bare `undefined`s to reach later slots — the
+            // single attempt made after a loop budget is spent would be the only
+            // attempt that can hang forever. Here it is killed by the same budget
+            // the strikes ran under.
             const procs: Array<ReturnType<typeof makeProc>> = []
             let i = 0
             const spawn = (() => {
@@ -1113,10 +1113,10 @@ const LADDER_CALL_SITES = [
 ] as const
 
 describe('shared error-triage ladder', () => {
-    // runPhaseChild and runPhaseWithLoopGuard used to carry two byte-identical
-    // copies of this ladder 166 lines apart, so a fix to one silently missed the
-    // other. There is one loop now; these tests run all four rungs through BOTH
-    // option sets so the one externally visible difference stays the only one.
+    // Two byte-identical copies of this ladder, one per call site, would let a fix
+    // to one silently miss the other. There is one loop; these tests run all four
+    // rungs through BOTH option sets so the one externally visible difference
+    // stays the only one.
     for (const site of LADDER_CALL_SITES) {
         describe(site.label, () => {
             const depsFor = (spawn: SpawnFn, debug?: string[]) => ({
@@ -1193,7 +1193,7 @@ describe('shared error-triage ladder', () => {
 
             test('spends the same budget — 3 attempts — before giving up', async () => {
                 // MAX_LEAK_RETRIES and MAX_LOOP_RESTARTS are separate policies that
-                // happen to agree at 2 today. Both wrappers therefore run 3 attempts
+                // happen to agree at 2 today. Both wrappers therefore attempts
                 // total; this pins the arithmetic (budget+1) on both sides.
                 const empty = ladderSpawn([agentEndResponse('')])
                 await expect(site.run(depsFor(empty.spawn), 'refine')).rejects.toThrow(
@@ -1219,12 +1219,12 @@ describe('shared error-triage ladder', () => {
 
 // ─── Regression: unguarded planning children ─────────────────────────────────
 //
-// mx5-n, 2026-08-14. /task-auto's decompose child (the coverage-retry of round
-// 1) ran for 16m23s and never returned. Measured while it was still alive:
+// /task-auto's decompose child can run for many minutes and never return.
+// Observed while one was still alive:
 //
-//   • the child PID had been up 16m23s, and .pi-tasks/plan-debug.log had not
-//     gained a line for that whole stretch — last entry "decompose-coverage
-//     round 1: INCOMPLETE" at 20:28:25Z.
+//   • the child PID had been up the whole time, and .pi-tasks/plan-debug.log had
+//     not gained a line for that stretch — last entry "decompose-coverage
+//     round 1: INCOMPLETE".
 //   • the loader showed the child at 102k/120k, and the model server's slot
 //     reported n_prompt_tokens 117,370 against a 120,064-token window for the
 //     request it was serving.

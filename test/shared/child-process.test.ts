@@ -107,9 +107,9 @@ describe('runChild json-events mode', () => {
         expect(lines).toContain('bash: ls -la')
     })
 
-    // Issue #16: this used to feed a `context_usage` event, which no released pi
-    // has ever emitted. `message_end` is the real (and only) readout, and the
-    // window comes from the caller because the stream carries none.
+    // GitHub issue #16: no released pi has ever emitted a `context_usage` event,
+    // so a test fed on one asserts nothing. `message_end` is the real and only
+    // readout, and the window comes from the caller because the stream carries none.
     test('emits onContextUsage from message_end, windowed by the caller', async () => {
         const events = [
             {
@@ -344,7 +344,7 @@ describe('summarizeToolArgs — search/fetch workers', () => {
     })
 })
 
-// mx5 run 9 item 3: model children run arbitrary bash and can `bun run dev &` a
+// item 3: model children run arbitrary bash and can `bun run dev &` a
 // server that outlives the child, holding a port and wrecking the final gate's own
 // `bun run start` with a self-inflicted EADDRINUSE. They must be spawned in their
 // own process group and that group reaped on exit; plumbing (text mode) must not be.

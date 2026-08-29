@@ -52,8 +52,8 @@ describe('JsonEventSink', () => {
         // Measured live (flaky proxy dropping the first connection): pi retries a
         // failed turn itself and emits agent_end(error) → auto_retry_start →
         // agent_end(text). Latching the first one reports a failure for a run that
-        // actually succeeded — which is how one dropped fetch used to fail a phase
-        // that had a perfectly good answer in hand.
+        // actually succeeded — which is how one dropped fetch fails a phase that
+        // had a perfectly good answer in hand.
         const s = sink()
         s.feed(
             line({
@@ -268,7 +268,7 @@ describe('JsonEventSink', () => {
         expect(lines).toEqual(['bash: ls -la', 'thinking…'])
     })
 
-    // mx5 run 10 item 6: the tool RESULT must reach the caller so the gate log can
+    // item 6: the tool RESULT must reach the caller so the gate log can
     // record what a `bash`/`curl` actually returned (the real tool_execution_end shape).
     test('emits onToolResult on tool_execution_end with the combined output and isError', () => {
         const results: Array<{name: string; isError: boolean; text: string}> = []

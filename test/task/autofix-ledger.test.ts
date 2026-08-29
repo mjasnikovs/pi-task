@@ -6,7 +6,7 @@
  * stage over a temp task dir and match a TRAIL STRING
  * (`startsWith('final-gate: check DEMOTED')`). The demotion rule in particular
  * was applied downstream from the evidence it judges — the shape
- * `final-gate-progress.ts`'s own comment names as the mx5 run-21 defect, which
+ * `final-gate-progress.ts`'s own comment names as the defect, which
  * shipped a product whose every page was blank as a `completed` run.
  */
 import {describe, expect, test} from 'bun:test'
@@ -52,7 +52,7 @@ describe('AutofixLedger — the demotion decision', () => {
     })
 
     test('a failure a PROBE OBSERVED is never demoted, however often it repeats', () => {
-        // nexttask 19A, and the run-21 defect: a deterministic un-fixed defect emits
+        // , and the defect: a deterministic un-fixed defect emits
         // an IDENTICAL failure by definition, so string equality reads
         // reproducibility as evidence against the instrument. A probe that LOOKED
         // overrules that, and the check now sits with the evidence rather than
@@ -108,7 +108,7 @@ describe('AutofixLedger — what still has to pass', () => {
 describe('AutofixLedger — writes, stranded work and the commit gate', () => {
     test('gitignored writes ACCUMULATE across attempts and de-duplicate', () => {
         // A `.env` written by a failed attempt is still on disk for the next one,
-        // and that attempt's own before/after diff cannot see it (mx5 run 19).
+        // and that attempt's own before/after diff cannot see it.
         const l = new AutofixLedger(3)
         l.wroteIgnored(['.env'])
         l.wroteIgnored(['.env', 'dist/app.js'])
@@ -125,7 +125,7 @@ describe('AutofixLedger — writes, stranded work and the commit gate', () => {
     })
 
     test('rejected edits in the tree close the commit gate permanently', () => {
-        // The cheat guard is never weakened to ease committing (mx5 run 14 item 2b).
+        // The cheat guard is never weakened to ease committing.
         const l = new AutofixLedger(3)
         expect(l.mayCommitTree()).toBe(true)
         l.rejectedEditsRemain()

@@ -21,7 +21,7 @@ describe('verifyExcerpt (PROMPT-3 item 4 diagnostics)', () => {
         for (const blank of ['   ', '\n', '\t \n ', '']) {
             // A citation with no characters in it is not evidence. The trap is
             // `content.includes('')`, which is true for every content — so the raw-string
-            // emptiness guard used to let "   " verify against anything, while verifyExcerpt
+            // emptiness guard would let "   " verify against anything, while verifyExcerpt
             // (testing the NORMALISED length) called the identical input unverified.
             expect(isExcerptInContent(blank, content)).toBe(false)
             expect(verifyExcerpt(blank, content).verified).toBe(false)

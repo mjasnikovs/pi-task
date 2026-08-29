@@ -1,7 +1,7 @@
 /**
  * WHERE `--thinking` MAY AND MAY NOT APPEAR IN A CHILD'S ARGV.
  *
- * Three properties now, and the third replaced the one that used to lead.
+ * Three properties.
  *
  *  1. Given the EMPTY fragment, every builder produces argv byte-identical to
  *     the version before reasoning profiles existed. That is a property of the
@@ -80,11 +80,8 @@ describe('focusedChildArgs', () => {
     })
 
     test('the shipped default puts the measured level on the wire', () => {
-        // WAS "resolves to no fragment", asserting the all-`inherit` property.
-        // That property is gone for this group: extraction was measured at
-        // n=20/arm on 2026-08-26 and is the table's one RUNG 1 cell. Asserted
-        // against DEFAULT_CONFIG rather than the live singleton, so the test is
-        // about the code and not about whoever is running it.
+        // Asserted against DEFAULT_CONFIG rather than the live singleton, so the
+        // test is about the code and not about whoever is running it.
         expect(DEFAULT_REASONING_TABLE.extraction).toBe('off')
         expect(thinkingArgs(resolveReasoning('extraction', DEFAULT_CONFIG))).toEqual([
             '--thinking',
@@ -111,17 +108,15 @@ describe('what the shipped table puts on the wire', () => {
      */
     const EXPECTED: Readonly<Record<string, string[]>> = {
         research: ['--thinking', 'medium'],
-        // `research:files` is MEASURED — ledger-research.jsonl, n=12/arm, rung
-        // 3 — and is the one worker cell that does not follow `research`.
+        // `research:files` is the one worker cell that does not follow `research`.
         'research:files': ['--thinking', 'off'],
-        // apis and context ship IDENTICAL to `research` — no axis survived
-        // STEP 0 for either, so the cell is the prior, not a reading. If one of
-        // these ever differs from the line above, check it carries a ledger.
+        // apis and context ship IDENTICAL to `research`: nothing was found that
+        // separates them, so the cell inherits the parent's decision. If one of
+        // these ever differs from the line above, it should say why.
         'research:apis': ['--thinking', 'medium'],
         'research:context': ['--thinking', 'medium'],
-        // `research:tooling` is MEASURED and lands on the SAME value by a
-        // different route: n=20/arm, off 13/20 vs medium 20/20, p=0.0083, RUNG
-        // 1. The wire byte is unchanged; the reason behind it is not.
+        // `research:tooling` lands on the SAME value by a different route: it was
+        // compared directly. The wire byte is unchanged; the reason behind it is not.
         'research:tooling': ['--thinking', 'medium'],
         phase: ['--thinking', 'off'],
         planning: ['--thinking', 'medium'],

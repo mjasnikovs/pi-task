@@ -77,7 +77,7 @@ describe('/task-config with no TUI', () => {
     })
 
     test('no empty bracket where the TUI has a blank row', async () => {
-        // The section gaps are TUI spacing. On one `|`-joined line they used to
+        // The section gaps are TUI spacing. On one `|`-joined line they would
         // come out as a stray `[]` between two headings.
         await taskConfig()('', headlessCtx())
 

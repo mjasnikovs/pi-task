@@ -1,11 +1,10 @@
 /**
- * batch-test-task tests — the mx5 run 14 fixture A/B (PROMPT item 6).
+ * batch-test-task tests — the fixture A/B (PROMPT item 6).
  *
- * The plan titles and the decision text below are VERBATIM from run 14
- * (`.pi-tasks/TASK_AUTO_0001.md` and the `[decisions: …]` clause carried onto
- * TASK_0037). What this file pins:
+ * The plan titles and the decision text below are VERBATIM from a * (`.pi-tasks/TASK_AUTO_0001.md` and the `[decisions: …]` clause carried onto
+ * one task). What this file pins:
  *
- *   - the run-14 plan's ONE batch title (TASK_0037) is found, and none of the
+ *   - the plan's ONE batch title is found, and none of the
  *     five per-area "Write <area> route tests" tasks, the two test-INFRA tasks,
  *     or the "+ tests" feature tasks are,
  *   - with the cadence decision present the batch task is dropped when another
@@ -25,9 +24,9 @@ import {
 import {groundedCoverage} from '../../src/task/coverage-loop.js'
 import {isCrossCuttingRequirement} from '../../src/task/requirements.js'
 
-// ─── Verbatim mx5 run 14 material ────────────────────────────────────────────
+// ─── Verbatim material ────────────────────────────────────────────
 
-/** The decision carried onto TASK_0037's own title, verbatim. */
+/** The decision carried onto a task's own title, verbatim. */
 const CADENCE_DECISION =
     'a test lands *as fast as possible* — in the same change — as each new route or'
     + ' React component/page. No route or component is considered done until its test'
@@ -45,7 +44,7 @@ const SPEC_TESTING_SECTION =
     + '**Client/component tests** — Playwright React component tests; every'
     + ' component/page test captures a screenshot committed as a baseline.\n'
 
-/** run 14's plan, verbatim (decisions/spec suffixes stripped as parsePlan sees it). */
+/** a plan, verbatim (decisions/spec suffixes stripped as parsePlan sees it). */
 const RUN14_PLAN = [
     'Set up project scaffold — package.json, tsconfig.json, ESLint flat config, Prettier .prettierrc.cjs with pinned versions and settings',
     'Set up docker-compose for local Postgres 18 development',
@@ -83,7 +82,7 @@ const RUN14_PLAN = [
     'Implement edit listing page — same fields as new, pre-populated, with photo management',
     'Implement my listings page — own listings grid with edit/sold/delete actions and "Invite a member" button',
     'Implement admin page — user list with ban/unban toggle, listing deletion capability',
-    // TASK_0037 — the batch title this module exists for (index 36).
+    // one task — the batch title this module exists for (index 36).
     'Write component and page tests — Playwright CT tests with screenshot baselines for all components and pages',
     'Implement polish — empty states, error states, loading states, responsive layout, final brand pass against DESIGN/brand-spec.md'
 ]
@@ -136,7 +135,7 @@ describe('findBatchTestTitles', () => {
         expect(hits).toEqual([0, 1, 2, 3])
     })
 
-    // Both titles VERBATIM from a live decompose rep (Qwen3.6-27B, mx5 fixture).
+    // Both titles VERBATIM from a live decompose rep.
     // reconcileTitleSources leaves a malformed `[source: "…" [§]]` citation in
     // place, so the cadence line it quotes ("…as each new route…") became part of
     // the title text — and the bare scope check called the scoped auth-test task a
@@ -213,7 +212,7 @@ describe('findBatchTestTitles', () => {
         ).toEqual([])
     })
 
-    // Rep 4 of the 8-rep live A/B (2026-07-20, Qwen3.6-27B on the mx5 fixture),
+    // Rep 4 of the 8-rep live A/B,
     // verbatim. The citation arrives as BARE PROSE — no quotes, no `[source: …]`
     // wrapper — and is then repeated inside one, so neither earlier guard sees it.
     // Its borrowed "every component/page" was the title's only quantifier, and the
@@ -305,7 +304,7 @@ describe('rewriteBatchTestPlan (run 14 fixture)', () => {
     })
 
     test('AFTER: dropped when another task already grounds its requirement', () => {
-        // TASK_0028 ("… __screenshots__/ directory") grounds the screenshot
+        // one task ("… __screenshots__/ directory") grounds the screenshot
         // obligation, and the cadence puts each component's test in its own task —
         // so nothing is lost by removing the batch task.
         const r = rewrite(RUN14_PLAN, [SCREENSHOT_REQ])
@@ -317,7 +316,7 @@ describe('rewriteBatchTestPlan (run 14 fixture)', () => {
     })
 
     test('AFTER: scoped sweep when the batch task is the SOLE owner', () => {
-        // Same plan without TASK_0028 — now no other title mentions screenshots or
+        // Same plan without one task — now no other title mentions screenshots or
         // baselines, so dropping outright would reduce planned coverage.
         const plan = RUN14_PLAN.filter(t => !t.startsWith('Set up Playwright component testing'))
         const r = rewrite(plan, [SCREENSHOT_REQ])

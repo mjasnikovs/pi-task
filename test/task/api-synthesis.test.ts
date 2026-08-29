@@ -5,7 +5,7 @@ import {
     synthesizedApiReaskHint
 } from '../../src/task/api-synthesis.js'
 
-/** The real mx5 run-13 TASK_0018 research APIS section, verbatim shape. */
+/** A real research APIS section, verbatim shape. */
 const RESEARCH = [
     'FILES',
     'build.ts  Build script to be created at project root',

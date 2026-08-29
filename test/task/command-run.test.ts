@@ -50,7 +50,7 @@ describe('the env-gap contract — a command that told us nothing never fails a 
 
 test('spawn-failed stays distinguishable from every other gap', () => {
     // Load-bearing: only a genuine spawn failure feeds the gate's full-blindness
-    // guard (mx5 run 16). A 127 inside the script chain, a missing browser and a
+    // guard. A 127 inside the script chain, a missing browser and a
     // timeout all mean the runner demonstrably RAN.
     const spawnFailed = classifyCommandRun(ran({failedToStart: true, status: null}))
     expect(spawnFailed.outcome === 'gap' && spawnFailed.gap === 'spawn-failed').toBe(true)
