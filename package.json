@@ -1,7 +1,7 @@
 {
     "name": "@mjasnikovs/pi-task",
     "version": "0.38.29",
-    "description": "Deterministic task planning and spec-orchestration for local models — crash-safe /task pipelines with verify/enforce gates, a real-time remote web view, and web/docs/fetch/worker subagent tools.",
+    "description": "Deterministic task planning and spec-orchestration for local models \u2014 crash-safe /task pipelines with verify/enforce gates, a real-time remote web view, and web/docs/fetch/worker subagent tools.",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -14,6 +14,7 @@
     "scripts": {
         "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
         "lint": "prettier --log-level warn --write 'src/**/*.ts' && eslint --fix . && tsc --noEmit",
+        "lint:check": "prettier --check 'src/**/*.ts' && eslint . && tsc --noEmit",
         "test": "cross-env AGENT=1 bun test --isolate src/ scripts/",
         "prepublishOnly": "bun run build"
     },

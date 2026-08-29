@@ -6,22 +6,36 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # lint:check, not lint: the latter runs prettier --write and eslint --fix,
+      # so it would pass by rewriting the tree instead of reporting it.
+      - name: Lint
+        run: bun run lint:check
+
   build-and-test:
     name: build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Normal runtime is ~2-6 min. Outer backstop only — the Test step carries
-    # its own 10-min timeout so a hang there fails that step and still runs the
-    # diagnostic probes. This job-level one now catches a hang anywhere ELSE
-    # (install, build), and cancelling the job is an acceptable outcome there.
-    #
-    # A previously-diagnosed instance of the hang class: a leaked detached child
-    # process's piped stdio kept the runner alive indefinitely — see
-    # final-gate.ts runBootCheck's child.unref() fix.
+    # Outer backstop only; the Test step carries its own timeout. This catches a
+    # hang in install or build.
     timeout-minutes: 15
     strategy:
-      # Don't cancel the Linux job when Windows fails (or vice versa) — we want
-      # to see both results. Windows is the reason this matrix exists: two
-      # separate Windows-only path bugs shipped because CI never ran there.
+      # Windows is the reason this matrix exists: two Windows-only path bugs
+      # shipped because CI never ran there. Don't cancel one OS when the other
+      # fails.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -40,44 +54,28 @@ jobs:
         run: bun run build
 
       - name: Test
-        # Skip the live-model smoke tests: they require a running pi model
-        # endpoint, which CI has no access to. `pi` is on PATH here (installed
-        # as a dependency), so the tests' own `which pi` guard doesn't catch
-        # this — PI_SKIP_SMOKE is the documented escape hatch.
+        # PI_SKIP_SMOKE: the live-model tests need a pi model endpoint CI has
+        # no access to, and `pi` IS on PATH here so their own guard misses it.
         #
-        # The step timeout is deliberately under the job's 15-min backstop. A
-        # JOB timeout *cancels* the job, which skips every remaining step — so
-        # the four hangs of 2026-07-17..20 (runs 29599476674, 29602387724,
-        # 29643488474, 29727590021) each produced a blank "cancelled" log and no
-        # diagnosis. A STEP timeout fails only this step, leaving the log intact
-        # and letting the probes below run. The suite takes ~30s locally and
-        # ~2-6 min on a cold runner, so 10 min is pure headroom.
+        # A STEP timeout under the job's 15-min backstop is deliberate: a JOB
+        # timeout cancels every remaining step, so four 2026-07 hangs produced
+        # a blank log and no diagnosis.
         timeout-minutes: 10
         run: bun run test
         env:
           PI_SKIP_SMOKE: "1"
-          # Print `::test-file <path>` as each file starts (bunfig preload,
-          # inert without this var). Run 30472844957 hung with the log ending
-          # on orientation-replay.test.ts — but that is just the last file that
-          # console.logs; bun prints a file header only for files that write
-          # output, so the hung log named the wrong file. With this on, the
-          # last ::test-file line IS the file that hung.
+          # Makes the bunfig preload print `::test-file <path>` per file, so the
+          # last line of a hung log names the file that actually hung. Without
+          # it bun only headers files that write output.
           PI_TEST_PROGRESS: "1"
 
-      # ---------------------------------------------------------------------
-      # Post-test diagnostics. These exist to characterise an intermittent hang
-      # that has never reproduced locally and hits whichever runner loses the
-      # race (it has struck both ubuntu and windows). Leading hypothesis: a test
-      # spawns a child that outlives it with stdio still piped, so the runner
-      # waits on the process group after bun itself reports done — the same
-      # class as the leaked detached child fixed in final-gate.ts runBootCheck
-      # via child.unref().
+      # Post-test diagnostics for an intermittent hang that has never reproduced
+      # locally and has struck both runners. Leading hypothesis: a test spawns a
+      # child that outlives it with stdio still piped.
       #
-      # `always()` so they run on the timeout path, which is the only path that
-      # matters here. They are diagnostic only and must never fail the job:
-      # every command is `|| true`, since a false red here would be worse than
-      # the flake it is chasing.
-      # ---------------------------------------------------------------------
+      # always() so they run on the timeout path — the only one that matters.
+      # Every command is `|| true`: a false red here beats nothing, but not the
+      # flake it chases.
       - name: Diagnose survivors (unix)
         if: always() && runner.os != 'Windows'
         run: |
@@ -85,13 +83,8 @@ jobs:
           ps -eo pid,ppid,pgid,etime,stat,cmd || true
           echo "::endgroup::"
 
-          # Match on the basename of argv[0], not on the comm column and not on
-          # a substring of the whole command line. comm is a trap here: node
-          # renames its main thread, so /proc/<pid>/comm reads "MainThread" and
-          # a comm filter misses the very processes this probe exists to catch.
-          # A substring match over full argv is the opposite failure — a bare
-          # /pi/ also hits "irq/9-acpi" and "at-spi-bus-launcher", burying the
-          # two or three lines that matter.
+          # Match the basename of argv[0]. /proc/<pid>/comm reads "MainThread"
+          # for node, and a substring match over full argv hits "irq/9-acpi".
           filter='NR == 1 { print; next }
                   { n = split($6, p, "/"); exe = p[n]; sub(/\.exe$/, "", exe)
                     if (exe ~ /^(bun|bunx|node|pi|tsc)$/) print }'
@@ -107,11 +100,8 @@ jobs:
             if [ -n "$pids" ]; then
               for pid in $pids; do
                 echo "--- pid $pid ---"
-                # -a is load-bearing: lsof ORs its selection flags by default,
-                # so `-p PID -d ^mem` without it dumps every fd on the box
-                # (~300KB) instead of this pid's. -w drops overlayfs stat
-                # warnings. Excluding mem/txt/rtd/cwd leaves the actual file
-                # descriptors, which is where a still-piped stdio shows up.
+                # -a is load-bearing: lsof ORs its selection flags, so without
+                # it this dumps every fd on the box.
                 lsof -w -a -p "$pid" -d '^mem,^txt,^rtd,^cwd' 2>/dev/null || true
               done
             else
@@ -128,8 +118,7 @@ jobs:
         run: |
           Write-Host "::group::bun / pi / node survivors"
           try {
-            # Anchor on the whole image name. An unanchored 'pi' matches half
-            # the box (spoolsv, WmiPrvSE, ...) and drowns the real signal.
+            # Anchored: an unanchored 'pi' matches spoolsv, WmiPrvSE and more.
             $procs = Get-CimInstance Win32_Process |
               Where-Object { $_.Name -match '^(bun|bunx|node|pi|tsc)\.exe$' } |
               Select-Object ProcessId, ParentProcessId, CreationDate, Name, CommandLine
@@ -142,22 +131,13 @@ jobs:
           catch { Write-Host "(unavailable)" }
           Write-Host "::endgroup::"
 
-  # ---------------------------------------------------------------------------
-  # Node runtime smoke. The suite above runs only under Bun (139 files import
-  # bun:test), but `pi` itself runs under NODE — that is the runtime executing
-  # this extension's dist/ in the field, and where issue #7 (an EADDRINUSE
-  # escaping as an uncaughtException that crashed pi) was reported. Nothing here
-  # exercised Node before. This job runs the SHIPPED build under real Node on
-  # both OSes, across pi's oldest supported Node (engines: node>=22.19.0) and a
-  # current line, asserting the remote-server bind/retry contract holds with
-  # zero out-of-band errors.
+  # The suite above is Bun-only, but `pi` runs the shipped dist/ under NODE —
+  # where issue #7 (an EADDRINUSE escaping as an uncaughtException) was
+  # reported. Runs the built output under real Node on both OSes, across pi's
+  # oldest supported version (engines: node>=22.19.0) and a current line.
   #
-  # It is a regression guard, NOT a reproduction: GH runners release ports fast
-  # enough that even the old buggy code stayed green, so a pass means "runs
-  # correctly, nothing escapes on this Node/OS", not "reproduced #7". Bun is
-  # still installed here solely to build (bun run build == tsc); the ASSERTION
-  # runs under the pinned Node.
-  # ---------------------------------------------------------------------------
+  # A regression guard, not a reproduction: runners release ports fast enough
+  # that even the buggy code stayed green.
   node-smoke:
     name: node smoke (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
