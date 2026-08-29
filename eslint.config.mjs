@@ -49,11 +49,6 @@ export default tseslint.config(
             '@typescript-eslint/no-explicit-any': 'error',
             'no-empty': ['error', {allowEmptyCatch: true}],
             'linebreak-style': ['error', 'unix'],
-            // avoidEscape lets a string keep double quotes when it contains a
-            // single quote (e.g. "couldn't"). Without it, eslint --fix rewrites
-            // prettier's double-quoted form to single-quoted-with-backslash,
-            // which prettier then re-flags — so `prettier --write && eslint --fix`
-            // never converges and lint silently leaves files dirty.
             quotes: ['error', 'single', {allowTemplateLiterals: true, avoidEscape: true}],
             semi: ['error', 'never'],
             'no-tabs': 0,
@@ -77,6 +72,6 @@ export default tseslint.config(
             '@typescript-eslint/require-await': 'off'
         }
     },
-    // Last: turns off every rule prettier already owns.
+    // Last, so it wins: every stylistic rule set above is switched off here.
     prettierConfig
 )
