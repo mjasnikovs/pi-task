@@ -31,9 +31,10 @@ import {
 } from '../task/mid-run-input.js'
 import type {ServerHandle} from './server.js'
 
-// Shared state that persists across jiti re-evaluations on session switches.
-// Each /new causes the extension module to be re-loaded by jiti (moduleCache:false),
-// but globalThis survives. This keeps the server running and messages flowing.
+// Shared state parked on globalThis. pi loads extensions through
+// `createJiti(..., {moduleCache: false})`, so a reload re-evaluates this module
+// and resets its module-level state; globalThis survives that, which is what
+// keeps the server running and messages flowing.
 type Shared = {
     server: ServerHandle | null
     send: ((text: string, opts?: {deliverAs: 'steer' | 'followUp'}) => void) | null
@@ -45,9 +46,9 @@ if (!_g.__piRemote) _g.__piRemote = {server: null, send: null, serveResult: null
 const S = _g.__piRemote!
 
 /**
- * Where a plain (non-slash) browser line goes. Exported so the decision is
- * tested as SHIPPED rather than as a copy — the three branches are the whole of
- * issue #8, and the middle one is the regression.
+ * Where a plain (non-slash) browser line goes. Exported so
+ * test/remote/mid-run-routing.test.ts drives the shipped decision rather than a
+ * copy of it — these three branches are the whole of issue #8.
  */
 export function routePlainLine(
     plain: string,
@@ -55,24 +56,19 @@ export function routePlainLine(
 ): void {
     addUserTurn(plain)
     // Read the run flag from SessionState, which is the only thing that owns it.
-    // A mirror of it here — a module-level `let` plus a getter/setter, set
-    // alongside agentStart/agentEnd — would be two sources of truth for one
-    // boolean, and they disagree in both directions: SessionState
-    // also clears agentRunning in addError and reset, neither of which touched the
-    // mirror — so an errored turn or a /new left this branch steering into a turn
-    // SessionState already considered finished. And the mirror was a plain module
-    // `let` while every other piece of remote state deliberately lives on
-    // globalThis to survive jiti re-evaluation, so it silently reset on session
-    // switch. Deleting it removed complexity rather than moving it.
+    // Three functions clear it — agentEnd, addError and reset — so anything
+    // mirroring the flag here would have to track an errored turn and a /new as
+    // well as a finished one, and would steer into a turn SessionState already
+    // considers over whenever it missed one.
     if (getState().agentRunning) {
         // A live turn: steer it (inject into the current generation) so the
         // nudge lands immediately.
         send(plain, {deliverAs: 'steer'})
     } else if (isRunActive()) {
         // Idle, but a task run owns the session — which is most of a run, since
-        // the spec phases and every gate are child processes. Sending here opens
-        // a SECOND turn beside the run; that is what killed a live run on pi
-        // 0.82.1. Hold it for the next task turn instead.
+        // the spec phases and every gate are child processes. pi documents
+        // sendUserMessage as "Always triggers a turn", so sending here opens a
+        // SECOND turn beside the run. Hold it for the next task turn instead.
         holdInput(plain)
     } else {
         send(plain)
@@ -168,9 +164,10 @@ export function registerRemote(pi: ExtensionAPI): void {
         publishNotify('Compacting context…', 'info')
     })
 
-    // Bridge-registered (not pi.registerCommand) so `/remote stop` also works when
-    // typed in the browser — the web UI advertises it, and while a /task-auto run
-    // holds the host command loop the browser is the only live input surface.
+    // registerBridgeCommand, not registerRemoteOnlyCommand: this one needs to
+    // exist in the terminal AND on the bridge, so `/remote stop` also works typed
+    // in the browser — the web UI advertises it, and while a /task-auto run holds
+    // the host command loop the browser is the only live input surface.
     registerBridgeCommand(pi, 'remote', {
         description: 'Show the remote QR code & URLs.',
         handler: async (args, ctx) => {
