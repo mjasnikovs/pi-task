@@ -20,10 +20,10 @@ export function renderModule(): string {
     }
 
     // Split text into ordered {type:'text'|'code', ...} blocks by scanning lines
-    // for a fenced code marker at line start. This replaces a RegExp that was built
-    // from a string where '[\\\\s\\\\S]' collapsed to '[sS]', so it matched nothing
-    // and every code block rendered as raw text. A line scanner also tolerates an
-    // unclosed trailing fence, which the regex never could.
+    // for a fenced code marker at line START — an indented fence is ordinary
+    // text. Scanning lines rather than matching one regex over the whole string
+    // is also what tolerates an unclosed trailing fence: everything after it
+    // becomes the code block.
     function parseBlocks(text) {
       var FENCE = String.fromCharCode(96, 96, 96);
       var lines = String(text == null ? '' : text).split('\\n');
