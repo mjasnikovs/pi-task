@@ -20,10 +20,11 @@ export interface PiTaskConfig {
     enforceGuidelines: boolean
     verifyWork: boolean
     /**
-     * Run the four research workers concurrently instead of one at a time.
-     * DEFAULT OFF. A single-GPU backend serves concurrent streams by sharing
-     * the same device between them, so each one slows down by roughly the
-     * number in flight. Measure your own backend before turning this on.
+     * Run the four research workers concurrently instead of one at a time
+     * (task/phases.ts). DEFAULT OFF. Serial is also what lets a worker read the
+     * sections finished before it — APIS builds on the FILES map, and gets
+     * nothing under the parallel branch. Measure your own backend before
+     * turning this on.
      */
     parallelResearchWorkers: boolean
     /**
@@ -32,13 +33,15 @@ export interface PiTaskConfig {
      * first pipeline's digest instead of re-fetching it. Per-run isolated,
      * external-only (project-source `.` lookups are excluded), success-only.
      *
-     * DEFAULT ON. A hit replays the stored text byte for byte, and the key is
-     * the whole query, so two different questions cannot collide.
+     * DEFAULT ON. A hit replays the stored text byte for byte. The key is the
+     * tool name plus the whole query — normalised for case and whitespace, so
+     * two spellings of one question share a digest, and nothing else does.
      */
     researchCache: boolean
     /**
      * Which engine backs web search (pi-worker-search + freshness/enrichment).
-     * `exa` and `ddg` need no API key; `brave` needs BRAVE_SEARCH_API_KEY.
+     * `exa` and `ddg` need no API key; `brave` needs one (see
+     * SEARCH_PROVIDER_KEY_ENV in workers/search-types.ts).
      * DEFAULT `exa` so search works out of the box with zero configuration.
      */
     searchProvider: SearchProvider
@@ -56,19 +59,19 @@ export interface PiTaskConfig {
     extensionWhitelist: string[]
     /**
      * Wall-clock ceiling (ms) on a SINGLE tool execution before the command
-     * watchdog steps in. Local models routinely run a command that never returns
-     * (e.g. `godot --headless` with no timeout, a dev server, a hung test) and
-     * the run wedges until the user manually aborts. pi's bash tool has an
-     * OPTIONAL timeout with NO default (bash.js), so a command the model didn't
-     * bound runs forever; this is the missing default.
+     * watchdog steps in. pi's bash tool declares its `timeout` parameter as
+     * "Timeout in seconds (optional, no default timeout)" and returns undefined
+     * when it is absent, so a command the model didn't bound runs forever. This
+     * is the missing default.
      *
      * ONE knob, TWO surfaces (shared/command-watchdog.ts): in the MAIN session
-     * the overrun call is cancelled via ctx.abort() (kills the tool's whole
-     * process tree) plus an auto-reminder turn; in the verify/fix GATE children
+     * the overrun fires ctx.abort(), which ends the whole agent operation — pi's
+     * bash tool answers that signal by killing the command's entire process
+     * tree — followed by an auto-reminder turn; in the verify/fix GATE children
      * (gate-deps.ts) the child is killed and re-spawned with a hint, the ceiling
-     * halving on repeat hangs. 0 = off — which unguards BOTH surfaces, gates
-     * included. Tool-agnostic: it arms on any tool execution, though in practice
-     * only bash runs long enough to trip it.
+     * halving per prior hang. 0 = off — which unguards BOTH surfaces, gates
+     * included. Tool-agnostic: it arms on any tool execution.
+     *
      * The default is a compromise: it has to outlast a real build or test suite
      * on the slowest machine you run this on, and still end a true hang.
      */
@@ -107,8 +110,8 @@ export interface PiTaskConfig {
      * killed and its result routed into the EXISTING connection-error retry.
      * 0 = off, on both surfaces.
      *
-     * The default is generous on purpose. A local backend can spend a long time
-     * in prompt processing emitting nothing at all, and that silence is healthy.
+     * The default is generous on purpose: a local backend can sit in prompt
+     * processing emitting nothing at all, and that silence is healthy.
      */
     streamInactivityMs: number
     /**
@@ -128,11 +131,13 @@ export interface PiTaskConfig {
     yoloMode: boolean
     /**
      * How much the run writes to its `.pi-tasks/*-debug.log` forensic trail
-     * (task/debug-log.ts). NOTHING in pi-task ever reads these files back —
-     * `task-io.ts` only globs `TASK_NNNN.md`, and auto-commit's trail snapshot
-     * copies bytes without parsing them — so this knob is behaviour-neutral by
-     * construction. It trades disk and repo noise against the ability to explain
-     * a run after it has finished.
+     * (task/debug-log.ts). Nothing in `src/` reads these files back —
+     * `task-io.ts` only matches `TASK_NNNN.md`, and auto-commit's trail snapshot
+     * reads every `.pi-tasks/` file as bytes and writes them back unparsed — so
+     * this knob is behaviour-neutral by construction. It trades disk and repo
+     * noise against the ability to explain a run after it has finished. The
+     * TESTS do read the trail back, which is why the test preload pins the
+     * config path away from the developer's own file.
      *
      * `full` is every line the child model emitted plus every tool result;
      * `events` keeps only decisions and guard actions; `off` writes nothing.
@@ -190,9 +195,10 @@ export function sanitizeDebugLogs(value: unknown): DebugLogLevel {
 }
 
 /**
- * The command-watchdog timeout choices offered by /task-config, newest-first in
- * the cycle order the picker shows. The stored config value is the ms number;
- * the label is display-only (mirrors the searchProvider label/value split).
+ * The command-watchdog timeout choices offered by /task-config, in the cycle
+ * order the picker shows: ascending, with `off` last. The stored config value is
+ * the ms number; the label is display-only (mirrors the searchProvider
+ * label/value split).
  */
 export const COMMAND_TIMEOUT_OPTIONS: ReadonlyArray<{label: string; ms: number}> = [
     {label: '5 min', ms: 5 * 60_000},
@@ -231,8 +237,8 @@ export function sanitizeCommandTimeoutExemptTools(value: unknown): string[] {
 
 /**
  * The stream-watchdog choices offered by /task-config, in cycle order. Every
- * option is minutes, not seconds: the failure this guards costs hours, and the
- * legitimate silence it must tolerate (local prompt processing) is minutes.
+ * option is minutes, not seconds: the silence this must tolerate — a local
+ * backend in prompt processing — is itself measured in minutes.
  */
 export const STREAM_INACTIVITY_OPTIONS: ReadonlyArray<{label: string; ms: number}> = [
     {label: '5 min', ms: 5 * 60_000},
@@ -296,12 +302,9 @@ type BooleanConfigKey = {
 
 /**
  * A boolean setting's loader. Only a REAL boolean counts; anything else falls
- * back to the shipped default.
- *
- * This is `yoloMode`'s guard, generalised. Its comment — *"a hand-edited
- * `"yoloMode": "false"` is a truthy string"* — was true verbatim of the other
- * seven booleans, none of which had it, so a stale `"verifyWork": "off"` reached
- * `getConfig().verifyWork` as truthy and a `"autoCommit": 0` reached it as falsy.
+ * back to the shipped default — a hand-edited `"verifyWork": "off"` is a truthy
+ * string and a `"autoCommit": 0` is a falsy number, and neither may decide a
+ * setting.
  */
 function asBoolean(key: BooleanConfigKey): (raw: unknown) => boolean {
     return raw => (typeof raw === 'boolean' ? raw : DEFAULT_CONFIG[key])
@@ -311,13 +314,9 @@ function asBoolean(key: BooleanConfigKey): (raw: unknown) => boolean {
  * How each setting's STORED value becomes a safe in-memory value — one loader per
  * key, keyed on the config's own type.
  *
- * `ConfigItem` (config/register.ts) already absorbed three of the four edits its
- * own header names: *"Adding one enum setting meant four coordinated edits (row,
- * format arm, parse arm, sanitizer) and NONE of them failed to compile if you
- * forgot it."* The sanitizer was the fourth, and it stayed behind in this file as
- * a hand-ordered statement ladder covering 7 of 14 keys. This is the mapped type
- * that closes it: a new field on `PiTaskConfig` is a compile error until it
- * declares how a hostile value becomes a safe one.
+ * The mapped type is the point: a new field on `PiTaskConfig` is a compile error
+ * until it declares how a hostile value becomes a safe one. Adding a field and
+ * nothing else fails tsc twice — once on DEFAULT_CONFIG, once here.
  */
 export const CONFIG_LOADERS: {
     [K in keyof PiTaskConfig]: (raw: unknown) => PiTaskConfig[K]
@@ -371,9 +370,9 @@ export function loadConfig(raw: unknown): PiTaskConfig {
  * Where the saved config lives. `PI_TASK_CONFIG_PATH` overrides it.
  *
  * The override exists because this module loads the real file at import time,
- * which made every test that reads a config value depend on the developer's own
- * `~/.config/pi-task/config.json` — a machine-local `"debugLogs": "off"` failed
- * 12 tests here while CI (no config file at all) stayed green. The test preload
+ * which makes every test that reads a config value depend on the developer's own
+ * `~/.config/pi-task/config.json` — a machine-local `"debugLogs": "off"` is
+ * enough to fail the tests that read `plan-debug.log` back. The test preload
  * points this at a path under the tmp dir that never exists, so tests always see
  * DEFAULT_CONFIG. Read once at module eval: the preload runs before any import.
  */
