@@ -11,7 +11,8 @@ export type ServeResult =
     | {state: 'certs-disabled'; host: string}
     | {state: 'unavailable'}
 
-/** The MagicDNS host of a serve result, or undefined when the daemon had no name. */
+/** The MagicDNS host of a serve result, or undefined for `unavailable` — the one
+ *  state that carries no host, because the daemon was unreachable or nameless. */
 export function hostFromResult(result: ServeResult): string | undefined {
     return result.state === 'unavailable' ? undefined : result.host
 }
@@ -109,7 +110,8 @@ export async function teardownTailscaleServe(port: number, run: Run = defaultRun
 /** Pure: pick the primary URL (what the QR encodes) and any hint lines from a
  *  serve result. Prefers the MagicDNS host over the raw IP whenever it's known —
  *  the https URL when serve is live, else http://<host>:<port> — so the QR and
- *  the announced URL carry the tailnet name (needed for SSH and webpush certs). */
+ *  the announced URL carry the tailnet name, which is what `tailscale cert` and
+ *  the `--https=443` handler above are issued for. */
 export function planRemoteUrls(
     httpPrimary: string,
     result: ServeResult,
