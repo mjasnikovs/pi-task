@@ -30,8 +30,8 @@ import type {TreeChangeSummary} from './write-guard.js'
  *
  * Deliberately a named constant with a test pinning it (plan-readonly.test.ts):
  * widening this string is the single edit that would end the read-only guarantee,
- * and it should never happen by accident. The same value grill and clarify use
- * for their generation children — planning has never needed more.
+ * and it should never happen by accident. The same value the grill-gen and
+ * auto-clarify children run under.
  */
 export const PLAN_TOOLS = 'read'
 
