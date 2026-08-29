@@ -2,7 +2,7 @@ import {describe, expect, test} from 'bun:test'
 import {listGuardableTools, toGuardableTools} from '../../src/config/tool-list.js'
 
 /**
- * Shapes copied verbatim from a live `pi.getAllTools()` dump (pi 0.83.0) so the
+ * Shapes copied verbatim from a live `pi.getAllTools()` dump, so the
  * grouping is exercised against what pi actually reports, not a guess at it.
  */
 const LIVE_SAMPLE = [

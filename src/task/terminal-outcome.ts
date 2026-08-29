@@ -49,7 +49,7 @@ export interface TerminalOutcome {
     /**
      * Demote the INNER task file to resumable. It reads `completed` from
      * spec-handoff, and leaving it that way is how a failed run's task file
-     * claimed success in the a audit.
+     * claimed success after the run had failed.
      */
     markResumable: boolean
     /**

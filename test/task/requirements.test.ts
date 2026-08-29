@@ -145,7 +145,7 @@ describe('obligation-passage recall floor', () => {
         // Three sections, 20 groundable quotes each. The shipped given-order fill
         // would keep §A's 20 + §B's 20 and drop §C entirely; the section-fair
         // fill must keep every section's head quotes — including §C's first,
-        // the a "serves static dist/" shape (tail section, early bullet).
+        // the "serves static dist/" shape (tail section, early bullet).
         const mk = (s: string, n: number) =>
             Array.from({length: n}, (_, i) => `${s} obligation ${i} with enough length to ground`)
         const doc = [

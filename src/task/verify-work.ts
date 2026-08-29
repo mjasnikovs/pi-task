@@ -1010,7 +1010,7 @@ export interface VerificationDeps {
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
-     * tree is untrustworthy in BOTH directions — the a child stashed the
+     * tree is untrustworthy in BOTH directions — a child that stashed the
      * work away and judged an empty tree — so it is discarded: the first mutated
      * run is retried once on the restored tree; a second mutation is a FAIL that
      * names the behavior. ABSENT → no guard (tests / non-git repos), unchanged. */

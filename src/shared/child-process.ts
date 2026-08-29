@@ -149,14 +149,11 @@ export interface RunChildJsonEventsOptions {
      * The child's context window in tokens, supplied BY THE CALLER — pi's event
      * stream does not carry one (GitHub issue #16).
      *
-     * Verified against the published tarballs of @earendil-works/pi-coding-agent
-     * and @earendil-works/pi-agent-core at 0.80.2 and 0.84.2, and against pi's
-     * own docs/json.md: the wire union is session / agent_* / turn_* / message_*
-     * / tool_execution_* / queue_update / compaction_* / auto_retry_*, the
-     * session header is {type,version,id,timestamp,cwd,parentSession}, and no
-     * member of either carries a window or even a model id. `contextUsage`
-     * exists ONLY as the in-process `ctx.getContextUsage()` extension API, which
-     * a `--mode json` child never speaks back to its parent.
+     * Check it against the installed package rather than assuming: no member of
+     * the `--mode json` event union carries a window, or even a model id.
+     * `contextUsage` exists ONLY as the in-process `ctx.getContextUsage()`
+     * extension API, which a `--mode json` child never speaks back to its
+     * parent.
      *
      * The parent therefore has to say. Children are spawned without `-m`
      * (CHILD_BASE_ARGS), so they resolve the same default model the parent runs
@@ -224,10 +221,11 @@ export class JsonEventSink {
      * CLEARED when a LATER agent_end delivers assistant text: pi retries a failed
      * turn itself (`auto_retry_start`) and each attempt emits its own agent_end,
      * so a recovered blip arrives as agent_end(stopReason "error", empty) followed
-     * by agent_end(text). Measured live against a proxy that drops the first
-     * connection: pi makes up to 4 attempts over ~15s, and on attempts 1–3 the
-     * child returns the real answer WITH the dead first attempt's errorMessage
-     * still in the stream. Latching that would report a failure for a run that
+     * by agent_end(text). How many attempts and how long they take is the user's
+     * `retry` setting — one initial call plus `retry.maxRetries`, backing off
+     * from `retry.baseDelayMs` — so on any attempt but the last the child
+     * returns the real answer WITH the dead first attempt's errorMessage still
+     * in the stream. Latching that would report a failure for a run that
      * succeeded. An error AFTER the last text-bearing turn still latches — that
      * one really did lose the tail of the work.
      */

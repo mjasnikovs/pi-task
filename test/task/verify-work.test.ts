@@ -335,7 +335,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('negative control: a success that cannot fail on wrong input is void evidence', () => {
-        // Regression guard for the a F5 class: a catch-all fallback answered
+        // Regression guard: a catch-all fallback answered
         // ANY method on ANY path with 200 + HTML, so the broken upload endpoint
         // "succeeded" and the verify curl could not fail — the child false-PASSed.
         // The rule must require a deliberately-wrong control and treat same-success on
@@ -362,7 +362,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('rule 5c: a spec-required check that self-skips or lacks tooling is UNOBSERVED, not PASS', () => {
-        // Regression guard for the a F2 class: the only behavioral checks ever
+        // Regression guard: the only behavioral checks ever
         // authored (browser smokes) were wrapped in `|| echo skipping`; the tool was
         // absent, the checks silently skipped, and the verify child called it "correctly
         // skipped" → PASS. The rule must (a) draw the line from rule 5's external-service

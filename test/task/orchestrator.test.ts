@@ -593,7 +593,7 @@ describe('runSingleTask', () => {
         })
     })
 
-    // Live repro (pi 0.82.1, local model, issue #8): a chat message sent from the
+    // Live repro (GitHub issue #8): a chat message sent from the
     // browser during a child phase starts a host turn, and if it is still
     // streaming when the pipeline delivers its spec, the delivery throws and the
     // run dies — "one task failed: Agent is already processing." Delivery must
