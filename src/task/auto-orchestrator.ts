@@ -126,7 +126,7 @@ import {
 
 // Hard ceiling on clarify questions per feature. The loop is open-ended (it stops
 // when the model emits NONE), but a model that never says NONE would otherwise
-// barrage the user — the real mx5 run asked 10, several of them redundant.
+// barrage the user with redundant questions.
 const MAX_CLARIFY_QUESTIONS = 8
 
 // Bounded coverage-triage rounds after decompose: judge → reprompt-with-missing
@@ -158,10 +158,10 @@ function coverageRepromptHint(missing: string[]): string {
 }
 
 // Deterministic distrust floor for the coverage gate. The gate's judge is the
-// same stochastic model as the decompose call it guards, and live (mx5 2026-07-08,
-// A/B N=10) it rubber-stamps a 1-task plan for an 18KB spec 3/10 times — always
-// as the bare "COVERAGE: COMPLETE" line, which is byte-identical to a legitimate
-// verdict, so the rubber-stamp is NOT detectable from the judge's output. The
+// same stochastic model as the decompose call it guards, and it will sometimes
+// rubber-stamp a one-task plan for a whole design document — as the bare
+// "COVERAGE: COMPLETE" line, byte-identical to a legitimate verdict, so the
+// rubber-stamp is NOT detectable from the judge's output. The
 // distrust signal must come from the input: a plan this small for a spec this
 // large is near-certainly the known degenerate-decompose flake (healthy runs on
 // the same inputs produce 10–30 titles). The floor only ever forces a REGENERATION
@@ -180,10 +180,10 @@ const EMPTY_PLAN_RETRIES = 2
 
 /**
  * An empty list is NEVER a valid decomposition of any feature request, at any spec
- * size. It used to escape this guard entirely — the old predicate opened with
- * `titles.length > 0`, so zero titles was not "suspect", the suspect-retry never
- * fired, the coverage loop broke immediately on `titles.length === 0`, and the run
- * aborted with "no tasks produced from the feature". A single degenerate
+ * size. A predicate opening with `titles.length > 0` lets zero titles escape
+ * entirely: not "suspect", so the suspect-retry never fires, the coverage loop
+ * breaks immediately on `titles.length === 0`, and the run aborts with "no tasks
+ * produced from the feature". A single degenerate
  * generation killed the whole run with no retry, which is the opposite of how the
  * same fault is treated one title higher.
  */
@@ -219,15 +219,15 @@ export interface AutoDeps extends GateDeps, FinalGateStageDeps {
     runChild: (name: string, tools: string, prompt: string) => Promise<string>
     /**
      * Paths with unmerged index entries (an in-progress merge conflict). The loop
-     * refuses to START a task on a conflicted tree — mx5 run 6 ran a full impl turn
-     * plus three verifies against one, with every commit doomed from the outset.
+     * refuses to START a task on a conflicted tree: a full implementation turn
+     * and its verifies run against one with every commit doomed from the outset.
      * Absent (tests) → treated as clean.
      */
     unmergedPaths?: (cwd: string) => Promise<string[]>
     /**
      * Sha of refs/stash or null. Compared around each task so a stash pushed (or
      * consumed) during the task and left behind is called out — an orphan stash is
-     * exactly the landmine that detonated as an unresolvable conflict in run 6.
+     * exactly the landmine that detonates as an unresolvable conflict later.
      * Absent (tests) → the check is skipped.
      */
     stashRef?: (cwd: string) => Promise<string | null>
@@ -327,8 +327,8 @@ async function triageClarifyQuestion(
         // manifest/config content) so a "scaffold/create/from scratch" question is
         // auto-resolved as an in-place UPDATE that PRESERVES what is on disk —
         // instead of "greenfield, from scratch", which the spec-only triage emitted
-        // 13/15 of the time and would mint a destructive decompose decision that can
-        // outrank refine's preserve directive (A/B live: 2/15 → 14/15 preserve).
+        // most of the time, minting a destructive decompose decision that can
+        // outrank refine's preserve directive.
         // Empty (greenfield repo / orientation off) → byte-identical to before.
         const source =
             existingFilesBlock.length > 0 ?
@@ -515,15 +515,15 @@ function buildStepFence(titles: string[], currentIndex: number): string {
  * repair step per accused FILE, spliced in directly after the step that just
  * finished.
  *
- * Three bounds, all mandatory (mx5 run 14 item 5 gray areas):
- *   - DEDUP by file — run 14's two `test/teardown.ts` debts must yield ONE repair
+ * Three bounds, all mandatory:
+ *   - DEDUP by file — two debts naming the same file must yield ONE repair
  *     step, not two. mergeRepairCandidates collapses the drained queue, and
  *     planHasRepairFor rejects a file the plan already carries a repair for.
  *   - CAP 1 per file per RUN — planHasRepairFor counts CHECKED-OFF entries too, so
  *     a repair step that itself failed is never re-spawned; it lands in the
  *     accept-debt ledger like any other task. That is what stops a repair loop.
  *   - MONOTONIC — insertTaskAfter only splices; no existing entry is rewritten,
- *     reordered or dropped (the run-12 replacement lesson).
+ *     reordered or dropped.
  *
  * Best-effort throughout: a fault here must never fail the run that produced the
  * finding — the debt is already durably recorded either way.
@@ -623,7 +623,7 @@ export async function orientFeature(
         taskId: '',
         signal: new AbortController().signal
     }).catch(() => '')
-    // Requirement extraction (mx5 run 11, goal A): grounded requirement units,
+    // Requirement extraction: grounded requirement units,
     // extracted from whatever structure the spec has, BEFORE decompose — they ride
     // into the decompose prompt as a ledger (structure-mirroring can't discharge
     // them) and drive the per-requirement coverage accounting below.
@@ -634,8 +634,8 @@ export async function orientFeature(
     try {
         // Recall floor: the obligation-marked passages ride into the prompt as a
         // checklist, and a marked passage that produced NO quote is hard evidence
-        // for one forced re-extraction (measured live: 1/5 extractions missed the
-        // entire marked testing section without this).
+        // for one forced re-extraction: without it an extraction can miss an
+        // entire marked section.
         const passages = enumerateObligationPassages(featureForModel)
         const extractOnce = async (hint: string | null): Promise<RequirementEntry[]> =>
             keepGroundedRequirements(
@@ -671,7 +671,7 @@ export async function orientFeature(
         // best-effort channel
     }
 
-    // Granularity floor (mx5 Jul 25 vs Jul 27): the plan's task COUNT was being set
+    // Granularity floor: the plan's task COUNT was being set
     // by an auto-resolved clarify line the user never saw — the same spec planned
     // into 41 tasks one day and 11 the next, with identical code. Derive the floor
     // from the requirements a task can own, so an unreviewable "one task per
@@ -724,17 +724,17 @@ export async function elicitClarifications(
     // strikes out (can't produce anything novel) we stop instead of barraging the
     // user with the same decision worded N ways. Also caps the absolute count.
     // The generate → parse → pick → dedupe → re-prompt state machine is
-    // task/question-source.ts, shared with the plan session. Clarify used to write
-    // its own, and it had drifted from the sibling in five ways — every one of
-    // which the shared source closes for free: `parsed[0]` became `pickQuestion`
-    // (an analysis note is no longer shown as the question, and the SUGGESTED
+    // task/question-source.ts, shared with the plan session. A second copy here
+    // drifts from the sibling; the shared source closes each way for free:
+    // `parsed[0]` becomes `pickQuestion`
+    // (an analysis note is not shown as the question, and the SUGGESTED
     // attached further down is no longer lost), and an unparseable reply now buys
     // one format re-prompt instead of ending the whole clarify — and decomposing
     // the feature with ZERO clarifications — on a formatting slip.
     //
     // Of plan's three quality rules only the DEFERRAL guard crosses. The other two
-    // cost an extra child call every time they fire, and clarify is the most A/B'd
-    // path here; moving them is its own experiment. See CLARIFY_QUALITY_RULES.
+    // cost an extra child call every time they fire; moving them is its own
+    // change to make and measure. See CLARIFY_QUALITY_RULES.
     const source = makeQuestionSource({
         generate: hint =>
             deps.runChild(
@@ -755,9 +755,10 @@ export async function elicitClarifications(
         // for the editable default and the persisted file.
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = drawn.plain
-        // PLAN SHAPE is the host's call, not the triage's (mx5 41→11 tasks on the
-        // same spec, same base commit, same code — see decompose-granularity.ts).
-        // The triage answers this fork for itself in 8/8 live reps and stamps it
+        // PLAN SHAPE is the host's call, not the triage's — the same spec off the
+        // same base commit can plan four times coarser or finer depending on one
+        // answer here (see decompose-granularity.ts).
+        // The triage answers this fork for itself every time and stamps it
         // "already settled by the spec" while the spec settles no such thing, so the
         // single most load-bearing decision in a run was an invisible coin flip.
         // Answer it deterministically instead: same channel, same transcript, but a
@@ -841,9 +842,9 @@ export async function decomposePlan(
     clarifications: string
 ): Promise<DecomposedPlan> {
     const {featureForModel, reqEntries, ownableRequirements, coarseFloor} = oriented
-    // Tests-in-the-same-change cadence (mx5 run 14, PROMPT item 6): when the
-    // decisions mandate it, a whole-project batch test task contradicts them —
-    // run 14 shipped one anyway (TASK_0037, 4.7h, yolo-accepted FAIL) because
+    // Tests-in-the-same-change cadence: when the
+    // decisions mandate it, a whole-project batch test task contradicts them, and
+    // one still ships because
     // decompose mirrors the spec's milestone shape. The decisions channel
     // OVERRIDES the spec doc, so this resolves toward the decision without asking.
     const noBatchTests = mandatesTestsInSameChange(clarifications, featureForModel)
@@ -862,7 +863,7 @@ export async function decomposePlan(
         buildRequirementsLedger(reqEntries),
         noBatchTests
     )
-    // Parse + FIDELITY RECONCILIATION (mx5 run 11, goal B): ground each title's
+    // Parse + FIDELITY RECONCILIATION: ground each title's
     // [source: "…"] citation against the doc, strip the clause, and re-attach any
     // `+`-joined constraint fragment the paraphrased title dropped (the silently
     // stripped "+ tests" class). Applied to EVERY decompose output — initial,
@@ -882,7 +883,7 @@ export async function decomposePlan(
         // Batch-test ban (item 6): drop or scope a whole-project "write all the
         // tests" task. Identity unless the cadence decision is present, and the
         // sweep replacement re-grounds every requirement the drop would cost — so
-        // planned coverage cannot fall (run 12's lesson).
+        // planned coverage cannot fall.
         const debatched = rewriteBatchTestPlan(
             plan.titles,
             clarifications,
@@ -906,7 +907,7 @@ export async function decomposePlan(
     logPlanDebug(cwd, `decompose produced ${planTitles.length} title(s)`)
     // BRACES for the floor: the prompt clause alone is a preference the model can
     // ignore, so a plan under the floor is sent back ONCE to be split (never
-    // regenerated — a fresh roll can drop a covered area, mx5 run 12). Longer plan
+    // regenerated — a fresh roll can drop a covered area). Longer plan
     // wins; a still-coarse plan falls through to the coverage judge as before, so
     // this can never block planning.
     if (isTooCoarse(planTitles.length, coarseFloor)) {
@@ -929,8 +930,8 @@ export async function decomposePlan(
     }
     // Distrust floor (see isSuspectPlan): a ≤2-title plan for a multi-KB spec is
     // regenerated once BEFORE the judge runs — the judge cannot be trusted to
-    // catch it (3/10 live false-pass) and a hinted retry heals it reliably
-    // (5/5 live). Longer list wins; a still-suspect plan falls through to the
+    // catch it, and a hinted retry heals it reliably.
+    // Longer list wins; a still-suspect plan falls through to the
     // judge loop as before, so this never blocks planning.
     // An EMPTY plan gets extra attempts (see EMPTY_PLAN_RETRIES): falling through
     // with zero titles aborts the whole run, so one roll of the dice is not enough.
@@ -998,17 +999,16 @@ export async function coverPlan(
     const {featureForModel, reqEntries} = oriented
     const {decomposePrompt, parsePlan} = decomposed
     let planTitles = decomposed.planTitles
-    // Coverage gate: a stochastic degenerate completion (live mx5: ONE task +
-    // natural EOS for an 18KB design doc) is nonempty, so the length guard below
+    // Coverage gate: a degenerate completion — ONE task and a natural EOS for a
+    // whole design document — is nonempty, so the length guard below
     // never fires and the whole run "completes" after one task. Judge the list
     // against the feature with a no-tools child; on INCOMPLETE, re-run decompose
     // with the missing areas as a hint. Best-effort so a triage fault never blocks
     // planning (mirrors triageClarifyQuestion).
     //
-    // Two hard-won invariants (mx5 run 12: a complete full-stack plan — 31
-    // requirements mapped, frontend pages present — was overwritten by a
-    // backend-only regeneration and shipped with only a toast, driven by 3 NEGATIVE
-    // requirements no task could own that kept the verdict INCOMPLETE forever):
+    // Two invariants. Without them a complete full-stack plan is overwritten by a
+    // narrower regeneration, driven by a handful of NEGATIVE requirements that no
+    // task can own and that therefore keep the verdict INCOMPLETE forever:
     //   • MONOTONIC replacement (coverage-loop.ts): a retry that DROPS a requirement
     //     the current plan already owns is REJECTED, never adopted. Coverage can
     //     only hold or grow across rounds — a worse regeneration can no longer
@@ -1045,8 +1045,8 @@ export async function coverPlan(
         // numbers. Live (Qwen3.6-27B) the model over-credits ownership, mapping a
         // "--json output" requirement to a generic "scaffold + argument parser"
         // task, so a plan with no --json task still "owned" it and the drop guard
-        // went blind (treatment 1/5). Grounding the drop-signal in the titles the
-        // model can't fake takes it back to 5/5. The model map still drives Fix A's
+        // went blind. Grounding the drop-signal in the titles the model cannot
+        // fake restores it. The model map still drives Fix A's
         // cross-cutting/unmapped accounting below (that only affects reprompt
         // aggressiveness, which the monotonic guard now backstops).
         const covered = groundedCoverage(
@@ -1096,9 +1096,9 @@ export async function coverPlan(
     // `best` is both the plan the next round reprompts FROM and the plan that
     // ships — kept identical because adoption is monotone (see coverage-loop.ts).
     //
-    // It is also the ONLY handle on the accounting. There used to be a second,
-    // `let accounting`, carried alongside — see the ScoredPlan doc comment for the
-    // requirement-to-wrong-task bug that cost us.
+    // It is also the ONLY handle on the accounting. A second one carried
+    // alongside is how a requirement gets attached to the wrong task — see the
+    // ScoredPlan doc comment.
     // The record, and the decisions it makes: task/plan-rounds.ts. This was five
     // locals threaded by closure through a ~90-line loop, plus a
     // snapshot-before-overwrite pair that existed only because the bonus-round
@@ -1177,8 +1177,8 @@ export async function coverPlan(
     const round = rounds.round()
     planTitles = best.plan.titles
     // Exhausted still INCOMPLETE: the best plan ships (the gate is best-effort), but
-    // silently shipping a KNOWN-gapped plan is how mx5 run 5 lost its whole test
-    // suite — tell the user what is still uncovered.
+    // silently shipping a KNOWN-gapped plan is how a run loses a whole area of
+    // work — tell the user what is still uncovered.
     const unresolvedMissing = rounds.unresolved()
     if (unresolvedMissing !== null) {
         logPlanDebug(
@@ -1214,7 +1214,7 @@ export async function planAuto(
     const clarifications = await elicitClarifications(ctx, cwd, deps, oriented)
     if (clarifications === null) return null // dismissed; already announced
 
-    // Artifact-production closure, plan side (mx5 run 13, PROMPT 2): runtime
+    // Artifact-production closure, plan side: runtime
     // files the spec REFERENCES (server snippets, prose "serve the built
     // index.html") that neither its file tree, its parsed build outputs, nor the
     // existing scaffold produce. Sentence-grounded coverage credited the SERVING
@@ -1254,16 +1254,16 @@ export async function planAuto(
     const planTitles = covered.planTitles
     // Carry what no single task owns (goal A(b)/(c)): cross-cutting requirements
     // become `.pi-tasks/requirements.md`, injected VERBATIM into every task's
-    // refine/compose (run 11: §10's test-first cadence had no carrier — the "spec
-    // is authoritative" pointer recovered it in 1 of ~6 tasks; content travels,
-    // pointers don't). Requirements still unmapped after the rounds are carried
+    // refine/compose. A rule stated only in the spec body has no carrier, and a
+    // "spec is authoritative" pointer recovers it in a minority of tasks: content
+    // travels, pointers do not. Requirements still unmapped after the rounds are carried
     // too — marked — and recorded user-visibly in the plan file, never dropped.
     //
     // #1: the holistic-judge missing areas are carried as a THIRD channel. They are
     // areas requirement-extraction never captured as a tracked entry (so the
     // grounded accounting is structurally blind to them), seen only by the judge —
-    // exactly the class that, having no carrier, was warned-about then dropped (mx5
-    // 2026-07-16, §10 test-infra). Carried independent of `accounting` so a mapping
+    // exactly the class that, having no carrier, is warned about and then
+    // dropped. Carried independent of `accounting` so a mapping
     // fault (accounting === null) can't strand them either.
     const carriedCrossCutting = best.accounting?.crossCutting ?? []
     const carriedUnmapped = best.accounting?.unmapped ?? []
@@ -1316,7 +1316,7 @@ export async function planAuto(
     // burned two model calls and left contracts.md / launch-contract.md carrying
     // facts for a run that never produced a task.
 
-    // Cross-slice contract registry (mx5 run 8, F3): now that the plan is settled,
+    // Cross-slice contract registry: now that the plan is settled,
     // extract the interface facts MORE THAN ONE slice must agree on — endpoint paths,
     // exported signatures, file layouts, env var names the DESIGN pins — into a
     // run-level artifact each downstream refine/compose/verify reads. The extraction
@@ -1337,12 +1337,12 @@ export async function planAuto(
         append: appendContracts
     })
 
-    // Launch contract (mx5 run 10 item 4): extract the package/build SCRIPTS the design
+    // Launch contract: extract the package/build SCRIPTS the design
     // declares the project must expose (`migrate`/`seed` fell through decompose and
     // shipped missing, unchecked). Each emitted name is re-grounded against the design
     // (keepGroundedScripts — kept only if the design backticks it), so the final gate's
     // manifest diff can never false-flag a hallucinated script. Recall is mechanical
-    // (mx5 run 11): enumerateScriptCandidates hands the child every backticked
+    //: enumerateScriptCandidates hands the child every backticked
     // script-shaped token near the word "script" as a checklist, so a script declared
     // far from the design's summary list (`test:ct` in §2 vs §9's five) can't be
     // missed by a weak model's recall — the child classifies, it no longer recalls.
@@ -1360,10 +1360,10 @@ export async function planAuto(
     })
 
     // Persist the TASK-MAPPED requirements keyed by the (spec-ref-attached) title
-    // each task will carry (mx5 run 16: only cross-cutting entries travelled;
-    // the 33 mapped ones shaped the title list and vanished — TASK_0008 narrowed
-    // §9's "serves `/api` + static `dist/`" out of its spec with nothing to stop
-    // it). Inert until the owned-requirements injection is wired into the phase
+    // each task will carry. With only cross-cutting entries travelling, the
+    // mapped ones shape the title list and then vanish, and a task can narrow a
+    // requirement out of its own spec with nothing to stop it.
+    // Inert until the owned-requirements injection is wired into the phase
     // prompts; recorded regardless so the plan's mapping is auditable per run.
     if (best.accounting && best.accounting.mapped.length > 0) {
         await writeOwnedRequirements(
@@ -1409,7 +1409,7 @@ export async function planAuto(
  *
  * The grounding step is the reason this shape exists rather than a plain child
  * call. A child asked for interface facts will paraphrase and occasionally invent
- * them (mx5 run 8, F3), and an invented fact in a run-level registry is read as
+ * them, and an invented fact in a run-level registry is read as
  * authoritative by every downstream refine/compose/verify. So nothing the child
  * says is trusted: `ground` re-checks each emitted line against the design text
  * host-side, and only substrings survive.
@@ -1477,9 +1477,9 @@ function defaultDeps(
         cwd,
         taskId: '',
         signal,
-        // IN-RUN thrash guard for the planning children (mx5-n 2026-08-14: a
-        // decompose child re-read DESIGN/marketplace.html until it filled a
-        // 120k window, and ran 16m23s without returning). Every planning child
+        // IN-RUN thrash guard for the planning children: without it a decompose
+        // child can re-read its design document until it fills the whole context
+        // window, and never return. Every planning child
         // gets its source doc INLINED in its prompt, so a second read of a file
         // it has already opened can only be thrash — which makes the read-once
         // block safe here in a way it is not for a phase that must explore.
@@ -1521,14 +1521,14 @@ function defaultDeps(
                 runFinalIntegrationGate(cwd2, {planText, signal})
             :   Promise.resolve({ok: true, reason: 'disabled'}),
         // Uncommitted paths, for the stranded-sub-fix handling around the final-gate
-        // picker (mx5 run 13 PROMPT 4 item 3). Every task is committed by the time
+        // picker. Every task is committed by the time
         // the gate runs, so whatever is dirty here belongs to the fix pass.
         pendingChanges: async cwd2 => {
             const changes = await collectTreeChanges(cwd2, signal)
             return [...changes.modified, ...changes.added, ...changes.deleted].sort()
         },
         // Re-derive the debt ledger against the FINAL tree after a converged
-        // autofix (nexttask 6). Only ever reached from inside the gate's own
+        // autofix. Only ever reached from inside the gate's own
         // resolution loop, so it needs no `verify work` switch of its own.
         // Same section, same cancel: this re-runs every ACCEPT-debt VERIFY command
         // against the final tree, each under its own 300s cap.
@@ -1547,7 +1547,7 @@ export function requestAutoCancel(): void {
 /**
  * Report a stash pushed during one task and left behind.
  *
- * An orphan stash later pops as an unresolvable conflict (mx5 run 6), so the
+ * An orphan stash later pops as an unresolvable conflict, so the
  * capture before the task and this check after it are ONE fact. They were a local
  * and a check ~120 lines and three returns apart, which is how the check came to
  * run only on the success path. Best-effort: never throws, so it cannot mask the
@@ -1613,8 +1613,8 @@ export async function runAutoLoop(
             const next = entries.find(e => !e.done)
             if (!next) {
                 // FINAL INTEGRATION GATE: every task passed its own per-slice gates,
-                // but per-slice green has shipped a dead app twice (mx5 runs 3 & 5:
-                // statics clean, every protected route 500ing). The run-level stage
+                // but per-slice green ships dead apps: statics clean, every
+                // protected route 500ing. The run-level stage
                 // runs the project's OWN whole-repo commands once, unaided, before the
                 // run is declared complete, and resolves a FAIL with the user. It
                 // touches none of this loop's per-task state — see run-final-gate.ts —
@@ -1625,7 +1625,7 @@ export async function runAutoLoop(
                     runId: id,
                     // The parent plan (the task list) is what lets the gate tell a
                     // served app from a CLI — the boot check requires a listener only
-                    // for the former (mx5 run 10: a CSS watcher satisfied "still alive").
+                    // for the former.
                     planText: body,
                     taskCount: entries.length
                 })
@@ -1643,8 +1643,7 @@ export async function runAutoLoop(
                 return
             }
             // REFUSE to start on a conflicted tree: an unmerged index dooms every
-            // commit ahead and a `git add -A` would silently mis-resolve it. mx5
-            // run 6 burned a full impl turn + three verify passes exactly here.
+            // commit ahead and a `git add -A` would silently mis-resolve it.
             const unmerged = deps.unmergedPaths ? await deps.unmergedPaths(cwd) : []
             if (unmerged.length > 0) {
                 await updateTaskFrontMatter(cwd, id, {state: 'failed'})
@@ -1739,7 +1738,7 @@ export async function runAutoLoop(
                     const policy = RUN_END_POLICY[res.end.kind]
                     // Demote the INNER task file: it reads `completed` from
                     // spec-handoff, and leaving it that way is how a failed run's task
-                    // file claimed success in the run 6 audit.
+                    // file claims success after the run failed.
                     if (policy.resumable) await markResumable(cwd, res.taskId)
                     // The PLAN fails only on a fault. A declined-steer interrupt leaves
                     // it in progress so /task-auto-resume re-delivers this task's spec.
@@ -1810,19 +1809,19 @@ export async function runAutoLoop(
                     )
                     return
                 }
-                // ROOT-CAUSE REPAIR (mx5 run 14 item 5): the gate may have attributed a
+                // ROOT-CAUSE REPAIR: the gate may have attributed a
                 // FAIL to a pre-existing defect in a file some OTHER task created. It can
                 // only QUEUE that finding — mutating the plan is this loop's job. Drain
                 // the queue and splice a scoped repair step in right after the step that
                 // just finished, so the defect is fixed BEFORE the next dependent task
-                // trips over it too (run 14 recorded the same `test/teardown.ts` cause
-                // twice, scheduled nothing, and the bug outlived ~24h of the run).
+                // trips over it too. Recording the same cause twice and scheduling
+                // nothing lets one defect outlive most of a run.
                 await schedulePendingRepairs(cwd, id, next.index, active, deps)
             } finally {
                 // EVERY exit from this attempt passes here — the two mid-attempt
-                // returns and a throw included. The check used to sit at the very
-                // end of the fall-through, ~120 lines and three returns below the
-                // capture, so it ran only when the task SUCCEEDED and the gate said
+                // returns and a throw included. Sitting at the end of the
+                // fall-through instead, below the capture and three returns, it
+                // would run only when the task SUCCEEDED and the gate said
                 // `done`. On a failed or interrupted task the user is told to run
                 // /task-auto-resume, straight onto the landmine the guard exists to
                 // name. The pairing is structural now, not positional.
@@ -1926,10 +1925,10 @@ async function handleTaskAutoResume(args: string, ctx: ExtensionCommandContext):
     try {
         await withRun(ctx, {onCancel: terminalCancel}, async () => {
             // Reuse the interrupted run's research-cache id, dropping only the entries whose
-            // own package moved version (F10). mx5 run 13 resumed three times and each
-            // resume's fresh id discarded a working 201-entry cache; run 14 then showed a
-            // whole-file freshness gate can never hold on a greenfield run that installs
-            // packages as it goes, so invalidation is per entry. See resumeResearchRun.
+            // own package moved version. A fresh id per resume discards the whole
+            // working cache, and a whole-file freshness gate can never hold on a
+            // greenfield run that installs packages as it goes — so invalidation is
+            // per entry. See resumeResearchRun.
             const research = await resumeResearchRun(cwd, getConfig().researchCache)
             if (research.reused) {
                 logPlanDebug(

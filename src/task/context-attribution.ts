@@ -1,25 +1,25 @@
 /**
- * Deterministic detector for the F-1 laundering shape: a CONTEXT bullet that asserts
+ * Deterministic detector for the laundering shape: a CONTEXT bullet that asserts
  * external API USAGE SEMANTICS under an attribution cue that no EXTERNAL CONTEXT block
  * can actually support.
  *
- * THE SHAPE, from mx5 run 15 (TASK_0027.md, verbatim):
+ * THE SHAPE:
  *
  *   - The `hono` dependency is pinned at `^4.12.31` in package.json, and the external
  *     context confirms `hc<AppType>` pattern with base URL `/api` for same-origin
  *     relative paths works correctly (per Hono RPC docs LIVE data).
  *
- * worker:context has tools `read,grep` only (phases.ts:623) — it cannot consult any
- * documentation — so the base-URL claim was necessarily from model memory. It shipped
- * into TASK_0027's CONSTRAINTS and ACCEPTANCE, the implementation obeyed it exactly
- * (`hc<AppType>('/api')` plus `api.api.auth.login.$post()`), and every request went to
- * `/api/api/...` ⇒ 404 ⇒ the product's entire API surface was dead.
+ * The `worker:context` spec in phases.ts gives that worker `read,grep` and nothing
+ * else — it cannot consult any documentation — so a base-URL claim like that one is
+ * necessarily from model memory. It then ships into a task's CONSTRAINTS and
+ * ACCEPTANCE, the implementation obeys it exactly, and every request goes to the
+ * wrong path.
  *
  * WHY THE OBVIOUS TEST DOES NOT WORK. "Flag a bullet whose package has no EXTERNAL
  * CONTEXT block" misses this case: EXTERNAL CONTEXT *did* carry a `### npm: hono` block.
  * That block contains version numbers and nothing else, so it cannot support a claim
  * about what a base URL MEANS — yet it lends the sentence an air of having been checked.
- * That is the whole mechanism (F-1e): one citable fact, the pinned version, fused in a
+ * That is the whole mechanism: one citable fact, the pinned version, fused in a
  * single sentence with an uncitable one under a shared attribution. The true half
  * launders the false half.
  *
@@ -34,23 +34,21 @@
  * That rule makes a service block authoritative for "current API surface, deprecation
  * status, and replacement systems", i.e. versions/status/names. A service block is a
  * title + URL + one-line description per result (service-blocks.ts:10); it cannot carry
- * what a parameter MEANS. This matters concretely: TASK_0027's enrichment produced
- * exactly one service block, `### service: Hono RPC client` (extractEnrichTargets on the
- * verbatim refined task yields services=[Hono RPC client], urls=[], packages=[any,api,hc]).
- * Were `service` treated as source-capable for semantics, the subject string "Hono RPC
- * client" would match the package `hono` and the fatal bullet would pass unflagged — the
- * detector would be unable to catch the very defect it exists for.
+ * what a parameter MEANS. This matters concretely: a task whose only external
+ * context is one block named `### service: Hono RPC client` would, were `service`
+ * treated as source-capable for semantics, have that subject string match the
+ * package `hono` — and the fatal bullet would pass unflagged. The detector would
+ * be unable to catch the defect it exists for.
  *
  * A bullet is FLAGGED iff all three hold:
- *   1. it carries an attribution cue ("per ... LIVE data", "the external context
- *      confirms", "docs confirm", "per the official docs", ...);
+ *   1. it carries an attribution cue ("per... LIVE data", "the external context
+ *      confirms", "docs confirm", "per the official docs",...);
  *   2. it asserts API usage semantics — how something is called, what a parameter means,
  *      what a default is, what behaviour results — as opposed to a version or a status;
  *   3. no `### url:` or `### docs:` block exists for any package the bullet names.
  *
- * Pure and side-effect free; unit-tested in context-attribution.test.ts against the real
- * run-15 bullets, including the three legitimate attributed bullets (TASK_0007, _0012,
- * _0031) that must NOT be flagged.
+ * Pure and side-effect free; unit-tested in context-attribution.test.ts, including
+ * legitimately attributed bullets that must NOT be flagged.
  */
 
 /** A block that actually appears in an EXTERNAL CONTEXT header. */

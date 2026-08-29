@@ -2,7 +2,7 @@
  * SCOPE-SHRINK detection for the final-gate fix pass.
  *
  * The label guard (final-gate-fix.ts) compares the SET of discoverable gate
- * commands before and after the fix child. mx5 run 19 walked straight through
+ * commands before and after the fix child. Without it a fix child walks straight through
  * it: the autofix rewrote `"test": "AGENT=1 bun test"` to
  * `"AGENT=1 bun test ./test"`, the label `bun run test` existed before and
  * after, the set difference was empty, and the gate re-ran a suite that no
@@ -21,7 +21,7 @@
  *      `--testPathIgnorePatterns`, `-x`, …);
  *   4. a config-file argument is swapped for one the fix pass itself created.
  *
- * With ONE excuse, measured on mx5@a9c6145 and documented at
+ * With ONE excuse, documented at
  * `excusedByRelocation`: rule 3 does not fire when the same pass hands the
  * excluded input to another command the gate already runs.
  *
@@ -313,7 +313,7 @@ export function makefileRecipe(makefileText: string, target: string): string | n
 // ── the rules ───────────────────────────────────────────────────────────────
 
 /**
- * RELOCATION EXCUSE (rule 3 only, measured on mx5@a9c6145).
+ * RELOCATION EXCUSE.
  *
  * That autofix rewrote `test` from `AGENT=1 bun test` to `AGENT=1 bun test
  * --path-ignore-patterns '**\/*.spec.tsx' && playwright test -c

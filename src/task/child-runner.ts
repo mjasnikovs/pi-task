@@ -52,22 +52,19 @@ export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 resta
 /**
  * Optional wall-clock bound on ONE spawn of a phase child. DEFAULT: OFF.
  *
- * It used to default to 600_000, sized against measured HEALTHY planning
- * children on one local 27B backend (decompose 89s, whole plan phase 321s) on
- * the reasoning that ten minutes was a 3-6x margin over honest work.
+ * WHY OFF, AND NOT A NUMBER. A wall clock on a model child measures the
+ * MODEL'S SPEED, not its health. The same planning child that answers well in
+ * seconds on one backend takes many minutes on another, or on the same backend
+ * with thinking turned on — so any cap generous enough to be safe is too loose
+ * to catch anything, and any cap tight enough to catch a runaway kills healthy
+ * work. Assume a model that emits one token per second and the number has no
+ * defensible value at all.
  *
- * That premise was measured and is false. Replaying ONE captured auto-decompose
- * request against the same backend with reasoning ON, n=10, everything else
- * byte-identical (2026-08-17): all ten answered correctly with 26-42 titles, and
- * every one took 610-927s. The cap would have killed 10 out of 10 GOOD runs and
- * then failed the phase with PhaseTimeoutError. The number was not measuring the
- * pathology, it was measuring one model's speed on one day.
- *
- * The runaway it was there to catch — a decompose child that ran 16m23s at
- * 117,370 of a 120,064-token window, forward-paging past the loop detector — is
- * now caught by StallDetector (stall-detector.ts), which bounds NON-PROGRESS and
- * CONTEXT CHURN instead of elapsed seconds. Both of those are properties of the
- * pathology, so neither has to be re-tuned for a slower model or a bigger repo.
+ * The runaway it was there to catch — a child forward-paging through its whole
+ * context window, past the loop detector, never going to return — is caught by
+ * StallDetector (stall-detector.ts) instead. That bounds NON-PROGRESS and
+ * CONTEXT CHURN, both properties of the pathology itself, so neither has to be
+ * re-tuned for a slower model or a bigger repo.
  *
  * The value and the plumbing stay for a caller that genuinely wants a hard stop
  * (tests inject a short one), but nothing sets it in production. Pass
@@ -297,7 +294,7 @@ export async function runChild({
         {
             mode: 'json-events',
             // A hung model stream reports nothing at all, so without this the
-            // phase child waits forever (mx5 run 14: ~2.9h of dead air). The kill
+            // phase child waits forever. The kill
             // is reported below as a connection-class cause, which routes it into
             // the retry/backoff path this file already has for a LOUD disconnect.
             streamInactivityMs: getConfig().streamInactivityMs,
@@ -410,11 +407,10 @@ export interface PhaseDeps {
      * the substitute answers directly and NONE of those guards run.
      *
      * The child's NAME is the first parameter because the name is what a caller
-     * branches on and what a test wants to assert. It used to be discarded before
-     * reaching the only injectable boundary (`spawn`), so a phase test had to
-     * reconstruct it by matching prompt PROSE against prompts.ts — which made
-     * prompt copy load-bearing test infrastructure in a codebase whose practice is
-     * rewording prompts and A/B-ing them.
+     * branches on and what a test wants to assert. Discarded before it reaches
+     * the only injectable boundary (`spawn`), a phase test has to reconstruct it
+     * by matching prompt PROSE against prompts.ts — which makes prompt copy
+     * load-bearing test infrastructure in a codebase that rewords prompts.
      *
      * `spawn` stays: the ladder's OWN tests must drive a real process to exercise
      * the rungs. This seam is for callers to whom the child is a premise.
@@ -423,13 +419,12 @@ export interface PhaseDeps {
 
     // ─── Research + auto-answer seams ────────────────────────────────────────
     //
-    // These used to be two trailing `= {}` dep bags on `phaseResearch` and
-    // `phaseAutoAnswer` (`PhaseResearchDeps`, `PhaseAutoAnswerDeps`). Nothing in
-    // production ever passed either — `PhaseConfig.run` takes `(deps, pc)`, so a
-    // row physically could not reach a third parameter — which left nine seams
-    // that only a direct call could use and ~30 routing decisions in two suites
-    // keyed on prompt PROSE. They belong here for exactly the reason `runChild`
-    // does: this is the interface a phase's children are a premise behind, and
+    // These belong here rather than in trailing `= {}` dep bags on
+    // `phaseResearch` and `phaseAutoAnswer`. `PhaseConfig.run` takes
+    // `(deps, pc)`, so a row physically cannot reach a third parameter — a seam
+    // parked there is reachable only by a direct call, and tests fall back to
+    // routing on prompt PROSE. Same reason `runChild` is here: this is the
+    // interface a phase's children are a premise behind, and
     // it is already threaded end to end from `TaskRunnerOptions`.
     //
     // Each defaults to the real implementation when absent, so production wiring
@@ -473,13 +468,10 @@ export interface PhaseDeps {
  * The subset of `PhaseDeps` a CALLER may supply — every injectable seam, derived
  * by naming what the runner owns instead of by listing what it does not.
  *
- * `TaskRunnerOptions` used to declare `spawnFn`, `runChild`, `runWorker` and a
- * seven-name `Pick` called `lookups` separately; `RunSingleTaskOptions` re-picked
- * all four, `runSingleTask` re-forwarded each by name, and the constructor spread
- * them back together. Four coordinated edits, none of which failed to compile if
- * you skipped one — the exact indictment this codebase already recorded against
- * `ConfigItem`. Four seams (`timeoutMs`, `sleepFor`, `childExtensions`,
- * `logDebug`) had in fact been left behind, so a runner-driven test of the
+ * Declaring the seams separately on `TaskRunnerOptions`, re-picking them on
+ * `RunSingleTaskOptions`, re-forwarding each by name and spreading them back
+ * together is four coordinated edits, none of which fails to compile if you skip
+ * one. Seams get left behind that way, and a runner-driven test of the
  * connection-error rung really slept and the debug trail could not be asserted at
  * all. Derived by `Omit`, a NEW seam field joins this with no second edit.
  */
@@ -591,7 +583,7 @@ async function triageChildResult(
  *
  * THREE RUNAWAY GUARDS ride the same budget, because this is the runner every
  * /task-auto planning child goes through (clarify, decompose, coverage,
- * contract-extract) and until mx5-n 2026-08-14 it had none:
+ * contract-extract), and an unguarded planning child can burn a whole run:
  *   • a LoopDetector, so an identical repeated tool call is killed and
  *     re-prompted instead of being allowed to fill the context window;
  *   • a StallDetector, the backstop for the varied-args thrash the loop
@@ -666,10 +658,10 @@ export async function runPhaseChild(
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
         const stall = new StallDetector()
-        // Arm the churn rule BEFORE the first tool call. The window used to reach
-        // the detector only through a context snapshot, and pi's stream never
-        // carries one, so it was always 0 and rule 2 never fired (issue #16). The
-        // parent knows the value at spawn time — say it then, not later.
+        // Arm the churn rule BEFORE the first tool call. pi's stream carries no
+        // context snapshot, so a detector that waited for one would sit at 0 and
+        // rule 2 would never fire (GitHub issue #16). The parent knows the value
+        // at spawn time — say it then, not later.
         stall.noteContext(deps.contextWindow ?? 0)
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
@@ -782,8 +774,8 @@ export function prependHint(hint: string | null, prompt: string): string {
  * Append one line to the task file's `loop events` section.
  *
  * Best-effort by contract: it runs for EVERY phase child now that there is one
- * loop, and the six sites that used to reach the un-trailed wrapper do not all
- * own a task file on disk (a scripted harness, a bare unit deps bag). A trail
+ * loop, and not every caller owns a task file on disk (a scripted harness, a
+ * bare unit deps bag). A trail
  * that cannot be written must cost the phase nothing — the loop kill itself is
  * already reported through the debug log and the thrown LoopExhaustedError.
  */
@@ -812,8 +804,8 @@ async function appendLoopEvent(
 /**
  * The two things a phase child can disagree about. Everything else — the loop
  * and stall detectors, the wall clock, the loop trail, the triage ladder and its
- * budget — is the one loop's, because the two wrappers that used to differ
- * disagreed on nothing else that was ever observable.
+ * budget — is the one loop's. These two are the only differences that were ever
+ * observable from outside.
  */
 export interface PhaseChildOptions {
     /**
@@ -852,11 +844,9 @@ async function runDegradedFinalAttempt(
     loopHistory: LoopHit[]
 ): Promise<string> {
     deps.logDebug?.(`${name}: loop budget exhausted — degrading to a no-tools final attempt`)
-    // BEHAVIOUR DELTA. This attempt now runs under the same wall clock as the
-    // strikes that led here. It used to pass `deps.signal` raw — one of the
-    // three drifts that came of reaching past bare `undefined`s to the later
-    // positionals — so the one attempt made after a loop budget was spent was
-    // also the one attempt that could hang forever.
+    // This attempt runs under the same wall clock as the strikes that led here.
+    // Passing `deps.signal` raw instead would make the one attempt taken after a
+    // loop budget is spent the one attempt that can hang forever.
     const clock = phaseTimeout(deps.signal, deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS)
     let r: PhaseRunResult
     try {

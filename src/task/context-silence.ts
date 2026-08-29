@@ -6,18 +6,18 @@
  * LEGITIMATE empty answer (the task truly had nothing worth a bullet). Only the former
  * is a defect worth a lever.
  *
- * WHAT THE RECORDED EVIDENCE SHOWED (48 reps, three runs, 2026-07-21/22). Every silent
- * rep — 5/48 — fell into one of two failure shapes, NONE legitimately empty:
+ * WHY A SILENT WORKER IS NEVER LEGITIMATELY EMPTY. Every silent rep observed
+ * fell into one of two failure shapes:
  *
- *   LOOP_DEGRADE (3/5): the worker thrashed the SAME grep 5× until the loop-killer fired
+ *   LOOP_DEGRADE: the worker thrashed the SAME grep until the loop-killer fired
  *     (exit 143), leaving only the degrade banner in place of a section. Verbatim:
- *       "(degraded: research CONTEXT worker stuck in a loop — called grep(...) ×5 ...)"
+ *       "(degraded: research CONTEXT worker stuck in a loop — called grep(...) ×5...)"
  *
- *   GENERATION_GARBAGE (2/5): the worker exited 0 in ~3.6s and emitted a hallucinated
+ *   GENERATION_GARBAGE: the worker exited 0 almost immediately and emitted a hallucinated
  *     non-bullet fragment instead of context. Verbatim: "Users deleted" and
- *       "[SYSTEM NOTE This message received a positive feedback reward/+20 ...]"
+ *       "[SYSTEM NOTE This message received a positive feedback reward/+20...]"
  *
- * The fixture (mx5 pre-TASK_0027 tree) is IDENTICAL across all reps and non-silent reps
+ * The fixture is IDENTICAL across all reps and non-silent reps
  * reliably emit 11–21 architectural bullets from it, so the input-empty rival is refuted:
  * the content was always there; a silent rep dropped it. Both shapes are therefore genuine
  * loss. This classifier keys on those shapes so the same verdict is reproducible and so a
@@ -101,8 +101,7 @@ export function classifyContextSilence(contextText: string, workerLog = ''): Sil
 }
 
 /**
- * Wilson score interval for a binomial proportion — the CI STEP 0 reports on the silent
- * and genuine-loss rates. Normal-approximation (Wald) intervals are badly wrong at the
+ * Wilson score interval for a binomial proportion. Normal-approximation (Wald) intervals are badly wrong at the
  * small counts and near-boundary rates this measurement lives at; Wilson is not.
  */
 export function wilsonInterval(

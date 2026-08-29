@@ -226,7 +226,7 @@ export const spawnCommand: CommandRunner = spec =>
 /**
  * A non-zero exit whose output shows an EXTERNAL runtime dependency is missing, not
  * a code fault: a browser suite (Playwright/Cypress) whose browser binaries or system
- * libraries were never installed here (mx5 run 10 item 2: `test:ct` must run in the
+ * libraries were never installed here (a component-test runner must run in the
  * gate, but on a box with no Playwright browsers it is an environment gap, not a FAIL).
  * These exit non-zero (not 127), so they need output-shape recognition to skip.
  */
@@ -262,7 +262,7 @@ export type CommandVerdict =
  * `spawn-failed` is first and is kept distinguishable from every other row by its
  * id: a tool-level gap (127 inside the chain, a missing browser, a timeout) means
  * the runner demonstrably RAN, and only genuine spawn failures feed the gate's
- * full-blindness guard (mx5 run 16 — see observabilityGapFailure).
+ * full-blindness guard (see observabilityGapFailure).
  */
 const GAP_RULES: ReadonlyArray<{
     id: CommandGapId
@@ -384,15 +384,15 @@ function leadingBin(line: string): string | null {
 }
 
 /**
- * Re-run one VERIFY-block command line (nexttask 5) under the gate's existing
+ * Re-run one VERIFY-block command line under the gate's existing
  * env-gap contract, so a debt whose reason NAMES that command can be closed by the
  * command itself rather than by a judgement about it.
  *
- * Runs through `sh -c` because a VERIFY line is a shell line, not an argv: run 19's
+ * Runs through `sh -c` because a VERIFY line is a shell line, not an argv: a
  * is `AGENT=1 bun test test/listings.test.ts`, and env prefixes, `&&` and redirects
  * are all ordinary there. The leading command word is still resolved through
  * runner-resolve so a login-shell-stripped PATH cannot make every re-run look like a
- * gap (mx5 run 16's blindness, one level down).
+ * gap.
  *
  * The asymmetry is the point: only exit 0 is conclusive. Every other ending — real
  * failure, missing tool, unreachable database, timeout, no POSIX shell — leaves the

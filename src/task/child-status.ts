@@ -2,7 +2,7 @@
  * ChildStatus — the live status of the child pi currently running under a
  * status loader: its latest output line and its context usage.
  *
- * Four sites used to keep this state by hand — `let lastLine; let contextUsage;`
+ * Without it each spawn site keeps this state by hand — `let lastLine; let contextUsage;`
  * plus two callbacks (`onChildOutput` writes the line, `onContextUsage` folds a
  * snapshot through `resolveContextUsage` with the parent window), a reset before
  * every child, and a loader whose every tick read both — in `/task-auto`'s

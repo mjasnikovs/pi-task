@@ -30,14 +30,14 @@
  *     durable. Cancel is observed on the far side, at loop-top.
  */
 
-/** Every place the cancel flag is polled. Kept as a closed union so the A/B
- *  harness and the tests enumerate the same set the loop does. */
+/** Every place the cancel flag is polled. Kept as a closed union so the tests
+ *  enumerate the same set the loop does. */
 export type CancelCheckpoint = 'loop-top' | 'pre-task' | 'pre-final-gate' | `phase:${string}`
 
 let requested = false
 
 /** Checkpoints actually reached since the last reset, in order. Instrumentation
- *  for the A/B harness and the unit tests — never read by the loop itself. */
+ *  for the tests — never read by the loop itself. */
 const crossed: CancelCheckpoint[] = []
 
 export function requestCancel(): void {
@@ -61,7 +61,7 @@ export function resetCancel(): void {
     requested = false
 }
 
-/** Drop the recorded checkpoint trail (A/B + tests). */
+/** Drop the recorded checkpoint trail. */
 export function resetCheckpointTrail(): void {
     crossed.length = 0
 }
@@ -75,14 +75,14 @@ export function resetCheckpointTrail(): void {
  */
 export function cancelCheckpoint(where: CancelCheckpoint): boolean {
     crossed.push(where)
-    // A/B ONLY (scripts/cancel-latency-ab.ts): reproduce the pre-checkpoint
-    // behaviour — the flag was observed at the loop top and nowhere else — so the
-    // two arms differ in exactly the thing under test and share every other path.
+    // CANCEL_AB_ARM=baseline reproduces the behaviour before these checkpoints
+    // existed: the flag is observed at the loop top and nowhere else. Set only by
+    // a measuring harness, so the two arms differ in exactly one thing.
     if (process.env.CANCEL_AB_ARM === 'baseline' && where !== 'loop-top') return false
     return requested
 }
 
-/** Checkpoints crossed since the last reset (A/B + tests). */
+/** Checkpoints crossed since the last reset. */
 export function checkpointsCrossed(): readonly CancelCheckpoint[] {
     return crossed
 }

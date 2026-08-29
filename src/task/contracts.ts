@@ -2,7 +2,7 @@
  * contracts — a per-run registry of CROSS-SLICE INTERFACE FACTS, recorded once at
  * decompose time and read (never written) by every downstream slice.
  *
- * The failure this serves (mx5 run 8, F3 — the dominant shipped-defect class): the
+ * The failure this serves: the
  * SOURCE design pins an interface contract (a SPLIT route table: `POST
  * /api/listings/:id/photos` but `GET/DELETE /api/photos/:id`). One slice's refine
  * FABRICATED a uniform mount table ("/api/photos → photosRoutes") with no anchor in
