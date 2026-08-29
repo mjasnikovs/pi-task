@@ -135,11 +135,7 @@ export interface VerifyOutcome {
  * that reached the ledger.
  */
 export type VerifyFailClass =
-    | 'repo-health'
-    | 'static-checks'
-    | 'unobserved'
-    | 'model-verdict'
-    | 'harness-fault'
+    'repo-health' | 'static-checks' | 'unobserved' | 'model-verdict' | 'harness-fault'
 
 /**
  * The prefix each class MINTS, stated once.

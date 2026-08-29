@@ -98,12 +98,7 @@ export class FetchAndCleanError extends Error {
     constructor(
         message: string,
         public readonly kind:
-            | 'invalid-url'
-            | 'http-error'
-            | 'not-html'
-            | 'too-large'
-            | 'network'
-            | 'aborted',
+            'invalid-url' | 'http-error' | 'not-html' | 'too-large' | 'network' | 'aborted',
         public readonly cause?: unknown
     ) {
         super(message)

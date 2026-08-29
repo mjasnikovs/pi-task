@@ -175,8 +175,7 @@ test('announceTerminal fans out to toast, remote notify and push, with the same 
     announceTerminal(ctx, 'TASK_0001 completed.', 'info')
     expect(notified).toEqual([{msg: 'TASK_0001 completed.', level: 'info'}])
     const notify = getBridge().sent.find(m => (m as {type: string}).type === 'notify') as
-        | {message: string; level: string}
-        | undefined
+        {message: string; level: string} | undefined
     expect(notify?.message).toBe('TASK_0001 completed.')
     expect(notify?.level).toBe('info')
     expect(pushes).toEqual([{title: 'Task finished', body: 'TASK_0001 completed.', tag: 'pi-end'}])

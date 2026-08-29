@@ -248,11 +248,7 @@ export const INFRA_GAP_OUTPUT_RE =
 
 /** Which way a command failed to tell us anything. */
 export type CommandGapId =
-    | 'spawn-failed'
-    | 'killed'
-    | 'command-not-found'
-    | 'missing-runtime'
-    | 'infrastructure'
+    'spawn-failed' | 'killed' | 'command-not-found' | 'missing-runtime' | 'infrastructure'
 
 export type CommandVerdict =
     /** Nothing was observed. Never fails a gate, never closes a debt. */

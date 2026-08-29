@@ -290,8 +290,7 @@ export interface PlanSessionDeps {
 }
 
 export type PlanOutcome =
-    | {kind: 'proceed'; entries: PlanEntry[]}
-    | {kind: 'cancelled'; entries: PlanEntry[]}
+    {kind: 'proceed'; entries: PlanEntry[]} | {kind: 'cancelled'; entries: PlanEntry[]}
 
 // ─── Pending question ────────────────────────────────────────────────────────
 

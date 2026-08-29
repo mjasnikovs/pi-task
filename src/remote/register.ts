@@ -104,9 +104,9 @@ export function registerRemote(pi: ExtensionAPI): void {
         )
         // Hands-off HTTPS: point Tailscale serve at our port so phones get a
         // secure context. Best-effort — any failure degrades to the http URL.
-        S.serveResult = await ensureTailscaleServe(S.server.port).catch(
-            (): ServeResult => ({state: 'unavailable'})
-        )
+        S.serveResult = await ensureTailscaleServe(S.server.port).catch((): ServeResult => ({
+            state: 'unavailable'
+        }))
         return S.server
     }
 

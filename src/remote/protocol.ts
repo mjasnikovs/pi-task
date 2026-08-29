@@ -125,10 +125,7 @@ export interface ClientClearHeld {
     type: 'clear_held'
 }
 export type ClientMessage =
-    | ClientChatMessage
-    | ClientPromptAnswer
-    | ClientInterrupt
-    | ClientClearHeld
+    ClientChatMessage | ClientPromptAnswer | ClientInterrupt | ClientClearHeld
 
 export function isClientMessage(x: unknown): x is ClientMessage {
     if (typeof x !== 'object' || x === null) return false

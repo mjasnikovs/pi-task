@@ -412,8 +412,7 @@ type RootCauseRouter = (
  * pass, a disabled gate or an accept-override leaves it false → flag-only.
  */
 type VerifyGateStep =
-    | {stop: GateResult}
-    | {proceed: {ctx: ExtensionCommandContext; cleanPass: boolean}}
+    {stop: GateResult} | {proceed: {ctx: ExtensionCommandContext; cleanPass: boolean}}
 
 /**
  * The VERIFY resolution loop: run the task's verification against the finished

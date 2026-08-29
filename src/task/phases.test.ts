@@ -3661,11 +3661,10 @@ describe('PhaseResearchDeps.runWorker seam', () => {
         // sawOutput:false means the child died at startup. One boolean; before the
         // seam this needed a process that exits without writing a byte.
         await expect(
-            runWithWorkers(
-                (label): RunWorkerResult =>
-                    label === 'worker:tooling' ?
-                        result({text: '', sawOutput: false, groundingRetrievalCount: 0})
-                    :   result()
+            runWithWorkers((label): RunWorkerResult =>
+                label === 'worker:tooling' ?
+                    result({text: '', sawOutput: false, groundingRetrievalCount: 0})
+                :   result()
             )
         ).rejects.toThrow(/TOOLING/i)
     })

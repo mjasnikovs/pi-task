@@ -27,12 +27,7 @@
 
 /** The gate outcomes a command has to act on. Mirrors runGatesForTask's union. */
 export type TerminalOutcomeKind =
-    | 'done'
-    | 'paused'
-    | 'session-cancelled'
-    | 'cancelled'
-    | 'interrupted'
-    | 'failed'
+    'done' | 'paused' | 'session-cancelled' | 'cancelled' | 'interrupted' | 'failed'
 
 /** What the message needs to name. */
 export interface TerminalMessageContext {
