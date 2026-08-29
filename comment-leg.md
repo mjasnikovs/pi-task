@@ -84,7 +84,7 @@ line counts as a comment line but opens no block.
 | `src/task/decompose-granularity.ts` | 149 | 102 | 11 | true |
 | `src/task/deep-render-check.ts` | 1018 | 232 | 60 | true |
 | `src/task/dropped-input.ts` | 40 | 13 | 3 | true |
-| `src/task/enforce-attribution.ts` | 236 | 109 | 25 | false |
+| `src/task/enforce-attribution.ts` | 236 | 109 | 25 | true |
 | `src/task/enforce-guidelines.ts` | 440 | 183 | 29 | false |
 | `src/task/enrichment.ts` | 95 | 4 | 1 | false |
 | `src/task/env-notes.ts` | 222 | 83 | 14 | false |

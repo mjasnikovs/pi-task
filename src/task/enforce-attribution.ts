@@ -7,12 +7,12 @@
  *     -  setApiError((usersData).error ?? 'Failed to load users')
  *     +  setApiError(usersData.error ?? 'Failed to load users')
  *
- * and the differential re-verify can then FAIL on a component test in a file that
- * change cannot reach — CT bundles per story, so the import graph never touches it.
- * The differential reverts the enforce commit anyway. The defect was real and
- * PRE-EXISTING, the final gate fixes it later and re-makes the identical paren
- * change, and the cost is one correct change destroyed plus a permanent false
- * verify-FAIL debt written against work that was fine.
+ * and the differential re-verify can still FAIL — on a test in a file that change
+ * cannot reach, because the runner bundles per story and the import graph never
+ * touches it. The differential reverts the enforce commit anyway. The defect was
+ * real and PRE-EXISTING, a later pass fixes it and re-makes the identical change,
+ * and the cost is one correct edit destroyed plus a false verify-FAIL debt written
+ * against work that was fine.
  *
  * The mechanism is not broken; it is asked the wrong question. The root-cause
  * channel (root-cause-repair.ts) attributes against `scope: 'committed'` — the
@@ -24,38 +24,49 @@
  *
  * So the filter here is mechanical and one-sided:
  *
- *   - the files the FAIL text NAMES are extracted, paths AND bare basenames. A
- *     reason naming `MyListings.spec.tsx:186` carries no separator and is invisible
- *     to root-cause-repair.ts's path-token regex, so basenames are not optional;
+ *   - the files the FAIL text NAMES are extracted, paths AND bare basenames. This
+ *     is not belt-and-braces: run against root-cause-repair.ts's own
+ *     `PATH_TOKEN_RE`, a reason naming `MyListings.spec.tsx:186` matches NOTHING,
+ *     because that pattern needs a `/`. Basenames are not optional here;
  *   - each is compared against the enforce commit's own file set, by path suffix
  *     and by RELATED STEM (`Admin.tsx` ~ `Admin.spec.tsx` ~ `Admin.stories.tsx`),
  *     so a regression in a touched file's own test still counts as overlap;
  *   - DISJOINT ⇒ keep the edits and route the defect. Anything else — an unknown
- *     enforce diff, a FAIL text naming no file at all, any overlap — reverts,
- *     which is the pre-existing behaviour. Never keep on ignorance.
+ *     or empty enforce diff, a FAIL text naming no file at all, any overlap —
+ *     reverts. Never keep on ignorance.
+ *
+ * Run across every branch: a disjoint reason KEEPs and names the file to blame;
+ * an overlap by path and an overlap by related stem (`Admin.spec.tsx` against a
+ * touched `src/client/pages/Admin.tsx`) both REVERT with the overlap recorded;
+ * and a reason naming no file, a null enforce diff and an empty one all REVERT.
+ * Exactly one branch keeps, and it requires positive evidence.
  *
  * Keeping the edits must not mean losing the finding: the caller still records the
  * debt and still queues the repair.
  *
  * THE HONEST WEAKNESS. This only fires when the FAIL text names a file. A type
  * error does — the compiler prints the path — but a failing unit test often names
- * the UNIT instead ("The MyListings component test \"edit link navigates…\" fails"),
- * with no path and no extension anywhere. Those fall through to the revert, which
- * costs exactly the behaviour that shipped before. That is the deliberate half of
- * the trade: a miss changes nothing, while a false KEEP would ship a real
- * regression. Widening the extractor to accept a bare identifier matching a tracked
- * file's stem would catch more, and is NOT wired: it resolves prose nouns to files,
- * and its false-positive mode is unexercised.
+ * the UNIT instead ("The MyListings component test fails"), with no path and no
+ * extension anywhere. Confirmed: that reason extracts nothing and REVERTs with
+ * `no-file-named`, which is exactly the behaviour that shipped before this filter
+ * existed.
+ *
+ * That is the deliberate half of the trade: a miss changes nothing, while a false
+ * KEEP would ship a real regression. Widening the extractor to accept a bare
+ * identifier matching a tracked file's stem would catch more, and is NOT wired: it
+ * resolves prose nouns to files, and its false-positive mode is unexercised.
  */
 
 /** A path-like token: at least one separator, ending in a file name. */
 const PATH_TOKEN_RE = /(?:[\w.@~-]+\/)+[\w.@-]+\.\w+/g
 
 /**
- * A bare file name with a code-ish extension. Deliberately extension-gated: an
- * ungated `\w+\.\w+` matches prose ("e.g.", "v1.2"), object access (`usersData.error`
- * — which an enforce diff can easily contain) and assertion chains
- * (`toBeVisible()`), and every one of those would be a phantom "named file".
+ * A bare file name with a code-ish extension. Deliberately extension-gated, and
+ * the gate does real work: run against an ungated `\w+\.\w+`, the prose "e.g.", a
+ * version "v1.2", the object access `usersData.error` and method chains like
+ * `page.locator` or `cy.get` ALL match, and every one would be a phantom "named
+ * file". Through this pattern none of them extract anything, while
+ * `MyListings.spec.tsx:186` and `src/server/routes/photos.ts` both do.
  */
 const BARE_FILE_RE =
     /\b[\w@-]+(?:\.[\w@-]+)*\.(?:tsx?|jsx?|mtsx?|ctsx?|mjs|cjs|vue|svelte|astro|py|go|rs|rb|java|kt|kts|cs|php|swift|scala|c|h|cc|cpp|hpp|css|scss|sass|less|html?|json|jsonc|ya?ml|toml|sql|sh|bash|zsh|md|mdx|prisma|graphql|gql|proto|lock)\b/g
@@ -64,7 +75,8 @@ const BARE_FILE_RE =
 const TRAILING_POSITION_RE = /:(\d+)(?::(\d+))?$/
 /** Suffixes that make a file a sibling of another (test/story/type companions). */
 const COMPANION_SUFFIXES = ['.spec', '.test', '.stories', '.story', '.d', '.min']
-/** A pathological reason cannot make this scan unbounded. */
+/** A pathological reason cannot make this scan unbounded — 60 names in yields 24
+ *  out. */
 const MAX_NAMED = 24
 
 /** Strip `./`, leading slashes and surrounding whitespace. */
