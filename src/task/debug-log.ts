@@ -1,39 +1,46 @@
 /**
  * One place that decides whether a `.pi-tasks/*-debug.log` line gets written.
  *
- * THE TRAIL IS WRITE-ONLY. Nothing in pi-task reads these files back: `task-io.ts`
- * globs `TASK_NNNN.md` and skips everything else, and auto-commit's `snapshotTrail`
- * copies the bytes across a `reset --hard` without ever parsing them. Every producer
- * is a `logDebug?.(…)` / `log(…)` side effect whose return value is discarded. So
- * this gate cannot change what a run DOES — only what it can explain afterwards.
+ * THE TRAIL IS WRITE-ONLY in production. Nothing under src/ reads these files
+ * back: `task-io.ts` globs `TASK_NNNN.md` and skips everything else, and
+ * auto-commit's `snapshotTrail` copies the bytes across a `reset --hard` without
+ * ever parsing them. Every producer is a `logDebug?.(…)` / `log(…)` side effect
+ * whose return value is discarded. So this gate cannot change what a run DOES —
+ * only what it can explain afterwards. (Tests do read the trail back, which is why
+ * `flushPlanDebug` exists.)
  *
  * TWO KINDS OF LINE, and the distinction is the whole point of having three levels
  * rather than a boolean:
  *
- *   'stream' — what the child model said, and what its tools returned. Reproducible
- *              by re-running, useful while you are actively debugging, and the
- *              bulk of the bytes (a verify log is mostly child output, of
- *              which 521 are `↳` tool dumps and most of the rest is raw model text).
+ *   'stream' — what the child model said, and what its tools returned. It is the
+ *              bulk of the bytes by a wide margin, and it is REPRODUCIBLE: re-run
+ *              the child and you get it again. Useful while actively debugging,
+ *              worthless as a record.
  *
  *   'event'  — a decision or a guard action: which phase started, why a worker was
  *              retried or degraded, what the git-state guard restored, what a
- *              write-capable child changed on disk, why a gate returned FAIL. Ten-ish
- *              lines per task, and NOT reproducible — it is the only record that the
- *              guard fired at all. When a final-fix child deletes a source file
- *              and the `tree changes:` line is the reason anyone could tell.
+ *              write-capable child changed on disk, why a gate returned FAIL. A
+ *              handful of lines per task, and NOT reproducible — it is the only
+ *              record that the guard fired at all. If a final-fix child deletes a
+ *              source file, the `tree changes:` line is the only way anyone can
+ *              tell.
  *
- * Hence the default is `events`, not `off`: the quiet default users want costs the
- * chatter, not the audit trail.
+ * Hence the shipped default is `events`, not `off` (DEFAULT_DEBUG_LOGS in
+ * config.ts): the quiet default users want costs the chatter, not the audit trail.
+ * A machine-local `"debugLogs": "off"` still wins — this is a default, not a floor.
  */
 import * as fsp from 'node:fs/promises'
 import {getConfig, sanitizeDebugLogs, type DebugLogLevel} from '../config/config.js'
 
 /**
  * Escape hatch for reproducing a user's bug without walking them through
- * /task-config. Follows the existing `PI_TASK_*` instrumentation convention
- * (`PI_TASK_TYPEONLY_LOG`, `PI_REMOTE_PUSH_DEBUG`). An unrecognised value is
- * ignored rather than treated as `off` — a typo in an env var must not silently
- * throw the trail away.
+ * /task-config. Follows the `PI_TASK_*` instrumentation convention this codebase
+ * already uses in nine places, `PI_TASK_TYPEONLY_LOG` among them.
+ *
+ * An unrecognised value is IGNORED rather than treated as `off` — a typo in an env
+ * var must not silently throw the trail away. Run: `full` and `off` both take
+ * effect, surrounding whitespace is tolerated, and `verbose` falls through to the
+ * saved config instead of resolving to anything.
  */
 export const DEBUG_LOG_ENV = 'PI_TASK_DEBUG_LOG'
 
@@ -56,7 +63,9 @@ export function debugLogLevel(
     return getConfig().debugLogs
 }
 
-/** Whether a line of this kind should be written at `level`. */
+/** Whether a line of this kind should be written at `level`. The whole matrix:
+ *  `off` writes nothing, `full` writes both kinds, `events` writes events and
+ *  drops stream. */
 export function shouldLogDebug(kind: DebugLine, level: DebugLogLevel): boolean {
     if (level === 'off') return false
     if (level === 'full') return true
@@ -85,6 +94,9 @@ export function makeDebugAppender(
  * Wrap a raw append in the level gate. Returns `undefined` when the level is
  * `off`, so callers that hold an OPTIONAL `logDebug` leave it unset and every
  * `logDebug?.(…)` in the pipeline short-circuits before it formats a string.
+ *
+ * Run: undefined at `off`, a function otherwise, and at `events` it writes an
+ * event line while dropping a stream one.
  */
 export function gateDebugWriter(
     write: (msg: string) => void,

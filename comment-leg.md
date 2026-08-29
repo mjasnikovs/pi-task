@@ -79,7 +79,7 @@ line counts as a comment line but opens no block.
 | `src/task/contracts.ts` | 245 | 88 | 17 | true |
 | `src/task/coverage-loop.ts` | 390 | 171 | 19 | true |
 | `src/task/critique-probes.ts` | 221 | 95 | 24 | true |
-| `src/task/debug-log.ts` | 97 | 57 | 8 | false |
+| `src/task/debug-log.ts` | 97 | 57 | 8 | true |
 | `src/task/decompose-fidelity.ts` | 232 | 85 | 10 | false |
 | `src/task/decompose-granularity.ts` | 149 | 102 | 11 | false |
 | `src/task/deep-render-check.ts` | 1018 | 232 | 60 | false |
