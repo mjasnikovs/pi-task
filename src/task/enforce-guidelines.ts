@@ -37,20 +37,25 @@ export const GUIDELINE_FILENAMES = ['AGENTS.md', 'CLAUDE.md'] as const
  * The fix pass gets exactly two tools: `read` and `edit`. Deliberately no
  * `write`, `grep`, `find`, or `ls`.
  *
- *  - No `write` (and `edit` ENOENTs on a missing path) → the pass cannot create
- *    new files. Without this the local model, unable to run lint/tsc/tests, wrote
- *    hundreds of scratch "runner" scripts hoping to execute them — 864 junk files
- *    in one real run (see enforce-debug.log analysis). This is the load-bearing
- *    removal: dropping `write` is what stops the runaway file creation.
+ *  - No `write`, and `edit` cannot substitute for it: pi's edit tool calls
+ *    `access(absolutePath)` FIRST and throws `Could not edit file: <path>. Error
+ *    code: ENOENT.` before it ever reads. So the pass cannot create a new file at
+ *    all. This is the load-bearing removal — a model that cannot run lint, tsc or
+ *    tests will otherwise write scratch "runner" scripts by the hundred hoping to
+ *    execute them, and dropping `write` is what stops that.
  *  - No `grep`/`find`/`ls` → the pass cannot enumerate or roam the tree; it is
  *    handed the explicit, closed list of changed files (see captureCommitDiff) and is
  *    told to edit only those.
  *  - `read` IS allowed: the model genuinely needs it — to re-read a file after
  *    editing to confirm the fix landed, and to read a neighbouring file for the
- *    correct import/type when bringing the change into compliance (without it the
- *    model fabricates imports — validated against the local model). `read` has no
- *    per-path sandbox in pi, so "only the changed files" is enforced for EDITS
- *    (the prompt scopes them) but is a soft instruction for READS.
+ *    correct import or type when bringing the change into compliance. Denied that,
+ *    it fabricates imports instead.
+ *
+ *    But `read` has NO per-path sandbox in pi. Its resolver only joins the path to
+ *    cwd and tries filename variants — checked, `/etc/hostname` resolves to
+ *    `/etc/hostname` and `../../../` escapes upward, with no confinement test
+ *    anywhere. So "only the changed files" is ENFORCED for edits, by the closed
+ *    file list the prompt scopes them to, and is a soft instruction for reads.
  */
 const ENFORCE_TOOLS = 'read,edit'
 
@@ -59,12 +64,15 @@ const ENFORCE_TOOLS = 'read,edit'
  * files and report violations but CANNOT edit, create, or run anything.
  *
  * This is the "no signal ⇒ no license to rewrite logic" half of the gate. When a
- * task ships no behavioral verification to guard a destructive edit (no runnable
- * VERIFY, or the verify gate did not produce a genuine clean pass), letting the
- * weak model rewrite working code is exactly what trashes the build. With
- * `read,edit` and no guard it degrades a clean tree while declaring CLEAN. Demoted to `read`, it cannot trash anything and still names the real
- * violation. So with no signal to revert against, the
- * pass reports the violation as a warning instead of editing.
+ * task ships no behavioural verification to guard a destructive edit — no runnable
+ * VERIFY, or a verify gate that never produced a genuine clean pass — there is
+ * nothing to revert against if the fix pass makes things worse. A weak model handed
+ * `read,edit` in that state can degrade a working tree and still report CLEAN,
+ * because nothing is able to contradict it.
+ *
+ * Demoted to `read` alone it cannot change anything, and still names the real
+ * violation. So with no signal to check against, the pass reports the violation as
+ * a warning instead of editing.
  */
 const ENFORCE_FLAG_TOOLS = 'read'
 
@@ -86,9 +94,13 @@ export interface EnforceOutcome {
 }
 
 /**
- * Read the guideline files that live directly in `cwd` (AGENTS.md, CLAUDE.md).
- * Returns null when none exist or all are empty — the caller treats that as a
- * pass. cwd-only by design: no walk up to the git root.
+ * Read the guideline files that live directly in `cwd` (AGENTS.md, CLAUDE.md),
+ * concatenated under a `## <name>` header each, in that order.
+ *
+ * Returns null when none exist OR all are empty — the caller treats either as a
+ * pass. cwd-only by design, with no walk up to the git root: run from a
+ * subdirectory holding only its own AGENTS.md, a CLAUDE.md one level up is not
+ * picked up.
  */
 export async function discoverGuidelines(
     cwd: string,
