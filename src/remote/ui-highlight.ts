@@ -1,10 +1,11 @@
 // Generalized single-pass syntax highlighter, shipped as a JS string and
-// concatenated into the page by ui.ts. It grew out of the client's original
-// JS-only tokenizer: the string/comment/number/identifier logic is now shared and
-// parameterized by a per-language config (keyword set + comment markers + string
-// flavors). Unknown languages fall back to escaped plain text (unchanged).
+// concatenated into the page by ui.ts. One string/comment/number/identifier
+// tokenizer, parameterized by a per-language config in HL_LANGS (keyword set +
+// comment markers + string flavors). A language with no entry there falls back
+// to escaped plain text with no spans at all.
 //
-// Depends on escHtml (ui-render.ts) — both land in the same <script>.
+// Depends on escHtml (ui-render.ts) — ui.ts emits renderModule() immediately
+// before highlightModule(), inside one <script>.
 
 /** Emitted client JS (top-level function declarations + language tables). */
 export function highlightModule(): string {
