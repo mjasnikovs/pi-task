@@ -1,26 +1,28 @@
 /**
  * What a typed message DOES while a task run owns the session.
  *
- * Before this module the two surfaces disagreed, and both were wrong whenever the
- * host session was idle — which is most of a run, since the spec phases and every
- * gate are child `pi` processes, not host turns:
+ * Both surfaces — the terminal Enter listener and the remote browser — need ONE
+ * rule, because for most of a run the HOST session is idle: the spec phases and
+ * every gate are child `pi` processes, not host turns. Left to itself each surface
+ * has its own failure on an idle session:
  *
- *   - browser  → `sendUserMessage` with no delivery mode, which starts a SECOND
- *                turn alongside the run. Reproduced live on pi 0.82.1 (issue #8):
- *                that turn ran the write tool into the project, and when it was
- *                still streaming as the pipeline delivered its spec the run died
- *                with "a task failed: Agent is already processing."
- *   - terminal → pi's `pendingUserInputs` queue, drained only by the main loop
- *                that our own command handler is parked inside — so the line sat
- *                there silently and then fired minutes later against a finished
- *                run.
+ *   - browser  → `sendUserMessage` with no delivery mode. pi's own API docs call it
+ *                "Always triggers a turn", so it opens a SECOND turn beside the run,
+ *                with the write tool in hand. If that turn is still streaming when
+ *                the pipeline delivers its spec, the spec's own send hits pi's
+ *                guard: "Agent is already processing. Specify streamingBehavior
+ *                ('steer' or 'followUp') to queue the message."
+ *   - terminal → pi's `pendingUserInputs` queue, which only `getUserInput()` drains
+ *                — and that is the main loop our own command handler is parked
+ *                inside. The line sits there silently, then fires against a
+ *                finished run.
  *
- * The shared rule both surfaces now follow:
+ * The shared rule both surfaces follow:
  *
- *   agent streaming → steer the live turn (unchanged; this half always worked)
+ *   agent streaming → steer the live turn
  *   agent idle, run active → HOLD it here, show it as pending, and deliver it as
  *                            a steer when the next task turn starts
- *   no run active → ordinary message, unchanged
+ *   no run active → ordinary message
  *
  * Holding is what makes the two surfaces agree AND keeps the run safe: a held
  * line never becomes a competing turn, and it is never silently replayed after
