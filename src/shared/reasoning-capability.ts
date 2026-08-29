@@ -3,32 +3,39 @@
  *
  * WHY A LOCAL COPY OF PI'S CLAMP
  * ------------------------------
- * pi never reports that it ignored or downgraded a level. Measured live against
- * this machine's llama-server, with a proxy capturing the request body:
+ * pi does not report that it ignored or downgraded a level. Captured on the wire,
+ * with a logging proxy between pi and the model server. All three runs completed
+ * normally and printed no warning of any kind:
  *
  *   1. a model with `reasoning: false` + `--thinking medium`
- *        → the body carries NO reasoning field at all. No error, no warning.
- *   2. `thinkingLevelMap: {off: null, ...}` + `--thinking off`
- *        → silently clamped UP to `medium`. Thinking stays on.
+ *        → the request body carries NO reasoning field and no
+ *          `chat_template_kwargs`. The level is erased, not refused.
+ *   2. `thinkingLevelMap: {off: null, …}` + `--thinking off`
+ *        → thinking STAYS ON: the body arrives with
+ *          `chat_template_kwargs.enable_thinking: true`. The clamp walks UP one
+ *          rung at a time, so `off` lands on `minimal` — not on `medium`.
  *   3. `--thinking low` where `low: null`
- *        → silently clamped to `medium`.
+ *        → `medium` on the wire.
  *
  * All three are the same arithmetic, and it is pure: `getSupportedThinkingLevels`
- * / `clampThinkingLevel` in @earendil-works/pi-ai's models module. Reproducing it
+ * / `clampThinkingLevel` in @earendil-works/pi-ai's `models.js`. Reproducing it
  * lets one predicate — `clampToModel(m, wanted) !== wanted` — catch all three
  * host-side, before a single request is sent.
  *
  * Reimplemented rather than imported because `@earendil-works/pi-ai` is neither a
- * dependency nor a peerDependency of pi-task: it is present only because
- * pi-coding-agent hoists it, so importing it would take a hard dependency on a
- * transitive package to get twenty lines of arithmetic. SOURCE OF TRUTH is that
- * module; `reasoning-capability.test.ts` is where a change upstream shows up.
+ * dependency, a devDependency nor a peerDependency of pi-task — it is in none of
+ * the three, and sits in node_modules only because pi-coding-agent depends on it.
+ * Importing it would take a hard dependency on a transitive package for twenty
+ * lines of arithmetic. SOURCE OF TRUTH is that module, and what follows is
+ * line-for-line identical to it, ladder included. Nothing here imports pi-ai, so
+ * an upstream change will not fail a test — the two have to be re-compared.
  */
 import {REASONING_GROUPS, type ReasoningGroup, type GroupSetting} from '../config/reasoning.js'
 
 /**
- * pi's own level ladder, in order. The order is the whole algorithm: an
- * unsupported level is resolved by walking UP first, then down.
+ * pi's own level ladder, in order — the same seven names, in the same sequence,
+ * as `EXTENDED_THINKING_LEVELS` in pi-ai's models.js. The order IS the algorithm:
+ * an unsupported level is resolved by walking UP first, then down.
  */
 export const THINKING_LADDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -52,9 +59,11 @@ export interface ReasoningModelFacts {
  *    1: the knob is not rejected, it is erased.
  *  - a MISSING map entry means "supported" for the standard levels but
  *    "unsupported" for `xhigh` / `max`, which are opt-in and must be declared.
- *    This is why config/reasoning.ts does not offer those two: a model with no
- *    map at all would receive the raw string, and Qwen3.8's chat template
- *    answers an unknown effort with HTTP 500 rather than a clamp.
+ *    This is why config/reasoning.ts offers neither: without a map the raw
+ *    string reaches the server, and a chat template that does not know the level
+ *    fails rather than clamping. Confirmed against a live server — an effort
+ *    string its template does not handle comes back HTTP 500, raised from inside
+ *    the template itself, while one it does handle returns 200.
  */
 export function supportedThinkingLevels(model: ReasoningModelFacts): LadderLevel[] {
     if (!model.reasoning) return ['off']
@@ -98,16 +107,18 @@ export interface ReasoningMismatch {
 /**
  * Every group whose setting the model will silently change.
  *
- * `inherit` groups are skipped entirely, and that is what keeps a default
- * install permanently quiet: with the shipped all-`inherit` table this returns
- * an empty array for every model, including one with no reasoning at all.
+ * `inherit` groups are skipped entirely, because an inherited group asks for
+ * nothing. That is not the same as a quiet default: the shipped table is mostly
+ * DECIDED, with a single cell left on `inherit`, so a default install is not
+ * silent. Run against a `reasoning: false` model it reports a mismatch for every
+ * group whose level that model cannot honour.
  *
  * It reports mismatches in BOTH directions, which is wider than "warn when
- * reasoning is on but unsupported". The failure actually captured on this
- * machine is the mirror of that — `off` clamped UP to `medium`, so a user who
- * turned thinking off still pays for it — and it is the same comparison. Warning
- * about one direction while staying silent about the other would ship this
- * feature with its own measured failure mode unreported.
+ * reasoning is on but unsupported". The mirror case is the one captured on the
+ * wire — `off` clamped UP with `enable_thinking: true` still going out, so a
+ * user who turned thinking off still pays for it — and it is the same
+ * comparison. Warning about one direction while staying silent about the other
+ * would ship this feature unable to see its own failure mode.
  */
 export function reasoningMismatches(
     model: ReasoningModelFacts | undefined,
