@@ -1,31 +1,20 @@
 /**
- * What the PLAN-SHAPING loops record, and the decisions that record makes.
+ * What the PLAN-SHAPING loop records, and the decisions that record makes.
  *
- * `GateTally`'s and `AutofixLedger`'s twin, one phase earlier. CONTEXT.md records
- * that shape twice already: a long loop threading mutable locals by closure, with
- * pure helpers extracted for testability while the ORDERING and CARRY-FORWARD
- * decisions stayed in the caller. `coverPlan` was the third instance — five locals
- * (`planTitles`, `best`, `round`, `roundCap`, `bonusRoundUsed`) plus a
- * snapshot-before-overwrite pair (`priorCovered`, `priorMissing`) that existed
- * ONLY because the bonus-round decision was made downstream from the evidence it
- * needed, so the loop had to save a copy of `best` before replacing it.
+ * `GateTally`'s and `AutofixLedger`'s twin, one phase earlier: the ORDERING and
+ * CARRY-FORWARD decisions live in the record, not in the caller's locals.
  *
- * The last real bug here says the shape out loud, in the loop's own comment:
- * *"As two assignments, the second one keeps the OLD plan's
- * accounting whenever the new plan's coverage-map child faulted
- * (`cand.accounting ?? accounting`) — binding requirements to titles they were
- * never mapped against."* `AutofixLedger`'s indictment, verbatim: the decision was
- * made downstream from the evidence.
+ * `consider` compares, replaces the plan WHOLE (`ScoredPlan` — titles and
+ * accounting together, because they are one value), and grants the bonus round IN
+ * THE SAME CALL that adopts — the way `AutofixLedger.judge(outcome, edited)`
+ * enters the demoted signature in the call that decides to demote. A caller
+ * cannot hold a pre-adoption snapshot that the replacement has already
+ * invalidated, because it never takes one.
  *
- * `consider` closes it by construction rather than by comment. It compares, it
- * replaces the plan WHOLE (titles and accounting together, because they are one
- * value), and it grants the bonus round IN THE SAME CALL that adopts — the way
- * `judge(outcome, edited)` enters the demoted signature in the call that demotes.
- * There is no window in which the snapshot and the replacement can disagree.
- *
- * NO I/O. No `logPlanDebug`, no notify, no child — for the same reason `GateTally`
- * performs none: a record that performs effects cannot be driven by a test that
- * only wants the verdict. The caller trails what the returned decision says.
+ * NO I/O. No `logPlanDebug`, no notify, no child — the same reason `GateTally`
+ * performs none (it imports two types and nothing else): a record that performs
+ * effects cannot be driven by a test that only wants the verdict. The caller
+ * trails what the returned decision says.
  */
 
 import {
@@ -50,9 +39,10 @@ export interface CoverageLedgerOptions {
     /**
      * Are there grounded requirements to judge against?
      *
-     * Without them `missing` is pure holistic-judge free text that can change every
-     * round, so there is no trustworthy "grew"/"new" signal — which is why the
-     * bonus round is requirements-path only.
+     * Without them `covered` is built by `groundedCoverage` over an EMPTY quote
+     * list, so it is empty every round and can never grow — the bonus round's own
+     * growth guard could not fire anyway. This flag says so up front instead of
+     * relying on that, and keeps the grant on the requirements path.
      */
     hasRequirements: boolean
 }
@@ -60,8 +50,6 @@ export interface CoverageLedgerOptions {
 /**
  * The coverage loop's record: the best plan seen, the rounds spent, and the
  * one-shot bonus round.
- *
- * Methods are named for what they MEAN, not for the field they touch.
  */
 export class CoverageLedger {
     private _round = 0
@@ -117,8 +105,8 @@ export class CoverageLedger {
 
         const priorCovered = this._best.plan.covered.size
         const priorMissing = new Set(this._best.plan.missing.map(normMissingArea))
-        // WHOLE, titles and accounting together. They are one value; splitting them
-        // is a bug this codebase has already had.
+        // WHOLE, titles and accounting together — one assignment, so the two can
+        // never come from different rounds.
         this._best = cand
 
         const grant =
@@ -135,9 +123,9 @@ export class CoverageLedger {
     }
 }
 
-// DECOMPOSE's two retry budgets (`emptyAttempts`, `smallRetryUsed`) are NOT here.
-// They look like this shape and are not: that loop keys on `isSuspectPlan`, a
-// predicate over the SPEC LENGTH rather than a title-count floor, and its two
-// counters already sit inside a nine-line comment explaining why a single counter
-// was wrong. Wrapping them in a class that does not model `isSuspectPlan` would
-// move the code without concentrating the decision.
+// DECOMPOSE's two retry budgets (`emptyAttempts`, `smallRetryUsed` in
+// auto-orchestrator.ts) are NOT here. They look like this shape and are not: that
+// loop keys on `isSuspectPlan`, which combines a title-count ceiling with a
+// minimum SPEC LENGTH, and its two counters carry their own comment on why a
+// single counter was wrong. Wrapping them in a class that does not model
+// `isSuspectPlan` would move the code without concentrating the decision.
