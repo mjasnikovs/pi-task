@@ -29,8 +29,8 @@ import type {PiTaskConfig} from './config.js'
  *
  * Grouped by JOB, not by spawn mechanism — two children that both go through
  * `runWorker` (a research worker and a verify gate) want different amounts of
- * thinking, while two that reach the model by different code paths (`refine` via
- * runPhaseChild, `compress-label` via the same) want the same.
+ * thinking, while `refine` in phases.ts and `compress-label` in title-label.ts
+ * want the same amount and share the `phase` cell.
  *
  * - `research`     the ad-hoc `pi-worker` subagent tool, and the fallback the four
  *                  research workers use when their own cell is unset
@@ -38,7 +38,8 @@ import type {PiTaskConfig} from './config.js'
  *                  one cell per research worker, so a level can be paid for in
  *                  one worker without paying for it in the other three
  * - `phase`        refine, verify-tooling, grill, compose, critique, compress-label
- * - `planning`     /task-auto's clarify / decompose / extract children
+ * - `planning`     /task-auto's planning children — clarify, decompose, and the
+ *                  extract/coverage passes around them
  * - `plan`         /task-plan's question and answer children
  * - `gate`         enforce, verify, lint-fix, final-fix, recommend
  * - `extraction`   the --no-tools focused docs/fetch extractors
@@ -142,8 +143,8 @@ export function sanitizeReasoningMode(value: unknown): ReasoningMode {
 }
 
 /**
- * Child NAME → reasoning group, for every child that goes through
- * `runPhaseChild` / `runPlanningChild`.
+ * Child NAME → reasoning group, for every child spawned under a name:
+ * `runPhaseChild`, `runPlanningChild`, and the research workers' `spec.label`.
  *
  * WHY KEYED ON THE NAME
  * ---------------------
@@ -276,10 +277,10 @@ export function resolveReasoning(group: ReasoningGroup, cfg: PiTaskConfig): Grou
 /**
  * The WHOLE table, as this config will actually run it.
  *
- * The question the settings menu, the mismatch scan and the custom-mode seeder
- * all ask. One accessor, so they cannot each invent their own shape for it.
- * `resolveReasoning` stays for the single-group question, and is the only place
- * the four modes are interpreted.
+ * The question the mismatch scan and the custom-mode seeder both ask. One
+ * accessor, so they cannot each invent their own shape for it. The settings menu
+ * asks the single-group question instead, through `resolveReasoning` — which is
+ * the only place the four modes are interpreted.
  */
 export function effectiveReasoning(cfg: PiTaskConfig): Record<ReasoningGroup, GroupSetting> {
     const out = {} as Record<ReasoningGroup, GroupSetting>
