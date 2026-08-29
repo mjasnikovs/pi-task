@@ -40,11 +40,11 @@ export function setupEvents(pi: ExtensionAPI): void {
             if (errorMessage || ae.reason === 'error') {
                 const message = errorMessage || 'Request failed'
                 addError(message)
-                // No push here: pi-task only notifies for the two cases the user
-                // cares about — needing their input (the grill/clarify dialog, see
-                // bridge.ask) and a top-level /task or /task-auto run finishing
-                // (orchestrator/auto-orchestrator). A push on every host agent
-                // error — most of them outside any task — is just noise.
+                // No push here: every pushNotify call site in src/ is one of
+                // two things — needing the user's input (bridge.ask) or a
+                // top-level run finishing (runSingleTask under `notifyFinish`,
+                // and run-bracket's announceTerminal). A push on every host
+                // agent error — most of them outside any task — is just noise.
             }
         }
     })
@@ -67,12 +67,13 @@ export function setupEvents(pi: ExtensionAPI): void {
 
     pi.on('agent_end', (_event, ctx) => {
         agentEnd(ctx.getContextUsage() as ContextUsage, ctx.model?.name)
-        // Deliberately no push: agent_end fires on EVERY host turn — every chat
-        // reply, every internal phase turn inside /task, and every internal /task
-        // run inside /task-auto — so a "Task finished" push here floods the device.
-        // The real "a run finished" push is fired from the top-level command
-        // handlers instead (orchestrator handleTask/handleTaskResume, and
-        // auto-orchestrator's runAutoLoop), which never fire for internal runs.
+        // Deliberately no push: agent_end fires on EVERY host-session turn —
+        // every chat reply, and the implementation turn of every task, including
+        // each task inside a /task-auto run — so a "Task finished" push here
+        // floods the device. (Phase children are spawned pi processes running
+        // --no-extensions, so they never reach this handler at all.) The real
+        // "a run finished" push is gated on `notifyFinish`, which only the
+        // top-level command handlers pass.
     })
 
     pi.on('input', (event, _ctx) => {
