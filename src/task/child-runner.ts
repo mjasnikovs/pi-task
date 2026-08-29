@@ -196,8 +196,8 @@ export function childArgs(
     // `--mode json` puts the child into the structured event stream the
     // unified runner parses in `mode: 'json-events'`. Without it the child
     // emits plain text, every line fails JSON.parse, finalText stays empty,
-    // and every phase fails with "X child produced no output". Was silently
-    // dropped in the 4e34f96 split-refactor; do not remove again.
+    // and every phase fails with "X child produced no output". A refactor has
+    // dropped it once already; do not remove it again.
     //
     // An empty `tools` string means "no tools at all" — emit `--no-tools`
     // instead of `--tools ''` (which pi would reject). Used by pure-judgment
@@ -205,8 +205,9 @@ export function childArgs(
     // hand them, never spend time reading the repo.
     //
     // The prompt is NOT an argv element: it goes to the child over stdin (see
-    // runChild below / getPiInvocation), so a large inlined-design prompt can't
-    // overflow the OS command-line limit (Windows `spawn ENAMETOOLONG`).
+    // runChild below / getPiInvocation), so a large inlined-design prompt cannot
+    // exceed the OS argv ceiling — which fails the spawn outright rather than
+    // truncating (`E2BIG` on this platform).
     //
     // `extensions` are internal `-e` loads for in-run guards (the caller supplies
     // the path). A no-tools child cannot make a tool call, so it never carries
@@ -230,13 +231,13 @@ export const USER_CANCELLED = '__user_cancelled__'
 /**
  * One child-pi invocation, as a value.
  *
- * WHY A RECORD. This was thirteen ordered positionals, and the thirteenth
- * carried its own DEBT note saying so. Two production callers reached it, and
- * they had already drifted: the degrade attempt wrote three bare `undefined`s to
- * reach the later slots and passed the RAW signal, so it escaped the wall clock
- * its own strike siblings run under — the same defect class this file already
- * recorded for `runAutoInstall` and for the deleted `runPhaseWithLoopGuard`.
- * Adjacent optionals of the same type can no longer swap without a type error.
+ * WHY A RECORD RATHER THAN POSITIONALS. With this many optional parameters of
+ * the same type, a caller reaching a late one must write bare `undefined`s to get
+ * there, and one that miscounts silently lands the wrong value in the wrong slot.
+ * The failure that shape produces here is a child spawned with the RAW signal
+ * instead of the wall-clocked one, escaping a guard its siblings run under, with
+ * nothing to catch it. Named fields make adjacent optionals of the same type
+ * impossible to swap without a type error.
  */
 export interface ChildRun {
     cwd: string
@@ -257,9 +258,11 @@ export interface ChildRun {
      */
     onToolResult?: (text: string, isError: boolean) => void
     /**
-     * The child's context window in tokens. Nothing in pi's event stream reports
-     * one (issue #16), so the parent hands its own down — children carry no `-m`
-     * and resolve the same default model. 0 / omitted = unknown, as before.
+     * The child's context window in tokens. Nothing in pi's `--mode json` stream
+     * reports one — a real capture carries token counts and a model id, but no key
+     * naming a window — so the parent hands its own down. Children carry no `-m`
+     * (CHILD_BASE_ARGS) and resolve the same default model, which is what makes
+     * the parent's window the honest value. 0 or omitted = unknown.
      */
     contextWindow?: number
     /**
@@ -354,12 +357,12 @@ export interface PhaseDeps {
     /**
      * The parent session's context window in tokens, handed down to every child.
      *
-     * pi's `--mode json` stream reports token counts but no window (issue #16),
-     * so without this the gauge shows a bare number and — worse — the
-     * StallDetector's CONTEXT CHURN rule, which is gated on a positive window,
-     * can never fire. Children are spawned without `-m` (CHILD_BASE_ARGS) and so
-     * run the parent's own default model; its window is the honest value.
-     * Absent = unknown, and both consumers degrade exactly as they did before.
+     * pi's `--mode json` stream reports token counts but no window, so without
+     * this the gauge shows a bare number and — worse — the StallDetector's CONTEXT
+     * CHURN rule can never fire: it opens with `if (this.contextWindow <= 0)
+     * return false`. Children are spawned without `-m` (CHILD_BASE_ARGS) and so
+     * run the parent's own default model, which is what makes its window the
+     * honest value. Absent = unknown, and both consumers degrade.
      */
     contextWindow?: number
     /**
@@ -495,8 +498,7 @@ export type PhaseSeams = Omit<
  *
  * On a retry, `hint` is the correction to prepend to the next prompt. It is
  * OMITTED (not null) when this rung has nothing to correct — the caller then
- * keeps whatever hint it was already carrying, exactly as the two hand-written
- * ladders did by falling through to `continue` without touching it.
+ * keeps whatever hint it was already carrying, rather than clearing it.
  */
 type LadderStep = {done: true; text: string} | {done: false; hint?: string}
 
@@ -507,9 +509,8 @@ type LadderStep = {done: true; text: string} | {done: false; hint?: string}
  * verdict, so a fix to any rung lands in every caller at once.
  *
  * `attempt` is the caller's 0-based counter, `budget` the matching restart
- * allowance (MAX_LEAK_RETRIES, which is also MAX_LOOP_RESTARTS — the loop and
- * leak budgets were separate constants at the same value and are shared by one
- * loop now) — so a phase runs `budget + 1` attempts before a rung gives up.
+ * allowance — MAX_LEAK_RETRIES and MAX_LOOP_RESTARTS are both 2, and one loop
+ * spends the pair — so a phase runs `budget + 1` attempts before a rung gives up.
  *
  * `verb` names the restart in the debug log ("retry" by default, "restart" for
  * refine and grill-gen). It is the only externally visible thing that differed
@@ -587,12 +588,12 @@ async function triageChildResult(
  *   • a LoopDetector, so an identical repeated tool call is killed and
  *     re-prompted instead of being allowed to fill the context window;
  *   • a StallDetector, the backstop for the varied-args thrash the loop
- *     detector's short window cannot see — the shape that actually cost us a
- *     16-minute decompose child that was never going to return. It bounds
+ *     detector's short window cannot see — a child that keeps calling tools with
+ *     different arguments, learns nothing, and is never going to return. It bounds
  *     consecutive no-new-ground calls and total context churn, NOT elapsed time;
- *   • PHASE_CHILD_TIMEOUT_MS, a hard wall clock, OFF by default because the
- *     measured healthy range (610-927s for a reasoning-on decompose) overlaps
- *     any value that would catch the pathology. See its comment.
+ *   • PHASE_CHILD_TIMEOUT_MS, a hard wall clock, OFF by default: a healthy
+ *     reasoning-on planning child and a runaway one occupy the same range of
+ *     elapsed times, so no threshold separates them. See its comment.
  * All three are checked BEFORE the triage ladder: we killed the child, so its
  * exit status describes our SIGTERM and says nothing about its verdict.
  */
@@ -659,9 +660,9 @@ export async function runPhaseChild(
         const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
         const stall = new StallDetector()
         // Arm the churn rule BEFORE the first tool call. pi's stream carries no
-        // context snapshot, so a detector that waited for one would sit at 0 and
-        // rule 2 would never fire (GitHub issue #16). The parent knows the value
-        // at spawn time — say it then, not later.
+        // context WINDOW, so a detector that waited to be told one would sit at 0,
+        // and the churn rule returns false on a non-positive window. The parent
+        // knows the value at spawn time — say it then, not later.
         stall.noteContext(deps.contextWindow ?? 0)
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
@@ -673,9 +674,10 @@ export async function runPhaseChild(
                     signal: clock.signal,
                     thinking,
                     onContextUsage: snapshot => {
-                        // Real window or nothing: noteContext ignores 0, and until
-                        // deps.contextWindow existed 0 was all it ever saw, which
-                        // left the churn rule permanently disarmed (issue #16).
+                        // Real window or nothing: `noteContext` ignores 0, which is
+                        // why the parent's value must be supplied at spawn — a
+                        // stream that only ever reports 0 leaves the churn rule
+                        // permanently disarmed.
                         stall.noteContext(snapshot.contextWindow)
                         deps.onContextUsage?.(snapshot)
                     },
@@ -804,8 +806,8 @@ async function appendLoopEvent(
 /**
  * The two things a phase child can disagree about. Everything else — the loop
  * and stall detectors, the wall clock, the loop trail, the triage ladder and its
- * budget — is the one loop's. These two are the only differences that were ever
- * observable from outside.
+ * budget — is the one loop's. These two are the only differences observable from
+ * outside it.
  */
 export interface PhaseChildOptions {
     /**
@@ -865,11 +867,10 @@ async function runDegradedFinalAttempt(
         clock.cleanup()
     }
     if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
-        // A wall-clock kill is NOT a loop. The clock above is new here, and
-        // without this check a degrade that outran its budget was reported as
-        // "loop budget exhausted", carrying a loop history that did not cause it
-        // — the same mislabel class the worker-kill roster exists to prevent, on
-        // the very path that clock was added to guard.
+        // A wall-clock kill is NOT a loop. Without this check a child that outran
+        // its budget is reported as "loop budget exhausted", carrying a loop
+        // history that did not cause it — the same mislabel class the worker-kill
+        // roster exists to prevent, on the very path the clock guards.
         if (clock.timedOut()) {
             throw new PhaseTimeoutError(name, deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS, 1)
         }

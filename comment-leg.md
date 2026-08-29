@@ -67,7 +67,7 @@ line counts as a comment line but opens no block.
 | `src/task/boot-probe.ts` | 1172 | 475 | 95 | true |
 | `src/task/cancel-input.ts` | 252 | 109 | 24 | true |
 | `src/task/cancel-points.ts` | 88 | 56 | 8 | true |
-| `src/task/child-runner.ts` | 962 | 443 | 79 | false |
+| `src/task/child-runner.ts` | 962 | 443 | 79 | true |
 | `src/task/child-status.ts` | 167 | 60 | 14 | false |
 | `src/task/clamp-output.ts` | 16 | 9 | 1 | false |
 | `src/task/command-run.ts` | 431 | 190 | 35 | false |
