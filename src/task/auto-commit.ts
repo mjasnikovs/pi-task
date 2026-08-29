@@ -74,7 +74,9 @@ export async function git(
  * fix (write-guard.ts) stops the rejection; this stops the tracking.
  *
  * ONLY UNTRACKED PATHS ARE EXCLUDED, and that is load-bearing rather than tidy.
- * `git ls-files --others` lists untracked, non-ignored files and nothing else, so a
+ * `git ls-files --others --exclude-standard` lists untracked, non-ignored files
+ * and nothing else — the flag is what drops the ignored ones, and without it the
+ * ignored tree comes back too. So a
  * path git ALREADY tracks can never appear here — meaning a project that
  * deliberately commits, say, a `coverage/` badge keeps having its edits to it
  * committed. Excluding by directory pathspec instead (`:(exclude)coverage/`) would
