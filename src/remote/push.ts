@@ -15,25 +15,24 @@ export interface VapidKeys {
     privateKey: string
 }
 
-/** Resolve the XDG data-home base. Under data-home (not cache) so the files it
- *  roots survive cache clears. Follows the repo's XDG convention; see
- *  workers/docs-core.ts. */
+/** Resolve the XDG data-home base. Same env-or-homedir shape the docs cache uses
+ *  (workers/docs-core.ts), but rooted at data-home rather than cache-home: what
+ *  lives under here is not reconstructible by re-fetching. */
 function dataHome(): string {
     return process.env.XDG_DATA_HOME?.trim() || path.join(os.homedir(), '.local', 'share')
 }
 
-/** Where the VAPID keypair is persisted — losing these keys invalidates every
- *  existing browser subscription. */
+/** Where the VAPID keypair is persisted. The browser subscribes with this
+ *  public key as its applicationServerKey (see ui-script.ts), so the pair has to
+ *  outlive the process that created it. */
 export function vapidStorePath(): string {
     return path.join(dataHome(), 'pi-task', 'vapid.json')
 }
 
 /** Where browser push subscriptions are mirrored to disk (next to vapid.json).
- *  Without this, a server restart — e.g. after a rebuild — silently drops every
- *  device: the in-memory store is empty, and a backgrounded/suspended PWA won't
- *  re-register until the user next foregrounds it, which is exactly when the push
- *  is no longer useful. The in-memory store stays authoritative within a process;
- *  this is its durable mirror. */
+ *  Without this a server restart starts with an empty store and reaches nobody
+ *  until every device happens to re-register. The in-memory store stays
+ *  authoritative within a process; this is its durable mirror. */
 export function subscriptionsStorePath(): string {
     return path.join(dataHome(), 'pi-task', 'subscriptions.json')
 }
@@ -44,17 +43,18 @@ export function pushLogPath(): string {
     return process.env.PI_REMOTE_PUSH_LOG?.trim() || '/tmp/pi-task-push.log'
 }
 
-/** VAPID JWT `sub` claim. Apple (unlike Chrome/FCM) validates this and rejects
- *  tokens with an unroutable subject like `mailto:...@localhost` as BadJwtToken,
- *  so the default is a real https URL. Override with PI_REMOTE_PUSH_SUBJECT
- *  (e.g. your own `mailto:you@domain.com`). */
+/** VAPID JWT `sub` claim. web-push's validateSubject requires a parseable URL
+ *  whose protocol is `https:` or `mailto:` and throws otherwise, so the default
+ *  is a real https URL. Override with PI_REMOTE_PUSH_SUBJECT (e.g. your own
+ *  `mailto:you@domain.com`). */
 export function pushSubject(): string {
     return process.env.PI_REMOTE_PUSH_SUBJECT?.trim() || 'https://github.com/mjasnikovs/pi-task'
 }
 
 /** Append a timestamped diagnostic line — but only when PI_REMOTE_PUSH_DEBUG is
- *  set, so it stays silent (and test-safe) by default. Push failures are
- *  otherwise swallowed, so this is the way to see Apple's HTTP status codes. */
+ *  set, so it stays silent (and test-safe) by default. deliver() swallows every
+ *  send failure, so this is the only way to see the push service's status
+ *  codes. */
 export function logPush(line: string): void {
     if (!process.env.PI_REMOTE_PUSH_DEBUG) return
     try {
@@ -66,8 +66,8 @@ export function logPush(line: string): void {
     }
 }
 
-/** Short host label for an endpoint, for readable logs (full endpoints are long
- *  and contain device tokens). */
+/** Short host label for an endpoint, for readable logs — a push endpoint's path
+ *  carries the device's own subscription id and does not belong in a log. */
 function endpointHost(sub: PushSubscriptionJSON): string {
     try {
         return new URL(sub.endpoint ?? '').host
@@ -98,10 +98,9 @@ export function loadOrCreateVapidKeys(file = vapidStorePath()): VapidKeys {
 }
 
 // In-memory subscription store, keyed by endpoint. Persisted on globalThis so it
-// survives jiti re-evaluation on session switches (same pattern as broadcast.ts),
-// and mirrored to disk (subscriptionsStorePath) so it also survives a full
-// process restart. A re-subscribe on page load can't be relied on for that: the
-// devices that need server push are backgrounded/suspended and won't reload.
+// survives the module being re-evaluated (same pattern as broadcast.ts), and
+// mirrored to disk (subscriptionsStorePath) so it also survives a full process
+// restart — a re-subscribe on page load only helps devices whose page is open.
 const g = globalThis as unknown as {__piRemoteSubs?: Map<string, PushSubscriptionJSON>}
 const freshStore = !g.__piRemoteSubs
 if (!g.__piRemoteSubs) g.__piRemoteSubs = new Map<string, PushSubscriptionJSON>()
@@ -162,8 +161,9 @@ export function clearSubscriptions(): void {
     saveSubscriptions()
 }
 
-/** True when the push service says the subscription is permanently gone and
- *  should be dropped (404 Not Found, 410 Gone). */
+/** True when the push service's status says the subscription is permanently
+ *  gone (404, 410) rather than transiently failing. web-push rejects with the
+ *  `statusCode` on any non-2xx, which is what this reads. */
 function isGone(err: unknown): boolean {
     const code = (err as {statusCode?: number} | null)?.statusCode
     return code === 404 || code === 410
@@ -211,9 +211,9 @@ export function publicKey(): string {
     return ensureConfigured().publicKey
 }
 
-/** Send a notification to all subscribed devices. Best-effort: delivery is
- *  server→push-service→device, so it reaches a suspended iOS PWA that the
- *  in-page Notification API never could. */
+/** Send a notification to all subscribed devices. Best-effort, and the route is
+ *  server→push-service→device, so it does not need the page to be open the way
+ *  the in-page Notification API does. */
 export async function pushNotify(title: string, body: string, tag?: string): Promise<void> {
     if (process.env.NODE_ENV === 'test') return
     const targets = getSubscriptions()
