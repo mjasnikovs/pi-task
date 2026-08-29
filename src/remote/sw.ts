@@ -1,10 +1,11 @@
-/** Service worker source served at /sw.js. It must be a real same-origin URL
- *  (a SW cannot be registered from a data: URL), and serving it at the root path
- *  gives it root scope so it controls the whole app.
+/** Service worker source served at /sw.js (see server.ts's request handler). It
+ *  must be a real same-origin URL — registering from a `data:` URL is refused
+ *  with "The URL protocol of the script is not supported" — and serving it at
+ *  the root path is what gives it root scope: a worker served at `/sw.js`
+ *  registers with scope `/`, one at `/deep/sw.js` with scope `/deep/`.
  *
- *  iOS home-screen PWAs deliver notifications ONLY through a service worker's
- *  push event — the in-page `new Notification()` constructor is unavailable — so
- *  this is the only path that reaches a backgrounded iPhone. */
+ *  Notifications go through this worker's push event rather than an in-page
+ *  `new Notification()` so they reach a device whose page is not open. */
 export function swJs(): string {
     return `self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (e) { e.waitUntil(self.clients.claim()); });
