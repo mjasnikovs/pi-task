@@ -1,26 +1,23 @@
-// Node runtime smoke test for the remote server (issue #7).
+// Node runtime smoke test for the remote server, guarding the failure mode in
+// issue #7: an EADDRINUSE on the optional remote server escaped the caller's
+// try/catch as an uncaughtException and took pi down with it.
 //
-// WHY a separate .mjs and not a bun:test file: the whole test suite imports
-// `bun:test`, so it only ever runs under Bun. But `pi` itself runs under NODE
-// (@earendil-works/pi-coding-agent ships `#!/usr/bin/env node`, engines
-// node>=22.19.0), which is the runtime that actually executes this extension's
-// dist/ in the field — and where issue #7 (an EADDRINUSE escaping as an
-// uncaughtException that crashed pi) was reported. Nothing in CI exercised Node
-// before this. This script runs the SHIPPED build (dist/remote/server.js) under
-// real Node and asserts the bind/retry contract holds with zero out-of-band
-// errors. Plain node:assert + a nonzero exit on failure — no test framework.
+// WHY a separate .mjs and not a bun:test file: every file under test/ imports
+// `bun:test`, so the suite only ever runs under Bun. The shipped bin runs under
+// Node — @earendil-works/pi-coding-agent's `bin.pi` starts `#!/usr/bin/env node`
+// and its package.json declares a node engines range. This script imports the
+// built dist/remote/server.js, runs under plain Node, and exits nonzero on
+// failure. No test framework.
 //
-// SCOPE / honest limits: this is a regression guard, not a reproduction of the
-// original crash. The race needs a runtime/OS that lags on port release; GH
-// runners (both ubuntu and windows) release fast enough that even the OLD buggy
-// code stayed green there. So a green here means "the fix runs correctly and
-// nothing escapes on this Node/OS", not "we reproduced #7".
+// It is a guard, not a reproduction. The bind race needs a runtime that lags on
+// port release. A green run here says the retry path runs clean and nothing
+// escapes on this Node and this OS.
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import {listenWithRetry} from '../dist/remote/server.js'
 
-// Any uncaughtException/unhandledRejection IS the issue-#7 failure mode (an
-// error escaping the caller's catch). Record every one; assert none at the end.
+// Any uncaughtException or unhandledRejection here is the failure mode itself:
+// an error escaping the caller's catch.
 const escaped = []
 process.on('uncaughtException', e => escaped.push(`uncaught: ${e}`))
 process.on('unhandledRejection', e => escaped.push(`unhandledRejection: ${e}`))
@@ -40,7 +37,6 @@ function check(name, ok) {
     if (!ok) failures++
 }
 
-// 1) Retries past an in-use first port and resolves on the next free one.
 {
     const base = 8850
     const free = await occupy(base)
@@ -54,8 +50,6 @@ function check(name, ok) {
     }
 }
 
-// 2) REJECTS (never throws uncaught) when the whole range is in use — the exact
-//    escape mode of #7 must come back as a rejection, not out-of-band.
 {
     const base = 8870
     const closers = await Promise.all([occupy(base), occupy(base + 1)])
@@ -72,8 +66,6 @@ function check(name, ok) {
     check('rejects (no throw) when range exhausted', rejected)
 }
 
-// 3) Stress: many rapid bind/close cycles re-create the "bind a just-freed
-//    port" pressure the bug lived in. Every cycle must land in range.
 {
     let ok = true
     for (let i = 0; i < 50; i++) {
@@ -81,7 +73,7 @@ function check(name, ok) {
         const port = await listenWithRetry(server, 8800, 100)
         if (port < 8800 || port >= 8900) ok = false
         server.close()
-        await new Promise(r => setImmediate(r)) // let close() progress before reuse
+        await new Promise(r => setImmediate(r))
     }
     check('50x rapid bind/close cycles stay in range', ok)
 }
