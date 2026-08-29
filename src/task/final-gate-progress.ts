@@ -1,33 +1,23 @@
 /**
- * final-gate-progress — the non-progress classifier for the final-gate autofix loop.
+ * final-gate-progress — the non-progress classifier for the final-gate autofix
+ * loop. `AutofixLedger.judge` is its only caller.
  *
- * The failure this closes (read off a run's own gate trail
- * trail): the gate's boot check asserted "the app never opened a listening socket"
- * in a sandbox where NO tool the probe knows (`ss`, `lsof`) exists — the check was
- * UNFALSIFIABLE there. Three autofix attempts each edited real files, re-ran, and
- * came back with a byte-identical ranked-first failure; the budget was spent on a
- * check no edit could ever move, the two checks that WERE fixable had converged by
- * attempt 2, and the run ended `failed` with 13 genuinely repaired files sitting
- * uncommitted in the working tree.
- *
- * The rule this encodes: an attempt that CHANGED the tree and re-ran the gate, and
- * got the same first failure back as the previous attempt, is evidence about the
- * CHECK, not about the fix. Two identical post-fix results ⇒ the check is
- * env-shaped/unfalsifiable in this environment ⇒ stop paying for it: demote that
- * one check to UNOBSERVED-with-debt (durable, so the NEXT run's gate re-checks it)
- * and let the REMAINING checks decide whether the gate converged. On replay:
- * checks 2 and 3 were fixed by attempts 1–2, so the run converges with the boot
- * check carried as debt instead of failing with the repairs stranded.
+ * The rule: an attempt that CHANGED the tree and re-ran the gate, and got the
+ * same ranked-first failure back as the previous attempt, is evidence about the
+ * CHECK, not about the fix. A check that survives two post-fix results
+ * identically is unfalsifiable in this environment, so stop paying for it —
+ * demote that ONE check to UNOBSERVED-with-debt and let the remaining checks
+ * decide whether the gate converged. The debt is appended to the ledger file
+ * under `.pi-tasks/`, so it outlives the run and the next gate re-checks it.
  *
  * Deliberately conservative:
- *   - It never fires on attempt 1. The first repeat can be an ordinary
- *     didn't-fix-it-yet; only a SECOND identical post-fix result is evidence.
- *   - It never fires when the attempt changed nothing (a BLOCKED child, a
- *     guard-discarded attempt): with no edit there is nothing to conclude about
- *     falsifiability.
- *   - It demotes exactly the one repeated check. Every other failure still has to
- *     pass for real; the debt keeps the demoted one visible at run end and in the
- *     next run's gate.
+ *   - It never fires on attempt 1: `previousSignature` is null until an attempt
+ *     has produced one, and null returns false.
+ *   - It never fires when the attempt changed nothing. The caller passes
+ *     `edited` as "the gate re-ran AND the tree is dirty", and a guard-rejected
+ *     attempt returns before the re-run, so its `gate` is undefined.
+ *   - It demotes exactly the one repeated signature. Every other failure still
+ *     has to pass for real.
  */
 
 /**
@@ -62,12 +52,18 @@ const VOLATILE: Array<[RegExp, string]> = [
  * A bare `:NNNN` port, which the localhost/`port N` rules above do not reach (a
  * failure that just says "no listener on :3000").
  *
- * NOT applied when the colon follows a SOURCE LOCATION — `src/db.ts:41`,
- * `Cart.tsx:88:12`. A failure detail embeds the failing command's output tail
- * verbatim (final-gate.ts `r.tail`), and tsc/eslint/bun-test tails are mostly
- * file:line. Collapsing those made two DIFFERENT defects in one file — the second
- * uncovered by fixing the first — compare equal, which reads as non-progress and
- * demotes a genuinely fixable check to UNOBSERVED debt. A moved error is progress.
+ * NOT applied when the colon follows a SOURCE LOCATION. A failure detail embeds
+ * the failing command's output tail verbatim (final-gate.ts interpolates
+ * `r.tail`), and tsc/eslint/bun-test tails are mostly `file:line`. Collapsing
+ * those would make two DIFFERENT defects in one file compare equal, which reads
+ * as non-progress and demotes a genuinely fixable check. A moved error is
+ * progress.
+ *
+ * The exemption covers the FILE:LINE colon only. Measured: `src/db.ts:41` and
+ * `src/db.ts:88` keep their line numbers and stay different, but the COLUMN in
+ * `Cart.tsx:88:12` normalises to `cart.tsx:88:<port>` — the prefix at that colon
+ * is the bare `88`, which is neither a path nor a filename. Two defects that
+ * differ only in column therefore compare equal.
  */
 const BARE_PORT = /(\S*?):(\d{2,5})\b/g
 /** A path (has a separator) or a filename with an extension ⇒ a source location. */
@@ -123,24 +119,17 @@ export interface NonProgressInput {
  * here: it edited the tree, the gate re-ran, and returned the same first failure
  * as the previous attempt.
  *
- * …EXCEPT when the probe OBSERVED the failure. This rule is a blind compensator
- * for a probe limitation — a boot check that "could not
- * observe a listener in that sandbox at all" — and that limitation was fixed
- * upstream ELEVEN MINUTES BEFORE this rule landed (`b0f90a7` 23:34:05, `dd3b0c3`
- * 23:45:09, both 2026-07-19). Every probe now reports "I could not look" as its
- * own outcome, with the reason. What was left was a second, blind judgment of the
- * same question, made DOWNSTREAM from the evidence — and its only reachable effect
- * was to overrule a probe that DID look.
+ * …EXCEPT when a probe OBSERVED the failure, which is checked FIRST and wins
+ * outright. A probe that looked and saw the defect has already answered the
+ * question this rule guesses at, and it answered it where the evidence is. A
+ * probe that could NOT look reports that as its own outcome instead, so it never
+ * reaches `observedFailures`.
  *
- * It has to be overruled, because a deterministic un-fixed defect emits an
- * IDENTICAL failure by definition. String equality therefore reads reproducibility
- * as evidence against the instrument, which is backwards for every project type: a
- * CLI that exits 2 twice, a build that fails on the same symbol twice, a C++ plugin
- * missing the same export twice. That has been seen once and it
- * released a product whose every page was blank as a `completed` run.
- *
- * The fix is NOT a better string pattern — the bug is that the decision was made
- * downstream from the evidence, not that the pattern was too coarse.
+ * The observed guard has to win, because a deterministic un-fixed defect emits an
+ * IDENTICAL failure by definition. Without it, string equality reads
+ * reproducibility as evidence against the instrument — a CLI that exits 2 twice,
+ * a build that fails on the same symbol twice — and demotes a real, still-broken
+ * check to debt.
  */
 export function isNonProgress(input: NonProgressInput): boolean {
     if (input.observed === true) return false
@@ -158,8 +147,8 @@ export function applyDemotions(failures: string[], demoted: ReadonlySet<string>)
     return failures.filter(f => !demoted.has(normalizeFailureDetail(f)))
 }
 
-/** The debt reason recorded for a demoted check, and the gate-trail wording. Kept
- *  in one place so the ledger line and the trail line cannot drift apart. */
+/** The debt reason recorded for a demoted check. One function so the ledger entry
+ *  and the wording the user reads cannot drift apart. */
 export function unobservedDebtReason(detail: string): string {
     return (
         `final gate check UNOBSERVED — ${detail.trim().slice(0, 200)} — `

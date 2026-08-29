@@ -10,15 +10,11 @@
  *
  * The reason is not tidiness. `final-gate-progress.ts` holds five pure functions,
  * and all five are consumed HERE and nowhere else — run-final-gate.ts names the
- * module only in comments and does not import it. Splitting evidence from
- * decision is precisely what `isNonProgress`'s own comment indicts:
- *
- *   > The fix is NOT a better string pattern — the bug is that the decision was
- *   > made downstream from the evidence.
- *
- * A gate that decides downstream from its evidence can let a broken product
- * report through the gap. Here the evidence and the decision sit in one module,
- * and the loop body reads as picker → apply → record.
+ * module only in comments and does not import it. The judgement therefore sits
+ * beside the evidence it judges: `judge` reads `observedFailures` off the SAME
+ * outcome the failure came from, and enters the demoted signature and breaks the
+ * previous-signature chain in that one call. A caller cannot apply those steps
+ * out of order or skip one, and the loop body reads as picker → apply → record.
  *
  * What is NOT here: anything that talks to the user, writes a ledger file, or
  * commits — confirmed, the module's only import is final-gate-progress and it
