@@ -33,7 +33,7 @@ export interface Turn {
     role: 'user' | 'assistant' | 'system'
     /** User text, error text, or a system note. Assistant content lives in `parts`. */
     text?: string
-    /** Ordered assistant content (text + tools). */
+    /** Ordered assistant content — text, thinking and tool parts, interleaved. */
     parts?: Part[]
     error?: boolean
     /** Epoch ms when the turn was committed — the client renders a dim HH:MM. */
