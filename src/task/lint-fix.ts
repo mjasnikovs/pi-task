@@ -1,12 +1,12 @@
 /**
  * lint-fix — the bounded, graduated resolution for a repo-health verify FAIL.
  *
- * The failure this closes (mx5 run 3, TASK_0017): AUTOFIX's only hammer is a FULL
+ * The failure this closes: AUTOFIX's only hammer is a FULL
  * implementation re-run. For a repo-health FAIL of 10 trivial lint findings the live
  * run burned two 36–56-minute impl turns, each REGENERATING a fresh 900-line rewrite
  * that failed lint differently — the loop cannot converge because the tool is bigger
- * than the defect. Validated live on the real TASK_0017 tree: a bounded fix child
- * (read,edit,bash) reached lint-clean in 64s and 106s, 2/2.
+ * than the defect. A bounded fix child (read,edit,bash) reaches lint-clean on a
+ * real tree in a couple of attempts.
  *
  * The same validation caught the design's failure mode: BOTH runs cheated, running
  * `git checkout -- src/test/request.ts` — REVERTING the task's uncommitted work to
@@ -28,14 +28,14 @@
  * recommend → AUTOFIX/ACCEPT/dismiss picker, so this pass can only make the loop
  * faster, never change what it can decide.
  *
- * FROZEN-PATH GUARD (mx5 run 12, TASK_0021/0022): the checker's own error text
+ * FROZEN-PATH GUARD: the checker's own error text
  * can INSTRUCT an edit to a spec-frozen file (typed ESLint: "playwright/index.ts
  * was not found by the project … Consider either including it in the
  * tsconfig.json") and this child complies — while the task's spec froze
  * `tsconfig.json` and verify's rule-4b prohibition probe then fails the TASK for
  * the gate child's edit. Two gates, contradictory rules, same file; the loop
- * never converges (live: TASK_0021 burned all three unattended AUTOFIX rounds).
- * Prompt framing alone is A/B-proven ~0–1/5 on the weak model (see
+ * never converges.
+ * Prompt framing alone does not hold on a weak model (see
  * frozen-path-guard.ts), so the deny is mechanical: the spec's frozen paths are
  * threaded in via `frozenPaths`, injected into the prompt as a do-not-touch list
  * (belt), and any frozen path the child still changed is deterministically
@@ -44,11 +44,11 @@
  * dirty with (possibly task) work is left alone, in the guard's safe direction:
  * cost time, never work.
  *
- * CROSS-TASK DELETION GUARD (mx5 run 12 PROMPT 2, verify-debug.log 17:53:44): the
+ * CROSS-TASK DELETION GUARD: the
  * revert-guard above is outcome-based but blind to a CLEAN tracked file — a
  * sibling task's committed deliverable is neither pre-dirty nor pre-untracked, so
  * DELETING it slips both checks, and if the lint converges the pass returns ok
- * (confirmed live: the child deleted TASK_0020's playwright ct files to green a
+ * (a child will delete a sibling task's component-test files to green a
  * typed-lint it was frozen out of fixing properly). The discriminator is
  * PROVENANCE, not deletion per se: a tracked file the CHILD deleted whose
  * introducing task (per `introducedBy`, git history) differs from the CURRENT
@@ -176,7 +176,7 @@ const EXCLUDE_TASKS_DIR = ':(exclude).pi-tasks'
 
 /**
  * Files differing from HEAD, or null when git itself failed. The distinction is
- * load-bearing: mx5 run 4 rolled back two GOOD converged fixes because a git
+ * load-bearing: without it a run rolls back GOOD converged fixes because a git
  * failure after the child read as "[] files still dirty" → every pre-existing work
  * file looked reverted → false "discarded work". A git error is INCONCLUSIVE, not
  * evidence of destruction.
@@ -328,7 +328,7 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     // CROSS-TASK DELETION GUARD: a tracked file the CHILD deleted whose
     // introducing task differs from the current task is a sibling's committed
-    // deliverable destroyed to go green (mx5 run 12: the child deleted TASK_0020's
+    // deliverable destroyed to go green (the child deletes a sibling's
     // playwright ct files and the pass returned ok — the revert-guard above only
     // watches pre-dirty and pre-untracked files, and a clean tracked sibling file
     // is neither). Restore JUST those paths from HEAD (they were clean pre-child,
@@ -365,8 +365,8 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     // FROZEN-PATH GUARD: a frozen path that was clean pre-child and is changed
     // now is the child's edit — the exact write verify's rule-4b prohibition
-    // probe is guaranteed to fail the TASK for (mx5 run 12: ESLint's own error
-    // text instructed the tsconfig.json edit and the child complied, 5/5 in the
+    // probe is guaranteed to fail the TASK for. ESLint's own error text will
+    // instruct a tsconfig.json edit and the child complies, every time, in the
     // live A/B). Revert JUST those paths (they were clean, so HEAD == pre-state:
     // no work can be lost) and report not-applied so the caller falls through to
     // the ordinary recommend → AUTOFIX/ACCEPT picker. Inconclusive git (either

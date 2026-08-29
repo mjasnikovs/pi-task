@@ -17,12 +17,12 @@
  * test to that copy and it passes: routing enforce through this concentrates the
  * differences into a table instead of moving them.
  *
- * The second reason for the module is that all of it used to live inside
+ * The second reason for the module is that all of it would otherwise live inside
  * `buildGateDeps`'s closure, so nothing about it was reachable from a test:
  * `buildGateDeps` is ~700 lines and is never called by the suite. The
  * git-state-guard wiring in particular — snapshot, restore-in-`finally`,
  * `verdictTainted` — is the mechanism that discards a verify verdict computed on
- * a tree the child mutated (mx5 run 6, where the verify child `git stash`ed the
+ * a tree the child mutated (a verify child can `git stash` the
  * task's uncommitted work and never popped it), and it could only be checked
  * indirectly through a fake `mutationCheck` one layer up. Here `runWorker` and
  * the git helpers are injected, so the ordering, the trail lines and the
@@ -48,7 +48,7 @@ export interface GateChildRow {
      */
     guarded: boolean
     /**
-     * Log tool OUTPUTS, not just the calls (mx5 run 10 item 6): without the result,
+     * Log tool OUTPUTS, not just the calls: without the result,
      * "verify claimed curl PASS on a server that cannot serve" is undecidable from
      * the log. Off for `enforce`, whose log is a per-pass verdict trail.
      */
@@ -172,7 +172,7 @@ export function makeGateChild(
                     cwd: deps.cwd,
                     ...(sig ? {signal: sig} : {}),
                     tools,
-                    // The four guard literals that used to sit here — run to
+                    // The four guard literals — run to
                     // completion, a per-command watchdog, a stream watchdog, and
                     // the path rule disabled — are the `gate` row of
                     // WORKER_PROFILES (workers/worker-profiles.ts), which carries
@@ -264,7 +264,7 @@ export function makeGateChild(
                 :   `=== ${deps.kind} end: ${row.okMarker} ===`
             )
             if (failure) throw new Error(failure)
-            // CAPABILITY-LEVEL diff capture (mx5 run 11): any WRITE-capable child —
+            // CAPABILITY-LEVEL diff capture: any WRITE-capable child —
             // decided by its TOOLS, not by which phase spawned it — gets its tree
             // changes logged, so a future write-capable kind cannot run invisibly
             // the way the final-fix child's `rm` did.

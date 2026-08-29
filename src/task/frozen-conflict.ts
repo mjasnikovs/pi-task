@@ -1,8 +1,8 @@
 /**
  * frozen-conflict — deterministic detection of an UNSATISFIABLE spec pair at
- * compose time (mx5 run 12 root cause, PROMPT 1 layer A).
+ * compose time.
  *
- * The failure this closes: compose authored TASK_0020 with a blanket freeze
+ * The failure this closes: compose authors a spec with a blanket freeze
  * ("Do not modify `tsconfig.json`, `eslint.config.js`, or `.prettierrc.cjs`;
  * those are handled in steps 1–2") while the deliverable — new
  * `playwright-ct.config.ts` + `playwright/index.ts` — needs exactly that
@@ -18,12 +18,12 @@
  *
  * The contradiction is visible IN THE COMPOSED TEXT ITSELF, so it must die at
  * spec time. Like the skip-escape / synthesized-wiring / plan-contradiction
- * probes (prompt-only rules are A/B-proven ~0–1/5 on the weak model), the
+ * probes (a prompt-only rule does not hold on a weak model), the
  * detector is deterministic and its finding is FORCED into the critique
  * rewrite: the rewrite must either grant scoped ownership ("MAY edit `X` ONLY
  * to register the files this task creates") or drop the file creation.
  *
- * High-precision by construction (FP-swept over the 26 real mx5 run-12 specs):
+ * High-precision by construction:
  *   - the freeze side must be BLANKET — a `Do NOT modify` line with no
  *     exception clause; a scoped freeze ("MAY edit … ONLY to register",
  *     "Only edit `X` …", "… except to add …") is already the resolution shape
@@ -38,7 +38,7 @@
  *     included"), unless-added ("won't be type-checked unless added"),
  *     directional active ("requires adding … to" / "must add … to"), or the
  *     prose SURRENDER itself ("will not be covered … since `X` is not
- *     modified" — the exact line the live TASK_0020 spec shipped).
+ *     modified" — the exact shape a live spec ships).
  * Mere co-mention never fires.
  */
 import {extractProhibitions, PROHIBITION_RE} from './prohibition-probe.js'
@@ -46,7 +46,7 @@ import {pathNamedIn} from './frozen-path-guard.js'
 
 /** One unsatisfiable freeze/requires-edit pair found in a composed spec. */
 export interface FrozenPathConflict {
-    /** The frozen path (normalized: no leading ./, no trailing /). */
+    /** The frozen path (normalized: no leading./, no trailing /). */
     path: string
     /** The freeze line, verbatim (the `Do NOT modify` constraint). */
     constraint: string
@@ -91,7 +91,7 @@ const MUST_ADD_DIRECTIONAL_RE =
 
 /** The prose-surrender pair: an artifact "will not be covered/type-checked/…"
  *  BECAUSE the (frozen) path "is not modified". Both halves must be present —
- *  this is the exact contradiction shape the live TASK_0020 spec shipped. */
+ *  this is the exact contradiction shape a live spec ships. */
 const NOT_COVERED_RE =
     /\b(?:will\s+not|won'?t|cannot|can'?t|is\s+not|isn'?t)\s+(?:be\s+)?(?:covered|type-?checked|checked|compiled|linted|validated|included)\b/i
 const BECAUSE_NOT_MODIFIED_RE =

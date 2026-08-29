@@ -1,6 +1,6 @@
 /**
  * launch-manifest — WHICH manifest the launch-contract diff is entitled to diff
- * against, and whether there is one at all (nexttask 16A).
+ * against, and whether there is one at all.
  *
  * The defect this closes (unobserved, proven by construction). The extraction end
  * of the launch contract has no ecosystem test anywhere in it:
@@ -19,14 +19,14 @@
  * That text seeds the autofix child's prompt (final-gate.ts's FinalGateOutcome.reason),
  * so the most likely repair on a CMake project was to write a package.json.
  *
- * IAR1 is how close this got: `plan-debug.log:10` records "launch-contract
+ * A run's own `plan-debug.log` records "launch-contract
  * extraction: 0 grounded script(s) kept from 3 emitted" — a non-npm project that
  * reached extraction and emitted three candidates, saved only by its design not
  * backticking them in a "script" paragraph.
  *
  * THE RULE, and it is deliberately two ecosystems wide, not three:
  *   • package.json present and parseable ⇒ diff against its `scripts` keys, exactly
- *     as before (byte-identical failure text on every npm tree — mx5's missing
+ *     as before (byte-identical failure text on every npm tree — a missing
  *     `build`/`seed` is a TRUE positive and must keep failing).
  *   • no package.json but a Makefile ⇒ diff against its TARGETS. The capability was
  *     already in final-gate.ts (`makeHasTarget`); the diff simply never called it.
@@ -36,8 +36,8 @@
  *     check must never invent a file the project chose not to have).
  *
  * cargo/poetry/gradle are NOT here on purpose. The corpus on this box contains one
- * project that ever recorded a launch contract (mx5, npm) and one non-npm project
- * that reached extraction (IAR1, CMake). A third ecosystem would be a guess.
+ * project that ever recorded a launch contract and one non-npm project
+ * that reached extraction. A third ecosystem would be a guess.
  */
 import {existsSync, readFileSync, readdirSync} from 'node:fs'
 import * as path from 'node:path'
@@ -153,7 +153,7 @@ export function readLaunchManifest(cwd: string): LaunchManifest {
 
 /**
  * The one line an INERT contract leaves behind. It rides in the gate's UNOBSERVED
- * channel rather than in `warnings` for the reason nexttask 16A gives: a check that
+ * channel rather than in `warnings` for one reason: a check that
  * silently did nothing must not read later as a check that passed.
  */
 export function inertLaunchContractNote(declared: string[], manifest: LaunchManifest): string {

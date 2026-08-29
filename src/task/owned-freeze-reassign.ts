@@ -1,15 +1,15 @@
 /**
  * owned-freeze-reassign — the DETERMINISTIC resolution for the owned/freeze
- * unsatisfiable pair (nexttask 2): an AUTHORITATIVE owned requirement whose only
+ * unsatisfiable pair: an AUTHORITATIVE owned requirement whose only
  * implementing file the same spec FREEZES. No model, no prose edit. The
  * requirement text is never altered — only which task's ledger entry carries it,
  * so "resolution by deletion" is structurally impossible.
  *
- * WHY NOT A REWRITE. Measured on mx5 run 18 (scripts/live-owned-freeze-conflict
+ * WHY NOT A REWRITE. Measured against recorded specs
  * -ab.ts, 20 trials/arm): forcing the pair through the critique seam drives
- * pair-present 8/20 → 0/20, but 11 of the 20 resolutions DELETE the
+ * a rewrite does remove the contradiction, but half its resolutions DELETE the
  * AUTHORITATIVE clause instead of moving it, and the delivered VERIFY still
- * greps `package.json` in both arms (6/20). Removal of the pair is not
+ * requirement rather than reassigning it. Removal of the pair is not
  * satisfaction of the requirement.
  *
  * ── THE MECHANISM: DETACH, then CLAIM ───────────────────────────────────────
@@ -89,9 +89,9 @@ export interface DetachResult {
  *
  * The negation half is not decoration. Every sibling task's refined prompt names
  * the files it must not touch ("Do not create or modify any other files outside
- * this slice (e.g., no changes to `src/server/index.ts`, …)" — mx5 run 19
- * TASK_0008). Without the fence check that spec claims the server file; with it,
- * run 19's 26 refined prompts yield exactly the two tasks that do write it.
+ * this slice (e.g., no changes to `src/server/index.ts`, …)". Without the fence
+ * check that spec claims the server file; with it, the plan's refined prompts
+ * yield exactly the tasks that really do write it.
  */
 export function writeIntent(text: string, p: string): boolean {
     const re = new RegExp(
@@ -102,7 +102,7 @@ export function writeIntent(text: string, p: string): boolean {
     )
     for (const m of text.matchAll(re)) {
         // The negation usually sits BEFORE the verb, so the window reaches back
-        // past it — matching only the verb→path span misses TASK_0008 entirely.
+        // past it — matching only the verb→path span misses a fenced spec entirely.
         const from = Math.max(0, (m.index ?? 0) - 90)
         const window = text.slice(from, (m.index ?? 0) + m[0].length)
         if (NEGATED_RE.test(window) || PROHIBITION_RE.test(window)) continue

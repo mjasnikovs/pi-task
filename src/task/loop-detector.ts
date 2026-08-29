@@ -114,7 +114,7 @@ export class LoopDetector {
 
         // 2. Path-aware loop: the same file re-targeted without forward progress.
         // Caught here precisely because varied offset/limit make the exact key
-        // miss it (TASK_0017: auth.ts read/grepped ~12× with changing args until
+        // miss it (one file read and grepped a dozen times with changing args until
         // the wall-clock timeout, never tripping the exact detector).
         const path = this.buf[this.buf.length - 1].path
         if (path !== null) {

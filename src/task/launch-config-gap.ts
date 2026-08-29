@@ -1,7 +1,7 @@
 /**
  * launch-config-gap — a launch script that cannot run because a variable the
  * project's own tracked template DECLARES is absent from this box is an
- * ENVIRONMENT GAP, not a code fault (mx5 run 20).
+ * ENVIRONMENT GAP, not a code fault.
  *
  * THE EPISODE. Attempt 3 of the final-gate autofix passed every guard, fixed the
  * failing test, and still lost the run:
@@ -21,7 +21,7 @@
  * script with `runnerEnv(runner)` = `process.env` plus a PATH prefix and nothing
  * else; "Missing required environment variable" matches neither ENV_GAP_OUTPUT_RE
  * nor INFRA_GAP_OUTPUT_RE, so it is a hard FAIL; and the only way to supply the
- * value is a gitignored `.env`, whose writes nexttask 4 correctly refuses to
+ * value is a gitignored `.env`, whose writes the gate correctly refuses to
  * credit. The static half of this already shipped and WORKED — `.env.example`
  * declares ADMIN_PHONE/ADMIN_PASSWORD, so `findMissingEnvDeclarations` was
  * correctly silent. This is the execution half.

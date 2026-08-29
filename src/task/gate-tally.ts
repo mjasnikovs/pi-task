@@ -14,7 +14,7 @@
  * testable with no tree at all.
  *
  * The two verdict predicates the gate has always exported — `observabilityGapFailure`
- * (run-16 full-blindness FAIL) and `unobservedVerdict` (the third, non-blocking
+ * and `unobservedVerdict` (the third, non-blocking
  * verdict) — live here because they read exactly the counters the tally owns;
  * `final-gate.ts` re-exports them so every existing importer is unchanged.
  */
@@ -22,7 +22,7 @@ import type {AcceptDebt} from './accept-debt.js'
 import type {FinalGateOutcome} from './final-gate.js'
 
 /**
- * Full-skip blindness guard (mx5 run 16). Per-command env-gap skips stay
+ * Full-skip blindness guard. Per-command env-gap skips stay
  * legitimate (a missing browser must not fail a suite); what may never happen
  * again is ALL of them skipping while the gate still reports PASS — a gate that
  * observed nothing dynamic has no basis to vouch for the assembled app. Pure so
@@ -67,7 +67,7 @@ export function observabilityGapFailure(args: {
  * `attempted === 0`, and until now that silence fell straight through to
  * `PASS — no integration command found (statics passed)`: the run-16 blindness class
  * entering through a different door, where "we never checked" reads exactly like "we
- * checked and it was fine". Measured 2026-07-27: IAR1 (C++/CMake, no package.json)
+ * checked and it was fine". Measured 2026-07-27: one real project (C++/CMake, no package.json)
  * shipped that verdict TWICE while carrying 2 and 3 open verify-FAIL debts, and
  * godot-engine (package.json whose only script is `verify`) reproduces it live today.
  *
@@ -80,7 +80,7 @@ export function observabilityGapFailure(args: {
  *    the runs with no dynamic evidence were exactly the runs already known to be
  *    carrying defects.
  *  - Against, and decisive: (1) that debt is ALREADY surfaced unconditionally at the
- *    gate moment, on PASS as on FAIL — the IAR1 records literally read "PASS — no
+ *    gate moment, on PASS as on FAIL — the one real project records literally read "PASS — no
  *    integration command found … UNRESOLVED VERIFY-FAIL DEBT still open (2)". The
  *    missing signal was never the debt, it was the word PASS endorsing the run, and
  *    that is what this fixes. (2) `ok: false` routes into the autofix picker, whose
@@ -88,10 +88,10 @@ export function observabilityGapFailure(args: {
  *    editing code, so the highest-probability child response is to FABRICATE a
  *    runnable command to satisfy the gate — the same fabrication class that refuted
  *    the `## verified tooling` harvest (see discoverIntegrationCommands) and that had
- *    run 11's fix child `rm` a sibling's deliverable. (3) That harvest being refuted
- *    means IAR1 and godot-engine can NEVER discover a command, so blocking would end
+ *    a fix child `rm` a sibling's deliverable. (3) That harvest being refuted
+ *    means one real project and godot-engine can NEVER discover a command, so blocking would end
  *    every non-npm run in `failed` permanently, with no remedy — the task's own I3
- *    ("show blocking does not block IAR1/godot post-Task-1") is unsatisfiable, and
+ *    is unsatisfiable, and
  *    its stated consequence is to downgrade to a warning and say so. This is that.
  * The teeth are elsewhere and are real: the verdict word changes, the gate trail says
  * UNOBSERVED, and the caller records a durable final-gate debt that the NEXT run's
@@ -133,13 +133,13 @@ interface TalliedFailure {
 }
 
 export class GateTally {
-    // Aggregated failures across ALL sections (mx5 run 13 — see runFinalIntegrationGate's
+    // Aggregated failures across ALL sections (see runFinalIntegrationGate's
     // doc). rank 0 = boot/render ("does not serve/render" is the most load-bearing
     // signal); rank 1 = everything else, kept in execution order by stable sort.
     private readonly failures: TalliedFailure[] = []
     /** Labels of the dynamic commands that ran AND passed — the PASS reason names them. */
     private readonly passed: string[] = []
-    // Full-skip blindness counters (mx5 run 16): every dynamic spawn counts an
+    // Full-skip blindness counters: every dynamic spawn counts an
     // attempt; a real pass OR a real fail counts an observation; skips observe
     // nothing. If everything discovered ends up skipped, observabilityGapFailure
     // turns the silence into a rank-0 failure instead of a static-only PASS.
@@ -148,7 +148,7 @@ export class GateTally {
     private spawnFailures = 0
     private readonly bins = new Set<string>()
     private readonly warnings: string[] = []
-    /** UNOBSERVED notes for launch scripts reclassified as CONFIG GAPS (run 20).
+    /** UNOBSERVED notes for launch scripts reclassified as CONFIG GAPS.
      *  They ride in `unobserved`, not `warnings`, so the caller's existing
      *  `recordDebt(cwd, id, fin.unobserved, 'final-gate')` writes the debt —
      *  never a PASS. */
@@ -157,7 +157,7 @@ export class GateTally {
      *  diff against" — a note, never a failure, never a silent pass. */
     private readonly contractNotes: string[] = []
     /** The boot section's own UNOBSERVED verdict (bootSkipVerdict / rejected launch
-     *  script). Lives outside the dynamic counters ON PURPOSE (mx5 run 18): the
+     *  script). Lives outside the dynamic counters ON PURPOSE: the
      *  test/build commands that did run cannot cancel it. */
     private bootNote: string | null = null
 
@@ -167,7 +167,7 @@ export class GateTally {
     }
 
     /**
-     * A failure a PROBE returned after observing (nexttask 19A — see
+     * A failure a PROBE returned after observing (see
      * FinalGateOutcome.observedFailures). Used by exactly one caller: the boot
      * section, whose `fail` outcome can only arise from a probe that looked. Every
      * other `fail()` keeps its class, so nothing else changes.
@@ -194,7 +194,7 @@ export class GateTally {
     }
 
     /**
-     * Un-count one observation. The config-gap branch (mx5 run 20): a launch
+     * Un-count one observation. The config-gap branch: a launch
      * script failed, the four static conditions plus the placeholder re-run said
      * the failure was a missing env variable the shipped template declares, and
      * so NOTHING about that script was observed — the real run could not reach
@@ -261,7 +261,7 @@ export class GateTally {
      *
      * Otherwise `ok: true`, with the UNOBSERVED note when the gate could not
      * observe something it meant to. Two independent notes, either or both of which
-     * may apply: the boot never ran (run 18), and/or NOTHING dynamic ran at all
+     * may apply: the boot never ran, and/or NOTHING dynamic ran at all
      * (unobservedVerdict — commands WERE discovered, none spawn-failed so the run-16
      * guard correctly stayed silent, and yet nothing ran: that used to be `statics
      * passed (integration commands not runnable here)`, the identical "we never
@@ -273,11 +273,11 @@ export class GateTally {
      * ZERO ATTEMPTS IS UNOBSERVED, NEVER A PASS: when nothing dynamic was even
      * attempted, the note IS the reason — there is no `statics passed (…)` suffix,
      * because "we never checked" must not read like "we checked and it was fine".
-     * IAR1 shipped that verdict TWICE while carrying open verify-FAIL debt.
+     * one real project shipped that verdict TWICE while carrying open verify-FAIL debt.
      *
      * The debt note rides in its OWN field: `reason` stays the mechanical failure
      * because it seeds the autofix child's prompt (see FinalGateOutcome.reason —
-     * run 11's fix child executed a recorded claim as an instruction).
+     * a fix child executed a recorded claim as an instruction).
      */
     verdict(debts: GateDebts): FinalGateOutcome {
         const withDebts = (o: FinalGateOutcome): FinalGateOutcome => ({

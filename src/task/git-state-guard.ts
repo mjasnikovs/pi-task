@@ -2,18 +2,18 @@
  * git-state-guard — deterministic repo-state snapshot/reconcile around the
  * read-only gate children (verify, recommend).
  *
- * The failure this closes (proven twice on mx5): those children hold a `read,bash`
+ * The failure this closes: those children hold a `read,bash`
  * contract whose "never modify the tree" clause is prompt-level only, and the live
- * local model breaks it. Run 6's verify child ran `git stash; git checkout HEAD~1;
+ * local model breaks it. A verify child will run `git stash; git checkout HEAD~1;
  * tsc; git checkout HEAD` with NO pop — the task's whole uncommitted implementation
  * vanished into a stash, the verify judged an empty tree (a full re-implementation
  * was burned), and the orphaned stash detonated two days later when a later impl
  * turn popped it onto a 14-commits-newer HEAD (unresolvable UU conflict, the
  * /task-auto checklist reverted to a stale state). The same child has been observed
- * running `eslint --fix .` mid-verification and ad-hoc DDL against the test DB.
+ * running `eslint --fix.` mid-verification and ad-hoc DDL against the test DB.
  *
  * Prompt rules are evidence-insufficient for this class (FROZEN-CONTRACT framing
- * A/B'd 0–1/5 compliance), so this is a capability-shaped fix: snapshot the repo
+ * a prompt rule does not hold), so this is a capability-shaped fix: snapshot the repo
  * state BEFORE the child runs, and afterwards deterministically restore anything
  * it moved — no model in the loop.
  *
@@ -21,7 +21,7 @@
  *   - HEAD (sha + symbolic branch ref): a child that checked out another commit
  *     and never came back is checked back out.
  *   - The WORKTREE CONTENT as a git tree object, built through a temporary index
- *     (`read-tree --empty` + `add -A` + `write-tree`, excluding .pi-tasks — the
+ *     (`read-tree --empty` + `add -A` + `write-tree`, excluding.pi-tasks — the
  *     gate's own debug logs land there DURING the run). This snapshots tracked
  *     *and* untracked (non-ignored) files without touching the real index or the
  *     stash. Restoration re-materialises every changed/deleted file from the
@@ -73,10 +73,10 @@ export interface ReconcileResult {
      *
      *  Deliberately false for child-CREATED files and for modified/deleted untracked
      *  *test-runner artifacts* (test-results/, playwright-report/, coverage output,
-     *  *.tsbuildinfo, .last-run.json …): a gate child that merely ran the suite and
+     *  *.tsbuildinfo,.last-run.json …): a gate child that merely ran the suite and
      *  left its report behind judged a tree whose only difference from pre-run is
      *  regenerable output — discarding a 49-min verify over that is the F-class this
-     *  splits off (mx5 run 9: 7 of 9 guard firings were pure test-results churn). */
+     *  splits off. */
     verdictTainted: boolean
     /** Human-readable restore actions, for the debug log / notify / gate trail. */
     actions: string[]
@@ -88,26 +88,26 @@ export interface ReconcileResult {
  * so its verdict stands. Gitignored files never reach the snapshot (git add -A skips
  * them); this list is for the ones a typical project leaves UNIGNORED — Playwright's
  * `test-results/` and `playwright-report/` above all, the exact churn that discarded
- * verify verdicts across mx5 run 9. Kept deliberately narrow: anything not matched
+ * verify verdicts. Kept deliberately narrow: anything not matched
  * here that a child modifies/deletes is treated as graded state (verdict-tainting).
  *
  * The list itself now lives in `regenerable-artifacts.ts` — the deletion guard and
  * the per-task commit need the same knowledge, and three private copies of it is
- * how mx5 run 20 spent two thirds of its repair budget on three screenshots.
+ * how a run spends most of its repair budget on a handful of screenshots.
  */
 const isBenignArtifact = isRegenerableArtifact
 
 /**
  * Regenerable machine state that is benign EVEN WHEN TRACKED — a project that
- * mistakenly commits it (mx5 run 10 does exactly this) must not have a gate child's
+ * mistakenly commits it must not have a gate child's
  * incidental rewrite of it discard the verdict. Two classes:
- *   - Playwright component-test build cache (`ctCacheDir` — run 10 committed 60+
+ *   - Playwright component-test build cache (`ctCacheDir` — a run commits dozens of
  *     `.playwright-cache/assets/*.js` bundles; a `test:ct` run rewrites them every
  *     time), and
  *   - the test runner's `.last-run.json` run-state file.
  * DELIBERATELY narrow: snapshot BASELINE images (`*-snapshots/*.png`) are NOT here —
  * a child that rewrites a baseline to make a screenshot test pass is the real
- * mutate-to-pass catch (run 10's other half), so those stay verdict-tainting.
+ * mutate-to-pass catch, so those stay verdict-tainting.
  */
 const ALWAYS_REGENERABLE_PATTERNS: readonly RegExp[] = [/(?:^|\/)\.last-run\.json$/]
 
@@ -279,7 +279,7 @@ async function restoreWorktree(
                 ) {
                     // Regenerable test/build output — not graded work. Either an
                     // always-regenerable class (ct cache / run-state, benign even when
-                    // tracked — mx5 run 10) or untracked test-runner output.
+                    // tracked) or untracked test-runner output.
                     artifactChanges.push(name)
                 } else if (code === 'D') {
                     gradedDeleted.push(name)
@@ -324,7 +324,7 @@ async function restoreWorktree(
  *   2. Worktree content from the snapshot TREE (not from any stash the child may
  *      have pushed — the snapshot is the authoritative "as the child found it").
  *   3. Child-pushed stash entries are dropped LAST, once the work they swallowed
- *      is already restored — this is exactly the orphan that detonated mx5 run 6.
+ *      is already restored — this is exactly the orphan that detonates later.
  *
  * Never throws; failures degrade to actions[] lines so the caller can log them.
  */
@@ -388,7 +388,7 @@ export async function reconcileGitState(
     let stash = await stashNow()
     if (stash !== before.stashSha) {
         // A child that pushed/popped a stash moved graded work in or out of the tree
-        // (mx5 run 6's stash-and-abandon) — always verdict-tainting.
+        // (a stash-and-abandon) — always verdict-tainting.
         tainted = true
         if (before.stashSha === null || (await stashContains(git, stash, before.stashSha))) {
             let dropped = 0

@@ -11,7 +11,7 @@
  * (or read,edit for enforce) passes of the same local model that must run to
  * completion: unguarded (no wall-clock timeout, exact-match loop guard only,
  * path-revisit disabled because re-running the same check IS the job), each with a
- * status widget and a per-gate debug log under .pi-tasks/.
+ * status widget and a per-gate debug log under.pi-tasks/.
  */
 import {existsSync, readFileSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
@@ -73,7 +73,7 @@ import {makeGateChild, type GateChildKind} from './gate-child.js'
  *  command so this module stays free of the orchestrators (avoids an import cycle). */
 export type RunTaskFn = GateDeps['runTask']
 
-/** Max chars of a tool result kept in the gate debug log (mx5 run 10 item 6). */
+/** Max chars of a tool result kept in the gate debug log. */
 const TOOL_RESULT_LOG_LIMIT = 300
 
 /**
@@ -213,7 +213,7 @@ export async function collectAddedLines(cwd: string, signal?: AbortSignal): Prom
 }
 
 /**
- * Deterministic sandbox-path-leak pass (see foreign-path.ts, mx5 run 13 PROMPT 4
+ * Deterministic sandbox-path-leak pass (see foreign-path.ts, a PROMPT 4
  * item 1): find absolute paths the task committed that resolve nowhere on this
  * machine while the real file sits in the repo, REPAIR the ones whose relative
  * form provably resolves, and return verify findings for whatever is left.
@@ -253,7 +253,7 @@ export async function collectForeignPathFindings(
 const MANIFEST_RE = /(^|\/)package\.json$/
 
 /**
- * Deterministic neutered-check-script pass (see script-escape.ts, mx5 run 13 PROMPT
+ * Deterministic neutered-check-script pass (see script-escape.ts, a PROMPT
  * 4 item 4): check-class scripts that cannot report failure, in a manifest THIS
  * task changed.
  *
@@ -302,7 +302,7 @@ async function readOrNull(cwd: string, rel: string): Promise<string | null> {
 }
 
 /**
- * Deterministic test-runner glob-collision pass (see runner-globs.ts, mx5 runs 7 AND
+ * Deterministic test-runner glob-collision pass (see runner-globs.ts, a AND
  * 13, PROMPT 4 item 2): the manifest declares both `bun test` and `playwright test`
  * without a provably disjoint file set, so `bun test` imports the playwright specs
  * and dies during collection.
@@ -383,7 +383,7 @@ export function parseBuildOutdirs(cwd: string): string[] {
 }
 
 /**
- * IGNORED-PATH CHANNEL (mx5 run 19 — see write-guard.ts). A fingerprint of every
+ * IGNORED-PATH CHANNEL (see write-guard.ts). A fingerprint of every
  * ACTIONABLE ignored path (`git status --porcelain --ignored=matching`, minus
  * build output / node_modules / .pi-tasks / .git), taken before and after a
  * write-capable gate child so its writes to files git never reports are
@@ -524,7 +524,7 @@ async function readRepoFile(cwd: string, rel: string): Promise<RepoFile | null> 
 }
 
 /**
- * Deterministic test-assembly probe input (see test-assembly.ts, run-8 F4): read the
+ * Deterministic test-assembly probe input: read the
  * task's own changed TEST files plus the repo's tracked source files, and return the
  * finding lines naming any test that rebuilds a production assembly it never imports.
  * Pure import-graph shape; failures degrade to no findings (the probe is a sharpener,
@@ -610,7 +610,7 @@ export function buildVerifyProbes(params: {
                 findProhibitionViolations(banned, files)
             )
         },
-        // Deterministic cross-task deletion probe (mx5 run 12 PROMPT 2):
+        // Deterministic cross-task deletion probe:
         // tracked files this task's diff DELETES whose introducing commit
         // belongs to a DIFFERENT task — a sibling's committed deliverable
         // destroyed (typically to green a check). Injected under rule 4d and
@@ -624,7 +624,7 @@ export function buildVerifyProbes(params: {
         // ("return 401 so the verification test passes") become rule-4c
         // findings so the child verifies the real requirement, not the check.
         probeGaming: () => collectAddedLines(cwd, signal).then(findProbeGaming),
-        // Deterministic sandbox-path-leak probe (mx5 run 13 PROMPT 4 item
+        // Deterministic sandbox-path-leak probe (
         // 1): absolute paths committed from the authoring child's own
         // environment (`/workspace/src/shared`) that resolve nowhere here.
         // Repaired deterministically where the relative form provably
@@ -632,13 +632,13 @@ export function buildVerifyProbes(params: {
         // that such a path breaks the BUILD — so the checks that would have
         // caught it report nothing rather than failing.
         foreignPath: () => collectForeignPathFindings(cwd, signal, log),
-        // Deterministic neutered-check-script probe (mx5 run 13 PROMPT 4
+        // Deterministic neutered-check-script probe (
         // item 4): a check script this task authored that cannot fail
         // (`… || true`, an inverted-grep launder). Injected under rule 4f,
         // because the child provably cannot find this by running the
         // script — it passes, which IS the defect.
         scriptEscape: () => collectScriptEscapeFindings(cwd, signal),
-        // Deterministic runner glob-collision probe (mx5 runs 7 AND 13,
+        // Deterministic runner glob-collision probe (
         // PROMPT 4 item 2): both `bun test` and `playwright test` declared
         // with no proof their file sets are disjoint. Injected under rule
         // 4g — the collision kills the suite during COLLECTION, which does
@@ -668,7 +668,7 @@ export function buildGateDeps(params: {
     runTask: RunTaskFn
 }): GateDeps & {finalGateFix: FinalGateFixFn} {
     const {signal, parentContextWindow, runTask} = params
-    // A/B seam (scripts/verify-deadair-ab.ts), same shape as CANCEL_AB_ARM in
+    // A/B seam, same shape as CANCEL_AB_ARM in
     // cancel-points.ts: reproduce the pre-fix gate — blocking sync repo health, no
     // loader across the deterministic stage — so the dead air can be measured in the
     // SAME binary rather than against a remembered baseline. Unset in every real run.
@@ -683,7 +683,7 @@ export function buildGateDeps(params: {
     // mutationCheck dep to discard a verdict computed on a mutated tree.
     let lastGuardReconcile: ReconcileResult | null = null
 
-    // Restore tracked files to HEAD and drop files a pass created; the .pi-tasks
+    // Restore tracked files to HEAD and drop files a pass created; the.pi-tasks
     // trail/log writes made during the pass survive both. Shared by the enforce
     // pre-commit gate (discardEdits) and the final-gate autofix shrink guard.
     const discardTreeEdits = async (cwd2: string): Promise<void> => {
@@ -733,7 +733,7 @@ export function buildGateDeps(params: {
         // Durable per-task gate trail: every verdict/decision lands in the task
         // file's `## gates` section so gate behavior is auditable from artifacts.
         record: (cwd2, taskId, line) => appendGateRecord(cwd2, taskId, line),
-        // Durable defect ledger under .pi-tasks/ (survives discardEdits): every
+        // Durable defect ledger under.pi-tasks/ (survives discardEdits): every
         // recorded class — accepted, yolo-accepted, enforce-revert, enforce-kept,
         // frozen-blocked, cross-task-deletion, root-cause — lands here with its
         // origin, and the final integration gate re-checks each one at run end.
@@ -771,8 +771,8 @@ export function buildGateDeps(params: {
                 }
                 // `enforce-commit` is HEAD ALONE — at the enforce differential HEAD is
                 // the ENFORCE commit, and that commit's own diff is the only file set
-                // that can answer "could reverting this repair the failure?" (mx5 run
-                // 18 / nexttask 4).
+                // that can answer "could reverting this repair the failure?" (run
+                // 18 / ).
                 const r = await git(
                     cwd2,
                     [
@@ -825,7 +825,7 @@ export function buildGateDeps(params: {
                 // timeout. This pass reworks files in place until every violation is
                 // fixed and legitimately reads/edits the same file many times — the
                 // research-worker guards mislabel that as a runaway and kill good work
-                // (proven on mx5 TASK_0002). classifyEnforceChildFailure still blocks
+                //. classifyEnforceChildFailure still blocks
                 // on a real failure (non-zero exit, leaked tool call) or a user cancel.
                 //
                 // This used to be an inline ~85-line copy of the gate-child ritual,
@@ -852,7 +852,7 @@ export function buildGateDeps(params: {
             // stopped: no spinner, no clock, no line (the `verifying…` notify cannot
             // even paint, since pi-tui schedules renders on process.nextTick and the
             // health check used to block the loop outright). MEASURED on real repos:
-            // 15s (mx5) to 69s (aiz-client) per health run, 0 of 686 expected 100ms
+            // 15s to 69s (aiz-client) per health run, 0 of 686 expected 100ms
             // timer ticks delivered. One loader now spans the WHOLE gate — the
             // deterministic stage and the child — so the run is never silent.
             const gateStartedAt = Date.now()
@@ -922,13 +922,13 @@ export function buildGateDeps(params: {
                     // when the mutation touched graded state (verdictTainted). A child
                     // that merely left test-runner output behind (test-results/,
                     // playwright-report/ …) judged an equivalent tree; its verdict stands
-                    // and the artifacts were still cleaned (mx5 run 9 lost 7 verdicts this
+                    // and the artifacts were still cleaned (lost 7 verdicts this
                     // way — see git-state-guard.ts).
                     mutationCheck: () =>
                         lastGuardReconcile?.verdictTainted ?
                             {mutated: true, detail: lastGuardReconcile.actions.join('; ')}
                         :   {mutated: false, detail: ''},
-                    // Per-run environment-facts cache under .pi-tasks/ (survives
+                    // Per-run environment-facts cache under.pi-tasks/ (survives
                     // discardEdits): earlier children's discoveries save this child
                     // the re-archaeology; its own ENV-NOTE lines are stored for the
                     // next one, stamped with this task's id as their origin so a
@@ -939,7 +939,7 @@ export function buildGateDeps(params: {
                         read: () => readEnvNotes(cwd2),
                         append: notes => appendEnvNotes(cwd2, notes, taskId)
                     },
-                    // Per-run cross-slice contract registry under .pi-tasks/ (F3): the
+                    // Per-run cross-slice contract registry under.pi-tasks/ (F3): the
                     // verbatim interface facts the design pins that multiple slices
                     // share, so the verify child checks this slice's boundary against
                     // them. Empty on single-`/task` runs or a design with no shared
@@ -950,7 +950,7 @@ export function buildGateDeps(params: {
         },
         lintFix: async (fixCtx, cwd2, taskTitle, taskId, failReason) => {
             // Same frozen extraction the enforce guard and the verify rule-4b
-            // probe consume (mx5 run 12: the lint-fix child edited spec-frozen
+            // probe consume (the lint-fix child edited spec-frozen
             // tsconfig.json because ESLint's own error text instructed it, then
             // verify failed the TASK for that edit — the child must know the
             // spec's do-not-touch list AND be mechanically denied it).
@@ -967,7 +967,7 @@ export function buildGateDeps(params: {
                     return {exitCode: r.exitCode, stdout: r.stdout}
                 },
                 frozenPaths,
-                // Cross-task deletion guard (mx5 run 12 PROMPT 2): the revert-guard
+                // Cross-task deletion guard: the revert-guard
                 // is blind to a clean tracked sibling deliverable, so deleting one
                 // greens the lint and the pass returns ok. Provenance is the
                 // discriminator — the guard restores a sibling's deleted file and
@@ -1029,7 +1029,7 @@ export function buildGateDeps(params: {
                 discoverLabels: discoverGateCommandLabels,
                 discoverBodies: discoverGateCommandBodies,
                 discard: discardTreeEdits,
-                // WRITE-GUARD STACK (mx5 run 11: this child ran with free bash and
+                // WRITE-GUARD STACK (this child ran with free bash and
                 // none of the run-8 guards — it rm'd a sibling task's verified
                 // deliverable and hand-copied a contract to green the lint). Diff
                 // capture happens at the makeGateChild seam; deletion guard +
@@ -1043,7 +1043,7 @@ export function buildGateDeps(params: {
                 // preserve registry), never a per-task union.
                 treeChanges: () => collectTreeChanges(cwd2, signal),
                 probeScan: () => collectAddedLines(cwd2, signal).then(findProbeGaming),
-                // IGNORED-PATH CHANNEL (mx5 run 19): the write guards above read
+                // IGNORED-PATH CHANNEL: the write guards above read
                 // `git status --porcelain`, which never reports ignored paths, so
                 // the pass that greened `bun run seed` by writing credentials into
                 // a gitignored `.env` was structurally invisible to all of them —

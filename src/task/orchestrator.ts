@@ -413,7 +413,7 @@ export class TaskRunner {
                 // SAFE CHECKPOINT (phase boundary): this phase's output is on disk
                 // and the next `advance()` has not moved front-matter forward, so a
                 // resume re-enters at exactly this phase. Without this the whole
-                // spec pipeline (refine→critique, ~4.5 min on the mx5 run, research
+                // spec pipeline (refine→critique, research
                 // alone ~3 min) runs to completion after a cancel is requested.
                 // Throwing USER_CANCELLED reuses the existing cancellation path:
                 // handleFailure leaves the task resumable and /task-auto's catch
@@ -591,7 +591,7 @@ export interface RunSingleTaskResult {
  * deliver its spec. With waitForImplementation, block until the agent finishes
  * implementing the delivered spec.
  *
- * The ending comes from `TaskRunner.run`. It used to be read back off the task
+ * The ending comes from `TaskRunner.run`. Read back off the task
  * file's front matter — a disk round-trip this process made to learn what it had
  * just done, and one that could not tell a cancel from a failure.
  */
@@ -689,7 +689,7 @@ export async function runSingleTask(
     //     400, say), which must stop /task-auto here rather than let it commit and
     //     advance on a file that says `completed`.
     //
-    // Both used to reach the caller as extra fields beside a boolean, and both are
+    // Both would otherwise reach the caller as extra fields beside a boolean, and both are
     // endings.
     let end = runEnd
     if (end.kind === 'completed' && interrupted) end = {kind: 'interrupted'}

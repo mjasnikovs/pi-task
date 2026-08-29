@@ -162,7 +162,7 @@ export interface PhaseConfig {
      * re-reads `refined` as GROUND TRUTH under a prompt that says CONSTRAINTS "MUST
      * be preserved", and `## refined prompt` on disk is deliberately left as refine
      * wrote it. A resume at critique used to hand the refuted constraint straight
-     * back — the mx5 run-19 defect, restored by the very machinery that closed it.
+     * back — the run-19 defect, restored by the very machinery that closed it.
      *
      * The trail is returned rather than written so the replay cannot duplicate a
      * gate line the live run already recorded.
@@ -228,10 +228,9 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 // no signal the file already exists and authors greenfield strip-constraints
 // ("bun-plugin-tailwind the only dependency", "exactly N scripts") that compose
 // then obeys over the research facts — the implementer executes a wholesale
-// rewrite that drops every existing dependency and script (mx5 TASK_0001 emptied
-// package.json; the REAL pipeline reproduced it 3/3 even with research surfacing
-// the deps). Handing refine the manifest/config CONTENT up front, with this
-// reframe, fixes it at the origin (A/B: 1/5 → 5/5 preserve, 5/5 end-to-end).
+// rewrite that drops every existing dependency and script — reliably, and even
+// when research has surfaced those dependencies. Handing refine the
+// manifest/config CONTENT up front, with this reframe, fixes it at the origin.
 const REFINE_PRESERVE_DIRECTIVE =
     'EXISTING FILES ON DISK — AUTHORITATIVE (overrides any "scaffold / create / set '
     + 'up / initialize / from scratch / only / exactly / minimal" wording in the task '
@@ -285,8 +284,7 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
 
 /**
  * The carried-context blocks a GENERATIVE phase (refine, compose) receives: the
- * cross-slice contracts plus the carried cross-cutting requirements (mx5 run 11,
- * goals A/C — `.pi-tasks/requirements.md`, written at plan time). The verbatim
+ * cross-slice contracts plus the carried cross-cutting requirements (* goals A/C — `.pi-tasks/requirements.md`, written at plan time). The verbatim
  * requirement quotes travel INTO every task's spec generation, so a mandated
  * methodology ("a test lands in the same change as each new route") reaches the
  * task's GOAL/CONSTRAINTS and its VERIFY — a pointer back to the spec doc
@@ -302,13 +300,13 @@ export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
 }
 
 /**
- * The owned (task-mapped) requirements for THIS task (mx5 run 16): matched by
+ * The owned (task-mapped) requirements for THIS task: matched by
  * the plan title the coverage map keyed them to, which is the task's stored
  * `raw prompt` section verbatim. Empty outside /task-auto runs, for spliced
  * repair tasks, and when the plan recorded no mapping — all of which degrade to
  * the pre-run-16 behavior. This is the BELT (prompt block, into refine +
- * compose); appendOwnedConstraints on the final spec is the BRACES — the belt
- * alone folded the clause in only 2/8 live reps per fixture.
+ * compose); appendOwnedConstraints on the final spec is the BRACES. The belt
+ * alone rarely gets the clause folded in.
  */
 async function ownedForThisTask(deps: PhaseDeps): Promise<OwnedRequirement[]> {
     try {
@@ -337,16 +335,16 @@ function repoSourceOracle(cwd: string): (p: string) => boolean {
 }
 
 /**
- * DETACH (nexttask 2) — an owned requirement this task cannot satisfy, because a
+ * DETACH — an owned requirement this task cannot satisfy, because a
  * category freeze in the very spec that carries it covers the only file that
  * could, stops being this task's obligation and is released to whichever later
  * task writes that file.
  *
  * Runs at the LAST spec-producing step, where the pair first exists: the stamped
  * bullet is written one statement earlier by `appendOwnedConstraints`, and a
- * critique-time probe measured 0/40 because the stamp did not exist yet. It
- * never edits prose and never asks a model — the run-18 rewrite lever resolved
- * 11 of 20 pairs by DELETING the authoritative clause. The quote stays in the
+ * critique-time probe would find nothing, because the stamp does not exist yet.
+ * It never edits prose and never asks a model — a rewrite lever resolves about
+ * half of these pairs by DELETING the authoritative clause. The quote stays in the
  * ledger throughout; only its owner changes.
  */
 export async function resolveOwnedFreezeForThisTask(
@@ -371,14 +369,14 @@ export async function resolveOwnedFreezeForThisTask(
 }
 
 /**
- * CLAIM (nexttask 2) — the other half. A requirement detached by an earlier task
+ * CLAIM — the other half. A requirement detached by an earlier task
  * becomes THIS task's own when its refined prompt says it writes the frozen
  * file. Run before compose builds its carried blocks, so the claimed obligation
  * rides the same belt every owned requirement does and the braces stamp it onto
  * this spec.
  *
  * The claimant is the only party that knows: at detach time the later tasks are
- * bare plan titles, and none of mx5 run 19's 26 titles contains the path. Over
+ * bare plan titles, and none of a 26 titles contains the path. Over
  * the same run's 26 REFINED prompts, `writeIntent` picks out exactly the two
  * tasks that write the server file.
  */
@@ -398,7 +396,7 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
     const contracts = await phaseCarriedBlocks(deps)
     // Imperative tool directives the user wrote into the RAW prompt ("via web
     // search", "fetch <url>"). Refine paraphrases the task and a weak model drops
-    // these some of the time (mx5 run 9: "via web search" vanished, the whole run
+    // these some of the time ("via web search" vanished, the whole run
     // made 0 search calls). Hand them to refine as a MUST-PRESERVE block (belt) and
     // re-check the output below (lever). Empty on an ordinary prompt → refine unchanged.
     const directives = extractUserDirectives(raw)
@@ -412,7 +410,7 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         // needs a successful read — on a test-writing task against a large
         // existing codebase the model over-explores (re-reads source hunting for
         // the impl) and burns the loop budget. Degrade to a no-tools final
-        // attempt instead of hard-failing the whole run. See TASK_0016 (mx5):
+        // attempt instead of hard-failing the whole run. See a task:
         // refine looped 3×/resume forever; the deliverable was always producible
         // from the title + design doc alone.
         {degradeOnExhaustion: true, verb: 'restart'}
@@ -529,7 +527,7 @@ export const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
  * cares about — never the per-file edit list. Big refined prompts embed a long
  * bulleted "fix these files" checklist *inside* the GOAL block; handing that to
  * a weak local model drags it into reading/grepping source it doesn't need and
- * it loops (TASK_0017: read(sql-adapter.ts) ×5 → loop-kill → fails the phase).
+ * it loops.
  * So scope TOOLING's view to the GOAL prose, truncated at the first bullet.
  *
  * Fallbacks, in order: no bare `GOAL` header (free-form refined) → the whole
@@ -628,12 +626,11 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // Applied to FILES and APIS only — NOT CONTEXT/TOOLING. Verified with a live
     // A/B on the local model (real pi, real repo): FILES and APIS are bimodal —
     // they sometimes answer from the inventory but sometimes spiral into heavy
-    // reads (APIS hit 37 reads / 221s, a near-runaway), and pre-supplying the core
-    // collapses that to 0 reads / ~3.5s with the model honoring "do not re-read"
-    // (0 core re-reads in every ON run). CONTEXT works from inventory+grep and
-    // reads ~0 files regardless, so the block was pure prefill and made it slower
-    // in 5/5 reps; TOOLING is already scoped + single-read-guarded and saw no
-    // benefit. So orientation only goes where reads actually happen.
+    // reads — APIS can spiral into dozens — and pre-supplying the core collapses
+    // that to none, with the model honouring "do not re-read". CONTEXT works from
+    // inventory and grep and barely reads files at all, so the block is pure
+    // prefill there and makes it slower; TOOLING is already scoped and
+    // single-read-guarded. So orientation only goes where reads actually happen.
     const orientationPaths =
         getConfig().orientation && inventoryRaw.length > 0 ?
             inventoryRaw.split('\n').filter(l => l.trim().length > 0)
@@ -656,26 +653,24 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // the worker is handed below — and the manifest's dependency names.
     const manifestPackages = await manifestDependencyNames(deps.cwd)
 
-    // PROMPT 4's spec-cited-URL lever is NOT WIRED HERE. It is built and unit-tested in
-    // ./spec-urls.ts and its live A/B FAILED: baseline 2/20 vs treatment 3/20, Fisher
-    // one-tailed p = 0.50, over two fixtures, with delivery into this very prompt proven
-    // separately (scripts/spec-url-prompt-delivery-check.ts). Shipping it anyway would put
-    // ~1000 characters of prefill into every APIS prompt for no measured benefit, which is
-    // the pattern nexxtasks exists to prevent. To re-run the experiment, restore the block
-    // this comment replaces — see the git history of this file and the PROMPT 4 entry in
-    // nexxtasks.txt RESULTS.
+    // The spec-cited-URL lever is NOT WIRED HERE. It is built and unit-tested in
+    // ./spec-urls.ts, and pointing the worker at a page it should have read did not
+    // change what it produced — delivery into this very prompt was proven separately,
+    // so the block arrived and did nothing. Wiring it would add about a kilobyte of
+    // prefill to every APIS prompt for no benefit. To try again, restore the block
+    // this comment replaces from this file's history.
 
-    // nexttask 5B fan-out bounds. All four read their env ONCE per research
+    //  fan-out bounds. All four read their env ONCE per research
     // phase, so every worker in a run sees the same policy and a harness cannot
     // half-apply an arm. CAP, SCALE and carry-forward are null/false in the
-    // shipped configuration; the progress deadline shipped ON (nexttask 9).
+    // shipped configuration; the progress deadline shipped ON.
     const leverEnv = snapshotLeverEnv()
     const fanoutBudget = projectDocsBudget(leverEnv)
     const progressCeilingMs = workerProgressCeilingMs(leverEnv)
     // Which deadline policy was in force is a fact about how every number below
-    // was produced. Run 18's 120 discarded minutes were only recoverable because
-    // 5A started writing down what the workers actually did; a run whose logs do
-    // not say which policy it ran under cannot be compared with one that does.
+    // was produced. A run whose logs do not say which policy it ran under cannot
+    // be compared with one that does, and time lost to discarded work is only
+    // recoverable from a log that recorded what the workers actually did.
     deps.logDebug?.(
         progressCeilingMs === null ?
             'phase:research: worker deadline = fixed elapsed cap (progress deadline DISABLED)'
@@ -697,7 +692,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // wall-clock-relative (queueing shows up in waitMs).
     //
     // Restarted attempts get their OWN row. Without one the widget contradicts
-    // itself: mx5 run 18 printed `workers 722.2s` over a longest member reading
+    // itself: a printed `workers 722.2s` over a longest member reading
     // `worker:apis work 239.3s`, because wait/work describe the final attempt
     // while the phase clock counts all three. The discarded time is the whole
     // gap, so naming it is what closes the widget.
@@ -729,15 +724,13 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     //     each other ~4x (context worker measured 27s solo vs 128s under load),
     //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
     //
-    // KNOWN-OPEN, AND THIS IS THE HONEST STATE OF IT. That A/B was run when
-    // every worker carried Qwen3's `/no_think` prompt suffix, so "thinking OFF"
-    // was assumed and sequential followed. The suffix has since been measured
-    // INERT — with server thinking on and `/no_think` still in the prompt,
-    // Qwen3.8 emitted a median 17k-char trace anyway (n=25) — and it has been
-    // removed in favour of the `research` reasoning group (config/reasoning.ts).
-    // So the arm this default was chosen under may never have been the arm that
-    // ran, and the group's level is now a user-visible setting rather than a
-    // constant.
+    // KNOWN-OPEN, AND THIS IS THE HONEST STATE OF IT. The comparison behind this
+    // default was made while every worker carried Qwen3's `/no_think` prompt
+    // suffix, so "thinking OFF" was assumed. That suffix cannot reach the chat
+    // template and does nothing; it has been removed in favour of the `research`
+    // reasoning group (config/reasoning.ts). So the arm this default was chosen
+    // under may never have been the arm that ran, and the group's level is now a
+    // user-visible setting rather than a constant.
     //
     // The default stays SEQUENTIAL because that is the measured-safe arm on a
     // single-GPU box and because flipping a shipped default on an invalidated
@@ -819,7 +812,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             tools: `read,grep,find,ls,${apisChannels.tools}`,
             fanoutBounded: true,
             extensions: apisChannels.extensions,
-            // ZERO-RETRIEVAL GATE (mx5 run-15 F-1, distinct from the STAGE 1-3 stopping-point
+            // ZERO-RETRIEVAL GATE (run-15 F-1, distinct from the STAGE 1-3 stopping-point
             // thread). In a MINORITY of reps worker:apis emits a complete, plausible APIS section
             // having made ZERO retrieval tool calls — the whole thing recalled from memory.
             // The output contract at RESEARCH_APIS_PROMPT already INSTRUCTS tool use and the
@@ -831,14 +824,11 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // preserved). It bounds itself ("look up the symbols you will list — no more") away
             // from the near-runaway 37-read tail.
             //
-            // EFFICACY NOT DEMONSTRATED — read before trusting this to matter. The live A/B
-            // (scripts/live-apis-zero-retrieval-ab.ts) ABSTAINED, underpowered: the failure is
-            // RARE and intermittent (base rate 0/40 one session, pooled ~5%), so the primary
-            // reduction (baseline 1/40 zero-retrieval ships -> treatment 0/40) did NOT reach
-            // significance (Fisher p = 0.50 — needs ~5 baseline ships, ~85 reps at ~6%). What IS
-            // established: the gate is correct BY CONSTRUCTION; on the 3 firings observed it
-            // recovered a grounded section every time; and it did NO harm (ungrounded-symbol rate
-            // went DOWN not up, no entry collapse, no runaway, cost +4-6%). It is wired as a
+            // EFFICACY NOT DEMONSTRATED — read before trusting this to matter. The
+            // failure it catches is rare and intermittent, so no comparison run here was
+            // ever powered to show a reduction. What IS established: the gate is correct
+            // BY CONSTRUCTION; every time it fired it recovered a grounded section; and it
+            // did no harm — no entry collapse, no runaway, and a small cost. It is wired as a
             // harmless safety net, NOT a proven-effective lever — do not cite it as a measured win
             // (nexxtasks.txt "ZERO-RETRIEVAL GATE ... ABSTAIN"). A powered A/B is STILL OPEN.
             zeroRetrievalRetry: APIS_ZERO_RETRIEVAL_PREAMBLE
@@ -852,26 +842,26 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // spawning long enumeration loops whose output then inflates
             // prefill on every subsequent round.
             //
-            // RECORDED DECISION (mx5 run-15 F-1, PROMPT 1 item 4): this worker stays
+            // RECORDED DECISION: this worker stays
             // ISOLATED — it is NOT given the APIS worker's output. It keeps `read,grep`
             // and is forbidden, by prompt and by the post-check below, from asserting
             // external-API behaviour it cannot see. Handing it the APIS section would
             // widen what it may assert without making any of it checkable here, and
             // APIS' own answers are the ones F-2 shows are type-only and unverified.
             tools: 'read,grep',
-            // SILENT-RETRY GATE. STEP 0 measured this worker silent (zero bullets) in ~10%
-            // of live reps (5/48, Wilson95 [4.5%, 22.2%]) and classified EVERY silent rep as
-            // a genuine loss — a loop-degrade banner (60%) or a hallucinated non-bullet
-            // fragment (40%) — never a legitimate empty answer, because the identical fixture
-            // reliably yields 11–21 bullets. A silent section is therefore a dropped section;
+            // SILENT-RETRY GATE. This worker goes silent — zero bullets — on a small but
+            // real share of runs, and every silent run inspected was a genuine loss: a
+            // loop-degrade banner, or a hallucinated non-bullet fragment. Never a
+            // legitimate empty answer, because the identical fixture reliably yields a
+            // dozen or more bullets. A silent section is therefore a dropped section;
             // retry once, keep the retry only if it emits bullets. See context-silence.ts.
             retryIfSilent: CONTEXT_SILENT_RETRY_PREAMBLE,
-            // BRACES for the LIVE-DATA RULE. In run 15 this worker wrote, verbatim, "The
+            // BRACES for the LIVE-DATA RULE. In a this worker wrote, verbatim, "The
             // `hono` dependency is pinned at `^4.12.31` in package.json, and the external
-            // context confirms `hc<AppType>` pattern with base URL `/api` ... works
+            // context confirms `hc<AppType>` pattern with base URL `/api`... works
             // correctly (per Hono RPC docs LIVE data)". It has read+grep only, so the
             // base-URL half came from memory; fused with the true version half under one
-            // attribution it read as sourced, became a hard requirement in TASK_0027's
+            // attribution it read as sourced, became a hard requirement in a task
             // CONSTRAINTS and ACCEPTANCE, and every request went to /api/api/... ⇒ 404.
             // A flagged bullet is demoted to an OPEN QUESTION here — before the section is
             // persisted — so it cannot reach compose as fact. Demotion, not deletion: the
@@ -1047,7 +1037,7 @@ export async function phaseAutoAnswer(
         }
         let parsed = parseAutoAnswer(text)
 
-        // Anti-synthesis guard (mx5 run 13, Bug A): the auto-answer invented
+        // Anti-synthesis guard: the auto-answer invented
         // `Bun.mkdirSync` while research's APIS section carried the correct list,
         // and the invention was promoted into requirements + VERIFY. Deterministic
         // verbatim-substring check: an API-shaped identifier in the answer that is
@@ -1359,7 +1349,7 @@ export async function phaseCritique(
     // added to catch.
     //
     // The contract registry is read here rather than inside the table because the
-    // critique PROMPT needs it too (run-8 F3): threading the design's pinned
+    // critique PROMPT needs it too: threading the design's pinned
     // interface facts into the rewrite lets it RECONCILE a synthesized wiring
     // specific against the facts it must reproduce — the generation-side
     // complement of the verify-side boundary check.
@@ -1497,8 +1487,8 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
  * REFINE — restate the raw prompt as a bounded 4-section spec, then subtractively
  * strike any phantom runtime specifier (`bun:sql`) it carried up verbatim from the
  * spec doc, BEFORE it flows to research/grill/compose. An appended correction alone
- * loses: the affirmative survives into the composed GOAL and on to the implementer
- * (proven: compose re-leaks it 4/4). Rewriting the source so compose has nothing to
+ * loses: the affirmative survives into the composed GOAL and on to the
+ * implementer, because compose re-leaks it. Rewriting the source so compose has nothing to
  * contradict is the fix. Silent + no-op when nothing is wrong or the runtime's types
  * aren't installed.
  */
@@ -1554,7 +1544,7 @@ export async function composePhase(d: PhaseDeps, p: PhaseContext): Promise<strin
  * CRITIQUE — the last spec-producing step, and the two host-side corrections that
  * must run after it in THIS ORDER.
  *
- * BRACES (mx5 run 16): append any owned design obligation the spec still omits as a
+ * BRACES: append any owned design obligation the spec still omits as a
  * CONSTRAINTS bullet. The belt block upstream is obeyed ~25% (measured); a host-side
  * append is obeyed by construction. Idempotent — quotes the spec already carries
  * (belt-obeying reps) are skipped.
@@ -1562,8 +1552,8 @@ export async function composePhase(d: PhaseDeps, p: PhaseContext): Promise<strin
  * Then DETACH: an owned obligation whose only file this spec also FREEZES is
  * unsatisfiable here, so it moves to the pending task that writes that file rather
  * than shipping a requirement no one can meet. It MUST run after the append, because
- * the append is what writes the stamp the detach reads — a critique-time probe
- * measured 0/40 because the stamp did not exist yet.
+ * the append is what writes the stamp the detach reads, so a critique-time probe
+ * would find nothing.
  */
 export async function critiquePhase(d: PhaseDeps, p: PhaseContext): Promise<string> {
     const spec = await critiqueWithFallback(d, p)
@@ -1632,50 +1622,30 @@ export async function replayPhaseCarry(
     await row.carry?.(deps, pc)
 }
 
-// INTEGRATION-DEPTH APPEND (2026-07-27): the lever proposed for this exact site —
-// deterministically append a known-runnable integration command to the VERIFY block
-// whenever a task's ACCEPTANCE claims runtime behaviour — is REFUTED at STEP 0 and was
-// NOT built. Nothing below is wired; this is the record.
+// INTEGRATION-DEPTH APPEND — considered for this site, NOT built.
 //
-// The defect is real and reproduces on four unrelated stacks. Measured with
-// scripts/verify-integration-depth-step0.ts (published metric regex in that file;
-// re-runnable, no model time): VERIFY blocks that boot or hit the real integrated
-// product — mx5 7/41, IAR1 3/10, godot-engine 2/20, runner 0/2, total 12/73 (16.4%).
-// That total OVERSTATES the truth: godot's two hits only match because the block greps
-// a URL out of CLAUDE.md, and IAR1's TASK_0006 curls a GitHub tarball to check a hash,
-// so genuine product integration is ~9/73 (~12%). The addressable class — runtime claim
-// in ACCEPTANCE, a boot command available with provenance, static-only VERIFY anyway —
-// is 29/73 (39.7%), clearing the task's 25% kill condition, but 27 of those 29 are mx5.
+// The idea: whenever a task's ACCEPTANCE claims runtime behaviour, deterministically
+// append a known-runnable integration command to its VERIFY block. Most VERIFY blocks
+// never boot or touch the integrated product, so the gap is real.
 //
-// What kills the lever is its input, not its premise. It needs a command that is
-// (1) provenance-bearing, (2) proven runnable, (3) terminating, and (4) integration-
-// shaped. Measured on scratch clones with scripts/integration-command-provenance.ts,
-// that intersection is EMPTY on every stack available here:
-//   mx5    `bun run dev` is the only command matching the metric and it does not
-//          terminate (probe killed it at 60s) — appending it hangs the verify child
-//          until the 15-minute command watchdog and then FAILs. Every command that DOES
-//          terminate (`bun run build` exit 0) fails the metric.
-//   godot  `godot --headless --quit` (0.8s, exit 0) and the real GUT runner (1.7s,
-//          exit 0) are both appendable — and neither matches the metric, which is
-//          web-shaped (curl/localhost/PORT=/run dev/http://). Nothing appendable can
-//          move the registered metric on a non-web stack, so the two-stack A/B the
-//          task requires is unsatisfiable by construction, not by sample size.
-//   IAR1   no candidate at all: cmake is absent from this box (the N5 finding).
-// R4 forbids swapping the metric after seeing results, so a broadened "boots the real
-// product" metric is a separate pre-registered experiment, not a rescue of this one.
+// What kills it is the input, not the premise. The append needs a command that is all
+// four of: provenance-bearing, proven runnable, TERMINATING, and integration-shaped.
+// That intersection tends to be empty. A dev server matches the shape and never
+// terminates — appending it hangs the verify child until the command watchdog and then
+// FAILs. Everything that does terminate (a build, a headless one-shot) is not
+// integration-shaped. And on a non-web stack nothing appendable is web-shaped at all.
 //
-// The deeper finding: on the stack holding 93% of the addressable mass, integration is
-// not a COMMAND. mx5's 7 integrated blocks are whole task-specific procedures — pick a
-// free port (3911/41234/42421/3001), export DATABASE_URL, boot, seed, log in, assert N
-// endpoints, tear down. A host-side append cannot synthesize that from provenance
-// (launch-contract.md records script NAMES only — no port, no health URL), and
-// synthesizing it from the task's own `## verified tooling` is the N5 fabrication road.
+// The deeper point: on a web stack, integration is not a COMMAND. An integrated VERIFY
+// block is a whole task-specific procedure — pick a free port, export the database URL,
+// boot, seed, log in, assert some endpoints, tear down. A host-side append cannot
+// synthesize that from provenance, because a launch contract records script NAMES and
+// nothing else: no port, no health URL. Synthesizing it from the task's own
+// `## verified tooling` section is fabrication.
+//
 // That machinery already exists in ONE place that owns ports, seeding and teardown: the
-// final gate's render check. The mx5-class defect belongs there (nexttask TASK 6), not
-// in per-task VERIFY blocks.
-//
-// Durable assets kept: both rigs above and their unit tests. Do NOT wire an append here
-// without a command source that satisfies all four properties at once.
+// final gate's render check. This class of defect belongs there, not in per-task VERIFY
+// blocks. Do NOT wire an append here without a command source that satisfies all four
+// properties at once.
 
 /** Dispatch a row's declared post-commit effect. Rows with none do nothing. */
 export async function postCommitPhase(

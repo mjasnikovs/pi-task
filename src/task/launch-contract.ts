@@ -3,7 +3,7 @@
  * declares the finished project must expose, extracted once at plan time and diffed
  * by the final gate against the shipped manifest.
  *
- * The failure this closes (mx5 run 10 item 4): the design's §9 "Build & run" listed
+ * The failure this closes: the design's §9 "Build & run" listed
  * the required scripts verbatim — `dev`, `build`, `migrate`, `seed`, `test` — but the
  * shipped package.json declared only `dev`, `build`, `lint`, `test`, `test:ct`. No
  * task owned `migrate`/`seed` (they fell through decompose), and NOTHING re-checked
@@ -95,7 +95,7 @@ export function keepGroundedScripts(names: string[], sourceDoc: string): string[
 }
 
 /**
- * DETERMINISTIC RECALL (mx5 run 11): enumerate every backticked, script-name-shaped
+ * DETERMINISTIC RECALL: enumerate every backticked, script-name-shaped
  * token in a paragraph that mentions the word "script", as extraction CANDIDATES.
  *
  * The run-11 failure this closes: `test:ct` is backticked in the design's §2 tooling
@@ -157,11 +157,11 @@ export async function appendDeclaredScripts(cwd: string, names: string[]): Promi
 const BOOT_CLASS_RE = /^(?:dev|start|serve|preview|watch)(?:[:_-].*)?$/i
 
 /**
- * The declared scripts the final gate must EXECUTE as one-shot commands (mx5 run
+ * The declared scripts the final gate must EXECUTE as one-shot commands (
  * 11): everything the launch contract declares that is neither boot-class (the
  * boot check exercises those) nor already covered by the gate's integration
  * commands (`covered`, case-insensitive — the test/build-shaped scripts that ran).
- * Run 11 shipped `migrate` and `seed` broken (`.rows` on a Bun sql array —
+ * A run can ship `migrate` and `seed` broken (`.rows` on a Bun sql array —
  * TypeError on first call) while the gate checked only that the scripts EXIST;
  * existence is not launchability.
  */

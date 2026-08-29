@@ -3,8 +3,8 @@
  * worker re-reads cold to learn "what is this project" (manifest, config, domain
  * types, schema, entrypoints, API surface). The four workers run as separate
  * child processes with no shared memory, so today each one independently
- * `read()`s the same hot files: across the recorded mx5 run package.json was
- * read 87×, src/types/index.ts 82×, and 55% of all worker reads were repeats of
+ * `read()`s the same hot files: across a recorded run, package.json and the
+ * shared type barrel are read dozens of times each, and most worker reads repeat
  * a file another worker in the same task had already read.
  *
  * This module picks that orientation core from the file inventory (repo-agnostic,
@@ -34,7 +34,7 @@ export const ORIENTATION_PER_FILE_MAX = 12 * 1024
  * Backstop file-count cap — a guard against a pathological repo with hundreds of
  * tiny core files packing the byte budget into noise, NOT a normal-case limit.
  * It is deliberately set high enough that the byte budget binds first on real
- * repos (verified: mx5/aiz-server hit the budget at ~16 files; a 5000-file repo
+ * repos (a small project hits the budget at a dozen or so files; a 5000-file repo
  * yields only ~6 orientation candidates because leaf source is filtered out). An
  * earlier cap of 16 wrongly bound before the budget — e.g. it dropped 5 core
  * files on a 165-file repo while leaving 17KB of budget unused.
@@ -107,7 +107,7 @@ export function orientationTier(path: string): number | null {
     const lower = path.toLowerCase()
     // Never orient on vendored/build output or tests: a dependency's manifest or
     // a big *.test.ts would otherwise outrank the project's own files and eat the
-    // budget (validated against the mx5 traces — node_modules/hono/package.json
+    // budget (node_modules/hono/package.json
     // and zod-schemas.test.ts both crowded out genuinely hot project files). A
     // git-ls-files inventory won't list these anyway; this is belt-and-braces.
     if (/(^|\/)(node_modules|dist|build|out|vendor|\.git|coverage)\//.test(lower)) return null

@@ -9,7 +9,7 @@
  *                turn alongside the run. Reproduced live on pi 0.82.1 (issue #8):
  *                that turn ran the write tool into the project, and when it was
  *                still streaming as the pipeline delivered its spec the run died
- *                with "TASK_0001 failed: Agent is already processing."
+ *                with "a task failed: Agent is already processing."
  *   - terminal → pi's `pendingUserInputs` queue, drained only by the main loop
  *                that our own command handler is parked inside — so the line sat
  *                there silently and then fired minutes later against a finished

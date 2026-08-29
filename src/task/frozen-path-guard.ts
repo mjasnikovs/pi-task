@@ -2,7 +2,7 @@
  * frozen-path-guard — deterministic write-deny on spec-frozen paths for the
  * write-capable gate children (the enforce EDIT pass especially).
  *
- * The failure class (carried from mx5 run 6, deferred there as the last unshipped
+ * The failure class (deferred once as the last unshipped
  * piece of the frozen-contract work): a spec's CONSTRAINTS pin a path as
  * off-limits ("**Do NOT modify** `src/server/index.ts`"), and a later
  * write-enabled GATE pass — the enforce child runs `read,edit` — edits that path
@@ -11,9 +11,9 @@
  * frozen contract is silently mutated by the very pass meant to police the work.
  *
  * Prompt framing is A/B-PROVEN insufficient for this class (the "FROZEN CONTRACT,
- * MUST NOT edit" instruction held 0/5 unguarded, ~1/5 with framing — the weak
+ * MUST NOT edit" instruction does not hold on its own — the weak
  * local model ignores an explicit capitalized MUST-NOT most of the time). A
- * chmod-style physical deny holds 5/5 but makes the model THRASH on the bare
+ * chmod-style physical deny holds, but makes the model THRASH on the bare
  * EACCES (1000+ futile re-attempts observed) — unacceptable on the enforce child,
  * which runs UNGUARDED (no wall-clock timeout). pi itself has no path-level edit
  * interception (only tool-NAME allow/deny), so the achievable, thrash-free,

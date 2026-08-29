@@ -17,7 +17,7 @@ import {MAX_GRILL_QUESTIONS} from './phases.js'
  *     bare recommendation): a genuine open fork carrying a best-effort suggestion.
  *   - 'api-synthesis' — the answer was ANSWERED, then DEMOTED because it names an
  *     API identifier absent from the research and the question, in a namespace the
- *     research covers (mx5 run 13: an invented `Bun.mkdirSync` reached requirements
+ *     research covers (an invented `Bun.mkdirSync` can reach requirements
  *     AND the VERIFY block). The suggestion rides along for a HUMAN to judge.
  *   - 'integration' — an integration/build-wiring unknown no fetched doc grounded;
  *     a wrong guess is a structural landmine, so the model's answer is offered as
