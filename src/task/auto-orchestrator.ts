@@ -2,8 +2,10 @@
  * /task-auto — plans a feature into a resumable list of task titles, then runs
  * each title through the existing single-task pipeline one at a time.
  *
- * This module currently holds the planning half (AutoDeps + planAuto). The run
- * loop, command handlers, and defaultDeps are added by the next task.
+ * The whole command lives here: the planning half (orient → elicit → decompose →
+ * cover → planAuto), the run loop (runAutoLoop), the production dependency table
+ * (defaultDeps), and the three command handlers registerTaskAuto wires up —
+ * /task-auto, /task-auto-resume and /task-auto-cancel.
  */
 import {existsSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
@@ -163,18 +165,20 @@ function coverageRepromptHint(missing: string[]): string {
 // "COVERAGE: COMPLETE" line, byte-identical to a legitimate verdict, so the
 // rubber-stamp is NOT detectable from the judge's output. The
 // distrust signal must come from the input: a plan this small for a spec this
-// large is near-certainly the known degenerate-decompose flake (healthy runs on
-// the same inputs produce 10–30 titles). The floor only ever forces a REGENERATION
-// — it never rejects a plan on count alone (the v0.13.34 objection), so a model
-// that insists twice still ships its small plan, with a warning.
+// large is near-certainly a degenerate generation rather than a real plan. The
+// floor only ever forces a REGENERATION — it never rejects a plan on count alone,
+// so a model that insists twice still ships its small plan, with a warning. Nine
+// tests pin the behaviour, including that a still-suspect plan ships and that a
+// shorter retry keeps the original list.
 const SUSPECT_PLAN_MAX_TITLES = 2
 const SUSPECT_PLAN_MIN_SPEC_CHARS = 4000
 
 /**
  * Extra retries granted when the plan is EMPTY rather than merely small. One
- * hinted retry heals a small-but-nonempty plan reliably; an empty generation is a
- * harder fault and was measured recurring back-to-back (2026-07-28 smoke: 13 empty
- * draws across 24 reps of a 20KB spec, including two in a row in one rep).
+ * hinted retry heals a small-but-nonempty plan; an empty generation is a harder
+ * fault that can recur back-to-back, and falling through with zero titles aborts
+ * the whole run rather than merely shipping a thin plan — so it is worth more
+ * than one roll of the dice.
  */
 const EMPTY_PLAN_RETRIES = 2
 
@@ -241,9 +245,11 @@ const MENTION_RE = /(?:^|\s)@([^\s]+)/g
 // [^\s]+ above would otherwise swallow into the path. Left unstripped, the
 // resulting "design.md," resolves to no file, expansion is silently skipped, and
 // the planner reasons over a one-line "Implement @design.md" with NO spec inline
-// → it fabricates generic questions/tasks the spec never called for (validated:
-// a stray comma turned a 32KB design into a contentless prompt). None of these
-// chars are legitimate trailing characters of a referenced doc path.
+// → it fabricates generic questions and tasks the spec never called for.
+//
+// Measured against a real file: the greedy token from "Implement @design.md,
+// reuse the parser" is `design.md,`, which does not exist; stripped, `design.md`
+// does. None of these chars are legitimate trailing characters of a doc path.
 const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
 
 /** The cleaned path token of an @-mention: greedy match minus trailing prose punctuation. */
@@ -252,26 +258,13 @@ function mentionPath(token: string): string {
 }
 
 /**
- * Fire-and-forget debug line for the PLAN phase (clarify/decompose), which runs
- * before any task file — hence any per-task `TASK_XXXX-debug.log` — exists. Writes
- * to `.pi-tasks/plan-debug.log`; the `*-debug.log` suffix keeps it grep-compatible
- * with the per-task logs. Never throws (mkdir + append are best-effort).
- *
- * Every call site here records a plan DECISION (how many titles a round produced,
- * whether a retry was adopted, which clarify answer was auto-resolved), so all of
- * them are `'event'` — this file carries no model chatter and survives at the
- * default level. It is also the only channel the plan phase has: it runs before
- * any task file, hence any `TASK_NNNN-debug.log`, exists.
- */
-/**
  * Every plan-debug write not yet on disk, chained.
  *
  * Fire-and-forget is right for production — a plan must never wait on its own
- * trail — but it leaves nothing to synchronise on, and the twelve tests that
- * read `plan-debug.log` back were racing the append that writes it. They failed
- * intermittently on ENOENT, ~4ms in, at a rate that moved with how many other
- * files the suite was running beside them. Chaining also serialises concurrent
- * appends, which is what keeps a line whole.
+ * trail — but it leaves nothing to synchronise on, so a test that reads
+ * `plan-debug.log` back races the append that writes it and fails on ENOENT.
+ * Chaining gives {@link flushPlanDebug} something to await, and it also
+ * serialises concurrent appends, which is what keeps a line whole.
  */
 let planDebugChain: Promise<unknown> = Promise.resolve()
 
@@ -280,6 +273,19 @@ export function flushPlanDebug(): Promise<unknown> {
     return planDebugChain
 }
 
+/**
+ * Fire-and-forget debug line for the PLAN phase (clarify/decompose). It is the
+ * only trail that phase has: planning runs before any task file exists, so there
+ * is no per-task `TASK_NNNN-debug.log` to write into yet. This goes to
+ * `.pi-tasks/plan-debug.log`, whose `*-debug.log` suffix matches the pattern
+ * debug-log.ts documents, so one grep still finds every log. Never throws — the
+ * mkdir and the append are both best-effort.
+ *
+ * Every call site records a plan DECISION (how many titles a round produced,
+ * whether a retry was adopted, which clarify answer was auto-resolved), so all of
+ * them are `'event'` and survive at the default level. No model chatter reaches
+ * this file.
+ */
 function logPlanDebug(cwd: string, msg: string): void {
     if (!shouldLogDebug('event', debugLogLevel())) return
     const line = `${new Date().toISOString()} ${msg}\n`
@@ -426,19 +432,20 @@ const DECISIONS_RE = /\s*\[decisions:\s*(.+?)\]\s*$/i
 
 /**
  * Thread the feature's spec references AND any per-task decisions into every
- * decomposed task title. A title is ALL a per-task pipeline ever sees, so both
- * the design doc the feature pointed at and the user's clarification choices have
- * to ride along or they're invisible downstream — this is how an "Implement
- * @design.md" run built a generic `posts` table the spec never mentioned, and how
- * a "do not use vite" clarification got silently overridden by the doc's own
- * vite.config.ts.
+ * decomposed task title. A title is ALL a per-task pipeline ever sees, so both the
+ * design doc the feature pointed at and the user's clarification choices have to
+ * ride along or they are invisible downstream — a task that cannot see the doc
+ * invents its own schema, and one that cannot see "do not use vite" is overridden
+ * by whatever the doc's own config says.
  *
- * Precedence is the crux: a clarification is a CORRECTION to a (possibly stale)
- * spec doc, so the decisions clause is marked as overriding the doc, while the doc
- * stays authoritative for everything the decisions don't touch. Decompose scopes
- * each decision to the task(s) it governs, so most titles carry none. No readable
- * refs and no decisions → title unchanged, so a doc-less /task-auto behaves
- * exactly as before.
+ * Precedence is the crux: a clarification is a CORRECTION to a possibly stale spec
+ * doc, so the decisions clause is marked as overriding the doc while the doc stays
+ * authoritative for everything the decisions do not touch. The emitted order puts
+ * decisions first, then the spec ref. Decompose scopes each decision to the tasks
+ * it governs, so most titles carry none.
+ *
+ * Run: with no refs and no decisions the title comes back unchanged, and
+ * re-threading an already-threaded list is a no-op.
  */
 export function attachSpecRefs(titles: string[], refs: string[]): string[] {
     const list = refs.map(r => '@' + r).join(' ')
@@ -462,15 +469,15 @@ export function attachSpecRefs(titles: string[], refs: string[]): string[] {
  * Build the refine scope fence for step `currentIndex` of an N-step /task-auto
  * plan. Every per-step pipeline only ever sees its own title, so without this the
  * refine phase — told "the task title is only a pointer into that spec; follow the
- * spec" — re-expands the whole referenced design into one task (a real run
- * implemented all 24 steps under step 1). The fence lists the sibling steps by
- * number and forbids touching anything they own, so refine bounds this step's
- * slice. Validated on the local model: with the fence, refine's CONSTRAINTS gained
- * an explicit per-step deferral list and tool calls dropped 27→11.
+ * spec" — re-expands the whole referenced design into a single task, implementing
+ * the entire plan under step one. The fence lists the sibling steps by number and
+ * forbids touching anything they own, so refine bounds this step's slice.
  *
  * The plan listing strips the threaded "| decisions … | spec …" tail from each
- * title (keeps the human-readable head) so the model reads clean step names. The
- * authoritative spec ref still rides on THIS step's own title via attachSpecRefs.
+ * title and keeps the human-readable head, so the model reads clean step names,
+ * and it marks the current one "(THIS STEP)" — both confirmed by building a fence
+ * over threaded titles. The authoritative spec ref still rides on THIS step's own
+ * title via attachSpecRefs.
  */
 export function buildScopeFence(titles: string[], currentIndex: number): string {
     const n = titles.length
@@ -500,8 +507,11 @@ export function buildScopeFence(titles: string[], currentIndex: number): string 
  * a queued root-cause repair. A repair title ("repair test/teardown.ts: …") reads
  * to refine like any other feature step, and refine's job is to expand a title into
  * a full spec — which is exactly how "repair the teardown" becomes "overhaul the
- * test infrastructure" (the /task-auto drift lesson). The extra fence pins the one
- * editable file and pins VERIFY to the command the defect was failing.
+ * test infrastructure". The extra fence pins the one editable file, and pins VERIFY
+ * to the failing command WHEN the title carries one: `extractFailingCommand` reads
+ * a backticked runner command out of the defect text, so a defect quoting
+ * `bun run test` yields it while a plain-prose defect yields undefined and only the
+ * file pin applies.
  */
 function buildStepFence(titles: string[], currentIndex: number): string {
     const base = buildScopeFence(titles, currentIndex)
@@ -522,6 +532,8 @@ function buildStepFence(titles: string[], currentIndex: number): string {
  *   - CAP 1 per file per RUN — planHasRepairFor counts CHECKED-OFF entries too, so
  *     a repair step that itself failed is never re-spawned; it lands in the
  *     accept-debt ledger like any other task. That is what stops a repair loop.
+ *     Both bounds run as described: three candidates over two files merge to two,
+ *     and a plan carrying an already-`[x]` repair for a file still answers true.
  *   - MONOTONIC — insertTaskAfter only splices; no existing entry is rewritten,
  *     reordered or dropped.
  *
@@ -599,7 +611,7 @@ export async function orientFeature(
     // clarify/decompose ever see it. Layer A only rewrites the per-task `refined`
     // text — which is DOWNSTREAM of here: clarify is the first phase and runs on
     // this raw inline, so the doc's affirmative `bun:sql` is parroted straight into
-    // the very first clarifying question ("instantly bun:sql is back"). Apply the
+    // the very first clarifying question. Apply the
     // same deterministic, no-LLM strike at the single point that feeds both planning
     // children. Silent + no-op when nothing is flagged or the runtime's types aren't
     // installed.
@@ -660,8 +672,9 @@ export async function orientFeature(
             // Union of both grounded passes (keepGrounded dedupes).
             reqEntries = keepGroundedRequirements([...reqEntries, ...retry], featureForModel)
         }
-        // Bound with marked-passage priority — a plain first-N cap truncates the
-        // doc's tail sections (measured live: an eager model fills 40 top-down).
+        // Bound with marked-passage priority. A plain first-N cap truncates the
+        // doc's tail sections, because an eager extraction fills the budget from the
+        // top down and never reaches them.
         reqEntries = capRequirements(reqEntries, passages, featureForModel)
         logPlanDebug(
             cwd,
@@ -671,12 +684,14 @@ export async function orientFeature(
         // best-effort channel
     }
 
-    // Granularity floor: the plan's task COUNT was being set
-    // by an auto-resolved clarify line the user never saw — the same spec planned
-    // into 41 tasks one day and 11 the next, with identical code. Derive the floor
-    // from the requirements a task can own, so an unreviewable "one task per
+    // Granularity floor: without it the plan's task COUNT is set by an
+    // auto-resolved clarify line the user never sees, so the same spec and the same
+    // code can plan coarse one run and fine the next. Derive the floor from the
+    // requirements a task can own instead, so an unreviewable "one task per
     // milestone" decision cannot collapse the plan; it also gates whether the
-    // plan-shape fork below is the host's to answer at all. 0 ownable ⇒ no channel.
+    // plan-shape fork below is the host's to answer at all. Measured:
+    // granularityFloor is 0 for three or fewer ownable requirements — no channel —
+    // and roughly half the count above that.
     const ownableRequirements = reqEntries.filter(e => !isCrossCuttingRequirement(e.quote)).length
     const coarseFloor = granularityFloor(ownableRequirements)
     if (coarseFloor > 0) {
@@ -726,16 +741,17 @@ export async function elicitClarifications(
     // user with the same decision worded N ways. Also caps the absolute count.
     // The generate → parse → pick → dedupe → re-prompt state machine is
     // task/question-source.ts, shared with the plan session. A second copy here
-    // drifts from the sibling; the shared source closes each way for free:
-    // `parsed[0]` becomes `pickQuestion`
-    // (an analysis note is not shown as the question, and the SUGGESTED
-    // attached further down is no longer lost), and an unparseable reply now buys
-    // one format re-prompt instead of ending the whole clarify — and decomposing
-    // the feature with ZERO clarifications — on a formatting slip.
+    // would drift from the sibling, and the shared source buys two things: it
+    // PICKS a question rather than taking the first parsed line, so an analysis
+    // note is never shown as the question and its SUGGESTED is not lost; and an
+    // unparseable reply costs one format re-prompt instead of ending clarify
+    // outright and decomposing the feature with ZERO clarifications.
     //
-    // Of plan's three quality rules only the DEFERRAL guard crosses. The other two
-    // cost an extra child call every time they fire; moving them is its own
-    // change to make and measure. See CLARIFY_QUALITY_RULES.
+    // Of plan's three quality rules only the DEFERRAL guard crosses. Checked:
+    // PLAN_QUALITY_RULES holds three ('no SUGGESTED', 'SUGGESTED deferred the
+    // decision', 'fork-shaped question with no ALT') and CLARIFY_QUALITY_RULES
+    // holds exactly the middle one. The other two cost an extra child call every
+    // time they fire, so moving them is its own change to make and measure.
     const source = makeQuestionSource({
         generate: hint =>
             deps.runChild(
@@ -757,8 +773,8 @@ export async function elicitClarifications(
         const shownQ = renderInlineMarkdown(question, theme)
         const plainQ = drawn.plain
         // PLAN SHAPE is the host's call, not the triage's — the same spec off the
-        // same base commit can plan four times coarser or finer depending on one
-        // answer here (see decompose-granularity.ts).
+        // same base commit can plan far coarser or finer depending on this one
+        // answer (see decompose-granularity.ts).
         // The triage answers this fork for itself every time and stamps it
         // "already settled by the spec" while the spec settles no such thing, so the
         // single most load-bearing decision in a run was an invisible coin flip.
@@ -1548,11 +1564,11 @@ export function requestAutoCancel(): void {
 /**
  * Report a stash pushed during one task and left behind.
  *
- * An orphan stash later pops as an unresolvable conflict, so the
- * capture before the task and this check after it are ONE fact. They were a local
- * and a check ~120 lines and three returns apart, which is how the check came to
- * run only on the success path. Best-effort: never throws, so it cannot mask the
- * outcome of the attempt it closes.
+ * An orphan stash later pops as an unresolvable conflict, so the capture before
+ * the task and this check after it are ONE fact — which is why the call sits in a
+ * `finally` rather than on the fall-through, where it would only run when the task
+ * succeeded. Best-effort: never throws, so it cannot mask the outcome of the
+ * attempt it closes.
  */
 async function reportStashDrift(
     active: ExtensionCommandContext,
@@ -1614,8 +1630,8 @@ export async function runAutoLoop(
             const next = entries.find(e => !e.done)
             if (!next) {
                 // FINAL INTEGRATION GATE: every task passed its own per-slice gates,
-                // but per-slice green ships dead apps: statics clean, every
-                // protected route 500ing. The run-level stage
+                // but per-slice green can still ship a dead app — every slice's own
+                // checks clean while the assembled whole does not serve. The run-level stage
                 // runs the project's OWN whole-repo commands once, unaided, before the
                 // run is declared complete, and resolves a FAIL with the user. It
                 // touches none of this loop's per-task state — see run-final-gate.ts —
@@ -1701,8 +1717,8 @@ export async function runAutoLoop(
             try {
                 // SAFE CHECKPOINT (pre-task): the tree is committed and no inner task
                 // is stamped yet, so stopping here just leaves this entry unchecked —
-                // a resume restarts it from scratch. Cheapest possible stop, and the
-                // last one before we commit to a ~30-minute task.
+                // a resume restarts it from scratch. The cheapest possible stop, and
+                // the last one before a whole task is under way.
                 if (cancelCheckpoint('pre-task')) {
                     announceDone(
                         active,
@@ -1728,13 +1744,13 @@ export async function runAutoLoop(
                         )
                 })
                 active = res.ctx ?? active
-                // One dispatch over the named ending. The five-branch ladder this
-                // replaces had to ask `isCancelRequested()` — a module global
-                // `/task-cancel` never sets — to tell a user stop from a fault, so a
-                // cancel during a task was announced in red as "stopped … fix and
-                // resume" and the inner file's `cancelled` was overwritten with
-                // `failed`. The runner names the ending now; resumability is
-                // RUN_END_POLICY's; only the wording is this command's.
+                // One dispatch over the named ending. The runner NAMES how the run
+                // ended, so nothing here has to infer a user stop from a fault by
+                // consulting a module global — the way that inference went wrong was
+                // announcing a cancel in red as "stopped … fix and resume" and
+                // overwriting the inner file's `cancelled` with `failed`.
+                // Resumability is RUN_END_POLICY's call (shared with /task's loop);
+                // only the wording is this command's.
                 if (!runSucceeded(res.end)) {
                     const policy = RUN_END_POLICY[res.end.kind]
                     // Demote the INNER task file: it reads `completed` from
@@ -1864,7 +1880,7 @@ async function handleTaskAuto(args: string, ctx: ExtensionCommandContext): Promi
     // and the ordinary command path cannot reach us.
     try {
         await withRun(ctx, {onCancel: terminalCancel}, async () => {
-            // Stamp a fresh per-run research-cache id (F10) BEFORE planning so enrichment and
+            // Stamp a fresh per-run research-cache id BEFORE planning so enrichment and
             // every task's research phase share one run's cache; disabled ⇒ clears any token a
             // prior run left, so nothing is cached.
             configureResearchRun(getConfig().researchCache)
