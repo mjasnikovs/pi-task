@@ -61,7 +61,11 @@ function readOffset(args: unknown): number {
     return typeof o === 'number' && Number.isFinite(o) ? o : 0
 }
 
-/** Default `limit` pi's read tool applies when the call names none. */
+/**
+ * pi's read tool truncates its output at `DEFAULT_MAX_LINES` lines (its
+ * `core/tools/truncate` module). A `limit` at or above that asks for as much as
+ * the tool will ever return, so it is treated the same as naming no limit at all.
+ */
 const DEFAULT_READ_LIMIT = 2000
 
 /**
@@ -113,9 +117,8 @@ export class LoopDetector {
         if (exact >= this.threshold) return {call, count: exact, windowSize: this.buf.length}
 
         // 2. Path-aware loop: the same file re-targeted without forward progress.
-        // Caught here precisely because varied offset/limit make the exact key
-        // miss it (one file read and grepped a dozen times with changing args until
-        // the wall-clock timeout, never tripping the exact detector).
+        // Caught here precisely because varied offset/limit change the exact key on
+        // every call, so pattern 1 above can never see it.
         const path = this.buf[this.buf.length - 1].path
         if (path !== null) {
             const revisits = this.countRevisits(path)
@@ -129,15 +132,16 @@ export class LoopDetector {
     /**
      * Count same-path calls in the window that are "revisits" — accesses that end
      * no further into the file than the furthest line already covered for that
-     * path. Paging yields zero revisits and never trips; repeated whole-file
-     * re-reads, backward jumps and path-targeting greps accumulate.
+     * path. The FIRST call on a path is therefore never a revisit: it sets the
+     * high-water mark. Paging yields zero revisits and never trips; repeated
+     * whole-file re-reads, backward jumps, narrower re-reads and repeated
+     * path-targeting greps all accumulate.
      *
-     * The comparison is on the RANGE, not the offset. Offset alone scored a page
-     * that re-asks from the same start with a bigger limit — `{offset:80,
-     * limit:400}` after `{offset:80, limit:300}`, real reads from a measured
-     * decompose run — as a revisit, even though it covers 100 lines the child had
-     * never seen. That is the same mistake SingleReadGuard made by keying on the
-     * path alone, and it is corrected the same way.
+     * The comparison is on the RANGE, not the offset. Keying on offset alone scores
+     * `{offset:80, limit:400}` after `{offset:80, limit:300}` as a revisit, even
+     * though it covers 100 lines the child has never seen. That is the same mistake
+     * SingleReadGuard made by keying on the path alone, and it is corrected the same
+     * way.
      */
     private countRevisits(path: string): number {
         let maxEnd = -1
