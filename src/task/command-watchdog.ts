@@ -9,14 +9,17 @@ import {CommandWatchdog, realTimerDeps, reminderMessage} from '../shared/command
  * returns — `godot --headless --check-only` with no timeout, a dev server, a
  * hung test — and the run wedges until the user manually aborts and tells the
  * model to add a timeout. pi's bash tool takes an OPTIONAL `timeout` with NO
- * default (see pi-coding-agent tools/bash.js), so any command the model didn't
- * bound runs forever. This supplies the missing default from the host side.
+ * default: its schema in `core/tools/bash.js` says "optional, no default
+ * timeout" and its resolver returns undefined for an absent value, so no timer is
+ * ever armed. This supplies the missing default from the host side.
  *
  * HOW: arm a wall-clock timer on `tool_execution_start`, disarm it on
- * `tool_execution_end`. If it elapses, `ctx.abort()` cancels the in-flight
- * operation — which fires the tool's AbortSignal, and pi's bash executor kills
- * the whole process tree on abort — then a follow-up user turn tells the model
- * what happened so it retries with a timeout instead of hanging again.
+ * `tool_execution_end` — both real pi events. If it elapses, `ctx.abort()`
+ * cancels the in-flight operation, which fires the tool's AbortSignal; pi's bash
+ * executor imports `killProcessTree` and its own comment on that listener reads
+ * "Handle abort signal by killing the entire process tree". A follow-up user turn
+ * then tells the model what happened so it retries with a timeout instead of
+ * hanging again.
  *
  * Tool-agnostic by default: it arms on every tool except exact names listed in
  * `commandTimeoutExemptTools`, which /task-config fills from the live tool list
@@ -45,16 +48,19 @@ export {
 
 /**
  * One-shot marker: the most recent turn abort was issued BY THE WATCHDOG, not by
- * a human ESC. Both end the assistant turn with stopReason 'aborted' — the only
- * signal steerUntilDone's classifyTurnEnd() can read — so without this flag the
- * steer loop can win the race against the watchdog's queued follow-up turn and
- * show a steering prompt to an empty room (wedging an unattended run).
+ * a human ESC. Both end the assistant turn the same way, and `classifyTurnEnd`
+ * has nothing else to go on — it decides with `last?.stopReason === 'aborted'`.
+ * Without this flag the steer loop can win the race against the watchdog's queued
+ * follow-up turn and show a steering prompt to an empty room, wedging an
+ * unattended run.
  *
- * Set synchronously in onFire BEFORE ctx.abort(), so it is observable by the
- * time any waitForIdle resolves; consumed (cleared) by the first reader. A stale
- * flag (the aborted turn wasn't one the steer loop was watching) only costs the
- * consumer a bounded wait before it falls back to prompting — it can never
- * permanently suppress a human's steer prompt.
+ * Set synchronously in onFire BEFORE ctx.abort(), so it is observable by the time
+ * any waitForIdle resolves; consumed by the first reader. Run: it reads false
+ * before any abort, true once after a note, false again immediately after — and
+ * two notes still yield exactly one true. A stale flag (the aborted turn was not
+ * one the steer loop was watching) only costs the consumer a bounded wait before
+ * it falls back to prompting; it can never permanently suppress a human's steer
+ * prompt.
  */
 let watchdogAbortPending = false
 
