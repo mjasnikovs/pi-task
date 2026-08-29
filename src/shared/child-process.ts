@@ -43,12 +43,17 @@ export type SpawnFn = (
         cwd: string
         shell: boolean
         stdio: ['ignore' | 'pipe', 'pipe', 'pipe']
-        /** Set only when the invocation needs env overrides (e.g. GIT_INDEX_FILE);
-         *  absent → the child inherits this process's environment as before. */
+        /** Set only when the invocation needs env overrides — git-state-guard's
+         *  `GIT_INDEX_FILE` throwaway index is the one caller. Absent → the child
+         *  inherits this process's environment. */
         env?: NodeJS.ProcessEnv
         /** true → give the child its own process group (POSIX `detached`), so any
-         *  server it backgrounds (`bun run dev &`) can be reaped as a group when the
-         *  child exits instead of leaking as an orphan holding a port (*  item 3). Set only for model children (json-events); plumbing stays put. */
+         *  server it backgrounds (`bun run dev &`) can be reaped as a group instead
+         *  of leaking as an orphan holding a port. The flag is what makes the reap
+         *  possible at all: with `detached`, a `kill(-pid)` issued after the child
+         *  has exited still takes the backgrounded grandchild with it; without it
+         *  the same call throws ESRCH and the grandchild survives. Set only for
+         *  model children (json-events); plumbing stays in-group. */
         detached?: boolean
     }
 ) => ProcLike
@@ -96,8 +101,10 @@ export interface ToolCall {
     /**
      * pi's id for this tool call, carried on both `tool_execution_start` and
      * `tool_execution_end` so a caller can pair them (the command watchdog arms
-     * on start and disarms on the matching end). Optional because the loop
-     * detector — the other consumer — keys on name+args and never needs it.
+     * on start and disarms on the matching end). It is the only thing that pairs
+     * them: the end event carries `toolName`, `result` and `isError`, but no
+     * `args`. Optional because the loop detector — the other consumer — keys on
+     * name+args and never needs it.
      */
     toolCallId?: string
 }
@@ -127,9 +134,10 @@ export interface ContextSnapshot {
 export interface RunChildTextOptions {
     mode: 'text'
     /**
-     * Drop stdout chunks instead of buffering them into the result. Use for
-     * pipe-through tools (npm install, build commands) where we only need the
-     * exit code and stderr — verbose stdout can exceed V8's max string length.
+     * Drop stdout chunks instead of buffering them into the result. Use when only
+     * the exit code and stderr are wanted and stdout is bulk noise. Its one caller
+     * is the docs extractor, which discards a verbose stdout and keeps stderr
+     * because stderr is what it came for.
      */
     discardStdout?: boolean
     /**
@@ -147,26 +155,28 @@ export interface RunChildJsonEventsOptions {
     onContextUsage?: (snapshot: ContextSnapshot) => void
     /**
      * The child's context window in tokens, supplied BY THE CALLER — pi's event
-     * stream does not carry one (GitHub issue #16).
+     * stream does not carry one.
      *
-     * Check it against the installed package rather than assuming: no member of
-     * the `--mode json` event union carries a window, or even a model id.
-     * `contextUsage` exists ONLY as the in-process `ctx.getContextUsage()`
-     * extension API, which a `--mode json` child never speaks back to its
-     * parent.
+     * Checked against a real `--mode json` capture rather than assumed: across
+     * every event it emits, no key anywhere names a context or a window. The
+     * stream DOES carry a model id and a token `usage` block, so the COUNT is
+     * available and only the window is missing. `getContextUsage()` exists solely
+     * as an in-process extension API, which a `--mode json` child never speaks
+     * back to its parent.
      *
      * The parent therefore has to say. Children are spawned without `-m`
      * (CHILD_BASE_ARGS), so they resolve the same default model the parent runs
-     * and the parent session's window is the honest answer. 0 / omitted keeps
-     * the old behaviour: report the token count with no window.
+     * and the parent session's window is the honest answer. 0 or omitted reports
+     * the token count with no window.
      */
     contextWindow?: number
     onToolCall?: (call: ToolCall) => LoopHit | null
     /**
-     * Fires when a tool call finishes, carrying its RESULT (the
-     * verify debug log recorded the `bash:` command but never its output, so "verify
-     * claimed curl PASS on a server that cannot serve" was undecidable from the log).
-     * Text is the tool's combined output; `isError` distinguishes a failed call.
+     * Fires when a tool call finishes, carrying its RESULT. `onToolCall` reports
+     * only the request, so without this a debug trail records that a `bash:`
+     * command ran and never what it printed — and a step that claims a command
+     * passed cannot be checked against what the command actually said. Text is
+     * the tool's combined output; `isError` distinguishes a failed call.
      */
     onToolResult?: (result: {
         name: string
@@ -176,13 +186,13 @@ export interface RunChildJsonEventsOptions {
     }) => void
     onFirstByte?: () => void
     /**
-     * Dead-backend stall guard (model server died mid-child, the
-     * child hung MUTE for 64 minutes). Liveness is OUTPUT PROGRESS, not wall
-     * time: any stdout/stderr chunk resets the window, so honest long work is
-     * never killed. Only when nothing arrived for `afterMs` is `probe` asked
-     * whether the model backend is reachable — reachable → keep waiting
-     * (prompt processing legitimately emits nothing for minutes); unreachable
-     * → the child is killed and the result carries `stalled: true` so callers
+     * Dead-backend stall guard: the model server dies mid-child and the child
+     * hangs mute with nothing to throw. Liveness is OUTPUT PROGRESS, not wall
+     * time — any stdout/stderr chunk resets the window, so honest long work is
+     * never killed. Only when nothing has arrived for `afterMs` is `probe` asked
+     * whether the model backend is reachable: reachable → keep waiting, because
+     * prompt processing legitimately emits nothing while it runs; unreachable →
+     * the child is killed and the result carries `stalled: true` so callers
      * report the real cause instead of hanging or mislabeling a user cancel.
      */
     stall?: {afterMs: number; probe: () => Promise<boolean>}
@@ -233,9 +243,9 @@ export class JsonEventSink {
     private textDeltaAccum = ''
     // json-events lines can split across data chunks; this holds the trailing
     // partial line between feeds so events spanning a boundary still parse. We
-    // deliberately do NOT accumulate the full raw stream: a long-running child
-    // emits hundreds of MB of events and buffering it would overflow V8's max
-    // string length (≈512MB). We keep only the parsed text.
+    // deliberately do NOT accumulate the full raw stream — only the parsed text
+    // is kept, so a long-running child cannot walk a buffer toward the runtime's
+    // max-string-length ceiling.
     private buf = ''
 
     constructor(
@@ -276,12 +286,12 @@ export class JsonEventSink {
         const opts = this.opts
         const t = typeof evt.type === 'string' ? evt.type : ''
 
-        // `message_end` is the ONLY context readout pi gives a `--mode json`
-        // child's parent. A `context_usage` branch preferred above this one is
-        // dead code: no released pi has ever emitted such an event (see
-        // `contextWindow` on RunChildJsonEventsOptions), and its presence is what
-        // makes the zero window below look
-        // like a harmless fallback rather than the only path. Issue #16.
+        // Token usage rides on assistant messages, and `message_end` is where the
+        // stream delivers them (`agent_end` then repeats the final one). There is
+        // no `context_usage` event to prefer over this: the string appears nowhere
+        // in the installed pi, and a real `--mode json` capture carries no key
+        // naming a context or a window. So the zero window below is not a
+        // fallback — it is what every caller that omits `contextWindow` gets.
         if (t === 'message_end' && opts.onContextUsage) {
             const msg = evt.message as Record<string, unknown> | undefined
             if (msg?.role === 'assistant') {
@@ -411,11 +421,11 @@ export function runChild(
         let aborted = false
         const discardStdout = opts?.mode === 'text' && opts.discardStdout === true
 
-        // Deliver the prompt on stdin, not argv: a large prompt (e.g. an inlined
-        // design doc) blows past the OS command-line limit — Windows CreateProcessW
-        // caps it at 32767 chars and Node throws `spawn ENAMETOOLONG`. When a
-        // prompt is present we open stdin as a pipe; otherwise keep it 'ignore'
-        // (git and other arg-only spawns are unaffected). See GitHub issue #1.
+        // Deliver the prompt on stdin, not argv. A large prompt — an inlined design
+        // doc, say — exceeds the OS argv ceiling and the spawn fails outright rather
+        // than truncating: on this platform it surfaces as `E2BIG`. When a prompt is
+        // present we open stdin as a pipe; otherwise it stays 'ignore', so git and
+        // other arg-only spawns are unaffected.
         const usesStdin = invocation.stdin !== undefined
         // Model children (json-events) run arbitrary bash — they can `bun run dev &`
         // a server that outlives the child and holds a port, wrecking the final gate
@@ -559,53 +569,43 @@ export function runChild(
             if (sink) sink.feed(chunk)
             else stdout += chunk
         })
-        // This accumulation is deliberately unbounded, unlike `discardStdout`
-        // above. The asymmetry was investigated on 2026-07-28 and the "stderr can
-        // overflow V8's max string length" hypothesis is REFUTED at ~5 orders of
-        // magnitude — do not re-open it without new volume evidence.
+        // This accumulation is deliberately unbounded, unlike `discardStdout` above.
         //
-        // Measured ceiling (binary search on `'a'.repeat`, not cited from memory):
-        // node v26.2.0 536,870,888 chars (512 MiB, 2^29-24), bun 1.3.14
-        // 2,147,483,647 (2 GiB). Both throw RangeError, not OOM — node's default
-        // heap is 4192 MiB, well clear of its own string ceiling. If it were ever
-        // reached the severity would be high: a throw in this handler escapes as
-        // an uncaughtException and the enclosing promise never settles (measured),
-        // so it would kill the host, not fail the child.
+        // A string ceiling does exist — the runtime's max string length, which
+        // throws a RangeError rather than running out of memory. What makes the
+        // asymmetry worth a comment is the severity if it were ever hit: a throw
+        // inside this handler is NOT catchable by the enclosing promise. With no
+        // `uncaughtException` handler installed the runtime prints the stack and
+        // exits, so the promise never settles because the host process is gone. It
+        // would take pi down rather than fail one child.
         //
-        // Measured volume, on real runs rather than synthetic ones: the largest
-        // single tool output in a whole run is a few kilobytes, and the heaviest
-        // commands in the system emit far less than that on stderr — a full test
-        // suite a couple of hundred bytes, a lint run under a hundred, a cached
-        // install nothing at all. That is orders of magnitude below the node
-        // ceiling, and reaching it inside the command bound would need a sustained
-        // stderr write rate nothing here comes close to.
+        // What keeps it far away is which children reach here: `pi` model children,
+        // `git`, and `npm install --loglevel=error`. Genuinely verbose work — test
+        // runners, builds, boot probes — never uses runChild. It goes through
+        // command-run's `BoundedOutput`, which caps each stream's head and tail and
+        // elides the middle.
         //
-        // The structural reason is the population of children that reach here:
-        // `pi` model children (stderr near-empty), `git`, and one
-        // `npm install --loglevel=error`. Genuinely verbose work — test runners,
-        // builds, boot probes — does not use runChild; final-gate.ts spawns its own
-        // and already caps at 8000 chars. So `discardStdout`'s single caller
-        // (docs-core.ts) is not an oversight to mirror: it discards the verbose
-        // stream and KEEPS stderr precisely because stderr is that call's payload.
-        //
-        // A symmetric `discardStderr` would therefore have no caller, and a naive
-        // cap here would be actively unsafe: consumers disagree about which end
-        // carries the cause — phases.ts:474 takes the tail (500), phases.ts:936
-        // takes the head (0, 300), and child-runner.ts:172 feeds the whole string
-        // into failure classification.
+        // So a symmetric `discardStderr` would have no caller. `discardStdout`'s one
+        // caller (docs-core) discards the verbose stream and KEEPS stderr precisely
+        // because stderr is that call's payload. A naive cap here would also be
+        // unsafe: consumers disagree about which END carries the cause —
+        // research-worker slices the TAIL of stderr in two places and the HEAD in a
+        // third, and child-runner feeds the whole string into its failure message.
         proc.stderr?.on('data', (d: Buffer) => {
             lastActivity = Date.now()
             streamWatch?.note()
             stderr += d.toString()
         })
         // One idempotent settle path for close/error/abort. Detaching the abort
-        // listener here is the point: `{once: true}` only fires-and-removes on an
-        // ACTUAL abort, so a child that finishes normally would leave its
-        // listener on the signal forever. A TaskRunner shares ONE AbortController
-        // across every child of a run, so those listeners accumulate linearly and
-        // each one retains, via `killProc`'s closure, the finished child process,
-        // this invocation (including its full prompt), and `opts` — together with
-        // everything the caller's callbacks close over. See GitHub issue #9.
+        // listener here is the point. `{once: true}` fires-and-removes on an ACTUAL
+        // abort and at no other time, so a child that finishes normally leaves its
+        // listener attached: five children that all exited cleanly still had five
+        // live listeners, all five fired on the eventual abort, and all five
+        // closures survived a forced GC. A TaskRunner shares ONE AbortController
+        // across every child of a run, so they accumulate linearly, and each one
+        // retains — through `killProc`'s closure — the finished child process, this
+        // invocation including its full prompt, and `opts`, along with everything
+        // the caller's callbacks close over.
         let settled = false
         const cleanup = (): void => {
             if (stallTimer) clearInterval(stallTimer)
