@@ -1,14 +1,27 @@
 /**
- * Inline-markdown helpers for the clarify/grill question dialogs.
+ * Inline-markdown helpers for the question dialogs (grill, clarify, /task-plan).
  *
- * The model often wraps the core question in **bold** (and code in backticks)
- * because it makes the question easier to read at a glance. ctx.ui.input titles
- * accept ANSI styling, so we RENDER those spans to terminal bold/code for the
- * displayed prompt, and STRIP them to plain text for the editable input default
- * and the persisted task file (which must stay ANSI-free).
+ * The question arrives carrying markdown because our own prompts ask for it:
+ * auto-prompts.ts and plan-prompts.ts both say "Put the core question in
+ * **bold** ... Backticks around code/identifiers are fine."
+ *
+ * One question then needs two forms, and question-dialog.ts `settleQuestion`
+ * builds both:
+ *   • RENDERED — passed as `localTitle`, which reaches `ctx.ui.input`. pi wraps
+ *     that title in `theme.fg("accent", ...)` and hands it to a pi-tui `Text`,
+ *     which passes embedded escape sequences straight through, so the bold and
+ *     code spans survive to the terminal.
+ *   • STRIPPED — passed as the browser card's `question`, as the editable
+ *     `recommended` default, and as the text recorded in QaTranscript, whose
+ *     `forRecord()` is written into the task file's `grill Q&A` section. All
+ *     three are plain text, never ANSI.
  */
 
-/** Minimal theme surface we need; ExtensionCommandContext['ui'].theme satisfies it. */
+/**
+ * Minimal theme surface we need. pi's `Theme` satisfies it: it declares
+ * `bold(text)` and `fg(color, text)`, and `mdCode` is one of its `ThemeColor`
+ * values, so `ctx.ui.theme` is passed in directly.
+ */
 export interface InlineMarkdownTheme {
     bold(text: string): string
     fg(color: 'mdCode', text: string): string
