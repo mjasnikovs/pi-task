@@ -103,10 +103,7 @@ class BorderedBox implements Component {
  *
  * `format` renders the stored value for the panel; `apply` parses the chosen
  * label back into it. Both live on the row so adding an enum setting is ONE
- * edit. Split across separate format and parse ladders, a missing arm compiles
- * fine and misbehaves at run time: an absent format arm renders
- * `String(cfg[id])`, and an absent parse arm writes the boolean
- * `newValue === 'on'` into an enum field.
+ * edit, and a row that renders but cannot parse is impossible to write.
  *
  * With both directions on the row, `format(apply(cfg, v)) === v` is a property
  * over the whole table, and the panel and the non-TUI listing cannot disagree
@@ -118,18 +115,16 @@ export interface ConfigItem {
      * string (`reason:`, `tool:`, `ext:`) for a DISCOVERED one.
      *
      * It is `string`, not `keyof PiTaskConfig`, and that is what lets the three
-     * dynamic families BE rows instead of bypassing them. While the id was
-     * narrow, each family re-invented both directions by hand — a builder, an
-     * apply function, and an arm in a four-way prefix ladder 300 lines away —
-     * and the round-trip property `config-items.test.ts` runs over `ITEMS`
-     * covered none of them.
+     * dynamic families BE rows instead of bypassing them — so the round-trip
+     * property in `config-items.test.ts` covers them through the same row type
+     * as the fixed settings.
      */
     id: string
     /**
-     * Which titled block of the menu this row sits under. Rows are grouped by
-     * section in {@link panelItems}, in the order the sections first appear in
-     * {@link ITEMS} — so moving a row between sections is a one-word edit and
-     * the header follows it.
+     * Which titled block of the menu this row sits under. {@link renderRows}
+     * walks {@link SECTIONS} and collects the rows claiming each key, so the
+     * block order is SECTIONS' order and moving a row between blocks is a
+     * one-word edit here.
      */
     section: Section
     label: string
@@ -150,12 +145,11 @@ export interface ConfigItem {
 /**
  * The titled blocks the settings menu is divided into.
  *
- * A flat list of ~30 rows — twelve settings, seven reasoning groups, one row per
- * live tool and one per installed extension — reads as a wall, and the rows that
- * belong together (a mode and the seven groups it controls; a timeout and the
- * per-tool exemptions from it) end up separated by rows that have nothing to do
- * with them. The headers are inert rows: no `values`, so Enter does nothing on
- * them.
+ * One flat list — the fixed settings, one row per reasoning group, one per live
+ * tool and one per installed extension — reads as a wall, and the rows that
+ * belong together (a mode and the groups it controls; a timeout and the per-tool
+ * exemptions from it) end up separated by rows that have nothing to do with
+ * them. The headers are inert rows: no `values`, so Enter does nothing on them.
  */
 export type Section =
     | 'session'
@@ -177,8 +171,7 @@ export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
     {key: 'logging', title: 'logging'},
     {key: 'extensions', title: 'child extensions'},
     // Last on purpose. It is the longest block (a fixed timeout plus one row
-    // per live tool, so it grows with the host) and the least often changed —
-    // in front of `unattended` it pushed every short section off the screen.
+    // per live tool, so it grows with the host) and the least often changed.
     {key: 'timeouts', title: 'timeouts'}
 ]
 
@@ -189,9 +182,8 @@ export const SECTION_ID_PREFIX = 'section:'
  * An inert titled row. No `values` ⇒ SettingsList's Enter handler no-ops on it,
  * and {@link SkipInertRows} steps the cursor straight over it.
  *
- * Upper case, and styled muted by {@link makeTheme}, because the dashed
- * lower-case form it replaces was the same case, colour and weight as the
- * setting labels underneath it — eight headings that read as nine more rows.
+ * Upper case, and styled muted by {@link makeTheme}, so a heading does not read
+ * as one more setting row.
  */
 function sectionHeader(title: string): PanelItem {
     return {
@@ -240,9 +232,8 @@ function booleanItem(
 /**
  * Every setting rendered by /task-config, in display order.
  *
- * Exported so the round-trip property below can be asserted over the WHOLE table
- * rather than per setting — the check that would have caught a forgotten arm in
- * either of the two ladders this replaced.
+ * Exported so the round-trip property in `config-items.test.ts` can be asserted
+ * over the WHOLE table rather than per setting.
  */
 export const ITEMS: ConfigItem[] = [
     booleanItem(
@@ -492,9 +483,9 @@ export function applyToolToggle(
  *
  * SHOWN IN EVERY MODE, not only `custom`. Two reasons, and the second is the
  * real one:
- *  - `SettingsList` fixes the overlay's body height from the descriptions it was
- *    constructed with (see createSettingsPanel), so rows that appear and vanish
- *    would leave the box sized for the wrong list.
+ *  - {@link createSettingsPanel} pads the box to a height computed from the
+ *    descriptions it was handed, so rows that appear and vanish would leave the
+ *    box sized for the wrong list.
  *  - The value displayed is what the group ACTUALLY runs at — resolveReasoning,
  *    not the stored custom table. In mode `off` every row reads `off` even
  *    though the custom table underneath is untouched, which is the honest
@@ -512,10 +503,10 @@ const REASON_ID_PREFIX = 'reason:'
  * parent is also a row.
  *
  * So a child is drawn as a tree branch under its parent and loses the repeated
- * `think: research:` prefix, which is 15 columns of the same text on four
- * consecutive lines. `└─` on the last child, `├─` on the rest, decided from the
- * group's position in {@link REASONING_GROUPS} rather than a hand-kept list —
- * adding a fifth worker moves the corner on its own.
+ * `think: research:` prefix, the same text at the head of four consecutive
+ * lines. `└─` on the last child, `├─` on the rest, decided from the group's
+ * position in {@link REASONING_GROUPS} rather than a hand-kept list — adding a
+ * fifth worker moves the corner on its own.
  *
  * Leading spaces survive: SettingsList pads the label right, never trims it.
  */
@@ -553,8 +544,8 @@ export function reasoningItems(): ConfigItem[] {
  * a per-group choice. The seeding step is what stops that from being a trap: on
  * the way out of `default`/`on`/`off` every OTHER group is first pinned to the
  * level it was already running at, so changing one row changes one row. Without
- * it, nudging `research` while in `off` would silently return the other six to
- * whatever the stored table happened to hold.
+ * it, nudging `research` while in `off` would silently return every other group
+ * to whatever the stored table happened to hold.
  */
 export function applyReasoningLevel(
     cfg: PiTaskConfig,
@@ -564,7 +555,7 @@ export function applyReasoningLevel(
     if (!REASONING_SETTINGS.includes(chosen as GroupSetting)) return
     if (cfg.reasoningMode !== 'custom') {
         // Freeze the table exactly as it runs today, then switch to custom, so
-        // opening one row cannot silently move the other six.
+        // opening one row cannot silently move the rest.
         cfg.reasoningLevels = effectiveReasoning(cfg)
         cfg.reasoningMode = 'custom'
     }
@@ -651,10 +642,9 @@ const DOWN_KEY = '\x1b[B'
  * Moves the cursor over the section headers and the blank rows between them.
  *
  * Those rows are decoration: they carry no `values`, so Enter already does
- * nothing on them. Without this they were still stops on the way down — with a
- * heading AND a blank line per section that is sixteen dead keypresses in a
- * thirty-row menu, and the panel opens with the cursor parked on a heading that
- * has no description to show.
+ * nothing on them. Without this they were still stops on the way down — a
+ * heading AND a blank line for every section — and the panel opens with the
+ * cursor parked on a heading that has no description to show.
  *
  * It drives the list through its own public `handleInput` — pressing the very
  * key the user pressed, N times — rather than reaching for the private
@@ -723,10 +713,10 @@ export function createSettingsPanel(
      * Called with the row's id, its new value, and the LIST ITSELF.
      *
      * The list is handed back because some rows change what OTHER rows display:
-     * flipping `reasoning` to off means all seven `think:` rows now run at off,
-     * and a row's `currentValue` is a snapshot taken when the panel was built.
-     * Without a way to write the others back, the menu shows `reasoning off`
-     * beside seven rows still claiming `inherit` — which is what it did.
+     * flipping `reasoning` to off means every `think:` row now runs at off, and
+     * a row's `currentValue` is a snapshot taken when the panel was built.
+     * Without a way to write the others back, the menu would show
+     * `reasoning off` beside rows still claiming `inherit`.
      */
     onChange: (id: string, newValue: string, list: SettingsList) => void,
     onCancel: () => void
@@ -814,15 +804,12 @@ export function panelItems(
  *
  * A row's `currentValue` in the live list is a snapshot taken when the panel was
  * built, and rows describe each other: cycling `reasoning` to `off` changes what
- * all seven `think:` rows run at, and cycling one group row flips the mode,
- * which changes the other six.
+ * every `think:` row runs at, and cycling one group row flips the mode, which
+ * changes all the others.
  *
- * This runs after ANY change, over EVERY row. Its predecessor,
- * `refreshReasoningRows`, ran after any change too — but hard-coded the seven
- * reasoning ids plus `reasoningMode` and touched none of the other ~30 rows, so
- * the next cross-row dependency would have needed a fifth function. Re-reading a
- * `format` costs nothing, which is why there is still no list of "changes that
- * need a refresh" to keep correct.
+ * This runs after ANY change, over EVERY row. Re-reading a `format` costs
+ * nothing, which is why there is no list of "changes that need a refresh" to
+ * keep correct.
  */
 export function syncRows(cfg: PiTaskConfig, rows: readonly ConfigItem[], list: SettingsList): void {
     for (const row of rows) list.updateValue(row.id, row.format(cfg))
@@ -882,12 +869,10 @@ async function handleTaskConfig(
                 theme,
                 (id, newValue, list) => {
                     // Every row parses its own value. There is no generic
-                    // fallback and no prefix ladder: the ladder this replaces
-                    // ended in one that wrote `newValue === 'on'` into whatever
-                    // field it was handed, so a new enum setting silently became
-                    // a boolean until someone noticed. A header row carries no
-                    // `values`, so SettingsList never cycles it and it matches
-                    // no row here anyway.
+                    // fallback and no prefix ladder, so a row that forgets to
+                    // parse cannot fall through to something that guesses. A
+                    // header row carries no `values`, so SettingsList never
+                    // cycles it and it matches no row here anyway.
                     rows.find(row => row.id === id)?.apply(cfg, newValue)
                     syncRows(cfg, rows, list)
                     saveConfig(cfg).catch(() => {})
