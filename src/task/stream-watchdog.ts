@@ -10,7 +10,7 @@ import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 /**
  * MAIN-SESSION adapter for the model-stream watchdog.
  *
- * WHY (mx5 run 14): three implementation turns died mid-turn — the session jsonl's
+ * WHY: three implementation turns died mid-turn — the session jsonl's
  * last record is an ordinary assistant message, then silence forever, while the
  * model container stayed Up(healthy). No error is ever thrown for this shape, so
  * the connection-error retry (which needs a reported ModelError) cannot fire and

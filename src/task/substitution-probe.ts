@@ -2,18 +2,19 @@
  * substitution-probe — deterministic detection of SELF-VERIFIED work, feeding the
  * verify gate's prompt.
  *
- * The failure class (mx5 run 3, TASK_0016/0017): the implementation hit a real bug
+ * The failure class: the implementation hit a real bug
  * in the shipped app ("Context is not finalized" from a mis-signatured middleware),
  * blamed the framework, and shipped "integration tests" that re-implement the API
  * inline — an own server intercepting protected routes, and a 943-line hand-rolled
  * duplicate in a test-support file that imports the real app and never calls it.
- * The suite runs 26/26 green while every protected route of the real server 500s.
+ * The suite runs green while every protected route of the real server 500s.
  * The verify child judged "do the tests pass", saw green, and PASSed.
  *
- * A/B on the live local model (5 runs/arm, the real mx5 tree as fixture) proved the
+ * A/B on the live local model proved the
  * fix must be a DETERMINISTIC, CONCRETE finding in the prompt, not prompt language
- * alone: the bare substitution rule caught 2/5 (right verdicts, 40% attention); the
- * rule PLUS a probe finding naming the suspect file caught 5/5, each verdict naming
+ * alone: the bare substitution rule catches it less than half the time — the
+ * verdicts it does reach are right, the attention is not there. The rule PLUS a
+ * probe finding naming the suspect file catches it every time, each verdict naming
  * the exact inline handlers and confirming the real app crashes.
  *
  * WHAT THE PROBE ASSERTS is deliberately the class INVARIANT, not any framework
@@ -26,7 +27,7 @@
  * same finding the same way. (An earlier draft pattern-matched JS server
  * constructors; that only re-encoded the one incident. A behavioral canary — rerun
  * the suite with shipped sources removed, still-green ⇒ copy — was also rejected:
- * the real mx5 copy still imported the shipped db module, so poisoning sources
+ * the real copy still imported the shipped db module, so poisoning sources
  * breaks the copy's tests too and the conviction never fires.)
  *
  * Findings are advisory: they mandate the spot-check, they never auto-FAIL. Honest

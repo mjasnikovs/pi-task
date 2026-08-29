@@ -9,7 +9,7 @@
  * differently from production and stay green while the shipped wiring is broken. Run-8
  * fixture: `test/photos.test.ts` imports the real `authRoutes` + `photosRoutes` leaves,
  * mounts them into its OWN app at a DIFFERENT prefix than the production entry, and
- * runs 102/102 green — while the shipped upload path is dead because production mounts
+ * runs green end to end — while the shipped upload path is dead because production mounts
  * the same leaf at the wrong prefix. The verify child, judging "do the tests pass",
  * saw green and counted the photos area verified. The seam the test was supposed to
  * cover is exactly the seam it re-implemented away.

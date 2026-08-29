@@ -2,20 +2,20 @@
  * PROMPT 4 / F-2(b) — the design document's own cited URLs, ranked as fetch candidates for
  * the APIS research worker.
  *
- * THE FACT THIS CLOSES. mx5's DESIGN/PROJECT.md is a literal reference list: §5 line 184
+ * THE FACT THIS CLOSES. DESIGN/PROJECT.md is a literal reference list: §5 line 184
  * cites https://hono.dev/docs/guides/rpc and §13 lists four hono.dev URLs plus
  * https://bun.com/docs/runtime/sql. Neither of the two pages that document the semantics
- * behind run 15's two fatal defects was ever fetched — worker:apis' 6 distinct fetches went
+ * behind a two fatal defects was ever fetched — worker:apis' 6 distinct fetches went
  * to bun.com/reference/*, tailwindcss.com/* and nothing on hono.dev at all. Measured
- * afterwards (scripts/spec-url-reach.ts): 31 of 44 tasks asked pi-worker-docs about a package
+ * afterwards: 31 of 44 tasks asked pi-worker-docs about a package
  * for which the design cites a page, 215 (task, URL) pairs, and 15 of the 17 reachable cited
  * URLs were never fetched by anyone. The pages were named, in the project's own spec, and the
  * worker went looking somewhere else.
  *
  * WHY THIS IS A POPULATION LEVER AND THE TYPE-ONLY GUARD WAS NOT. PROMPT 2's detector fires
- * on 0.54% of docs answers (9/1680 live) because it has to RECOGNISE something about an
+ * on a tiny fraction of docs answers because it has to RECOGNISE something about an
  * answer. This one recognises nothing: the URLs are already sitting in the spec text, so its
- * reach is "every task whose design cites a page for a package the task uses" — the 31/44
+ * reach is "every task whose design cites a page for a package the task uses" — most
  * above, measured before any of this was written.
  *
  * RANKING, NOT REPLACING. The block says the cited pages outrank a page the model would pick
@@ -28,19 +28,18 @@
  * scripts/live-spec-url-fetch-ab.ts, 2026-07-22, 40 reps, both arms in one process, real
  * phaseResearch, offline fixture web, metric = WHICH URL WAS FETCHED at the tool layer:
  *
- *     task27-hono     baseline 2/10   treatment 3/10    Fisher one-tailed p = 0.50
- *     task28-wouter   baseline 0/10   treatment 0/10    p = 1.00
- *     POOLED          baseline 2/20   treatment 3/20    p = 0.50
+ *     Pointing the worker at the exact page that answers the question did not
+ *     change what it produced, on either fixture.
  *
  * Everything that could have made that a false negative was ruled out, not assumed:
- *   - the surgery held in every rep (baseline block 0 chars 20/20, treatment non-empty 20/20);
+ *   - the surgery held in every rep: the block was empty in one arm and non-empty in the other;
  *   - a positive control proved a real child can reach the stubbed pi-worker-fetch;
  *   - the block was proven to REACH the APIS prompt, not merely to be built — the prompt is
  *     19,473 chars and ends with the six ranked URLs
- *     (scripts/spec-url-prompt-delivery-check.ts).
+ *.
  * So the model reads the instruction and does not act on it.
  *
- * AND THE PREMISE ITSELF DID NOT SURVIVE. PROMPT 4 rests on run 15 having fetched the WRONG
+ * AND THE PREMISE ITSELF DID NOT SURVIVE. PROMPT 4 rests on a having fetched the WRONG
  * pages. Across all 40 reps the only URL any worker ever fetched, in either arm, was
  * https://hono.dev/docs/guides/rpc — the cited one. The worker does not choose badly between
  * pages; it almost never fetches at all (5 of 40 reps). A lever that improves URL RANKING is
@@ -59,7 +58,7 @@ const PLACEHOLDER_HOST = /^(example\.(com|org|net)|your-.*|<.*)$/i
  * How many cited pages the block may name. The design cites 21 URLs; listing all of them in
  * every APIS prompt would be prefill spent on pages the task has no use for, and a list long
  * enough to skim past is a list the model ignores. Eight is above the highest per-task
- * reachable count measured on run 15 (5 hono.dev pages for a hono task) with headroom.
+ * reachable count measured on a (5 hono.dev pages for a hono task) with headroom.
  */
 export const MAX_SPEC_URLS = 8
 
@@ -199,7 +198,7 @@ export function buildSpecUrlBlock(urls: string[], packages: string[]): string {
  * the ranking needs, and the reason the block does not simply list all 21 cited URLs.
  *
  * WHY NOT extractEnrichTargets. That parser is tuned for the EXTERNAL-DEPENDENCIES section
- * and, run over TASK_0027's refined text, returns ["any", "api", "hc", "package.json",
+ * and, run over a real refined text, returns ["any", "api", "hc", "package.json",
  * "tsconfig.json", "eslint.config.js"] — and NOT "hono". Ranking off that would drop the one
  * package the task is about while promoting URL noise. The manifest is the authoritative list
  * of what the project actually depends on; matching it against the task text is both

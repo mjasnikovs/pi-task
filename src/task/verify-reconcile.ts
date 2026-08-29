@@ -1,11 +1,11 @@
 /**
  * verify-reconcile — deterministic reconciliation of a spec's VERIFY assertions
- * against the PLAN (mx5 run 11, goal D).
+ * against the PLAN.
  *
- * The failure this closes: TASK_0009's composed spec carried
+ * The failure this closes: a task composed spec carried
  *   `if [ -f src/client/pages/admin.tsx ] || grep -rn 'Admin' src/client/pages/ …; then … exit 1`
  * — a NEGATIVE EXISTENCE assertion on a SIBLING task's pinned deliverable
- * (TASK_0008 shipped the admin page; the design pins the admin routes). The
+ *. The
  * scope fence ("do NOT build other steps' work") leaked into the verify script
  * as "other steps' work must be ABSENT". Verify then correctly FAILed at run
  * end, the user accepted it as debt, and the final-gate autofix treated the
@@ -16,7 +16,7 @@
  * rewrite, the skip-escape pattern), not surface as a run-end verify-FAIL.
  *
  * Detection is deterministic and shape-aware for how these specs actually write
- * absence checks (measured on the real run-11 artifacts):
+ * absence checks:
  *   - `if <cond>; then … exit 1; fi` where <cond> contains a POSITIVE existence
  *     probe (`[ -f P ]`, `test -e P`, `grep PAT …`): P/PAT must be absent or the
  *     verify fails.

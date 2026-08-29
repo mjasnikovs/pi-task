@@ -1,11 +1,11 @@
 /**
  * write-guard — deterministic tree-change accounting for WRITE-CAPABLE gate
- * children (mx5 run 11).
+ * children.
  *
  * The failure class: the final-gate autofix child (read,edit,bash) was added after
  * the run-8 guard generation and inherited NONE of the guards the other
  * write-capable passes carry — no diff capture, no frozen-path deny, no probe
- * scans, free `rm`. Run 11 it deleted `src/client/pages/admin.tsx` (TASK_0008's
+ * scans, free `rm`. It will delete a file like `src/client/pages/admin.tsx` (a task
  * verified deliverable) to satisfy a recorded debt claim, and the deletion was
  * invisible: nothing even logged what the pass changed.
  *
@@ -16,7 +16,7 @@
  * is a committed task's deliverable, so deleting one is rejected outright — with
  * one allowance, a RELOCATION (the same file name reappears as an added file
  * elsewhere, e.g. moving a test the runner was never meant to pick up out of its
- * glob — the legitimate fix shape from run 7). Pure text/path analysis; no git
+ * glob — a legitimate fix shape). Pure text/path analysis; no git
  * execution, no stack assumptions.
  */
 import {isDeletionExemptArtifact} from './regenerable-artifacts.js'
@@ -135,16 +135,16 @@ const basename = (p: string): string => {
  * The deletions a fix pass may NOT make: every deleted tracked file whose name does
  * not reappear among the added files (a relocation keeps the file, under the same
  * name, somewhere in the tree). Anything returned here rejects the whole fix
- * attempt — run 11's `rm src/client/pages/admin.tsx` had no corresponding add and
+ * attempt — a `rm src/client/pages/admin.tsx` had no corresponding add and
  * destroyed a sibling task's verified deliverable.
  *
- * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT (mx5 run 20). The guard is pure git: no
+ * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT. The guard is pure git: no
  * ecosystem, no exemption list, so three Playwright FAILURE screenshots that
- * TASK_0027's own `git add -A` had swept into a commit read as deliverables. Two
+ * a task own `git add -A` had swept into a commit read as deliverables. Two
  * consecutive attempts were discarded whole over them — each taking a real
  * `src/client/api.test.tsx` repair with it, which attempt 3 then re-did and kept.
  * 6m14s of an 8m16s gate. And the pipeline committed those same three deletions at
- * the end anyway, in the stranded-fix commit (mx5 5d4147e), so the guard did not
+ * the end anyway, in the stranded-fix commit, so the guard did not
  * even preserve what it rejected two attempts to protect.
  *
  * The exempt list is a strict SUBSET of the verdict-level artifact list and lives
@@ -160,7 +160,7 @@ export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// IGNORED-PATH CHANNEL (mx5 run 19)
+// IGNORED-PATH CHANNEL
 //
 // The final-gate autofix greened `bun run seed` by writing DATABASE_URL and
 // ADMIN_* into `/workspace/.env`, which `.gitignore:14` ignores. Everything
@@ -180,7 +180,7 @@ export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
 //
 // EXEMPT BY MECHANISM, not by hope: build output and dependency trees are
 // ignored too and a rule that fires on every `dist/` write is unusable. STEP 0
-// (scripts/ignored-writes-baserate.ts) measured the real shape — over 68
+// measured the real shape — over 68
 // recorded child logs in ~/hub the gate children announced 29 writes, 9 of them
 // to ignored paths, and 8 of those 9 are `.env` (the other is `node_modules`,
 // from `bun install`). Gate children do not hand-write build output; the

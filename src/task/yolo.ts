@@ -62,7 +62,7 @@ export type YoloPick = {kind: 'answer'; answer: string} | {kind: 'skip'; note: s
  * producer today is the anti-synthesis demotion — an answer proven to name a
  * hallucinated API identifier. Auto-accepting that would re-promote exactly the
  * invention the demotion was built to stop (it reached requirements AND the VERIFY
- * block in mx5 run 13), so a machine may never take it; a human still can.
+ * block), so a machine may never take it; a human still can.
  */
 export function yoloPickAnswer(
     enabled: boolean,
@@ -120,7 +120,7 @@ export function yoloVerifyResolution(enabled: boolean): ResolutionChoice | null 
  *
  * 'leave', not 'accept': an unattended run that cannot fix the whole-repo gate has
  * not produced a working project, and the honest terminal state is a failed run a
- * resume can re-enter — mx5 run 13 ended "FAIL accepted by user" on an app that
+ * resume can re-enter — a ended "FAIL accepted by user" on an app that
  * 404'd at `/`, and that acceptance is what made the failure look like a success.
  */
 export function yoloFinalGateChoice(enabled: boolean, canAutofix: boolean): FinalGateChoice | null {

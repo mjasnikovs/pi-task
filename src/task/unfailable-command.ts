@@ -1,6 +1,6 @@
 /**
  * unfailable-command — is this shell command's exit status DESTROYED by its own
- * construction? (nexttask 19C)
+ * construction?
  *
  * WHY THIS EXISTS. `recheckAcceptDebts` may auto-close an accepted debt on exactly
  * one piece of evidence: the debt named a VERIFY command, that command was re-run,
@@ -17,7 +17,7 @@
  *     B  `npx tsc --noEmit 2>&1 | tail -5; test $? -eq 0 && …`        1  ← `$?` is
  *        tail's status, not tsc's.
  *
- * IAR1 (CMake / C++ / OBS plugin — no database, no frontend, no HTTP server)
+ * one real project (CMake / C++ / OBS plugin — no database, no frontend, no HTTP server)
  * carries 11 of the 16; one of its tasks is SEVEN consecutive `test -f … && echo
  * "PASS" || echo "FAIL"` lines standing in for a build verification.
  *
@@ -27,7 +27,7 @@
  *
  * DECIDED ON SHELL SHAPE, NEVER ON THE VERB. `grep -q …` and `ctest …` set a real
  * status and are untouched; `test -f X || { echo …; exit 1; }` exits non-zero and
- * is untouched. Naming verbs is the mistake nexttask 3 already paid for
+ * is untouched. Naming verbs is the mistake  already paid for
  * (command-shrink's guard compared NAMES) and 16B re-bought.
  *
  * OUT OF SCOPE BY DESIGN: bare `|| true`. skip-escape.ts:11-19 records the FP

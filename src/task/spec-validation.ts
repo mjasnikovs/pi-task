@@ -21,7 +21,7 @@ export function parseVerifyBlock(spec: string): VerifyCommand[] | null {
  * parseVerifyBlock, but only when the fenced block is actually CLOSED.
  *
  * An unterminated fence makes the lenient parser swallow the rest of the file:
- * mx5 run 19's `TASK_0001.md` opens ```sh and never closes it, so its "VERIFY
+ * a `a task.md` opens ```sh and never closes it, so its "VERIFY
  * commands" include the phase-timings table and every appended gate-trail line.
  * That is harmless where the parser only asks "is there something runnable here",
  * and NOT harmless where a parsed line is treated as provenance — a debt reason
@@ -137,8 +137,8 @@ export const REFINE_SECTIONS = [
  *
  * It does NOT require the text to START with GOAL, even though REFINE_PROMPT
  * says "four sections, exact headings, in this order" and forbids a preamble.
- * Measured over the 57-task mx5 corpus: 55/56 non-empty refined prompts carry
- * all four bare headings, but only 25/56 open with one — a preamble is what real
+ * Measured over a real multi-task corpus: nearly every non-empty refined prompt
+ * carries all four bare headings, but fewer than half open with one — a preamble is what real
  * refine output usually looks like, and production has always consumed it fine.
  * A validator stricter than its consumers would reject work that works.
  *

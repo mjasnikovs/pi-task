@@ -31,7 +31,7 @@ export type TerminalOutcomeKind =
 
 /** What the message needs to name. */
 export interface TerminalMessageContext {
-    /** The task or run id shown to the user (`TASK_0007`, `AUTO_0002`, `Task`). */
+    /** The task or run id shown to the user. */
     tag: string
     /**
      * The step this happened at, ALREADY formatted with its leading space —
@@ -49,7 +49,7 @@ export interface TerminalOutcome {
     /**
      * Demote the INNER task file to resumable. It reads `completed` from
      * spec-handoff, and leaving it that way is how a failed run's task file
-     * claimed success in the run 6 audit.
+     * claimed success in the a audit.
      */
     markResumable: boolean
     /**

@@ -22,7 +22,7 @@
  * child has `bash`, so it can quietly make almost anything go green — export an env
  * var, source a config file, run a different command, rebuild in a scratch dir,
  * fabricate the artifact by hand — and then report PASS, masking a defect a fresh
- * checkout or CI run would hit. (This is exactly what sank an mx5 run: the verify
+ * checkout or CI run would hit. (This is exactly what sank an run: the verify
  * child `export`ed the test DB URL its own shell, watched the suite go green, and
  * passed a project whose documented command failed unaided.) The prompt therefore
  * anchors the child to ONE principle: run the project's own commands verbatim in the
@@ -32,26 +32,27 @@
  * how it connects. This generalises across languages and toolchains and assumes no
  * tests, build, or particular runtime.
  *
- * A/B-proven on the live local model (Qwen3.6-35B), 5 runs/arm on a work-around-to-pass
- * fixture (documented command fails unaided; greppable env file makes it pass): the old
- * prompt false-passed 2/5; the new prompt caught it 5/5, each time naming the unwired
- * config. Guards (3 runs/arm): a healthy project still PASSes 3/3 (no false-fail), a
- * genuinely-broken shipped build FAILs 3/3, and a genuine external-service gap — which
- * the OLD prompt wrongly blamed on the code 3/3 — now correctly PASSes 3/3.
+ * A/B'd on a live local model against a work-around-to-pass fixture — the
+ * documented command fails unaided, and a greppable env file makes it pass. The
+ * prompt below catches it and names the unwired config; a prompt without these
+ * rules passes it. Three guards held: a healthy project still PASSes, a
+ * genuinely-broken shipped build still FAILs, and a genuine external-service gap
+ * — which the weaker prompt blamed on the code — now correctly PASSes.
  *
- * The sibling failure class is GREP-THEATER (mx5 run 2, TASK_0002): the composed VERIFY
+ * The sibling failure class is GREP-THEATER: the composed VERIFY
  * block was grep-only, so the child "verified" a schema.sql containing INVALID SQL by
  * grepping for its own broken text — while a live PostgreSQL sat reachable in the same
  * container, never touched. The prompt now (a) says a grep-only VERIFY block does not cap
  * the obligation to execute/apply an executable artifact, and (b) requires PROBING a
  * declared external service before invoking the absent-service exception — reachable ⇒
- * the real verification must run against it. A/B on the faithful fixture (invalid
- * `generate always as` schema, grep-only VERIFY, unadvertised trust-auth PostgreSQL on
- * the default port, DATABASE_URL unset — exactly the mx5 shape): old prompt false-PASSed
- * 4/5; new prompt FAILed 5/5, each naming the real syntax error. Guards: explicit-URL
- * variant old 5/5 / new 5/5 correct-FAIL (no regression), valid schema 3/3 PASS (no
- * paranoia), unreachable-DB 2/3 PASS via the env-gap exception + 1 conservative FAIL
- * that still named the genuine SQL defect (safe direction — only false-PASS trashes work).
+ * the real verification must run against it. A/B'd on a faithful fixture: an
+ * invalid schema, a grep-only VERIFY block, an unadvertised database reachable on
+ * its default port and no connection string set. The weaker prompt passes it; this
+ * one FAILs and names the real syntax error. Guards: the explicit-URL variant is
+ * unchanged, a valid schema PASSes (no
+ * paranoia), and an unreachable database mostly PASSes via the env-gap exception,
+ * failing conservatively when it does not — and that FAIL still named the genuine
+ * SQL defect, which is the safe direction. Only a false PASS trashes work.
  *
  * It runs as a GATE right after the implementation turn, BEFORE the task is
  * checked off or committed. A FAIL stops the /task-auto run exactly like an
@@ -377,9 +378,9 @@ const asLines = (raw: string[]): string[] => raw
 const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     /**
      * Deterministic self-verification probe (see substitution-probe.ts): the
-     * TEST-THE-COPY class is caught 5/5 only when the prompt carries both the rule
-     * (3b) AND a concrete finding naming the suspect file — the rule alone got 2/5
-     * attention on the local model. The findings are pure git shape (test files the
+     * TEST-THE-COPY class is caught reliably only when the prompt carries both the
+     * rule (3b) AND a concrete finding naming the suspect file. The rule alone
+     * rarely gets the model's attention. The findings are pure git shape (test files the
      * task itself changed), so the mandate is language- and framework-agnostic.
      */
     probeAdapter({
@@ -403,15 +404,15 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     /**
      * Deterministic prohibition probe (see prohibition-probe.ts): spec-forbidden
      * paths the task's diff modified anyway. Same probe+rule design, same reason:
-     * the VIOLATION-EXCUSAL class (mx5 run 7: child saw "Do NOT modify server-side
+     * the VIOLATION-EXCUSAL class (child saw "Do NOT modify server-side
      * code" violated, waived it as "additive, tests pass", PASSed) needs both the
      * no-waiver rule (4b) AND the concrete diff fact — the baseline child usually
      * never runs `git diff` at all, so without the finding it cannot even SEE the
-     * violation. A/B on the live local model (violated-but-working fixture,
-     * everything green, forbidden file modified additively): old prompt 5/5
-     * false-PASS (several runs affirmatively claimed the forbidden file was
-     * untouched); rule+finding 5/5 FAIL naming the constraint. Guard: honest-clean
-     * fixture (prohibition in spec, probe silent) 5/5 PASS — no paranoia.
+     * violation. On a violated-but-working fixture — everything green, forbidden
+     * file modified additively — the rule alone PASSes, and will affirmatively
+     * claim the forbidden file was untouched. Rule plus finding FAILs and names the
+     * constraint. Guard: an honest-clean fixture, with the prohibition in the spec
+     * and the probe silent, still PASSes.
      * Reverted-violation ≡ clean at the diff level (no entry → no finding).
      */
     probeAdapter({
@@ -447,8 +448,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic cross-task deletion probe (see task-provenance.ts, mx5 run 12
-     * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
+     * Deterministic cross-task deletion probe (see task-provenance.ts, a * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
      * provenance) differs from the current task. The only row whose probe does NOT
      * return finding lines — the structured value also rides on a FAIL outcome so
      * an ACCEPT records each deletion as a durable debt.
@@ -487,7 +487,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic probe-gaming probe (see probe-gaming.ts, run-8 F6): added lines
+     * Deterministic probe-gaming probe: added lines
      * whose stated purpose is to make a CHECK pass instead of meeting the
      * requirement it stands for ("return 401 so the verification test passes").
      */
@@ -531,7 +531,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
      * DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
      * block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
      * fallback. Injected so rule 5c fires reliably — the model does not self-discover
-     * a graceful skip-escape (A/B: rule alone ~1-3/5), but acts on a finding naming
+     * a graceful skip-escape from the rule alone, but acts on a finding naming
      * the exact line, per the proven probe+rule pattern. Pure text analysis over
      * `deps.spec`, so this row needs no dep and reports no stage: it is the one probe
      * that is never absent and never costs a git call.
@@ -558,7 +558,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic sandbox-path-leak probe (see foreign-path.ts, mx5 run 13 PROMPT
+     * Deterministic sandbox-path-leak probe (see foreign-path.ts, a PROMPT
      * 4 item 1): absolute paths this task committed that exist only inside the
      * authoring child's own environment — `/workspace/src/shared` in a vite alias —
      * while the real file sits at `src/shared` here.
@@ -599,8 +599,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic neutered-check-script probe (see script-escape.ts, mx5 run 13
-     * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
+     * Deterministic neutered-check-script probe (see script-escape.ts, a * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
      * exit status cannot be non-zero (`… || true`, an inverted-grep launder). The
      * damage is second-order — the script still "passes" — which is exactly why the
      * child cannot discover it by running the check.
@@ -638,7 +637,7 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic test-runner glob-collision probe (see runner-globs.ts, mx5 runs
+     * Deterministic test-runner glob-collision probe (see runner-globs.ts, runs
      * 7 AND 13, PROMPT 4 item 2): the manifest declares two runners whose file sets
      * are not provably disjoint, so the scanning one imports the other's specs and
      * dies during COLLECTION.
@@ -1011,7 +1010,7 @@ export interface VerificationDeps {
      * Result of the git-state guard for the MOST RECENT runChild call (see
      * git-state-guard.ts): did the child mutate repo state (stash/checkout/file
      * rewrites), which the guard then restored? A verdict computed on a mutated
-     * tree is untrustworthy in BOTH directions — the mx5 run 6 child stashed the
+     * tree is untrustworthy in BOTH directions — the a child stashed the
      * work away and judged an empty tree — so it is discarded: the first mutated
      * run is retried once on the restored tree; a second mutation is a FAIL that
      * names the behavior. ABSENT → no guard (tests / non-git repos), unchanged. */
@@ -1046,8 +1045,8 @@ export interface VerificationDeps {
 export async function runWorkVerification(deps: VerificationDeps): Promise<VerifyOutcome> {
     // DETERMINISTIC gate FIRST: run the project's own whole-repo static analysis and
     // let its exit code decide, before spending a model turn. This catches the class
-    // the model gate misses — a task whose composed VERIFY block never lints (proven
-    // 5/5 false-PASS live) — because it does not depend on that block. A fail is the
+    // the model gate misses — a task whose composed VERIFY block never lints, which
+    // false-PASSes every time — because it does not depend on that block. A fail is the
     // ordinary verify-FAIL outcome, so it flows into the existing resolution picker.
     // Absent dep, or a no-op result (no tooling to run), falls through to the model.
     const stage = (label: string): void => {

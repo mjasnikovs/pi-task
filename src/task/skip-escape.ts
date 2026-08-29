@@ -1,13 +1,13 @@
 /**
- * Deterministic skip-escape scanner for authored VERIFY blocks (run-8 F2).
+ * Deterministic skip-escape scanner for authored VERIFY blocks.
  *
  * A skip-escape is a `||` fallback that lets a REQUIRED check pass SILENTLY when
  * its tool is absent or it fails — e.g. `playwright test … || echo "skipping"`.
- * mx5 run-8 shipped a blank/dead app partly because its only behavioral smoke
+ * run-8 shipped a blank/dead app partly because its only behavioral smoke
  * tests were wrapped this way: the tool was absent, the check silently skipped,
  * and the verify child blessed it as "correctly skipped".
  *
- * FP-MEASURED on the historical VERIFY blocks (~/hub/mx5/.pi-tasks, 22 tasks): a
+ * FP-MEASURED on the historical VERIFY blocks: a
  * blanket `|| true` flag is ~90% false positives — teardown (`kill … || true`,
  * `docker compose down … || true`), setup (`… install … || true`), and negative
  * tests (`… && exit 1 || true`, where `|| true` catches an EXPECTED failure). Of

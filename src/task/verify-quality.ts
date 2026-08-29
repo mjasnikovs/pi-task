@@ -1,7 +1,7 @@
 /**
- * Grep-theater VERIFY detector (mx5 run-13 Bug B), compose-critique side.
+ * Grep-theater VERIFY detector, compose-critique side.
  *
- * TASK_0018's VERIFY block "verified" a build script with tsc + three greps on
+ * a task VERIFY block "verified" a build script with tsc + three greps on
  * build.ts's SOURCE — it never ran `bun build.ts`. The greps asserted the
  * hallucinated `Bun.mkdirSync` line was present, so a broken build shipped
  * green and stayed broken for 14 tasks. Grep-on-source is not verification of
@@ -12,7 +12,7 @@
  * file (.ts/.js/.sh — a build script, server, CLI entry) and (b) contains NO
  * execution command at all — every command is static inspection (grep, test,
  * ls, cat, tsc --noEmit, eslint, prettier). Any real execution anywhere in the
- * block (bun/node/npm run/test, curl, ./script) means the deliverable-runs
+ * block (bun/node/npm run/test, curl,./script) means the deliverable-runs
  * question is at worst partially covered, and we step aside — the guard may
  * only cost time, never work, so recall is floored at the unambiguous
  * all-static case rather than chasing which command exercises which file.
@@ -77,7 +77,7 @@ const INSPECT_HEADS = new Set(['grep', 'rg', 'cat', 'head', 'tail', 'wc'])
  * `if grep -q x f; then` splits into an `if`-prefixed segment plus bare `then`;
  * `… || { echo FAIL; exit 1; }` yields `{ echo …` and `}` segments. Treating
  * these as unknown heads would count them as execution and silently blind the
- * detector on exactly the incident shape (run-13's VERIFY used all of them).
+ * detector on exactly the incident shape.
  */
 const CONTROL_PREFIX = new Set(['if', 'elif', 'while', 'until', 'then', 'else', 'do', '!'])
 const CONTROL_ONLY = new Set(['}', ')', 'fi', 'done', 'esac'])
@@ -158,8 +158,8 @@ export interface VerifyCommandClass {
     staticOnly: boolean
     /**
      * The command observes RUNTIME behaviour: an HTTP request, a port probe, a
-     * process it starts and watches. This is the distinction nexttask 7's M3
-     * turns on — mx5 run 18's TASK_0023 VERIFY is all `node -e "…package.json…"`,
+     * process it starts and watches. This is the distinction 's M3
+     * turns on — a a task VERIFY is all `node -e "…package.json…"`,
      * which EXECUTES node yet can only assert that a string is present in a
      * config file, and the behavioural half of the owned requirement ("serves
      * `/api` + static `dist/`") is exactly what it cannot see.
@@ -191,7 +191,7 @@ export function classifyVerifyCommands(spec: string): VerifyCommandClass[] {
 
 /**
  * Retry hint when the critique rewrite KEPT the grep-theater block it was told
- * to fix (live A/B: 1/5 rewrites ignored the injected defect). Prepended to the
+ * to fix — a rewrite can ignore the injected defect. Prepended to the
  * second rewrite attempt; the defect block naming the exact files is still in
  * the prompt body.
  */

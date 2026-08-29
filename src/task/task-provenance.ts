@@ -1,12 +1,12 @@
 /**
  * task-provenance — file → introducing-task lookup, and the cross-task deletion
- * detection built on it (mx5 run-12 PROMPT 2).
+ * detection built on it.
  *
  * The failure class: write-enabled gate/fix children can DELETE a sibling task's
- * committed deliverable to turn a red check green. Live (mx5 2026-07-16,
+ * committed deliverable to turn a red check green. Live (2026-07-16,
  * verify-debug.log 17:53:44): `bun run lint` was permanently red because
  * committed playwright ct files were not registered in a spec-frozen tsconfig —
- * so a lint-fix child deleted TASK_0020's verified deliverables and the pass
+ * so a lint-fix child deleted a task verified deliverables and the pass
  * returned ok. Every existing guard missed the class:
  *
  *   - the lint-fix revert-guard checks only pre-DIRTY files reverted and

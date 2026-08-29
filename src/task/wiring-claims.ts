@@ -1,7 +1,7 @@
 /**
- * Deterministic synthesized-wiring scanner for a composed spec (run-8 F3, gen side).
+ * Deterministic synthesized-wiring scanner for a composed spec.
  *
- * F3 (the dominant run-8 shipped defect): refine/compose invent a "uniform" wiring
+ * F3: refine/compose invent a "uniform" wiring
  * table — one module → one mount prefix, `/api/<x>` → `<x>Routes` for every module —
  * though the design pins ENDPOINTS, not mounts, and one module's pinned endpoints do
  * NOT all sit under a single prefix (photos: `POST /api/listings/:id/photos` AND
@@ -11,8 +11,8 @@
  * lever) — this is its GENERATION-side complement.
  *
  * A/B-measured on the live 27B (F3 critique trap): the CROSS-SLICE CONTRACTS registry
- * is NECESSARY but the prompt+registry alone is a WEAK catcher (A/B arms 0/8, +registry
- * only 1/8) — the model's attention goes to the obvious VERIFY weakness and it rarely
+ * is NECESSARY but the prompt and registry alone are a WEAK catcher — the
+ * model's attention goes to the obvious VERIFY weakness and it rarely
  * does the path-composition reasoning even with the facts in front of it. The reliable
  * lever is the SAME probe+rule pattern as [[skip-escape-scanner-f2]] / [[verify-
  * substitution-ab]]: a deterministic finding that NAMES the exact synthesized mappings

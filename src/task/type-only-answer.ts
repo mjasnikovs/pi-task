@@ -2,7 +2,7 @@
  * Deterministic detector for the F-2 shape: a pi-worker-docs answer that RESTATES a type
  * signature or declaration for a USAGE question, without ever saying what the API DOES.
  *
- * THE FATAL CASE, from mx5 run 15 (research-cache.json, verbatim):
+ * THE FATAL CASE, from a (research-cache.json, verbatim):
  *
  *   query : "hc factory function signature base url parameter types exported from hono/client"
  *   answer: "The `hc` factory function exported from `hono/client` accepts a generic type

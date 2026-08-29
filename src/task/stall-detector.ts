@@ -6,7 +6,7 @@
  * planning children" on one local backend: decompose 89s, so 600s looked like a
  * 6x margin. That sizing is not a property of the pathology, it is a property of
  * that day's model, that day's samplers and that day's design doc. Measured on
- * the same 27B backend with reasoning ON (2026-08-17, n=10 replays of one
+ * the same backend with reasoning ON (replays of one
  * captured auto-decompose request, everything else byte-identical): every single
  * healthy run took 610-927s and produced 26-42 correct titles. The cap would
  * have killed 10 out of 10 GOOD runs. A slower model, a bigger design doc or a
@@ -33,7 +33,7 @@
  *      that exceeds CONTEXT_CHURN_FACTOR times its own context window and it
  *      still has not answered, it has necessarily forgotten what it read first
  *      and is re-reading to fill a window pi keeps compacting. That is the
- *      mx5-n 2026-08-14 shape: 16m23s at 117,370 of a 120,064-token window,
+ *      the observed shape: many minutes spent at the very top of the context window,
  *      ~56k tokens of tool output per minute, forward-paging the whole time so
  *      rule 1 alone would not have caught it. The bound scales with the model's
  *      OWN window, so a 1M-context model gets a 1M-context allowance.

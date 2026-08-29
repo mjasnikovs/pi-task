@@ -3,7 +3,7 @@
  * directives a user writes into a raw task prompt, so a downstream rewrite (refine)
  * cannot silently drop them.
  *
- * The failure this closes (mx5 run 9, validated): the raw prompt was
+ * The failure this closes: the raw prompt was
  *   "Research Playwright best practices VIA WEB SEARCH — focus on E2E testing…"
  * Refine rewrote the task well in every other respect (it correctly killed a wrong
  * "Next.js" framing) but the "via web search" instruction vanished from the refined
