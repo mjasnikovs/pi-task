@@ -211,5 +211,13 @@ and three still name things a new developer does not have:
   nexttask items and `magicknumbers.md`.
 - `src/config/reasoning.ts` — `REASONING_GROUP_HELP`, shown in
   `/task-config`, says "Measured: the two arms tie" and "the last full run".
+- `src/task/foreign-path.ts` — `foreignPathDefectText`, the critique/enforce
+  defect block, says "mx5 run 13" and "63 tests collected, 0 run" to the model.
+
+That last one is INVISIBLE to the usual checks. The file contains a real NUL
+byte (`` `${file}\0${abs}` ``, a key separator in `findForeignPaths`), so tools
+treat it as binary: plain `grep -n mx5` on it exits 1 with no output, and
+`git grep` prints only `Binary file … matches` with no line. Use `grep -a`, or
+read it in Python, before believing a clean scan of this repo.
 
 Changing these changes what ships, so they need their own decision.
