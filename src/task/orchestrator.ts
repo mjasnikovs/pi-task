@@ -12,8 +12,9 @@
  *   /task-cancel           cancel the running task (soft-terminal — still resumable)
  *
  * The orchestrator persists after every phase boundary to
- * <cwd>/.pi-tasks/TASK_NNNN.md. All user interaction during phases runs through
- * ctx.ui dialogs; the main pi chat only receives the final spec.
+ * <cwd>/.pi-tasks/TASK_NNNN.md. User interaction during phases runs through the
+ * SessionUI bridge — a local ctx.ui dialog raced against a remote browser card —
+ * never through the main conversation, which only receives the final spec.
  */
 
 import * as fsp from 'node:fs/promises'
@@ -96,11 +97,12 @@ let piApi: ExtensionAPI | null = null
 /**
  * The live session's thinking level, as a {@link ThinkingControl}.
  *
- * Goes through `piApi` rather than the command ctx because
- * `ExtensionCommandContext` exposes `thinkingLevel` READ-ONLY; the setter lives
- * on the extension API. Before `registerTask(pi)` has run there is nothing to
- * control, so this degrades to a no-op pair rather than throwing — a task that
- * cannot move the level should still run.
+ * Goes through `piApi` rather than the command ctx because `ExtensionContext`
+ * (which the command ctx extends) carries `thinkingLevel` as a plain optional
+ * VALUE with no setter; `setThinkingLevel` lives on `ExtensionAPI`. Before
+ * `registerTask(pi)` has run there is nothing to control, so this degrades to a
+ * no-op pair rather than throwing — a task that cannot move the level should
+ * still run.
  */
 function piThinkingControl(): ThinkingControl {
     const api = piApi
@@ -130,12 +132,13 @@ export interface TaskRunnerOptions {
      * `spawn` drives the Error-triage ladder or a real process. `runChild(name,
      * tools, prompt)` answers every phase child BY NAME, with none of the
      * ladder's guards — use it when the child is a premise of the test, not its
-     * subject. `runWorker(label, input)` answers every research worker by name,
-     * so the three Research retry gates are reachable without matching a marker
-     * sentence inside a prompt. The EXTERNAL CONTEXT lookups and the file
+     * subject. `runWorker(label, input)` answers every research worker by name, so
+     * the research phase's retry gates (`zeroRetrievalRetry`, `retryIfSilent`, the
+     * restart ladder) are reachable without matching a marker sentence inside a
+     * prompt. The EXTERNAL CONTEXT lookups and the file
      * inventory each default to the real implementation when absent. `timeoutMs`,
-     * `sleepFor`, `childExtensions` and `logDebug` are seams too, and were
-     * unreachable from here until this became one field.
+     * `sleepFor`, `childExtensions` and `logDebug` are seams too, and travel in the
+     * same field.
      */
     seams?: PhaseSeams
     /** Called with the resolved task id once its file exists, before any phase
@@ -187,9 +190,9 @@ export class TaskRunner {
     private readonly _deps: PhaseDeps
     private readonly _pc: PhaseContext
     /**
-     * Per-phase wall-clock durations collected during the run. Written to the
-     * `## phase timings` section on successful completion so we can spot
-     * regressions and target future speed work. Each top-level entry is a
+     * Per-phase wall-clock durations collected during the run, written to the
+     * `## phase timings` section — on completion, and again from the catch so a
+     * failed run still records what it got through. Each top-level entry is a
      * phase (refine/research/grill/compose/critique); children are optional
      * sub-step splits the phase chose to record via deps.recordSubStep.
      */
@@ -209,8 +212,8 @@ export class TaskRunner {
         this._implAwaited = opts.implAwaited ?? false
         this._startedAt = Date.now()
 
-        // We'll populate id/title/phase lazily in run().
-        // Placeholder — real values set in run().
+        // Placeholder: id/title/phase are only known once run() has allocated or
+        // read the task file.
         this._widgetState = {
             taskId: '',
             title: '',
@@ -235,7 +238,7 @@ export class TaskRunner {
             },
             // Handed DOWN so the child's own snapshot carries a window and the
             // StallDetector's churn rule can arm; resolveContextUsage below stays
-            // as the fallback for a child that still reports none (issue #16).
+            // as the fallback for a child that still reports none.
             contextWindow: parentContextWindow,
             onContextUsage: snapshot => {
                 this._widgetState.contextUsage = resolveContextUsage(
@@ -283,16 +286,15 @@ export class TaskRunner {
         this._abort.abort()
     }
 
-    /** Execute the full task lifecycle. Mid-run input holds instead of starting
-     *  a competing turn for the whole of it, and the terminal interception is
-     *  armed for the same window (`withRun`); nested inside `runGatedTask` or
-     *  the `/task-auto` loop the bracket refcounts, so this changes nothing there
-     *  and covers the fire-and-forget `runSingleTask` path on its own. */
     /**
-     * Run the task and NAME how it ended.
+     * Run the task and NAME how it ended (`RunEnd`), so no caller has to re-read
+     * the task file to find out.
      *
-     * This returned `void`, so the caller re-read the task file to learn what had
-     * just happened here — see run-end.ts for the report that got wrong.
+     * Mid-run input holds instead of starting a competing turn for the whole of
+     * it, and the terminal interception is armed for the same window (`withRun`);
+     * nested inside `runGatedTask` or the `/task-auto` loop the bracket refcounts,
+     * so this changes nothing there and covers the fire-and-forget
+     * `runSingleTask` path on its own.
      */
     async run(): Promise<RunEnd> {
         return withRun(this._ctx, {}, () => this._run())
@@ -340,11 +342,12 @@ export class TaskRunner {
 
         // Wire up per-task debug log (<cwd>/.pi-tasks/TASK_XXXX-debug.log).
         const debugLogPath = path.join(tasksDir(cwd), `${id}-debug.log`)
-        // Left UNSET at level `off`, so the ~39 `logDebug?.(…)` sites downstream
-        // short-circuit before they format a string and the file is never created.
-        // A caller-supplied `logDebug` seam WINS: it is the only way to observe
-        // the ~39 trail decisions from a runner-driven test, and production never
-        // sets one, so the file writer is unaffected.
+        // `gateDebugWriter` returns undefined at level `off`, so every
+        // `logDebug?.(…)` site downstream short-circuits before it formats a string
+        // and the file is never created. A caller-supplied `logDebug` seam WINS
+        // (`??=`): it is the only way to observe the trail decisions from a
+        // runner-driven test, and production never sets one, so the file writer is
+        // unaffected.
         this._deps.logDebug ??= gateDebugWriter((msg: string) => {
             const line = `${new Date().toISOString()} ${msg}\n`
             fsp.appendFile(debugLogPath, line).catch(() => {
@@ -412,9 +415,9 @@ export class TaskRunner {
                 await postCommitPhase(phase, this._deps, this._pc, out)
                 // SAFE CHECKPOINT (phase boundary): this phase's output is on disk
                 // and the next `advance()` has not moved front-matter forward, so a
-                // resume re-enters at exactly this phase. Without this the whole
-                // spec pipeline (refine→critique, research
-                // alone ~3 min) runs to completion after a cancel is requested.
+                // resume re-enters at exactly this phase. Without a checkpoint here
+                // the whole refine→critique pipeline runs to completion after a
+                // cancel is requested.
                 // Throwing USER_CANCELLED reuses the existing cancellation path:
                 // handleFailure leaves the task resumable and /task-auto's catch
                 // announces the resume hint.
@@ -489,10 +492,11 @@ export class TaskRunner {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
         armImplWidget(meta, {oneShot: true})
-        // Always name a delivery mode. pi ignores it when the session is idle and
-        // uses it when something else is streaming — so this one call is correct
-        // in both cases, where an isIdle() check is a check-then-act race that
-        // loses to any turn starting in between (issue #8).
+        // Always name a delivery mode. pi's `prompt()` consults `streamingBehavior`
+        // only inside `if (this.isStreaming)`, so naming one is inert on an idle
+        // session and queues on a busy one — correct in both cases, where an
+        // isIdle() check is a check-then-act race that loses to any turn starting
+        // in between.
         piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
     }
 
@@ -558,8 +562,8 @@ export interface RunSingleTaskOptions extends Pick<
     notifyFinish?: boolean
     /**
      * How the implementation turn's thinking level is read and written. Defaults
-     * to the live pi session; injected by tests, which must be able to assert
-     * the restore without a real session to restore.
+     * to the live pi session; injectable so the hold-and-restore is assertable
+     * with no real session to restore.
      */
     thinkingControl?: ThinkingControl
 }
@@ -568,11 +572,7 @@ export interface RunSingleTaskResult {
     taskId: string
     /**
      * How the run ended, named by the runner rather than re-derived from disk.
-     *
-     * This was `ok: boolean` plus `sessionCancelled`, `interrupted` and `reason`
-     * — four fields for one fact, three of them smuggled out of the `withSession`
-     * closure through mutable captures. `/task-cancel` fell into the `!ok` arm
-     * and was reported as a failure; see run-end.ts.
+     * One value for one fact: see run-end.ts for the endings and their policy.
      */
     end: RunEnd
     /**
@@ -591,9 +591,8 @@ export interface RunSingleTaskResult {
  * deliver its spec. With waitForImplementation, block until the agent finishes
  * implementing the delivered spec.
  *
- * The ending comes from `TaskRunner.run`. Read back off the task
- * file's front matter — a disk round-trip this process made to learn what it had
- * just done, and one that could not tell a cancel from a failure.
+ * The ending in the result comes from `TaskRunner.run` itself, not from re-reading
+ * the task file's front matter — which cannot tell a cancel from a failure.
  */
 export async function runSingleTask(
     ctx: ExtensionCommandContext,
@@ -619,10 +618,12 @@ export async function runSingleTask(
         withSession: async newCtx => {
             freshCtx = newCtx
             getBridge().currentCtx = newCtx // keep remote dispatch ctx fresh across session replacement
-            // Same reason, for the terminal: pi clears every extension terminal
-            // input listener when the old session is invalidated, and that
-            // happens at the START of each task — precisely the window a typed
-            // /task-auto-cancel has to survive. No-op unless a run armed one.
+            // Same reason, for the terminal: pi wires
+            // `setBeforeSessionInvalidate(() => this.resetExtensionUI())`, and
+            // `resetExtensionUI` calls `clearExtensionTerminalInputListeners()`.
+            // Every extension listener dies at the START of each task — precisely
+            // the window a typed /task-auto-cancel has to survive. No-op unless a
+            // run armed one.
             rearmCancelListener(newCtx)
             const runner = new TaskRunner({
                 ctx: newCtx,
@@ -640,7 +641,8 @@ export async function runSingleTask(
                         opts.thinkingControl ?? piThinkingControl()
                     )
                     try {
-                        // Queue-or-run: never throws, whatever else is on the session (issue #8).
+                        // Queue-or-run: naming a delivery mode means pi's
+                        // "Agent is already processing" throw is unreachable here.
                         await newCtx.sendUserMessage(spec, {deliverAs: 'followUp'})
                         if (opts.waitForImplementation) {
                             await newCtx.waitForIdle()
@@ -685,12 +687,9 @@ export async function runSingleTask(
     // delivered and the task file already reads `completed`:
     //
     //   • the user interrupted and declined to steer — a pause, not a fault;
-    //   • the implementation turn died with stopReason "error" (a context-overflow
-    //     400, say), which must stop /task-auto here rather than let it commit and
-    //     advance on a file that says `completed`.
-    //
-    // Both would otherwise reach the caller as extra fields beside a boolean, and both are
-    // endings.
+    //   • the implementation turn died with stopReason "error", which must stop
+    //     /task-auto here rather than let it commit and advance on a file that
+    //     says `completed`.
     let end = runEnd
     if (end.kind === 'completed' && interrupted) end = {kind: 'interrupted'}
     else if (end.kind === 'completed' && implError) end = {kind: 'failed', reason: implError}
@@ -722,9 +721,9 @@ export const gateRunTask: RunTaskFn = (c, cwd, t, opts) =>
         // NO `seams` here, deliberately. Threading them would need a field on
         // `GateParams` and another on `GateDeps`, and nothing — production or
         // test — would set either: the gate is reached through two orchestrators
-        // that build their params from a task file. An unused field on a seam
-        // roster is the `WorkerOutcome.reason` shape (written twelve times, read
-        // by nothing), so this stays unplumbed until a test actually needs it.
+        // that build their params from a task file. `WorkerOutcome.reason` is what
+        // that costs: written at every `workerUnavailable` call site and read
+        // nowhere. So this stays unplumbed until a test actually needs it.
     })
 
 /**
@@ -758,15 +757,13 @@ export async function runGatedTask(
 ): Promise<void> {
     // The GATES are part of the run, and they are child processes with the host
     // session idle — the same hold window as the spec phases. Bracketing only
-    // TaskRunner would leave verify/enforce looking like "no run", which a live
-    // run on pi 0.82.1 showed as runActive=false while the widget still read
-    // "verifying work" (issue #8). The body has many early returns, so the
-    // bracket lives in this wrapper rather than in a dozen places. The same
-    // bracket arms the raw-stdin interception for the WHOLE run: without it a
-    // plain /task had no terminal path at all — only /task-auto armed one — so a
-    // line typed during it went into pi's queue and fired after the run (seen
-    // live). No onCancel: a typed /task-auto-cancel goes through the generic
-    // bridge dispatch here.
+    // TaskRunner would leave verify/enforce reading as "no run" while the widget
+    // still says "verifying work". The body has many early returns, so the bracket
+    // lives in this wrapper rather than in a dozen places. The same bracket arms
+    // the raw-stdin interception for the WHOLE run: without it a line typed during
+    // a plain /task lands in pi's `pendingUserInputs` and fires after the run. No
+    // onCancel: a typed /task-auto-cancel goes through the generic bridge dispatch
+    // here.
     await withRun(ctx, {}, () => runGatedTaskInner(ctx, cwd, raw, opts))
 }
 
@@ -795,10 +792,8 @@ async function runGatedTaskInner(
     const res = await deps.runTask(active, cwd, raw, {resumeId: opts.resumeId})
     active = res.ctx ?? active
     const tag = res.taskId || 'Task'
-    // One dispatch over the named ending. The four-branch ladder this replaces put
-    // a CANCELLED run into the `!ok` arm, so `/task-cancel` overwrote the file's
-    // `cancelled` with `failed` and told the user their task had stopped and needed
-    // fixing. Resumability comes from RUN_END_POLICY; the wording stays here,
+    // One dispatch over the named ending, so a cancel can never be reported as a
+    // failure. Resumability comes from RUN_END_POLICY; the wording stays here,
     // because `/task-auto` says `/task-auto-resume` where this says `/task-resume`.
     if (!runSucceeded(res.end)) {
         const policy = RUN_END_POLICY[res.end.kind]
@@ -862,7 +857,7 @@ async function handleTask(args: string, ctx: ExtensionCommandContext): Promise<v
     // When a gate is enabled, /task awaits the implementation and runs the same
     // verify + enforce gates a /task-auto sub-task does. With both gates off
     // (the default), /task stays fire-and-forget: hand the spec to the main
-    // conversation and return immediately, exactly as before.
+    // conversation and return immediately.
     const cfg = getConfig()
     if (cfg.verifyWork || cfg.enforceGuidelines) {
         await runGatedTask(ctx, cwd, raw)
