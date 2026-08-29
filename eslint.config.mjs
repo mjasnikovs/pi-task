@@ -18,9 +18,6 @@ export default tseslint.config(
             parserOptions: {
                 tsconfigRootDir: import.meta.dirname,
                 projectService: {
-                    // scripts/*.ts moved to their own scripts/tsconfig.json:
-                    // the allowDefaultProject glob hard-caps at 8 matched files
-                    // and the harness collection outgrew it.
                     allowDefaultProject: ['eslint.config.mjs', '.prettierrc.cjs'],
                     defaultProject: 'tsconfig.json'
                 }
@@ -73,9 +70,7 @@ export default tseslint.config(
         }
     },
     {
-        // Test mocks deliberately mark methods `async` to match the real
-        // async signatures they stand in for, even when the fake body has
-        // no `await`. That's intentional, so don't flag it here.
+        // Mocks are `async` to match the real signatures they stand in for.
         files: ['**/*.test.ts', 'src/test-utils/**/*.ts'],
         rules: {
             '@typescript-eslint/require-await': 'off'
