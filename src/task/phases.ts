@@ -224,12 +224,11 @@ export function replaceToolingWithVerified(research: string, verifiedCommands: s
 // ─── Phase functions ─────────────────────────────────────────────────────────
 
 // Authoritative directive that travels with the refine orientation block. Refine
-// runs BEFORE research, so on a "Scaffold project with package.json…" title it has
-// no signal the file already exists and authors greenfield strip-constraints
-// ("bun-plugin-tailwind the only dependency", "exactly N scripts") that compose
-// then obeys over the research facts — the implementer executes a wholesale
-// rewrite that drops every existing dependency and script — reliably, and even
-// when research has surfaced those dependencies. Handing refine the
+// is PHASE_ORDER[0] and research is [1], so on a "scaffold the project" title
+// refine has no signal that the manifest already exists. It can then author
+// greenfield strip-constraints ("X is the only dependency", "exactly N scripts")
+// which compose obeys — and the implementer rewrites the manifest from scratch,
+// dropping every dependency and script already in it. Handing refine the
 // manifest/config CONTENT up front, with this reframe, fixes it at the origin.
 const REFINE_PRESERVE_DIRECTIVE =
     'EXISTING FILES ON DISK — AUTHORITATIVE (overrides any "scaffold / create / set '
@@ -284,13 +283,13 @@ export async function phaseContractsBlock(deps: PhaseDeps): Promise<string> {
 
 /**
  * The carried-context blocks a GENERATIVE phase (refine, compose) receives: the
- * cross-slice contracts plus the carried cross-cutting requirements (* goals A/C — `.pi-tasks/requirements.md`, written at plan time). The verbatim
- * requirement quotes travel INTO every task's spec generation, so a mandated
- * methodology ("a test lands in the same change as each new route") reaches the
- * task's GOAL/CONSTRAINTS and its VERIFY — a pointer back to the spec doc
- * recovered the dropped §10 in only 1 of ~6 applicable tasks; content
- * travels, pointers don't. Both blocks are '' outside their runs, so a bare
- * /task is byte-identical to before.
+ * cross-slice contracts plus the carried cross-cutting requirements
+ * (`.pi-tasks/requirements.md`, written at plan time). The verbatim requirement
+ * quotes travel INTO every task's spec generation, so a mandated methodology
+ * ("a test lands in the same change as each new route") reaches the task's
+ * GOAL/CONSTRAINTS and its VERIFY. Content travels; a pointer back to the spec
+ * doc does not. Both blocks are '' outside a /task-auto run, so a bare /task
+ * sees no change.
  */
 export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
     const contracts = await phaseContractsBlock(deps)
@@ -303,10 +302,10 @@ export async function phaseCarriedBlocks(deps: PhaseDeps): Promise<string> {
  * The owned (task-mapped) requirements for THIS task: matched by
  * the plan title the coverage map keyed them to, which is the task's stored
  * `raw prompt` section verbatim. Empty outside /task-auto runs, for spliced
- * repair tasks, and when the plan recorded no mapping — all of which degrade to
- * the pre-behavior. This is the BELT (prompt block, into refine +
- * compose); appendOwnedConstraints on the final spec is the BRACES. The belt
- * alone rarely gets the clause folded in.
+ * repair tasks, and when the plan recorded no mapping — all of which make this a
+ * no-op. This is the BELT (a prompt block, into refine and compose);
+ * `appendOwnedConstraints` on the final spec is the BRACES. The belt is a request
+ * to the model and can be ignored; the braces are a host-side append and cannot.
  */
 async function ownedForThisTask(deps: PhaseDeps): Promise<OwnedRequirement[]> {
     try {
@@ -342,10 +341,11 @@ function repoSourceOracle(cwd: string): (p: string) => boolean {
  *
  * Runs at the LAST spec-producing step, where the pair first exists: the stamped
  * bullet is written one statement earlier by `appendOwnedConstraints`, and a
- * critique-time probe would find nothing, because the stamp does not exist yet.
- * It never edits prose and never asks a model — a rewrite lever resolves about
- * half of these pairs by DELETING the authoritative clause. The quote stays in the
- * ledger throughout; only its owner changes.
+ * critique-time probe would find nothing because the stamp does not exist yet.
+ * It never edits prose and never asks a model — a model asked to remove a
+ * contradiction can satisfy the request by DELETING the authoritative clause,
+ * which is not satisfaction of the requirement. The quote stays in the ledger
+ * throughout; only its owner changes.
  */
 export async function resolveOwnedFreezeForThisTask(
     deps: PhaseDeps,
@@ -375,10 +375,10 @@ export async function resolveOwnedFreezeForThisTask(
  * rides the same belt every owned requirement does and the braces stamp it onto
  * this spec.
  *
- * The claimant is the only party that knows: at detach time the later tasks are
- * bare plan titles, and none of a 26 titles contains the path. Over
- * the same run's 26 REFINED prompts, `writeIntent` picks out exactly the two
- * tasks that write the server file.
+ * The claimant is the only party that knows. At detach time the later tasks are
+ * bare plan titles, and a plan title names a slice of behaviour rather than a
+ * file. By its own compose a task has a REFINED prompt, which does say which
+ * files it will write — and that is what `writeIntent` reads.
  */
 export async function claimOwnedFreezeForThisTask(deps: PhaseDeps, refined: string): Promise<void> {
     const ledger = await readOwnedRequirements(deps.cwd).catch(() => [])
@@ -396,8 +396,8 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
     const contracts = await phaseCarriedBlocks(deps)
     // Imperative tool directives the user wrote into the RAW prompt ("via web
     // search", "fetch <url>"). Refine paraphrases the task and a weak model drops
-    // these some of the time ("via web search" vanished, the whole run
-    // made 0 search calls). Hand them to refine as a MUST-PRESERVE block (belt) and
+    // these some of the time, and a directive that vanishes at refine is gone from
+    // every later phase. Hand them to refine as a MUST-PRESERVE block (belt) and
     // re-check the output below (lever). Empty on an ordinary prompt → refine unchanged.
     const directives = extractUserDirectives(raw)
     const directivesBlock = preserveDirectivesBlock(directives)
@@ -407,18 +407,17 @@ export const phaseRefine = async (deps: PhaseDeps, raw: string, planContext?: st
         'read',
         REFINE_PROMPT(raw, planContext, existingFiles, contracts, directivesBlock),
         // refine's deliverable is a 4-section text rewrite that never strictly
-        // needs a successful read — on a test-writing task against a large
-        // existing codebase the model over-explores (re-reads source hunting for
-        // the impl) and burns the loop budget. Degrade to a no-tools final
-        // attempt instead of hard-failing the whole run. See a task:
-        // refine looped 3×/resume forever; the deliverable was always producible
-        // from the title + design doc alone.
+        // needs a successful read: it is producible from the title and the design
+        // doc alone. Against a large existing codebase the model can over-explore
+        // instead — re-reading source hunting for the implementation — and burn the
+        // loop budget. Degrade to a no-tools final attempt rather than hard-failing
+        // the whole run.
         {degradeOnExhaustion: true, verb: 'restart'}
     )
     // Shape check, REPORTED not enforced. Refine's four sections are what
     // extractCapsSection, scopedToolingGoal, deriveTitle and extractEnrichTargets
-    // each look for, and all four fail SILENTLY when one is missing — so the loss
-    // was previously invisible. Deliberately not a retry or a throw: refine's
+    // each look for, and all four fail SILENTLY when one is missing, so without
+    // this line the loss leaves no trace. Deliberately not a retry or a throw: refine's
     // output is usable prose even when a heading is gone (the four consumers
     // degrade, they do not break), and a run must not die over a heading. This
     // puts the miss in the debug log where an audit can find it.
@@ -470,10 +469,10 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
  * The worker channels the APIS research worker is given.
  *
  * `pi-worker-search` + `pi-worker-fetch` ride along only when the configured
- * engine is usable (a keyless engine always is; brave needs its key). A tool
- * without a key just errors, and a weak model burns calls on it — while search
- * being ABSENT was structural in the other direction: three consecutive audited
- * runs made 0 search calls because the child literally did not have the tool.
+ * engine is usable. `searchConfigured` decides: exa and ddg are keyless and
+ * always usable, brave is usable only with its key. A keyless tool that errors
+ * on every call is something a weak model burns calls on; a tool the child was
+ * never handed is a channel it cannot use at all, however the prompt is worded.
  *
  * Both halves of "given a channel" — the tools string and the `-e` path — come
  * from the same rows, so they cannot disagree.
@@ -493,10 +492,10 @@ export function searchConfigured(
     getEnv: (k: string) => string | undefined = k => process.env[k],
     provider: SearchProvider = getConfig().searchProvider
 ): boolean {
-    // Asks the SAME row `search()` asks. Re-stating brave's env pair here
-    // under a comment saying it "mirrors search-core's lookup" — two statements of
-    // one fact, and the one that decides whether the APIS worker is even handed the
-    // search tool.
+    // Goes through `searchProviderKey`, the same lookup `search()` itself uses.
+    // Re-stating brave's env pair here would make two statements of one fact, and
+    // this is the one that decides whether the APIS worker is handed the search
+    // tool at all.
     return searchProviderKey(provider, getEnv) !== null
 }
 
@@ -514,9 +513,9 @@ export const RESEARCH_SEARCH_HINT =
  * In-process guards loaded into the TOOLING worker only: block a re-read of any
  * file already read, and block any byte-identical grep/find/ls repeat, feeding
  * the model "you already have this, answer now" instead of letting it re-run.
- * TOOLING reads each file once and never needs an identical search twice in any
- * healthy recorded run, so neither rule has a legitimate false positive here.
- * See single-read-guard.ts.
+ * TOOLING's job is to name verification commands, so it has no reason to read a
+ * file twice or repeat a search byte for byte — which is what makes both rules
+ * safe to arm HERE and nowhere else. See single-read-guard.ts.
  */
 export const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
     new URL('../workers/single-read-extension.js', import.meta.url)
@@ -533,9 +532,7 @@ export const SINGLE_READ_EXTENSION_PATH = fileURLToPath(
  * Fallbacks, in order: no bare `GOAL` header (free-form refined) → the whole
  * refined unchanged; a GOAL block with no bullets → the full GOAL block. The
  * GOAL boundary is the next bare ALL-CAPS header (CONSTRAINTS, KNOWN-UNKNOWNS,
- * …) or end of text. Verified against every recorded refined prompt: the
- * bullet-heavy failure case drops 3319→329 chars with zero source-file
- * mentions; the rest are unchanged or only lightly trimmed.
+ * …) or end of text.
  */
 export function scopedToolingGoal(refined: string): string {
     const m = /^GOAL[ \t]*\n([\s\S]*?)(?=\n[A-Z][A-Z][A-Z -]*[ \t]*\n|$(?![\s\S]))/m.exec(refined)
@@ -567,8 +564,8 @@ async function manifestDependencyNames(cwd: string): Promise<string[]> {
 /**
  * Prepended to worker:apis's prompt on the ONE retry the zero-retrieval gate triggers. It
  * names the exact failure (a section written with no retrieval) so the correction is concrete,
- * and bounds the retrieval to the symbols about to be listed — a broad "read everything" here
- * would trade the memory-written section for the 37-read near-runaway at phases.ts's read tail.
+ * and bounds the retrieval to the symbols about to be listed — a broad "read everything"
+ * here would trade a memory-written section for a read runaway.
  */
 const APIS_ZERO_RETRIEVAL_PREAMBLE =
     'STOP. Your previous attempt at this task wrote a complete APIS section without calling a '
@@ -581,12 +578,11 @@ const APIS_ZERO_RETRIEVAL_PREAMBLE =
 
 /**
  * Prepended to worker:context's prompt on the ONE retry the silent-retry gate triggers. The
- * previous attempt produced ZERO bullets — STEP 0 (context-silence.ts) showed every such rep
- * across 48 live reps was a genuine loss (a loop-degrade or a hallucinated non-bullet
- * fragment), never a legitimate empty answer, because the same tree reliably yields 11–21
- * bullets. So this names that failure and steers away from the two shapes that caused it:
- * the repeated-grep thrash that trips the loop-killer, and emitting anything that is not a
- * bullet. It does NOT loosen the sourced-bullet invariant — it explicitly repeats that
+ * previous attempt produced ZERO bullets, which `classifyContextSilence`
+ * (context-silence.ts) has already judged a genuine loss rather than an honest empty
+ * answer. So this names that failure and steers away from the two shapes that cause it:
+ * the repeated-grep thrash that trips the loop-killer, and emitting anything that is not
+ * a bullet. It does NOT loosen the sourced-bullet invariant — it explicitly repeats that
  * external-API semantics stay open questions unless quoted.
  */
 const CONTEXT_SILENT_RETRY_PREAMBLE =
@@ -623,14 +619,12 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // repo; purely additive (nothing is blocked) so it can only remove a
     // redundant read, never hide a file.
     //
-    // Applied to FILES and APIS only — NOT CONTEXT/TOOLING. Verified with a live
-    // A/B on the local model (real pi, real repo): FILES and APIS are bimodal —
-    // they sometimes answer from the inventory but sometimes spiral into heavy
-    // reads — APIS can spiral into dozens — and pre-supplying the core collapses
-    // that to none, with the model honouring "do not re-read". CONTEXT works from
-    // inventory and grep and barely reads files at all, so the block is pure
-    // prefill there and makes it slower; TOOLING is already scoped and
-    // single-read-guarded. So orientation only goes where reads actually happen.
+    // Applied to FILES and APIS only — NOT CONTEXT/TOOLING, and the split is by
+    // whether the worker reads at all. FILES and APIS explore by reading, so
+    // pre-supplying the core replaces reads they would otherwise make. CONTEXT
+    // works from the inventory and grep, and TOOLING is scoped to the GOAL prose
+    // and single-read-guarded, so for those two the block is pure prefill with no
+    // read to displace. Orientation only goes where reads actually happen.
     const orientationPaths =
         getConfig().orientation && inventoryRaw.length > 0 ?
             inventoryRaw.split('\n').filter(l => l.trim().length > 0)
@@ -653,24 +647,21 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // the worker is handed below — and the manifest's dependency names.
     const manifestPackages = await manifestDependencyNames(deps.cwd)
 
-    // The spec-cited-URL lever is NOT WIRED HERE. It is built and unit-tested in
-    // ./spec-urls.ts, and pointing the worker at a page it should have read did not
-    // change what it produced — delivery into this very prompt was proven separately,
-    // so the block arrived and did nothing. Wiring it would add about a kilobyte of
-    // prefill to every APIS prompt for no benefit. To try again, restore the block
-    // this comment replaces from this file's history.
+    // The spec-cited-URL lever from ./spec-urls.ts is built and unit-tested but is
+    // NOT WIRED HERE: pointing the worker at a page it should have read did not
+    // change what it produced, so the block would be prefill on every APIS prompt
+    // for nothing.
 
-    //  fan-out bounds. All four read their env ONCE per research
-    // phase, so every worker in a run sees the same policy and a harness cannot
-    // half-apply an arm. CAP, SCALE and carry-forward are null/false in the
-    // shipped configuration; the progress deadline shipped ON.
+    // Research fan-out bounds, read from the environment ONCE per research phase,
+    // so every worker in a run sees the same policy and a harness cannot half-apply
+    // one. In the shipped configuration the budget knobs are unset and the progress
+    // deadline is on.
     const leverEnv = snapshotLeverEnv()
     const fanoutBudget = projectDocsBudget(leverEnv)
     const progressCeilingMs = workerProgressCeilingMs(leverEnv)
-    // Which deadline policy was in force is a fact about how every number below
-    // was produced. A run whose logs do not say which policy it ran under cannot
-    // be compared with one that does, and time lost to discarded work is only
-    // recoverable from a log that recorded what the workers actually did.
+    // Which deadline policy was in force decides what every worker timing below
+    // means, and the two policies are not comparable. Logging it is what makes a
+    // trail readable after the fact.
     deps.logDebug?.(
         progressCeilingMs === null ?
             'phase:research: worker deadline = fixed elapsed cap (progress deadline DISABLED)'
@@ -692,10 +683,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     // wall-clock-relative (queueing shows up in waitMs).
     //
     // Restarted attempts get their OWN row. Without one the widget contradicts
-    // itself: a printed `workers 722.2s` over a longest member reading
-    // `worker:apis work 239.3s`, because wait/work describe the final attempt
-    // while the phase clock counts all three. The discarded time is the whole
-    // gap, so naming it is what closes the widget.
+    // itself: waitMs and workMs describe only the FINAL attempt while the phase
+    // clock counts every attempt, so the phase total exceeds its longest member by
+    // the time the discarded attempts took. Naming that gap is what reconciles them.
     const recordWorker = <
         T extends {waitMs: number; workMs: number; attempts: number; totalWallMs: number}
     >(
@@ -714,30 +704,14 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             return r
         })
 
-    // Run the four workers ONE AT A TIME. Settled by an A/B on the local
-    // llama.cpp backend (single GPU, same task/model) — and the answer FLIPS
-    // with thinking:
-    //   - thinking ON  → parallel wins: long decodes batch well, 4 concurrent
-    //     finish in ~max(worker), not the sum.
-    //   - thinking OFF → sequential wins: with short decodes the batching upside
-    //     is gone, but 4 concurrent streams still split the one GPU and slow
-    //     each other ~4x (context worker measured 27s solo vs 128s under load),
-    //     so summed-but-fast (~100s) beats max-of-slowed (~130s).
-    //
-    // KNOWN-OPEN, AND THIS IS THE HONEST STATE OF IT. The comparison behind this
-    // default was made while every worker carried Qwen3's `/no_think` prompt
-    // suffix, so "thinking OFF" was assumed. That suffix cannot reach the chat
-    // template and does nothing; it has been removed in favour of the `research`
-    // reasoning group (config/reasoning.ts). So the arm this default was chosen
-    // under may never have been the arm that ran, and the group's level is now a
-    // user-visible setting rather than a constant.
-    //
-    // The default stays SEQUENTIAL because that is the measured-safe arm on a
-    // single-GPU box and because flipping a shipped default on an invalidated
-    // premise would be replacing one unmeasured claim with another. The
-    // parallel x reasoning-level interaction is unmeasured; re-run the A/B
-    // before changing this, and treat `parallelResearchWorkers` as the opt-in
-    // for backends that genuinely serve parallel streams.
+    // Run the four workers ONE AT A TIME by default. Which order wins depends on
+    // the backend: concurrent streams share one local GPU and slow each other
+    // down, so the sum of four fast workers can beat the max of four slowed ones,
+    // while a backend that genuinely serves parallel streams has no such tradeoff.
+    // `parallelResearchWorkers` is the opt-in for those backends. The worker's
+    // reasoning level (config/reasoning.ts `research` group) changes decode length
+    // and so changes the answer too, which is why this is a config knob and not a
+    // constant.
     //
     // Result order (files, apis, context, tooling) is preserved for assembly.
     // Resolved once: `searchConfigured()` reads the environment, and the tools
@@ -746,9 +720,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
     const workerSpecs: Array<{
         /** Section heading this worker's output is assembled under. */
         section: string
-        /** The worker's child NAME — what the loader, the debug trail and the A/B
-         *  ledgers print, and the key into `REASONING_GROUP_BY_CHILD`, so it also
-         *  decides the worker's own reasoning cell. */
+        /** The worker's child NAME — what the loader and the debug trail print, and
+         *  the key into `REASONING_GROUP_BY_CHILD`, so it also decides the worker's
+         *  own reasoning cell. */
         label: string
         /** Static, or built from the sections completed so far (serial mode
          *  hands APIS the finished FILES map; parallel mode hands it nothing). */
@@ -770,12 +744,11 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
          *  loop-degrade banner or a hallucinated non-bullet fragment (classifyContextSilence
          *  → genuineLoss) — is re-run ONCE with this preamble prepended. The retry replaces
          *  the original only if it produces bullets; otherwise the original is kept. A
-         *  legitimately-empty section (honest "nothing to surface") is NOT retried. STEP 0
-         *  established every silent worker:context rep was a genuine loss, not an empty
-         *  answer (context-silence.ts). */
+         *  legitimately-empty section (honest "nothing to surface") is NOT retried —
+         *  `classifyContextSilence` is what tells the two apart. */
         retryIfSilent?: string
-        /** This worker can issue project-source docs lookups, so the 5B fan-out
-         *  bounds apply to it (see task/research-fanout-budget.ts). */
+        /** This worker can issue project-source docs lookups, so the fan-out bounds
+         *  apply to it (see task/research-fanout-budget.ts). */
         fanoutBounded?: true
     }> = [
         {
@@ -790,9 +763,8 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // Read-heavy: gets the orientation core (see note above). Search/fetch
             // ride along only when a Brave key exists — see SEARCH_EXTENSION_PATH.
             // FILES' finished map rides along when available (serial default), so
-            // the worker doesn't re-derive where-things-live via docs-"."
-            // queries the FILES worker just answered (a F7: up to 10
-            // duplicate `.`-decodes per task through the serial bottleneck).
+            // the worker doesn't re-derive where-things-live through project-docs
+            // queries the FILES worker just answered.
             prompt: prior =>
                 orientation.block
                 + promptHeader
@@ -801,10 +773,9 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                     prior.find(s => s.name === 'FILES')?.text || undefined
                 )
                 + (searchConfigured() ? RESEARCH_SEARCH_HINT : '')
-                // 5B CAP arm — empty unless PI_TASK_PROJECT_DOCS_BUDGET is
-                // set. The tool-side half lives in pi-worker-docs.ts; a
-                // budget enforced without being announced would just read
-                // to the worker as a broken tool.
+                // Empty unless PI_TASK_PROJECT_DOCS_BUDGET is set. The tool-side
+                // half lives in pi-worker-docs.ts; a budget enforced without being
+                // announced would just read to the worker as a broken tool.
                 + (fanoutBudget === null ? '' : projectDocsBudgetNotice(fanoutBudget)),
             // The tools string and the `-e` paths are ONE fact — which worker
             // channels this research worker is given — and would otherwise be two literals
@@ -812,25 +783,22 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             tools: `read,grep,find,ls,${apisChannels.tools}`,
             fanoutBounded: true,
             extensions: apisChannels.extensions,
-            // ZERO-RETRIEVAL GATE (a F-1, distinct from the STAGE 1-3 stopping-point
-            // thread). In a MINORITY of reps worker:apis emits a complete, plausible APIS section
-            // having made ZERO retrieval tool calls — the whole thing recalled from memory.
-            // The output contract at RESEARCH_APIS_PROMPT already INSTRUCTS tool use and the
-            // worker skips it anyway (STAGE 2 proved a prompt line does not move grounding), so
-            // this is a deterministic gate, not another instruction: groundingRetrievalCount === 0
-            // on a non-empty section is ungrounded BY CONSTRUCTION — no semantic judgement, the
-            // exact checkable handle STAGE 3's prose-clause gate lacked. The forced-retrieval
-            // retry recovers a grounded section rather than silencing the worker (entry count
-            // preserved). It bounds itself ("look up the symbols you will list — no more") away
-            // from the near-runaway 37-read tail.
+            // ZERO-RETRIEVAL GATE. worker:apis can emit a complete, plausible APIS
+            // section having made ZERO retrieval tool calls — the whole thing recalled
+            // from memory. RESEARCH_APIS_PROMPT already instructs tool use, so another
+            // instruction is not the answer; this is a deterministic gate instead.
+            // `groundingRetrievalCount === 0` on a NON-EMPTY section is ungrounded by
+            // construction, with no semantic judgement needed. The forced-retrieval
+            // retry recovers a grounded section rather than silencing the worker (the
+            // original is kept if the retry still retrieves nothing, so the entry count
+            // cannot collapse), and it bounds itself — "look up the symbols you will
+            // list — no more" — away from a read runaway.
             //
-            // EFFICACY NOT DEMONSTRATED — read before trusting this to matter. The
-            // failure it catches is rare and intermittent, so no comparison run here was
-            // ever powered to show a reduction. What IS established: the gate is correct
-            // BY CONSTRUCTION; every time it fired it recovered a grounded section; and it
-            // did no harm — no entry collapse, no runaway, and a small cost. It is wired as a
-            // harmless safety net, NOT a proven-effective lever — do not cite it as a measured win
-            // (nexxtasks.txt "ZERO-RETRIEVAL GATE ... ABSTAIN"). A powered A/B is STILL OPEN.
+            // A SAFETY NET, NOT A DEMONSTRATED WIN. The failure it catches is
+            // intermittent, and nothing here establishes how often it fires or what it
+            // is worth. What the code does establish is that it cannot make things
+            // worse: it only ever replaces a zero-retrieval section with a retrieving
+            // one.
             zeroRetrievalRetry: APIS_ZERO_RETRIEVAL_PREAMBLE
         },
         {
@@ -842,30 +810,26 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             // spawning long enumeration loops whose output then inflates
             // prefill on every subsequent round.
             //
-            // RECORDED DECISION: this worker stays
-            // ISOLATED — it is NOT given the APIS worker's output. It keeps `read,grep`
-            // and is forbidden, by prompt and by the post-check below, from asserting
-            // external-API behaviour it cannot see. Handing it the APIS section would
-            // widen what it may assert without making any of it checkable here, and
-            // APIS' own answers are the ones F-2 shows are type-only and unverified.
+            // ISOLATED on purpose: this worker is NOT given the APIS worker's output.
+            // It keeps `read,grep` and is forbidden — by prompt and by the post-check
+            // below — from asserting external-API behaviour it cannot see. Handing it
+            // the APIS section would widen what it may assert without making any of it
+            // checkable here.
             tools: 'read,grep',
-            // SILENT-RETRY GATE. This worker goes silent — zero bullets — on a small but
-            // real share of runs, and every silent run inspected was a genuine loss: a
-            // loop-degrade banner, or a hallucinated non-bullet fragment. Never a
-            // legitimate empty answer, because the identical fixture reliably yields a
-            // dozen or more bullets. A silent section is therefore a dropped section;
-            // retry once, keep the retry only if it emits bullets. See context-silence.ts.
+            // SILENT-RETRY GATE. This worker can come back with zero bullets. The two
+            // causes `classifyContextSilence` recognises — a loop-degrade banner, and a
+            // hallucinated non-bullet fragment — are both dropped sections, not honest
+            // empty answers, so retry once and keep the retry only if it emits bullets.
+            // See context-silence.ts.
             retryIfSilent: CONTEXT_SILENT_RETRY_PREAMBLE,
-            // BRACES for the LIVE-DATA RULE. In a this worker wrote, verbatim, "The
-            // `hono` dependency is pinned at `^4.12.31` in package.json, and the external
-            // context confirms `hc<AppType>` pattern with base URL `/api`... works
-            // correctly (per Hono RPC docs LIVE data)". It has read+grep only, so the
-            // base-URL half came from memory; fused with the true version half under one
-            // attribution it read as sourced, became a hard requirement in a task
-            // CONSTRAINTS and ACCEPTANCE, and every request went to /api/api/... ⇒ 404.
-            // A flagged bullet is demoted to an OPEN QUESTION here — before the section is
-            // persisted — so it cannot reach compose as fact. Demotion, not deletion: the
-            // bullet count is preserved, because a silenced worker is a different
+            // BRACES for the LIVE-DATA RULE (the belt is the prompt). This worker has
+            // `read,grep` only, so it cannot have read a doc — yet it can write one
+            // bullet that fuses a fact it DID read from the manifest with an external-API
+            // claim it did not, under a single "per the docs" attribution. Fused that
+            // way the whole bullet reads as sourced and can become a hard CONSTRAINT.
+            // A flagged bullet is demoted to an OPEN QUESTION here — before the section
+            // is persisted — so it cannot reach compose as fact. Demotion, not deletion:
+            // the bullet count is preserved, because a silenced worker is a different
             // regression.
             postProcess: text => {
                 const r = demoteUnsourcedAttributions(text, externalContext, manifestPackages)
@@ -917,10 +881,10 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
                 taskId: deps.taskId,
                 signal: deps.signal,
                 spawn: deps.spawn,
-                // ONE CELL PER WORKER. Sharing one cell, the four workers would
-                // share the `research` cell on the grounds that they are the same
-                // job over four questions; the run logs disagree. The cells DO NOT
-                // ship identical — the evidence is on each of them in reasoning.ts.
+                // ONE CELL PER WORKER. The four are the same job over four
+                // questions, so one shared `research` cell is the tempting shape —
+                // but the four cells do not ship identical, so sharing one would
+                // silently change three of them. See config/reasoning.ts.
                 thinkingFor: thinkingForChild,
                 logDebug: deps.logDebug,
                 onChildOutput: deps.onChildOutput,
@@ -936,7 +900,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
 
     const sections: Array<{name: string; text: string}> = []
     if (!getConfig().parallelResearchWorkers) {
-        // Default: ONE AT A TIME (see the A/B note above the specs) — a fatal
+        // Default: ONE AT A TIME (see the note above the worker specs) — a fatal
         // failure throws before later workers run, and each worker can see the
         // finished sections before it (APIS builds on the FILES map).
         for (const spec of workerSpecs) {
@@ -947,8 +911,8 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
         // worker runs to its own outcome first, so one fatal failure cannot
         // orphan the others' output — their sections persist for the resume
         // before the failure is thrown. Assembly order stays the spec order
-        // regardless of completion order. No prior sections exist here, so
-        // prompt builders get none (APIS runs map-less, as before this option).
+        // regardless of completion order. No prior sections exist here, so prompt
+        // builders get none — APIS runs without the FILES map it gets when serial.
         const settled = await Promise.allSettled(workerSpecs.map(spec => drive(spec, [])))
         for (const s of settled) {
             if (s.status === 'rejected') throw s.reason
@@ -1129,8 +1093,8 @@ export async function phaseGrill(
     const ui = new SessionUI(ctx)
     // ONE record, two renderings (task/qa-transcript.ts): `forRecord()` is what
     // compose and critique are handed, `forGenerator()` is what the next grill-gen
-    // call sees. Stated as a comment a dozen lines under a
-    // push that broke it.
+    // call sees. The two differ only in provenance suffixes, which is why they can
+    // drift apart unnoticed.
     const transcript = new QaTranscript(GRILL_QA_POLICY)
     const askedQuestions: string[] = [] // plain text of each question, for the dup backstop
     // Deterministic backstop against a model that ignores "never re-ask": a
@@ -1228,8 +1192,6 @@ export async function phaseGrill(
  * the same place. The task file's `## refined prompt` is deliberately left as
  * refine wrote it; the drop is recorded on the `## gates` trail with both source
  * lines quoted, so the decision stays auditable after the fact.
- *
- * Base rate first, then a two-armed A/B, which passed.
  */
 export async function dropRefutedConstraints(
     deps: PhaseDeps,
@@ -1321,18 +1283,16 @@ export async function phaseCritique(
      * An additional deterministic defect block, forced into the rewrite exactly
      * like the probes below and overriding a CLEAN triage the same way.
      *
-     * This is the A/B seam for a probe that is not wired yet: the discipline
-     * here is "wire only on PASS", so a
-     * candidate probe has to be measurable through the SHIPPED critique path
-     * rather than through a hand-copied replica of it, or the two arms differ by
-     * more than the probe. Undefined in production.
+     * The seam exists so a candidate probe can be exercised through the SHIPPED
+     * critique path rather than through a hand-copied replica of it — otherwise a
+     * comparison differs by more than the probe. Undefined in production.
      */
     extraDefects?: string | null
 ): Promise<string> {
     // Fast triage before the expensive full rewrite. The rewrite regenerates
-    // the entire spec from scratch and is the costliest tail of the pipeline
-    // (observed up to ~240s). Most compose drafts are already good, so we first
-    // ask a cheap, short-output triage pass whether a rewrite is even needed.
+    // the entire spec from scratch, which makes it the most expensive step in the
+    // pipeline. Most compose drafts are already good, so we first ask a cheap,
+    // short-output triage pass whether a rewrite is even needed.
     //
     // We only short-circuit when the draft already has a runnable VERIFY block
     // (parseVerifyBlock !== null): the final handoff gate rejects specs without
@@ -1372,9 +1332,9 @@ export async function phaseCritique(
         let verdict: string | null
         try {
             // No tools: triage judges only the spec/refined/qa text it is given.
-            // Granting `read` here let it wander the repo to "verify" findings,
-            // which made the supposedly-cheap pass cost as much as a rewrite
-            // (observed ~133s). The judgement needs no file access.
+            // Granting `read` lets it wander the repo to "verify" findings, which
+            // costs as much as the rewrite this pass exists to avoid. The judgement
+            // needs no file access.
             verdict = await runPhaseChild(
                 deps,
                 'critique-triage',
@@ -1466,10 +1426,9 @@ export async function critiqueWithFallback(d: PhaseDeps, p: PhaseContext): Promi
         // so returning that same draft would persist a VERIFY-less spec the
         // handoff gate rejects and resume can't heal. Compose now enforces a
         // parseable VERIFY, so this should hold; keep the guard so a regression
-        // fails the run cleanly instead of shipping a broken spec.
-        // (verify_grep_theater: both rewrite attempts kept a grep-only VERIFY;
-        // the draft carries the same defect but is the validated-shape fallback
-        // — deliver it rather than fail the run. The guard costs time, never work.)
+        // fails the run cleanly instead of shipping a broken spec. A draft that
+        // carries the SAME defect the rewrite failed to fix is still delivered —
+        // it is the validated-shape fallback, and failing the run costs more.
         if (parseVerifyBlock(p.spec) === null) throw err
         p.ctx.ui.notify(
             msg === 'verify_grep_theater' ?
@@ -1572,10 +1531,9 @@ export async function critiquePhase(d: PhaseDeps, p: PhaseContext): Promise<stri
  * The pipeline, as a table with no bodies.
  *
  * Every row's `run` is a named exported function, so the COMPOSITION inside a
- * step — which is where this codebase's recorded phase defects have lived, not in
- * the parts — is drivable directly instead of only through a whole TaskRunner run.
- * The parts stay exported and separately covered; what changed is that the ORDER
- * they run in is now asserted by driving the row rather than retyped in a test.
+ * step is drivable directly instead of only through a whole TaskRunner run. That
+ * matters because a step's parts can each be correct while the order they run in
+ * is wrong — see `runPhaseRow`, which is the surface that pins the order.
  */
 export const PHASES: PhaseConfig[] = [
     {
