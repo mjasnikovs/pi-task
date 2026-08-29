@@ -2,44 +2,41 @@
  * frozen-conflict — deterministic detection of an UNSATISFIABLE spec pair at
  * compose time.
  *
- * The failure this closes: compose authors a spec with a blanket freeze
- * ("Do not modify `tsconfig.json`, `eslint.config.js`, or `.prettierrc.cjs`;
- * those are handled in steps 1–2") while the deliverable — new
- * `playwright-ct.config.ts` + `playwright/index.ts` — needs exactly that
- * registration edit, and the spec "resolved" the contradiction with prose
- * surrender ("Accept that `playwright-ct.config.ts` will not be covered by
- * `tsc --noEmit` since `tsconfig.json` is not modified in this step"). Typed
- * ESLint does not "accept" anything: the moment the created files land,
- * `bun run lint` hard-errors REPO-WIDE and permanently — and the "owning"
- * steps 1–2 completed long ago, so NO task may ever perform the edit (every
- * spec carries the same freeze). Every subsequent task then burned its
- * unattended AUTOFIX rounds on a repo-health FAIL none of them was allowed to
- * fix, and the eventual "escape" was a child DELETING the deliverables.
+ * The shape: a spec blanket-freezes a config file while its own deliverable
+ * needs exactly the registration edit that freeze forbids, and the
+ * contradiction is "resolved" in prose ("Accept that it will not be covered by
+ * `tsc --noEmit` since `tsconfig.json` is not modified in this step"). A typed
+ * linter accepts nothing. The moment the created files land the repo-wide
+ * static check fails PERMANENTLY, and because the step that owns the frozen
+ * file has already completed, no later task is allowed to fix it either — every
+ * one of them burns its autofix rounds on a defect none of them may touch.
  *
- * The contradiction is visible IN THE COMPOSED TEXT ITSELF, so it must die at
- * spec time. Like the skip-escape / synthesized-wiring / plan-contradiction
- * probes (a prompt-only rule does not hold on a weak model), the
- * detector is deterministic and its finding is FORCED into the critique
- * rewrite: the rewrite must either grant scoped ownership ("MAY edit `X` ONLY
- * to register the files this task creates") or drop the file creation.
+ * The contradiction is visible IN THE COMPOSED TEXT ITSELF, so it dies at spec
+ * time: the detector is deterministic and its finding is FORCED into the
+ * critique rewrite, which must either grant scoped ownership ("MAY edit `X`
+ * ONLY to register the files this task creates") or drop the file creation.
  *
- * High-precision by construction:
+ * High-precision by construction. Each rule below was run against the detector:
+ *
  *   - the freeze side must be BLANKET — a `Do NOT modify` line with no
- *     exception clause; a scoped freeze ("MAY edit … ONLY to register",
- *     "Only edit `X` …", "… except to add …") is already the resolution shape
- *     and must never re-fire;
- *   - the statement side is judged per SENTENCE, not per line (real GOALs are
- *     one giant line — line scoping false-fired on `must include` in a
- *     response-shape sentence three paths away from the frozen one);
- *   - a sentence that is itself prohibition-shaped ("Preserve … do not
- *     remove or modify …") is the freeze side restated, never a statement;
- *   - the sentence must NAME the frozen path (pathNamedIn) AND match one of
- *     the measured phrasing families: passive registration ("must also be
- *     included"), unless-added ("won't be type-checked unless added"),
- *     directional active ("requires adding … to" / "must add … to"), or the
- *     prose SURRENDER itself ("will not be covered … since `X` is not
- *     modified" — the exact shape a live spec ships).
- * Mere co-mention never fires.
+ *     exception clause. A scoped freeze is already the resolution shape and
+ *     must never re-fire; "… except to add …", "You MAY edit `X` ONLY to
+ *     register …" and "Only edit `X` (…)" each yield zero against a statement
+ *     that otherwise fires;
+ *   - the statement side is judged per SENTENCE, not per line, because real
+ *     GOALs are one giant line. Measured: a line carrying the GOAL, a
+ *     response-shape "must include `id` and `name`", and a path mention yields
+ *     nothing, while the same line shape carrying a real registration sentence
+ *     yields one;
+ *   - a prohibition-shaped sentence ("Preserve … do not remove or modify …") is
+ *     the freeze side restated and yields nothing;
+ *   - the sentence must NAME the frozen path AND match one of the phrasing
+ *     families. All six fire: passive registration, unless-added,
+ *     not-checked-unless, "requires adding … to", "must add … to", and the
+ *     surrender pair.
+ *
+ * Mere co-mention never fires: "The build reads `tsconfig.json` at startup."
+ * yields nothing.
  */
 import {extractProhibitions, PROHIBITION_RE} from './prohibition-probe.js'
 import {pathNamedIn} from './frozen-path-guard.js'
@@ -61,10 +58,9 @@ export interface FrozenPathConflict {
 
 /**
  * A freeze that carves out its own exception is SCOPED, not blanket — it is
- * exactly the resolution shape the probe demands ("MAY edit `X` ONLY to
- * register…", "Only edit `X` (add the search route)…", "Do not modify `X`
- * except to add…"), so it never counts as the freeze side of a conflict, or
- * the recomposed spec would re-fire forever.
+ * exactly the resolution shape the probe demands, so it never counts as the
+ * freeze side of a conflict. Without this the recomposed spec would re-fire
+ * forever on its own fix.
  */
 const EXCEPTION_RE =
     /\b(?:except|unless|beyond|other\s+than|apart\s+from|only\s+(?:to|for|if|when|where|edit|modify|change|touch|update)|may\s+(?:edit|modify|change|update|add))\b/i
@@ -82,16 +78,16 @@ const NOT_CHECKED_UNLESS_RE =
     /\b(?:won'?t|will\s+not|cannot|can'?t|does\s+not|doesn'?t|is\s+not|isn'?t)\s+(?:be\s+)?[\w\s-]{0,40}?(?:type-?check|compil|lint|cover|resolv|recogni[sz]|includ|pick)\w*[^;]{0,80}?\bunless\b/i
 
 /** Directional active: "requires adding … to …" / "must add … to/into/in …".
- *  The preposition requirement is what keeps a response-shape "must include
- *  `field`" sentence from counting as a registration edit. */
+ *  The preposition is what keeps a response-shape sentence from counting as a
+ *  registration edit — measured, "The response must include `tsconfig.json`."
+ *  yields nothing while "You must add the new entry to `tsconfig.json`." fires. */
 const REQUIRES_DIRECTIONAL_RE =
     /\brequires?\s+(?:add|includ|regist|updat|edit|modify|chang)\w*[^;]{0,80}?\b(?:to|into|in)\b/i
 const MUST_ADD_DIRECTIONAL_RE =
     /\bmust\s+(?:also\s+)?(?:add|includ|regist|updat)\w*[^;]{0,80}?\b(?:to|into|in)\b/i
 
 /** The prose-surrender pair: an artifact "will not be covered/type-checked/…"
- *  BECAUSE the (frozen) path "is not modified". Both halves must be present —
- *  this is the exact contradiction shape a live spec ships. */
+ *  BECAUSE the (frozen) path "is not modified". BOTH halves must be present. */
 const NOT_COVERED_RE =
     /\b(?:will\s+not|won'?t|cannot|can'?t|is\s+not|isn'?t)\s+(?:be\s+)?(?:covered|type-?checked|checked|compiled|linted|validated|included)\b/i
 const BECAUSE_NOT_MODIFIED_RE =
@@ -110,10 +106,10 @@ function isRequiresEditStatement(sentence: string): boolean {
 
 /**
  * Split a spec line into sentences: a `.` or `;` followed by whitespace and a
- * capital/backtick/bracket opener ends a sentence. The opener requirement
- * keeps `e.g. foo` and mid-path dots intact; backtick paths carry no `. ` so
- * they never split. Judging per sentence is what makes one-giant-line GOALs
- * scannable without cross-sentence false fires.
+ * capital, backtick or bracket opener ends a sentence. The opener requirement
+ * keeps `e.g. foo` and mid-path dots intact — measured, a sentence containing
+ * "e.g." still matches as one piece. Judging per sentence is what makes
+ * one-giant-line GOALs scannable without cross-sentence false fires.
  */
 function splitSentences(line: string): string[] {
     return line.split(/[.;]\s+(?=[A-Z`([-])/)
@@ -124,8 +120,10 @@ interface Blanket {
     constraint: string
 }
 
-/** Backtick-quoted path-shaped tokens in a sentence (the same shape rule the
- *  prohibition extractor applies), minus surrounding quotes. */
+/** Backtick-quoted path-shaped tokens in a sentence, minus surrounding quotes.
+ *  The same three-way test `looksLikePath` applies in prohibition-probe.ts:
+ *  path characters only, and either a separator, an extension, or a leading
+ *  dot. */
 function pathTokensIn(sentence: string): string[] {
     const out: string[] = []
     for (const m of sentence.matchAll(/`([^`]+)`/g)) {
@@ -142,11 +140,11 @@ function pathTokensIn(sentence: string): string[] {
  *  frozen path, appending each new pair to `out`.
  *
  *  `anchorSpec` (research scans only): a research statement counts ONLY when,
- *  besides the frozen path, it names at least one other path that still
- *  appears in the SPEC. That anchor is what makes resolution (b) terminal:
- *  when the rewrite DROPS the file creation, the created file vanishes from
- *  the spec, the research statement about it loses its anchor, and the
- *  detector goes quiet instead of re-firing forever on stale research. */
+ *  besides the frozen path, it names at least one other path that still appears
+ *  in the SPEC. That anchor is what makes resolution (b) terminal — measured,
+ *  the same research sentence fires while the spec still creates the file and
+ *  goes quiet once the spec no longer mentions it, instead of re-firing forever
+ *  on stale research. */
 function scanForStatements(
     text: string,
     blanket: Blanket[],
@@ -189,10 +187,9 @@ function scanForStatements(
  * SPEC alone; research contributes only the statement side (live compose
  * sometimes drops the research's "must also be included" nuance from the spec
  * text while shipping the freeze and the file creation - the contradiction is
- * then visible only across the compose boundary). Deterministic, pure text -
- * the same extraction the live A/B grounds its measurements in, so the model
- * cannot self-report its way past it. Empty on a null spec or one that froze
- * nothing.
+ * then visible only across the compose boundary). Deterministic and pure text,
+ * so the model cannot self-report its way past it. Empty on a null spec or one
+ * that froze nothing.
  */
 export function findFrozenPathConflicts(
     spec: string | null | undefined,
@@ -215,11 +212,11 @@ export function findFrozenPathConflicts(
 }
 
 /**
- * The forced critique-rewrite defect text (skip-escape pattern: MANDATORY,
- * self-contained, names the exact resolution options). The two permitted
- * resolutions come straight from the incident analysis: scoped ownership or
- * dropping the creation — prose acknowledging the gap is called out as a
- * non-resolution because that is precisely what the live model shipped.
+ * The forced critique-rewrite defect text: MANDATORY, self-contained, and it
+ * names the exact resolution options. Only two are permitted — scoped ownership
+ * or dropping the creation — and prose acknowledging the gap is called out as a
+ * non-resolution, because that is the shape a model reaches for first and it
+ * leaves the contradiction intact.
  */
 export function frozenConflictProbeText(conflicts: FrozenPathConflict[]): string {
     const items = conflicts.map(
