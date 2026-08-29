@@ -2,9 +2,12 @@
  * Command watchdog — the per-tool-call wall-clock machine, shared by both
  * surfaces that can run a command which never returns.
  *
- * WHY THIS LIVES IN shared/: pi's bash tool takes an OPTIONAL `timeout` with NO
- * default (pi-coding-agent core/tools/bash.js), so ANY command the model didn't
- * bound runs forever. That is true in two places, and they are disjoint:
+ * WHY THIS LIVES IN shared/: pi's bash tool takes an OPTIONAL `timeout` and has
+ * no default for it. Its schema says so in as many words — "Timeout in seconds
+ * (optional, no default timeout)" — and its resolver returns `undefined` for an
+ * absent value, which skips arming any timer at all. So ANY command the model
+ * did not bound itself runs forever. That is true in two places, and they are
+ * disjoint:
  *
  *   MAIN SESSION — the implementation turn, handed off via sendUserMessage
  *                  (task/orchestrator.ts). Guarded by registerCommandWatchdog
@@ -20,7 +23,8 @@
  *
  *   main session — ctx.abort() ends the whole agent operation, not just the one
  *                  tool call (pi types it "Abort the current agent operation"),
- *                  and pi runs sibling tool calls CONCURRENTLY by default. So an
+ *                  and pi's agent defaults `toolExecution` to "parallel", so
+ *                  siblings really are in flight together. An
  *                  overrun kills every tool in flight in that turn — including
  *                  one exempted via commandTimeoutExemptTools, which only stops
  *                  a timer being armed FOR that tool, not its being collateral
@@ -55,17 +59,18 @@ export interface WatchdogDeps {
     onFire: (toolCallId: string, toolName: string, timeoutMs: number) => void
 }
 
-/** Whole minutes, floored at 1, for the human-facing ceiling in both messages. */
+/** Whole minutes for the human-facing ceiling in both messages: rounded to
+ *  nearest, then floored at 1 so a sub-minute ceiling never reads "0 minutes". */
 function minutes(timeoutMs: number): string {
     const mins = Math.max(1, Math.round(timeoutMs / 60_000))
     return `${mins} minute${mins === 1 ? '' : 's'}`
 }
 
 /**
- * The core correction, shared by both adapters' messages. Two jobs, both
- * learned from live runs: stop the model reporting a killed command as a
- * success, and name the ONE mechanism that prevents a repeat (the bash tool's
- * own `timeout` parameter) rather than leaving "be faster" as the takeaway.
+ * The core correction, shared by both adapters' messages. Two jobs: stop the
+ * model reporting a killed command as a success, and name the one mechanism
+ * that prevents a repeat — the bash tool's own `timeout` parameter — rather
+ * than leaving "be faster" as the takeaway.
  */
 function correction(): string {
     return (
@@ -113,9 +118,9 @@ export function reminderMessage(toolName: string, timeoutMs: number): string {
  * child that believes it starts clean may re-apply them or misread the tree.
  * Only the CONVERSATION is gone; the hint must say so precisely.
  *
- * Replaces the generic worker-timeout hint for this case: that one blames
- * "exploring too long", which is the wrong diagnosis for a hung command and
- * never mentions the timeout parameter.
+ * Used instead of the generic worker-timeout hint, which blames the child for
+ * "exploring too long" — the wrong diagnosis for a hung command, and one that
+ * never mentions the `timeout` parameter that would prevent it.
  */
 export function commandTimeoutHint(
     toolName: string,
@@ -141,9 +146,10 @@ export function commandTimeoutHint(
 }
 
 export class CommandWatchdog {
-    /** Armed timers, keyed by the tool call they guard. Tool executions are
-     *  sequential, so this holds at most one entry in normal operation, but the
-     *  map keeps it correct even if pi ever overlaps two calls. */
+    /** Armed timers, keyed by the tool call they guard. A map rather than one
+     *  handle because pi's agent defaults `toolExecution` to "parallel": a batch
+     *  of sibling calls is genuinely in flight together, so several timers can be
+     *  armed at once and each must be cancelled by its own id. */
     private readonly active = new Map<string, TimerHandle>()
 
     constructor(private readonly deps: WatchdogDeps) {}
@@ -193,12 +199,13 @@ export class CommandWatchdog {
  * Real-clock schedule/cancel. Shared by both adapters; tests substitute a fake
  * scheduler instead.
  *
- * REF'd, for the same measured reason as the stream watchdog's poll (see
- * realStreamTimerDeps): under Bun on windows an unref'd timer never fires once
- * nothing ref'd is pending, and a child sitting in a hung command is exactly
- * that state — so the unref disabled the guard in the one case it exists for.
- * The timer is cleared when the tool ends and in runWorker's `finally`, so it
- * cannot outlive the call it watches.
+ * REF'd deliberately, and NOT unref'd. Measured on this platform, on both
+ * runtimes: an unref'd timer with nothing else ref'd and pending never fires at
+ * all — the process simply exits — while the identical ref'd timer does. A
+ * watchdog whose whole job is to fire while everything else is stuck cannot
+ * afford that. Holding the loop open is safe here because the timer is cancelled
+ * when the tool ends and again in runWorker's `finally`, so it cannot outlive
+ * the call it watches.
  */
 export const realTimerDeps: Pick<WatchdogDeps, 'schedule' | 'cancel'> = {
     schedule: (fn, ms) => setTimeout(fn, ms),
