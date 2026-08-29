@@ -1,29 +1,36 @@
 /**
- * The extra output-contract clause spliced into RESEARCH_APIS_PROMPT.
+ * An output-contract clause for the APIS research prompt that is NOT wired in.
  *
- * WHAT IT CHANGES. `worker:apis` treats an entry as finished once it has a
+ * READ THIS FIRST: nothing splices this into `RESEARCH_APIS_PROMPT`. The only
+ * references to `APIS_SEMANTICS_CONTRACT` in the tree are its own tests and a
+ * regression guard in prompts.test.ts that asserts the shipped prompt does NOT
+ * contain it. The text is kept, and pinned by tests, so the lever can be read and
+ * re-tried — not because it is in use.
+ *
+ * WHAT IT WOULD CHANGE. `worker:apis` treats an entry as finished once it has a
  * SIGNATURE, because that is what its output format asks for. A signature says
- * nothing about what an argument MEANS, and the implementing agent has to guess
- * — a plausible wrong guess about a base URL or a default is the most damaging
- * thing this section can carry. So the clause moves the completion bar: an entry
- * is unfinished until it also carries a SEMANTICS field.
+ * nothing about what an argument MEANS, and the implementing agent has to guess —
+ * a plausible wrong guess about a base URL or a default is the most damaging thing
+ * this section can carry. The clause moves the completion bar: an entry is
+ * unfinished until it also carries a SEMANTICS field.
  *
- * STEP 3 OF THE FALLBACK IS LOAD-BEARING. DO NOT "CLOSE" IT.
- * The `UNVERIFIED:` escape is mandatory and is not a loophole. Forbidding
- * abstention is how a worker holding one true fact and one uncheckable one fuses
- * them into a single confident wrong claim. A lever that buys behaviour
- * questions with fabrication is a regression, not a win.
+ * STEP 3 OF THE FALLBACK IS LOAD-BEARING. DO NOT "CLOSE" IT. The `UNVERIFIED:`
+ * escape is mandatory and is not a loophole: a worker that may not abstain has
+ * nowhere to put an uncheckable fact except into a confident claim. A lever that
+ * buys behaviour questions with fabrication is a regression, not a win.
  *
- * Wording notes, each answering something the shape of the prompt forces:
- *  - "NOT DONE WHEN THEY HAVE A SIGNATURE" is the whole lever. The worker stops
- *    by format, so the change has to move the format's bar, not add advice.
- *  - the worked example shows an entry that does NOT satisfy the rule. A rule
- *    with no counter-example reads as satisfied by anything.
- *  - step 2 says escalation is EXPECTED rather than permitted. Bundled `.d.ts`
- *    files genuinely carry no semantics, and "you may escalate" tells a worker
- *    nothing it did not already have.
- *  - step 3 is stated as CORRECT and REQUIRED, in those words, so the field
- *    cannot be closed by guessing.
+ * Wording notes, each answering something the shape of the prompt forces. All four
+ * are present in the string below, checked:
+ *  - "NOT DONE WHEN THEY HAVE A SIGNATURE" is the whole lever. The worker stops by
+ *    format, so the change has to move the format's bar, not add advice.
+ *  - the worked example (`hc(baseUrl: Prefix, …)`) shows an entry that does NOT
+ *    satisfy the rule. A rule with no counter-example reads as satisfied by
+ *    anything.
+ *  - step 2 says escalation is EXPECTED — "Expect this:" — rather than permitted.
+ *    Bundled `.d.ts` files genuinely carry no semantics, and "you may escalate"
+ *    tells a worker nothing it did not already have.
+ *  - step 3 is stated as "A CORRECT AND REQUIRED OUTCOME", in those words, so the
+ *    field cannot be closed by guessing.
  */
 export const APIS_SEMANTICS_CONTRACT = `THIRD-PARTY PACKAGE ENTRIES ARE NOT DONE WHEN THEY HAVE A SIGNATURE. For every entry whose symbol comes from a third-party npm package — not this project's own source, not a runtime builtin — the line carries a SECOND field saying what the thing MEANS in use: what one of its arguments stands for, what it defaults to, what a path/URL/prefix it is handed is relative to, or what its return value actually is. Format:
   <name>  <one-line signature or use>  — SEMANTICS: <what it means in use>
