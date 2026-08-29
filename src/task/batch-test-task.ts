@@ -2,29 +2,24 @@
  * batch-test-task — ban the whole-project "write all the tests" task when the
  * DECISIONS channel mandates tests-in-the-same-change.
  *
- * The failure this closes: a plan that contains
+ * The failure this closes: a plan carrying one enormous title like "Write
+ * component and page tests — with screenshot baselines for all components and
+ * pages", which cannot converge, while the decision carried ON THAT TITLE says
+ * the opposite — that a test lands in the same change as each new route or
+ * component, and testing is not batched to the end of a milestone.
  *
- *   one title reading "Write component and page tests — CT tests with
- *   screenshot baselines for all components and pages"
+ * Decompose did not invent the shape; it mirrors a spec whose own milestone
+ * structure induces it. So the conflict is SPEC-INTERNAL — the spec's structure
+ * against the spec's own cadence rule — and the decisions channel OVERRIDES the
+ * spec doc by definition, the same precedence the task titles already state.
+ * Resolve toward the decision; never ask the user.
  *
- * — one enormous task that cannot converge, while the very decision carried ON
- * THAT TITLE says the opposite:
- *
- *   "a test lands *as fast as possible* — in the same change — as each new route
- *    or React component/page. No route or component is considered done until its
- *    test exists and passes. Don't batch testing to the end of a milestone."
- *
- * Decompose did not invent the shape: the spec's own §10/§12 structure induced it,
- * and decompose mirrors the spec. So the conflict is SPEC-INTERNAL (the spec's
- * milestone shape vs the spec's own cadence rule), and the decisions channel
- * OVERRIDES the spec doc by definition — the same precedence the task titles
- * already state. Resolve toward the decision; never ask the user.
- *
- * The mechanism is a deterministic post-decompose rewrite (applied on EVERY
- * decompose output, like fidelity reconciliation), plus a conditional prompt rule
+ * The mechanism is a deterministic post-decompose rewrite, applied on every
+ * decompose output like fidelity reconciliation, plus a conditional prompt rule
  * as the belt. Only the batch-EVERYTHING shape is banned — coverage is never
- * nuked. Which of the two outcomes fires is decided by
- * `groundedCoverage`, not by wording:
+ * nuked. Which of the two outcomes fires is decided by `groundedCoverage`, not by
+ * wording, and holding the title fixed while changing only the requirement
+ * switches it:
  *
  *   • the batch title grounds NO requirement that survives its removal ⇒ every
  *     requirement it touched is owned by some other task, the per-change cadence
@@ -41,8 +36,12 @@ import {groundedCoverage} from './coverage-loop.js'
 
 /**
  * Sentences that MANDATE tests landing with the change they cover. Deliberately
- * narrow: a spec that merely REQUIRES tests ("every route has tests") does not
- * ban a batch task — only an explicit cadence/anti-batch directive does.
+ * narrow: a spec that merely REQUIRES tests does not ban a batch task — only an
+ * explicit cadence or anti-batch directive does. Run: "every route has tests"
+ * does NOT mandate, while "a test lands in the same change as each new route",
+ * "never batch tests" and "a route is not considered done until its test exists"
+ * all do. That last alternative needs the literal word "not" — a sentence phrased
+ * "NO route is considered done until…" does not match it on its own.
  */
 const SAME_CHANGE_RE =
     /\bin the same (?:change|commit|pr|patch|diff|task|step)\b|\b(?:do ?n['’]?t|do not|never|no)\s+(?:batch|defer|postpone|save|leave)\b|\bnot\b[^.]{0,60}\bdone until\b[^.]{0,60}\btest/i
@@ -53,11 +52,12 @@ const TEST_WORD_RE = /\btests?\b|\btesting\b|\btest-first\b/i
 /**
  * Does the decisions/spec text mandate tests-in-the-same-change?
  *
- * Scans sentence by sentence and requires BOTH signals in the SAME sentence, so
- * a testing section that happens to sit near an unrelated "don't defer" line
- * cannot trigger the ban. `decisions` is checked first and alone is sufficient;
- * the spec is scanned too because a cadence rule is often stated in the body of the
- * doc and only echoed into the decisions channel.
+ * Scans sentence by sentence and requires BOTH signals in the SAME sentence, so a
+ * testing section that happens to sit near an unrelated "don't defer" line cannot
+ * trigger the ban — confirmed, "Don't defer the docs. Every route has tests."
+ * returns false. `decisions` is checked first and alone is sufficient; the spec is
+ * scanned too, and a mandate found only there is enough, because a cadence rule is
+ * often stated in the doc body and only echoed into the decisions channel.
  */
 export function mandatesTestsInSameChange(decisions: string, spec = ''): boolean {
     for (const text of [decisions, spec]) {
@@ -74,13 +74,13 @@ const DECISIONS_CLAUSE_RE = /\s*\[decisions:/i
 
 /**
  * Where decompose's trailing metadata starts. `[source: …]` is included because
- * reconcileTitleSources only strips a WELL-FORMED trailing citation: measured
- * live, the model also emits `[source: "…" [10. Testing]]`, which fails that
- * regex and leaks the QUOTED SPEC LINE into the title. Judging scope on such a
- * title reads the citation's words as the task's own — the cadence quote "…as
- * each new route or React component/page" made a properly scoped
- * "Write route/API tests for auth" look like a batch task (live false positive,
- * rep 1). A citation is provenance, never scope.
+ * reconcileTitleSources only strips a WELL-FORMED trailing citation. Confirmed by
+ * running it: `[source: "…"]` is stripped, while `[source: "…" [10. Testing]]`
+ * comes back untouched, leaking the QUOTED SPEC LINE into the title. Judging scope
+ * on such a title reads the citation's words as the task's own, so a cadence quote
+ * about "each new route or React component/page" makes a properly scoped "Write
+ * route/API tests for auth" look like a batch task. A citation is provenance,
+ * never scope.
  */
 const CLAUSE_START_RE = /\s*\[(?:source|decisions)\s*:/i
 
@@ -107,10 +107,10 @@ function head(body: string): string {
  * scope. Measured live: the model frequently appends its citation as a bare
  * quote with no `[source: …]` wrapper ("Write auth route tests — … — "…a test
  * lands as fast as possible — in the same change — as each new route or React
- * component/page.""), and that borrowed "each" made five correctly scoped
- * per-area test tasks read as batch tasks (rep 5). Trading a possible miss (a
- * batch title whose only quantifier sits inside a quote) for never deleting a
- * properly scoped test task: the false positive is far the more expensive error.
+ * component/page.""), and that borrowed "each" makes a correctly scoped per-area
+ * test task read as a batch task. Trading a possible miss — a batch title whose
+ * only quantifier sits inside a quote — for never deleting a properly scoped test
+ * task: the false positive is far the more expensive error.
  */
 function stripQuotedSpans(s: string): string {
     return s.replace(/"[^"]*"/g, ' ').replace(/[“][^”]*[”]/g, ' ')
@@ -138,19 +138,19 @@ const MIN_ECHO_CHARS = 40
 /**
  * Drop detail segments that are VERBATIM spec text.
  *
- * Third variant of the same failure, and the one the syntactic defenses miss:
- * measured live, the model appended its
- * citation as BARE PROSE — no quotes, no `[source: …]` wrapper — and then
- * repeated it inside a `[source: "…"]` clause:
+ * Third variant of the same failure, and the one the syntactic defenses miss: the
+ * model appends its citation as BARE PROSE — no quotes, no `[source: …]` wrapper —
+ * and may then repeat it inside a `[source: "…"]` clause:
  *
  *   "Implement Login page with phone/password form and tests — **Client/UI:**
  *    Playwright `1.61.1` React component tests … — every component/page test
  *    captures a screenshot committed as a baseline. [source: "…"]"
  *
  * `stripQuotedSpans` sees no quotes and `splitDecisions` cuts only at the clause,
- * so the borrowed "every component/page" survived as if it were the task's own
- * scope, and a correctly per-change-scoped Login task was DROPPED — the exact
- * deletion this module exists to avoid.
+ * so the borrowed "every component/page" survives as if it were the task's own
+ * scope and a correctly per-change-scoped Login task is DROPPED — the exact
+ * deletion this module exists to avoid. Demonstrated by running that title both
+ * ways: WITHOUT the spec it is flagged as a batch task, WITH the spec it is kept.
  *
  * The general rule the two earlier guards were reaching for: text the title shares
  * verbatim with the spec is provenance, whoever failed to mark it as such. So the
@@ -188,12 +188,13 @@ const TEST_INFRA_RE =
  * WHOLE-PROJECT scope: a universal quantifier that governs a PROJECT-LEVEL target
  * ("all components and pages", "every route"), not merely any noun.
  *
- * Both halves are load-bearing, each learned from a live false positive:
+ * Both halves are load-bearing:
  *   - "full"/"complete" are excluded — they routinely scope a single area
  *     ("full login flow");
- *   - the quantifier must reach a project-level plural within ~20 chars, because
- *     "Test PartCard component — ALL badge combinations…" is a one-component task
- *     that a bare-quantifier rule flagged and DROPPED (live rep 3).
+ *   - the quantifier must reach a project-level plural within a short span, so
+ *     "Test PartCard component — ALL badge combinations…" stays a one-component
+ *     task. Confirmed: that title is NOT flagged, while "…for all components and
+ *     pages" is.
  */
 const WHOLE_SCOPE_RE =
     /\b(?:all|every|each|entire|whole|comprehensive)\b[\w\s,/-]{0,20}?\b(?:components?|pages?|routes?|endpoints?|screens?|views?|modules?|layers?|files?|features?|app|application|project|codebase|repo|repository|system|surface)\b|\bacross the (?:app|application|project|codebase|repo|repository)\b|\bend[- ]to[- ]end coverage\b/i
@@ -233,9 +234,11 @@ const TEST_COMMAND_RE =
  * The spec's own coverage source — the command whose report scopes the sweep.
  *
  * Only backticked spans are considered, so the result is a command the spec
- * actually writes down rather than a phrase inferred from prose; a span carrying
- * a coverage flag wins over a plain test run. Falls back to a generic phrase when
- * the spec names no command, which keeps the sweep title well-formed either way.
+ * actually writes down rather than a phrase inferred from prose: a plain-prose
+ * "bun test" is ignored and falls through to the generic phrase. A span carrying a
+ * coverage flag wins over a plain test run — a spec naming both `bun test` and
+ * `bun test --coverage` yields the latter. The fallback keeps the sweep title
+ * well-formed when the spec names no command at all.
  */
 export function coverageSourceFromSpec(spec: string): string {
     const spans = [...spec.matchAll(/`([^`\n]+)`/g)].map(m => m[1].trim())
@@ -374,15 +377,20 @@ export interface BatchTestRewrite {
  * Rewrite a decomposed plan so it carries no whole-project batch test task when
  * the decisions mandate tests-in-the-same-change.
  *
- * No mandate, or no batch title ⇒ the plan is returned untouched (identity), so
- * every non-cadence run behaves exactly as before.
+ * No mandate, or no batch title ⇒ the plan is returned untouched, with no actions,
+ * so every non-cadence run is unaffected. Both identity paths run as described.
  *
  * With a mandate, ALL batch titles are removed at once before coverage is
  * re-measured — otherwise two batch tasks would each mask the other's orphans and
  * both would look droppable. The orphaned set is then whatever grounded coverage
  * the removal costs; it is non-empty only when no other task's title claims that
- * requirement, and it becomes the sweep's scope. At most ONE sweep is emitted (in
- * the first batch title's position, so plan order is preserved).
+ * requirement, and it becomes the sweep's scope. At most ONE sweep is emitted, in
+ * the first batch title's position, so plan order is preserved.
+ *
+ * Run on the SAME batch title twice, changing only the requirement list: when
+ * another task grounds the requirement the title is DROPPED, and when the batch
+ * title is its only owner it is SCOPED into a sweep naming that quote and the
+ * spec's own coverage command. Any `[decisions: …]` tail rides onto the sweep.
  */
 export function rewriteBatchTestPlan(
     titles: string[],
