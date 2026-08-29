@@ -2,14 +2,12 @@
  * decompose-granularity — the deterministic FLOOR on how finely /task-auto cuts
  * a feature into tasks.
  *
- * The failure this closes: the SAME design doc, from the
- * SAME base commit, with a byte-identical planning path, planned once into 41
- * tasks and once into 11. The whole 4x difference is one line of clarify text.
- * /task-auto's clarify head asks a plan-shape question first ("one task per
- * milestone, or split smaller?"), the answer-side triage auto-resolves it and
- * stamps it "already settled by the spec", so the user never sees the fork; and
- * the answer decides the whole plan. Swap only that one line and the same design
- * document plans several times coarser or finer.
+ * The failure this closes: the SAME design doc, from the SAME base commit, with a
+ * byte-identical planning path, plans several times coarser or finer depending on
+ * ONE line of clarify text. /task-auto's clarify head asks a plan-shape question
+ * first ("one task per milestone, or split smaller?"), the answer-side triage
+ * auto-resolves it and stamps it "already settled by the spec", so the user never
+ * sees the fork — and that answer decides the whole plan.
  *
  * The spec does NOT settle it. A section titled "Build order (milestones)" is an
  * ORDER, not a task breakdown. So the plan's granularity, the single
@@ -24,10 +22,10 @@
  *
  *   floor = ceil(ownable requirements / MAX_REQUIREMENTS_PER_TASK)
  *
- * MAX_REQUIREMENTS_PER_TASK = 2 sits between the two shapes: a plan cut fine
- * enough to work carries about one ownable requirement per task, and a collapsed
- * one carries closer to three. A ceiling of 2 rejects the collapse without
- * demanding the finest plan possible.
+ * MAX_REQUIREMENTS_PER_TASK = 2 sits deliberately between the two shapes: a plan
+ * cut fine enough to work carries roughly one ownable requirement per task, and a
+ * collapsed one bundles several. A ceiling of 2 rejects the collapse without
+ * demanding the finest possible plan.
  *
  * Spec-shape-agnostic: the only inputs are two integers. A CLI, a library, a
  * refactor, a docs job all flow through the same arithmetic, and a feature with
@@ -48,14 +46,14 @@ export const MAX_REQUIREMENTS_PER_TASK = 2
  * Also zero below MIN_REQUIREMENTS_FOR_PLAN_SHAPE, for the reason that constant
  * already documents: under a handful of requirements the plan is one or two tasks
  * either way, and the requirement COUNT at that scale is an artifact of extraction
- * granularity rather than real breadth. Measured (2026-07-28 size smoke): the
- * 78-char feature "Add a `--version` flag to the CLI that prints the package
- * version and exits 0" extracted THREE ownable requirements — the flag, the
- * print, the exit code — yielding a floor of 2 for what is unambiguously one
- * task. Both arms correctly shipped 1 title, so the floor bought nothing and cost
- * a split-retry child; had anything ever made it binding it would have forced a
- * bad split. The same cut governs both because it is the same judgement: the
- * requirement channel is not load-bearing for shape until a feature has real breadth.
+ * granularity rather than real breadth. A one-line feature request — "add a
+ * --version flag that prints the version and exits 0" — extracts three ownable
+ * requirements (the flag, the print, the exit code) for what is unambiguously one
+ * task, and an ungated floor would demand two. The same cut governs both checks
+ * because it is the same judgement.
+ *
+ * Run: the floor is 0 for 0-4 ownable requirements, then ceil(n/2) — 5 gives 3,
+ * 10 gives 5, 21 gives 11.
  */
 export function granularityFloor(ownable: number): number {
     if (ownable < MIN_REQUIREMENTS_FOR_PLAN_SHAPE) return 0
@@ -88,10 +86,18 @@ export function planShapeIsHostsToAnswer(ownable: number): boolean {
 /**
  * Does this clarify question decide how finely the feature is CUT into tasks?
  *
- * Deterministic and narrow on purpose. It must fire on the fork the triage keeps
- * answering for itself ("follow the milestones as-is, or split more granularly?")
- * and stay off ordinary scope questions — an over-eager classifier would replace
- * a real user decision with the host's. Matched against the plain-text question.
+ * Deterministic and narrow on purpose: it must fire on the fork the triage keeps
+ * answering for itself and stay off ordinary scope questions, because an
+ * over-eager classifier would replace a real user decision with the host's.
+ * Matched against the plain-text question.
+ *
+ * BOTH halves must hold — a breakdown phrase AND a plan-unit noun — and the unit
+ * list is SINGULAR except for tasks. Measured across the units it names:
+ *   milestone / section / step / phase / task / tasks   fire
+ *   milestones / sections / steps / phases              do NOT
+ * So "one task per milestone, or split smaller?" fires, while the same fork
+ * phrased "follow the milestones as-is, or split more granularly?" does not —
+ * the breakdown half matches, the plural unit does not.
  */
 export function isPlanShapeQuestion(question: string): boolean {
     const q = question.toLowerCase()
@@ -109,15 +115,13 @@ export function isPlanShapeQuestion(question: string): boolean {
  * BELT — the host's own answer to that fork, recorded in the clarify transcript in
  * place of the triage's.
  *
- * WHY A CLARIFICATION AND NOT A DECOMPOSE RULE. Both were measured live. As a
- * RULES line replacing "prefer a handful of substantial tasks", the same directive
- * removed the collapse but destroyed plan-size control: 66, then 81 and 85 titles
- * for a spec whose healthy plan is ~30, plus one decompose child that blew the
- * model's 120k context window and killed the planning phase (the baseline produced
- * no such failure in 27 reps). Naming a target count made it worse, not better.
- * In the CLARIFICATIONS block, with the "prefer a handful" counterweight left
- * intact, the identical directive held 20–39 titles across 16 reps. The channel is
- * part of the lever, not a detail.
+ * WHY A CLARIFICATION AND NOT A DECOMPOSE RULE. The identical directive behaves
+ * very differently depending on where it lands. As a RULES line REPLACING "prefer
+ * a handful of substantial tasks", it removes the collapse but takes the
+ * counterweight with it, and plan size runs away — far enough that a decompose
+ * child can exhaust its context window and kill the planning phase outright. In
+ * the CLARIFICATIONS block, with that counterweight left intact, the same words
+ * land as one input among several. The channel is part of the lever, not a detail.
  *
  * Deliberately count-free: the spec-derived floor stays host-side, where it is
  * enforced silently and cannot be chased.

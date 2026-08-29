@@ -81,7 +81,7 @@ line counts as a comment line but opens no block.
 | `src/task/critique-probes.ts` | 221 | 95 | 24 | true |
 | `src/task/debug-log.ts` | 97 | 57 | 8 | true |
 | `src/task/decompose-fidelity.ts` | 232 | 85 | 10 | true |
-| `src/task/decompose-granularity.ts` | 149 | 102 | 11 | false |
+| `src/task/decompose-granularity.ts` | 149 | 102 | 11 | true |
 | `src/task/deep-render-check.ts` | 1018 | 232 | 60 | false |
 | `src/task/dropped-input.ts` | 40 | 13 | 3 | false |
 | `src/task/enforce-attribution.ts` | 236 | 109 | 25 | false |
