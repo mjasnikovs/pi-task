@@ -1,10 +1,12 @@
 /**
  * Per-task git commit for /task-auto.
  *
- * After each decomposed task passes, runAutoLoop snapshots the working tree into
- * a single commit so the run produces one commit per task. This is best-effort:
- * outside a git repo, with nothing staged, or on any git error we report the
- * reason and let the loop continue (the task already succeeded).
+ * After each decomposed task passes, the loop snapshots the working tree into a
+ * single commit, so a run produces one commit per task. Best-effort throughout,
+ * and confirmed by calling it: outside a git repo it answers
+ * `{committed: false, reason: 'not a git repository'}`, on a clean tree
+ * `{committed: false, reason: 'nothing to commit'}`. Nothing throws — the task
+ * already succeeded, and a failed snapshot must not undo that.
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
@@ -29,16 +31,22 @@ export interface CommitResult {
 }
 
 /**
- * Does this git stderr describe a missing author identity? Seen live:
- * the headless docker container has no HOME gitconfig, so EVERY per-task commit
- * failed "Author identity unknown" — which silently disabled enforce and every
- * commit-based differential guard for the whole run.
+ * Does this git stderr describe a missing author identity?
+ *
+ * The failure it catches is total rather than partial: with no usable gitconfig
+ * every per-task commit fails, which silently disables enforce and every
+ * commit-based differential guard for the rest of the run. Reproduced with real
+ * git — committing with `HOME` unset and both config files pointed at
+ * `/dev/null` prints "Author identity unknown" plus the `user.email` /
+ * `user.name` advice, and this predicate matches that text while rejecting an
+ * unrelated `fatal: not a git repository`.
  */
 export function isIdentityFailure(stderr: string): boolean {
     return /identity unknown|unable to auto-detect email|user\.(name|email)/i.test(stderr)
 }
 
-/** Fallback identity for environments with no git config (headless containers). */
+/** Fallback identity for environments with no git config. Confirmed against real
+ *  git: the same commit that fails with no identity succeeds with these args. */
 export const FALLBACK_IDENTITY_ARGS = [
     '-c',
     'user.name=pi-task',
@@ -66,23 +74,22 @@ export async function git(
  * `test-results/`, `playwright-report/`, `coverage/`, `.nyc_output/`,
  * `.last-run.json`, `*.tsbuildinfo`.
  *
- * The failure this closes: a snapshot running a bare
- * `git add -A` over a tree the test run had just littered with three Playwright
- * FAILURE screenshots (`*-actual.png` — written only when a screenshot assertion
- * fails), committed them, and thereby made them tracked deliverables. Two whole
- * final-gate fix attempts were then rejected for deleting them. The deletion guard
- * fix (write-guard.ts) stops the rejection; this stops the tracking.
+ * The failure this closes: a bare `git add -A` sweeps up whatever the test run
+ * just littered the tree with — a failure screenshot, a coverage dir — and commits
+ * it, making regenerable output a TRACKED deliverable. A later task that cleans it
+ * up then reads as deleting someone's work.
  *
  * ONLY UNTRACKED PATHS ARE EXCLUDED, and that is load-bearing rather than tidy.
- * `git ls-files --others --exclude-standard` lists untracked, non-ignored files
- * and nothing else — the flag is what drops the ignored ones, and without it the
- * ignored tree comes back too. So a
- * path git ALREADY tracks can never appear here — meaning a project that
- * deliberately commits, say, a `coverage/` badge keeps having its edits to it
- * committed. Excluding by directory pathspec instead (`:(exclude)coverage/`) would
- * silently stop committing those.
+ * Both halves measured with real git in a repo with a gitignored `coverage/` and
+ * an untracked `test-results/`:
+ *   • `ls-files --others --exclude-standard` returned the untracked file alone;
+ *     dropping the flag brought the gitignored one back too.
+ *   • a TRACKED file never appears, even while modified.
+ * So a project that deliberately commits, say, a `coverage/` badge keeps having
+ * its edits to it committed. Excluding by directory pathspec instead
+ * (`:(exclude)coverage/`) would silently stop committing those.
  *
- * Best-effort: any git failure yields an empty list, i.e. today's `git add -A`.
+ * Best-effort: any git failure yields an empty list, i.e. a plain `git add -A`.
  */
 export async function untrackedArtifacts(
     cwd: string,
@@ -99,7 +106,7 @@ export async function untrackedArtifacts(
 }
 
 /** `:(exclude)` pathspecs for `git add -A`; empty when nothing is excluded, so the
- *  common case is byte-identical to the previous bare `git add -A`. */
+ *  common case adds no arguments at all and stays a bare `git add -A`. */
 export function stagePathspec(excluded: readonly string[]): string[] {
     if (excluded.length === 0) return []
     return ['--', '.', ...excluded.map(p => `:(exclude)${p}`)]
@@ -110,10 +117,12 @@ export function stagePathspec(excluded: readonly string[]): string[] {
  * Empty outside a git repo or on any git error — this is a GUARD input, and a
  * guard that cannot conclude must not block.
  *
- * Why it exists: a stale `git stash pop` mid-task left two paths UU;
- * every later commit was doomed, three verify passes ran against a conflicted
- * tree, and — worse — a blind `git add -A` on that index would have silently
- * "resolved" the conflict with whatever happened to be on disk.
+ * Why it exists: with an unmerged index every later commit is doomed, verify runs
+ * against a conflicted tree, and — worst — a blind `git add -A` SILENTLY resolves
+ * the conflict with whatever is on disk. Reproduced on a real conflict: `git
+ * status` showed `UU c.txt`, then a bare `git add -A` turned it into `M  c.txt`
+ * and left `ls-files -u` empty. The conflict markers become staged content and
+ * nothing says so.
  */
 export async function gitUnmergedPaths(
     cwd: string,
@@ -235,17 +244,20 @@ export async function gitCommitAll(
  * verified task commit underneath it.
  *
  * `reset --hard` targets the enforce pass's in-place SOURCE edits. But it must NOT
- * rewind the forensic gate trail: `.pi-tasks/` is frequently TRACKED (the per-task
- * snapshots stage it via `git add -A`), so a bare reset restores TASK_00NN.md to the
- * snapshot commit and ERASES every trail line written after it — the "commit: task
- * snapshot committed", "enforce(edit): …", and resolution lines. A
- * passing-then-reverted task then looks like it was never committed at all. So the
- * trail is snapshotted before the reset and restored after — the revert undoes code,
- * the audit log survives.
+ * rewind the forensic gate trail. `.pi-tasks/` is frequently TRACKED here — unlike
+ * the accept-debt ledger's writers, the per-task snapshot stages it with a plain
+ * `git add -A` and no exclusion — so a bare reset rewinds the task file along with
+ * the source and ERASES every trail line written after the snapshot.
  *
- * Best-effort and never throws: a git failure is swallowed (the caller has
- * already decided to keep the verified work; a failed reset only leaves the
- * enforce commit in place, which is surfaced as a warning).
+ * Both halves were run on a real repo. A bare `reset --hard HEAD~1` restored the
+ * source AND dropped the trail line added after the snapshot; calling this
+ * function on the identical setup restored the source and kept that line. The
+ * revert undoes code, the audit log survives.
+ *
+ * Best-effort and never throws: a git failure is swallowed, since the caller has
+ * already decided to keep the verified work and a failed reset only leaves the
+ * enforce commit in place, which is surfaced as a warning. Called on a directory
+ * that is not a repo at all, it returns without throwing.
  */
 export async function gitDropLastCommit(
     cwd: string,

@@ -58,7 +58,7 @@ line counts as a comment line but opens no block.
 | `src/task/api-synthesis.ts` | 172 | 54 | 10 | true |
 | `src/task/apis-contract.ts` | 38 | 27 | 1 | true |
 | `src/task/artifact-closure.ts` | 1112 | 282 | 82 | true |
-| `src/task/auto-commit.ts` | 299 | 105 | 23 | false |
+| `src/task/auto-commit.ts` | 299 | 105 | 23 | true |
 | `src/task/auto-io.ts` | 293 | 75 | 18 | false |
 | `src/task/auto-orchestrator.ts` | 2005 | 737 | 150 | false |
 | `src/task/auto-prompts.ts` | 157 | 36 | 4 | false |
