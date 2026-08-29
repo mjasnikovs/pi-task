@@ -8,16 +8,19 @@
  * from the four research workers. `enrichment.ts` stays a pure parser; the I/O
  * lives here.
  *
- * There were TWO copies of this assembly: {@link gatherExternalContext} (the
- * research phase, raw workers) and an 87-line inline block in `phaseAutoAnswer`
- * (the grill auto-answer, focused workers). They agreed on everything that
- * shows up in the output — the 8-step shape, the "npm blocks lead" ordering,
- * the `### docs:` / `### url:` headings, the service loop's `no_key` / `error`
- * handling, the block terminator — and disagreed only on POLICY. So the shape
- * is {@link buildExternalContext} once, the disagreements are
- * {@link ExternalContextPolicy}, and the worker variant is
- * {@link ExternalContextLookups} — an adapter, expressible only since the
- * focused-extractor seam landed.
+ * TWO call paths share this assembly: the research phase via
+ * {@link gatherExternalContext} (raw workers) and the grill auto-answer via
+ * {@link buildExternalContext} directly (focused workers). Everything that shows
+ * up in the OUTPUT is identical between them — the "npm blocks lead" ordering, the
+ * `### docs:` / `### url:` headings, the service loop's `no_key` / `error`
+ * handling, the trailing blank-line terminator — and they differ only on POLICY.
+ *
+ * So the shape lives here once, the differences are {@link ExternalContextPolicy},
+ * and the raw-vs-focused worker choice is {@link ExternalContextLookups}, an
+ * adapter the focused-extractor seam made expressible.
+ *
+ * Run against a mixed source, the emitted headings come out in exactly that order:
+ * `### npm:` then `### docs:` then `### url:` then `### service:`.
  */
 
 import {docsRaw} from '../workers/docs-core.js'
@@ -74,8 +77,9 @@ export interface ExternalTargetResult {
  * whole page markdown, truncated), `phaseAutoAnswer` binds the FOCUSED ones (a
  * child's one-question answer). Everything else about the block is identical.
  *
- * A rejected lookup is caught by the builder and yields no blocks for that
- * target, so adapters may throw freely.
+ * A rejected lookup is caught by the builder and yields no blocks for that target,
+ * so adapters may throw freely. Confirmed: one adapter rejecting mid-fan-out
+ * leaves the other targets' blocks intact and contributes nothing of its own.
  */
 export interface ExternalContextLookups {
     docs(pkg: string): Promise<ExternalTargetResult | null>
@@ -85,10 +89,11 @@ export interface ExternalContextLookups {
 }
 
 /**
- * The six places the two call paths genuinely disagreed. Each is a knob rather
- * than a default, because every one of them is a deliberate, measured choice on
- * at least one path — the auto-answer block is capped and records nothing
- * because it runs per grill question, in front of a waiting user.
+ * The five places the two call paths genuinely disagree. Each is a knob rather
+ * than a default, because every one is a deliberate choice on at least one path:
+ * the auto-answer block is capped and records nothing because it runs per grill
+ * question, in front of a waiting user, while research is uncapped and trails its
+ * sub-step.
  */
 export interface ExternalContextPolicy {
     /**
@@ -101,9 +106,9 @@ export interface ExternalContextPolicy {
     /**
      * A cheap live version lookup for every named dep that did NOT get a docs
      * target, so a version block exists for ALL of them. Omit to disable, as the
-     * auto-answer path does. Without this on the research path, deps past the
-     * docs cap had no live version and a "which version?" question fell back to
-     * the model's stale training data — how tailwindcss got pinned to an old major.
+     * auto-answer path does. Without it, any dep past the docs cap carries no live
+     * version at all, and a "which version?" question falls back to whatever the
+     * model remembers — which is how a dependency gets pinned to a stale major.
      */
     versionLookup?: (pkg: string) => Promise<NpmVersionInfo | null>
     /** Sub-step label recorded via `deps.recordSubStep`. Omit to record nothing. */
@@ -117,8 +122,10 @@ export interface ExternalContextPolicy {
 }
 
 /**
- * Assemble the `EXTERNAL CONTEXT\n…\n\n` block for `source`, or `''` when there
- * is nothing to enrich (no targets, or every lookup failed).
+ * Assemble the `EXTERNAL CONTEXT\n…\n\n` block for `source`, or `''` when there is
+ * nothing to enrich — no targets, or every lookup failed. Both were run: a source
+ * naming nothing returns `''`, and so does one whose only target is a service
+ * search that errored.
  */
 export async function buildExternalContext(
     source: string,

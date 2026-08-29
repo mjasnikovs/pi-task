@@ -89,7 +89,7 @@ line counts as a comment line but opens no block.
 | `src/task/enrichment.ts` | 95 | 4 | 1 | true |
 | `src/task/env-notes.ts` | 222 | 83 | 14 | true |
 | `src/task/env-template-closure.ts` | 448 | 160 | 48 | true |
-| `src/task/external-context.ts` | 260 | 92 | 21 | false |
+| `src/task/external-context.ts` | 260 | 92 | 21 | true |
 | `src/task/failure-classifier.ts` | 122 | 16 | 5 | false |
 | `src/task/file-inventory.ts` | 68 | 31 | 4 | false |
 | `src/task/final-gate-fix.ts` | 509 | 194 | 42 | false |
