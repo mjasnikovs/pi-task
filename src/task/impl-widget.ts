@@ -1,24 +1,30 @@
 /**
  * Implementation-turn status widget.
  *
- * The phase widget (widget.ts) is disposed at spec-handoff, so the host agent's
- * implementation turn — the longest, most visible part of a run — otherwise shows
- * only pi's bare "⠸ Working…" indicator. This module keeps the SAME rich status
- * block alive across that turn (task id · implementing/elapsed/context bar · ↳ last
- * tool), driven by the host's own live `ctx.getContextUsage()`.
+ * `TaskRunner._deliverSpec` is preceded by `_disposeWidget()`, so the phase widget
+ * (widget.ts) is gone before the spec is handed off. Without this module the host
+ * agent's implementation turn — the longest, most visible part of a run — would
+ * show only pi's own working indicator, whose default message is the literal
+ * `"Working..."`. This keeps the SAME rich status block alive across that turn
+ * (task id · implementing/elapsed/context bar · ↳ last tool), driven by the host's
+ * own live `ctx.getContextUsage()`, which pi declares as
+ * `getContextUsage(): ContextUsage | undefined`.
  *
- * It is event-driven rather than poll-wrapped because the two delivery paths differ:
+ * Event-driven rather than poll-wrapped, because the two delivery paths differ:
  *
- *   • /task (fire-and-forget): the command returns right after `sendUserMessage`,
- *     so the host runs the impl turn AFTER our code is gone — only an `agent_start`
- *     handler can pick it up. Armed one-shot: `agent_end` disarms it.
- *   • /task-auto (awaited): the caller blocks across `waitForIdle` plus any
- *     compaction-resume / steer turns. Armed sticky: each `agent_start` re-shows the
- *     widget, `agent_end` only hides it between turns, and the caller disarms once
- *     the whole implementation phase has settled.
+ *   • /task (fire-and-forget): the command returns right after
+ *     `piApi.sendUserMessage(spec, {deliverAs: 'followUp'})`, so the host runs the
+ *     impl turn AFTER this code is gone and only an `agent_start` handler can pick
+ *     it up. Armed one-shot, and `agent_end` disarms it.
+ *   • /task-auto (awaited): the caller blocks across `waitForIdle` plus any resume
+ *     or steer turns. Armed sticky — each `agent_start` re-shows the widget,
+ *     `agent_end` only hides it between turns, and the caller disarms in a
+ *     `finally` once the whole implementation phase has settled.
  *
- * Only one task runs at a time (single active task), so a single module-level slot
- * is sufficient.
+ * `_deliverSpec` picks between them with `oneShot: !this._implAwaited`.
+ *
+ * A single module-level slot is enough because only one task runs at a time —
+ * `orchestrator.ts` keeps one module-level `activeTask`.
  */
 
 import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
@@ -50,7 +56,8 @@ let timer: ReturnType<typeof setInterval> | null = null
 let activeCtx: ExtensionContext | null = null
 
 /** Map the host's live context usage to the widget snapshot, or undefined when the
- *  token count is unknown (e.g. right after compaction, before the next response). */
+ *  token count is unknown. pi types `ContextUsage.tokens` as `number | null` and
+ *  documents the null as "right after compaction, before next LLM response". */
 function snapshot(ctx: ExtensionContext): ContextSnapshot | undefined {
     const u = ctx.getContextUsage?.()
     if (!u || u.tokens == null) return undefined
@@ -126,7 +133,10 @@ export function disarmImplWidget(): void {
     lastLine = undefined
 }
 
-/** Wire the agent-lifecycle handlers that drive the widget. Call once at setup. */
+/** Wire the agent-lifecycle handlers that drive the widget. Call once at setup.
+ *  All three events are pi's own: `agent_start`, `tool_execution_start` and
+ *  `agent_end` each have an `on()` overload, and ToolExecutionStartEvent carries
+ *  the `toolName` and `args` read below. */
 export function setupImplWidget(pi: ExtensionAPI): void {
     pi.on('agent_start', (_event, ctx) => {
         if (!armed) return
