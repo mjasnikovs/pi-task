@@ -21,20 +21,19 @@ export interface PiTaskConfig {
     verifyWork: boolean
     /**
      * Run the four research workers concurrently instead of one at a time.
-     * DEFAULT OFF: serial was A/B-proven faster on a single-GPU local backend
-     * (concurrent streams split the GPU and slow each other ~4×, see
-     * phases.ts). Turn on only for a parallel-capable backend.
+     * DEFAULT OFF. A single-GPU backend serves concurrent streams by sharing
+     * the same device between them, so each one slows down by roughly the
+     * number in flight. Measure your own backend before turning this on.
      */
     parallelResearchWorkers: boolean
     /**
-     * Cache docs/search/fetch worker RESULTS for the duration of one /task-auto run
-     * so sibling tasks re-asking the same (package/url, query) reuse the first
-     * pipeline's digest instead of re-fetching (mx5 run-8 F10: the research phase
-     * burned 75 of 363 min largely re-fetching the same external docs across ~20
-     * siblings). Per-run isolated, external-only (project-source `.` lookups excluded),
-     * success-only. DEFAULT ON — the F10 live A/B showed no answer-quality regression
-     * (a cache hit serves byte-identical text to the first fetch; distinct queries never
-     * collide).
+     * Cache docs/search/fetch worker RESULTS for the duration of one /task-auto
+     * run, so sibling tasks re-asking the same (package/url, query) reuse the
+     * first pipeline's digest instead of re-fetching it. Per-run isolated,
+     * external-only (project-source `.` lookups are excluded), success-only.
+     *
+     * DEFAULT ON. A hit replays the stored text byte for byte, and the key is
+     * the whole query, so two different questions cannot collide.
      */
     researchCache: boolean
     /**
@@ -70,8 +69,8 @@ export interface PiTaskConfig {
      * halving on repeat hangs. 0 = off — which unguards BOTH surfaces, gates
      * included. Tool-agnostic: it arms on any tool execution, though in practice
      * only bash runs long enough to trip it.
-     * DEFAULT 15 min: long enough for a real build/test suite, short enough that
-     * a true hang doesn't cost half an hour of dead time.
+     * The default is a compromise: it has to outlast a real build or test suite
+     * on the slowest machine you run this on, and still end a true hang.
      */
     requestTimeoutMs: number
     /**
@@ -95,19 +94,21 @@ export interface PiTaskConfig {
      * aborts the request (shared/stream-watchdog.ts). A hung or silently-dropped
      * stream throws nothing, so neither the connection-error retry (needs a
      * reported error) nor the command watchdog (covers tool calls only) nor the
-     * child stall guard (a reachable endpoint is proof of life) can see it — mx5
-     * run 14 lost ~2.9h to three such hangs while the model server stayed healthy.
+     * child stall guard (a reachable endpoint is proof of life) can see it. The
+     * server stays healthy the whole time; only the stream is gone.
      *
-     * Measured as time since the LAST stream event of any kind, so a slow model
-     * emitting one token every 30s is never touched; only total silence counts.
-     * Suspended while a tool executes — that window is the command watchdog's.
+     * Measured as time since the LAST stream event of any kind, so a model that
+     * is merely slow is never touched however slow it is; only total silence
+     * counts. Suspended between `tool_execution_start` and the last call
+     * settling — that window belongs to the command watchdog.
      *
      * ONE knob, TWO surfaces: the MAIN session aborts the turn through the same
      * plumbing the command watchdog uses and posts a resume reminder; a CHILD is
      * killed and its result routed into the EXISTING connection-error retry.
      * 0 = off, on both surfaces.
-     * DEFAULT 10 min: local prompt processing on a 32k context legitimately emits
-     * nothing for minutes, so a 60-120s ceiling would kill healthy long prompts.
+     *
+     * The default is generous on purpose. A local backend can spend a long time
+     * in prompt processing emitting nothing at all, and that silence is healthy.
      */
     streamInactivityMs: number
     /**
@@ -137,23 +138,20 @@ export interface PiTaskConfig {
      * `events` keeps only decisions and guard actions; `off` writes nothing.
      *
      * DEFAULT `events`, not `off`, because the two levels are not the same kind
-     * of record. Measured on a real 247 KB `verify-debug.log` (IAR1, 1315 lines):
-     * the child's own output and the `↳` tool dumps are 85% of the bytes, while
-     * the `=== … ===` markers are 15% — and that 15% is the ONLY record of what
-     * the guards did (`GIT-STATE GUARD — child mutated graded state`, the
-     * write-capable child's `tree changes`, the FAIL reason). mx5 run 11's
-     * final-fix child deleted a source file; the tree-changes line is why that
-     * was findable at all. Silencing the chatter costs nothing; silencing the
-     * guard record makes the next incident unreconstructible, and a debug log
-     * cannot be recovered after the fact.
+     * of record. The child's own output and the `↳` tool dumps are bulk. The
+     * `=== … ===` markers are the only record of what the guards did — the
+     * git-state guard firing, a write-capable child's tree changes, a FAIL
+     * reason. Silencing the chatter costs nothing. Silencing the guard record
+     * makes the next incident unreconstructible, and a debug log cannot be
+     * recovered after the fact.
      */
     debugLogs: DebugLogLevel
     /**
      * Which reasoning profile is in force. See config/reasoning.ts for the four
      * modes and the group vocabulary.
      *
-     * DEFAULT `default`, whose table ships all-`inherit` — so installing this
-     * version changes no child's argv until the user opts in.
+     * DEFAULT `default`, which uses the shipped per-group table. `off` and `on`
+     * override every group at once; `custom` reads the user's own table.
      */
     reasoningMode: ReasoningMode
     /**
@@ -265,8 +263,6 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     enforceGuidelines: true,
     verifyWork: true,
     parallelResearchWorkers: false,
-    // ON: the F10 live A/B showed no answer-quality regression (fidelity 3/3, quality
-    // 3/3, 0 collisions; ~14.5s of repeated docs lookups collapse to 0ms on a hit).
     researchCache: true,
     searchProvider: 'exa',
     extensionWhitelist: [],
@@ -275,12 +271,11 @@ export const DEFAULT_CONFIG: PiTaskConfig = {
     streamInactivityMs: DEFAULT_STREAM_INACTIVITY_MS,
     // OFF: auto-answering is for unattended throwaway runs only.
     yoloMode: false,
-    // EVENTS: the model chatter is 85% of the bytes and nobody reads it; the
-    // guard/verdict markers are the 15% that explains a failed run.
+    // EVENTS: the model chatter is bulk nobody reads; the guard and verdict
+    // markers are what explains a failed run.
     debugLogs: DEFAULT_DEBUG_LOGS,
-    // DEFAULT: the measured per-group table, which currently holds `inherit` in
-    // every cell. Every child's argv is byte-identical to the version before
-    // reasoning profiles existed until a cell is filled in by an A/B.
+    // DEFAULT: the shipped per-group table. A cell left at `inherit` emits no
+    // --thinking flag, so that child keeps the host's own level.
     reasoningMode: 'default',
     reasoningLevels: {...DEFAULT_REASONING_TABLE}
 }
@@ -348,14 +343,14 @@ export const CONFIG_LOADERS: {
 }
 
 /**
- * Turn parsed config JSON into a `PiTaskConfig`. Pure — this is the seam the load
- * block used to have none of, so every hostile-value case was reachable only
- * through `getConfig()`, which reads the developer's own machine.
+ * Turn parsed config JSON into a `PiTaskConfig`. Pure, so every hostile-value
+ * case is reachable from a test without going through `getConfig()`, which reads
+ * whatever this machine has on disk.
  *
- * A non-object `raw` yields the defaults. That is not merely defensive: the old
- * block spread `parsed` directly, and `{...DEFAULT_CONFIG, ...'ab'}` produces
- * numeric index keys. Keys absent from the table are dropped rather than carried
- * into the config object.
+ * A non-object `raw` yields the defaults. Spreading a string instead would
+ * produce numeric index keys: `{...DEFAULT_CONFIG, ...'ab'}` gains `0` and `1`.
+ * Keys absent from the sanitizer table are dropped rather than carried into the
+ * config object.
  */
 export function loadConfig(raw: unknown): PiTaskConfig {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {

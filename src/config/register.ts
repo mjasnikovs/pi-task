@@ -102,15 +102,11 @@ class BorderedBox implements Component {
  * One /task-config setting, and BOTH directions of its value.
  *
  * `format` renders the stored value for the panel; `apply` parses the chosen
- * label back into it. They are per-row because the two used to be hand-written
- * ladders — a `displayValue` arm to format, a matching `onChange` arm to parse,
- * and three different idioms for the same parse across the four enum settings.
- * Adding one enum setting meant four coordinated edits (row, format arm, parse
- * arm, sanitizer) and NONE of them failed to compile if you forgot it: a missed
- * format arm rendered `String(cfg[id])`, and a missed parse arm let the generic
- * `else` write the boolean `newValue === 'on'` into an enum field. The comment
- * that used to sit in that `else` — explaining why `debugLogs` must not fall
- * into it — was the interface saying it was too shallow.
+ * label back into it. Both live on the row so adding an enum setting is ONE
+ * edit. Split across separate format and parse ladders, a missing arm compiles
+ * fine and misbehaves at run time: an absent format arm renders
+ * `String(cfg[id])`, and an absent parse arm writes the boolean
+ * `newValue === 'on'` into an enum field.
  *
  * With both directions on the row, `format(apply(cfg, v)) === v` is a property
  * over the whole table, and the panel and the non-TUI listing cannot disagree
@@ -500,9 +496,9 @@ export function applyToolToggle(
  *    constructed with (see createSettingsPanel), so rows that appear and vanish
  *    would leave the box sized for the wrong list.
  *  - The value displayed is what the group ACTUALLY runs at — resolveReasoning,
- *    not the stored custom table. That makes the measured `default` table
- *    readable from the menu instead of hidden in a source file, which is the
- *    whole point of having measured it.
+ *    not the stored custom table. In mode `off` every row reads `off` even
+ *    though the custom table underneath is untouched, which is the honest
+ *    answer to "what will my next child do".
  */
 const REASON_ID_PREFIX = 'reason:'
 
@@ -766,10 +762,10 @@ export function createSettingsPanel(
  * One list of `ConfigItem`s — so a row's display, its write-back and its section
  * are one object, the dispatch is a lookup by id, and the round-trip properties
  * in `config-items.test.ts` cover the reasoning, tool and extension families
- * that used to bypass the row type entirely.
+ * through the same row type as everything else.
  *
- * Fixed rows come before discovered ones within a section, which is the order
- * the hand-written `extra` map produced.
+ * Fixed rows come before discovered ones within a section, so a freshly
+ * installed extension appends rather than reshuffling the menu.
  */
 export function configRows(
     installed: InstalledExtension[],
@@ -857,11 +853,10 @@ async function handleTaskConfig(
     const tools = getTools()
 
     if (ctx.mode !== 'tui') {
-        // Reads the SAME `format` the panel does, so the two renderings cannot
-        // disagree about what a setting currently says.
-        // Built from panelItems, not a second hand-written walk of the same
-        // tables: the two renderings used to be able to disagree about what a
-        // setting said, and a headless run is the one place nobody would notice.
+        // Built from panelItems and reading the SAME `format` the panel does,
+        // so the two renderings cannot disagree about what a setting says. A
+        // second walk of the same tables is the one place nobody would notice
+        // them drifting, because a headless run has no panel to compare against.
         const lines = panelItems(cfg, installed, tools)
             // The blank rows between sections are there to give the TUI air.
             // One line of `|`-joined text has none to give, and an empty label
