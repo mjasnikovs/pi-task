@@ -10,21 +10,28 @@ import type {ContextSnapshot} from '../shared/child-process.js'
 /**
  * The parent session's context window, or 0 when the model doesn't expose it.
  *
- * The parameter is the STRUCTURAL MINIMUM this reads, not one of pi's context
- * interfaces. It took `ExtensionCommandContext` and immediately cast it away,
- * which is a lie that also excluded the plain `ExtensionContext` a TOOL is
- * handed — the very caller (`workers/pi-worker.ts`) that needs the window to arm
- * the churn rule. Both pi contexts satisfy this shape.
+ * The parameter is the STRUCTURAL MINIMUM this reads, deliberately, rather than
+ * one of pi's context interfaces. Naming `ExtensionCommandContext` here would
+ * exclude the plain context a TOOL is handed — and that is a real caller:
+ * `workers/pi-worker.ts` reads the window through this to arm the churn rule.
+ * Both pi contexts carry a `model` whose `contextWindow` is a number, so both
+ * satisfy the shape.
+ *
+ * Returns 0 for a context with no model, and for a model with no window.
  */
 export function getParentContextWindow(ctx: {model?: {contextWindow?: number}}): number {
     return ctx.model?.contextWindow ?? 0
 }
 
 /**
- * Fold a raw context snapshot into a display snapshot: prefer the child's
- * own contextWindow, else the last known one, else the parent session's; then
- * derive percent against it — falling back to the child's reported percent when
- * no window is known at all.
+ * Fold a raw context snapshot into a display snapshot: prefer the child's own
+ * contextWindow, else the last known one, else the parent session's; then derive
+ * percent against it, falling back to the child's own reported percent when no
+ * window is known at all.
+ *
+ * Run through all four: a child reporting 4000 uses it; a child reporting 0 with a
+ * previous 8000 uses that; with neither, the parent's; and with nothing anywhere
+ * the reported percent survives untouched. The derived percent clamps at 100.
  */
 export function resolveContextUsage(
     snapshot: ContextSnapshot,
