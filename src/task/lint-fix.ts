@@ -1,17 +1,16 @@
 /**
  * lint-fix — the bounded, graduated resolution for a repo-health verify FAIL.
  *
- * The failure this closes: AUTOFIX's only hammer is a FULL
- * implementation re-run. For a repo-health FAIL of 10 trivial lint findings the live
- * run burned two 36–56-minute impl turns, each REGENERATING a fresh 900-line rewrite
- * that failed lint differently — the loop cannot converge because the tool is bigger
- * than the defect. A bounded fix child (read,edit,bash) reaches lint-clean on a
- * real tree in a couple of attempts.
+ * WHY A SEPARATE PASS. AUTOFIX's only hammer is a FULL implementation re-run. For a
+ * repo-health FAIL of a few trivial lint findings the re-run REGENERATES the work
+ * rather than editing it, and fresh output fails lint differently — the loop cannot
+ * converge because the tool is bigger than the defect. A bounded fix child
+ * (read,edit,bash) edits only the findings.
  *
- * The same validation caught the design's failure mode: BOTH runs cheated, running
- * `git checkout -- src/test/request.ts` — REVERTING the task's uncommitted work to
- * make the findings vanish. So this pass ships with a deterministic REVERT-GUARD,
- * outcome-based (command filtering can't catch every path to the same effect):
+ * REVERT-GUARD. A fix child can reach lint-clean by DISCARDING the task's
+ * uncommitted work: `git checkout -- <the work file>` makes every finding vanish.
+ * The prompt forbids it, but the guard is outcome-based, because command filtering
+ * cannot catch every path to the same effect:
  *
  *   - Before the child runs: snapshot the full working state (`git add -A` +
  *     `git write-tree`, then unstage) and record which files differ from HEAD.
@@ -28,34 +27,38 @@
  * recommend → AUTOFIX/ACCEPT/dismiss picker, so this pass can only make the loop
  * faster, never change what it can decide.
  *
- * FROZEN-PATH GUARD: the checker's own error text
- * can INSTRUCT an edit to a spec-frozen file (typed ESLint: "playwright/index.ts
- * was not found by the project … Consider either including it in the
- * tsconfig.json") and this child complies — while the task's spec froze
- * `tsconfig.json` and verify's rule-4b prohibition probe then fails the TASK for
- * the gate child's edit. Two gates, contradictory rules, same file; the loop
- * never converges.
- * Prompt framing alone does not hold on a weak model (see
- * frozen-path-guard.ts), so the deny is mechanical: the spec's frozen paths are
- * threaded in via `frozenPaths`, injected into the prompt as a do-not-touch list
- * (belt), and any frozen path the child still changed is deterministically
- * reverted post-child and the fix reported not-applied (suspenders). Only paths
- * that were CLEAN before the child ran are reverted — a frozen path already
- * dirty with (possibly task) work is left alone, in the guard's safe direction:
- * cost time, never work.
+ * FROZEN-PATH GUARD. The checker's own error text can INSTRUCT an edit to a
+ * spec-frozen file. Typed ESLint, asked to lint a file outside the tsconfig
+ * `include`, prints:
  *
- * CROSS-TASK DELETION GUARD: the
- * revert-guard above is outcome-based but blind to a CLEAN tracked file — a
- * sibling task's committed deliverable is neither pre-dirty nor pre-untracked, so
- * DELETING it slips both checks, and if the lint converges the pass returns ok
- * (a child will delete a sibling task's component-test files to green a
- * typed-lint it was frozen out of fixing properly). The discriminator is
- * PROVENANCE, not deletion per se: a tracked file the CHILD deleted whose
- * introducing task (per `introducedBy`, git history) differs from the CURRENT
+ *     Parsing error: <file> was not found by the project service. Consider either
+ *     including it in the tsconfig.json or including it in allowDefaultProject.
+ *
+ * A child that complies edits `tsconfig.json`. If the task's spec froze that file,
+ * verify's prohibition probe raises rule 4b — "SPEC PROHIBITIONS ARE PART OF THE
+ * BAR — YOU HAVE NO WAIVER AUTHORITY" — and FAILs the TASK for the gate child's
+ * edit. Two gates, contradictory rules, same file; the loop never converges.
+ *
+ * So the deny is mechanical rather than framing: the spec's frozen paths are
+ * threaded in via `frozenPaths`, injected into the prompt as a do-not-touch list
+ * (belt), and any frozen path the child still changed is deterministically reverted
+ * post-child and the fix reported not-applied (suspenders). Only paths that were
+ * CLEAN before the child ran are reverted — a frozen path already dirty with
+ * (possibly task) work is left alone, in the guard's safe direction: cost time,
+ * never work.
+ *
+ * CROSS-TASK DELETION GUARD. The revert-guard above is outcome-based but blind to a
+ * CLEAN tracked file. Delete one and `git status --porcelain` reports ` D <path>`
+ * while it appears in NEITHER of the guard's two lists: it was not pre-dirty (it
+ * matched HEAD) and not pre-untracked (it is tracked). If the lint then converges,
+ * the pass returns ok having destroyed a sibling task's committed deliverable. The
+ * discriminator is PROVENANCE, not deletion per se: a tracked file the CHILD deleted
+ * whose introducing task (per `introducedBy`, git history) differs from the CURRENT
  * task is restored from HEAD and the fix reported not-applied naming the owner.
- * Same-task deletions, unknown provenance, relocations, and any git error all
- * step aside — the guard may only cost time, never work. Armed only when both
- * `currentTaskId` and `introducedBy` are wired.
+ * Same-task deletions, unknown provenance, relocations (a deletion whose basename
+ * reappears among the added paths) and any git error all step aside — the guard may
+ * only cost time, never work. Armed only when both `currentTaskId` and
+ * `introducedBy` are wired.
  */
 import {parseChangedFrozenFiles, pathNamedIn, revertFrozenPaths} from './frozen-path-guard.js'
 import {runFixChild} from './fix-child.js'
@@ -101,10 +104,8 @@ export interface LintFixDeps {
      */
     introducedBy?: (rel: string) => Promise<string | null>
     /**
-     * Debug-log sink. This dep did not exist, so all four of this pass's guard
-     * trips were invisible in the trail while the twin (`FinalFixDeps.log`) logged
-     * three of its own — and a guard whose firing leaves no record cannot be
-     * distinguished from one that never armed.
+     * Debug-log sink. Every guard below logs its own trip through it: a guard whose
+     * firing leaves no record cannot be distinguished from one that never armed.
      */
     log?: (msg: string) => void
 }
@@ -113,10 +114,10 @@ export interface LintFixDeps {
 export const LINT_FIX_TOOLS = 'read,edit,bash'
 
 /**
- * Build the fix child's prompt. The constraints encode both live findings: smallest
- * edits only (the impl re-run's rewrite habit is the defect this pass replaces), and
- * an explicit ban on discarding work (both validation runs reached green via
- * `git checkout` of the work file until the guard existed).
+ * Build the fix child's prompt. Two constraints carry the design: smallest edits
+ * only — the re-run's rewrite habit is the defect this pass replaces — and an
+ * explicit ban on discarding work, which is the cheapest route to a green check and
+ * exactly what the revert-guard exists to catch.
  */
 export function buildLintFixPrompt(failReason: string, frozenPaths: string[] = []): string {
     const frozenBlock =
@@ -260,12 +261,10 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     const deletionGuardArmed = Boolean(deps.currentTaskId && deps.introducedBy)
     const preChanges = deletionGuardArmed ? await treeChanges(deps) : null
 
-    // The four-rung ladder lives in task/fix-child.ts. A cancel still propagates
-    // (it THROWS, so the caller's USER_CANCELLED path is unchanged); what is new
-    // here is the BLOCKED rung, which this pass instructed in its prompt and then
-    // discarded the reply of — so a child that reported BLOCKED still paid the
-    // whole guard stack and a repo-health re-run (15–69s measured) to be told
-    // `did not converge`, instead of its own stated reason.
+    // The four-rung ladder lives in task/fix-child.ts: a cancel propagates as a
+    // THROW (so the caller's USER_CANCELLED path is unchanged), a child that threw
+    // for any other reason is `error`, a self-declared BLOCKED is `blocked`, and
+    // anything else is `done`.
     const end = await runFixChild({
         runChild: deps.runChild,
         tools: LINT_FIX_TOOLS,
@@ -284,10 +283,10 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     // REVERT-GUARD: every pre-existing work file must still differ from HEAD, and
     // every pre-existing untracked file must still exist. Trip → restore snapshot.
-    // Every comparison requires git to have actually SUCCEEDED: a git error after
-    // the child is inconclusive (proven live: it flagged the whole untracked file
-    // list as "discarded" while the child had verifiably edited only lint findings)
-    // — then the guard steps aside and the converge check below still decides.
+    // Every comparison requires git to have actually SUCCEEDED. A git error after
+    // the child reads as "nothing is dirty", which would flag every pre-existing
+    // work file as discarded — inconclusive, not evidence. The guard then steps
+    // aside and the converge check below still decides.
     const stillDirtyList = await dirtyFiles(deps)
     let guardNote: string | undefined
     const violations: string[] = []
@@ -328,10 +327,9 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
 
     // CROSS-TASK DELETION GUARD: a tracked file the CHILD deleted whose
     // introducing task differs from the current task is a sibling's committed
-    // deliverable destroyed to go green (the child deletes a sibling's
-    // playwright ct files and the pass returned ok — the revert-guard above only
-    // watches pre-dirty and pre-untracked files, and a clean tracked sibling file
-    // is neither). Restore JUST those paths from HEAD (they were clean pre-child,
+    // deliverable destroyed to go green. The revert-guard above only watches
+    // pre-dirty and pre-untracked files, and a clean tracked sibling file is
+    // neither. Restore JUST those paths from HEAD (they were clean pre-child,
     // so nothing of the task's work can be lost) and report not-applied naming the
     // owner. Inconclusive on any side — git error, unknown provenance, same-task
     // deletion, relocation — steps aside.
@@ -363,14 +361,13 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
         }
     }
 
-    // FROZEN-PATH GUARD: a frozen path that was clean pre-child and is changed
-    // now is the child's edit — the exact write verify's rule-4b prohibition
-    // probe is guaranteed to fail the TASK for. ESLint's own error text will
-    // instruct a tsconfig.json edit and the child complies, every time, in the
-    // live A/B). Revert JUST those paths (they were clean, so HEAD == pre-state:
-    // no work can be lost) and report not-applied so the caller falls through to
-    // the ordinary recommend → AUTOFIX/ACCEPT picker. Inconclusive git (either
-    // side) → guard steps aside; the verify probe still catches what survives.
+    // FROZEN-PATH GUARD: a frozen path that was clean pre-child and is changed now
+    // is the child's edit — the exact write verify's rule-4b prohibition probe
+    // fails the TASK for. Revert JUST those paths (they were clean, so HEAD ==
+    // pre-state: no work can be lost) and report not-applied so the caller falls
+    // through to the ordinary recommend → AUTOFIX/ACCEPT picker. Inconclusive git
+    // (either side) → guard steps aside; the verify probe still catches what
+    // survives.
     if (preFrozenDirty !== null) {
         const postFrozenDirty = await frozenDirtySet(deps, frozen)
         if (postFrozenDirty !== null) {
@@ -408,18 +405,17 @@ export async function runBoundedLintFix(deps: LintFixDeps): Promise<LintFixResul
     // while the child's edits sit in the working tree.
     //
     // So BLOCKED does not decide; it only supplies a better REASON when the check
-    // agrees nothing converged. That was the durable half of the win. Skipping the
-    // re-run was the other half, and it is not worth this.
+    // agrees nothing converged. Skipping the re-run on the marker alone is not
+    // worth that risk.
     const health = await deps.repoHealth()
     if (!health.ok) {
         if (end.kind === 'blocked') {
             return {ok: false, reason: `fix child blocked: ${end.note}`}
         }
-        // FROZEN-PATH TRACE on non-convergence (PROMPT 1 layer B): when the child
-        // was honest — it did NOT touch the frozen path, so the guard above never
-        // tripped — but the check is still red and its own output NAMES a frozen
-        // path (typed ESLint: "playwright/index.ts was not found by the project …
-        // consider including it in the tsconfig.json"), the findings can only be
+        // FROZEN-PATH TRACE on non-convergence: when the child was honest — it did
+        // NOT touch the frozen path, so the guard above never tripped — but the
+        // check is still red and its own output NAMES a frozen path (the typed
+        // ESLint message quoted in this file's header), the findings can only be
         // fixed by an edit this task's spec forbids. Report it under the same
         // `frozen-path:` prefix as the guard trip, so the gate loop can route
         // straight to the human picker instead of burning unattended AUTOFIX
