@@ -1,21 +1,24 @@
 // Tool-call presentation helpers, shipped as a JS string and concatenated into
 // the page by ui.ts. Turns raw {toolName, args} into a readable one-line summary,
-// a +N −M diff badge, and an expandable line-diff body for edit/write tools —
-// replacing the old "name + JSON.stringify(args) hard-sliced at 64 chars".
+// a +N −M diff badge, and an expandable line-diff body for edit/write tools.
 //
-// Depends on escHtml (ui-render.ts) — both land in the same <script>.
+// Depends on escHtml (ui-render.ts) — ui.ts emits renderModule() ahead of
+// toolsModule(), inside one <script>.
 
 /** Emitted client JS (top-level function declarations). */
 export function toolsModule(): string {
-    return `    // args arrives as an object (live tool_start / snapshot part) or a JSON string.
+    return `    // pi types tool_execution_start's args as an "any", so accept
+    // either the object (live event / snapshot part) or a JSON string; null for
+    // anything else.
     function toolArgs(args) {
       if (args && typeof args === 'object') return args;
       if (typeof args === 'string') { try { return JSON.parse(args); } catch (e) { return null; } }
       return null;
     }
 
-    // A readable one-line summary. Falls back to the old name+JSON form (but with NO
-    // hard 64-char slice — the summary line ellipsizes via CSS, full text on hover).
+    // A readable one-line summary, falling back to name + JSON for a tool with no
+    // special case. Never truncated here: .tool-label ellipsizes in CSS and
+    // addToolCall puts the full text in the summary's title attribute.
     function toolSummary(toolName, args) {
       var name = (toolName || '').toLowerCase();
       var a = toolArgs(args);
