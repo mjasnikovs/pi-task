@@ -19,18 +19,21 @@
  * defect") still governs every verdict — the block injected into prompts says
  * so explicitly. The cache only kills re-discovery time.
  *
- * PROVENANCE + RE-VALIDATION: a verify child once grepped component
- * names in a MINIFIED bundle (identifiers mangled ⇒ 0 hits by construction),
- * wrote "build tree-shakes ALL route components — pre-existing issue" to the
- * cache, and ten later tasks inherited it verbatim as a standing "pre-existing,
- * unrelated" excuse to wave off a genuinely broken deliverable — nobody
- * re-checked. Two guards close that class: (a) each note is stamped host-side
- * with the ORIGIN task that recorded it (a note is second-hand hearsay, not the
- * reader's own observation); (b) the injected block demands the reader
- * RE-VALIDATE a note in the CURRENT tree before citing it to excuse a failure,
- * flags EXCUSE-CLASS notes ("pre-existing", "unrelated", "tree-shaken") for
- * exactly that scrutiny, and forbids treating a grep of a generated artifact as
- * evidence of absence. Provenance is mechanical; re-validation is prompt-level.
+ * PROVENANCE + RE-VALIDATION. A shared cache has a failure mode a per-child one
+ * does not: a WRONG fact propagates. The shape to fear is a verify child grepping
+ * component names in a MINIFIED bundle — identifiers there are mangled, so zero
+ * hits is guaranteed regardless of the truth — concluding "the build tree-shakes
+ * all route components, pre-existing issue", and every later task inheriting that
+ * verbatim as a standing excuse to wave off a genuinely broken deliverable.
+ * Nobody re-checks a fact that is already written down.
+ *
+ * Two guards close it. (a) Each note is stamped host-side with the ORIGIN task
+ * that recorded it, so it reads as second-hand hearsay rather than the reader's
+ * own observation. (b) The injected block demands the reader RE-VALIDATE a note
+ * in the CURRENT tree before citing it to excuse a failure, marks EXCUSE-CLASS
+ * notes for exactly that scrutiny, and states outright that a zero-hit grep of a
+ * generated artifact is not evidence of absence. Provenance is mechanical;
+ * re-validation is prompt-level.
  */
 import {makeLedger} from './ledger.js'
 
@@ -53,8 +56,10 @@ export interface EnvNote {
 }
 
 /**
- * Parse the stored file into fact+origin records. Legacy lines written before
- * provenance (no separator) parse with an empty origin, so old caches still read.
+ * Parse the stored file into fact+origin records. A line with no separator parses
+ * with an empty origin rather than being dropped, so a cache written before
+ * provenance existed still reads — and `buildEnvNotesBlock` renders those as
+ * "origin unrecorded" instead of silently claiming an author.
  */
 export function parseEnvNotes(raw: string): EnvNote[] {
     const out: EnvNote[] = []
@@ -92,8 +97,10 @@ export async function readEnvNotes(cwd: string): Promise<string> {
 }
 
 /**
- * Pull `ENV-NOTE: <fact>` lines out of a child's answer text. Deduplicated,
- * length-capped; verdict markers can never match (different prefix).
+ * Pull `ENV-NOTE: <fact>` lines out of a child's answer text: trimmed,
+ * deduplicated case-insensitively, and dropped when empty or over
+ * MAX_NOTE_LENGTH. Run: a `VERDICT:` line and even a near-miss `ENV-NOTES:` line
+ * match nothing, so a verdict cannot leak into the fact cache.
  */
 export function extractEnvNotes(text: string): string[] {
     const notes: string[] = []
@@ -110,17 +117,22 @@ export function extractEnvNotes(text: string): string[] {
 }
 
 /**
- * EXCUSE-CLASS wording: a note that waves a problem off as someone else's or a
- * prior condition ("pre-existing … mismatch", "unrelated to this task",
- * "tree-shaken", "not applicable"). These are the notes that propagate across
- * slices as standing excuses — every one of the cache's
- * dozen such notes was either the false tree-shake fact or the schema mismatch
- * the final gate later proved was a REAL defect. Pure text, stack-agnostic; the
- * flag never drops or fails a note, it only marks it as needing live
- * re-validation before it may EXCUSE a failure. FP is harmless by construction:
- * a benign fact re-validates and is used, the marker only bites a citation-to-
- * wave-off. Benign status facts ("5 pre-existing warnings") do not match — a
- * "pre-existing" match requires a co-located problem word.
+ * EXCUSE-CLASS wording: a note that waves a problem off as someone else's or as a
+ * prior condition. These are the notes that propagate across slices as standing
+ * excuses, and the ones most likely to be masking a real defect rather than
+ * describing the environment.
+ *
+ * Pure text, stack-agnostic. The flag never drops or fails a note — it only marks
+ * it as needing live re-validation before it may EXCUSE a failure, so a false
+ * positive is harmless: a benign fact re-validates and is used, and the marker
+ * only bites a citation-to-wave-off.
+ *
+ * Run against the shapes it has to separate: "unrelated to this task",
+ * "tree-shaken by the build", "pre-existing mismatch in the schema", "not
+ * applicable here" and "affects all routes" all flag, while the benign status
+ * fact "5 pre-existing warnings" does NOT — a "pre-existing" match needs a
+ * co-located problem word — and neither do ordinary facts like "postgres
+ * reachable on 5432".
  */
 const EXCUSE_PATTERNS: RegExp[] = [
     /\bunrelated\b/i,
@@ -141,9 +153,14 @@ export function isExcuseNote(fact: string): boolean {
 /**
  * Append newly discovered facts to the cache, deduplicated against what is
  * already there (case-insensitive fact match), keeping the newest MAX_NOTES.
- * Each new fact is stamped with the `origin` task that recorded it; a fact
- * already present keeps its ORIGINAL origin (provenance traces to who first
- * established it). Failures are swallowed — the cache is a sharpener, never a
+ * Each new fact is stamped with the `origin` task that recorded it; a fact already
+ * present keeps its ORIGINAL origin, so provenance traces to whoever first
+ * established it. Confirmed by re-appending the same fact under a different task:
+ * one entry survives, still carrying the first writer.
+ *
+ * Tabs in an emitted fact are normalised to spaces before storage, which is what
+ * keeps the separator unambiguous. The cap holds too — sixty further facts leave
+ * MAX_NOTES stored. Failures are swallowed: the cache is a sharpener, never a
  * blocker.
  */
 export async function appendEnvNotes(cwd: string, notes: string[], origin = ''): Promise<void> {
