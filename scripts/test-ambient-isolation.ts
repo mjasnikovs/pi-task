@@ -5,20 +5,19 @@
  * a green CI run and a red local run mean nothing.
  *
  *   1. `src/config/config.ts` reads `~/.config/pi-task/config.json` on module
- *      eval. CI has no such file, so CI always saw DEFAULT_CONFIG. A developer
- *      with `"debugLogs": "off"` saved from /task-config failed 12 tests in
- *      auto-orchestrator.test.ts — the plan phase stopped writing the
- *      `plan-debug.log` those tests read back, so they died on ENOENT with no
- *      hint that a config file, not the code, was the cause.
- *   2. Every `PI_TASK_*` var is an instrumentation override that beats the
- *      saved config (see DEBUG_LOG_ENV, PROJECT_DOCS_BUDGET_ENV, and the rest).
- *      One left exported in a shell — the usual way to reproduce a user's bug —
- *      silently re-skews the next suite run in that terminal.
+ *      eval. A machine with `"debugLogs": "off"` saved from /task-config turns
+ *      the plan phase's `plan-debug.log` off, and the tests in
+ *      auto-orchestrator.test.ts that read that file back die on ENOENT — with
+ *      no hint that a config file, not the code, was the cause.
+ *   2. A `PI_TASK_*` var is an instrumentation override; `PI_TASK_DEBUG_LOG` is
+ *      read before the saved config, so it decides the level outright. One left
+ *      exported in a shell — the usual way to reproduce a user's bug — silently
+ *      re-skews the next suite run in that terminal.
  *
  * Both are cleared here rather than per-file: any test that imports a module
- * that reads config or env is exposed, and that set only grows. A test that
- * WANTS a non-default value still sets it itself — the preload runs first, so a
- * deliberate `process.env.X = ...` inside a test file still wins.
+ * which reads config or env is exposed. A test that WANTS a non-default value
+ * still sets it itself — the preload runs first, so a deliberate
+ * `process.env.X = ...` inside a test file still wins.
  *
  * The config path is pointed at a name under the tmp dir that is never created,
  * so the load throws ENOENT and falls back to DEFAULT_CONFIG. Nothing is
