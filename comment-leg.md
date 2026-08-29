@@ -54,7 +54,7 @@ line counts as a comment line but opens no block.
 | `src/shared/pkg-version.ts` | 22 | 7 | 1 | true |
 | `src/shared/reasoning-capability.ts` | 127 | 70 | 10 | true |
 | `src/shared/stream-watchdog.ts` | 241 | 120 | 19 | true |
-| `src/task/accept-debt.ts` | 770 | 314 | 42 | false |
+| `src/task/accept-debt.ts` | 770 | 314 | 42 | true |
 | `src/task/api-synthesis.ts` | 172 | 54 | 10 | false |
 | `src/task/apis-contract.ts` | 38 | 27 | 1 | false |
 | `src/task/artifact-closure.ts` | 1112 | 282 | 82 | false |

@@ -7,11 +7,18 @@
  * NOTHING revisits it. A later task could have fixed it, or it could still be
  * broken at run end, and no gate ever said which.
  *
- * Mechanism (mirrors env-notes.ts / contracts.ts): each ACCEPT-despite-FAIL is
- * appended HOST-SIDE to `.pi-tasks/accept-debt.md` as a durable `<taskId>\t<reason>`
- * record (the gate sequence never lets a child write the file — no artifact
- * corruption). The ledger lives under `.pi-tasks/`, so it survives discardEdits and
- * the git-state guard, both of which exclude that directory by design.
+ * Mechanism (mirrors env-notes.ts / contracts.ts, which share `makeLedger`): each
+ * ACCEPT-despite-FAIL is appended HOST-SIDE to `.pi-tasks/accept-debt.md` as a
+ * durable tab-separated record. The gate sequence never lets a child write the
+ * file, so it cannot be corrupted by the work it is recording.
+ *
+ * Living under `.pi-tasks/` is what makes it durable, and both exclusions are
+ * explicit rather than incidental. `discardEdits` runs
+ * `git checkout -- . ':(exclude).pi-tasks'` then `git clean -fd -e .pi-tasks`, and
+ * the git-state guard writes its tree with the same `:(exclude).pi-tasks` pathspec.
+ * Confirmed against a real repo: a discard restored the tracked file, removed the
+ * untracked one, and left the ledger byte-identical; and appending a debt did not
+ * move the guard's tree hash, while a one-line source edit did.
  *
  * RE-CHECK at run end (final-gate.ts): the final integration gate reads the ledger,
  * re-checks each debt against the CURRENT tree, and SURFACES the ones still open in
@@ -93,8 +100,8 @@ const FIELD_SEP = '\t'
  *     at fault, so its work — and, at the
  *     enforce site, the enforce pass's edits — are KEPT rather than reverted; the
  *     defect is recorded here and a scoped repair task is queued into the plan
- *     (root-cause-repair.ts). Before this class existed the ledger recorded the same
- *     root cause twice and nothing ever scheduled a fix, so it survived ~24h.
+ *     (root-cause-repair.ts). Recording without queuing would let the same root
+ *     cause be re-recorded by each task it fails, with nothing ever fixing it.
  */
 export type DebtOrigin =
     | 'accepted'
@@ -109,11 +116,11 @@ export type DebtOrigin =
 /**
  * Origin → the one-line provenance label the surfaced report prints for it
  * (describeDebt). This table IS the origin registry: `Record<DebtOrigin, string>`
- * makes a new union member a compile error until it has a label, and both the
- * describe side and the parse side read it, so adding an origin is one union member
- * plus one line here — not the six edit sites the per-origin recorder functions used
- * to cost. The label text is user-facing (it lands in the final gate's report and in
- * the FAIL picker), so these strings are byte-frozen.
+ * makes a new union member a compile error until it has a label, and BOTH the
+ * describe side and the parse side read it — `isKnownOrigin` tests membership of
+ * this very table — so adding an origin is one union member plus one line here.
+ * The label text is user-facing: it lands in the final gate's report and in the
+ * FAIL picker, so these strings are byte-frozen.
  */
 const DEBT_LABELS: Record<DebtOrigin, string> = {
     accepted: 'accepted despite verify-FAIL',
@@ -159,9 +166,8 @@ export interface AcceptDebt {
     /**
      * The ONE command this debt's own reason NAMES, quoted verbatim in backticks and
      * present byte-identically in the owning task's VERIFY block. Set at record
-     * time by classifyVerifyCommand; absent whenever the
-     * reason names no such command — which is most of them (measured: 2 of 19
-     * PROJECT-pool debts).
+     * time by classifyVerifyCommand, and absent whenever the reason names no such
+     * command — which is the common case, since most FAIL reasons are prose.
      *
      * It exists so the run-end re-check can settle the debt the way the debt was
      * created: by RUNNING the command and reading its exit status. Never
@@ -292,13 +298,12 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
  * Best-effort by construction (appendDebt swallows its own faults): the ledger is an
  * auditing aid and must never break the gate sequence that calls it.
  *
- * `origin` is REQUIRED and deliberately has no default. Defaulting it to
- * 'accepted' (the legacy 2-field on-disk shape), and that default silently absorbed
- * a dropped argument: the eight-recorder collapse migrated one call in
- * A debt recorded without its origin makes a run-level 'final-gate'
- * demotion was stamped as a human 'accepted'. The wrappers each carried their class
- * in the NAME, so no migration of them could lose it; a defaulted parameter can.
- * Making it explicit turns that whole class of slip into a compile error.
+ * `origin` is REQUIRED and deliberately has no default. A default of 'accepted'
+ * would be the tempting one, since that is the legacy 2-field on-disk shape — and
+ * that is exactly what makes it dangerous. A dropped argument would then be
+ * absorbed in silence, stamping a run-level 'final-gate' demotion as a human
+ * 'accepted': the one confusion this type exists to prevent. Requiring it turns
+ * that slip into a compile error instead.
  */
 export async function recordDebt(
     cwd: string,
@@ -374,15 +379,18 @@ export function isStaticClassDebt(reason: string): boolean {
  * than a command. Any of those ⇒ not stored ⇒ the debt is simply unclassified, i.e.
  * exactly as un-closable as it is today.
  *
- * …and one more condition: a command whose EXIT STATUS IS DESTROYED
- * BY ITS OWN CONSTRUCTION is not storable either. The whole auto-close rests on a
- * ZERO exit meaning "the check passed" (see recheckAcceptDebts below), and a
- * VERIFY line shaped like `test -f … && echo "PASS" || echo "FAIL"` exits zero
- * whatever the tree contains. Projects with no test runner attract these: a
- * string of such lines standing in for a build check.
+ * …and one more condition: a command whose EXIT STATUS IS DESTROYED BY ITS OWN
+ * CONSTRUCTION is not storable either. The whole auto-close rests on a ZERO exit
+ * meaning "the check passed" (see recheckAcceptDebts below), and a VERIFY line
+ * shaped like `test -f … && echo "PASS" || echo "FAIL"` exits zero whatever the
+ * tree contains. Run in a real shell with the file absent, it prints FAIL and
+ * exits 0; the bare `test -f` exits 1. So the chain does not merely weaken the
+ * signal, it inverts it — the one output a human would read as failure is the one
+ * a re-check would read as resolved.
+ *
  * Refusing to store one leaves the debt OPEN and surfaced, which is strictly the
- * smaller claim. See unfailable-command.ts for what is and is not decidable, and
- * why bare `|| true` stays out of scope.
+ * smaller claim. See unfailable-command.ts for what is and is not decidable; bare
+ * `|| true` stays out of scope, and is confirmed NOT to match.
  */
 function isStorableCommand(cmd: string): boolean {
     return (
@@ -454,10 +462,11 @@ export interface VerifyRerunResult {
 }
 
 /**
- * Re-runs allowed per re-check. `inv-bounded`: a run that accepted many command-shaped
- * FAILs must not turn its own report into an unbounded second test suite. Three covers
- * every recorded run in the corpus (max classified per run: 1) with room to spare, and
- * anything past it stays open with the budget stated in the trail — never closed.
+ * Re-runs allowed per re-check. `inv-bounded`: a run that accepted many
+ * command-shaped FAILs must not turn its own report into an unbounded second test
+ * suite. The cap is a ceiling, not a target — a debt past it stays OPEN with the
+ * budget named in the trail, never closed. Confirmed by running the re-check with
+ * more command-class debts than the budget: the extras come back open.
  */
 const MAX_VERIFY_RERUNS = 3
 
@@ -700,10 +709,11 @@ const DEBT_RERUN_TIMEOUT_MS = 300_000
 /**
  * Extra infrastructure-gap shapes recognised ONLY when re-running a debt's command,
  * never in the gate's own verdicts. A driver that reports its connection simply
- * closed (`ERR_POSTGRES_CONNECTION_CLOSED` — what bun's SQL client says when the
- * database is not running at all) is an
- * absent dependency, and calling that "the defect is still present" would be a
- * finding the environment invented. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
+ * closed is an absent dependency, not a defect, and calling it "the defect is
+ * still present" would be a finding the environment invented. The postgres code is
+ * verbatim from the runtime: pointed at a port with nothing behind it, bun's SQL
+ * client throws a `PostgresError` whose `code` is exactly
+ * `ERR_POSTGRES_CONNECTION_CLOSED`. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
  * gate verdict the same wording can be a real fault the suite must own, and only the
  * debt re-check needs the conservative reading — where it costs nothing, because gap
  * and fail both leave the debt open.
@@ -719,9 +729,11 @@ const DEBT_INFRA_GAP_RE = /ERR_POSTGRES_CONNECTION_CLOSED|ERR_MYSQL_CONNECTION|E
  * a passing tree and have that count as the debt being fixed — the run would then be
  * certifying its own side effect. So tracked state is captured before and after, and
  * a pass that came with a tracked change is downgraded to INCONCLUSIVE with the
- * change named. Untracked output is left alone: it is what a build legitimately
- * produces, and `git status --porcelain` in a repo with the usual ignores does not
- * see it.
+ * change named. Untracked output is left alone because the guard asks git not to
+ * report it: `--untracked-files=no` is doing that work, NOT the project's ignore
+ * rules. Checked both ways — with and without a matching `.gitignore`, the flag
+ * returns an empty status for a fresh untracked build directory, while plain
+ * `--porcelain` reports it when it is not ignored.
  *
  * A repository the guard cannot read (no git, git absent) is not a licence to skip
  * the guard: the re-run is INCONCLUSIVE there, because "nothing changed" would be an
