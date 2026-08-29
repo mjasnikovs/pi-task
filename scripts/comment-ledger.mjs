@@ -34,9 +34,9 @@ const scan = (src) => {
 	let inBlock = false
 	let openRun = false
 	// String state carries ACROSS lines: a template literal spans many of them,
-	// and `src/remote/ui-script.ts` is one 1241-line backtick string holding the
-	// browser client. Resetting this per line reads that string's own `//` lines
-	// as TypeScript comments.
+	// and `src/remote/ui-script.ts` is almost entirely one backtick string holding
+	// the browser client. Resetting this per line reads that string's own `//`
+	// lines as TypeScript comments.
 	let str = null
 	for (const raw of src.split('\n')) {
 		let hasCode = false
