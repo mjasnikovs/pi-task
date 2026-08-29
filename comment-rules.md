@@ -26,15 +26,58 @@ Checked on 2026-08-29, not assumed:
 
 ## The loop
 
-For each file, for each comment, for each claim inside it:
+ONE FILE AT A TIME. ONE COMMENT AT A TIME. ONE CLAIM AT A TIME.
 
-1. **Name the claim.** One sentence. A comment usually makes several.
+Take the first row in `comment-leg.md` whose `verified` column is `false`.
+Open that file. Read every comment in it, top to bottom. For each claim:
+
+1. **Name the claim.** Write it as one sentence. A comment usually makes
+   several; each one is judged on its own.
 2. **Route it** to a verify channel below.
-3. **Run the check.** Not read about it. Run it.
+3. **Run the check.** Not read about it. Not reason about it. RUN it — the
+   command, the request, the grep.
 4. **Proven** — rewrite the comment to say only what the check showed.
 5. **Not proven** — delete the claim.
-6. File is done when every claim in it is proven or gone.
-7. Then, and only then, flip its row to `verified = true` in `comment-leg.md`.
+6. The file is done when every claim in it is proven or gone.
+7. Run `bun run lint:check` and `bun run test`. Commit.
+8. THEN flip that one row to `verified = true`.
+
+Then the next file. Do not batch. Do not move to file two before file one is
+committed.
+
+## What verifying is NOT
+
+These are the shortcuts that get taken when the file count looks large. None
+of them is verification, and none of them may flip a row:
+
+- Deleting a banned token (`mx5`, `run 14`) and leaving the sentence.
+- Running a script across many files at once.
+- Passing `scripts/comment-residue.py`. That checker finds banned WORDS. It
+  cannot tell whether a claim is true.
+- Reading a diff and thinking it looks right.
+- Reasoning from the code without running anything, when the claim is about
+  `pi`, the model, git, or a package.
+
+A row is `true` only when every claim in that file was named and checked.
+
+## Honesty about rate
+
+This is roughly 6,000 claims over 25,773 comment lines. It does not fit in one
+session and is not supposed to.
+
+- Report the real rate after the first ten files: claims checked, time taken,
+  files done.
+- If the rate makes the job impossible in the scope you were given, SAY SO and
+  stop. Do not switch to a faster method and keep filling the column.
+- Never describe a file as verified in a commit message unless it went through
+  the loop above.
+
+## Heartbeat
+
+A session doing this work runs a 15-minute heartbeat that re-issues the
+instruction. Its only jobs are to keep going and to keep the method honest —
+it is not permission to speed up. If the heartbeat fires and the answer is
+"nothing left to do", check the ledger before believing it.
 
 ## Verify channels
 
@@ -146,26 +189,20 @@ Every row in `comment-leg.md` reads `verified = true`.
 
 ## State
 
-Done. All 432 files reviewed; every row in `comment-leg.md` reads
-`verified = true`. Lint clean, 3891 tests pass.
+NOT STARTED. 0 of 432 rows verified.
 
-Rerun the check any time:
+An earlier pass deleted unverifiable text from 248 files — run numbers, private
+corpus names, statistics, dead `scripts/` pointers, `/home/edgars` paths. Those
+removals stand and the suite is green. But that pass was pattern deletion, not
+verification, and no file has been through the loop above.
 
-```
-python3 scripts/comment-residue.py $(git ls-files '*.ts' '*.mjs')
-node scripts/comment-ledger.mjs
-```
-
-`comment-residue.py` reports banned tokens **inside comments only**, so test
-fixture data and code do not count. About forty hits survive and are all false
-positives by construction — "used to signal" meaning "employed to", a 429/403
-status pair, `ceil(6/2)`, the "Run 1 / Run 2" step labels in a resume test.
-Read them; do not delete on the checker's word.
+Do not treat those 248 files as partly done. A file that had `mx5 run 14`
+stripped out of a sentence still has every other claim in it unchecked.
 
 ### What this pass did NOT touch
 
-**Prompt and UI strings.** The comments-only rule left string literals alone,
-and three of them still name things a new developer does not have:
+**Prompt and UI strings.** The comments-only rule leaves string literals alone,
+and three still name things a new developer does not have:
 
 - `src/task/verify-work.ts` — four lines of shipped prompt text say
   "mx5 run 13" and "mx5 runs 7 and 13" to the model.
@@ -175,10 +212,3 @@ and three of them still name things a new developer does not have:
   `/task-config`, says "Measured: the two arms tie" and "the last full run".
 
 Changing these changes what ships, so they need their own decision.
-
-### Volume
-
-Comment lines went from 25,835 to 24,914 — about a thousand lines. The brief
-was to make every comment checkable, not to make them fewer, and the chosen
-rule was to rewrite rather than delete. Cutting the volume itself is a
-separate pass with a different rule.
