@@ -60,15 +60,16 @@ of them is verification, and none of them may flip a row:
 
 A row is `true` only when every claim in that file was named and checked.
 
-## Honesty about rate
+## Rate
 
-This is roughly 6,000 claims over 25,773 comment lines. It does not fit in one
-session and is not supposed to.
+Roughly 6,000 claims over 25,773 comment lines. It does not fit in one session,
+and that is fine — SCOPE IS NOT THE PROBLEM. The whole repo gets done. It takes
+as many sessions as it takes.
 
-- Report the real rate after the first ten files: claims checked, time taken,
-  files done.
-- If the rate makes the job impossible in the scope you were given, SAY SO and
-  stop. Do not switch to a faster method and keep filling the column.
+- Report the real rate after the first ten files: claims checked, files done.
+- Being slow is correct. Going faster by changing method is not.
+- Running out of session is expected. Leave the ledger honest and the next
+  session picks up the first `false` row.
 - Never describe a file as verified in a commit message unless it went through
   the loop above.
 
