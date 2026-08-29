@@ -152,10 +152,15 @@ Done. All 432 files reviewed; every row in `comment-leg.md` reads
 Rerun the check any time:
 
 ```
-python3 scripts/../<residue checker>   # see the session log
-git grep -n 'mx5\|nexttask\|/home/edgars'
+python3 scripts/comment-residue.py $(git ls-files '*.ts' '*.mjs')
 node scripts/comment-ledger.mjs
 ```
+
+`comment-residue.py` reports banned tokens **inside comments only**, so test
+fixture data and code do not count. About forty hits survive and are all false
+positives by construction — "used to signal" meaning "employed to", a 429/403
+status pair, `ceil(6/2)`, the "Run 1 / Run 2" step labels in a resume test.
+Read them; do not delete on the checker's word.
 
 ### What this pass did NOT touch
 
