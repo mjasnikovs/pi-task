@@ -61,7 +61,7 @@ line counts as a comment line but opens no block.
 | `src/task/auto-commit.ts` | 299 | 105 | 23 | true |
 | `src/task/auto-io.ts` | 293 | 75 | 18 | true |
 | `src/task/auto-orchestrator.ts` | 2005 | 737 | 150 | true |
-| `src/task/auto-prompts.ts` | 157 | 36 | 4 | false |
+| `src/task/auto-prompts.ts` | 157 | 36 | 4 | true |
 | `src/task/autofix-ledger.ts` | 193 | 86 | 25 | false |
 | `src/task/batch-test-task.ts` | 439 | 205 | 31 | false |
 | `src/task/boot-probe.ts` | 1172 | 475 | 95 | false |

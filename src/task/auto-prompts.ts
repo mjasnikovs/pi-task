@@ -1,16 +1,22 @@
 /**
- * Prompts for /task-auto's two feature-level child calls. These produce a task
- * LIST only; all research/spec depth is /task's job, run per-title later.
+ * The three feature-level prompts /task-auto sends before any task starts: one
+ * clarifying QUESTION at a time, one task LIST, and one coverage VERDICT over
+ * that list. None of them produces a spec — all research and spec depth is
+ * /task's job, run per title later.
  */
 import {DECOMPOSE_SOURCE_RULE} from './decompose-fidelity.js'
 import {DECOMPOSE_NO_BATCH_TESTS_RULE} from './batch-test-task.js'
 
 /**
- * Clarify: asks ONE question at a time. Output MUST match parseClarifyList — a
- * single numbered question followed by a "SUGGESTED: <default>" line, an optional
- * "ALT: <alternative>" line for binary "A or B?" forks, or the literal token NONE
- * when no clarification remains. priorQA carries the questions already answered so
- * each next question adapts to them.
+ * Clarify: asks ONE question at a time. Output MUST match `parseClarifyList` —
+ * the shared parser in parsers.ts that question-source.ts actually calls on this
+ * reply — so the shape is a single numbered question, then a "SUGGESTED: <default>"
+ * line, then an optional "ALT: <alternative>" line for binary "A or B?" forks, or
+ * the literal token NONE when no clarification remains. `priorQA` is interpolated
+ * as ANSWERS SO FAR, so each next question adapts to what has been settled.
+ *
+ * Runs with the read tool (`--tools read`), which is what the "you may use the read
+ * tool" line above depends on.
  */
 export const AUTO_CLARIFY_PROMPT = (feature: string, priorQA: string): string =>
     `You are planning how to split a feature into separate implementation tasks, one clarifying question at a time.
@@ -71,19 +77,23 @@ NONE`
 
 /**
  * Decompose: output a markdown checkbox list of task titles (one line each).
- * `requirementsLedger` is buildRequirementsLedger's grounded quote list (goal E's
- * belt): the spec's obligations ride into decompose explicitly, so mirroring the
- * spec's own milestone/section structure cannot silently discharge them. '' ⇒
- * the prompt is unchanged.
  *
- * `noBatchTests` adds the anti-batch-test rule (batch-test-task.ts) — emitted ONLY
- * when the decisions mandate tests-in-the-same-change, so every other run sees the
- * prompt it always saw. It is the belt; the host-side rewrite is the lever.
+ * `requirementsLedger` is buildRequirementsLedger's grounded quote list: the spec's
+ * obligations ride into decompose explicitly, so mirroring the spec's own
+ * milestone/section structure cannot silently discharge them. An empty or
+ * whitespace-only ledger leaves the prompt byte-identical to the default — checked.
  *
- * Plan GRANULARITY is deliberately NOT a rule here — it rides in CLARIFICATIONS
- * (decompose-granularity.ts). Stated as a RULES line it overwhelms the other
- * rules and the plan explodes; stated as a clarification, with the counterweight
- * below left intact, the same directive lands as one input among several.
+ * `noBatchTests` adds the anti-batch-test rule (batch-test-task.ts), emitted ONLY
+ * when the decisions mandate tests-in-the-same-change; `false` also leaves the
+ * prompt byte-identical, so every other run sees the same text. It is the belt —
+ * `rewriteBatchTestPlan` is the host-side lever.
+ *
+ * Plan GRANULARITY is deliberately NOT a rule here. The only count-shaped line in
+ * RULES is the FORMAT one ("One task per line"); the floor reaches the model as a
+ * CLARIFICATION instead, through the host-set plan-shape answer in the transcript
+ * (decompose-granularity.ts), with a split-retry hint if the drawn plan still comes
+ * in under it. Kept out of RULES so it lands as one input among several rather
+ * than as another imperative competing with the ones already there.
  */
 export const AUTO_DECOMPOSE_PROMPT = (
     feature: string,
@@ -117,13 +127,18 @@ ${DECOMPOSE_SOURCE_RULE}${noBatchTests ? `\n${DECOMPOSE_NO_BATCH_TESTS_RULE}` : 
 - Output the checkbox list and NOTHING else (no preamble, no numbering).`
 
 /**
- * Coverage triage: judge whether a decomposed task list covers the whole
- * feature. Guards the plan — the highest-leverage artifact in /task-auto —
- * against a degenerate-but-nonempty decompose completion: one task emitted for
- * a whole design document, with a natural EOS, which a `titles.length === 0`
- * gate waves through and the run "completes" after that single task.
- * Pure judgment over text already in hand, so it runs with --no-tools.
- * Output MUST match parseCoverageVerdict.
+ * Coverage triage: judge whether a decomposed task list covers the whole feature.
+ * Guards the plan — the highest-leverage artifact in /task-auto — against a
+ * degenerate-but-nonempty decompose completion: one task emitted for a whole
+ * design document, with a natural end-of-stream, which a `titles.length === 0`
+ * gate waves through so the run "completes" after that single task.
+ *
+ * Pure judgment over text already in hand, so it runs with NO tools: the call site
+ * passes an empty tools string, which childArgs turns into `--no-tools`.
+ *
+ * Output MUST match `parseCoverageVerdict`, including the at-most-8 bound — the
+ * parser stops collecting MISSING lines at eight, so a longer list is truncated
+ * rather than rejected.
  */
 export const DECOMPOSE_COVERAGE_PROMPT = (
     feature: string,
