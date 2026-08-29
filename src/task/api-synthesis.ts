@@ -1,5 +1,5 @@
 /**
- * Anti-synthesis guard for grill/clarify auto-answers (mx5 run-13 Bug A).
+ * Anti-synthesis guard for grill/clarify auto-answers.
  *
  * The grill auto-answer channel invented `Bun.mkdirSync` (does not exist) while
  * the task's own research APIS section carried the correct list (Bun.build,

@@ -206,11 +206,11 @@ function entryTitle(line: string): string | null {
 
 /**
  * Insert a NEW unchecked entry directly after the `afterIndex`th checkbox — the
- * mid-run plan mutation the root-cause repair channel needs (mx5 run 14 item 5:
- * a repair task must land BEFORE the next dependent task, not at the end of the
- * plan, or the defect keeps failing everything in between).
+ * mid-run plan mutation the root-cause repair channel needs: a repair task must
+ * land BEFORE the next dependent task, not at the end of the plan, or the defect
+ * keeps failing everything in between.
  *
- * MONOTONIC by construction (the run-12 replacement lesson): this only ever
+ * MONOTONIC by construction: this only ever
  * SPLICES a line in. No existing entry is rewritten, reordered, or dropped, and
  * an already-present title is a no-op — so a plan can grow mid-run but never
  * shrink, and a retried insert cannot duplicate. Returns whether a line was added.

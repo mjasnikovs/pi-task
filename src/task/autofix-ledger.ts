@@ -17,7 +17,7 @@
  *   > The fix is NOT a better string pattern — the bug is that the decision was
  *   > made downstream from the evidence.
  *
- * mx5 run 21 shipped a product whose every page was blank as a `completed` run
+ * Without it a run can ship a product whose every page is blank and still report
  * through that gap. Here the evidence and the decision sit in one module, and the
  * loop body reads as picker → apply → record.
  *
@@ -62,7 +62,7 @@ export class AutofixLedger {
     /**
      * Gitignored paths the fix passes have written so far. ACCUMULATED across
      * attempts: a `.env` written by a failed attempt is still on disk for the next
-     * one, and that attempt's own before/after diff cannot see it (mx5 run 19).
+     * one, and that attempt's own before/after diff cannot see it.
      */
     private _ignoredWritten: string[] = []
     /** Sub-fixes a non-converging attempt left uncommitted. REPLACED each attempt. */
@@ -74,7 +74,7 @@ export class AutofixLedger {
     /**
      * A write-guard rejected an attempt whose edits could NOT be discarded, so
      * REJECTED edits are sitting in the tree and the terminal paths must not commit
-     * what they find there (mx5 run 14 item 2b — the cheat guard is never weakened
+     * what they find there (the cheat guard is never weakened
      * to ease committing).
      */
     private _rejectedEditsInTree = false

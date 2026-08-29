@@ -24,12 +24,12 @@ export interface CommitResult {
     /** UNTRACKED regenerable test-runner output this commit deliberately left out
      *  of the index (see `stagePathspec`). Empty/absent when nothing was excluded.
      *  Present so the caller can TRAIL it: a silent exclusion is the same failure
-     *  class as the silent ignored-path write nexttask 4 closed. */
+     *  class as a silent write to an ignored path. */
     excluded?: string[]
 }
 
 /**
- * Does this git stderr describe a missing author identity? Seen live (mx5 run 4):
+ * Does this git stderr describe a missing author identity? Seen live:
  * the headless docker container has no HOME gitconfig, so EVERY per-task commit
  * failed "Author identity unknown" — which silently disabled enforce and every
  * commit-based differential guard for the whole run.
@@ -66,7 +66,7 @@ export async function git(
  * `test-results/`, `playwright-report/`, `coverage/`, `.nyc_output/`,
  * `.last-run.json`, `*.tsbuildinfo`.
  *
- * This is the other half of mx5 run 20. TASK_0027's snapshot ran a bare
+ * The failure this closes: a snapshot running a bare
  * `git add -A` over a tree the test run had just littered with three Playwright
  * FAILURE screenshots (`*-actual.png` — written only when a screenshot assertion
  * fails), committed them, and thereby made them tracked deliverables. Two whole
@@ -108,7 +108,7 @@ export function stagePathspec(excluded: readonly string[]): string[] {
  * Empty outside a git repo or on any git error — this is a GUARD input, and a
  * guard that cannot conclude must not block.
  *
- * Why it exists (mx5 run 6): a stale `git stash pop` mid-task left two paths UU;
+ * Why it exists: a stale `git stash pop` mid-task left two paths UU;
  * every later commit was doomed, three verify passes ran against a conflicted
  * tree, and — worse — a blind `git add -A` on that index would have silently
  * "resolved" the conflict with whatever happened to be on disk.
@@ -133,7 +133,7 @@ export async function gitUnmergedPaths(
 
 /** Sha of `refs/stash`, or null when there is no stash (or not a git repo). Used
  *  to detect a stash created (or consumed) during a task and left behind — the
- *  exact landmine that detonated mx5 run 6 two days after it was pushed. */
+ *  exact landmine that detonates days after it is pushed. */
 export async function gitStashRef(
     cwd: string,
     signal?: AbortSignal,
@@ -236,9 +236,8 @@ export async function gitCommitAll(
  * rewind the forensic gate trail: `.pi-tasks/` is frequently TRACKED (the per-task
  * snapshots stage it via `git add -A`), so a bare reset restores TASK_00NN.md to the
  * snapshot commit and ERASES every trail line written after it — the "commit: task
- * snapshot committed", "enforce(edit): …", and resolution lines (mx5 run 9:
- * TASK_0007/0008/0012 each lost their whole post-snapshot trail on this exact path,
- * so a passing-then-reverted task looked like it had never been committed). So the
+ * snapshot committed", "enforce(edit): …", and resolution lines. A
+ * passing-then-reverted task then looks like it was never committed at all. So the
  * trail is snapshotted before the reset and restored after — the revert undoes code,
  * the audit log survives.
  *

@@ -1,12 +1,11 @@
 /**
  * accept-debt — a per-run ledger of tasks the user ACCEPTED despite a verify-FAIL.
  *
- * The failure this closes (mx5 run 4 B3, carried open; run 8 fixture TASK_0012):
+ * The failure this closes:
  * when a task's VERIFY gate FAILs and the resolution picker's ACCEPT branch is
  * chosen, the human blesses the artifact AS-IS — a real, recorded defect ships and
- * NOTHING revisits it. Run 8's TASK_0012 shipped a frozen-path violation that was
- * accepted and never re-checked; a later task could have fixed it, or it could
- * still be broken at run end, and no gate ever said which.
+ * NOTHING revisits it. A later task could have fixed it, or it could still be
+ * broken at run end, and no gate ever said which.
  *
  * Mechanism (mirrors env-notes.ts / contracts.ts): each ACCEPT-despite-FAIL is
  * appended HOST-SIDE to `.pi-tasks/accept-debt.md` as a durable `<taskId>\t<reason>`
@@ -52,19 +51,17 @@ const FIELD_SEP = '\t'
  * Provenance of a recorded defect:
  *   - 'accepted'       — the user chose ACCEPT despite a verify-FAIL (the original class).
  *   - 'enforce-revert' — an enforce-pass re-verify FAILED and the enforce edits were
- *     reverted; the FAIL indicted the ORIGINAL work (mx5 run 10 TASK_0004: "Missing
- *     server entry point … the Hono server cannot be started"), so the terminal defect
+ *     reverted, but the FAIL indicted the ORIGINAL work, so the terminal defect
  *     was FOUND and then erased by the very mechanism that found it. Persisted here so
  *     the final gate re-checks and surfaces it instead of letting it die with the revert.
  *   - 'enforce-kept'   — the same enforce re-verify FAIL, but the failing check named
  *     only files the ENFORCE COMMIT does not touch, so reverting that commit could not
- *     possibly repair it (mx5 run 18 TASK_0024: a one-line paren removal in `Admin.tsx`
- *     was reverted over a `MyListings.spec.tsx` CT failure it cannot reach, and the
- *     final gate re-made the identical change 5 minutes later). The edits are KEPT and
+ *     possibly repair it — reverting a change in one file over a failure in a file
+ *     it cannot reach only loses the change. The edits are KEPT and
  *     the defect is recorded here — keeping the work must never mean losing the finding.
  *   - 'frozen-blocked' — a repo-health verify-FAIL whose only fix is an edit to a path
- *     THIS task's spec froze (mx5 run 12: `bun run lint` permanently red because the
- *     created files need a tsconfig registration every spec forbids). Cross-task
+ *     THIS task's spec froze — a lint left permanently red because the files it
+ *     created need a registration every spec forbids editing. Cross-task
  *     contradiction: no unattended re-run can converge, so the gate loop records the
  *     defect and routes to the human picker instead of burning AUTOFIX rounds.
  *   - 'yolo-accepted'   — YOLO MODE (unattended auto-pick, see yolo.ts) took the
@@ -73,16 +70,16 @@ const FIELD_SEP = '\t'
  *     weighed this failing artifact and blessed it, which is exactly the assurance
  *     an auto-pick cannot give. Same re-check treatment, honest provenance.
  *   - 'cross-task-deletion' — the task's work DELETED a sibling task's committed
- *     deliverable (mx5 run 12 PROMPT 2: a fix child deleted TASK_0020's playwright ct
- *     files to green a lint) and the user ACCEPTed the verify-FAIL anyway, so the
+ *     deliverable — a fix child deleting a sibling's test files to green a lint —
+ *     and the user ACCEPTed the verify-FAIL anyway, so the
  *     deletion ships in the next commit. Recorded so the final gate re-checks it:
  *     resolved iff the named file is back in the tree (a later task restored it),
  *     otherwise surfaced.
  *   - 'final-gate' — the final integration gate DEMOTED one of its own checks to
- *     UNOBSERVED (mx5 run 14): two fix attempts that both changed the tree and
+ *     UNOBSERVED: two fix attempts that both changed the tree and
  *     re-ran the gate produced a byte-identical ranked-first failure, so the check
- *     is unfalsifiable in this environment (run 14: the boot probe needed `ss` or
- *     `lsof` and the sandbox had neither) and no further attempt can move it. The
+ *     is unfalsifiable in this environment — the boot probe needing a tool the
+ *     sandbox does not have, say — and no further attempt can move it. The
  *     run is allowed to converge on the REMAINING checks, carrying this one here
  *     so the next run's gate re-checks and re-surfaces it rather than losing it.
  *     Also recorded for the ZERO-OBSERVATION verdict (final-gate.ts
@@ -91,9 +88,9 @@ const FIELD_SEP = '\t'
  *     completed on statics alone. Same treatment for the same reason: unprovable
  *     here, so carry it forward rather than let a silent PASS bury it.
  *   - 'root-cause' — the task's verify FAILed because of a PRE-EXISTING defect in a
- *     file a DIFFERENT task created, which this task's own work never touched (mx5
- *     run 14: TASK_0007's `test/teardown.ts` TRUNCATE bug FAILed TASK_0013 and
- *     TASK_0019). The current task is not at fault, so its work — and, at the
+ *     file a DIFFERENT task created, which this task's own work never touched. One
+ *     such defect can FAIL several later tasks in a row. The current task is not
+ *     at fault, so its work — and, at the
  *     enforce site, the enforce pass's edits — are KEPT rather than reverted; the
  *     defect is recorded here and a scoped repair task is queued into the plan
  *     (root-cause-repair.ts). Before this class existed the ledger recorded the same
@@ -155,14 +152,14 @@ export interface AcceptDebt {
      * Set (never serialized) when the recorded reason CONFLICTS with the run itself:
      * it asserts a file's existence is the failure, but that file is another task's
      * committed deliverable (see annotateDebtConflicts). A conflicting debt is a
-     * PLAN defect to surface, never an instruction to act on — mx5 run 11's autofix
-     * child `rm`'d TASK_0008's verified admin page to satisfy exactly such a claim.
+     * PLAN defect to surface, never an instruction to act on. An autofix child
+     * seeded with such a claim will delete the file to satisfy it.
      */
     conflict?: string
     /**
      * The ONE command this debt's own reason NAMES, quoted verbatim in backticks and
-     * present byte-identically in the owning task's VERIFY block (nexttask 5, mx5 run
-     * 19 TASK_0009). Set at record time by classifyVerifyCommand; absent whenever the
+     * present byte-identically in the owning task's VERIFY block. Set at record
+     * time by classifyVerifyCommand; absent whenever the
      * reason names no such command — which is most of them (measured: 2 of 19
      * PROJECT-pool debts, `scripts/debt-verify-class-baserate.ts`).
      *
@@ -202,7 +199,7 @@ export function parseAcceptDebts(raw: string): AcceptDebt[] {
             continue
         }
         const origin = parts[2]?.trim()
-        // 4th field: the verbatim VERIFY command the reason names (nexttask 5).
+        // 4th field: the verbatim VERIFY command the reason names.
         // Absent in every legacy record, and absent in most new ones.
         const verifyCommand = parts[3]?.trim()
         out.push({
@@ -272,7 +269,7 @@ async function appendDebt(cwd: string, entry: AcceptDebt): Promise<void> {
     if (entry.reason.length === 0) return
     try {
         // Classify AT RECORD TIME, against the spec as it stands when the defect is
-        // recorded (nexttask 5). Doing it later would read a spec a subsequent task
+        // recorded. Doing it later would read a spec a subsequent task
         // may have rewritten — the provenance claim has to be made where it is true.
         const verifyCommand =
             entry.verifyCommand ?? (await classifyVerifyCommand(cwd, entry.taskId, entry.reason))
@@ -313,7 +310,7 @@ export async function recordDebt(
 }
 
 /**
- * The reason text a CROSS-TASK DELETION debt stores (mx5 run 12 PROMPT 2): the task's
+ * The reason text a CROSS-TASK DELETION debt stores: the task's
  * work deleted a file a DIFFERENT task's commit introduced, verify FAILed, and the
  * user ACCEPTed — so the deletion survives into the next commit. The shape is fixed
  * and machine-parseable so the final gate's re-check can extract the path and prove
@@ -354,16 +351,14 @@ export function isStaticClassDebt(reason: string): boolean {
 }
 
 /**
- * The VERIFY-COMMAND class (nexttask 5): the ONE command a recorded reason itself
+ * The VERIFY-COMMAND class: the ONE command a recorded reason itself
  * NAMES, quoted verbatim in backticks, and present byte-identically in the owning
  * task's VERIFY block.
  *
- * mx5 run 19 recorded `work did not verify: The VERIFY block command \`AGENT=1 bun
- * test test/listings.test.ts\` fails unaided …`; eleven minutes later the final-gate
- * autofix fixed exactly that, the gate's own re-run printed `121 pass 0 fail`, and
- * the run still ended reporting the debt STILL OPEN — because no reachable code path
- * could ever have closed it (see recheckAcceptDebts: two classes, neither reachable
- * for a `work did not verify:` reason).
+ * Without it, a debt whose reason reads `work did not verify: The VERIFY block
+ * command \`…\` fails unaided` can be FIXED by a later autofix and still be
+ * reported STILL OPEN at run end, because no reachable code path could close it:
+ * see recheckAcceptDebts, whose other two classes never match such a reason.
  *
  * Deliberately NOT fuzzy: a backticked span is accepted only when it equals a parsed
  * VERIFY line exactly (after trimming). No paraphrase, no reconstruction, no prefix
@@ -379,13 +374,12 @@ export function isStaticClassDebt(reason: string): boolean {
  * than a command. Any of those ⇒ not stored ⇒ the debt is simply unclassified, i.e.
  * exactly as un-closable as it is today.
  *
- * …and one more condition (nexttask 19C): a command whose EXIT STATUS IS DESTROYED
+ * …and one more condition: a command whose EXIT STATUS IS DESTROYED
  * BY ITS OWN CONSTRUCTION is not storable either. The whole auto-close rests on a
- * ZERO exit meaning "the check passed" (see recheckAcceptDebts below), and 16 of
- * the 612 store-eligible VERIFY lines on this box exit zero whatever the tree
- * contains — 12 of them in IAR1, a CMake/C++ OBS plugin with no database, no
- * frontend and no HTTP server, where one task is seven consecutive
- * `test -f … && echo "PASS" || echo "FAIL"` lines standing in for a build check.
+ * ZERO exit meaning "the check passed" (see recheckAcceptDebts below), and a
+ * VERIFY line shaped like `test -f … && echo "PASS" || echo "FAIL"` exits zero
+ * whatever the tree contains. Projects with no test runner attract these: a
+ * string of such lines standing in for a build check.
  * Refusing to store one leaves the debt OPEN and surfaced, which is strictly the
  * smaller claim. See unfailable-command.ts for what is and is not decidable, and
  * why bare `|| true` stays out of scope.
@@ -405,9 +399,9 @@ function isStorableCommand(cmd: string): boolean {
  * VERIFY fence, or a reason that quotes nothing all yield null, and null simply
  * means the debt keeps today's behaviour (surfaced, never auto-closed).
  *
- * The STRICT parse matters here. mx5 run 19's `TASK_0001.md` opens ```sh and never
- * closes it, so the lenient parser hands back the phase-timings table and every
- * appended gate-trail line as "VERIFY commands" — including sentences that quote
+ * The STRICT parse matters here. A spec that opens ```sh and never closes it
+ * makes the lenient parser hand back the phase-timings table and every appended
+ * gate-trail line as "VERIFY commands" — including sentences that quote
  * `bun run lint`. Matching a reason against that would mint a stored, re-runnable
  * command with fabricated provenance, which is the one thing this class may not do.
  */
@@ -474,7 +468,7 @@ const MAX_VERIFY_RERUNS = 3
  * task or a human restored it, so the deletion no longer holds); every other debt
  * stays OPEN (unprovable ⇒ surface, never re-hide) — unless it carries a stored
  * `verifyCommand` and `rerunVerify` re-runs that command to a ZERO exit, which is the
- * third class (nexttask 5): the debt named a command, the command was run, and it
+ * third class: the debt named a command, the command was run, and it
  * passed. FP-safe: the only auto-closes are ones a deterministic check can stand
  * behind, and here the check is the task spec's own command.
  */
@@ -484,7 +478,7 @@ export async function recheckAcceptDebts(
         staticOk: boolean
         fileExists?: (rel: string) => boolean
         /**
-         * Re-run a debt's stored VERIFY command (nexttask 5). Absent ⇒ the class is
+         * Re-run a debt's stored VERIFY command. Absent ⇒ the class is
          * inert and every debt behaves exactly as it did before it existed. Only
          * `pass` may close a debt; `fail` and `gap` both leave it open, and the
          * caller is expected to have made `pass` mean "ran, exited 0, and changed
@@ -554,16 +548,15 @@ export async function recheckAcceptDebts(
     return {open, resolved, trail}
 }
 
-// ─── Conflicting-claim classification (mx5 run 11) ──────────────────────────
+// ─── Conflicting-claim classification ──────────────────────────
 //
 // A recorded debt is a CLAIM about the tree, not an instruction to change it. The
 // one class a deterministic check can prove SELF-CONTRADICTORY is an
 // existence-as-failure claim ("<path> exists" fails the verify) whose named path is
 // a DIFFERENT task's committed deliverable: the plan shipped the file on purpose
 // and a sibling's verify indicts it — a plan defect (sibling scope-fence leaked
-// into a verify assertion), not a fixable fault. Run 11's TASK_0009 debt read
-// "src/client/pages/admin.tsx exists (introduced by prior TASK_0008…)" and the
-// final-gate autofix child, seeded with it, ran `rm` on the verified page.
+// into a verify assertion), not a fixable fault. A debt reading "<path> exists"
+// hands a final-gate autofix child a reason to `rm` a verified page.
 
 /** A path-like token: at least one directory separator, ending in a file name. */
 const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
@@ -573,7 +566,7 @@ const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
  * token immediately followed by "exists" / "still exists", or by "must/should not
  * exist". Only this narrow shape qualifies: a reason that merely MENTIONS a path
  * (a prohibition violation, a broken import) is an ordinary defect claim, not an
- * existence assertion, and must never be flagged (run 11's T1/T7 debts name paths
+ * existence assertion, and must never be flagged (such debts name paths
  * this way and are genuine).
  */
 export function extractExistenceClaims(reason: string): string[] {
@@ -650,7 +643,7 @@ export function describeDebt(d: AcceptDebt): string {
 }
 
 /**
- * ACCEPT-debt re-check (mx5 run 4 B3 / run 8 TASK_0012): read the ledger of tasks
+ * ACCEPT-debt re-check: read the ledger of tasks
  * the user accepted despite a verify-FAIL and re-check each against the CURRENT
  * tree. A static-class debt whose statics now pass is provably RESOLVED (a later
  * task fixed it) and pruned from the ledger; every other debt cannot be proven
@@ -659,7 +652,7 @@ export function describeDebt(d: AcceptDebt): string {
  * accept-debt.ts). Best-effort: a ledger read/write failure must never break the
  * caller.
  *
- * FACTORED OUT of runFinalIntegrationGate (nexttask 6): the derivation has to be
+ * FACTORED OUT of runFinalIntegrationGate: the derivation has to be
  * runnable at a SECOND moment — after a converged final-gate autofix, where the
  * orchestrator used to rebuild its gate outcome as a bare `{ok, reason}` and drop
  * `openDebts` entirely. The report a run ends on has to be derived from the tree
@@ -686,13 +679,13 @@ export async function deriveOpenDebts(
         // tree — a deterministic existence check, corroborating the per-file
         // provenance the record already carries.
         fileExists: rel => existsSync(path.join(cwd, rel)),
-        // VERIFY-COMMAND class (nexttask 5): a debt that NAMES a command is settled
+        // VERIFY-COMMAND class: a debt that NAMES a command is settled
         // by running that command, under the gate's own env-gap contract and behind
         // the no-write guard below.
         rerunVerify: cmd => rerunDebtVerifyCommand(cwd, cmd, run, signal)
     })
     if (resolved.length > 0) await writeAcceptDebts(cwd, openRaw)
-    // Conflicting-claim annotation (mx5 run 11): an existence-as-failure debt whose
+    // Conflicting-claim annotation: an existence-as-failure debt whose
     // named file is another task's committed deliverable is a plan defect — surface
     // the contradiction with the debt so nobody (human or child) treats the claim as
     // a deletion instruction. Pure git-history lookup; degrades to no annotation.
@@ -708,7 +701,7 @@ const DEBT_RERUN_TIMEOUT_MS = 300_000
  * Extra infrastructure-gap shapes recognised ONLY when re-running a debt's command,
  * never in the gate's own verdicts. A driver that reports its connection simply
  * closed (`ERR_POSTGRES_CONNECTION_CLOSED` — what bun's SQL client says when the
- * database is not there at all, as on this box with the mx5 container stopped) is an
+ * database is not running at all) is an
  * absent dependency, and calling that "the defect is still present" would be a
  * finding the environment invented. Kept out of INFRA_GAP_OUTPUT_RE on purpose: in a
  * gate verdict the same wording can be a real fault the suite must own, and only the

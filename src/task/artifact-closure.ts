@@ -2,7 +2,7 @@
  * artifact-closure — dangling runtime file references (the run-13 index.html
  * class, nexttask PROMPT 2).
  *
- * The failure this closes (mx5 run 13, validated): a runtime file reference with
+ * The failure this closes: a runtime file reference with
  * NO producer anywhere in the plan shipped silently. The server's SPA fallback
  * read `Bun.file('dist/index.html')`; the build emitted only `app.css` +
  * `main.js`; no task, script, or build output ever CREATES `index.html` — so the
@@ -187,7 +187,7 @@ export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[
 }
 
 // ---------------------------------------------------------------------------
-// GENERATED HTML (nexttask 3, mx5 run 18).
+// GENERATED HTML.
 //
 // The run-13 checker fired correctly on `src/server/index.ts → dist/index.html`;
 // the autofix satisfied it by appending an HTML template literal to `build.ts`

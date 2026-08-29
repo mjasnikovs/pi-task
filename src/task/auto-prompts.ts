@@ -81,10 +81,9 @@ NONE`
  * prompt it always saw. It is the belt; the host-side rewrite is the lever.
  *
  * Plan GRANULARITY is deliberately NOT a rule here — it rides in CLARIFICATIONS
- * (decompose-granularity.ts). Live A/B: as a RULES line replacing "prefer a
- * handful", it made plan size explode (81 and 85 titles for a spec whose healthy
- * plan is ~30, one 120k-context blowup); as a clarification, with the counterweight
- * below left intact, the same directive holds 20–39 across 16 reps.
+ * (decompose-granularity.ts). Stated as a RULES line it overwhelms the other
+ * rules and the plan explodes; stated as a clarification, with the counterweight
+ * below left intact, the same directive lands as one input among several.
  */
 export const AUTO_DECOMPOSE_PROMPT = (
     feature: string,
@@ -120,10 +119,10 @@ ${DECOMPOSE_SOURCE_RULE}${noBatchTests ? `\n${DECOMPOSE_NO_BATCH_TESTS_RULE}` : 
 /**
  * Coverage triage: judge whether a decomposed task list covers the whole
  * feature. Guards the plan — the highest-leverage artifact in /task-auto —
- * against a degenerate-but-nonempty decompose completion (live mx5: the model
- * emitted ONE task for an 18KB design doc with a natural EOS, and the only
- * existing gate was `titles.length === 0`, so the run "completed" after one
- * task). Pure judgment over text already in hand, so it runs with --no-tools.
+ * against a degenerate-but-nonempty decompose completion: one task emitted for
+ * a whole design document, with a natural EOS, which a `titles.length === 0`
+ * gate waves through and the run "completes" after that single task.
+ * Pure judgment over text already in hand, so it runs with --no-tools.
  * Output MUST match parseCoverageVerdict.
  */
 export const DECOMPOSE_COVERAGE_PROMPT = (

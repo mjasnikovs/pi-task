@@ -1,15 +1,14 @@
 /**
  * batch-test-task — ban the whole-project "write all the tests" task when the
- * DECISIONS channel mandates tests-in-the-same-change (mx5 run 14, PROMPT item 6).
+ * DECISIONS channel mandates tests-in-the-same-change.
  *
- * The failure this closes: run 14's plan contained
+ * The failure this closes: a plan that contains
  *
- *   TASK_0037  "Write component and page tests — Playwright CT tests with
- *               screenshot baselines for all components and pages"
+ *   one title reading "Write component and page tests — CT tests with
+ *   screenshot baselines for all components and pages"
  *
- * — ~4.7h, the worst active-time task of the run, ended in a yolo-accepted verify
- * FAIL with a frozen-config violation — while the very decision carried ON THAT
- * TITLE said the opposite:
+ * — one enormous task that cannot converge, while the very decision carried ON
+ * THAT TITLE says the opposite:
  *
  *   "a test lands *as fast as possible* — in the same change — as each new route
  *    or React component/page. No route or component is considered done until its
@@ -24,7 +23,7 @@
  * The mechanism is a deterministic post-decompose rewrite (applied on EVERY
  * decompose output, like fidelity reconciliation), plus a conditional prompt rule
  * as the belt. Only the batch-EVERYTHING shape is banned — coverage is never
- * nuked (run 12's lesson). Which of the two outcomes fires is decided by
+ * nuked. Which of the two outcomes fires is decided by
  * `groundedCoverage`, not by wording:
  *
  *   • the batch title grounds NO requirement that survives its removal ⇒ every
@@ -57,7 +56,7 @@ const TEST_WORD_RE = /\btests?\b|\btesting\b|\btest-first\b/i
  * Scans sentence by sentence and requires BOTH signals in the SAME sentence, so
  * a testing section that happens to sit near an unrelated "don't defer" line
  * cannot trigger the ban. `decisions` is checked first and alone is sufficient;
- * the spec is scanned too because run 14's cadence rule is stated in §10 of the
+ * the spec is scanned too because a cadence rule is often stated in the body of the
  * doc and only echoed into the decisions channel.
  */
 export function mandatesTestsInSameChange(decisions: string, spec = ''): boolean {
@@ -140,7 +139,7 @@ const MIN_ECHO_CHARS = 40
  * Drop detail segments that are VERBATIM spec text.
  *
  * Third variant of the same failure, and the one the syntactic defenses miss:
- * measured live (rep 4, Qwen3.6-27B on the mx5 fixture), the model appended its
+ * measured live, the model appended its
  * citation as BARE PROSE — no quotes, no `[source: …]` wrapper — and then
  * repeated it inside a `[source: "…"]` clause:
  *
@@ -250,9 +249,9 @@ export function coverageSourceFromSpec(spec: string): string {
  * carries NO ownership signal here. Without this scrub the bare token "test"
  * connects a screenshot-baseline requirement to "Write auth route tests", and the
  * orphan check goes blind. (Scrubbed locally rather than added to
- * COVERAGE_STOPWORDS: those govern the A/B-validated monotonic adoption guard,
+ * COVERAGE_STOPWORDS: those govern the monotonic adoption guard,
  * where "test" IS a discriminating noun for a plan that has no testing task at
- * all.) Token-level, not regex — `mx5_test` must scrub to `mx5`.
+ * all.) Token-level, not regex — `myapp_test` must scrub to `myapp`.
  */
 const GENERIC_TEST_TOKENS = new Set([
     'test',
