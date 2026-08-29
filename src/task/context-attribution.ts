@@ -9,8 +9,8 @@
  *     context confirms `hc<AppType>` pattern with base URL `/api` for same-origin
  *     relative paths works correctly (per Hono RPC docs LIVE data).
  *
- * The `worker:context` spec in phases.ts gives that worker `read,grep` and nothing
- * else — it cannot consult any documentation — so a base-URL claim like that one is
+ * The `worker:context` row in phases.ts gives that worker `tools: 'read,grep'` and
+ * nothing else — no fetch, no docs channel — so a base-URL claim like that one is
  * necessarily from model memory. It then ships into a task's CONSTRAINTS and
  * ACCEPTANCE, the implementation obeys it exactly, and every request goes to the
  * wrong path.
@@ -30,25 +30,35 @@
  *   ### url:      fetched page content            -> CAN source a semantics claim
  *   ### service:  3 search-result SNIPPETS        -> cannot source a semantics claim
  *
- * The `service` exclusion is not a judgement call — it is the LIVE-DATA RULE's own scope.
- * That rule makes a service block authoritative for "current API surface, deprecation
- * status, and replacement systems", i.e. versions/status/names. A service block is a
- * title + URL + one-line description per result (service-blocks.ts:10); it cannot carry
- * what a parameter MEANS. This matters concretely: a task whose only external
- * context is one block named `### service: Hono RPC client` would, were `service`
- * treated as source-capable for semantics, have that subject string match the
- * package `hono` — and the fatal bullet would pass unflagged. The detector would
- * be unable to catch the defect it exists for.
+ * The `service` exclusion is not a judgement call — it is the LIVE-DATA RULE's own
+ * scope. That rule (prompts.ts) makes a service block authoritative for "current
+ * API surface, deprecation status, and replacement systems", i.e. versions, status
+ * and names. And a service block is only ever a title, a URL and a one-line
+ * description per result — see `formatServiceBlock` — so it cannot carry what a
+ * parameter MEANS.
+ *
+ * This matters concretely, and was checked: with a single
+ * `### service: Hono RPC client` block as the only external context, the fatal
+ * bullet IS flagged. Were `service` treated as source-capable, that subject would
+ * match the package `hono` and the bullet would pass — leaving the detector unable
+ * to catch the one defect it exists for.
  *
  * A bullet is FLAGGED iff all three hold:
  *   1. it carries an attribution cue ("per... LIVE data", "the external context
  *      confirms", "docs confirm", "per the official docs",...);
- *   2. it asserts API usage semantics — how something is called, what a parameter means,
- *      what a default is, what behaviour results — as opposed to a version or a status;
+ *   2. it asserts API usage semantics — how something is called, what a parameter
+ *      means, what a default is, what behaviour results — as opposed to a version
+ *      or a status;
  *   3. no `### url:` or `### docs:` block exists for any package the bullet names.
  *
- * Pure and side-effect free; unit-tested in context-attribution.test.ts, including
- * legitimately attributed bullets that must NOT be flagged.
+ * All six branches were run against the laundering bullet above. It is FLAGGED with
+ * an npm-only block, with a service-only block, and with no external context at
+ * all; it is NOT flagged once a `### docs:` or `### url:` block for that package
+ * exists. And the same context leaves alone a version claim made under an
+ * attribution cue, a semantics claim made with NO cue, and a plain "is pinned at"
+ * statement of fact.
+ *
+ * Pure and side-effect free; also unit-tested in context-attribution.test.ts.
  */
 
 /** A block that actually appears in an EXTERNAL CONTEXT header. */

@@ -73,7 +73,7 @@ line counts as a comment line but opens no block.
 | `src/task/command-run.ts` | 431 | 190 | 35 | true |
 | `src/task/command-shrink.ts` | 486 | 127 | 38 | true |
 | `src/task/command-watchdog.ts` | 120 | 59 | 9 | true |
-| `src/task/context-attribution.ts` | 345 | 127 | 27 | false |
+| `src/task/context-attribution.ts` | 345 | 127 | 27 | true |
 | `src/task/context-silence.ts` | 119 | 46 | 10 | false |
 | `src/task/context-usage.ts` | 40 | 21 | 3 | false |
 | `src/task/contracts.ts` | 245 | 88 | 17 | false |
