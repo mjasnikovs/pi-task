@@ -5,11 +5,12 @@ import {DefaultPackageManager, SettingsManager, getAgentDir} from '@earendil-wor
 
 /**
  * Enumerates the host's installed pi extensions for the /task-config whitelist
- * (GitHub issue #4) using pi's OWN resolver — the same DefaultPackageManager
- * the host runtime discovers extensions with — so the menu always mirrors what
- * `pi list`/discovery would load: install a package and it appears, uninstall
- * it and it vanishes (a stale whitelist entry is then skipped at spawn time by
- * extensionArgs' existence filter, never fatal).
+ * (GitHub issue #4) using pi's OWN resolver: the call below is the same
+ * `new DefaultPackageManager(...)` plus `resolve(() => "skip")` that pi's own
+ * startup makes (cli/startup-ui.js). So the menu shows what the host would
+ * load — install a package and it appears, uninstall it and it vanishes (a
+ * stale whitelist entry is then skipped at spawn time by extensionArgs'
+ * existence filter, never fatal).
  */
 
 export interface InstalledExtension {
