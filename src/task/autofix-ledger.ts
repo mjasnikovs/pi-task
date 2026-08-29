@@ -2,28 +2,29 @@
  * autofix-ledger — what the run-end RESOLUTION LOOP records, and the decisions
  * that record makes.
  *
- * The same deepening `GateTally` already proved one altitude down. That replaced
- * twelve mutable locals threaded through ~400 lines of `runFinalIntegrationGate`
- * by closure; this replaces six threaded through ~235 lines of
- * `runFinalGateStage` — the attempt count, the accumulated gitignored writes, the
- * stranded sub-fixes, the previous failure signature, the demoted set, and the
- * rejected-edits flag.
+ * Six pieces of state that would otherwise be mutable locals threaded through
+ * `runFinalGateStage` by closure: the attempt count, the accumulated gitignored
+ * writes, the stranded sub-fixes, the previous failure signature, the demoted
+ * set, and the rejected-edits flag. The same shape `GateTally` uses one altitude
+ * down.
  *
  * The reason is not tidiness. `final-gate-progress.ts` holds five pure functions,
- * each called from exactly ONE site inside that loop — extracted for testability
- * while the decisions about ORDERING and CARRY-FORWARD stayed in the caller. That
- * is precisely the shape `isNonProgress`'s own comment indicts:
+ * and all five are consumed HERE and nowhere else — run-final-gate.ts names the
+ * module only in comments and does not import it. Splitting evidence from
+ * decision is precisely what `isNonProgress`'s own comment indicts:
  *
  *   > The fix is NOT a better string pattern — the bug is that the decision was
  *   > made downstream from the evidence.
  *
- * Without it a run can ship a product whose every page is blank and still report
- * through that gap. Here the evidence and the decision sit in one module, and the
- * loop body reads as picker → apply → record.
+ * A gate that decides downstream from its evidence can let a broken product
+ * report through the gap. Here the evidence and the decision sit in one module,
+ * and the loop body reads as picker → apply → record.
  *
  * What is NOT here: anything that talks to the user, writes a ledger file, or
- * commits. The loop keeps those, the same way `GateTally` keeps no I/O — a record
- * that performs effects cannot be driven by a test that only wants the verdict.
+ * commits — confirmed, the module's only import is final-gate-progress and it
+ * touches no filesystem, UI or git. The loop keeps those, the same way
+ * `GateTally` keeps no I/O: a record that performs effects cannot be driven by a
+ * test that only wants the verdict.
  */
 
 import {
@@ -61,11 +62,15 @@ export class AutofixLedger {
     private _attempts = 0
     /**
      * Gitignored paths the fix passes have written so far. ACCUMULATED across
-     * attempts: a `.env` written by a failed attempt is still on disk for the next
-     * one, and that attempt's own before/after diff cannot see it.
+     * attempts, and that asymmetry with `_stranded` below is deliberate: a `.env`
+     * written by a failed attempt is still on disk for the next one, and that
+     * attempt's own before/after diff cannot see it. Run: two calls carrying an
+     * overlapping path yield the union, deduplicated, in first-seen order.
      */
     private _ignoredWritten: string[] = []
-    /** Sub-fixes a non-converging attempt left uncommitted. REPLACED each attempt. */
+    /** Sub-fixes a non-converging attempt left uncommitted. REPLACED each attempt,
+     *  unlike `_ignoredWritten` above — this is a snapshot of what is uncommitted
+     *  right now, not a history. Run: a second `setStranded` discards the first. */
     private _stranded: string[] = []
     /** The previous attempt's normalized ranked-first failure. */
     private _prevFailSig: string | null = null
@@ -124,9 +129,10 @@ export class AutofixLedger {
     /**
      * May a terminal path commit what is in the working tree?
      *
-     * False once a guard has rejected an attempt without discarding its edits.
-     * This is the ONE question the flag exists to answer, and it is asked at three
-     * terminal sites — as a method rather than a bare boolean read at each.
+     * False once a guard has rejected an attempt without discarding its edits, and
+     * it never flips back — rejected edits stay rejected for the rest of the loop.
+     * Exposed as a method rather than a public boolean so the question is asked in
+     * one vocabulary wherever a terminal path needs it.
      */
     mayCommitTree(): boolean {
         return !this._rejectedEditsInTree
@@ -162,7 +168,8 @@ export class AutofixLedger {
         ) {
             this._demoted.add(normalizeFailureDetail(detail))
             // A demotion ends the chain: the next attempt has no previous signature
-            // to match, so one demotion cannot cascade into a second.
+            // to match, so one demotion cannot cascade into a second. Run on three
+            // identical outcomes — only the SECOND demotes, the third does not.
             this._prevFailSig = null
             return {detail, demoted: true, debtReason: unobservedDebtReason(detail)}
         }
