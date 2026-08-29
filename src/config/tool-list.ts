@@ -26,11 +26,11 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
 export interface GuardableTool {
     /** Exact tool name — the watchdog's key, and what the config stores. */
     name: string
-    /** Provenance shown in the menu, e.g. "built in" or "npm:pi-fable". */
+    /** Provenance shown in the menu, e.g. "built in" or "npm:pi-fable (/path)". */
     origin: string
 }
 
-/** `source` values pi reports for its own tools rather than an extension's. */
+/** The `source` pi reports for its own tools rather than an extension's. */
 const BUILTIN_SOURCE = 'builtin'
 
 /**
