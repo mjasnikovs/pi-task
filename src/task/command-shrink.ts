@@ -2,11 +2,13 @@
  * SCOPE-SHRINK detection for the final-gate fix pass.
  *
  * The label guard (final-gate-fix.ts) compares the SET of discoverable gate
- * commands before and after the fix child. Without it a fix child walks straight through
- * it: the autofix rewrote `"test": "AGENT=1 bun test"` to
- * `"AGENT=1 bun test ./test"`, the label `bun run test` existed before and
- * after, the set difference was empty, and the gate re-ran a suite that no
- * longer covered the repository — then reported "autofix converged".
+ * commands before and after the fix child, and a fix child walks straight through
+ * it. Rewrite `"test": "AGENT=1 bun test"` to `"AGENT=1 bun test ./test"` and the
+ * label `bun run test` exists before and after, so the set difference is empty —
+ * while the gate now re-runs a suite that no longer covers the repository, and
+ * reports that the autofix converged. Fed to `classifyBodyChange`, those two
+ * bodies come back `narrow` / `path-added`, which is the whole point of this
+ * module.
  *
  * What changed was not the command's NAME but its SCOPE. This module compares
  * the RESOLVED BODIES (`scripts[name]` for package.json, the recipe lines for a
@@ -16,23 +18,27 @@
  *   1. a path/glob argument is ADDED to a command member that had none
  *      (`bun test` → `bun test ./test`);
  *   2. an existing path/glob argument is replaced by a strict SUBPATH of itself
- *      (`eslint src` → `eslint src/server`);
+ *      (`eslint ./src` → `eslint ./src/server`). Note the argument has to LOOK
+ *      like a path — a bare `src` with no separator, dot or glob is not treated
+ *      as one, so `eslint src` → `eslint src/server` reads as neutral;
  *   3. an exclusion flag/pattern is ADDED (`--ignore`, `--exclude`,
  *      `--testPathIgnorePatterns`, `-x`, …);
  *   4. a config-file argument is swapped for one the fix pass itself created.
  *
- * With ONE excuse, documented at
- * `excusedByRelocation`: rule 3 does not fire when the same pass hands the
- * excluded input to another command the gate already runs.
+ * With ONE excuse, documented at `excusedByRelocation`: rule 3 does not fire when
+ * the same pass hands the excluded input to another command the gate already
+ * runs. Rules 1, 2 and 4 have no excuse.
  *
- * Everything else passes: new env vars, added flags that do not restrict the
- * input set, reordering, added chain members, whole new scripts. The guard's
- * job is to stop the fix pass from silently redefining the gate's own success
- * criterion — not to review the fix.
+ * Everything else passes, each checked by running it: a new env var, a flag that
+ * does not restrict the input set, reordering, an added chain member, an
+ * identical body. A path replaced by its PARENT classifies as `widen`, not
+ * `narrow`. The guard's job is to stop the fix pass from silently redefining the
+ * gate's own success criterion — not to review the fix.
  *
- * PURE by construction (no fs, no git): the live guard feeds it two body maps
- * from `discoverGateCommandBodies`, the replay harness feeds it two maps built
- * from git blobs. Same code decides both.
+ * PURE by construction: the module has no imports at all — no fs, no git, no
+ * clock. The live guard feeds it two body maps from `discoverGateCommandBodies`;
+ * anything replaying history feeds it two maps built from git blobs. The same
+ * code decides both.
  */
 
 /** Which of the four mechanical shapes fired. */
@@ -72,8 +78,9 @@ export interface Narrowing {
 
 // ── tokenizing ──────────────────────────────────────────────────────────────
 
-/** Split a shell body into chain members, quote-aware: `&&`, `||`, `;`, `|`,
- *  and newlines (Makefile recipes arrive as multiple lines). */
+/** Split a shell body into chain members on `&&`, `||`, `;`, `|` and newlines
+ *  (Makefile recipes arrive as multiple lines). Quote-aware, and it matters:
+ *  `bun test --name 'a && b' && lint` splits into two members, not three. */
 export function splitChainMembers(body: string): string[] {
     const out: string[] = []
     let cur = ''
@@ -315,19 +322,18 @@ export function makefileRecipe(makefileText: string, target: string): string | n
 /**
  * RELOCATION EXCUSE.
  *
- * That autofix rewrote `test` from `AGENT=1 bun test` to `AGENT=1 bun test
- * --path-ignore-patterns '**\/*.spec.tsx' && playwright test -c
- * playwright-ct.config.ts`. Read by hand: `test:ct` was ALREADY
- * `playwright test -c playwright-ct.config.ts` and already a discovered gate
- * command, so the excluded specs never left the gate's coverage — the pass
- * separated two runners that collide, it did not shrink what is measured.
- * Rejecting it would be a false positive, and the rule as first written did.
+ * A fix pass can split two runners that collide — excluding a set of specs from
+ * one command while adding, in the same body, a chain member that another
+ * ALREADY-DISCOVERED gate command runs over exactly those specs. Nothing left the
+ * gate's coverage there, so rejecting it would be a false positive.
  *
- * The excuse is deliberately narrow and hard to game: the pass must have added
- * a chain member that is VERBATIM (whitespace-normalized) a member of another
- * discovered gate command's body. `&& echo ok` does not qualify; neither does a
- * near-copy pointed at a different config. Nothing excuses rules 1, 2 or 4 —
- * a path narrowing stands on its own.
+ * The excuse is deliberately narrow and hard to game: the pass must have ADDED a
+ * chain member that is VERBATIM (whitespace-normalized) a member of another
+ * discovered gate command's body. Run both ways — with the sibling present the
+ * exclusion classifies neutral, and a near-copy pointed at a different config
+ * does NOT excuse it. An added FLAG alone can never qualify, because there is no
+ * added member to match. Nothing excuses rules 1, 2 or 4: a path narrowing stands
+ * on its own.
  *
  * Returns the matching sibling member, or null.
  */

@@ -71,7 +71,7 @@ line counts as a comment line but opens no block.
 | `src/task/child-status.ts` | 167 | 60 | 14 | true |
 | `src/task/clamp-output.ts` | 16 | 9 | 1 | true |
 | `src/task/command-run.ts` | 431 | 190 | 35 | true |
-| `src/task/command-shrink.ts` | 486 | 127 | 38 | false |
+| `src/task/command-shrink.ts` | 486 | 127 | 38 | true |
 | `src/task/command-watchdog.ts` | 120 | 59 | 9 | false |
 | `src/task/context-attribution.ts` | 345 | 127 | 27 | false |
 | `src/task/context-silence.ts` | 119 | 46 | 10 | false |
