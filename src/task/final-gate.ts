@@ -2,47 +2,47 @@
  * final-gate — the run-level integration gate /task-auto runs ONCE, after every
  * task is checked off and before the run is declared complete.
  *
- * The failure this closes: every existing gate is
- * per-task/per-slice, so a run can finish with each slice individually blessed
- * while the ASSEMBLED project is dead — statics green yet every protected route
- * 500ing, tests failing across slices, later tasks breaking files earlier
- * tasks verified. Per-task repo-health closes the static half; nothing ever ran
- * the project's own test/build commands against the finished whole.
+ * Every other gate in this extension is per-task, so a run can finish with each
+ * slice individually blessed while the ASSEMBLED project is dead. Per-task
+ * repo-health covers the static half; nothing else runs the project's own
+ * test/build/start commands against the finished whole.
  *
- * Like repo-health-check (whose discovery style this mirrors), it is deterministic
- * — no model, no per-file narrowing, no "not my task" gray area. It discovers the
- * project's OWN integration commands (the ones a fresh checkout / CI would run)
- * and lets their REAL exit codes decide:
+ * Like repo-health-check, whose discovery style it mirrors, it is deterministic:
+ * no model, no per-file narrowing. It discovers the project's OWN commands and
+ * lets their REAL exit codes decide. `runFinalIntegrationGate` runs the sections
+ * in this order:
  *
- *   - static analysis first (runRepoHealthCheck — cheap, precise), then
- *   - lockfile↔manifest consistency (a lockfile can carry a
- *     dependency no committed manifest declared, so the tree tested green here
- *     but a FRESH CHECKOUT could not even install — each ecosystem's own offline
- *     "is the lock in sync" command decides), then
- *   - the project's own `test` and `build` commands, run verbatim and unaided, then
- *   - one boot exercise of the project's own start command (
- *     every static and test gate green, yet `bun run start` died in ~1s on a
- *     self-inflicted EADDRINUSE — nothing had ever LAUNCHED the finished project).
- *     No ports, URLs, or framework knowledge: fast non-zero exit → FAIL, quick
- *     exit 0 → PASS (CLI-style), still alive after the grace window → PASS and
- *     the whole process group is killed (scripts spawn children; a leaked child
- *     server would mask every later boot check with a port collision).
+ *   - static analysis (runRepoHealthCheck), then
+ *   - the launch-contract diff and the `pre-discovery` closure scans, which need
+ *     no runner at all, then
+ *   - lockfile↔manifest consistency — a lockfile can carry a dependency no
+ *     committed manifest declares, so the tree tests green here while a FRESH
+ *     CHECKOUT cannot install; each ecosystem's own non-mutating "is the lock in
+ *     sync" command decides, then
+ *   - the project's own test and build commands, verbatim and unaided, then
+ *   - the declared launch scripts, one-shot, then
+ *   - one boot exercise of the start command. No ports, URLs or framework
+ *     knowledge: fast non-zero exit → FAIL, quick exit 0 → PASS (CLI-style),
+ *     still alive after the grace window → PASS, and the whole process group is
+ *     killed, because scripts spawn children and a leaked child server masks
+ *     every later boot check with a port collision, then
+ *   - the blindness guard and the `post-boot` closure scans.
+ *
+ * EVERY section runs and the failures AGGREGATE into one ranked list; nothing
+ * early-returns on the first failure.
  *
  * Environment-gap safety, same contract as repo-health-check: a command that
  * CANNOT run (ENOENT, exit 127 = command-not-found inside the script chain, or a
- * timeout) is an environment problem, not a code fault — it is SKIPPED, never
- * failed. Only a command that actually ran and exited non-zero fails the gate,
- * and the reason carries the tail of its real output so the user (and a resume
- * fix) can act on it. A test suite that needs a database will fail here when the
- * database is genuinely reachable-but-mis-wired — which is exactly the class the
- * per-task gates kept excusing — and the caller puts a human on the decision
- * (accept / leave failed), so a genuine external gap can still be overridden.
+ * timeout) is an environment problem, not a code fault — SKIPPED, never failed.
+ * Only a command that actually ran and exited non-zero fails the gate, and the
+ * reason carries the tail of its real output so the user and a resume fix can act
+ * on it. A test suite that needs a database still fails here when the database is
+ * reachable-but-mis-wired, and the caller puts a human on that decision, so a
+ * genuine external gap can be overridden.
  *
- * A skip is never silent, though. A DISCOVERED boot command that never ran is its
- * own verdict — nothing else the gate observed can
- * cancel it. Validation harnesses for that lever:
- *   base rate on the shipped gate, a two-armed deterministic A/B with
- *   invariants, and zero-false-positive arms over every local repo
+ * A skip is never silent: a DISCOVERED boot command that never ran is its own
+ * verdict, kept outside the tally's dynamic counters so nothing else the gate
+ * observed can cancel it.
  */
 import {existsSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
@@ -109,21 +109,21 @@ export interface FinalGateOutcome {
     /**
      * On a fail: the exact command(s), exit code(s), and output tail(s) — the
      * MECHANICAL failures only. The accept-debt note is deliberately NOT folded in
-     * here: this string seeds the final-gate AUTOFIX child's prompt,
-     * and a debt included there is read as an instruction — the fix child
-     * `rm`'d a sibling task's verified deliverable to satisfy a recorded claim. The
-     * child cannot act on text it never receives; debts travel in `debtNote`.
-     * With multiple failures this is the numbered, ranked list (see `failures`).
+     * here, because this string is what `buildFinalFixPrompt` puts in front of the
+     * autofix child, and a recorded debt claim reaching a write-enabled child reads
+     * as an instruction to act on it. The child cannot act on text it never
+     * receives; debts travel in `debtNote`. With multiple failures this is the
+     * numbered, ranked list (see `failures`).
      */
     reason: string
     /**
      * On a fail: EVERY section failure individually, ranked most load-bearing
      * first — boot/render ("the app does not serve/render") outranks any single
-     * test failure. The gate runs every section and aggregates rather than
-     * early-returning (a test-glob failure otherwise shadows the boot +
-     * render probe, so the user accepted the FAIL having only ever seen 1 failing
-     * CT test while the shipped app 404'd on every non-API GET). Callers trail
-     * each entry and show the full list wherever an ACCEPT decision is made.
+     * test failure. The gate aggregates rather than early-returning: the boot and
+     * render probes run LAST, so a first-failure return would let any earlier test
+     * failure shadow the one signal that answers "does the app serve anything at
+     * all". Callers trail each entry and show the full list wherever an ACCEPT
+     * decision is made.
      */
     failures?: string[]
     /**
@@ -131,18 +131,12 @@ export interface FinalGateOutcome {
      * entries whose evidence is "we looked, and what we saw was bad", as opposed to
      * "we could not look".
      *
-     * The probes have always known this about themselves: `RenderOutcome` is
-     * `pass | fail | skip`, `f648f5b` (2026-07-14) turned a render `skip` into
-     * "render check UNOBSERVED: <reason>", and `b0f90a7` (2026-07-19) made an
-     * unenumerable boot return PASS-stamped-UNOBSERVED rather than FAIL. What was
-     * missing is that the outcome CLASS never travelled with the failure TEXT, so
-     * the non-progress classifier downstream had to guess — and guessed by string
-     * equality, which a deterministic un-fixed defect satisfies by definition.
-     *
-     * When the render probe FAILS on a blank page and the same failure comes
-     * back from two tree-changing fix attempts (because the defect was real and
-     * unfixed), the classifier read that as evidence against the INSTRUMENT, and
-     * the run shipped a product whose every page was blank as `completed`.
+     * The probes distinguish "we looked and it was bad" from "we could not look"
+     * in their own outcomes; this field carries that class alongside the failure
+     * TEXT. Without it the non-progress classifier downstream has only string
+     * equality to go on, and a deterministic un-fixed defect satisfies string
+     * equality by definition — so a real, still-broken check reads as an
+     * unfalsifiable one and gets demoted to debt.
      *
      * Membership is by exact text identity with an entry of `failures` — never a
      * pattern, never a re-derivation. Absent/empty on a pass.
@@ -155,10 +149,10 @@ export interface FinalGateOutcome {
      */
     debtNote?: string
     /**
-     * ACCEPT-despite-verify-FAIL debts still open at run end:
-     * tasks the user blessed as-is despite a verify-FAIL that a
-     * deterministic re-check could not prove resolved. The caller surfaces them so a
-     * run never completes silently carrying an accepted defect. Empty/absent = none.
+     * ACCEPT-despite-verify-FAIL debts still open at run end: tasks the user
+     * blessed as-is despite a verify-FAIL that a deterministic re-check could not
+     * prove resolved. The caller surfaces them so a run never completes silently
+     * carrying an accepted defect. Empty/absent = none.
      */
     openDebts?: AcceptDebt[]
     /**
@@ -166,8 +160,8 @@ export interface FinalGateOutcome {
      * supposed to. Two independent triggers, either or both:
      *   - nothing dynamic ran at all — no command was discoverable, or every discovered
      *     one skipped as an environment gap (unobservedVerdict);
-     *   - a served app's boot command was discovered and SKIPPED, whatever else ran
-     *.
+     *   - a served app's boot command was discovered and SKIPPED, whatever else ran.
+     *
      * `ok` is still true (the statics did pass and there is nothing to fix), but this is
      * NOT a PASS: the caller must record it as UNOBSERVED, never as "checked and fine".
      * Absent ⇒ everything the gate meant to observe, it observed.
@@ -181,24 +175,19 @@ export interface FinalGateOutcome {
  * manifest that exists wins, mirroring discoverHealthCommands. Empty means
  * "nothing to run" — the static half may still gate.
  *
- * THE MANIFEST ALLOWLIST BELOW IS NARROW, AND THAT IS A KNOWN, MEASURED GAP: a
- * C++/CMake project (no package.json) and a package.json whose only script is
- * `verify` both discover NOTHING here. That outcome is now reported as UNOBSERVED
- * rather than as a PASS (see unobservedVerdict), which makes the blindness loud and
- * durable — it does not remove it. The gap itself stands.
+ * THE MANIFEST ALLOWLIST BELOW IS NARROW, AND THAT IS A KNOWN GAP: a project with
+ * no package.json, Makefile, Cargo.toml, go.mod or pyproject.toml discovers
+ * NOTHING here, and so does a package.json whose only script is named something
+ * else. That outcome is reported as UNOBSERVED rather than as a PASS (see
+ * unobservedVerdict), which makes the blindness loud — it does not remove it.
  *
- * The obvious fix — harvest each task's own `## verified tooling` section, which
- * DOES record the missing commands — was measured on 2026-07-27 and REFUTED. That
- * section is model-authored and, despite its name, unverified: on godot-engine it
- * yields 3 commands that exit 0 and 8 that exit non-zero, six of those for purely
- * fabricated reasons (recorded without a required argument, pointing at files that
- * do not exist, naming a test runner the project does not use) — so harvesting it
- * turns that project's PASS into a FAIL citing "No scene path provided", plus ~15
- * minutes of hang. Full numbers, the reproduction rig, and why no pre-execution
- * filter can separate a fabricated command from a real one:
- * measurement below. DO NOT re-propose the harvest without
- * first fixing the PROVENANCE of `## verified tooling` (record cwd + exit code at
- * authoring time); widening this allowlist tool-by-tool is not the fix either.
+ * DO NOT close the gap by harvesting each task's own `## verified tooling`
+ * section. That section is the parsed output of a model child (phases.ts writes
+ * it from the verify-tooling worker), and despite its name nothing records the
+ * cwd the command was tried in or the code it exited with — so a fabricated
+ * command is indistinguishable from a real one before it runs, and running it is
+ * how the gate would find out. Fix that provenance first. Widening this allowlist
+ * tool-by-tool is not the fix either.
  */
 export function discoverIntegrationCommands(cwd: string): {
     ecosystem: string | null
@@ -207,12 +196,15 @@ export function discoverIntegrationCommands(cwd: string): {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
         const cmds: HealthCommand[] = []
-        // Every test-shaped script, not just the one literally named `test` (
-        // 10: `test:ct` — 89 Playwright component tests, the ONLY client-executing
-        // suite — never ran because the gate looked only for `test`/`build`). Plain
-        // `test` leads (richer, most common), then `test:*`/`test-*` in declaration
-        // order, then `build`. Env-gap SKIP still applies per command (a suite whose
-        // browser/runtime is absent skips, it does not fail — see runGateCommand).
+        // Every test-shaped script, not just the one literally named `test`: a
+        // project's only browser-executing suite is often `test:ct` or similar, and
+        // looking for `test` alone never runs it. Plain `test` leads, then every
+        // `test:`/`test_`/`test-` prefixed name in declaration order (Array#sort is
+        // stable), then `build`. Measured on a manifest declaring test:ct, build,
+        // test_unit, test-e2e, test, testing and pretest, the result is exactly
+        // test, test:ct, test_unit, test-e2e, build — `testing` and `pretest` do
+        // not match. Env-gap SKIP still applies per command: a suite whose browser
+        // or runtime is absent skips rather than fails (see runGateCommand).
         const testNames = Object.keys(s).filter(n => n === 'test' || /^test[:_-]/.test(n))
         testNames.sort((a, b) =>
             a === 'test' ? -1
@@ -256,11 +248,18 @@ export function discoverIntegrationCommands(cwd: string): {
 
 /**
  * Per-ecosystem lockfile↔manifest consistency checks. A check applies only when
- * BOTH the manifest and its lockfile exist (no lockfile → nothing to verify),
- * and every command is the ecosystem's own non-mutating "is the lock in sync
- * with the manifest" form — validated to exit 0 fast on an in-sync tree and
- * non-zero on a genuine desync, without touching the tree or (when in sync)
- * the network.
+ * BOTH the manifest and its lockfile exist — no lockfile means nothing to verify
+ * — and every command is that ecosystem's own non-mutating "is the lock in sync
+ * with the manifest" form.
+ *
+ * Four of the six were run against real throwaway projects, in sync and then with
+ * one dependency added to the manifest only. Each exited 0 in sync and non-zero
+ * on the desync, and left the lockfile byte-identical either way:
+ * `bun install --frozen-lockfile --dry-run` 0/1, `npm ci --dry-run` 0/1 (and it
+ * does not remove node_modules), `cargo metadata --locked` 0/101,
+ * `uv lock --check` 0/1. The `go` and `poetry` rows could not be run here — those
+ * binaries are not installed on this box — so they are asserted, not measured.
+ * A desync does reach the network; only the in-sync path is offline.
  */
 const LOCKFILE_CHECKS: Array<{manifest: string; lockfiles: string[]; cmd: HealthCommand}> = [
     {
@@ -316,11 +315,11 @@ export function discoverGateCommandLabels(cwd: string): string[] {
  * The RESOLVED BODY of every discoverable gate command, keyed by the same label
  * `discoverGateCommandLabels` produces.
  *
- * The label is what the gate CALLS; the body is what actually runs. A
- * autofix changed `scripts.test` from `AGENT=1 bun test` to `AGENT=1 bun test
- * ./test` — the label `bun run test` was identical before and after, so the
- * label guard saw nothing while the suite stopped covering the repository. The
- * shrink guard compares these bodies (see command-shrink.ts).
+ * The label is what the gate CALLS; the body is what actually runs. A fix pass
+ * can rewrite `scripts.test` to run one subdirectory and leave the label
+ * `bun run test` identical, so the label guard sees nothing while the suite stops
+ * covering the repository. The shrink guard compares these bodies (see
+ * command-shrink.ts).
  *
  * A command with no indirection (`cargo test --quiet`, `pytest -q`) resolves to
  * itself: it cannot be narrowed without changing the label, which the label
@@ -421,23 +420,22 @@ async function runGateCommand(
 }
 
 // `runVerifyCommandLine` and its outcome type live in command-run.ts with the
-// other command drivers; re-exported so existing importers keep working.
+// other command drivers; re-exported because the gate's own test suite reaches
+// them through this module.
 export {runVerifyCommandLine, type VerifyRerunOutcome} from './command-run.js'
 
 // The two verdict predicates — the full-blindness FAIL and the third,
 // non-blocking UNOBSERVED verdict — live with the counters they read, in
-// gate-tally.ts (GateTally). Re-exported so every existing importer keeps working.
+// gate-tally.ts (GateTally). Re-exported for the gate's own test suite.
 export {observabilityGapFailure, unobservedVerdict}
 
-// File → introducing-task provenance moved to task-provenance.ts (
-// PROMPT 2 extracted it for the cross-task deletion guards); re-exported so
-// existing importers keep working.
+// File → introducing-task provenance lives in task-provenance.ts, next to the
+// cross-task deletion guards that use it; re-exported for the gate's own tests.
 export {taskThatIntroduced}
 
-// The boot probe moved to boot-probe.ts (its own concern, 0 other importers inside
-// src/). Re-exported so the seven validation harnesses under scripts/ — which have
-// always imported exactly this surface and nothing else from the gate — keep
-// working unchanged. Same pattern as taskThatIntroduced above.
+// The boot probe lives in boot-probe.ts. This module is its ONLY importer inside
+// src/, so these re-exports exist for consumers outside it; of them, the gate's
+// own test suite currently reaches only `bootSkipVerdict` through here.
 export {
     discoverBootCommand,
     detectsServedApp,
@@ -457,8 +455,8 @@ export type {BootDeps}
 export type {BootSectionVerdict} from './boot-probe.js'
 
 // The ACCEPT-debt re-check (`deriveOpenDebts`, `rerunDebtVerifyCommand`) lives in
-// accept-debt.ts with the ledger it reads and writes; re-exported so the
-// orchestrator and the harnesses under scripts/ keep working unchanged.
+// accept-debt.ts with the ledger it reads and writes; re-exported because
+// auto-orchestrator.ts imports `deriveOpenDebts` through this module.
 export {deriveOpenDebts, rerunDebtVerifyCommand}
 
 /**
@@ -469,10 +467,9 @@ export {deriveOpenDebts, rerunDebtVerifyCommand}
  *     with no runnable command at all still FAILS the scan instead of returning
  *     UNOBSERVED. A static check needs no runner; that is the whole point of
  *     deciding it in exactly the environment where every dynamic probe went blind.
- *   - `post-boot` runs after the dynamic sections, which is where these scans'
- *     failures have always landed relative to command/launch/boot failures.
- *     Execution order is the aggregate's tiebreak within a rank, so moving a row
- *     between stages MOVES it in the user-visible failure list.
+ *   - `post-boot` runs after the dynamic sections. Execution order is the
+ *     aggregate's tiebreak within a rank, so moving a row between stages MOVES it
+ *     in the user-visible failure list.
  */
 type ClosureScanStage = 'pre-discovery' | 'post-boot'
 
@@ -507,13 +504,12 @@ interface ClosureScan {
      * finding.
      *
      * A GENERATOR rather than a function returning an array, for two reasons.
-     * First, the driver's try/catch wraps the ITERATION, so a scan that produces
-     * two findings and then faults still emits those two — precisely what the
-     * three hand-written `for (… ) fail(…)` loops inside try blocks did. Second,
-     * the three scans do not share a result shape (one nullable finding; a list;
-     * a list plus the template set its formatter also needs), and folding scan
-     * and format together lets each row keep its own arity instead of forcing a
-     * lowest-common-denominator result type on all of them.
+     * First, the driver's try/catch wraps the ITERATION, so a scan that yields two
+     * findings and then throws still emits those two. Second, the three scans do
+     * not share a result shape — one nullable finding, a list, and a list plus the
+     * template set its formatter also needs — and folding scan and format together
+     * lets each row keep its own arity instead of forcing a
+     * lowest-common-denominator result type on all three.
      */
     run: (input: ClosureScanInput) => Iterable<string>
 }
@@ -522,23 +518,22 @@ interface ClosureScan {
  * The run-level closure scans, in emission order within their stage.
  *
  * ONLY checks of this shape belong here. Four other checks in this gate are
- * deliberately NOT rows: repo-health returns {ok, reason} and formats inline;
- * the launch-contract diff branches on manifest kind and can emit a NOTE instead
- * of a failure; the launch config-gap produces neither a failure nor a note but
- * UN-COUNTS a dynamic observation; and the boot check is an async, stateful,
- * port-binding exercise. Squeezing any of those in would mean a row type with
- * more escape hatches than content.
+ * deliberately NOT rows: repo-health returns {ok, reason} and formats inline; the
+ * launch-contract diff branches on manifest kind and can emit a NOTE instead of a
+ * failure; the launch config-gap produces neither a failure nor a note but
+ * UN-COUNTS a dynamic observation (`tally.unobserve()`); and the boot check is
+ * async, stateful and port-binding. Squeezing any of those in would mean a row
+ * type with more escape hatches than content.
  */
 const CLOSURE_SCANS: ClosureScan[] = [
     {
-        // Serve-entry closure: the tree builds a server
-        // app, expects to serve (SPA fallback / static read / a design clause), and
-        // NOTHING anywhere starts a listener — `src/server/index.ts` ended at
-        // `export {app}`, so the product could not be started at all while every
-        // dynamic probe went blind on a docker-less box. Static, deterministic,
-        // milliseconds, and — unlike the boot check — decidable in exactly the
-        // environment where the boot skipped. Hence `pre-discovery`: a project with
-        // no runnable command at all must still fail this, not report UNOBSERVED.
+        // Serve-entry closure: the tree builds a server app, expects to serve (SPA
+        // fallback, a static read, a design clause), and NOTHING anywhere starts a
+        // listener — a module that ends at `export {app}` cannot be started at all.
+        // Static and synchronous, and unlike the boot check it is decidable in
+        // exactly the environment where a boot would skip. Hence `pre-discovery`: a
+        // project with no runnable command must still fail this rather than report
+        // UNOBSERVED.
         id: 'serve-entry',
         stage: 'pre-discovery',
         rank: 0,
@@ -548,13 +543,12 @@ const CLOSURE_SCANS: ClosureScan[] = [
         }
     },
     {
-        // Artifact-production closure: a runtime file
-        // reference with NO producer anywhere ships silently — the server read
-        // `Bun.file('dist/index.html')` while the build emitted only app.css +
-        // main.js, so every non-API GET 404s behind a fully green plan.
-        // Deterministic scan of the shipped tree (literal refs only, positive
-        // producer evidence required — see artifact-closure.ts); each dangle names
-        // referencer + missing path.
+        // Artifact-production closure: a runtime file reference with NO producer
+        // anywhere ships silently — a server reading `dist/index.html` that no build
+        // step emits 404s every request behind a fully green plan. Deterministic
+        // scan of the shipped tree: literal references only, positive producer
+        // evidence required (artifact-closure.ts). Each dangle names the referencer
+        // and the missing path.
         id: 'dangling-artifact',
         stage: 'post-boot',
         rank: 0,
@@ -563,16 +557,15 @@ const CLOSURE_SCANS: ClosureScan[] = [
         }
     },
     {
-        // Env-template closure: a shipped source file
-        // requires an env var the shipped template never mentions. `seed.ts` read
-        // `process.env.ADMIN_PHONE`/`ADMIN_PASSWORD`, `.env.example` declared
-        // neither, `bun run seed` exited 1, and the autofix "fixed" it by writing
-        // the GITIGNORED `.env` — so the committed tree still cannot seed and
-        // nothing at run end said why. Same shape and rank as the dangling-artifact
-        // scan above: naming the ARTIFACT that is wrong, statically, instead of only
-        // the command that failed. The formatter needs the template set as well as
-        // the finding, which is why scan and format are folded into one row.
-        // Inert on any tree with no tracked template (ENOENT = pass).
+        // Env-template closure: a shipped source file requires an env var the
+        // shipped template never mentions. Without this the only symptom is the
+        // script's own non-zero exit, which an autofix can silence by writing the
+        // GITIGNORED `.env` — leaving a committed tree that still cannot run and
+        // nothing at run end saying why. Same shape and rank as the
+        // dangling-artifact scan: name the ARTIFACT that is wrong, statically,
+        // rather than only the command that failed. The formatter needs the
+        // template set as well as the finding, which is why scan and format are one
+        // row. Inert on any tree with no tracked template.
         id: 'env-template',
         stage: 'post-boot',
         rank: 0,
@@ -614,34 +607,15 @@ export {CLOSURE_SCANS, runClosureScans}
 export type {ClosureScan, ClosureScanInput, ClosureScanStage}
 
 /**
- * Run the final gate: static analysis first, then the lockfile consistency
- * checks, then the discovered integration commands, then one boot exercise of
- * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
- *
- * EVERY section runs and failures AGGREGATE. Early-returning on the first
- * failing section shadows the most load-bearing signal, because the boot and
- * render probes — the ones that answer "does the app serve anything at all" —
- * are ordered last. A user then accepts a FAIL having seen one failing component
- * test while every non-API GET 404s, and boot/render never executed in any
- * attempt. So the outcome carries the full ranked failure list (boot/render
- * first: "the app does not serve/render" outranks any single test), the ACCEPT
- * decision is made on all of it, and autofix converges only when the whole list
- * is empty.
- */
-/**
  * Everything the run-end gate needs beyond the tree it is judging.
  *
- * An options object rather than a positional tail: the production call site read
- * `runFinalIntegrationGate(cwd, undefined, undefined, undefined, planText)`, and
- * `bootGraceMs`/`timeoutMs` are adjacent numbers that swap without a type error.
+ * An options object rather than a positional tail, because `bootGraceMs` and
+ * `timeoutMs` are adjacent numbers that would swap without a type error.
  *
- * `run`, `envClosure` and `trackedFiles` are SEAMS, by the same test GateDeps
- * states: a scenario needs to substitute them. `runGateCommand`,
- * `runVerifyCommandLine` and `rerunDebtVerifyCommand` each already take a
- * `CommandRunner`; this is the fourth and last driver in the file, and without it
- * the config-gap branch below is unreachable in test — not by oversight, but
- * because reaching it needs a git-tracked env template, so every launch-contract
- * test (bare `makeDir`, no `git init`) misses it by construction.
+ * `run`, `envClosure` and `trackedFiles` are test SEAMS. Without `run`, the
+ * config-gap branch below is unreachable from a test: reaching it needs a
+ * git-tracked env template, and the launch-contract tests build a bare directory
+ * with no `git init`, so they miss it by construction.
  */
 export interface FinalGateOptions {
     timeoutMs?: number
@@ -657,9 +631,9 @@ export interface FinalGateOptions {
     trackedFiles?: (cwd: string) => string[] | null
     /**
      * The run's cancel. Reaches every command the gate spawns — repo-health, the
-     * lockfile/integration/launch sections and the ACCEPT-debt re-runs. Nothing
-     * could be cancelled while `CommandRunner` was synchronous: the event loop
-     * never got a turn in which to notice.
+     * lockfile, integration and launch sections, and the ACCEPT-debt re-runs. It
+     * only works because `CommandRunner` is async: a synchronous spawn never gives
+     * the event loop a turn in which to notice an abort.
      */
     signal?: AbortSignal
 }
@@ -683,17 +657,16 @@ export async function runFinalIntegrationGate(
         },
         trackedFiles: trackedFilesFn = trackedFiles
     } = opts
-    // ASYNC: the run-end gate no longer blocks the event loop for the project's own
-    // lint, so a loader can
-    // paint and a cancel can reach the child.
+    // ASYNC so the event loop keeps turning while the project's own lint runs: a
+    // loader can paint and a cancel can reach the child.
     const stat = await runRepoHealthCheck(cwd, {
         run: runCmd,
         ...(opts.signal === undefined ? {} : {signal: opts.signal})
     })
-    // Debts are derived once, before any section runs, and ride on every verdict
-    // shape (GateTally.verdict): `reason` stays the mechanical failure because it
-    // seeds the autofix child's prompt, and a fix child will execute a recorded
-    // claim as an instruction.
+    // Debts are derived ONCE, before any section runs, and ride on every verdict
+    // shape (GateTally.verdict). `reason` stays purely mechanical because it seeds
+    // the autofix child's prompt, and a write-enabled child reads a recorded claim
+    // as an instruction.
     const debts = await deriveOpenDebts(cwd, stat.ok, runCmd, opts.signal)
     // Every section below RECORDS into the tally (failures ranked, the four
     // dynamic counters, the notes) and the verdict is assembled ONCE at the end —
@@ -704,20 +677,20 @@ export async function runFinalIntegrationGate(
     // whole-repo static check, and `isStaticClassDebt` must recognise a debt that
     // entered the ledger through EITHER altitude.
     if (!stat.ok) tally.fail(`${VERIFY_FAIL_PREFIX['static-checks']} ${stat.reason}`)
-    // Launch-contract diff: the design declared `migrate`/`seed`
-    // scripts that fell through decompose and shipped missing, unchecked. Diff the
-    // plan-time-extracted declared scripts against the manifest; a missing one is a
-    // launch-surface defect. FP-safe: empty declared list (nothing grounded) → no check.
+    // Launch-contract diff: a design can declare scripts that fall through
+    // decompose and ship missing, unchecked. Diff the plan-time-extracted declared
+    // scripts against the manifest; a missing one is a launch-surface defect.
+    // FP-safe: an empty declared list means nothing was grounded, so no check runs.
     //
-    // THE DIFF IS INERT WITHOUT A MANIFEST. Diffing against
-    // `Object.keys(packageScripts(cwd))`, whose catch returns {}, makes a project
-    // with NO package.json indistinguishable from one with no scripts: every
-    // declared script is reported missing, in wording naming a file the project
-    // was never meant to have. Nothing upstream is npm-shaped (the extractor scrapes any
-    // design that says "script"), and this text seeds the autofix child's prompt, so
-    // on a CMake/cargo project the likely repair was to write a package.json.
+    // THE DIFF MUST NOT RUN WITHOUT A MANIFEST. `packageScripts` catches and
+    // returns {}, so diffing against its keys makes a project with NO package.json
+    // indistinguishable from one with no scripts — every declared script reported
+    // missing, naming a file the project was never meant to have. The extractor
+    // upstream scrapes any design that says "script", nothing about it is
+    // npm-shaped, and this text seeds the autofix child's prompt, so on a
+    // CMake/cargo project the repair it invites is to write a package.json.
     // readLaunchManifest resolves package.json, else a Makefile's targets, else
-    // nothing — and nothing means no failure plus a note, never a silent pass.
+    // nothing — and nothing means a note, never a failure and never a silent pass.
     const declared = await readDeclaredScripts(cwd)
     if (declared.length > 0) {
         const manifest = readLaunchManifest(cwd)
@@ -768,35 +741,33 @@ export async function runFinalIntegrationGate(
             tally.ran(label)
         }
     }
-    // EXECUTE the launch contract: every declared script that is
-    // neither boot-class (the boot check below owns those) nor already covered by
-    // the integration commands above RUNS as a one-shot, in declared order —
-    // existence is not launchability (`migrate`/`seed` shipped as first-call
-    // TypeErrors while the gate checked only that they exist). The env-gap
-    // contract extends to missing external INFRASTRUCTURE (no DB/daemon on this
-    // box → skip, not fail); a skip whose script also carries a standing EXCUSE
-    // note (F7) is surfaced as an UNOBSERVED warning — the note may be covering a
-    // real defect the gate could not reach here — a "pre-existing bug" note can
-    // excuse the exact scripts that then ship broken.
+    // EXECUTE the launch contract: every declared script that is neither
+    // boot-class (the boot check below owns those) nor already covered by the
+    // integration commands above RUNS as a one-shot, in declared order. Existence
+    // is not launchability — a script can be present in the manifest and throw on
+    // its first call. The env-gap contract extends to missing external
+    // INFRASTRUCTURE here (no DB or daemon on this box → skip, not fail), and a
+    // skip whose script also carries a standing EXCUSE note is surfaced as an
+    // UNOBSERVED warning: the note may be covering a real defect the gate could
+    // not reach.
     if (declared.length > 0) {
         const covered = cmds.flatMap(([bin, args]) =>
             (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
         )
         const skippedLaunch: string[] = []
-        // A declared script the manifest doesn't expose is already a launch-contract
-        // failure above; executing it too would double-report (pre-aggregation the
-        // contract diff early-returned, so this loop could assume presence).
-        // EXECUTION STAYS npm-ONLY. The diff above now also speaks Makefile (16A),
-        // but the runner below is literally `bun run <name>`; on a Makefile project
-        // `present` is empty, so every declared target is skipped rather than run
-        // through the wrong tool. Widening the RUNNER is a separate lever with its
-        // own A/B, not a free rider on an inertness fix.
+        // A declared script the manifest doesn't expose is already a
+        // launch-contract failure above; executing it too would double-report.
+        // EXECUTION STAYS npm-ONLY: the runner below is literally `bun run <name>`,
+        // so on a Makefile project `present` is empty from `packageScripts` and
+        // every declared target is skipped rather than run through the wrong tool.
+        // The diff above does speak Makefile; widening the RUNNER to match is a
+        // separate change.
         const present = new Set(Object.keys(packageScripts(cwd)).map(s => s.toLowerCase()))
         const scripts = packageScripts(cwd)
-        // CONFIG-GAP INPUTS, read once: the tracked file list and the
-        // union of every tracked env template's declared variables. Both empty on a
-        // non-git tree or a tree with no template, which makes the whole check inert
-        // — a project with no template gains no excuse. See launch-config-gap.ts.
+        // CONFIG-GAP INPUTS, read once: the tracked file list and the union of every
+        // tracked env template's declared variables. Both are empty on a non-git tree
+        // or one with no template, which makes the whole check inert there — a
+        // project with no template gains no excuse. See launch-config-gap.ts.
         const closure = envClosure(cwd)
         const trackedForGap = closure.templates.length > 0 ? (trackedFilesFn(cwd) ?? []) : []
         const launchTimeout = Math.min(timeoutMs, 180_000)
@@ -821,17 +792,16 @@ export async function runFinalIntegrationGate(
             }
             tally.observed()
             if (r.outcome === 'fail') {
-                // A CONFIG GAP IS NOT A CODE FAULT. The run died on
-                // `bun run seed` exiting 1 because ADMIN_PHONE — which the project's
-                // own `.env.example` DECLARES — is absent from this box, and the only
-                // way to supply it is a gitignored `.env` the commit cannot contain.
-                // Four static conditions (findLaunchConfigGap) plus one dynamic one:
-                // re-run with the variables supplied as synthetic placeholders, and
-                // reclassify ONLY if that exits 0. A script that fails for its own
-                // reasons fails again with the values present and stays a FAIL — an
+                // A CONFIG GAP IS NOT A CODE FAULT. A script can exit non-zero only
+                // because a variable its own committed template DECLARES is absent
+                // from this box, where the only way to supply it is a gitignored
+                // `.env` no commit can contain. findLaunchConfigGap decides the
+                // static half; the dynamic half is this re-run with the variables
+                // supplied as synthetic placeholders, and the reclassification
+                // happens ONLY if that exits 0. A script that fails for its own
+                // reasons fails again with the values present and stays a FAIL: an
                 // absent variable is not a licence to ignore an exit code the code
-                // caused. Nothing is parsed from the child's stderr: the wording is
-                // the project's, not the harness's.
+                // caused. Nothing is parsed from the child's stderr.
                 const gap = findLaunchConfigGap({
                     cwd,
                     script: name,
@@ -882,39 +852,37 @@ export async function runFinalIntegrationGate(
             }
         }
     }
-    // Boot + render ALWAYS runs: it is independent of test results by
-    // construction, and it carries the run's most load-bearing signal — earlier
-    // failures no longer shadow it. Its failures rank FIRST in the aggregate.
-    // A boot that never RAN is its own verdict;
-    // it lives outside the tally's dynamic counters on purpose, so the test/build
-    // commands that did run cannot cancel it.
+    // Boot + render ALWAYS runs. It is independent of test results by
+    // construction and carries the run's most load-bearing signal, so its failures
+    // rank FIRST in the aggregate and earlier failures cannot shadow it. A boot
+    // that never RAN is its own verdict, kept outside the tally's dynamic counters
+    // on purpose, so the test/build commands that did run cannot cancel it.
     //
-    // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict, and the
-    // zero-attempts branch of GateTally.verdict). Nothing was discovered, so nothing
-    // ran, so the blindness guard below (attempted === 0 → null) does not fire — and
-    // reporting this as `PASS — no integration command found (statics passed)`
-    // makes "we never checked" read identically to "we checked and it was fine",
-    // and a run can ship that verdict while carrying open verify-FAIL debt.
-    // The outcome stays `ok: true` (non-blocking, justified at unobservedVerdict) but
-    // is labelled, trailed and carried as debt by the caller. It needs no new command
-    // source, so unlike the harvest lever refuted at discoverIntegrationCommands it
-    // cannot inject a fabricated failure. The inert-contract note rides on it too: a
-    // non-npm project carrying a launch contract usually discovers no command either,
-    // and that is exactly the run whose silence must not read as "the contract was
-    // checked and was fine".
+    // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict and the
+    // zero-attempts branch of GateTally.verdict). Nothing discovered means nothing
+    // ran, so the blindness guard below cannot fire either —
+    // `observabilityGapFailure` returns null the moment `attempted === 0`. Calling
+    // that a PASS makes "we never checked" read identically to "we checked and it
+    // was fine", and a run can ship that verdict while carrying open verify-FAIL
+    // debt. The outcome stays `ok: true` and non-blocking, but is labelled,
+    // trailed and carried as debt by the caller. It needs no new command source, so
+    // unlike the harvest refused at discoverIntegrationCommands it cannot inject a
+    // fabricated failure. The inert-contract note rides on it: a non-npm project
+    // carrying a launch contract usually discovers no command either, and that is
+    // exactly the run whose silence must not read as "the contract was checked and
+    // was fine".
     //
-    // This return sits AFTER the launch-script loop, not before it. Firing first,
-    // a DECLARED launch script never runs on a tree with no discoverable
-    // integration command. "Nothing to observe"
-    // is a fact about the tally — no attempt, no failure — not about discovery, and
-    // asking the tally makes the two paths see the same state. It still returns
-    // before the boot `else` branch and the post-boot closure scans, whose stage is a
-    // statement about when they are meaningful.
+    // This return sits AFTER the launch-script loop, not before it. Firing first, a
+    // DECLARED launch script would never run on a tree with no discoverable
+    // integration command. The condition asks the TALLY — no attempt and no failure
+    // — rather than asking discovery, so both paths see the same state. It still
+    // returns before the boot section and the post-boot closure scans.
     if (!boot && tally.silent()) return tally.verdict(debts)
     // The boot CONCEPT lives in boot-probe.ts (runBootSection): discovery,
     // served-app detection, the probe defaults, the boot check, orphan-port
     // recovery, the port-holder diagnosis, the skip verdict and the
-    // rejected-launch-script branch. This is the record, and nothing else.
+    // rejected-launch-script branch. What is left here is only the recording of
+    // its result into the tally.
     const bootSection = await runBootSection(cwd, {
         ...(planText === undefined ? {} : {planText}),
         ...(bootGraceMs === undefined ? {} : {graceMs: bootGraceMs}),
@@ -931,16 +899,16 @@ export async function runFinalIntegrationGate(
     }
     if (bootSection.ranLabel) tally.ran(bootSection.ranLabel)
     for (const w of bootSection.warnings) tally.warn(w)
-    // Full-skip blindness guard: commands were discovered but every
-    // one skipped → rank-0 failure, never a static-only PASS. Runner resolvability
-    // is checked through resolveRunner so the failure text can name the missing
-    // runner when that is the cause.
+    // Full-skip blindness guard: commands were discovered but every one skipped →
+    // rank-0 failure, never a static-only PASS. Runner resolvability is checked
+    // through resolveRunner so the failure text can name the missing runner when
+    // that is the cause.
     const gap = tally.blindness(b => resolveRunner(b).ok)
     if (gap) tally.fail(gap, 0)
     // The remaining run-level closure scans — "the shipped tree references or
-    // requires something it does not contain" — after every dynamic section, so
-    // their failures keep their historical place in the aggregate (CLOSURE_SCANS:
-    // 'post-boot').
+    // requires something it does not contain" — after every dynamic section, which
+    // is where their failures sit in the aggregate's within-rank order
+    // (CLOSURE_SCANS: 'post-boot').
     runClosureScans('post-boot', {cwd, planText}, (t, r) => tally.fail(t, r))
     return tally.verdict(debts)
 }
