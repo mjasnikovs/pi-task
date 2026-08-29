@@ -1,17 +1,16 @@
 /**
- * Project orientation core — a bounded snapshot of the few files every research
- * worker re-reads cold to learn "what is this project" (manifest, config, domain
- * types, schema, entrypoints, API surface). The four workers run as separate
- * child processes with no shared memory, so today each one independently
- * `read()`s the same hot files: across a recorded run, package.json and the
- * shared type barrel are read dozens of times each, and most worker reads repeat
- * a file another worker in the same task had already read.
+ * Project orientation core — a bounded snapshot of the few files a research worker
+ * re-reads cold to learn "what is this project" (manifest, config, domain types,
+ * schema, entrypoints, API surface). The four research workers are separate child
+ * processes with no shared memory, so without this each one reads the same hot
+ * files for itself.
  *
- * This module picks that orientation core from the file inventory (repo-agnostic,
- * by path convention), reads it ONCE in the parent, and the caller folds it into
- * the shared prompt header — so every worker already has those files and skips
- * the cold read. It is purely additive: nothing is blocked, so a worker can still
- * read anything it wants; orientation only removes the need to.
+ * This module picks that core from the file inventory (repo-agnostic, by path
+ * convention) and reads it ONCE in the parent. The caller folds the block into a
+ * prompt: refine gets a tier-0/1 subset, and phases.ts prepends the full block to
+ * the two READ-HEAVY research workers (`worker:files`, `worker:apis`) — not to all
+ * four. It is purely additive: nothing is blocked, so a worker can still read
+ * anything it wants; orientation only removes the need to.
  *
  * Bounded by design — the snapshot can never overflow the prompt regardless of
  * repo size: a hard total byte budget, a per-file cap (one huge file can't eat
@@ -21,23 +20,19 @@
  */
 
 /**
- * Total bytes of file content the orientation block may contain (~10k tokens).
- * This is the real overflow guard: it bounds the block regardless of repo size,
- * and because the snapshot is prepended to each read-heavy worker it also caps
- * the prefill those workers pay. Selection stops as soon as adding a file would
- * exceed it.
+ * Total bytes the emitted orientation block may occupy. This is the real overflow
+ * guard: it bounds the block regardless of repo size, and because the snapshot is
+ * prepended to each read-heavy worker it also caps the prefill those workers pay.
+ * Selection stops as soon as adding a file would exceed it.
  */
 export const ORIENTATION_BYTE_BUDGET = 40 * 1024
 /** A single file larger than this is skipped (read by the worker as before). */
 export const ORIENTATION_PER_FILE_MAX = 12 * 1024
 /**
  * Backstop file-count cap — a guard against a pathological repo with hundreds of
- * tiny core files packing the byte budget into noise, NOT a normal-case limit.
- * It is deliberately set high enough that the byte budget binds first on real
- * repos (a small project hits the budget at a dozen or so files; a 5000-file repo
- * yields only ~6 orientation candidates because leaf source is filtered out). An
- * earlier cap of 16 wrongly bound before the budget — e.g. it dropped 5 core
- * files on a 165-file repo while leaving 17KB of budget unused.
+ * tiny core files packing the byte budget into noise, NOT a normal-case limit. Set
+ * high enough that the byte budget binds first: whenever this cap is what stops
+ * selection, budget is left unspent and core files are dropped for no reason.
  */
 export const ORIENTATION_MAX_FILES = 40
 
@@ -105,10 +100,9 @@ function depth(p: string): number {
  */
 export function orientationTier(path: string): number | null {
     const lower = path.toLowerCase()
-    // Never orient on vendored/build output or tests: a dependency's manifest or
-    // a big *.test.ts would otherwise outrank the project's own files and eat the
-    // budget (node_modules/hono/package.json
-    // and zod-schemas.test.ts both crowded out genuinely hot project files). A
+    // Never orient on vendored/build output or tests: a dependency's package.json
+    // is tier 0 by basename and a `*.test.ts` under `src/types/` is tier 2, so
+    // either would outrank the project's own files and eat the budget. A
     // git-ls-files inventory won't list these anyway; this is belt-and-braces.
     if (/(^|\/)(node_modules|dist|build|out|vendor|\.git|coverage)\//.test(lower)) return null
     if (/\.(test|spec)\.[a-z]+$/.test(lower) || /(^|\/)(__tests__|e2e)\//.test(lower)) return null
@@ -179,10 +173,9 @@ export async function buildOrientation(
     const supplied = new Set<string>()
     const parts: string[] = []
     // Budget the *emitted* block, not just the raw content: the per-file fence
-    // (`--- path ---\n` + the `\n\n` join) and the fixed wrapper add up across
-    // many files and would otherwise let the block overrun the budget (a 27-file
-    // repo overran a content-only budget by >1KB). Seed `used` with the wrapper
-    // so the final block is guaranteed ≤ byteBudget.
+    // (`--- path ---\n` + the `\n\n` join) and the fixed wrapper add up across many
+    // files, so a content-only budget lets the block overrun. Seeding `used` with
+    // the wrapper makes `Buffer.byteLength(block) <= byteBudget` an invariant.
     const HEADER =
         `PROJECT ORIENTATION (full contents of the project's core files — `
         + `already provided, do not re-read these)\n`
