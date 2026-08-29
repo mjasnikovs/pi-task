@@ -97,12 +97,11 @@ export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
 }
 
 /**
- * Persist, flash and announce a failure — and RETURN the classification.
+ * Persist, flash and announce a failure, and return the classification.
  *
- * Returning `void` would strand the name it has just computed, and the
- * caller learned how the run ended by re-reading the task file's front matter and
- * narrowing it to a boolean. Handing the value back is what lets `TaskRunner.run`
- * say `RunEnd` instead.
+ * `TaskRunner.run` builds its `RunEnd` from the returned `state` and `reason`.
+ * The front-matter write here is what a later resume reads, not the channel
+ * this process uses to learn how the run ended.
  */
 export async function handleFailure(
     err: unknown,
@@ -115,8 +114,8 @@ export async function handleFailure(
     await updateTaskFrontMatter(cwd, id, {state: c.state, reason: c.reason})
     flashTerminalWidget(ctx, c.state, id, c.flash)
     ctx.ui.notify(`${id} ${c.notify}`, c.level)
-    // Mirror to remote viewers — ctx.ui.notify is terminal-only, so without this
-    // the remote view shows nothing when a task fails.
+    // Mirror to remote viewers. `ctx.ui.notify` reaches the terminal UI only, so
+    // without this call the remote view shows nothing when a task fails.
     publishLifecycleNotice(`${id} ${c.notify}`, c.level)
     return c
 }
