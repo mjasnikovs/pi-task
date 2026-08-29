@@ -1,37 +1,29 @@
 /**
  * frozen-path-guard — deterministic write-deny on spec-frozen paths for the
- * write-capable gate children (the enforce EDIT pass especially).
+ * write-capable gate children, the enforce EDIT pass especially.
  *
- * The failure class (deferred once as the last unshipped
- * piece of the frozen-contract work): a spec's CONSTRAINTS pin a path as
- * off-limits ("**Do NOT modify** `src/server/index.ts`"), and a later
- * write-enabled GATE pass — the enforce child runs `read,edit` — edits that path
- * anyway. Its edits are judged only locally (a guideline-compliance verdict), then
- * committed as an "ENFORCE GUIDELINES" snapshot on top of the verified task. The
- * frozen contract is silently mutated by the very pass meant to police the work.
+ * The failure class: a spec's CONSTRAINTS pin a path as off-limits ("**Do NOT
+ * modify** `src/server/index.ts`"), and a later write-enabled GATE pass edits it
+ * anyway. The enforce child runs with `ENFORCE_TOOLS = 'read,edit'`, its edits
+ * are judged only for guideline compliance, and they are then committed as an
+ * `ENFORCE GUIDELINES` snapshot on top of the verified task — so the frozen
+ * contract gets mutated by the very pass meant to police the work.
  *
- * Prompt framing is insufficient for this class. Put a "FROZEN CONTRACT, MUST
- * NOT edit `X`" line in front of a local model and hand it a build error whose
- * obvious fix is inside `X`, and a large minority of the time it answers "I will
- * add … to `X`". Most of the rest of the time it does find a legitimate way
- * round — a new `.d.ts`, a `/// <reference>` — which is exactly why undoing the
- * violation afterwards is workable: the honest answers are already there.
+ * A tool-layer deny is not available. pi 0.84.4 offers `--tools` and
+ * `--exclude-tools`, both allow/deny by tool NAME; no flag scopes an edit to a
+ * path. A chmod-style physical deny would leave the child thrashing on a bare
+ * EACCES, and the enforce child has NO WALL CLOCK to stop it — the `gate` row of
+ * WORKER_PROFILES sets `worker-timeout` to `{timeoutMs: 0}`, leaving only a
+ * per-command watchdog and a stream watchdog.
  *
- * A chmod-style physical deny holds, but makes the model THRASH on the bare
- * EACCES — unacceptable on the enforce child, which runs UNGUARDED (no
- * wall-clock timeout). pi itself has no path-level edit
- * interception (only tool-NAME allow/deny), so the achievable, thrash-free,
- * stack-agnostic realization of a tool-layer deny is this: let the pass edit
- * freely, then deterministically UNDO any frozen-path change it made before those
- * edits can be committed. The violating write never lands in a commit, regardless
- * of what the model intended — no model in the loop, same discipline as
- * git-state-guard.
+ * So the achievable deny is after the fact: let the pass edit freely, then
+ * deterministically UNDO any frozen-path change before those edits can be
+ * committed. No model is in the loop, the same discipline as git-state-guard.
  *
- * Everything degrades to a no-op when the spec froze nothing (a single-`/task`
- * run, or a spec with no `Do NOT modify` line naming a path → no frozen paths →
- * nothing snapshotted, nothing reverted) and on any git error. Pure git shape,
- * zero stack assumptions — a frozen path exists for a CLI, a library, a script
- * collection exactly as for a web app.
+ * Everything degrades to a no-op when the spec froze nothing — a single-`/task`
+ * run, or a spec with no `Do NOT modify` line naming a path — and on any git
+ * error. Pure git shape, zero stack assumptions: a frozen path exists for a CLI,
+ * a library or a script collection exactly as for a web app.
  */
 import {extractProhibitions} from './prohibition-probe.js'
 
@@ -40,10 +32,14 @@ export type FrozenGit = (args: string[]) => Promise<{stdout: string; exitCode: n
 
 /**
  * The concrete paths the spec forbids modifying, normalized and de-duplicated —
- * the SAME extraction the verify prohibition-probe and the accept-debt ledger
- * consume, so "frozen" means one thing across the gates. Empty when the spec is
- * null or names no path-like token on a modification-ban line: the guard is then a
- * no-op by construction.
+ * `extractProhibitions`, the same extraction the verify prohibition probe
+ * (gate-deps.ts) and the compose-time conflict detector (frozen-conflict.ts)
+ * consume, so "frozen" means one thing across the gates.
+ *
+ * Normalisation strips a leading `./` and a trailing `/`: measured, a spec
+ * banning `` `./src/a.ts` `` and `` `src/b/` `` yields `src/a.ts` and `src/b`.
+ * A null spec, or one with no modification-ban line naming a path, yields an
+ * empty list and the guard is a no-op by construction.
  */
 export function frozenPathsFromSpec(spec: string | null | undefined): string[] {
     if (!spec) return []
@@ -58,12 +54,13 @@ export function frozenPathsFromSpec(spec: string | null | undefined): string[] {
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
- * Does this prose/tool-output text NAME the given path? Word-bounded on both
- * sides so `tsconfig.json` matches `` `tsconfig.json` ``, `(tsconfig.json:18)`
- * and a bare mention, but never `foo.tsconfig.json`, `config/tsconfig.json`
- * (a different file) or `tsconfig.json5`/`tsconfig.json.bak`. Shared by the
- * compose-time unsatisfiable-pair detector (frozen-conflict.ts) and lint-fix's
- * non-convergence trace, so "the text names a frozen path" means one thing.
+ * Does this prose or tool-output text NAME the given path? Word-bounded on both
+ * sides. Measured against `tsconfig.json`: `` `tsconfig.json` ``,
+ * `(tsconfig.json:18)` and a bare mention all match; `foo.tsconfig.json`,
+ * `config/tsconfig.json` (a different file), `tsconfig.json5` and
+ * `tsconfig.json.bak` all do not. Shared by the compose-time unsatisfiable-pair
+ * detector (frozen-conflict.ts) and lint-fix's non-convergence trace, so "the
+ * text names a frozen path" means one thing.
  */
 export function pathNamedIn(text: string, path: string): boolean {
     const p = path.replace(/^\.\//, '').replace(/\/+$/, '')
@@ -77,6 +74,10 @@ export function pathNamedIn(text: string, path: string): boolean {
  * anything must be reverted at all. A rename line (`R  old -> new`) yields the NEW
  * path — the side that carries the child's write. Deterministic and pure so the
  * parsing is unit-tested without a real repo.
+ *
+ * Every shape below was taken from real `git status --porcelain` output, not
+ * assumed: ` M path`, ` D path`, `?? path`, `R  old -> new`, and a path
+ * containing a space, which git emits wrapped in double quotes.
  */
 export function parseChangedFrozenFiles(porcelain: string): string[] {
     const out: string[] = []
@@ -109,10 +110,22 @@ export function parseChangedFrozenFiles(porcelain: string): string[] {
  * Runs AFTER the task's own work is committed (HEAD), so "restore to HEAD" keeps
  * the verified task's version of the frozen file and discards ONLY the gate
  * child's edit on top of it — the task's own frozen-path edits, if any, are a
- * separate concern the verify prohibition-probe surfaces. `git checkout HEAD`
- * covers modified/deleted tracked files under each pathspec; `git clean` removes
- * any untracked file the pass created under a frozen directory. Both are scoped to
- * the frozen pathspec, so nothing else in the tree is touched.
+ * separate concern the verify prohibition probe surfaces. `git checkout -f HEAD`
+ * covers modified and deleted tracked files under each pathspec; `git clean -fdq`
+ * removes untracked files the pass created under a frozen directory. Both are
+ * scoped to the frozen pathspec.
+ *
+ * Run against a real repo with one frozen directory and one free one: a modified
+ * file came back to its HEAD content, a deleted file came back, and two untracked
+ * creations (one with a space in its name) were removed, while an edit to a file
+ * OUTSIDE the pathspec survived untouched.
+ *
+ * ONE CASE IS NOT FULLY UNDONE: a rename already STAGED in the index. `git mv`
+ * inside the frozen directory leaves `frozen/new.txt` present and staged after
+ * both commands, because checkout cannot restore a path HEAD does not contain and
+ * clean skips tracked files — while this function still reports it as reverted.
+ * An ordinary edit-tool rename is a delete plus an untracked create, and that IS
+ * fully undone; staging requires git, which the enforce child does not have.
  *
  * Best-effort: an empty frozen list, a non-git tree, or any git error yields an
  * empty result — the guard must never break the gate on a project it cannot reason

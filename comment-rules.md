@@ -17,7 +17,7 @@ Checked on 2026-08-29, not assumed:
 
 | what | value |
 | --- | --- |
-| model | `Qwen3.6-27B-NVFP4-MTP.gguf` |
+| model | `Qwen3.8-27B-NVFP4-MTP-VERY-HIGH.gguf` |
 | llama.cpp build | `b10665-ca3d5a3e1` |
 | endpoint | `http://127.0.0.1:8080` |
 | context | 120064 |
