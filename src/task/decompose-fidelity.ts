@@ -1,13 +1,13 @@
 /**
  * decompose-fidelity — verbatim fidelity of plan derivations.
  *
- * The failure this closes: the design's §12 milestone lines 2 and 4 end in
- * "guards + tests" / "contact + tests"; the decomposed titles carried everything
+ * The failure this closes: a design's milestone line ends in an additive
+ * constraint — "… guards + tests" — and the decomposed title carries everything
  * BUT the "+ tests" suffix. A title is ALL a per-task pipeline ever sees, so a
- * silently dropped constraint fragment vanishes from the whole run — the dropped
- * tests were exactly the instrument that would have caught the shipped 404 bug.
- * Decompose paraphrases freely and NOTHING compared a title to the spec line it
- * derives from.
+ * silently dropped fragment vanishes from the whole run, and the dropped thing is
+ * disproportionately the instrument that would have caught the bug. Decompose
+ * paraphrases freely, and without this nothing compares a title to the spec line
+ * it derives from.
  *
  * Mechanism (contracts.ts pattern, applied to decompose itself): the decompose
  * prompt asks each task line to cite its origin as a trailing
@@ -20,9 +20,11 @@
  *   3. RE-ATTACHES the missing fragments to the title verbatim.
  *
  * Scope is deliberately the additive-suffix class (`+`-joined fragments): those
- * are constraints by construction, so re-attachment can never inject noise that
- * the cited line doesn't demand — worst case is redundancy with what the title
- * already says, never fabrication. Whole-line paraphrase drift is NOT judged here
+ * are constraints by construction, so re-attachment can never inject noise the
+ * cited line does not demand — worst case is redundancy with what the title
+ * already says, never fabrication. In practice not even that: a title that
+ * already carries the fragment restores nothing, and the singular/plural
+ * allowance means "a test" counts as covering "tests". Whole-line paraphrase drift is NOT judged here
  * (a title is a paraphrase by design); requirement-level coverage owns that.
  * No similarity thresholds anywhere: grounding is exact normalised substring,
  * presence is exact word membership (with a singular/plural `s` allowance).
@@ -50,9 +52,12 @@ const SOURCE_RE = /^\[source:\s*"([\s\S]*)"\s*\]$/i
  * comes back as `Invites — create/validate/redeem, /join/:token page.` Screening
  * every spec line in its RENDERED form is what makes those quotes match at all.
  *
- * The two directions this has to hold in:
- *   FLOOR   a real spec line with ONE content word altered must NOT be grounded.
- *   CEILING a real spec line quoted without its markup MUST be grounded.
+ * The two directions this has to hold in, both run:
+ *   FLOOR   a real spec line with ONE content word altered must NOT be grounded —
+ *           changing `sessions` to `tokens`, or `redeem` to `revoke`, drops it.
+ *   CEILING a real spec line quoted without its markup MUST be grounded — both the
+ *           `2. **Auth** —` numbering-and-bold case and the backticked
+ *           `` `/join/:token` `` case still match.
  */
 function demark(s: string): string {
     return s
@@ -67,10 +72,13 @@ function demark(s: string): string {
  * Undo the backslash-escaping a model applies to a quote it is putting INSIDE a
  * double-quoted clause. `[source: "… \`import { sql } from \\"bun\\"\` gotcha …"]`
  * is a faithful copy of a line the document stores with plain quotes; the
- * backslashes are an artefact of the delimiter, not content, and a real share of
- * otherwise-faithful quotes fail to match for this reason alone.
- * Only `\"` is undone — no other escape sequence is interpreted, so this
- * cannot rewrite a quote into something the document happens to contain.
+ * backslashes are an artefact of the delimiter, not content, so without this an
+ * otherwise-faithful quote fails to match for that reason alone.
+ *
+ * Only `\"` is undone — no other escape sequence is interpreted, so this cannot
+ * rewrite a quote into something the document happens to contain. Confirmed both
+ * ways: the escaped-quote citation grounds, and a citation carrying a literal
+ * `\n` does not.
  */
 function unescapeQuotes(s: string): string {
     return s.replace(/\\"/g, '"')
@@ -86,15 +94,17 @@ export interface SourcedTitle {
 /**
  * Split a decompose title into its base and its GROUNDED source citations.
  *
- * PLURAL, because the model emits plural. The prompt asks for one trailing
- * citation and a quarter of real titles carry more — 62 of 244 across the 20
- * recorded runs. The old pattern was `\[source:\s*"(.+)"\]$`: greedy `.+`
- * against an end anchor, so on `[source: "A"] [source: "B"]` it matched from the
- * FIRST clause to the LAST quote and produced the superstring `A"] [source: "B`,
- * which of course is not in the document. Two real citations became one
- * fabricated one, and both were discarded. Peeling from the end with
- * lastIndexOf is the fix; a lazy quantifier is NOT, because leftmost-first
- * matching plus the `$` anchor expands it across the later clauses just the same.
+ * PLURAL, because the model emits plural: the prompt asks for one trailing
+ * citation and a real share of titles carry more than one.
+ *
+ * A single anchored pattern cannot read them. Run on `[source: "A"] [source: "B"]`,
+ * `\[source:\s*"(.+)"\]$` captures the superstring `A"] [source: "B` — from the
+ * FIRST clause to the LAST quote — which is of course not in the document, so two
+ * real citations become one fabricated one and both are discarded. Making the
+ * quantifier LAZY changes nothing: `(.+?)` against the same input captures the
+ * identical superstring, because leftmost-first matching plus the `$` anchor
+ * expands it across the later clauses just the same. Peeling from the end with
+ * lastIndexOf is what actually works — confirmed, both citations come back.
  *
  * An absent clause yields no sources; a fabricated (ungrounded) one is dropped
  * — exactly like keepGroundedContracts rejects a paraphrased quote.
