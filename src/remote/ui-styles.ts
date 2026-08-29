@@ -9,11 +9,9 @@ export const STYLES = `    :root {
     body {
       background: var(--base); color: var(--text);
       font-family: ui-monospace, monospace;
-      /* --app-h is set from window.innerHeight (see setAppHeight) so the column
-         height is a stable pixel value across an orientation change. 100dvh is a
-         fallback for first paint / no-JS: iOS Safari interpolates dvh during the
-         rotation animation, which makes the whole flex column resize repeatedly
-         ("spazzing out") — a fixed px height does not. */
+      /* --app-h is set by setAppHeight (visualViewport.height, falling back to
+         window.innerHeight) so the column height is a stable pixel value across
+         an orientation change. 100dvh is the fallback for first paint / no-JS. */
       height: var(--app-h, 100dvh);
       display: flex; flex-direction: column; overflow: hidden;
       padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
@@ -207,7 +205,7 @@ export const STYLES = `    :root {
       align-self: stretch; max-width: 100%; font-size: 12px;
     }
     /* Header row above a code block: language label on the left, copy button on
-       the right (the surface bar that used to live on .code-lang). */
+       the right, on its own surface bar. */
     .code-head {
       display: flex; align-items: center; justify-content: space-between;
       background: var(--surface0);
@@ -261,9 +259,8 @@ export const STYLES = `    :root {
       position: relative;
     }
     /* Held mid-run input: what you typed is waiting for the next task turn.
-       In normal flow, NOT absolutely positioned over the composer — as an
-       overlay it covered the task widget's progress row (caught in a real
-       browser against a live /task-auto run). */
+       In normal flow, NOT absolutely positioned — as an overlay it would cover
+       the task widget's progress row above the composer. */
     #held-bar {
       display: flex; align-items: center; gap: 8px; flex-shrink: 0;
       background: var(--mantle); border-top: 1px solid var(--surface1);
@@ -323,8 +320,8 @@ export const STYLES = `    :root {
       font-size: 13px; z-index: 100; letter-spacing: 0.03em;
     }
     #reconnect-overlay.visible { display: flex; }
-    /* Trailing stream indicator: the same braille spinner as the thinking bubble,
-       inline at the end of the streaming text (not a green blinking block). */
+    /* Trailing stream indicator: the same braille spinner as the thinking bubble
+       (one ticker paints every .spin), inline at the end of the streaming text. */
     .cursor {
       color: var(--mauve); margin-left: 2px;
       font-family: ui-monospace, monospace;
@@ -334,8 +331,8 @@ export const STYLES = `    :root {
     /* Structured task widget (progress bar + phase badge + elapsed). Replaces the
        plain text lines when the server sends a structured data payload. */
     #status-panel.structured { white-space: normal; display: block; }
-    /* Title gets its own line and wraps (clamped to 2) — never truncated to a stub
-       the way the old single-row flex layout squeezed it on narrow/mobile widths. */
+    /* Title gets its own line and wraps, clamped to 2 — never squeezed to a stub
+       by the meta row beside it on a narrow screen. */
     .widget-title { display: -webkit-box; -webkit-box-orient: vertical;
       -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--text);
       font-size: 13px; line-height: 1.3; word-break: break-word; }
