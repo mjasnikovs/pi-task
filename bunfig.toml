@@ -1,13 +1,7 @@
 [test]
 pathIgnorePatterns = ["dist/**", "**/__fixtures__/**"]
-# test-file-progress: names each test file as it starts, so a hung CI log says
-#   WHICH file hung. Inert unless PI_TEST_PROGRESS is set (CI sets it).
-# test-timeout: raises bun's 5000ms default to 30s. That default is a Windows-CI
-#   tripwire for the 22 test files that spawn real subprocesses — see the
-#   script's header for the two jobs it killed.
-# test-ambient-isolation: clears the developer's saved config + PI_TASK_* env
-#   so a local run measures the code, not the machine. FIRST in the list: it
-#   must run before anything imports src/config/config.ts.
+# test-ambient-isolation must stay FIRST: it runs before anything imports
+# src/config/config.ts.
 preload = [
     "./scripts/test-ambient-isolation.ts",
     "./scripts/test-file-progress.ts",
