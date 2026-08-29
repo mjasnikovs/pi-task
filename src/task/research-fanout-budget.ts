@@ -1,8 +1,8 @@
 /**
- * nexttask 5B — the two candidate bounds on worker:apis's project-source fan-out.
+ *  — the two candidate bounds on worker:apis's project-source fan-out.
  *
  * ⚠ ONE of the levers in this file is wired: the RESCUE progress deadline
- * (`workerProgressCeilingMs`) SHIPPED ON in nexttask 9, on a PASS measured over 42
+ * (`workerProgressCeilingMs`) SHIPPED ON in, on a PASS measured over 42
  * trials per arm against an instrument whose own false-break rate is on record at
  * 1.5%. CAP, SCALE and RESCUE-CARRY remain OFF unless their env var is set — CAP
  * and SCALE were rejected on argument (see below), carry-forward was measured
@@ -12,9 +12,9 @@
  * against the shipped baseline in the SAME build — the alternative (dist surgery)
  * measures a patched copy of the code and not the code. Nothing may read them
  * outside that harness until it reports PASS; a lever wired on argument rather
- * than measurement is the failure mode nexttasks exists to prevent.
+ * than measurement is the failure mode to avoid here.
  *
- * THE FAULT THEY TARGET (mx5 run 18, measured — scripts/research-restart-baserate.ts):
+ * THE FAULT THEY TARGET:
  * `worker:apis` fans out `pi-worker-docs(module: ".")` project-source lookups, each
  * of which spawns its own summarising child, and the per-worker wall-clock cap is
  * 240s. Pearson r(project lookups, worker wall clock) = 0.909 over 24 tasks. 0-4
@@ -27,7 +27,7 @@
  *
  *   CAP     bound the fan-out to fit the ceiling. Told to the worker upfront
  *           (projectDocsBudgetNotice) and enforced in the tool
- *           (projectDocsBudgetExhausted), because run 18 shows the prompt alone
+ *           (projectDocsBudgetExhausted), because a shows the prompt alone
  *           does not bind: the same worker is ALREADY told "be decisive" by
  *           WORKER_TIMEOUT_HINT on every restart.
  *   SCALE   bound the ceiling to fit the fan-out: each project-source lookup
@@ -37,7 +37,7 @@
  * The risk each carries, and why the A/B's quality invariant is load-bearing: CAP
  * can produce a faster worker that ships a THINNER APIS section, which is a
  * regression wearing a win's clothes (a
- * lever moved behaviour 20/20 while fabricating 15% of it). SCALE can simply
+ * lever moved behaviour every time while fabricating part of it). SCALE can simply
  * spend the extra time and still time out, buying nothing.
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -182,10 +182,10 @@ export const DEFAULT_WORKER_PROGRESS_CEILING_MS = 1_200_000
 /**
  * The progress-based deadline's ceiling, or null when the lever is OFF.
  *
- * SHIPPED ON as of nexttask 9 — the env var is now the OFF switch, not the on
+ * SHIPPED ON as of  — the env var is now the OFF switch, not the on
  * switch. Measured baseline vs progress over 42 trials/arm on a calibrated
- * instrument (A/A false-break 1.5%): worker-timeout restarts 22/24 → 0/24,
- * degrades 8/24 → 0/24, entries up on all four high-fan-out fixtures (TASK_0021
+ * instrument: worker-timeout restarts and degrades both go to zero, and entries
+ * are up on all four high-fan-out fixtures (a task
  * 11.0 → 25.5), quality invariants HOLD, every treatment-arm ungrounded flag
  * hand-verified as an instrument artifact rather than a fabrication.
  *
@@ -208,7 +208,7 @@ export function workerProgressCeilingMs(env: Env = defaultEnv): number | null {
  *
  * Upfront and NUMERIC on purpose. The worker cannot ration a budget it learns
  * about only when it is spent, and "be decisive" — which it already receives on
- * every timeout restart — is exactly the unquantified version that run 18 shows
+ * every timeout restart — is exactly the unquantified version that a shows
  * it ignoring until the third attempt.
  */
 export function projectDocsBudgetNotice(budget: number): string {

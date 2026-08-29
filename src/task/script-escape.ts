@@ -1,7 +1,7 @@
 /**
  * script-escape — deterministic detection of CHECK SCRIPTS THAT CANNOT FAIL.
  *
- * The failure this closes (mx5 run 13, PROMPT 4 item 4): the shipped package.json
+ * The failure this closes: the shipped package.json
  * declared, verbatim,
  *     "lint": "prettier … && eslint --fix … && (tsc --noEmit 2>&1 | grep -qv 'TS18003' || true)"
  * The typecheck is neutered twice over — its output is piped into an INVERTED grep
@@ -10,7 +10,7 @@
  * consumer of that script — the repo-health verify gate, the final integration gate,
  * a human reading a green CI line — is reading a constant, not a measurement.
  *
- * It was harmless in run 13 only by luck: tsc happened to be clean (validated). The
+ * It was harmless in a only by luck: tsc happened to be clean (validated). The
  * class is not harmless — this is the same defect as run-8's F2 skip-escape, moved
  * one level out. findSkipEscapes (skip-escape.ts) scans a spec's own VERIFY block;
  * nothing scanned the SCRIPT DEFINITIONS those VERIFY blocks then invoke by name, so
@@ -19,7 +19,7 @@
  * TWO SHAPES, both crisp, both scoped to CHECK-CLASS script names:
  *
  *   A. ALWAYS-ZERO TAIL — the script's last command cannot fail (`… || true`,
- *      `… || :`, `… || exit 0`, `…; exit 0`, a trailing `|| echo` fallback). A
+ *      `… ||:`, `… || exit 0`, `…; exit 0`, a trailing `|| echo` fallback). A
  *      shell script's status is its last command's status, so this is a proof, not
  *      a heuristic: the script exits 0 no matter what the checker found.
  *
@@ -28,7 +28,7 @@
  *      is true of virtually any non-empty output, including a wall of errors.
  *
  * Deliberately NOT flagged, because each is legitimate and FP-measured against the
- * real corpus (pi-task, aiz-server, aiz-client, gofer, mx5):
+ * real corpus:
  *   - `|| exit 1` — a HARDENING, the opposite of an escape (aiz-server).
  *   - any `||`/pipe in a NON-check script (`clean`, `dev`, `start`, `copy-fonts`) —
  *     a teardown `rm -rf dist || true` is correct and common.
@@ -73,7 +73,7 @@ const INVERTED_GREP_RE = /\|\s*grep\s+(?:-\w*v\w*|-\w+\s+-\w*v\w*)/
 
 /**
  * Strip trailing subshell/group closers and separators so the tail patterns see the
- * real last command. mx5's script ends `… || true)` — without this the `)` hides it.
+ * real last command. script ends `… || true)` — without this the `)` hides it.
  */
 function tailOf(body: string): string {
     let s = body.trim()
@@ -191,7 +191,7 @@ export function scriptEscapeVerifyFindings(findings: ScriptEscapeFinding[]): str
 export function scriptEscapeDefectText(findings: ScriptEscapeFinding[]): string {
     return [
         'NEUTERED CHECK SCRIPT — this spec defines a check script that CANNOT FAIL, so every',
-        'gate that runs it reads a constant instead of a measurement (mx5 run 13 shipped',
+        'gate that runs it reads a constant instead of a measurement (a run shipped',
         '`"lint": "… && (tsc --noEmit 2>&1 | grep -qv \'TS18003\' || true)"` — the typecheck',
         'was fully disarmed, and it went unnoticed only because tsc happened to be clean).',
         "Rewrite each so it PROPAGATES the checker's exit status: drop the `|| true` /",

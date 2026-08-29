@@ -12,7 +12,7 @@
  *   PREVENTION — the planning children run with {@link PLAN_TOOLS}, an allowlist
  *   of exactly one tool. pi applies `--tools` to built-in, extension AND custom
  *   tools, so a write tool contributed by a whitelisted extension is excluded too
- *   (proven live — scripts/live-task-plan-readonly.ts). This is what actually
+ *. This is what actually
  *   makes the session read-only.
  *
  *   VERIFICATION — after every child, the working tree is compared against the

@@ -2,7 +2,7 @@
  * The one place that knows which repo paths are regenerable machine OUTPUT.
  *
  * This module exists because the knowledge was in exactly one module and two
- * others needed it (mx5 run 20). `git-state-guard.ts` knew `test-results/` was
+ * others needed it. `git-state-guard.ts` knew `test-results/` was
  * regenerable and used it for VERDICT decisions only; `write-guard.ts`'s deletion
  * guard did not, so it rejected two whole fix attempts over three Playwright
  * failure screenshots — taking each attempt's real `src/client/api.test.tsx`
@@ -22,13 +22,13 @@
  * `.svelte-kit/` are deliberately NOT in it.
  *
  * MEASURED over 269 git work trees under ~/hub, ~/tmp, ~/.cache
- * (`scripts/tracked-artifact-baserate.ts`, 2026-08-07):
+ *:
  *
- *     trees tracking any artifact path      33   (33 of 33 have .pi-tasks)
+ *     trees tracking any artifact path      33   (33 of 33 have.pi-tasks)
  *     test-results/                         33 trees / 33 files
- *     .last-run.json                        33 trees / 33 files  ← the SAME 33 files
- *     dist/, build/, .next/, .turbo/, .svelte-kit/, playwright-report/,
- *     coverage/, .nyc_output/, *.tsbuildinfo      0 trees
+ *.last-run.json                        33 trees / 33 files  ← the SAME 33 files
+ *     dist/, build/,.next/,.turbo/,.svelte-kit/, playwright-report/,
+ *     coverage/,.nyc_output/, *.tsbuildinfo      0 trees
  *
  * So `test-results/` and `.last-run.json` are exempt on MEASUREMENT — they are the
  * only artifact paths this corpus tracks at all, and the one real episode is
@@ -40,9 +40,8 @@
  * shipped artifact — and with 0 tracked instances here the exemption would never
  * fire anyway, so it would buy nothing while carrying that risk.
  *
- * 32 of the 33 trees are one A/B harness's delivery trees built from a single mx5
- * DESIGN/PROJECT.md: 32 independent RUNS of one project shape, which is evidence
- * of reproducibility and not of breadth. The 33rd is mx5 itself.
+ * 32 of the 33 trees are one A/B harness's delivery trees built from a single * DESIGN/PROJECT.md: 32 independent RUNS of one project shape, which is evidence
+ * of reproducibility and not of breadth. The 33rd is itself.
  */
 
 /** Directory prefixes and file names that are regenerable test/build output. */

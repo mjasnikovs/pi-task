@@ -1,6 +1,6 @@
 /**
  * requirements — requirement-level coverage accounting for /task-auto planning
- * (mx5 run 11, goal A).
+ *.
  *
  * The failure this closes: the design's §10 Testing section REQUIRES test-first
  * cadence, Playwright CT with screenshot baselines, a `test:ct` script, a
@@ -120,9 +120,9 @@ export function keepGroundedRequirements(
  * the rule:
  *  - an eager model extracts 40+ items top-down (every §1 decision row), so a
  *    plain first-N cap systematically drops the TAIL sections — exactly where
- *    mx5 keeps its testing obligations;
+ *    keeps its testing obligations;
  *  - "given order" as the tie-break re-creates the same tail bias one level up
- *    (mx5 run 16, measured live: the model emitted 185 requirements, 178
+ *    (measured live: the model emitted 185 requirements, 178
  *    grounded — INCLUDING §9's "serves `/api` + static `dist/`", the clause
  *    whose loss shipped a permanently blank app — and the cap's doc-order fill
  *    cut all 138 past the cap, every one from the design's tail).
@@ -158,19 +158,18 @@ export function capRequirements(
     // "MUST log every request" is 22 characters and every length-based rule reads
     // it as a fragment. Filtering ahead of the marked/rest split deleted it.
     //
-    // INSURANCE, not a measured win on mx5: across both 30-run pools exactly one
-    // distinct quote per pool is low-value AND marked, and it is a genuinely
-    // truncated one. The layering matters for specs whose obligations are SHORT,
-    // which mx5's are not. Do not cite it as the reason tail coverage holds —
+    // INSURANCE, not a demonstrated win: on the specs measured here, almost
+    // nothing is both low-value and marked. The layering matters for specs whose
+    // obligations are SHORT. Do not cite it as the reason tail coverage holds —
     // tail coverage is identical with the filter applied before the split.
     const pool = deprioritiseLowValue ? budgetedByObligation(rest, budget, sourceDoc) : rest
     return [...marked.slice(0, MAX_REQUIREMENTS), ...sectionFairFill(pool, budget, sourceDoc)]
 }
 
 /** Longest a dependency-pin row can be before it is presumed to carry an
- *  obligation after the pin. Real pins in the measured corpus run 32..48 chars;
- *  the pin-prefixed lines that DO obligate ("TypeScript `6.0.3` — one strict
- *  `tsconfig.json`: `strict`, `noUncheckedIndexedAccess`, …") run 130..260. */
+ *  obligation after the pin. A bare pin is short; a pin-prefixed line that DOES
+ *  obligate ("TypeScript `6.0.3` — one strict `tsconfig.json`: `strict`,
+ *  `noUncheckedIndexedAccess`, …") is several times longer. */
 const MAX_PIN_LENGTH = 80
 
 /** Cut mid-expression: an unbalanced fence or bracket, or a trailing separator.
@@ -229,12 +228,10 @@ export function isLowValueQuote(quote: string): boolean {
 /**
  * Deprioritise obligation-free quotes, but only as far as the BUDGET requires.
  *
- * Measured (mx5, 20402-char spec, two independent 30-run extraction pools): the
- * extractor's single-pass yield swings 20..160 for byte-identical input, and the
- * padding crowds real obligations out of the 40 that ship — high-yield runs land
- * FEWER critical obligations than low-yield ones. Critical obligations reaching
- * the shipped list go 8.50 → 9.37 of 16 on the design pool (10 runs better, 0
- * worse, p=0.0020) and 7.70 → 8.43 on the confirmation pool (12 / 0, p=0.0005).
+ * The extractor's single-pass yield swings wildly for byte-identical input, and
+ * the padding crowds real obligations out of the fixed number that ship — a
+ * high-yield run lands FEWER critical obligations than a low-yield one.
+ * Deprioritising the obligation-free quotes reverses that.
  *
  * BUDGETED, not absolute. Below the cap no slot is contested, so dropping there
  * destroys information and buys nothing; a run that filtered 55 quotes down to 20
@@ -437,7 +434,7 @@ export type ReqMapping = {kind: 'task'; task: number} | {kind: 'cross'} | {kind:
  * POLICY (a product-wide rule every slice obeys, not one slice's deliverable). The
  * per-task coverage map maps both to NONE forever, so left in the `unmapped` set
  * they kept the decompose loop's verdict INCOMPLETE and forced it to regenerate
- * the whole plan endlessly (mx5 run 12: 3 un-ownable NEGATIVE requirements drove a
+ * the whole plan endlessly (3 un-ownable NEGATIVE requirements drove a
  * complete full-stack plan to be overwritten by a backend-only one). These belong
  * in the CROSS-CUTTING carry — injected verbatim into every task — never fed back
  * as a missing area.
@@ -570,13 +567,12 @@ function formatEntry(e: RequirementEntry, marker?: string): string {
  *   • `unresolved`   — grounded requirements still unmapped after the retry rounds.
  *   • `judgeFlagged` — free-text areas the holistic coverage judge flagged as
  *     uncovered that requirement-extraction never captured as a tracked entry, so
- *     the grounded channels above are structurally blind to them (mx5 2026-07-16:
- *     §10's test-infra setup was seen ONLY by the judge and, having no carrier,
+ *     the grounded channels above are structurally blind to them (*     §10's test-infra setup was seen ONLY by the judge and, having no carrier,
  *     was warned-about then dropped). These are plain strings, not quotes of the
  *     source; marked distinctly so a task can tell an inferred area from a verbatim
  *     obligation.
  *   • `danglingArtifacts` — runtime files the spec references but nothing
- *     produces (mx5 run 13: the served `index.html` no task, tree entry, or
+ *     produces (the served `index.html` no task, tree entry, or
  *     build output ever created), still unclaimed by any title at coverage
  *     exhaustion. Deterministically extracted (artifact-closure.ts), so like
  *     judge areas they are host-authored strings, not source quotes.
@@ -633,10 +629,10 @@ export function buildRequirementsBlock(requirements: string): string {
 
 // ─── Owned (task-mapped) requirements — the run-16 channel gap ──────────────
 //
-// Of run 16's 40 kept requirements only the 6 CROSS-CUTTING ones were persisted
+// Of a 40 kept requirements only the 6 CROSS-CUTTING ones were persisted
 // and injected; the 33 TASK-MAPPED ones rode the decompose ledger (shaping the
 // title list) and then vanished — nothing ever showed a task its OWN mapped
-// obligations. TASK_0008's refine read §9's "serves `/api` + static `dist/`",
+// obligations. a task refine read §9's "serves `/api` + static `dist/`",
 // quoted it in a grill question, and still narrowed the composed spec to
 // "SPA fallback serves index.html"; the shipped server never served the client
 // bundle and the app was permanently blank. An obligation the coverage map
@@ -654,7 +650,7 @@ export interface OwnedRequirement {
      *  plan time, and spliced repair tasks shift them). */
     title: string
     /**
-     * DETACHED (nexttask 2, owned-freeze-reassign.ts): the files this obligation
+     * DETACHED: the files this obligation
      * names that its assigned task FROZE, making it unsatisfiable there. While
      * set, the entry is owned by nobody — `ownedForTitle` skips it — and `title`
      * records only where it came from. The next task whose refined prompt shows
@@ -750,46 +746,38 @@ export function buildOwnedRequirementsBlock(owned: OwnedRequirement[]): string {
 /**
  * BRACES for the owned channel (the PROMPT-1 pattern): deterministically append
  * each owned obligation the composed spec does not already carry as a
- * CONSTRAINTS bullet. Measured need (scripts/live-owned-requirement-compose-ab
- * .ts, 8 reps/arm on two real run-16 losses): with the belt block alone compose
- * folded the clause into CONSTRAINTS/ACCEPTANCE in only 2/8 reps per fixture
- * (baseline 0/8) — an instruction the model mostly ignores, the PROMPT-4 shape.
+ * CONSTRAINTS bullet. With the belt block alone, compose rarely folds the clause
+ * into CONSTRAINTS or ACCEPTANCE — it is an instruction the model mostly ignores.
  * A host-side append cannot be ignored. "Already carries" = the normalised
  * quote appears anywhere in the spec — belt-obeying reps aren't double-stated.
  * No CONSTRAINTS section (shape-invalid spec) → returned unchanged; this runs
  * only on specs the shape gate already accepted.
  *
- * NOT EXTENDED TO CONSUMER TASKS — REFUTED AT STEP 0, 2026-07-27. The proposal
- * was to classify owned requirements INVARIANT (prohibition-shaped) vs
- * DELIVERABLE and propagate the INVARIANTs from here to every task whose spec
- * names the same symbol/file, because mx5 run 17 gave all three Hono-RPC
- * obligations to TASK_0021 (which complied perfectly) while the four CONSUMER
- * tasks that never saw them — 0027/0031/0033/0034 — hand-wrote casts and shipped
- * 7 dead client call sites. It was not built, for two measured reasons
- * (scripts/owned-consumer-generality-step0.ts, re-runnable):
+ * NOT EXTENDED TO CONSUMER TASKS — considered and refuted. The proposal was to
+ * classify owned requirements INVARIANT (prohibition-shaped) vs DELIVERABLE and
+ * propagate the INVARIANTs from here to every task whose spec names the same
+ * symbol or file. The motivating case is real: one task receives every obligation
+ * about a typed client and complies perfectly, while the consumer tasks that
+ * never saw them hand-write casts and ship dead call sites.
  *
- *  1. IT DOES NOT GENERALIZE. The task's own kill condition was <20% of a second
- *     stack's OWNED requirements being prohibition-shaped. IAR1, 8 live
- *     regenerations of the real plan-time pipeline over its real 10-task list:
- *     2/42 pooled = 4.8% (narrow four-phrase reading 1/42 = 2.4%). mx5 itself is
- *     7/33 = 21.2% only under the BROAD rule above; under "never/don't/must
- *     not/do not" it is 2/33 = 6.1%. The structural reason is in accountCoverage
- *     right here: a prohibition the map leaves NONE is already carried
- *     cross-cutting to every task, so in the five reps that logged the split 18
- *     of IAR1's 19 prohibition-shaped requirements were never owner-only in the
- *     first place. mx5's 7 leaked because the model mapped them to a TASK.
- *  2. THE TARGETING RULE MISSES ITS OWN MOTIVATING CASE. Symbol/file relevance
- *     would not have reached the four violators for the clause they actually
- *     broke ("If a call isn't fully typed end-to-end via `hc`, fix the route
- *     chaining/export, don't paper over it…"): its only extractable symbol is
- *     `chaining/export`, which no consumer spec contains — 0 consumers. Its
- *     siblings would have reached all four, attaching to 13/41 tasks each; across
- *     mx5's 33 owned requirements the mean attach rate is 21% of all tasks and
- *     5/33 would attach to more than half of them (the task's own I1 trigger).
+ * Two things kill it.
  *
- * Do not re-open on mx5 evidence alone. A future attempt needs a second stack
- * where prohibition-shaped requirements actually land OWNED, and a targeting rule
- * that survives a clause whose symbols are prose.
+ *  1. IT DOES NOT GENERALIZE. Prohibition-shaped requirements mostly do not land
+ *     OWNED in the first place. The reason is in accountCoverage right here: a
+ *     prohibition the map leaves unowned is already carried cross-cutting to
+ *     every task. The ones that reach an owner reached it because the model
+ *     mapped them to a task, which is not a property of the requirement.
+ *  2. THE TARGETING RULE MISSES ITS OWN MOTIVATING CASE. Symbol or file relevance
+ *     would not have reached the violators for the clause they actually broke
+ *     ("If a call isn't fully typed end-to-end via `hc`, fix the route
+ *     chaining/export, don't paper over it…") — its only extractable symbol is
+ *     `chaining/export`, which no consumer spec contains. Its siblings would have
+ *     reached them, and would also have attached to a large fraction of every
+ *     other task in the plan, which is its own failure.
+ *
+ * A future attempt needs a stack where prohibition-shaped requirements actually
+ * land OWNED, and a targeting rule that survives a clause whose symbols are
+ * prose.
  */
 export function appendOwnedConstraints(spec: string, owned: OwnedRequirement[]): string {
     if (owned.length === 0) return spec

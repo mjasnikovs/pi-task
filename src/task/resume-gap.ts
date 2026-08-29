@@ -1,7 +1,7 @@
 /**
  * Resume gating & the honest resume banner.
  *
- * mx5 run 14 lost ~10 hours to dead air that looked like a stall: the host was
+ * a lost ~10 hours to dead air that looked like a stall: the host was
  * powered off overnight, both containers stopped at 20:00Z, and the run picked
  * up cleanly the moment they were restarted at 06:01Z. Nothing was wrong with
  * the run — the only defect was that nobody could tell. Two things follow.

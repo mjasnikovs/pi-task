@@ -1,21 +1,21 @@
 /**
  * root-cause-repair — turn a verify-FAIL that was CAUSED by another task's file
- * into a scoped repair task in the running plan (mx5 run 14, PROMPT item 5).
+ * into a scoped repair task in the running plan.
  *
- * The failure class this closes, observed end-to-end in run 14: TASK_0007 shipped
+ * The failure class this closes, observed end-to-end: a task ships
  * `test/teardown.ts` with parameterized table names in its TRUNCATE statements.
  * That bug then FAILED two later, unrelated tasks —
  *
- *   TASK_0013  "test/teardown.ts has a pre-existing bug (parameterized table names
+ *   a task  "test/teardown.ts has a pre-existing bug (parameterized table names
  *               in TRUNCATE statements) … despite all 10 actual tests passing"
- *   TASK_0019  "… due to a pre-existing teardown bug in `test/teardown.ts`
- *               (created by TASK_0007) … this task did not modify the teardown"
+ *   a task  "… due to a pre-existing teardown bug in `test/teardown.ts`
+ *               … this task did not modify the teardown"
  *
  * — and BOTH ended in an enforce-revert, so the enforce pass's edits were destroyed
  * over a defect the current task did not create. The ledger recorded the root cause
  * twice and NOTHING ever scheduled a fix: the bug survived ~24h, until the final
  * gate's fix child happened to patch it, and it also generated the "2 pre-existing
- * failures / state pollution" excuse notes repeated across TASK_0033…0038.
+ * failures / state pollution" excuse notes repeated across a task…0038.
  *
  * The channel here is deliberately narrow, because a false positive costs a whole
  * task slot and mutates a running plan. Three independent conditions must ALL hold:
@@ -23,7 +23,7 @@
  *   1. TEXT — the FAIL reason (or the resolution research's rationale) carries an
  *      explicit blame cue ("pre-existing", "created by TASK_nnnn", "bug in", "this
  *      task did not modify") and a path token near it. Merely MENTIONING a path is
- *      not blame: run 14's TASK_0010 FAIL lists `src/server/db.ts` inside the
+ *      not blame: a a task FAIL lists `src/server/db.ts` inside the
  *      spec's own "Preserve all existing files on disk" quote, and must not spawn
  *      a repair task for it.
  *   2. PROVENANCE — the blamed file was introduced by a DIFFERENT task's commit
@@ -32,13 +32,13 @@
  *      this task edited it, the defect may well be its own and the ordinary
  *      autofix/revert path is right.
  *
- * Environment-attributed failures are vetoed outright (run 14's TASK_0006: "no
+ * Environment-attributed failures are vetoed outright ('s a task: "no
  * PostgreSQL database server is available in this environment"). No file edit can
  * repair a missing daemon, so a repair task would be a guaranteed non-converging
  * yolo-FAIL.
  *
  * Everything downstream is deduplicated by FILE: N debts naming one root file yield
- * exactly ONE repair task per run (run 14 would otherwise have spawned two for
+ * exactly ONE repair task per run (would otherwise have spawned two for
  * `test/teardown.ts`). The repair task itself is just an ordinary plan entry — if it
  * fails, it lands in the ledger like any other task and is never re-spawned, which
  * is what keeps this from looping.
@@ -52,15 +52,14 @@ const PATH_TOKEN_RE = /(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g
  * Phrases that ATTRIBUTE a failure to something that predates the current task.
  * Each is a blame cue: the path token nearest a cue is the accused file. Kept
  * deliberately specific — a bare "existing" matches the spec boilerplate
- * "Preserve all existing files on disk" that run 14's TASK_0010 FAIL quotes.
+ * "Preserve all existing files on disk" that a a task FAIL quotes.
  */
 const BLAME_CUE_RE =
     /pre-?\s?existing|existing (?:bug|defect|failure|issue|fault)|(?:created|introduced|added|written) (?:by|in) TASK_\d+|(?:bug|defect|fault|error) in\b|already (?:broken|failing|red)|(?:this task )?did not (?:modify|touch|create|change)|not (?:modified|touched|created|introduced) by this task|unrelated to this task/gi
 
 /**
  * Failures the environment causes, not a file. No edit to any file repairs a
- * missing database server, so these must never open the repair channel — run 14's
- * TASK_0006 ("no PostgreSQL database server is available in this environment (no
+ * missing database server, so these must never open the repair channel — a * a task ("no PostgreSQL database server is available in this environment (no
  * binary, no Docker, no listener on port 5432)") is the canonical shape.
  */
 const ENVIRONMENT_BLAME_RE =
@@ -338,8 +337,8 @@ export interface MergedRepair {
 }
 
 /**
- * Collapse candidates by file — MANDATORY dedup: run 14's two teardown.ts debts
- * (TASK_0013, TASK_0019) must yield exactly ONE repair task naming both. First
+ * Collapse candidates by file — MANDATORY dedup: two debts naming the same
+ * teardown file must yield exactly ONE repair task naming both. First
  * record wins for defect/command (they describe the same fault); blamed tasks
  * accumulate in first-seen order.
  */

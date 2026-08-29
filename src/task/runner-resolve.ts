@@ -2,7 +2,7 @@
  * runner-resolve — make the deterministic gates able to SPAWN the project's own
  * runner when the host PATH lost it.
  *
- * The failure this closes (mx5 run 16, validated): pi was launched inside the
+ * The failure this closes: pi was launched inside the
  * sandbox through a LOGIN shell, whose /etc/profile reset PATH and dropped
  * ~/.bun/bin — so `bun` was unspawnable in every gate spawn. Under the env-gap
  * contract (ENOENT / exit 127 → skip, deliberately, so a missing tool is never a
@@ -19,7 +19,7 @@
  * The PATH PREFIX matters as much as the binary: a resolved `bun run test` still
  * re-invokes `bun` (and the repo's own bins) INSIDE the script chain, and those
  * inner calls exit 127 without the runner's directory on PATH — the same silent
- * blindness one level down (run 16's final-fix child hit exactly this and had to
+ * blindness one level down ('s final-fix child hit exactly this and had to
  * hand-export PATH). Spawn sites must therefore use runnerEnv(), not just the
  * resolved binary.
  */

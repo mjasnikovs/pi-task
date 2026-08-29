@@ -153,7 +153,7 @@ ${refined}`
 
 // STAGE 2 (2026-07-23): APIS_SEMANTICS_CONTRACT was wired in above and UNWIRED after its A/B
 // FAILED. It is the ONE lever of three that moved worker:apis's behaviour — behaviour-class
-// package queries 20/20 vs 2/20, Fisher p ≈ 0 — confirming Stage 1's mechanism (completion is
+// nearly every package query, where before it was almost none — completion is
 // set by the output CONTRACT, not the answer or the target). But it failed invariant 2a: the
 // ungrounded-symbol rate rose 1.0% -> 4.7% (p(rise) = 0.0010) and the semantics clause it adds
 // carried 15% ungrounded symbols with the mandatory `UNVERIFIED:` abstention used 0 times in 40

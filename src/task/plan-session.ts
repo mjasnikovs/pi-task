@@ -159,14 +159,14 @@ export function planDecisiveHint(question: string, suggested: string): string {
  * Corrective re-prompt for a fork-shaped question that shipped only ONE option.
  *
  * Measured on the local model (scripts/live-task-plan-step0.ts, 15 reps): the
- * SUGGESTED line is always there, but 10/15 questions named two alternatives and
+ * SUGGESTED line is always there, but most questions name two alternatives and
  * gave only one of them — so the picker showed a single card and the user had to
  * type out the option the model itself had just proposed.
  *
  * The retry quotes the question back because the child is stateless (a fresh
  * process per call, prompt only), so it cannot otherwise know what it just wrote.
- * Validated before wiring (scripts/live-task-plan-fork-alt.ts): 6/6 fires
- * recovered an ALT, and 6/6 re-asked the SAME question rather than changing the
+ * Validated before wiring: every fire recovered an ALT, and every one
+ * re-asked the SAME question rather than changing the
  * subject. It costs one extra child call on the questions where it fires.
  */
 export function planForkHint(question: string): string {
@@ -215,7 +215,7 @@ const DEFERRAL_RULE: QuestionRule = {
  * defect survives — a question with a weak default still beats no question.
  *
  * Only {@link CLARIFY_QUALITY_RULES} is shared with `/task-auto`, and only the
- * deferral rule is in it. The other two were MEASURED here (10/15 fork-shaped
+ * deferral rule is in it. The other two were measured here (fork-shaped
  * questions shipped one option; the SUGGESTED requirement is in both prompts) but
  * each costs one extra child call every time it fires, and clarify is the most
  * A/B'd path in the codebase — moving them there is its own experiment, not a
@@ -231,7 +231,7 @@ export const PLAN_QUALITY_RULES: ReadonlyArray<QuestionRule> = [
     DEFERRAL_RULE,
     {
         // A fork-shaped question that ships one option leaves the user typing out
-        // the alternative the model itself just named (10/15 measured live).
+        // the alternative the model itself just named.
         id: 'fork-shaped question with no ALT',
         detect: (q, plain) =>
             q.alt === undefined && q.suggested !== undefined && looksLikeFork(plain) ?

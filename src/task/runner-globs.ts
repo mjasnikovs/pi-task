@@ -2,13 +2,13 @@
  * runner-globs — deterministic detection of TWO TEST RUNNERS FIGHTING OVER THE SAME
  * FILES, checked as soon as a project declares both rather than discovered at run end.
  *
- * The failure this closes — SECOND occurrence, runs 7 AND 13: a project declares both
+ * The failure this closes — SECOND occurrence, a AND 13: a project declares both
  * `bun test` and `playwright test`. Bun's runner scans the whole project for
  * `*.test.*` / `*.spec.*`; Playwright's component/e2e specs ARE `*.spec.tsx`. So
  * `bun test` imports Playwright spec files, which import `@playwright/test` outside a
  * Playwright runner, and the whole suite dies on a module it was never meant to load.
  *
- * Run 7 found it in the final gate. Run 13 found it in the final gate AGAIN — and the
+ * The final gate has found it, and then found it again — and the
  * fix (a `pathIgnorePatterns` line in bunfig.toml) was still sitting UNCOMMITTED in
  * the working tree when the run ended, so HEAD shipped with `bun run test` broken. A
  * defect that recurs across runs and survives its own fix is not a discovery problem;

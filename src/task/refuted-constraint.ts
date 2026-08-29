@@ -1,18 +1,18 @@
 /**
  * A refutation is a DELETION, not an addition.
  *
- * THE LEAD (mx5 run 19, `~/hub/mx5 @ dfbdd6f`, TASK_0001). Refine invented a
+ * THE LEAD. Refine invented a
  * dependency the design explicitly rules out; the run's own research said so, in
  * writing, in the same file; the composed spec then turned the invention into a
  * capitalised prohibition against the design's own API:
  *
- *   :21   refine CONSTRAINTS   "Add only new entries the task requires (e.g.,
+ *:21   refine CONSTRAINTS   "Add only new entries the task requires (e.g.,
  *                              `hono`, `bun-sql`-equivalent, …, `argon2`, …)"
- *   :92   research CONTEXT     "Password hashing uses `Bun.password` (built-in
+ *:92   research CONTEXT     "Password hashing uses `Bun.password` (built-in
  *                              argon2id) — no external `argon2` or
  *                              `@node-rs/argon2` dependency needed despite the
  *                              task's mention of it."
- *   :132  spec CONSTRAINTS     "Do NOT use built-in `Bun.password` for hashing —
+ *:132  spec CONSTRAINTS     "Do NOT use built-in `Bun.password` for hashing —
  *                              the refined task explicitly requires `argon2`."
  *
  * `argon2@^0.41.0` shipped as a runtime dependency of a repo that never imports
@@ -36,7 +36,7 @@
  * refine CONSTRAINTS line. Both sides are already separate strings in the task
  * file.
  *
- * STEP 0 (`scripts/refuted-constraint-baserate.ts`) measured the closed set over
+ * STEP 0 measured the closed set over
  * every recorded task file in the corpus before any of it was wired.
  */
 
@@ -126,7 +126,7 @@ const DEP_WORD = /\bdependenc(?:y|ies)\b|\bnpm\b|\bpackages?\b|\bdevDependenc(?:
 
 /** The owned-requirement stamp (requirements.ts:813). A line carrying it is a
  *  design-sourced obligation and is NEVER refutable by research — this is the
- *  guard that keeps this pass out of nexttask 2's failure mode. */
+ *  guard that keeps this pass out of 's failure mode. */
 const OWNED_MARKER = 'owned requirement from the source design'
 
 export type Refutation = {

@@ -1,11 +1,11 @@
 /**
  * repo-health-check — the deterministic, whole-repo half of the verify gate.
  *
- * The failure this closes (proven on the mx5 run): the verify gate ran only the
+ * The failure this closes: the verify gate ran only the
  * task's OWN composed VERIFY block, and that block is authored per-task by the local
- * model — so it is inconsistent. Some tasks lint the whole repo, some (TASK_0021)
+ * model — so it is inconsistent. Some tasks lint the whole repo, some
  * ship a VERIFY of `tsc --noEmit` ONLY, with no lint at all. A/B on the live model,
- * 5 runs/arm on the real dirty tree: the tsc-only task false-PASSed 5/5 while
+ * On a real dirty tree a tsc-only task false-PASSes every time, while
  * `bun run lint` reported 11 errors. The model gate is only ever as good as the
  * VERIFY block it happened to be handed.
  *
@@ -107,7 +107,7 @@ export function discoverHealthCommands(cwd: string): {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
         const cmds: HealthCommand[] = []
-        // Only static-analysis scripts. `lint` commonly chains tsc (as in mx5's
+        // Only static-analysis scripts. `lint` commonly chains tsc (as in this
         // `prettier && eslint && tsc`), so a single `bun run lint` covers both.
         for (const name of ['lint', 'typecheck']) {
             if (s[name]) cmds.push(['bun', ['run', name]])
@@ -182,7 +182,7 @@ export async function runRepoHealthCheck(
     const run = opts.run ?? spawnCommand
     for (const [bin, args] of cmds) {
         opts.onCommand?.(`${bin} ${args.join(' ')}`)
-        // Runner resolution (mx5 run 16): a PATH-stripped environment must not
+        // Runner resolution: a PATH-stripped environment must not
         // silently skip the statics when the runner sits at a known install
         // location; the resolved dir also rides on PATH for the script chain.
         const runner = resolveRunner(bin)

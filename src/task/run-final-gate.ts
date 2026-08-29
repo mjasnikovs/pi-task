@@ -4,7 +4,7 @@
  * task-gates.ts gates ONE task against its own spec. This gates the WHOLE REPO once,
  * when every task in a /task-auto run is checked off and BEFORE the run is declared
  * complete: every task passed its own per-slice gates, but per-slice green has shipped
- * a dead app twice (mx5 runs 3 & 5 — statics clean, every protected route 500ing). So
+ * a dead app twice. So
  * the project's OWN whole-repo commands run once here, unaided.
  *
  * The stage owns four things the per-task gate has no equivalent of:
@@ -19,7 +19,7 @@
  *      after MAX_FINAL_GATE_AUTOFIX so a non-converging fix pass cannot loop forever.
  *   4. The stranded sub-fixes a non-converging fix pass leaves in the working tree —
  *      committed on EVERY terminal outcome, because both of them end the run and the
- *      next `git checkout` would destroy real repairs (mx5 run 14: 13 of them).
+ *      next `git checkout` would destroy real repairs.
  *
  * Every terminal outcome is RETURNED, never announced here — same contract as
  * {@link runGatesForTask}'s GateResult: the caller owns the parent task file's state
@@ -76,8 +76,7 @@ export interface FinalGateStageDeps {
     finalGateFix?: FinalGateFixFn
     /**
      * Paths currently uncommitted in the working tree (`git status` shape), used to
-     * detect SUB-FIXES a non-converging fix pass left behind (mx5 run 13 PROMPT 4 item
-     * 3). Every task is committed by the time this stage runs, so anything dirty here
+     * detect SUB-FIXES a non-converging fix pass left behind (* 3). Every task is committed by the time this stage runs, so anything dirty here
      * is the fix pass's own work. Absent → the stranded-fix handling is skipped
      * entirely (prior behavior).
      */
@@ -88,7 +87,7 @@ export interface FinalGateStageDeps {
      * verify-FAIL defect(s) are STILL unresolved" report used to be built from the
      * FIRST gate result and the converged-autofix path then rebuilt the gate outcome
      * as a bare `{ok, reason}` — so `openDebts` was not merely un-actioned, it was GONE
-     * from the value, and no code path could ever clear, re-check or act on it (mx5 run
+     * from the value, and no code path could ever clear, re-check or act on it (run
      * 18: four defects reported STILL OPEN at 14:58, one of them fixed by the autofix
      * that converged at 15:03, and the report never moved).
      *
@@ -130,8 +129,7 @@ export interface FinalGateStageParams {
     /** The parent /task-auto id: trail target, notify prefix, commit-message tag. */
     runId: string
     /** The parent plan (the task list), handed to the gate so it can tell a served app
-     *  from a CLI — the boot check requires a listener only for the former (mx5 run 10:
-     *  a CSS watcher satisfied "still alive"). */
+     *  from a CLI — the boot check requires a listener only for the former (*  a CSS watcher satisfied "still alive"). */
     planText: string
     /** How many tasks the run completed — for the completion announcement only. */
     taskCount: number
@@ -243,7 +241,7 @@ export async function runFinalGateStage(
             // recording must never break the gate
         }
     }
-    // Trail EVERY aggregated failure entry (mx5 run 13): the gate runs all sections
+    // Trail EVERY aggregated failure entry: the gate runs all sections
     // and ranks the list; a single sliced reason line would re-hide everything past
     // the first entry.
     const trailGateFail = async (f: {reason: string; failures?: string[]}): Promise<void> => {
@@ -260,11 +258,11 @@ export async function runFinalGateStage(
         }
     }
     let fin: FinalGateOutcome = await deps.finalGate(cwd, planText)
-    // Record the outcome symmetrically (mx5 run 10 item 7): only FAIL was ever
+    // Record the outcome symmetrically: only FAIL was ever
     // trailed, so a PASSing gate was indistinguishable from a gate that never ran. The
     // PASS reason names the commands that were run. THREE verdicts, not two
     // (final-gate.ts unobservedVerdict): a gate that observed nothing dynamic is
-    // UNOBSERVED, never PASS — IAR1 shipped `PASS — no integration command found`
+    // UNOBSERVED, never PASS — one real project shipped `PASS — no integration command found`
     // twice while carrying open verify-FAIL debt. It does not block (justified there),
     // but it is labelled here, warned about, and recorded as durable debt so the next
     // run's gate re-surfaces it.
@@ -283,7 +281,7 @@ export async function runFinalGateStage(
     } else {
         await trailGateFail(fin)
     }
-    // ACCEPT-debt re-check surfacing (mx5 run 4 B3 / run 8 TASK_0012): tasks the user
+    // ACCEPT-debt re-check surfacing: tasks the user
     // accepted despite a verify-FAIL that the gate could not prove resolved against the
     // current tree. Surface them at the gate moment — on PASS or FAIL — so a run never
     // completes silently carrying an accepted defect. Informational: the per-task
@@ -308,7 +306,7 @@ export async function runFinalGateStage(
     let reportedDebts: AcceptDebt[] = fin.openDebts ?? []
     await surfaceOpenDebts(reportedDebts)
     // An owned obligation a task DETACHED (its own spec froze the only file that could
-    // satisfy it, nexttask 2) and no later task claimed. Detach never deletes the
+    // satisfy it, ) and no later task claimed. Detach never deletes the
     // quote, so the run ends holding it — say so, or the resolution would be a quieter
     // version of the deletion it exists to prevent.
     const unclaimed = unclaimedPendingRequirements(
@@ -330,7 +328,7 @@ export async function runFinalGateStage(
         )
     }
     /**
-     * nexttask 6 (mx5 run 18). The lines above are emitted from the FIRST gate result;
+     * . The lines above are emitted from the FIRST gate result;
      * the converged-autofix paths below used to rebuild `fin` as `{ok, reason}`, so
      * `openDebts` did not survive the fix pass — the run's last word on its own defects
      * was a snapshot of a tree that no longer existed, and no code path could clear,
@@ -358,7 +356,7 @@ export async function runFinalGateStage(
             openDebts: fresh.openDebts,
             ...(fresh.debtNote ? {debtNote: fresh.debtNote} : {})
         }
-        // Per-debt evidence from the VERIFY-COMMAND re-check (nexttask 5): which
+        // Per-debt evidence from the VERIFY-COMMAND re-check: which
         // command was re-run and what it did. A close that cannot be read back from
         // the trail is a close nobody can audit, and an INCONCLUSIVE re-run is worth
         // saying out loud — it is the difference between "still broken" and "nothing
@@ -401,7 +399,7 @@ export async function runFinalGateStage(
         )
     }
     // Resolution loop: Leave-failed (recommended) / Autofix (bounded, model-driven fix
-    // pass + gate re-run — run 7's gap: the picker had NO automated fix path) /
+    // pass + gate re-run — a gap: the picker had NO automated fix path) /
     // Accept. The user always decides; after MAX_FINAL_GATE_AUTOFIX attempts that
     // still FAIL the autofix card is withdrawn so the loop cannot run unbounded.
     // What this loop RECORDS, and the decisions that record makes: the attempt
@@ -422,7 +420,7 @@ export async function runFinalGateStage(
         }
     }
     // Commit whatever guard-clean repairs the fix passes left, on ANY terminal
-    // non-converged outcome. Run 14 ended on LEAVE with 13 real repairs dirty in the
+    // non-converged outcome. A run can end on LEAVE with real repairs dirty in the
     // tree after an unattended run — the next checkout would have destroyed them
     // silently.
     const commitStranded = async (outcome: 'accepted' | 'left-failed'): Promise<void> => {
@@ -436,7 +434,7 @@ export async function runFinalGateStage(
             )
             return
         }
-        // REPORT WHAT ACTUALLY HAPPENED (mx5 run 20). This bound the CommitResult to
+        // REPORT WHAT ACTUALLY HAPPENED. This bound the CommitResult to
         // `sha` and interpolated it, so the trail read "committed 5 stranded fix-pass
         // change(s) as [object Object]". Worse than cosmetic: `commit` returns
         // {committed, reason?, note?} and NEVER a sha, the `committed` field was never
@@ -469,7 +467,7 @@ export async function runFinalGateStage(
     while (!fin.ok) {
         const canAutofix = deps.finalGateFix !== undefined && ledger.canAutofix()
         // The picker question shows the debts (the HUMAN weighs them); the autofix seed
-        // below deliberately does not — mx5 run 11's fix child executed a debt claim as
+        // below deliberately does not — a fix child executed a debt claim as
         // an `rm` instruction.
         const question =
             `Final integration gate FAILED for ${id}.\n\n${fin.reason}${fin.debtNote ?? ''}\n\n`
@@ -479,14 +477,14 @@ export async function runFinalGateStage(
                 `\n\nAutofix attempts so far: ${ledger.attempts()}/${MAX_FINAL_GATE_AUTOFIX}.`
             :   '')
             // Never let a partial repair be invisible at the moment the human decides
-            // (run 13: a bunfig fix that made `bun run test` pass 116/116 was stranded
+            // (a config fix that made the test command pass was stranded
             // by an ACCEPT).
             + strandedFixNote([...ledger.stranded()])
         // YOLO: keep autofixing WHILE the card is still offered — the loop withdraws it
         // after MAX_FINAL_GATE_AUTOFIX, so the cap that bounds a non-converging fix pass
         // still bounds this — then LEAVE the run failed. Never 'accept': an unattended
         // run that could not green the whole-repo gate has not produced a working
-        // project, and mx5 run 13 shows what an accepted FAIL looks like afterwards (a
+        // project, and a shows what an accepted FAIL looks like afterwards (a
         // shipped app that 404s at `/`).
         const yoloFinal = yoloFinalGateChoice(isYoloMode(), canAutofix)
         if (yoloFinal !== null) {
@@ -505,7 +503,7 @@ export async function runFinalGateStage(
             // repaired but never committed would be lost to the next `git checkout`
             // while HEAD keeps the defect it fixed. Commit it as its own, named
             // commit — the ACCEPT is a decision about the FAILING gate, never an
-            // instruction to throw away work (mx5 run 13 item 3).
+            // instruction to throw away work.
             await commitStranded('accepted')
             active.ui.notify(
                 `${id}: final integration gate FAIL accepted by user — completing.`
@@ -528,7 +526,7 @@ export async function runFinalGateStage(
             const seed =
                 choice.guidance ? `${fin.reason}\n\nUser guidance: ${choice.guidance}` : fin.reason
             const fix = await deps.finalGateFix!(active, cwd, seed, [...ledger.ignoredWrites()])
-            // IGNORED-PATH WRITES (mx5 run 19). The pass wrote file(s) git ignores, so
+            // IGNORED-PATH WRITES. The pass wrote file(s) git ignores, so
             // they are not in the commit and a fresh clone does not have them. Trailed
             // on EVERY outcome — a rejected attempt's tracked edits are discarded while
             // its ignored writes survive on disk — and carried forward, so a later
@@ -565,7 +563,7 @@ export async function runFinalGateStage(
                 // The gate's own outcome, whole, with this door's reason on it. It
                 // used to be a two-key literal, so `openDebts` and `observedFailures`
                 // were dropped and `reconcileDebts` was the only thing putting one of
-                // them back — the recorded mx5 run-18 defect.
+                // them back — the recorded run-18 defect.
                 fin = {...(fix.gate ?? fin), ok: true, reason: fix.reason}
                 // The gate itself just passed, statics included, so `staticOk` here is
                 // proof rather than assumption.
@@ -595,9 +593,9 @@ export async function runFinalGateStage(
                 `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
                 'warning'
             )
-            // NON-PROGRESS CLASSIFIER (mx5 run 14 item 2a). An attempt that changed the
+            // NON-PROGRESS CLASSIFIER. An attempt that changed the
             // tree, re-ran the gate, and got back the SAME ranked-first failure as the
-            // previous such attempt is evidence about the CHECK, not the fix: run 14
+            // previous such attempt is evidence about the CHECK, not the fix:
             // burned all three attempts on a boot probe that could not observe a
             // listener in that sandbox at all. Demote that one check to
             // UNOBSERVED-with-debt and let the REMAINING checks decide.
@@ -660,7 +658,7 @@ export async function runFinalGateStage(
             // pass got as far as re-running it, otherwise the one we already hold —
             // and either way it arrives whole, so nothing (`openDebts`,
             // `observedFailures`) is dropped by the assignment. This used to be a
-            // literal with four keys, and the field it omitted is the recorded mx5
+            // literal with four keys, and the field it omitted is the recorded
             // run-18 defect.
             const base = fix.gate ?? fin
             const carried = base.failures === undefined ? undefined : ledger.remaining(base)
@@ -690,8 +688,8 @@ export async function runFinalGateStage(
             :   'final-gate: left failed (user)'
         )
         // Leaving the run failed is TERMINAL for an unattended run, so the fix passes'
-        // guard-clean repairs are committed here too — run 14 left 13 of them dirty for
-        // a `git checkout` to destroy (mx5 run 13 item 3, run 14 item 2b). The user
+        // guard-clean repairs are committed here too — a left 13 of them dirty for
+        // a `git checkout` to destroy. The user
         // still owns the outcome; they own it with the work in HEAD, named in the trail.
         await commitStranded('left-failed')
         return {

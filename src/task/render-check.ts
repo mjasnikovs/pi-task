@@ -1,14 +1,14 @@
 /**
  * render-check — one headless-browser page load against the booted app's live
- * listener, judging whether the client actually RENDERED anything (mx5 runs 8 and
+ * listener, judging whether the client actually RENDERED anything (and
  * 11).
  *
  * The failure class: every "renders without runtime errors" check in the pipeline
- * was curl — and curl cannot execute JavaScript. Run 8 shipped an app whose ESM
+ * was curl — and curl cannot execute JavaScript. A run can ship an app whose ESM
  * bundle was loaded in a classic script tag: HTTP 200 on every route, permanently
- * BLANK page, all gates green. Run 11 shipped a router with no <Switch> (the 404
+ * BLANK page, all gates green. Or a router with no <Switch> (the 404
  * fallback rendered on every page) — invisible to every gate for the same reason.
- * The gate's boot check proves a LISTENER exists (run 10); this proves the
+ * The gate's boot check proves a LISTENER exists; this proves the
  * listener serves a page whose client code MOUNTS something.
  *
  * Mechanism, deterministic and dependency-free: discover a Chrome-family binary
@@ -17,7 +17,7 @@
  * page's JS under a virtual-time budget), and judge the RENDERED body: it must
  * contain visible text or concrete visual/interactive elements. A blank mount
  * point after JS ran is the run-8 class — FAIL with the body's shape. What it
- * deliberately does NOT judge: correctness of what rendered (run 11's 404-below-
+ * deliberately does NOT judge: correctness of what rendered ('s 404-below-
  * login needs app knowledge no generic gate has).
  *
  * Env-gap contract as everywhere: no browser found, a browser that cannot launch,
@@ -55,7 +55,7 @@ function onPath(bin: string): boolean {
 /**
  * The newest Playwright-cache Chromium, if any — the HEADLESS SHELL preferred over
  * the full build. Found, never installed: the cache exists on any box that ever ran
- * Playwright browsers (the mx5-class projects install it as their own test
+ * Playwright browsers (many projects install it as their own test
  * dependency). The headless shell is purpose-built for `--dump-dom` and returns
  * promptly on a network URL where the full system chromium can stall under a
  * virtual-time budget (validated live on this box: shell exits 0 in ~1s, full
@@ -158,7 +158,7 @@ const VIRTUAL_TIME_BUDGET_MS = 8_000
 /**
  * A Chrome console line on stderr:
  *
- *     [11506:11506:0814/090315.702981:INFO:CONSOLE:322] "Uncaught ReferenceError:
+ *     [PID:PID:MMDD/HHMMSS.uuuuuu:INFO:CONSOLE:322] "Uncaught ReferenceError:
  *         process is not defined", source: http://localhost:8791/main.js (322)
  *
  * Only the severity and the message survive. The bracketed pid/tid/timestamp
@@ -176,7 +176,7 @@ const MAX_CONSOLE_LINES = 12
 /**
  * The page's console output, as captured while the DOM was being rendered.
  *
- * MEASURED on this box (2026-08-14) against the shipped mx5 run-21 bundle, both
+ * MEASURED on this box (2026-08-14) against the shipped run-21 bundle, both
  * binaries the probe can discover:
  *
  *     /usr/bin/chromium              --dump-dom alone → 0 bytes of stderr
@@ -205,7 +205,7 @@ export function parseConsoleLines(stderr: string): string[] {
 /**
  * Append the console output to a FAIL detail — and to nothing else.
  *
- * WHY (nexttask 19B; the class 18A opened for repo-health). Run 21's fix child was
+ * WHY. A fix child is
  * told "the body is EMPTY" and nothing more. It spent 45 minutes on tests, bundler
  * config and static serving, read the offending line twice, and moved on. The
  * probe was holding the answer the whole time: `Uncaught ReferenceError: process
@@ -243,7 +243,7 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
             '--no-sandbox',
             '--disable-dev-shm-usage',
             `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
-            // Route the page's console to stderr (nexttask 19B). stdout — the DOM
+            // Route the page's console to stderr. stdout — the DOM
             // the judge reads — is byte-identical with and without these; measured
             // on both discoverable binaries, see withConsoleEvidence.
             '--enable-logging=stderr',

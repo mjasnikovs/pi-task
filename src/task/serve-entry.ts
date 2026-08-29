@@ -1,8 +1,8 @@
 /**
  * serve-entry — the project builds a server app, expects to SERVE, and nothing in
- * the tree ever starts a listener (nexttask 2 part B).
+ * the tree ever starts a listener.
  *
- * THE FAILURE THIS CLOSES (mx5 run 18, measured). The shipped `src/server/index.ts`
+ * THE FAILURE THIS CLOSES. The shipped `src/server/index.ts`
  * is 28 lines that construct a Hono app, mount five `/api` routers, add an SPA
  * fallback reading `Bun.file('dist/index.html')` — and end at `export {app}`. There
  * is no `Bun.serve`, no `export default app`, no `serve()` from an adapter, no
@@ -13,8 +13,8 @@
  * The product could not be started at all, and the run shipped green: the gate's
  * boot command resolved to a `docker compose up` orchestrator, docker was absent in
  * the sandbox, and the boot SKIPPED. This is the SECOND run to lose this exact
- * clause — mx5 run 16 shipped a server that never served the client bundle
- * (scripts/live-owned-requirement-compose-ab.ts) — so a dynamic-only gate has now
+ * clause — a shipped a server that never served the client bundle
+ * — so a dynamic-only gate has now
  * failed to catch it twice.
  *
  * WHY STATIC. The check needs no runtime, no browser, no docker, no database and no
@@ -64,7 +64,7 @@ const CONSTRUCT_PATTERNS: Array<{re: RegExp; construct: string}> = [
     {re: /(?:^|[^.\w])express\s*\(\s*\)/, construct: 'express()'},
     {re: /(?:^|[^.\w])[Ff]astify\s*\(/, construct: 'fastify()'},
     {re: /(?:^|[^.\w])polka\s*\(/, construct: 'polka()'}
-    // `connect()` (the middleware framework) is deliberately absent: gofer's
+    // `connect()` (the middleware framework) is deliberately absent: another project's
     // src/store/db.ts calls `connect()` on a DATABASE, and a construct signal that
     // cannot tell a server from a db handle is not a construct signal.
 ]
@@ -168,7 +168,7 @@ export function findServeExpectation(src: string): string | null {
 }
 
 /** A design/spec clause that names a served path — the plan-side half of the same
- *  expectation (mx5's `DESIGN/PROJECT.md:285`: "serves `/api` + static `dist/`"). */
+ *  expectation, e.g. a design that says "serves `/api` + static `dist/`". */
 export function planExpectsServing(planText: string | undefined): string | null {
     if (!planText) return null
     const re =

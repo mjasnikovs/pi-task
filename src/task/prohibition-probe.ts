@@ -2,12 +2,12 @@
  * prohibition-probe — deterministic detection of VIOLATED SPEC PROHIBITIONS,
  * feeding the verify gate's prompt.
  *
- * The failure class (mx5 run 7, "New Listing page" task): the spec's CONSTRAINTS
+ * The failure class: the spec's CONSTRAINTS
  * said "**Do NOT modify** any server-side code: `src/server/index.ts`, …"; the
  * implementation modified `src/server/index.ts` anyway; the verify child SAW it
  * ("VIOLATES 'Do NOT modify server-side code'"), waived it ("BUT: this is
  * additive, tests pass with it"), and PASSed. Worse, the reproduction fixture
- * showed the baseline child usually never LOOKS: 5/5 baseline runs consulted no
+ * showed the baseline child usually never LOOKS: it consults no
  * diff at all and several affirmatively claimed the forbidden file was untouched.
  *
  * So — like the substitution probe (see substitution-probe.ts, whose A/B proved

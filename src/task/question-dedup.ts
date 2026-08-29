@@ -143,7 +143,7 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
     return union === 0 ? 0 : inter / union
 }
 
-// Validated against the real mx5 run (question-dedup.test.ts): the re-asked
+// Validated in question-dedup.test.ts against a recorded run: the re-asked
 // SPA-build/serve forks scored 0.152 / 0.275 / 0.421 against an earlier question,
 // while every genuinely-distinct subsystem question topped out at 0.077. 0.12 sits
 // in that gap — above the distinct ceiling, below the lowest true duplicate — so

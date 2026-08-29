@@ -146,7 +146,7 @@ export function researchWorkerCacheHeading(section: string): string {
  *     touches and to drop everything else — so silence is the CORRECT answer and
  *     was killing the whole task at research (issue #10). Measured live on the
  *     issue's own prompt (30 reps/worker, local Qwen3.6-27B): every APIS answer was
- *     semantically "there is nothing here", and 2/30 were literally zero bytes on a
+ *     semantically "there is nothing here", and some are literally zero bytes on a
  *     clean exit — the other 28 survived only because the model happened to wrap the
  *     same non-answer in a parenthetical, which is model style, not signal. The
  *     caller retries once and then accepts an explicit empty section; what stays
@@ -313,7 +313,7 @@ export function isBareNoneAnswer(text: string): boolean {
  * and an easy opt-out there would silence real research.
  *
  * MEASUREMENT OPEN. The recovery path's QUALITY on a real repo is being measured
- * (scripts live under /home/edgars/tmp/issue10: first FILES answer faulted to
+ * (first FILES answer faulted to
  * empty, every other child live, against an uninterrupted control). First rep on
  * an earlier wording did NOT take the `(none)` exit but drifted into writing code
  * instead of listing paths — the deliverable-not-inputs failure the base prompt
@@ -370,7 +370,7 @@ export async function runResearchWorker(
                 // ONE CELL PER WORKER since 2026-08-28. They used to share
                 // the `research` cell on the grounds that they are the same
                 // job over four questions; the run logs disagree. All 40.7
-                // wasted research minutes in mx5-n were restarts in
+                // wasted research minutes are restarts in
                 // `tooling` and `context`, and `files`/`apis` never
                 // restarted — so the level that pays for one pair is being
                 // paid for the other. THE FOUR CELLS DO NOT SHIP IDENTICAL:
