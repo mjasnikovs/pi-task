@@ -41,7 +41,7 @@ line counts as a comment line but opens no block.
 | `src/remote/ui-script.ts` | 1245 | 2 | 1 | true |
 | `src/remote/ui-styles.ts` | 430 | 0 | 0 | true |
 | `src/remote/ui-tools.ts` | 117 | 7 | 2 | true |
-| `src/remote/ui.ts` | 96 | 0 | 0 | false |
+| `src/remote/ui.ts` | 96 | 0 | 0 | true |
 | `src/shared/child-extensions.ts` | 53 | 26 | 3 | false |
 | `src/shared/child-output.ts` | 98 | 42 | 8 | false |
 | `src/shared/child-process.ts` | 690 | 243 | 56 | false |
