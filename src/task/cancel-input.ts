@@ -3,12 +3,15 @@
  *
  * THE PROBLEM. While a /task-auto run is in flight, the host's interactive main
  * loop is parked at `await session.prompt("/task-auto …")` and never loops back
- * to read input. pi's editor submit handler (interactive-mode.js) has two paths:
+ * to read input. pi's editor submit handler — `modes/interactive/interactive-mode.js`
+ * — has two paths, and both are verbatim in the installed package:
  *
- *   - streaming    → session.prompt(text, {streamingBehavior:"steer"}), and
- *                    agent-session.prompt() runs extension commands immediately.
- *   - not streaming → pendingUserInputs.push(text) — a queue only the parked
- *                    main loop drains.
+ *   - streaming    → `session.prompt(text, {streamingBehavior: "steer"})`. pi's own
+ *                    comment on that branch says it "handles extension commands
+ *                    (execute immediately)".
+ *   - not streaming → `pendingUserInputs.push(text)`, reached only when no
+ *                    `onInputCallback` is registered — i.e. exactly when the main
+ *                    loop is parked. `getUserInput()` is the sole drain.
  *
  * The host session is NOT streaming for most of a run: the spec phases and every
  * gate are child `pi` processes, not host turns. So a /task-auto-cancel typed
@@ -16,12 +19,17 @@
  * already finished — by which point `autoRunning` is false and it answers "No
  * /task-auto loop is running." The command was, for most of a run, inert.
  *
- * THE FIX. `ctx.ui.onTerminalInput` (→ TUI.addInputListener) is a raw stdin
- * listener that the TUI dispatches BEFORE the focused component sees the bytes,
- * independently of the parked main loop. We watch for the submit key, read what
- * the editor is holding, and if it is the cancel command we raise the request
- * ourselves and `consume` the keystroke so the line is never queued for a
- * post-run replay of the confusing "no loop is running" message.
+ * THE FIX. `ctx.ui.onTerminalInput` (→ `TUI.addInputListener`) is a raw stdin
+ * listener, and the ordering it depends on is real: `handleTerminalInput` runs
+ * every registered input listener FIRST, returning immediately on the first one
+ * that answers `{consume: true}`, before any focused-component dispatch below it.
+ * That happens independently of the parked main loop.
+ *
+ * So we watch for the submit key, read what the editor is holding, and if it is
+ * the cancel command we raise the request ourselves and `consume` the keystroke —
+ * otherwise the line sits in the queue and replays after the run as the confusing
+ * "No /task-auto loop is running." auto-orchestrator emits when nothing is in
+ * flight.
  *
  * WHAT ELSE IT NOW CARRIES. The same interception makes the terminal behave like
  * the browser for everything else typed mid-run, instead of feeding pi's queue:
@@ -32,7 +40,9 @@
  *     task turn, rather than starting a competing turn or being replayed after
  *     the run.
  *
- * Three things are deliberately NOT intercepted, and each would be a regression:
+ * Three things are deliberately NOT intercepted, and each would be a regression
+ * (the key test: ESC against a full editor is not a submission, and neither is any
+ * ordinary character):
  *   - a keystroke that is not a submit, so typing and history are untouched;
  *   - anything typed while a prompt/dialog is open (the raw listener sees keys
  *     BEFORE the focused component, so swallowing here would eat the user's
@@ -48,12 +58,15 @@ import {holdInput, isRunActive} from './mid-run-input.js'
 import {getBridge} from '../remote/bridge.js'
 import {getState} from '../remote/session-state.js'
 
-/** The command this listener delivers. Accepts a leading slash only — matching
- *  bare "task-auto-cancel" would fire on prose about the command. */
+/** The command this listener delivers. Anchored at both ends and requiring the
+ *  leading slash, so bare "task-auto-cancel", "/task-auto-cancel now" and
+ *  "please run /task-auto-cancel" all fail to match — prose about the command must
+ *  never fire it. Surrounding whitespace is tolerated. */
 const CANCEL_RE = /^\/task-auto-cancel\s*$/
 
 /** Enter, in the encodings a terminal actually sends. A bare "\n" is what many
- *  terminals emit in raw mode; "\r" is the usual CR. */
+ *  terminals emit in raw mode; "\r" is the usual CR; "\r\n" covers the pair. All
+ *  three submit; nothing else does, ESC included. */
 function isSubmitKey(data: string): boolean {
     return data === '\r' || data === '\n' || data === '\r\n'
 }
@@ -177,10 +190,12 @@ export function installCancelListener(
 // ─── Armed listener (survives session replacement) ────────────────────────────
 
 /**
- * The listener does NOT survive `ctx.newSession()`. pi's InteractiveMode
- * registers `setBeforeSessionInvalidate(() => this.resetExtensionUI())`, and
- * `resetExtensionUI` calls `clearExtensionTerminalInputListeners()` — so every
- * per-task session replacement silently drops it. That replacement happens at
+ * The listener does NOT survive `ctx.newSession()`, and the chain is all three
+ * links, each present in the installed package: `InteractiveMode` registers
+ * `setBeforeSessionInvalidate(() => this.resetExtensionUI())`, `resetExtensionUI`
+ * calls `clearExtensionTerminalInputListeners()`, and that clears the very set
+ * this listener lives in — so every per-task session replacement silently drops
+ * it. That replacement happens at
  * the START of each task, which is exactly the window this listener exists to
  * cover, so the run must re-arm against the fresh ctx as soon as one appears
  * (runSingleTask, where the new ctx is also handed to the remote bridge).
@@ -198,10 +213,14 @@ let armed: {
  * Begin intercepting mid-run terminal input. Refcounted, because runs nest:
  * /task-auto arms for its loop and every task inside it arms again, so a plain
  * "replace" would let the first inner run's end silently un-arm the rest of the
- * loop. The first `onCancel` wins — /task-auto passes one so a typed
- * /task-auto-cancel can post its acknowledgement through the live ctx; a plain
- * /task passes none and lets the generic bridge dispatch handle that command
- * like any other.
+ * loop. Run: three nested arms produce ONE install and take three disarms to
+ * release.
+ *
+ * The first `onCancel` wins — /task-auto passes one so a typed /task-auto-cancel
+ * can post its acknowledgement through the live ctx; a plain /task passes none
+ * and lets the generic bridge dispatch handle that command like any other. An arm
+ * that adds a callback where there was none upgrades in place, reinstalling
+ * against the same refcount rather than starting a second one.
  */
 export function armCancelListener(
     ctx: ExtensionCommandContext,
