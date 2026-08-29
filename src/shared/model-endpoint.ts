@@ -2,18 +2,18 @@
  * model-endpoint — discovery + reachability probe for the model backend(s) a
  * child pi process talks to.
  *
- * The failure this serves: the model server went down
- * mid-gate-child and the child hung MUTE for 64 minutes — pi's own
- * connection-error handling only fires when a request FAILS, not when the
- * backend freezes and the open request simply never answers. The stall guard in
- * runChild uses this module to tell the two apart: no output could be honest
- * long work (prompt processing emits nothing for minutes), so only "no output
- * AND the endpoint does not answer" is treated as a dead backend.
+ * The failure this serves: the model server dies mid-child and the child hangs
+ * mute. pi's own connection-error handling cannot help, because it runs from a
+ * catch — a request that FAILS reaches it, a request that simply never answers
+ * does not. The stall guard in runChild uses this module to tell the two apart:
+ * silence alone could be honest long work, since prompt processing emits nothing
+ * while it runs, so only "no output AND the endpoint does not answer" counts as
+ * a dead backend.
  *
- * Discovery is generic: the custom providers pi itself is configured with
- * (models.json `providers.*.baseUrl`), no provider or server names hardcoded.
- * No discoverable endpoint → nothing to probe → the guard NEVER kills (a child
- * on a backend we cannot see must get the benefit of the doubt).
+ * Discovery is generic — the custom providers pi is configured with, read from
+ * models.json `providers.*.baseUrl`, with no provider or server name hardcoded.
+ * No discoverable endpoint means nothing to probe, and the guard then NEVER
+ * kills: a child on a backend we cannot see gets the benefit of the doubt.
  */
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -38,9 +38,13 @@ export function discoverModelEndpoints(
 }
 
 /**
- * true → at least one endpoint ANSWERED (any HTTP status counts — a 404 still
- * proves the server is alive); false → every probe was refused or hung past the
- * timeout. An empty list is true: nothing to probe means never kill.
+ * true → at least one endpoint ANSWERED. Any HTTP status counts, because the
+ * question is liveness, not correctness: probing a path that 404s still returns
+ * true, while a closed port returns false. Both confirmed against a live server.
+ * An empty list is true — nothing to probe means never kill.
+ *
+ * `models` is joined RELATIVELY here, and deliberately: it lives under the
+ * OpenAI-compatible prefix a baseUrl already carries. Contrast `/props` below.
  */
 export async function probeModelEndpoints(urls: string[], timeoutMs = 5_000): Promise<boolean> {
     if (urls.length === 0) return true
@@ -63,12 +67,13 @@ export async function probeModelEndpoints(urls: string[], timeoutMs = 5_000): Pr
  * What a llama.cpp server's own chat template can actually do about reasoning,
  * as reported by `GET /props`.
  *
- * This is the only source of truth that does NOT come from models.json. It
- * answers the one question the host-side clamp cannot: *is models.json lying
- * about the server?* — the case that matters being pi's built-in llama.cpp
- * provider, which hardcodes `reasoning: false`, so anyone who reached their
- * server through `/login llama.cpp` rather than a hand-written provider entry
- * has a dead knob and nothing to tell them so.
+ * This is the only source of truth that does NOT come from models.json, and it
+ * answers the question the host-side clamp cannot: is models.json lying about
+ * the server? The case that matters is pi's built-in llama.cpp provider, which
+ * really does hardcode `reasoning: false` — the literal line is in
+ * `extensions/llama/provider.js`, under `LLAMA_PROVIDER_ID = "llama.cpp"`. So
+ * anyone who reached their server through `/login llama.cpp` rather than a
+ * hand-written provider entry has a dead knob and nothing to tell them so.
  */
 export interface ChatTemplateCaps {
     /** The template reads `reasoning_effort` — i.e. levels, not just on/off. */
@@ -84,14 +89,22 @@ export interface ChatTemplateCaps {
  * answer worth having" — not a llama.cpp server, unreachable, or a body in a
  * shape this does not recognise.
  *
- * `null` is a first-class result, not an error: every non-llama.cpp backend
- * returns it, and the caller must degrade to the models.json view rather than
- * warn about a server it could not read. Never throws.
+ * `null` is a first-class result, not an error: a backend that does not serve
+ * this shape returns it, and the caller must degrade to the models.json view
+ * rather than warn about a server it could not read. Never throws — a closed
+ * port answers `null`, confirmed.
  *
- * The LEADING SLASH in `/props` is load-bearing. A configured baseUrl normally
- * ends in `/v1` (llama-server's OpenAI-compatible prefix) while `/props` lives at
- * the server root, so a relative `'props'` would resolve to `/v1/props` and 404 —
- * which this would report as `null`, i.e. as a silent loss of the better signal.
+ * The LEADING SLASH in `/props` is load-bearing, because `/props` lives at the
+ * server ROOT while a configured baseUrl carries an OpenAI-compatible prefix.
+ * How a relative `'props'` resolves depends on whether that prefix ends in a
+ * slash, which is not something this can rely on:
+ *
+ *     new URL('props',  'http://host/v1')   →  /props
+ *     new URL('props',  'http://host/v1/')  →  /v1/props     ← 404
+ *     new URL('/props', either)             →  /props
+ *
+ * A 404 would come back from here as `null`, silently losing the better signal.
+ * The absolute form is right for both.
  */
 export async function probeChatTemplateCaps(
     baseUrl: string,
