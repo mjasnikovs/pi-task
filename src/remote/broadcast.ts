@@ -1,6 +1,8 @@
 import type {WebSocket} from 'ws'
 
-// globalThis persists across jiti module re-evaluations on session switches
+// pi loads an extension through `createJiti(..., {moduleCache: false})`, so a
+// reload re-evaluates this module and resets its module-level state. globalThis
+// survives that, which is why the client set lives there.
 const g = globalThis as unknown as Record<string, Set<WebSocket> | undefined>
 if (!g.__piRemoteClients) g.__piRemoteClients = new Set<WebSocket>()
 
