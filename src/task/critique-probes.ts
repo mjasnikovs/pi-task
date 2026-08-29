@@ -6,7 +6,7 @@
  * the deterministic half of critique: the triage child judges taste, these decide
  * facts.
  *
- * Why a table. Every probe used to be written out three times inside
+ * Why a table. Written out longhand, every probe appears three times inside
  * `phaseCritique` — once as a four-line detect/format/log ritual, once as a term
  * in the seven-way conjunction that lets a CLEAN triage short-circuit, and once
  * as an element of the array merged into the rewrite. Adding a probe meant three
@@ -79,7 +79,7 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
     probe({
         // run-8 F2: a required VERIFY check wrapped in a skip-announcing `||`
         // fallback (`… || echo "skipping (tool absent)"`) lets the check pass
-        // while never running. FP-measured 0/20 on the historical specs.
+        // while never running.
         id: 'skip-escape',
         detect: ctx => findSkipEscapes(ctx.spec),
         text: f => skipEscapeDefectText(f),
@@ -87,10 +87,10 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
     }),
     probe({
         // run-8 F3, generation side. The registry alone is a WEAK catcher (live
-        // A/B: prompt+registry ~1/8) — the model's attention goes to the obvious
+        // — the model's attention goes to the obvious
         // VERIFY weakness and it rarely does the path-composition reasoning. The
         // scanner NAMES the inferred mount mappings and juxtaposes the verbatim
-        // pinned facts, forcing focused reconciliation. FP-clean (1/18 files on
+        // pinned facts, forcing focused reconciliation. (Narrow enough to stay clean on
         // the run-8 trees). Grounding = the registry ∪ any design doc the
         // spec/refined @-reference. No registry ⇒ nothing to contradict.
         id: 'synthesized-wiring',
@@ -106,11 +106,11 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
         log: f => `synthesized wiring flagged in spec: ${f.map(w => w.line).join(' | ')}`
     }),
     probe({
-        // mx5 run 11, goal D: a VERIFY line asserting the ABSENCE of an artifact
+        // A VERIFY line asserting the ABSENCE of an artifact
         // the plan pins elsewhere — a path a prior task already shipped, a sibling
-        // title's deliverable, a contract-pinned boundary. Run 11: the scope fence
-        // leaked into TASK_0009's verify as "the admin page must NOT exist"
-        // (TASK_0008's deliverable); the guaranteed FAIL became an accepted debt
+        // title's deliverable, a contract-pinned boundary. A scope fence can
+        // leak into a sibling's verify as "the admin page must NOT exist"
+        //; the guaranteed FAIL became an accepted debt
         // that the final-gate autofix then "fixed" by deleting the sibling's work.
         // It must die here, at spec time. Delete-tasks keep their check by
         // declaring the delete.
@@ -127,7 +127,7 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
             + f.map(c => `${c.assertion.target} (${c.against})`).join(' | ')
     }),
     probe({
-        // mx5 run 12 root cause: a blanket frozen path ("Do NOT modify
+        // A blanket frozen path ("Do NOT modify
         // `tsconfig.json` … handled in steps 1–2") whose registration edit the
         // spec's OWN body — or the task's RESEARCH the spec was composed from
         // (live drafts sometimes drop the nuance while shipping the freeze and the
@@ -143,7 +143,7 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
             + f.map(c => c.path).join(' | ')
     }),
     probe({
-        // mx5 run 13, Bug B: a VERIFY block that grep-asserts the SOURCE of a
+        // A VERIFY block that grep-asserts the SOURCE of a
         // runnable deliverable while every command in the block is static
         // inspection — the build script "verified" by three greps that was never
         // run, shipping broken for 14 tasks. VERIFY must EXECUTE the artifact and
@@ -152,7 +152,7 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
         detect: ctx => findGrepOnlyVerify(ctx.spec),
         text: f => grepOnlyVerifyDefectText(f),
         log: f => `grep-theater VERIFY flagged in spec: ${f.map(x => x.target).join(' | ')}`,
-        // Detector-backed closure: live A/B, 1/5 rewrites ignored the injected
+        // Detector-backed closure: a rewrite can ignore the injected
         // defect and re-shipped the grep-only block.
         unresolvedProblem: {
             name: 'verify_grep_theater',
@@ -160,7 +160,7 @@ export const CRITIQUE_PROBES: ReadonlyArray<CritiqueProbe<unknown>> = [
         }
     }),
     probe({
-        // mx5 run 13, PROMPT 4 item 4: a spec that DICTATES a check script which
+        // A spec that DICTATES a check script which
         // cannot fail — `"lint": "… || true"`, or a checker laundered through an
         // inverted grep. Whatever task implements that spec writes the disarmed
         // script into package.json, and from then on every gate that runs it

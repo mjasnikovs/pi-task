@@ -1,9 +1,9 @@
 /**
  * deep-render-check — sign in on the booted app and prove the AUTHENTICATED half
- * of it is alive (mx5 run 17).
+ * of it is alive.
  *
  * The failure class this closes: the shallow render check (render-check.ts) loads
- * ONE url and judges the rendered DOM. mx5 run 17 satisfies it completely while
+ * ONE url and judges the rendered DOM. An app can satisfy it completely while
  * being unusable — GET / redirects to /login, the login page renders fully, and
  * that is the whole check. Behind it, src/client/hooks/useAuth.ts called
  * `typedClient.api.auth.me.get()`; hono RPC methods are `$get`/`$post`, so a bare
@@ -12,7 +12,7 @@
  * session cookie, zero /api/auth/me requests are ever made, and the app bounces to
  * /login forever. Seven call sites were dead the same way, mixed in the same files
  * with correct `$get` ones — the signature of code no runtime ever executed. The
- * server was healthy throughout: 134/134 tests, tsc clean, login 200, me-with-
+ * server healthy throughout: whole suite green, tsc clean, login 200, me-with-
  * cookie 200. Nothing static could see it.
  *
  * The generic instrument is a NETWORK FACT: after a real sign-in, did the client
@@ -24,8 +24,8 @@
  *
  * SCOPE HONESTY: this is WEB-ONLY. It runs only behind detectsServedApp() and does
  * nothing for C++, Godot, CLI or library projects, which are most of the fleet. It
- * is here because the class is the most expensive one observed — it ended run 16
- * (blank page) and run 17 (dead login) outright.
+ * is here because the class is the most expensive one observed: a blank page, or
+ * a login that does not work, ends a run outright.
  *
  * Mechanism, dependency-free: the same discovered Chrome-family binary the shallow
  * check uses, driven over the DevTools protocol through the `ws` dependency the
@@ -181,7 +181,7 @@ export function findLoginCredentials(vars: Record<string, string>): LoginCredent
  * The LOCAL port the project's own client was built to call, when its dotenv pins
  * one (`APP_URL=http://localhost:3000`, `VITE_API_URL=…`), else null.
  *
- * Why the boot check wants it (measured on mx5@373e88d, both directions): a bundler
+ * Why the boot check wants it: a bundler
  * bakes that base URL into the client at BUILD time, so a client served on the
  * gate's freshly-reserved private port calls an origin nothing is listening on. The
  * app is then unusable for reasons that have nothing to do with the code, and the
@@ -189,7 +189,7 @@ export function findLoginCredentials(vars: Record<string, string>): LoginCredent
  * origin and never reaches the server we booted. Serving on the app's own declared
  * port makes the session same-origin and the evidence real.
  *
- * This deliberately narrows the private-port ownership evidence of run 14, so it
+ * This deliberately narrows the private-port ownership evidence, so it
  * only applies when the port is LOCAL, DECLARED by the project itself, and CURRENTLY
  * FREE — the caller checks freeness and falls back to a reserved port otherwise.
  */
@@ -306,7 +306,7 @@ const MISSING_ROUTE_STATUS = new Set([404, 405, 501])
  * redirects to a fresh document legitimately issues no XHR at all, so the missing
  * half is reported UNOBSERVED in the detail instead. (The task text asked for
  * "≥1 same-origin /api/* 2xx during the session" as a hard assertion; STEP 0
- * refuted that wording — the BROKEN mx5 build satisfies it with the probe's own
+ * refuted that wording — a BROKEN build satisfies it with the probe's own
  * login POST — so the assertion is registered post-auth and excludes the sign-in
  * request. See the scratch REGISTERED-METRIC record quoted in the commit.)
  */
@@ -980,7 +980,7 @@ export async function driveSession(
     const leftAuthWall = !(now?.hasPassword ?? false) || (now?.pathname ?? '') !== before.pathname
 
     // Exercise the authenticated app once. A sign-in page that ends on a success
-    // card — mx5's does — issues NOTHING after the login POST, so the authenticated
+    // card can issue NOTHING after the login POST, so the authenticated
     // data path is never observed at all and every request-shaped fact below is a
     // fact about the login form. Re-entering the landing URL with the session cookie
     // is the cheapest way to make the app fetch its own data. Deliberately gated on

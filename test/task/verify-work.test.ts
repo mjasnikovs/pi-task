@@ -403,7 +403,7 @@ describe('buildVerifyPrompt', () => {
 })
 
 describe('buildVerifyPrompt — the probe table preserves the measured layout', () => {
-    // The prompt is A/B-tested wording (VALIDATION-DEBT.md), and the table drives two
+    // The prompt wording is load-bearing, and the table drives two
     // DIFFERENT orders: notice blocks come out in table order, the hand-numbered rules
     // come out in rule-number order. Nothing else pins either, so these hold them.
     test('the 4b…4g rule band stays in ascending rule-number order, each rule once', () => {

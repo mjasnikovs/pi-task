@@ -1,7 +1,7 @@
 /**
  * final-gate-progress — the non-progress classifier for the final-gate autofix loop.
  *
- * The failure this closes (mx5 run 14, validated from TASK_AUTO_0001.md's gates
+ * The failure this closes (read off a run's own gate trail
  * trail): the gate's boot check asserted "the app never opened a listening socket"
  * in a sandbox where NO tool the probe knows (`ss`, `lsof`) exists — the check was
  * UNFALSIFIABLE there. Three autofix attempts each edited real files, re-ran, and
@@ -15,7 +15,7 @@
  * CHECK, not about the fix. Two identical post-fix results ⇒ the check is
  * env-shaped/unfalsifiable in this environment ⇒ stop paying for it: demote that
  * one check to UNOBSERVED-with-debt (durable, so the NEXT run's gate re-checks it)
- * and let the REMAINING checks decide whether the gate converged. Run 14 replay:
+ * and let the REMAINING checks decide whether the gate converged. On replay:
  * checks 2 and 3 were fixed by attempts 1–2, so the run converges with the boot
  * check carried as debt instead of failing with the repairs stranded.
  *
@@ -109,7 +109,7 @@ export interface NonProgressInput {
      *  attempt that edited and re-tested says anything about falsifiability. */
     edited: boolean
     /**
-     * Did a PROBE return this failure after OBSERVING? (nexttask 19A.) Read off
+     * Did a PROBE return this failure after OBSERVING? Read off
      * `FinalGateOutcome.observedFailures` by exact text identity — never re-derived
      * from the failure string.
      *
@@ -123,8 +123,8 @@ export interface NonProgressInput {
  * here: it edited the tree, the gate re-ran, and returned the same first failure
  * as the previous attempt.
  *
- * …EXCEPT when the probe OBSERVED the failure (nexttask 19A). This rule was built
- * as a blind compensator for a probe limitation — run 14's boot check "could not
+ * …EXCEPT when the probe OBSERVED the failure. This rule is a blind compensator
+ * for a probe limitation — a boot check that "could not
  * observe a listener in that sandbox at all" — and that limitation was fixed
  * upstream ELEVEN MINUTES BEFORE this rule landed (`b0f90a7` 23:34:05, `dd3b0c3`
  * 23:45:09, both 2026-07-19). Every probe now reports "I could not look" as its
@@ -136,7 +136,7 @@ export interface NonProgressInput {
  * IDENTICAL failure by definition. String equality therefore reads reproducibility
  * as evidence against the instrument, which is backwards for every project type: a
  * CLI that exits 2 twice, a build that fails on the same symbol twice, a C++ plugin
- * missing the same export twice. mx5 run 21 is the one recorded instance and it
+ * missing the same export twice. That has been seen once and it
  * released a product whose every page was blank as a `completed` run.
  *
  * The fix is NOT a better string pattern — the bug is that the decision was made

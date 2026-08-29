@@ -11,15 +11,15 @@
  * rather than a boolean:
  *
  *   'stream' — what the child model said, and what its tools returned. Reproducible
- *              by re-running, useful while you are actively debugging, and 85% of the
- *              bytes (measured: a 247 KB IAR1 `verify-debug.log` is 1315 lines, of
+ *              by re-running, useful while you are actively debugging, and the
+ *              bulk of the bytes (a verify log is mostly child output, of
  *              which 521 are `↳` tool dumps and most of the rest is raw model text).
  *
  *   'event'  — a decision or a guard action: which phase started, why a worker was
  *              retried or degraded, what the git-state guard restored, what a
  *              write-capable child changed on disk, why a gate returned FAIL. Ten-ish
  *              lines per task, and NOT reproducible — it is the only record that the
- *              guard fired at all. mx5 run 11's final-fix child deleted a source file
+ *              guard fired at all. When a final-fix child deletes a source file
  *              and the `tree changes:` line is the reason anyone could tell.
  *
  * Hence the default is `events`, not `off`: the quiet default users want costs the

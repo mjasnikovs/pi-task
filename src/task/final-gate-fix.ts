@@ -2,7 +2,7 @@
  * final-gate-fix — the bounded, model-driven fix pass offered when the FINAL
  * integration gate fails.
  *
- * The failure this closes (mx5 run 7, validated): the final gate's first live
+ * The failure this closes: the final gate's first live
  * firing was a TRUE POSITIVE — the project's own `test` command genuinely failed
  * whole-repo while every per-slice check was green — but the resolution picker
  * offered only "Leave failed" / "Accept". There was NO automated path to fix a
@@ -26,7 +26,7 @@
  * discoverable afterwards rejects the attempt and discards its edits. A fix may
  * change what a command DOES, never make it disappear.
  *
- * WRITE-GUARD STACK (mx5 run 11): this child was added after the run-8 guard
+ * WRITE-GUARD STACK: this child was added after the run-8 guard
  * generation and inherited none of them — it ran `rm` on a sibling task's
  * verified deliverable to satisfy a recorded debt claim and hand-copied a pinned
  * contract to green the lint, with free bash and no trace. Every attempt now
@@ -116,7 +116,7 @@ export function exitedCommandFromReason(reason: string): string | null {
  * Build the fix child's prompt. Generic by construction: the only project facts
  * in it are the gate's own failure text — the command comes from the project's
  * discovered manifest, never from a hardcoded ecosystem. The seed may carry
- * SEVERAL failures (the gate aggregates every section since mx5 run 13, ranked
+ * SEVERAL failures (the gate aggregates every section, ranked
  * most load-bearing first); convergence means the WHOLE list is empty, so the
  * child is told to fix all of them.
  */
@@ -174,7 +174,7 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
 }
 
 /**
- * STRANDED SUB-FIXES (mx5 run 13, PROMPT 4 item 3).
+ * STRANDED SUB-FIXES.
  *
  * A fix attempt that does not converge keeps its edits: they are NOT discarded
  * (only a guard trip discards), and `deps.commit` runs only on `fix.ok`. So a
@@ -182,8 +182,8 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
  * and if the user then ACCEPTs the FAIL the run completes around it — leaving HEAD
  * broken while the repair is invisible unless someone runs `git status`.
  *
- * That is exactly what run 13 shipped: the fix child's bunfig.toml change made
- * `bun run test` pass 116/116, attempt 1 did not converge overall, the user accepted
+ * The shape: the fix child's config change makes the test command pass, attempt 1
+ * does not converge overall, the user accepts
  * the FAIL, and the tree still shows the file modified while HEAD's `bun run test` is
  * broken. The repair and the breakage were BOTH real; only the repair was discarded
  * by default.
@@ -191,7 +191,7 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
  * The rule: a partial fix is either committed (its own commit, named in the trail) or
  * explicitly surfaced — never silently stranded.
  *
- * mx5 run 14 proved the committing half only ever ran on the ACCEPT path. The run
+ * The committing half can end up reachable only on the ACCEPT path. The run
  * ended on LEAVE (YOLO, budget spent) and 13 real repairs — the dev script, the
  * teardown bug, test serialization, the migrate script: the changes that make that
  * app work today — were left dirty in the tree, one `git checkout` from gone, after
@@ -237,10 +237,10 @@ export interface FinalFixResult {
      * (absent only when the fix child self-declared blocked and the re-run was
      * skipped).
      *
-     * This used to be four flattened `gate*` mirrors, and the flattening lost
+     * Four flattened `gate*` mirrors here would lose
      * things. `openDebts` never crossed at all, so `runFinalGateStage` rebuilt
      * `fin` as a literal three times and each literal dropped it — the recorded
-     * mx5 run-18 defect, fixed by RE-DERIVING the field (`reconcileDebts`) rather
+     * defect, fixed by RE-DERIVING the field (`reconcileDebts`) rather
      * than by keeping the value. Then 19A had to push `observedFailures` across the
      * same wall as a third parallel field and re-pair it downstream by
      * `gateObservedFailures?.includes(detail)` — a membership test that exists only
@@ -263,7 +263,7 @@ export interface FinalFixResult {
     guardTripped?: boolean
     /** …and its edits were discarded. When a guard tripped and this is false, the
      *  working tree still holds REJECTED edits, so the caller must NOT commit what
-     *  it finds there (mx5 run 14 item 2b: commit surviving fix-pass edits — but
+     *  it finds there (commit surviving fix-pass edits — but
      *  only guard-CLEAN ones; the cheat guard is never weakened to ease committing). */
     editsDiscarded?: boolean
 }
@@ -292,7 +292,7 @@ export interface FinalFixDeps {
     /** Discard the fix child's working-tree edits (guard trips only). Absent
      *  → the violation is still rejected, edits are left for inspection. */
     discard?: (cwd: string) => Promise<void>
-    // ── Write-guard stack (mx5 run 11: this child ran UNGUARDED — free `rm`,
+    // ── Write-guard stack (unguarded, this child gets a free `rm`,
     //    no diff capture, no frozen-path deny, no probe scan). All optional so
     //    tests and older wirings degrade to the previous behavior; gate-deps
     //    wires every one of them.
@@ -308,10 +308,10 @@ export interface FinalFixDeps {
     revertFrozen?: (paths: string[]) => Promise<string[]>
     /** Deterministic probe scan over the child's ADDED lines (probe-gaming, F6):
      *  a fix written to game a check rather than meet it rejects the attempt —
-     *  run 11's autofix replaced the typed client with a hand-written contract
+     *  an autofix can replace the typed client with a hand-written contract
      *  copy to green the lint. Findings are verbatim offending lines. */
     probeScan?: () => Promise<string[]>
-    // ── Ignored-path channel (mx5 run 19: the fix pass greened `bun run seed` by
+    // ── Ignored-path channel (a fix pass can green a command by
     //    writing credentials into a gitignored `.env`, invisible to every guard
     //    above because porcelain does not report ignored paths).
     /** Fingerprint of the ACTIONABLE ignored paths (build output and node_modules
@@ -425,7 +425,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return rejected(`fix pass removed the gate's own command(s) (${vanished.join(', ')})`)
     }
 
-    // SCOPE-SHRINK GUARD (mx5 run 19): the label surviving is not enough. The
+    // SCOPE-SHRINK GUARD: the label surviving is not enough. The
     // autofix kept `bun run test` and rewrote its BODY from `AGENT=1 bun test`
     // to `AGENT=1 bun test ./test`, so the set difference above was empty while
     // the suite stopped covering the repository — and the gate re-ran, went
@@ -475,7 +475,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return withIgnored({ok: false, reason: `did not converge: ${fin.reason}`, gate: fin})
     }
 
-    // IGNORED-DEPENDENCY DOWNGRADE (mx5 run 19). The gate says PASS; the question
+    // IGNORED-DEPENDENCY DOWNGRADE. The gate says PASS; the question
     // this answers is whether that PASS belongs to the REPOSITORY or only to this
     // worktree. Decided mechanically, never by judgement: move the ignored files
     // the pass wrote aside, re-run the gate once, put them back. Still passing ⇒

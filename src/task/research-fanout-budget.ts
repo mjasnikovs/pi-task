@@ -36,7 +36,7 @@
  *
  * The risk each carries, and why the A/B's quality invariant is load-bearing: CAP
  * can produce a faster worker that ships a THINNER APIS section, which is a
- * regression wearing a win's clothes (memory/apis-contract-stage2-failed.md: a
+ * regression wearing a win's clothes (a
  * lever moved behaviour 20/20 while fabricating 15% of it). SCALE can simply
  * spend the extra time and still time out, buying nothing.
  *

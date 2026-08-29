@@ -26,7 +26,7 @@ const ENRICH_CAP = 3
 // page fetch). A live npm VERSION lookup is just one cheap registry GET, so it
 // can cover far more packages — every dependency a task explicitly names should
 // get a grounded latest-version block, not just the first ENRICH_CAP of them. A
-// task that named 6 runtime deps used to leave the 4th–6th (e.g. tailwindcss)
+// a task naming several runtime deps leaves the later ones (e.g. tailwindcss)
 // with NO live version, so a version question fell back to stale training data.
 const ENRICH_VERSION_CAP = 12
 const ENRICH_SERVICE_HEADER = 'EXTERNAL-DEPENDENCIES'

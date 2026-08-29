@@ -62,9 +62,9 @@ const ENFORCE_TOOLS = 'read,edit'
  * task ships no behavioral verification to guard a destructive edit (no runnable
  * VERIFY, or the verify gate did not produce a genuine clean pass), letting the
  * weak model rewrite working code is exactly what trashes the build — A/B-proven:
- * with `read,edit` and no guard the model degraded a clean tree in 4/5 runs while
- * declaring CLEAN. Demoted to `read`, it cannot trash anything (5/5 clean) and
- * still names the real violation (5/5). So with no signal to revert against, the
+ * with `read,edit` and no guard the model degrades a clean tree while declaring
+ * CLEAN. Demoted to `read`, it cannot trash anything and still names the real
+ * violation. So with no signal to revert against, the
  * pass reports the violation as a warning instead of editing.
  */
 const ENFORCE_FLAG_TOOLS = 'read'
@@ -113,7 +113,7 @@ export async function discoverGuidelines(
 }
 
 /**
- * Render the deterministic probe-gaming findings (run-8 F6) as a prompt block, or
+ * Render the deterministic probe-gaming findings as a prompt block, or
  * an empty array when there are none. Shared by the edit and flag prompts: the
  * finding is a concrete diff line whose stated purpose is to make a check pass
  * rather than meet the requirement — the reliable lever the prompt rule leans on.
@@ -272,7 +272,7 @@ export function classifyEnforceChildFailure(r: EnforceChildResult): string | nul
     if (!failure) return null
     switch (failure.kind) {
         case 'stalled':
-            // mx5 run 7: 64 minutes of silence reported as a user cancel.
+            // Otherwise a long silence is reported as a user cancel.
             return 'model server unreachable — the child produced no output and the model endpoint did not respond'
         case 'command-timeout': {
             // Its text is truncated mid-run — the verdict in it is partial and
@@ -383,7 +383,7 @@ export interface EnforcementDeps {
      *  - `'edit'` (default): `read,edit` — the model fixes violations in place. The
      *    caller is responsible for guarding those edits with a differential
      *    verification check (revert on regression), because a bare edit pass
-     *    trashes working code (A/B: 4/5).
+     *    trashes working code.
      *  - `'flag'`: `read` only — the model reports violations but cannot touch the
      *    tree. Used when there is no verification signal to guard an edit against.
      */

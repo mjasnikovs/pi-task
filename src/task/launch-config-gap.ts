@@ -56,7 +56,7 @@
  *
  * The probe run is a DIAGNOSTIC, never an observation. Its success is not
  * reported, and the verdict it produces is UNOBSERVED with debt — never a PASS
- * (memory/unobserved-gate-verdict-shipped.md). The placeholder is a fixed
+ * The placeholder is a fixed
  * harness-authored string; `.env.example`'s own values are never injected,
  * because they are placeholders too (`change-me`) and a green seed run against
  * them would be a fabricated observation.

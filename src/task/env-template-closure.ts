@@ -1,15 +1,15 @@
 /**
  * env-template-closure — a shipped source file requires an env var the shipped
- * template never mentions (nexttask 10).
+ * template never mentions.
  *
- * The failure this closes (mx5 run 19, `dfbdd6f`, validated): `src/server/seed.ts`
+ * The failure this closes: `src/server/seed.ts`
  * reads `process.env.ADMIN_PHONE` / `ADMIN_PASSWORD` with no default, the tracked
  * `.env.example` declares only `DATABASE_URL` + `APP_URL`, and `bun run seed` was
  * one of the run's final-gate commands. It exited 1; the gate's autofix wrote the
- * two vars into `.env`, which is GITIGNORED (nexttask 4) — so the committed tree
+ * two vars into `.env`, which is GITIGNORED — so the committed tree
  * still cannot seed and nothing at run end ever said why. Coverage credits the
  * CONSUMING side (seed.ts exists, is owned, passes its own VERIFY); the template is
- * a separate artifact nobody re-reads after TASK_0001.
+ * a separate artifact nobody re-reads after the task that wrote it.
  *
  * THE RULE. Every REQUIRED env read in TRACKED source must appear in the TRACKED
  * env template. One-directional: a variable DECLARED but never read is silence, not
@@ -19,7 +19,7 @@
  *   1. carries a default — `?? …`, `|| …`, `os.getenv('X', d)`, `environ.get('X', d)`;
  *   2. is compared, not consumed — `===`, `!==`, `==`, `!=` on either side;
  *   3. is an assignment TARGET — `process.env.DATABASE_URL = testDbUrl`, which is
- *      what every one of mx5's seven test files does and is the single largest FP
+ *      what a test file typically does, and is the single largest FP
  *      source in the corpus;
  *   4. names an AMBIENT variable — a short fixed allowlist (below) of things the
  *      platform, not the project, supplies.
@@ -36,7 +36,7 @@
  *     with a missing manifest). This must never invent a file the project chose
  *     not to have.
  *
- * Not npm-shaped (`memory/gate-blind-on-non-npm-projects.md`): JS/TS
+ * Not npm-shaped: JS/TS
  * (`process.env` / `Bun.env`), Python (`os.environ[…]`, `os.environ.get`,
  * `os.getenv`) and Go (`os.Getenv`) read the same way. Go's `os.LookupEnv` is the
  * explicit may-be-absent API and is treated as its own step-aside.
@@ -59,9 +59,8 @@ export const AMBIENT_ENV = new Set([
     'TMPDIR',
     'LANG',
     // Windows/OS equivalents of the above, and the package manager's own vars —
-    // every one of these was OBSERVED as a "required" read during STEP 0's
-    // hand-read (gofer-rag `npm_execpath`, the pi-task corpus's `LOCALAPPDATA` /
-    // `XDG_CACHE_HOME`), and none of them belongs in a project's template.
+    // every one of these reads as "required" to a naive scan (`npm_execpath`,
+    // `LOCALAPPDATA`, `XDG_CACHE_HOME`), and none belongs in a project's template.
     'APPDATA',
     'LOCALAPPDATA',
     'USERPROFILE',
@@ -210,7 +209,7 @@ const MATCHERS: Matcher[] = [
  *  that opens with one? (`process.env.X\n    ?? 'y'` is one expression.)
  *
  *  A ternary CONDITION counts: `process.env.npm_execpath ? a : b` names both
- *  outcomes, so nothing is required (gofer-rag, hand-read in STEP 0). `?.` is
+ *  outcomes, so nothing is required. `?.` is
  *  optional chaining, not a ternary, and must not match. */
 function hasDefault(before: string, after: string, nextLine: string | undefined): boolean {
     // The read IS the fallback: `X ?? process.env.BRAVE_API_KEY` (brave-warning.ts)
@@ -232,14 +231,14 @@ function hasDefault(before: string, after: string, nextLine: string | undefined)
  *   `if (c) …`                               Playwright cache when unset
  *
  * The discriminator is the SIGN of the guard, and it is exactly what separates
- * those from the lead: mx5's seed.ts writes `const phone = process.env.ADMIN_PHONE`
+ * those from the lead: a seed script writes `const phone = process.env.ADMIN_PHONE`
  * … `if (!phone) throw`. A NEGATED guard means the variable is required and the
  * program stops without it; a POSITIVE guard means it is an override. So a bare
  * `if (` / `while (` head steps aside, `if (!` does not, and an assign-then-guard
  * is resolved by looking ahead for the FIRST guard on that variable.
  */
 const GUARD_HEAD_RE = /\b(?:if|while)\s*\(\s*$/
-/** How far an assign-then-guard may reach. mx5's is 4 lines; 10 is slack. */
+/** How far an assign-then-guard may reach. A few lines is typical; 10 is slack. */
 const GUARD_LOOKAHEAD = 10
 
 function isProbeHead(before: string): boolean {
@@ -254,7 +253,7 @@ function assignedTo(before: string): string | null {
 
 /**
  * What the guard's own body does. A NEGATED guard only means "required" when the
- * program STOPS without the variable — `if (!phone) throw` (mx5, the lead). When
+ * program STOPS without the variable — `if (!phone) throw`. When
  * it merely returns or falls through — `if (!process.env.PI_REMOTE_PUSH_DEBUG)
  * return` (push.ts, a debug flag) — the variable is optional and the negation
  * proves nothing. Same syntax, opposite meaning; the body is the discriminator.
@@ -302,7 +301,7 @@ function locallySupplied(text: string, name: string): boolean {
  *  it as an override, so every read of it in that file is a probe. Without this,
  *  the CONSUMING read inside the guarded branch — `if (process.env.PI_BIN) return
  *  {command: process.env.PI_BIN}` (pi-invocation.ts), `process.env.GOFER_PYTHON ?
- *  [process.env.GOFER_PYTHON] : [...]` (gofer) — reads as required. */
+ *  [process.env.PYTHON_BIN] : [...]` — reads as required. */
 function locallyProbed(text: string, name: string): boolean {
     const e = `(?:process|Bun)\\.env\\s*\\.\\s*${name}`
     return (
@@ -321,7 +320,7 @@ function isCompared(before: string, after: string): boolean {
 
 /** Rule 3: the read is a WRITE — `process.env.X = …` (but not `==`/`===`), or
  *  `delete process.env.X`. Both mean the file SUPPLIES the variable rather than
- *  consuming it; mx5's seven test files are the assignment case and gofer's
+ *  consuming it; a suite of test files is the assignment case and a
  *  `wdio.packaged.conf.ts` (`delete process.env.GOFER_GDFORMAT`) is the delete
  *  case — a scrub of a developer override, the opposite of a requirement. */
 function isAssigned(before: string, after: string): boolean {
@@ -349,8 +348,7 @@ export function scanSource(file: string, text: string): EnvRead[] {
                 // the RESULT is seen (`os.Getenv("X") == ""`).
                 const after = matcher.call ? raw.replace(/^\s*\)/, '') : raw
                 // …and past any WRAPPING call's brackets, so `Number(process.env.X)
-                // || 32` (gofer-rag, the largest FP class the STEP-0 hand-read
-                // found) reads as defaulted. Stepping aside when the `||` in fact
+                // || 32` — the largest false-positive class — reads as defaulted. Stepping aside when the `||` in fact
                 // defaults an enclosing expression is a false NEGATIVE, which this
                 // check spends freely; a false rank-0 gate failure it does not.
                 // …and past a trailing accessor chain, so `process.env.X?.trim() ||

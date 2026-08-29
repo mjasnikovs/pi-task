@@ -19,7 +19,7 @@
  * it, locked in by a VERIFY assertion, next to a spec telling the next
  * implementer not to use `Bun.sql` — the API the whole data layer is built on.
  *
- * This is `memory/phantom-correction-additive-not-subtractive.md` at spec scale:
+ * An appended correction loses to the preserved text it contradicts:
  * the correction was APPENDED to research CONTEXT while the wrong text stayed in
  * refine's CONSTRAINTS, and CONSTRAINTS is what the implementer is told is
  * authoritative.
@@ -27,7 +27,7 @@
  * THE LEVER. Deterministic detection, then a scoped removal, BEFORE compose sees
  * the refined task. Never a model rewrite: every model-rewrite lever at this seam
  * has resolved contradictions by deleting the AUTHORITATIVE side
- * (`memory/owned-freeze-critique-lever-refuted.md`, 11/20). This pass can only
+ * This pass can only
  * delete a refine-invented token, and can never touch an owned line.
  *
  * The match is lexical, never semantic: a research CONTEXT bullet refutes a

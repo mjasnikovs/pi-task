@@ -231,7 +231,7 @@ export function extractSpecForVerification(taskBody: string): string | null {
  * LOCKFILE_CHECKS in final-gate.ts, where a whole package ecosystem is one row.)
  *
  * THIS PROMPT IS A MEASURED ARTIFACT — its wording is A/B-tested on the live
- * local model and the verdicts are recorded in VALIDATION-DEBT.md, so the table
+ * local model, so the table
  * must emit BYTE-IDENTICAL text for the same findings. Two orders are
  * load-bearing and they are NOT the same order:
  *   - NOTICE BLOCKS are emitted in TABLE order (the order the rows appear below).

@@ -1,6 +1,6 @@
 /**
  * coverage-loop — the MONOTONIC replacement rule for /task-auto's decompose
- * coverage gate (mx5 run 12).
+ * coverage gate.
  *
  * The failure this closes: the coverage-retry loop regenerated the whole plan on
  * every INCOMPLETE verdict, and adopted the regeneration on nothing but a size
@@ -51,7 +51,7 @@ export interface CoveragePlan {
 // requirement to any plan. Stopped so grounding keys on the DISTINCTIVE nouns
 // (json, dead-letter, serialize, symlink…) that actually name a deliverable.
 // English function words + generic task verbs + generic project nouns — all
-// domain-agnostic (no mx5/web vocabulary).
+// domain-agnostic.
 const COVERAGE_STOPWORDS = new Set([
     // function words
     'the',
@@ -175,13 +175,13 @@ function contentTokens(s: string): Set<string> {
  * DETERMINISTIC owned-set for the monotonic guard — grounded in requirement↔title
  * token overlap, NOT the coverage-map model's `TASK n` verdict.
  *
- * Why this exists (live A/B, Qwen3.6-27B, mx5-shaped CLI spec): the model
+ * Why this exists: the model
  * over-credits ownership — it mapped a "--json output" requirement to a generic
  * "scaffold + argument parser" task, so a plan with NO --json task still reported
  * owning it. A guard that trusts those numbers is blind to the very drop it must
- * catch (treatment held only 1/5 trials). Grounding coverage in whether a task
+ * catch. Grounding coverage in whether a task
  * TITLE actually shares a distinctive token with the requirement makes the
- * drop-signal independent of the model's rubber-stamp (treatment → 5/5).
+ * drop-signal independent of the model's rubber-stamp.
  *
  * A requirement is "covered" when some title shares a DISTINCTIVE token with it —
  * distinctive meaning the token is not shared across more than half the ownable
@@ -280,7 +280,7 @@ export function decideAdoption(
         }
         // Growth must PAY FOR ITSELF. Past this point the retry's owned-set is a
         // superset, so an equal size means the sets are IDENTICAL — the retry
-        // covers nothing new. Adopting it anyway is how mx5 (2026-07-28) went
+        // covers nothing new. Adopting it anyway is how a plan goes
         // 26 → 32 → 60 titles with the owned-set pinned at 27 in all three rounds,
         // both retries logged as "preserves owned coverage".
         //
@@ -289,22 +289,19 @@ export function decideAdoption(
         // depend only on the quotes), and coverageRepromptHint asks the model for
         // "every task your previous list already had ... PLUS" — a superset. So
         // `dropped` is structurally empty whenever the model obeys the hint and the
-        // guard adopted unconditionally (measured: 2000/2000 superset retries
-        // adopted; 563/2000 independently-sampled ones rejected — the guard has
+        // guard adopted unconditionally. A retry that is a strict superset is
+        // always adopted; an independently-sampled one often is not — the guard has
         // power, just not against the shape the prompt requests).
         //
         // REJECT, never break. Rejection keeps the smaller plan and lets the loop
         // reprompt again; breaking here forfeits a later round that would have
-        // gained (live: 19t/24c → 38t/24c → 40t/25c, where stopping at the tie
-        // loses the 25th requirement). "No gain this round" is not "no gain ever".
+        // gained: a later round can add the requirement a tied round did not. "No gain this round" is not "no gain ever".
         //
         // Safety is structural, not statistical: this branch is reachable only when
         // the retry covers NO MORE than the current plan, so it can never decline a
-        // strictly better one. Live A/B (Qwen3.6-27B, mx5 20KB spec, 24 reps,
-        // precondition 24/24): inflated plans 7/24 → 0/24, Fisher two-sided
-        // p=0.0094; coverage mean 24.58 → 24.79 (higher in 6 reps, lower in 1, and
-        // that one rep never fired this clause); plan size 41.8 → 38.8, which is
-        // NOT significant (sign 15/8, p=0.21) — the win is removing pathological
+        // strictly better one. It removes plans inflated by a retry that added
+        // titles without adding coverage, and leaves coverage itself alone — the
+        // win is removing pathological
         // inflation, not shrinking plans generally.
         if (
             retry.covered.size <= current.covered.size
@@ -338,7 +335,7 @@ export function decideAdoption(
  * title list the coverage-map child was prompted with. Hold the two apart and the
  * index silently addresses the wrong plan.
  *
- * That is not hypothetical. The coverage loop used to keep `best` (the scored plan)
+ * That is not hypothetical: a loop that keeps `best` (the scored plan)
  * and a separate `let accounting`, updated on adoption as
  * `accounting = cand.accounting ?? accounting`. `cand.accounting` is null whenever
  * the coverage-map child throws or its output fails to parse — a fault that is

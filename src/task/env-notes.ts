@@ -1,7 +1,7 @@
 /**
  * env-notes — a per-run cache of ENVIRONMENT FACTS shared across gate children.
  *
- * The failure this serves (mx5 run 7, F8): every gate child re-discovers the
+ * The failure this serves: every gate child re-discovers the
  * same environment facts from scratch — where the DB credentials live, which
  * services are reachable, which tools are installed — burning minutes of
  * archaeology per child through the serial model bottleneck.
@@ -19,7 +19,7 @@
  * defect") still governs every verdict — the block injected into prompts says
  * so explicitly. The cache only kills re-discovery time.
  *
- * PROVENANCE + RE-VALIDATION (run 8, F7): a verify child once grepped component
+ * PROVENANCE + RE-VALIDATION: a verify child once grepped component
  * names in a MINIFIED bundle (identifiers mangled ⇒ 0 hits by construction),
  * wrote "build tree-shakes ALL route components — pre-existing issue" to the
  * cache, and ten later tasks inherited it verbatim as a standing "pre-existing,
@@ -113,7 +113,7 @@ export function extractEnvNotes(text: string): string[] {
  * EXCUSE-CLASS wording: a note that waves a problem off as someone else's or a
  * prior condition ("pre-existing … mismatch", "unrelated to this task",
  * "tree-shaken", "not applicable"). These are the notes that propagate across
- * slices as standing excuses (mx5 run-8 F7) — every one of the run-8 cache's
+ * slices as standing excuses — every one of the run-8 cache's
  * dozen such notes was either the false tree-shake fact or the schema mismatch
  * the final gate later proved was a REAL defect. Pure text, stack-agnostic; the
  * flag never drops or fails a note, it only marks it as needing live

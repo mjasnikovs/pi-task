@@ -1,5 +1,5 @@
 /**
- * decompose-fidelity — verbatim fidelity of plan derivations (mx5 run 11, goal B).
+ * decompose-fidelity — verbatim fidelity of plan derivations.
  *
  * The failure this closes: the design's §12 milestone lines 2 and 4 end in
  * "guards + tests" / "contact + tests"; the decomposed titles carried everything
@@ -47,17 +47,12 @@ const SOURCE_RE = /^\[source:\s*"([\s\S]*)"\s*\]$/i
  *
  * BACKTICKS ARE THE SAME CLASS and were the larger half. A code span renders as
  * bare text, so `3. **Invites** — create/validate/redeem, \`/join/:token\` page.`
- * comes back as `Invites — create/validate/redeem, /join/:token page.` Measured
- * on the mx5 fixture, screening every spec line in its RENDERED form:
- * 107/216 grounded with backticks kept, 216/216 with them dropped.
+ * comes back as `Invites — create/validate/redeem, /join/:token page.` Screening
+ * every spec line in its RENDERED form is what makes those quotes match at all.
  *
- * MEASURED 2026-08-27 over the 20 recorded decompose runs in
- * ab-grouplab/ledger-planning.jsonl, and screened both ways first:
- *   FLOOR   real spec lines with ONE content word altered: 0/216 pass.
- *   CEILING real spec lines quoted without their markup: 209/257 = 81.3% passed
- *           before, 257/257 after. 48 genuine lines were being rejected.
- * Re-screened by scripts/decompose-fidelity-screen.ts, which is the standing
- * check: CEILING raw 216/216, CEILING rendered 216/216, FLOOR 0/216.
+ * The two directions this has to hold in:
+ *   FLOOR   a real spec line with ONE content word altered must NOT be grounded.
+ *   CEILING a real spec line quoted without its markup MUST be grounded.
  */
 function demark(s: string): string {
     return s
@@ -72,9 +67,9 @@ function demark(s: string): string {
  * Undo the backslash-escaping a model applies to a quote it is putting INSIDE a
  * double-quoted clause. `[source: "… \`import { sql } from \\"bun\\"\` gotcha …"]`
  * is a faithful copy of a line the document stores with plain quotes; the
- * backslashes are an artefact of the delimiter, not content. Measured live: 4 of
- * the 19 ungrounded clauses in the n=30/arm planning run were this and nothing
- * else. Only `\"` is undone — no other escape sequence is interpreted, so this
+ * backslashes are an artefact of the delimiter, not content, and a real share of
+ * otherwise-faithful quotes fail to match for this reason alone.
+ * Only `\"` is undone — no other escape sequence is interpreted, so this
  * cannot rewrite a quote into something the document happens to contain.
  */
 function unescapeQuotes(s: string): string {

@@ -1,69 +1,51 @@
 /**
  * enforce-attribution — decide whether an enforce-pass re-verify FAIL can possibly
- * be the ENFORCE COMMIT's fault (mx5 run 18, nexttask 4).
+ * be the ENFORCE COMMIT's fault.
  *
- * The failure class, measured. Run 18's TASK_0024 enforce commit `ee65661` was, in
- * full, one line:
+ * THE FAILURE CLASS. An enforce commit can be one line:
  *
  *     -  setApiError((usersData).error ?? 'Failed to load users')
  *     +  setApiError(usersData.error ?? 'Failed to load users')
  *
- * The differential re-verify then FAILed on `MyListings.spec.tsx:186`, a Playwright
- * CT file `Admin.tsx` cannot reach (CT bundles per story; the import graph never
- * touches it), and the differential reverted the enforce commit anyway. The defect
- * was real and PRE-EXISTING — `getByText('SOLD')` matched two elements because
- * MOCK_LISTINGS already carries a sold row — and the final gate fixed it five
- * minutes later, in the same commit that RE-MADE the identical paren change. Cost:
- * one correct change destroyed, one permanent false verify-FAIL debt written
- * against work that was fine, and the change re-made anyway.
+ * and the differential re-verify can then FAIL on a component test in a file that
+ * change cannot reach — CT bundles per story, so the import graph never touches it.
+ * The differential reverts the enforce commit anyway. The defect was real and
+ * PRE-EXISTING, the final gate fixes it later and re-makes the identical paren
+ * change, and the cost is one correct change destroyed plus a permanent false
+ * verify-FAIL debt written against work that was fine.
  *
- * The mechanism was not broken; it was asked the wrong question. The root-cause
- * channel (root-cause-repair.ts) attributed against `scope: 'committed'` — the
- * TASK's own commit, which touched `MyListings.tsx` — concluded "this task touched
- * the file", and fell through to the conservative revert. But at THIS seam the
- * differential is deciding whether to discard the ENFORCE COMMIT. The causal
- * question is therefore *"could the enforce diff have caused this?"*, never *"could
- * the task have?"*: reverting the enforce commit can only ever repair damage the
- * enforce commit did.
+ * The mechanism is not broken; it is asked the wrong question. The root-cause
+ * channel (root-cause-repair.ts) attributes against `scope: 'committed'` — the
+ * TASK's own commit — concludes "this task touched the file", and falls through to
+ * the conservative revert. But at THIS seam the differential is deciding whether to
+ * discard the ENFORCE COMMIT. The causal question is therefore *"could the enforce
+ * diff have caused this?"*, never *"could the task have?"*: reverting the enforce
+ * commit can only ever repair damage the enforce commit did.
  *
  * So the filter here is mechanical and one-sided:
  *
- *   - the files the FAIL text NAMES are extracted (paths AND bare basenames — run
- *     18's reason named `MyListings.spec.tsx:186`, which carries no separator and
- *     is invisible to root-cause-repair.ts's path-token regex, a second reason
- *     that incident could not be attributed);
+ *   - the files the FAIL text NAMES are extracted, paths AND bare basenames. A
+ *     reason naming `MyListings.spec.tsx:186` carries no separator and is invisible
+ *     to root-cause-repair.ts's path-token regex, so basenames are not optional;
  *   - each is compared against the enforce commit's own file set, by path suffix
  *     and by RELATED STEM (`Admin.tsx` ~ `Admin.spec.tsx` ~ `Admin.stories.tsx`),
  *     so a regression in a touched file's own test still counts as overlap;
  *   - DISJOINT ⇒ keep the edits and route the defect. Anything else — an unknown
  *     enforce diff, a FAIL text naming no file at all, any overlap — reverts,
- *     which is exactly the pre-existing behaviour. Never keep on ignorance.
+ *     which is the pre-existing behaviour. Never keep on ignorance.
  *
  * Keeping the edits must not mean losing the finding: the caller still records the
- * debt and still queues the repair. Losing the finding was mx5 run 5's mistake.
+ * debt and still queues the repair.
  *
- * MEASURED COVERAGE, and it is the honest weakness of this filter. Live, 40 trials
- * against the run-18 tree with a real verify child
- * (`scripts/live-enforce-attribution-ab.ts`):
- *
- *   reachable arm (the enforce edit itself breaks `Admin.tsx`, ground truth REVERT)
- *     20/20 FAILs named a resolvable file, 20/20 decided correctly — tsc prints the
- *     path, so the regression case is fully covered.
- *   disjoint arm (a deterministic failure in `MyListings.spec.tsx`, ground truth KEEP)
- *     only 9/20 FAILs named a file at all. The other 11 named the UNIT — "The
- *     MyListings component test \"edit link navigates…\" fails … expects 4 Edit links"
- *     — with no path and no `.tsx` anywhere. Those 11 fall through to the revert.
- *
- * So this fires on roughly half of live disjoint failures and on the recorded run-18
- * verdict (which did name `MyListings.spec.tsx:186`), and it was NEVER wrong: 29 of
- * 29 extractable decisions matched ground truth across both arms. The arm-level
- * verdict is still FAIL against the pre-registered ≥80%-extractable bar, and the
- * shipped rule is deliberately the conservative half of that trade: a miss costs
- * exactly the behaviour that shipped before, while a false KEEP would ship a real
- * regression. A stem-widened extractor (accept a bare identifier matching a tracked
- * file's stem) reaches 40/40 with 0 errors in the same data and is NOT wired — see
- * VALIDATION-DEBT.md, it resolves prose nouns to files and its FP mode was never
- * exercised.
+ * THE HONEST WEAKNESS. This only fires when the FAIL text names a file. A type
+ * error does — the compiler prints the path — but a failing unit test often names
+ * the UNIT instead ("The MyListings component test \"edit link navigates…\" fails"),
+ * with no path and no extension anywhere. Those fall through to the revert, which
+ * costs exactly the behaviour that shipped before. That is the deliberate half of
+ * the trade: a miss changes nothing, while a false KEEP would ship a real
+ * regression. Widening the extractor to accept a bare identifier matching a tracked
+ * file's stem would catch more, and is NOT wired: it resolves prose nouns to files,
+ * and its false-positive mode is unexercised.
  */
 
 /** A path-like token: at least one separator, ending in a file name. */
@@ -72,7 +54,7 @@ const PATH_TOKEN_RE = /(?:[\w.@~-]+\/)+[\w.@-]+\.\w+/g
 /**
  * A bare file name with a code-ish extension. Deliberately extension-gated: an
  * ungated `\w+\.\w+` matches prose ("e.g.", "v1.2"), object access (`usersData.error`
- * — which run 18's own enforce diff contains) and assertion chains
+ * — which an enforce diff can easily contain) and assertion chains
  * (`toBeVisible()`), and every one of those would be a phantom "named file".
  */
 const BARE_FILE_RE =

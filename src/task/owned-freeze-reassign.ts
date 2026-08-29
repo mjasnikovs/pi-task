@@ -27,34 +27,30 @@
  *           pending paths, the entry becomes that task's own — belt into its
  *           compose, braces onto its spec.
  *
- * ── WHY NOT "PICK THE TARGET AT DETACH TIME", WHICH IS WHAT nexttask2.md ASKS ─
+ * ── WHY NOT "PICK THE TARGET AT DETACH TIME" ─────────────────────────────────
  *
- * nexttask2.md's branch 1 is "if exactly one OTHER task in the plan names path
- * `P` — its title or its spec's file list contains `P` — move the requirement
- * there". Measured over all 60 recorded composed specs on disk
- * (scripts/owned-freeze-reassign-baserate.ts), on the one conflict the corpus
- * contains (mx5 run 19 TASK_0015, path `src/server/index.ts`):
+ * The obvious rule is "if exactly one OTHER task in the plan names path `P` — its
+ * title or its spec's file list contains `P` — move the requirement there". Two
+ * things break it.
  *
- *     title-only    3 candidates   TASK_0014 TASK_0016 TASK_0017
- *     FILES-only    7 candidates   TASK_0016 … TASK_0025
- *     either        8 candidates   → "exactly one" NEVER holds
+ * "Exactly one" does not hold. Against composed specs on disk, a single conflicting
+ * path draws several candidates by title and more by FILES list, so the rule never
+ * fires with a unique target.
  *
- * and, decisively, that measurement is against RECORDED SPECS, which production
- * does not have: at the conflicting task's compose the later tasks are still
- * bare plan titles. None of run 19's 26 plan titles contains the string
- * `src/server/index.ts` — TASK_0017's reads "Client API layer — typed
- * hono/client hc<AppType> in api.ts, small fetch/mutation hooks, SPA fallback
- * route on server". A path-lexical target rule at detach time is therefore
- * BLIND IN PRODUCTION (0 candidates), the same way the run-18 critique probe was.
+ * Worse, that reading needs COMPOSED SPECS, which production does not have. At the
+ * conflicting task's compose the later tasks are still bare plan titles, and a plan
+ * title almost never contains a file path — it says "Client API layer — typed
+ * client, fetch hooks, SPA fallback route on server" where the path is
+ * `src/server/index.ts`. A path-lexical target rule at detach time is therefore
+ * BLIND IN PRODUCTION: zero candidates, every time.
  *
- * The claimant knows what the planner did not. By its own compose, TASK_0017 has
- * a refined prompt that says "add an SPA fallback route to the existing server
- * `src/server/index.ts`". Over run 19's 26 refined prompts, `writeIntent` on that
- * path fires on exactly two: TASK_0014 (which created the file, already run) and
- * TASK_0017. Nothing else in the plan claims it — six other specs mention the
- * path, all of them to fence themselves off it.
+ * The claimant knows what the planner did not. By its own compose, the later task
+ * has a refined prompt that says "add an SPA fallback route to the existing server
+ * `src/server/index.ts`" — and `writeIntent` on that path fires on it and on the
+ * task that created the file, and on nothing else. Other specs mention the path
+ * only to fence themselves off it.
  *
- * ── WHY NOT nexttask2.md's BRANCH 2 (CARRY EVERYTHING CROSS-CUTTING) ────────
+ * ── WHY NOT BRANCH 2, CARRY EVERYTHING CROSS-CUTTING ────────────────────────
  *
  * The cross-cutting channel is for prohibitions and product-wide rules
  * (`isCrossCuttingRequirement`; `accountCoverage` only routes those there). The

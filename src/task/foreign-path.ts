@@ -2,7 +2,7 @@
  * foreign-path — deterministic detection (and mechanical repair) of ABSOLUTE PATHS
  * a child leaked from its own sandbox into a committed source/config file.
  *
- * The failure this closes (mx5 run 13, PROMPT 4 item 1): TASK_0023 committed
+ * The failure this closes: TASK_0023 committed
  * `playwright-ct.config.ts` carrying vite aliases pinned to the child's sandbox
  * mount —
  *     '../../shared': '/workspace/src/shared',

@@ -2,10 +2,10 @@
  * final-gate — the run-level integration gate /task-auto runs ONCE, after every
  * task is checked off and before the run is declared complete.
  *
- * The failure this closes (mx5 runs 3 and 5, validated): every existing gate is
+ * The failure this closes: every existing gate is
  * per-task/per-slice, so a run can finish with each slice individually blessed
  * while the ASSEMBLED project is dead — statics green yet every protected route
- * 500ing, 105/174 tests failing across slices, later tasks breaking files earlier
+ * 500ing, tests failing across slices, later tasks breaking files earlier
  * tasks verified. Per-task repo-health closes the static half; nothing ever ran
  * the project's own test/build commands against the finished whole.
  *
@@ -15,12 +15,12 @@
  * and lets their REAL exit codes decide:
  *
  *   - static analysis first (runRepoHealthCheck — cheap, precise), then
- *   - lockfile↔manifest consistency (mx5 run 7, validated: the lockfile carried a
+ *   - lockfile↔manifest consistency (a lockfile can carry a
  *     dependency no committed manifest declared, so the tree tested green here
  *     but a FRESH CHECKOUT could not even install — each ecosystem's own offline
  *     "is the lock in sync" command decides), then
  *   - the project's own `test` and `build` commands, run verbatim and unaided, then
- *   - one boot exercise of the project's own start command (mx5 run 7, validated:
+ *   - one boot exercise of the project's own start command (
  *     every static and test gate green, yet `bun run start` died in ~1s on a
  *     self-inflicted EADDRINUSE — nothing had ever LAUNCHED the finished project).
  *     No ports, URLs, or framework knowledge: fast non-zero exit → FAIL, quick
@@ -39,7 +39,7 @@
  * (accept / leave failed), so a genuine external gap can still be overridden.
  *
  * A skip is never silent, though. A DISCOVERED boot command that never ran is its
- * own verdict (bootSkipVerdict, mx5 run 18) — nothing else the gate observed can
+ * own verdict — nothing else the gate observed can
  * cancel it. Validation harnesses for that lever:
  *   scripts/boot-skip-baserate.ts      base rate, shipped gate, before the change
  *   scripts/boot-skip-verdict-ab.ts    two-armed deterministic A/B + invariants
@@ -110,7 +110,7 @@ export interface FinalGateOutcome {
     /**
      * On a fail: the exact command(s), exit code(s), and output tail(s) — the
      * MECHANICAL failures only. The accept-debt note is deliberately NOT folded in
-     * here (mx5 run 11): this string seeds the final-gate AUTOFIX child's prompt,
+     * here: this string seeds the final-gate AUTOFIX child's prompt,
      * and a debt included there is read as an instruction — the run-11 fix child
      * `rm`'d a sibling task's verified deliverable to satisfy a recorded claim. The
      * child cannot act on text it never receives; debts travel in `debtNote`.
@@ -121,7 +121,7 @@ export interface FinalGateOutcome {
      * On a fail: EVERY section failure individually, ranked most load-bearing
      * first — boot/render ("the app does not serve/render") outranks any single
      * test failure. The gate runs every section and aggregates rather than
-     * early-returning (mx5 run 13: a bun-test glob failure shadowed the boot +
+     * early-returning (a test-glob failure otherwise shadows the boot +
      * render probe, so the user accepted the FAIL having only ever seen 1 failing
      * CT test while the shipped app 404'd on every non-API GET). Callers trail
      * each entry and show the full list wherever an ACCEPT decision is made.
@@ -130,7 +130,7 @@ export interface FinalGateOutcome {
     /**
      * The SUBSET of `failures` that a PROBE returned after actually observing —
      * entries whose evidence is "we looked, and what we saw was bad", as opposed to
-     * "we could not look" (nexttask 19A).
+     * "we could not look".
      *
      * The probes have always known this about themselves: `RenderOutcome` is
      * `pass | fail | skip`, `f648f5b` (2026-07-14) turned a render `skip` into
@@ -140,7 +140,7 @@ export interface FinalGateOutcome {
      * the non-progress classifier downstream had to guess — and guessed by string
      * equality, which a deterministic un-fixed defect satisfies by definition.
      *
-     * mx5 run 21: the render probe FAILED on a blank page, the same failure came
+     * When the render probe FAILS on a blank page and the same failure comes
      * back from two tree-changing fix attempts (because the defect was real and
      * unfixed), the classifier read that as evidence against the INSTRUMENT, and
      * the run shipped a product whose every page was blank as `completed`.
@@ -156,8 +156,8 @@ export interface FinalGateOutcome {
      */
     debtNote?: string
     /**
-     * ACCEPT-despite-verify-FAIL debts still open at run end (mx5 run 4 B3 / run 8
-     * TASK_0012): tasks the user blessed as-is despite a verify-FAIL that a
+     * ACCEPT-despite-verify-FAIL debts still open at run end:
+     * tasks the user blessed as-is despite a verify-FAIL that a
      * deterministic re-check could not prove resolved. The caller surfaces them so a
      * run never completes silently carrying an accepted defect. Empty/absent = none.
      */
@@ -168,7 +168,7 @@ export interface FinalGateOutcome {
      *   - nothing dynamic ran at all — no command was discoverable, or every discovered
      *     one skipped as an environment gap (unobservedVerdict);
      *   - a served app's boot command was discovered and SKIPPED, whatever else ran
-     *     (bootSkipVerdict, mx5 run 18 — test suites may not stand in for a launch).
+     *.
      * `ok` is still true (the statics did pass and there is nothing to fix), but this is
      * NOT a PASS: the caller must record it as UNOBSERVED, never as "checked and fine".
      * Absent ⇒ everything the gate meant to observe, it observed.
@@ -208,7 +208,7 @@ export function discoverIntegrationCommands(cwd: string): {
     if (existsSync(path.join(cwd, 'package.json'))) {
         const s = packageScripts(cwd)
         const cmds: HealthCommand[] = []
-        // Every test-shaped script, not just the one literally named `test` (mx5 run
+        // Every test-shaped script, not just the one literally named `test` (
         // 10: `test:ct` — 89 Playwright component tests, the ONLY client-executing
         // suite — never ran because the gate looked only for `test`/`build`). Plain
         // `test` leads (richer, most common), then `test:*`/`test-*` in declaration
@@ -317,7 +317,7 @@ export function discoverGateCommandLabels(cwd: string): string[] {
  * The RESOLVED BODY of every discoverable gate command, keyed by the same label
  * `discoverGateCommandLabels` produces.
  *
- * The label is what the gate CALLS; the body is what actually runs. mx5 run 19's
+ * The label is what the gate CALLS; the body is what actually runs. A
  * autofix changed `scripts.test` from `AGENT=1 bun test` to `AGENT=1 bun test
  * ./test` — the label `bun run test` was identical before and after, so the
  * label guard saw nothing while the suite stopped covering the repository. The
@@ -392,13 +392,13 @@ async function runGateCommand(
           /** true → the runner binary never spawned (ENOENT). Distinct from a
            *  tool-level gap (127 inside the chain, missing browser, timeout),
            *  where the runner demonstrably RAN: only spawn failures feed the
-           *  full-blindness guard (mx5 run 16 — see observabilityGapFailure). */
+           *  full-blindness guard. */
           spawnFailed: boolean
       }
     | {outcome: 'pass'}
     | {outcome: 'fail'; status: number; tail: string}
 > {
-    // Runner resolution (mx5 run 16): a login-shell-stripped PATH left `bun`
+    // Runner resolution: a login-shell-stripped PATH left `bun`
     // unspawnable, so every dynamic check skipped and the gate went blind. The
     // resolved binary is spawned, and its directory rides on the child's PATH so
     // the SCRIPT CHAIN can re-invoke the runner (`bun run test` runs `bun test`
@@ -430,7 +430,7 @@ export {runVerifyCommandLine, type VerifyRerunOutcome} from './command-run.js'
 // gate-tally.ts (GateTally). Re-exported so every existing importer keeps working.
 export {observabilityGapFailure, unobservedVerdict}
 
-// File → introducing-task provenance moved to task-provenance.ts (mx5 run-12
+// File → introducing-task provenance moved to task-provenance.ts (
 // PROMPT 2 extracted it for the cross-task deletion guards); re-exported so
 // existing importers keep working.
 export {taskThatIntroduced}
@@ -532,7 +532,7 @@ interface ClosureScan {
  */
 const CLOSURE_SCANS: ClosureScan[] = [
     {
-        // Serve-entry closure (mx5 run 18, nexttask 2B): the tree builds a server
+        // Serve-entry closure: the tree builds a server
         // app, expects to serve (SPA fallback / static read / a design clause), and
         // NOTHING anywhere starts a listener — `src/server/index.ts` ended at
         // `export {app}`, so the product could not be started at all while every
@@ -549,10 +549,10 @@ const CLOSURE_SCANS: ClosureScan[] = [
         }
     },
     {
-        // Artifact-production closure (mx5 run 13, PROMPT 2): a runtime file
+        // Artifact-production closure: a runtime file
         // reference with NO producer anywhere ships silently — the server read
         // `Bun.file('dist/index.html')` while the build emitted only app.css +
-        // main.js, so every non-API GET 404'd behind 32/32 green checkoffs.
+        // main.js, so every non-API GET 404s behind a fully green plan.
         // Deterministic scan of the shipped tree (literal refs only, positive
         // producer evidence required — see artifact-closure.ts); each dangle names
         // referencer + missing path.
@@ -564,7 +564,7 @@ const CLOSURE_SCANS: ClosureScan[] = [
         }
     },
     {
-        // Env-template closure (mx5 run 19, nexttask 10): a shipped source file
+        // Env-template closure: a shipped source file
         // requires an env var the shipped template never mentions. `seed.ts` read
         // `process.env.ADMIN_PHONE`/`ADMIN_PASSWORD`, `.env.example` declared
         // neither, `bun run seed` exited 1, and the autofix "fixed" it by writing
@@ -619,16 +619,15 @@ export type {ClosureScan, ClosureScanInput, ClosureScanStage}
  * checks, then the discovered integration commands, then one boot exercise of
  * the start command — whole-repo, verbatim, unaided. Deterministic (no model).
  *
- * EVERY section runs and failures AGGREGATE (mx5 run 13): the gate used to
- * early-return on the first failing section, and the boot + render probe — built
- * after run 11 exactly for "app serves blank/nothing" — was ordered last, so any
- * earlier failure shadowed the most load-bearing signal. Run 13's user accepted
- * the FAIL having seen only 1 failing CT test while the app 404'd on every
- * non-API GET; boot/render never executed in any attempt. Now the outcome
- * carries the full ranked failure list (boot/render first — "the app does not
- * serve/render" outranks any single test), the ACCEPT decision is made on all of
- * it, and autofix converges only when the whole list is empty. Per-section
- * env-gap/INFRA_GAP skip semantics and orphan-port recovery are unchanged.
+ * EVERY section runs and failures AGGREGATE. Early-returning on the first
+ * failing section shadows the most load-bearing signal, because the boot and
+ * render probes — the ones that answer "does the app serve anything at all" —
+ * are ordered last. A user then accepts a FAIL having seen one failing component
+ * test while every non-API GET 404s, and boot/render never executed in any
+ * attempt. So the outcome carries the full ranked failure list (boot/render
+ * first: "the app does not serve/render" outranks any single test), the ACCEPT
+ * decision is made on all of it, and autofix converges only when the whole list
+ * is empty.
  */
 /**
  * Everything the run-end gate needs beyond the tree it is judging.
@@ -686,7 +685,7 @@ export async function runFinalIntegrationGate(
         trackedFiles: trackedFilesFn = trackedFiles
     } = opts
     // ASYNC: the run-end gate no longer blocks the event loop for the project's own
-    // lint (measured 15s mx5 / 69s aiz-client with zero timer ticks), so a loader can
+    // lint, so a loader can
     // paint and a cancel can reach the child.
     const stat = await runRepoHealthCheck(cwd, {
         run: runCmd,
@@ -694,7 +693,7 @@ export async function runFinalIntegrationGate(
     })
     // Debts are derived once, before any section runs, and ride on every verdict
     // shape (GateTally.verdict): `reason` stays the mechanical failure because it
-    // seeds the autofix child's prompt — run 11's fix child executed a recorded
+    // seeds the autofix child's prompt, and a fix child will execute a recorded
     // claim as an instruction.
     const debts = await deriveOpenDebts(cwd, stat.ok, runCmd, opts.signal)
     // Every section below RECORDS into the tally (failures ranked, the four
@@ -706,16 +705,16 @@ export async function runFinalIntegrationGate(
     // whole-repo static check, and `isStaticClassDebt` must recognise a debt that
     // entered the ledger through EITHER altitude.
     if (!stat.ok) tally.fail(`${VERIFY_FAIL_PREFIX['static-checks']} ${stat.reason}`)
-    // Launch-contract diff (mx5 run 10 item 4): the design declared `migrate`/`seed`
+    // Launch-contract diff: the design declared `migrate`/`seed`
     // scripts that fell through decompose and shipped missing, unchecked. Diff the
     // plan-time-extracted declared scripts against the manifest; a missing one is a
     // launch-surface defect. FP-safe: empty declared list (nothing grounded) → no check.
     //
-    // THE DIFF IS INERT WITHOUT A MANIFEST (nexttask 16A). It used to diff against
-    // `Object.keys(packageScripts(cwd))`, whose catch returns {} — so a project with
-    // NO package.json was indistinguishable from one with no scripts, and every
-    // declared script was reported missing in wording naming a file the project was
-    // never meant to have. Nothing upstream is npm-shaped (the extractor scrapes any
+    // THE DIFF IS INERT WITHOUT A MANIFEST. Diffing against
+    // `Object.keys(packageScripts(cwd))`, whose catch returns {}, makes a project
+    // with NO package.json indistinguishable from one with no scripts: every
+    // declared script is reported missing, in wording naming a file the project
+    // was never meant to have. Nothing upstream is npm-shaped (the extractor scrapes any
     // design that says "script"), and this text seeds the autofix child's prompt, so
     // on a CMake/cargo project the likely repair was to write a package.json.
     // readLaunchManifest resolves package.json, else a Makefile's targets, else
@@ -770,7 +769,7 @@ export async function runFinalIntegrationGate(
             tally.ran(label)
         }
     }
-    // EXECUTE the launch contract (mx5 run 11): every declared script that is
+    // EXECUTE the launch contract: every declared script that is
     // neither boot-class (the boot check below owns those) nor already covered by
     // the integration commands above RUNS as a one-shot, in declared order —
     // existence is not launchability (`migrate`/`seed` shipped as first-call
@@ -778,8 +777,8 @@ export async function runFinalIntegrationGate(
     // contract extends to missing external INFRASTRUCTURE (no DB/daemon on this
     // box → skip, not fail); a skip whose script also carries a standing EXCUSE
     // note (F7) is surfaced as an UNOBSERVED warning — the note may be covering a
-    // real defect the gate could not reach here (run 11's "pre-existing .rows
-    // bug" note excused the exact scripts that shipped broken).
+    // real defect the gate could not reach here — a "pre-existing bug" note can
+    // excuse the exact scripts that then ship broken.
     if (declared.length > 0) {
         const covered = cmds.flatMap(([bin, args]) =>
             (bin === 'bun' || bin === 'npm') && args[0] === 'run' && args[1] ? [args[1]] : []
@@ -795,7 +794,7 @@ export async function runFinalIntegrationGate(
         // own A/B, not a free rider on an inertness fix.
         const present = new Set(Object.keys(packageScripts(cwd)).map(s => s.toLowerCase()))
         const scripts = packageScripts(cwd)
-        // CONFIG-GAP INPUTS (mx5 run 20), read once: the tracked file list and the
+        // CONFIG-GAP INPUTS, read once: the tracked file list and the
         // union of every tracked env template's declared variables. Both empty on a
         // non-git tree or a tree with no template, which makes the whole check inert
         // — a project with no template gains no excuse. See launch-config-gap.ts.
@@ -823,7 +822,7 @@ export async function runFinalIntegrationGate(
             }
             tally.observed()
             if (r.outcome === 'fail') {
-                // A CONFIG GAP IS NOT A CODE FAULT (mx5 run 20). The run died on
+                // A CONFIG GAP IS NOT A CODE FAULT. The run died on
                 // `bun run seed` exiting 1 because ADMIN_PHONE — which the project's
                 // own `.env.example` DECLARES — is absent from this box, and the only
                 // way to supply it is a gitignored `.env` the commit cannot contain.
@@ -884,20 +883,19 @@ export async function runFinalIntegrationGate(
             }
         }
     }
-    // Boot + render ALWAYS runs (mx5 run 13): it is independent of test results by
+    // Boot + render ALWAYS runs: it is independent of test results by
     // construction, and it carries the run's most load-bearing signal — earlier
     // failures no longer shadow it. Its failures rank FIRST in the aggregate.
-    // A boot that never RAN is its own verdict (mx5 run 18 — see bootSkipVerdict);
+    // A boot that never RAN is its own verdict;
     // it lives outside the tally's dynamic counters on purpose, so the test/build
     // commands that did run cannot cancel it.
     //
     // ZERO DISCOVERY IS UNOBSERVED, NEVER A PASS (see unobservedVerdict, and the
     // zero-attempts branch of GateTally.verdict). Nothing was discovered, so nothing
     // ran, so the blindness guard below (attempted === 0 → null) does not fire — and
-    // this outcome used to be reported as `PASS — no integration command found
-    // (statics passed)`, i.e. "we never checked" reading identically to "we checked
-    // and it was fine". IAR1 shipped that verdict TWICE while carrying open
-    // verify-FAIL debt (its .pi-tasks/TASK_AUTO_0001.md:31 and TASK_AUTO_0002.md:37).
+    // reporting this as `PASS — no integration command found (statics passed)`
+    // makes "we never checked" read identically to "we checked and it was fine",
+    // and a run can ship that verdict while carrying open verify-FAIL debt.
     // The outcome stays `ok: true` (non-blocking, justified at unobservedVerdict) but
     // is labelled, trailed and carried as debt by the caller. It needs no new command
     // source, so unlike the harvest lever refuted at discoverIntegrationCommands it
@@ -906,9 +904,9 @@ export async function runFinalIntegrationGate(
     // and that is exactly the run whose silence must not read as "the contract was
     // checked and was fine".
     //
-    // This return sits AFTER the launch-script loop, not before it: it used to fire
-    // first, so a DECLARED launch script never ran on a tree with no discoverable
-    // integration command (found and left unfixed in f5d7110). "Nothing to observe"
+    // This return sits AFTER the launch-script loop, not before it. Firing first,
+    // a DECLARED launch script never runs on a tree with no discoverable
+    // integration command. "Nothing to observe"
     // is a fact about the tally — no attempt, no failure — not about discovery, and
     // asking the tally makes the two paths see the same state. It still returns
     // before the boot `else` branch and the post-boot closure scans, whose stage is a
@@ -934,10 +932,10 @@ export async function runFinalIntegrationGate(
     }
     if (bootSection.ranLabel) tally.ran(bootSection.ranLabel)
     for (const w of bootSection.warnings) tally.warn(w)
-    // Full-skip blindness guard (mx5 run 16): commands were discovered but every
+    // Full-skip blindness guard: commands were discovered but every
     // one skipped → rank-0 failure, never a static-only PASS. Runner resolvability
     // is checked through resolveRunner so the failure text can name the missing
-    // runner when that is the cause (the run-16 shape: login-shell PATH lost bun).
+    // runner when that is the cause.
     const gap = tally.blindness(b => resolveRunner(b).ok)
     if (gap) tally.fail(gap, 0)
     // The remaining run-level closure scans — "the shipped tree references or

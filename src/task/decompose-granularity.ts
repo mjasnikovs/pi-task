@@ -2,18 +2,17 @@
  * decompose-granularity — the deterministic FLOOR on how finely /task-auto cuts
  * a feature into tasks.
  *
- * The failure this closes (mx5, Jul 25 vs Jul 27): the SAME design doc, from the
+ * The failure this closes: the SAME design doc, from the
  * SAME base commit, with a byte-identical planning path, planned once into 41
  * tasks and once into 11. The whole 4x difference is one line of clarify text.
  * /task-auto's clarify head asks a plan-shape question first ("one task per
- * milestone, or split smaller?" — 8/8 live reps), the answer-side triage
- * auto-resolves it 8/8 and stamps it "already settled by the spec", so the user
- * never sees the fork; and the answer decides the whole plan. Live A/B, run 18's
- * transcript with ONLY that line swapped (n=8/arm): coarse mean 11.4 titles vs
- * fine mean 28.6, 63.5/64 pairwise wins, p<0.001.
+ * milestone, or split smaller?"), the answer-side triage auto-resolves it and
+ * stamps it "already settled by the spec", so the user never sees the fork; and
+ * the answer decides the whole plan. Swap only that one line and the same design
+ * document plans several times coarser or finer.
  *
- * The spec does NOT settle it. mx5's §12 is titled "Build order (milestones)" —
- * an ORDER, 9 items, not a task breakdown. So the plan's granularity, the single
+ * The spec does NOT settle it. A section titled "Build order (milestones)" is an
+ * ORDER, not a task breakdown. So the plan's granularity, the single
  * highest-leverage decision in a run (each title is handed to its own pipeline
  * that researches and specs it alone), was being decided by a coin flip nobody
  * could see, review, or reproduce.
@@ -25,10 +24,10 @@
  *
  *   floor = ceil(ownable requirements / MAX_REQUIREMENTS_PER_TASK)
  *
- * MAX_REQUIREMENTS_PER_TASK = 2 is anchored on the two real mx5 plans, not on
- * taste: the 41-task plan carried 0.8 ownable requirements per task, the collapsed
- * 11-task plan carried 2.8. A ceiling of 2 sits between them — it rejects the
- * collapse without demanding the finest plan ever observed.
+ * MAX_REQUIREMENTS_PER_TASK = 2 sits between the two shapes: a plan cut fine
+ * enough to work carries about one ownable requirement per task, and a collapsed
+ * one carries closer to three. A ceiling of 2 rejects the collapse without
+ * demanding the finest plan possible.
  *
  * Spec-shape-agnostic: the only inputs are two integers. A CLI, a library, a
  * refactor, a docs job all flow through the same arithmetic, and a feature with
@@ -38,7 +37,7 @@
 
 /**
  * The most distinct grounded requirements one task may carry before the plan is
- * judged too coarse. See the module docstring for the mx5 anchoring.
+ * judged too coarse. See the module docstring for where the number comes from.
  */
 export const MAX_REQUIREMENTS_PER_TASK = 2
 
@@ -135,7 +134,7 @@ export const PLAN_SHAPE_ANSWER =
  * BRACES — the reprompt when the returned plan lands under the floor. Also
  * countless, for the reason above: it asks for a SPLIT of the plan in hand rather
  * than a fresh roll (a regeneration is a new stochastic draw over the whole plan
- * and can drop an area the current one covers — mx5 run 12).
+ * and can drop an area the current one covers).
  */
 export function granularitySplitHint(titles: number, ownable: number): string {
     return (

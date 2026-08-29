@@ -1332,7 +1332,7 @@ export async function phaseCritique(
      * like the probes below and overriding a CLEAN triage the same way.
      *
      * This is the A/B seam for a probe that is not wired yet: the discipline
-     * here is "wire only on PASS" (memory/prompt4-spec-urls-failed.md), so a
+     * here is "wire only on PASS", so a
      * candidate probe has to be measurable through the SHIPPED critique path
      * rather than through a hand-copied replica of it, or the two arms differ by
      * more than the probe. Undefined in production.

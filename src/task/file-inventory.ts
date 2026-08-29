@@ -33,7 +33,7 @@ export function stripTasksDir(raw: string): string {
  * unhappy path has to collapse to it.
  *
  * Runs on the shared GitRunner (`shared/git-runner.ts`), which brings the abort
- * discipline this used to hand-roll: the listener is detached when the child
+ * discipline a hand-rolled version misses: the listener is detached when the child
  * settles normally, so a run-long orchestrator signal does not accumulate one
  * retained child per invocation (GitHub issue #9).
  *
