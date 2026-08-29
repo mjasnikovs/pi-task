@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint'
 import prettierConfig from 'eslint-config-prettier/flat'
 
 export default tseslint.config(
-    {ignores: ['dist', 'node_modules', 'src/**/__fixtures__/**']},
+    {ignores: ['dist', 'node_modules', 'test/**/__fixtures__/**']},
     {
         extends: [js.configs.recommended, ...tseslint.configs.recommended],
         files: ['**/*.ts'],
@@ -76,7 +76,7 @@ export default tseslint.config(
     },
     {
         // Mocks are `async` to match the real signatures they stand in for.
-        files: ['**/*.test.ts', 'src/test-utils/**/*.ts'],
+        files: ['**/*.test.ts', 'test/test-utils/**/*.ts'],
         rules: {
             '@typescript-eslint/require-await': 'off'
         }

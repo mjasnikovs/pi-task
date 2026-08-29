@@ -26,7 +26,7 @@
  *     not accumulate one listener per git invocation.
  *   - `env` entries are MERGED over `process.env` (the GIT_INDEX_FILE
  *     throwaway-index pattern), not substituted for it.
- *   - `spawnFn` is the test seam: pass a fake from `test-utils/fake-spawn.ts` and
+ *   - `spawnFn` is the test seam: pass a fake from `test/test-utils/fake-spawn.ts` and
  *     the runner never touches a real repo.
  */
 import {runChildDefault, type SpawnFn} from './child-process.js'

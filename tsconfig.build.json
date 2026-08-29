@@ -1,10 +1,12 @@
 {
     "extends": "./tsconfig.json",
-    "exclude": [
-        "node_modules",
-        "dist",
-        "src/**/*.test.ts",
-        "src/test-utils",
-        "src/**/__fixtures__"
-    ]
+    "compilerOptions": {
+        "noEmit": false,
+        "rootDir": "src"
+    },
+    "include": ["src"],
+    // `test` is where tests live; the rest is belt-and-braces — a test or a
+    // fixture colocated under src/ would otherwise be compiled into dist/ and
+    // published, and `import ... from 'bun:test'` throws under Node.
+    "exclude": ["node_modules", "dist", "test", "src/**/*.test.ts", "src/**/__fixtures__"]
 }

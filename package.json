@@ -13,9 +13,9 @@
     ],
     "scripts": {
         "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
-        "lint": "prettier --log-level warn --write 'src/**/*.ts' && eslint --fix . && tsc --noEmit",
-        "lint:check": "prettier --check 'src/**/*.ts' && eslint . --max-warnings 0 && tsc --noEmit",
-        "test": "cross-env AGENT=1 bun test --isolate src/ scripts/",
+        "lint": "prettier --log-level warn --write '{src,test}/**/*.ts' && eslint --fix . && tsc --noEmit",
+        "lint:check": "prettier --check '{src,test}/**/*.ts' && eslint . --max-warnings 0 && tsc --noEmit",
+        "test": "cross-env AGENT=1 bun test --isolate test/ scripts/",
         "prepublishOnly": "bun run build"
     },
     "peerDependencies": {

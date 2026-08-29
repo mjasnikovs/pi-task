@@ -18,9 +18,12 @@
         "isolatedModules": true,
         "declaration": true,
         "outDir": "dist",
-        "rootDir": "src",
+        // Only tsconfig.build.json emits. A bare `tsc` type-checks src AND test,
+        // so letting it write would scatter dist/src + dist/test over the
+        // dist/index.js that package.json `main` and `pi.extensions` name.
+        "noEmit": true,
         "types": ["bun-types"]
     },
-    "include": ["src"],
-    "exclude": ["node_modules", "dist", "src/**/__fixtures__"]
+    "include": ["src", "test"],
+    "exclude": ["node_modules", "dist", "test/**/__fixtures__"]
 }
