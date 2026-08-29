@@ -73,8 +73,9 @@ export async function listInstalledExtensions(
     const selfRoot = opts.selfRoot ?? selfPackageRoot()
     const settingsManager = SettingsManager.create(opts.cwd, agentDir)
     const pm = new DefaultPackageManager({cwd: opts.cwd, agentDir, settingsManager})
-    // "skip": a package in settings whose install dir is missing must not
-    // trigger an interactive install prompt from inside a config menu.
+    // "skip": a package in settings whose install dir is missing is passed over.
+    // Without this callback pi installs it instead, which a config menu must
+    // never do on the user's behalf.
     const resolved = await pm.resolve(() => Promise.resolve('skip'))
     const out: InstalledExtension[] = []
     for (const r of resolved.extensions) {

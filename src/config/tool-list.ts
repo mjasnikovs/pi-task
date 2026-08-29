@@ -5,23 +5,23 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
  * the live session rather than named by hand.
  *
  * WHY DISCOVERY AND NOT A HAND-EDITED NAME LIST: the watchdog arms on ANY tool
- * (see task/command-watchdog.ts), which is correct for `bash` — pi's bash takes
- * an OPTIONAL `timeout` with no default, so an unbounded command runs forever —
- * but wrong for an extension tool that already owns a longer, bounded contract
- * of its own. Those tools get aborted mid-transaction at the generic ceiling.
- * The operator has to be able to say "not this one", and the only identity that
- * survives a rename or an uninstall is the one pi itself reports.
+ * (see task/command-watchdog.ts), which is correct for `bash` — its `timeout`
+ * is optional and has no default (`resolveTimeoutMs` returns undefined when it
+ * is omitted), so an unbounded command runs forever — but wrong for an
+ * extension tool that already owns a longer, bounded contract of its own. Those
+ * tools get aborted mid-transaction at the generic ceiling. The operator has to
+ * be able to say "not this one", and the only identity that survives a rename
+ * or an uninstall is the one pi itself reports.
  *
- * MEASURED against pi 0.83.0 (`pi.getAllTools()`), not assumed:
- *   - built-ins report `source: "builtin"`, `path: "<builtin:bash>"`
- *   - extension tools report the extension's real entry-point path — the SAME
+ * What `pi.getAllTools()` reports:
+ *   - built-ins carry `source: "builtin"` and a synthetic `<builtin:name>` path
+ *   - extension tools carry the extension's real entry-point path — the SAME
  *     identity `extensionWhitelist` keys on (see extension-list.ts)
- *   - `getAllTools()` THROWS during extension loading ("Extension runtime not
- *     initialized"); it is only callable from `session_start` onward, which is
- *     why this is read when the menu opens and never at registration.
- *   - `getActiveTools()` is a strict SUBSET (4 of 7 built-ins in a plain
- *     session), so it is the wrong source: a tool the model isn't currently
- *     offered is still a tool the watchdog would arm on if it ran.
+ *   - it THROWS during extension loading ("Extension runtime not initialized"),
+ *     so this is read when the menu opens and never at registration
+ *   - `getActiveTools()` returns only what the model is currently offered, which
+ *     is the wrong source: a tool that is not offered right now is still a tool
+ *     the watchdog would arm on if it ran.
  */
 export interface GuardableTool {
     /** Exact tool name — the watchdog's key, and what the config stores. */
