@@ -2,22 +2,26 @@
  * coverage-loop — the MONOTONIC replacement rule for /task-auto's decompose
  * coverage gate.
  *
- * The failure this closes: the coverage-retry loop regenerated the whole plan on
- * every INCOMPLETE verdict, and adopted the regeneration on nothing but a size
- * floor (`retry.length * 2 >= current.length`). A regeneration is a fresh
- * stochastic roll of the ENTIRE plan, so one that DROPPED a previously-covered
- * feature-area but kept the title count replaced the better plan anyway — and,
- * because the loop shipped whatever the LAST round produced, the dropped area was
- * gone with only a toast. Live: a complete full-stack plan (31 requirements
- * mapped, frontend pages present) was overwritten by a backend-only one and
- * shipped, driven by 3 NEGATIVE requirements no task could ever "own" that kept
- * the verdict INCOMPLETE forever.
+ * The failure this closes: a coverage retry regenerates the WHOLE plan, so it is a
+ * fresh stochastic roll rather than an edit. Adopt it on a size floor alone and a
+ * retry that DROPPED a previously-covered area but kept the title count replaces
+ * the better plan — and since the loop ships whatever the last round produced, the
+ * dropped area is gone with only a toast.
+ *
+ * The shape that makes this bite: a requirement no task can ever "own" — a
+ * prohibition, say — keeps the verdict INCOMPLETE forever, so the loop keeps
+ * rolling until a worse plan happens to come up last.
  *
  * The rule here makes replacement monotone: coverage can only hold or grow across
  * rounds. A retry is adopted ONLY when it drops no requirement the current plan
- * already owns (its owned-set is a superset). Because adoption is monotone, the
- * working plan at exhaustion is the best-covered one seen — so "ship the working
- * plan" is automatically "ship the best", never "ship the last".
+ * already owns — its owned-set must be a superset. Because adoption is monotone,
+ * the working plan at exhaustion is the best-covered one seen, so "ship the
+ * working plan" is automatically "ship the best" and never "ship the last".
+ *
+ * Each rule was run. A retry dropping one owned requirement is rejected naming
+ * it; a strict superset is adopted; a retry that grows while covering nothing new
+ * is rejected as "no coverage gain"; and with no requirement signal at all, a
+ * retry leaving MORE areas uncovered is rejected while one leaving fewer is taken.
  *
  * Spec-shape-agnostic: the only inputs are title counts and the set of
  * requirement INDICES a task owns (from the host-side coverage map). No feature
@@ -50,6 +54,10 @@ export interface CoveragePlan {
 // titles and requirement quotes, so overlap on them would falsely connect a
 // requirement to any plan. Stopped so grounding keys on the DISTINCTIVE nouns
 // (json, dead-letter, serialize, symlink…) that actually name a deliverable.
+//
+// Confirmed: titles built only from these words own NOTHING, while titles naming
+// `JSON output` and `dead-letter queue` own the matching requirements.
+//
 // English function words + generic task verbs + generic project nouns — all
 // domain-agnostic.
 const COVERAGE_STOPWORDS = new Set([
@@ -280,9 +288,9 @@ export function decideAdoption(
         }
         // Growth must PAY FOR ITSELF. Past this point the retry's owned-set is a
         // superset, so an equal size means the sets are IDENTICAL — the retry
-        // covers nothing new. Adopting it anyway is how a plan goes
-        // 26 → 32 → 60 titles with the owned-set pinned at 27 in all three rounds,
-        // both retries logged as "preserves owned coverage".
+        // covers nothing new. Adopting it anyway lets a plan inflate round after
+        // round with the owned-set pinned, every step logged as "preserves owned
+        // coverage".
         //
         // The old rule could not object, by construction: groundedCoverage is
         // monotone in the title set (titleTokens is a union over titles; df/maxDF
