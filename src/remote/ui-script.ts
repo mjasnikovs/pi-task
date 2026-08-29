@@ -21,7 +21,8 @@ export function clientScript(wsUrl: string): string {
       if (usage && usage.percent != null) contextFill.style.width = usage.percent + '%';
       setStatusChip(usage);
     }
-    // Compact token count for the header chip (mirrors formatContextTokens).
+    // Compact token count for the header chip. Matches the terminal's
+    // formatContextTokens up to 10M; above that this one keeps a decimal.
     function fmtTokens(n) {
       if (n == null) return '';
       if (n < 1000) return String(n);
@@ -58,11 +59,8 @@ export function clientScript(wsUrl: string): string {
     // Last ~20 toasts, newest first, for the bell dropdown history.
     let notifHistory = [];
     let modelName = '';
-    // Widgets are keyed (e.g. 'pi-tasks', 'pi-task-auto'); track them per key so a
-    // clear for one key can't be masked by a stale message from another.
-    // Single authoritative task-widget slot. The snapshot and the live 'widget'
-    // delta both set this; null hides the panel. (No more per-key map that could
-    // strand an orphaned widget on screen.)
+    // Single authoritative task-widget slot — two variables, no keying. The
+    // snapshot and the live 'widget' delta both set them; null hides the panel.
     let taskWidgetLines = null;
     let taskWidgetData = null;
     function renderWidgets() {
@@ -156,10 +154,10 @@ export function clientScript(wsUrl: string): string {
       { name: '/compact',          desc: 'Compact context to save tokens' },
       { name: '/remote stop',      desc: 'Stop the remote server' },
     ];
-    // Every entry above must be dispatchable from the browser — /clear, /help and
-    // /fast used to sit here and were not (they are not pi commands at all), so
-    // picking one only ever produced "Unknown command". register.test.ts asserts
-    // this list stays a subset of what the bridge can actually run.
+    // Every entry above must be dispatchable from the browser, or picking it
+    // only ever toasts "Unknown command: /x". register.test.ts parses this array
+    // out of clientScript() and asserts each name is in the bridge's command map
+    // (/new excepted, which register.ts dispatches itself).
     let cmdActive = [];
     let cmdIndex = -1;
 
@@ -492,11 +490,13 @@ export function clientScript(wsUrl: string): string {
       thinkingText = '';
     }
 
-    // Pull the human-readable text out of a tool result. Many tools (Read, Bash,
-    // MCP tools) return Anthropic content-block shapes — { content: [{type:'text',
-    // text:'...'}] } or a bare array of such blocks — which JSON.stringify would
-    // render as escaped, unreadable JSON. Extract the text blocks and join them;
-    // return null when there's nothing text-shaped so the caller falls back to JSON.
+    // Pull the human-readable text out of a tool result. pi types AgentToolResult
+    // with content: (TextContent | ImageContent)[], and TextContent is
+    // {type:'text', text}, so a result usually arrives as { content: [...] } — or,
+    // since the event field is typed \`any\`, as a bare array of those blocks.
+    // JSON.stringify would render either as escaped, unreadable JSON. Extract the
+    // text blocks and join them; return null when there is nothing text-shaped so
+    // the caller falls back to JSON.
     function contentBlocksText(result) {
       const blocks = Array.isArray(result) ? result
         : (result && Array.isArray(result.content)) ? result.content
@@ -567,8 +567,8 @@ export function clientScript(wsUrl: string): string {
       return el;
     }
 
-    // Render one committed transcript turn. Assistant turns are an ordered list of
-    // parts (text segments + tool calls), so the layout matches the terminal's
+    // Render one committed transcript turn. Assistant turns are an ordered list
+    // of parts — text, thinking and tool — so the layout matches the terminal's
     // interleaving instead of one merged blob with tools dumped at the end.
     function renderTurn(t) {
       if (t.error) { addBubble('error', t.text); addTurnTime(t.ts, 'assistant'); return; }
@@ -745,8 +745,8 @@ export function clientScript(wsUrl: string): string {
     }
 
     // Register the service worker, subscribe via the Push API, and hand the
-    // subscription to the server. The server (not the page) sends notifications,
-    // so they arrive even when this PWA is backgrounded/suspended on iOS.
+    // subscription to the server. The server, not the page, sends the
+    // notification, so delivery does not need this page to be open.
     function subscribePush() {
       return navigator.serviceWorker.register('/sw.js')
         .then(function () { return navigator.serviceWorker.ready; })
@@ -1214,11 +1214,11 @@ export function clientScript(wsUrl: string): string {
     window.addEventListener('online', connectNow);
     window.addEventListener('focus', connectNow);
 
-    // Pin the column to window.innerHeight (a stable px value) instead of letting
-    // it ride 100dvh, which iOS Safari interpolates DURING the rotation animation
-    // and makes the whole layout resize repeatedly ("spazzing out"). A rotation
-    // also fires several resize events and changes scrollHeight, so coalesce the
-    // updates in one rAF and re-pin to the bottom when the user was already there.
+    // Pin the column to a stable pixel height instead of leaving it on the
+    // 100dvh fallback in ui-styles.ts (height: var(--app-h, 100dvh)). A rotation
+    // fires several resize events and changes scrollHeight, so coalesce the
+    // updates in one rAF and re-pin to the bottom when the user was already
+    // there.
     let appHeightRaf = null;
     let appHeightPin = false;
     function setAppHeight() {
