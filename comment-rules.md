@@ -143,3 +143,37 @@ Green, then commit, then flip the row.
 this file and `comment-leg.md`.
 
 Every row in `comment-leg.md` reads `verified = true`.
+
+## State
+
+Done. All 432 files reviewed; every row in `comment-leg.md` reads
+`verified = true`. Lint clean, 3891 tests pass.
+
+Rerun the check any time:
+
+```
+python3 scripts/../<residue checker>   # see the session log
+git grep -n 'mx5\|nexttask\|/home/edgars'
+node scripts/comment-ledger.mjs
+```
+
+### What this pass did NOT touch
+
+**Prompt and UI strings.** The comments-only rule left string literals alone,
+and three of them still name things a new developer does not have:
+
+- `src/task/verify-work.ts` — four lines of shipped prompt text say
+  "mx5 run 13" and "mx5 runs 7 and 13" to the model.
+- `src/workers/worker-profiles.ts` — the `why` strings name mx5 runs,
+  nexttask items and `magicknumbers.md`.
+- `src/config/reasoning.ts` — `REASONING_GROUP_HELP`, shown in
+  `/task-config`, says "Measured: the two arms tie" and "the last full run".
+
+Changing these changes what ships, so they need their own decision.
+
+### Volume
+
+Comment lines went from 25,835 to 24,914 — about a thousand lines. The brief
+was to make every comment checkable, not to make them fewer, and the chosen
+rule was to rewrite rather than delete. Cutting the volume itself is a
+separate pass with a different rule.
