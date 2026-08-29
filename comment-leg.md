@@ -51,7 +51,7 @@ line counts as a comment line but opens no block.
 | `src/shared/leaked-tool-call.ts` | 65 | 41 | 6 | true |
 | `src/shared/model-endpoint.ts` | 120 | 51 | 8 | true |
 | `src/shared/pi-invocation.ts` | 33 | 11 | 2 | true |
-| `src/shared/pkg-version.ts` | 22 | 7 | 1 | false |
+| `src/shared/pkg-version.ts` | 22 | 7 | 1 | true |
 | `src/shared/reasoning-capability.ts` | 127 | 70 | 10 | false |
 | `src/shared/stream-watchdog.ts` | 241 | 120 | 19 | false |
 | `src/task/accept-debt.ts` | 770 | 314 | 42 | false |
