@@ -3,13 +3,10 @@
  * declares the finished project must expose, extracted once at plan time and diffed
  * by the final gate against the shipped manifest.
  *
- * The failure this closes: the design's §9 "Build & run" listed
- * the required scripts verbatim — `dev`, `build`, `migrate`, `seed`, `test` — but the
- * shipped package.json declared only `dev`, `build`, `lint`, `test`, `test:ct`. No
- * task owned `migrate`/`seed` (they fell through decompose), and NOTHING re-checked
- * the finished manifest against the design's own list, so the run completed missing
- * two of its declared entrypoints. A per-slice gate cannot catch this — it is a
- * whole-project launch-surface fact — and the final gate never had the design's list.
+ * The gap it closes is structural. A script the design names but no task owned can
+ * fall through decompose and ship missing, and a per-slice gate cannot see that: it
+ * is a whole-project launch-surface fact, and nothing else re-reads the finished
+ * manifest against the design's own list.
  *
  * Mechanism (mirrors contracts.ts): a plan-time child EMITs `SCRIPT:` lines naming the
  * scripts the design declares; the host GROUNDS each against the design — a name is
@@ -17,9 +14,13 @@
  * form designs use to declare a script. A paraphrase or a script the model invented is
  * not grounded and is dropped, so the diff can never false-flag on a hallucinated
  * requirement. The grounded list is appended HOST-SIDE to `.pi-tasks/launch-contract.md`
- * (children never write it), which survives discardEdits and the git-state guard.
+ * — the extraction child runs `--no-tools` and so has no write tool at all. Both halves
+ * of `discardTreeEdits` skip that directory (`checkout -- . :(exclude).pi-tasks`, then
+ * `clean -fd -e .pi-tasks`), and the git-state guard excludes it from the tree it
+ * hashes, so the file outlives a discarded pass.
  *
- * At run end the final gate reads the list, reads the manifest's `scripts`, and FAILs
+ * At run end the final gate reads the list, reads the shipped manifest's script names
+ * (`readLaunchManifest`: package.json `scripts`, else a Makefile's targets), and FAILs
  * naming any declared script the manifest is missing. FP-safe by construction: an
  * empty/ungrounded list (a design that never backticks a script name) yields no check.
  */
@@ -98,19 +99,17 @@ export function keepGroundedScripts(names: string[], sourceDoc: string): string[
  * DETERMINISTIC RECALL: enumerate every backticked, script-name-shaped
  * token in a paragraph that mentions the word "script", as extraction CANDIDATES.
  *
- * The run-11 failure this closes: `test:ct` is backticked in the design's §2 tooling
- * paragraph, so the grounding guard would have KEPT it — but the extraction child
- * anchored on §9's one-line summary (`dev`,`build`,`migrate`,`seed`,`test`) and never
- * emitted it. Grounding can only DROP a candidate, never add one, so recall was
- * entirely the model's, over a 20KB doc. This makes recall mechanical: the host
- * enumerates candidates and hands them to the child as an explicit checklist; the
- * model's job flips from recall (weak) to per-candidate classification (strong).
+ * Grounding can only DROP a candidate, never add one, so without this the recall of a
+ * script declared far from the design's summary list is entirely the model's. This
+ * makes recall mechanical: the host enumerates the candidates and hands them to the
+ * child as an explicit checklist, so the model's job flips from recall (weak) to
+ * per-candidate classification (strong).
  *
  * The paragraph gate (`\bscripts?\b`, word-bounded so "TypeScript"/"JavaScript"
  * don't match) is a grounded-context filter, not a tuned knob: a design declares a
- * script by calling it one. It keeps package-name paragraphs (`hono`, `react`) out
- * of the checklist so a weak model isn't invited to keep junk the grounding guard
- * would then bless (every package name is backticked somewhere). A design with no
+ * script by calling it one. It keeps package-name paragraphs out of the checklist so
+ * a weak model isn't invited to keep junk the grounding guard would then bless —
+ * every package name is backticked somewhere. A design with no
  * such paragraph yields no candidates and the prompt is unchanged.
  */
 export function enumerateScriptCandidates(sourceDoc: string): string[] {
@@ -157,13 +156,12 @@ export async function appendDeclaredScripts(cwd: string, names: string[]): Promi
 const BOOT_CLASS_RE = /^(?:dev|start|serve|preview|watch)(?:[:_-].*)?$/i
 
 /**
- * The declared scripts the final gate must EXECUTE as one-shot commands (
- * 11): everything the launch contract declares that is neither boot-class (the
- * boot check exercises those) nor already covered by the gate's integration
- * commands (`covered`, case-insensitive — the test/build-shaped scripts that ran).
- * A run can ship `migrate` and `seed` broken (`.rows` on a Bun sql array —
- * TypeError on first call) while the gate checked only that the scripts EXIST;
- * existence is not launchability.
+ * The declared scripts the final gate must EXECUTE as one-shot commands: everything
+ * the launch contract declares that is neither boot-class (the boot check exercises
+ * those) nor already covered by the gate's integration commands (`covered`,
+ * case-insensitive — the test/build-shaped scripts that ran). Checking only that a
+ * script is DECLARED says nothing about whether running it works; existence is not
+ * launchability.
  */
 export function runnableDeclaredScripts(declared: string[], covered: string[]): string[] {
     const have = new Set(covered.map(s => s.toLowerCase()))
@@ -194,9 +192,9 @@ export function missingDeclaredScripts(declared: string[], manifestScripts: stri
  * (keepGroundedScripts), so a hallucinated script cannot reach the diff.
  *
  * `candidates` is enumerateScriptCandidates' mechanical checklist. It exists so the
- * model cannot MISS a declared script buried far from the design's summary list (the
- * a `test:ct` hole); the model still classifies each candidate against the
- * design, and the host grounding still applies. Empty ⇒ the prompt is unchanged.
+ * model cannot MISS a declared script buried far from the design's summary list; the
+ * model still classifies each candidate against the design, and the host grounding
+ * still applies. Empty ⇒ the prompt is unchanged.
  */
 export const LAUNCH_EXTRACT_PROMPT = (feature: string, candidates: string[] = []): string =>
     [
