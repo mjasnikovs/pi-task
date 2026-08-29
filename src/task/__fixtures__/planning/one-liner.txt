@@ -1,1 +1,0 @@
-Add rate limiting to the login endpoint — 5 attempts per minute per IP, 429 with Retry-After when exceeded.
