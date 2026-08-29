@@ -1,7 +1,7 @@
 /**
  * The one bounded request, and the three ways it can end.
  *
- * Five modules used to hand-roll this. The copies had already drifted —
+ * Five modules would otherwise hand-roll this, and the copies drift —
  * `npm-version.ts` never grew the `userAborted` flag, so a user cancel came back
  * as `null`, indistinguishable from a registry that is down. These tests pin the
  * distinction that drift erased.

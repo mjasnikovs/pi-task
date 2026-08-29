@@ -5,7 +5,7 @@
  * The 10-min step timeout preserves the log, but the log could not say WHICH
  * file was running: `bun test` prints a file header only for files that write
  * output of their own, so the last header in a hung log names the last file
- * that happened to console.log — not the file that hung. Run 30472844957's log
+ * that happened to console.log — not the file that hung. A CI log
  * ended on `orientation-replay.test.ts` purely because that file prints a line.
  *
  * An onLoad plugin fires as each test file is loaded, and loading is lazy —

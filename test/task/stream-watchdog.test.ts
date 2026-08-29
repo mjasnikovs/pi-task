@@ -43,7 +43,7 @@ async function withWindow(ms: number, fn: () => Promise<void>): Promise<void> {
 }
 
 describe('registerStreamWatchdog', () => {
-    // The exact run-14 shape: a turn streams normally, then the stream dies with
+    // The exact shape: a turn streams normally, then the stream dies with
     // no error, no exit, and no further events of any kind.
     test('aborts the turn and posts a resume reminder when the stream dies mid-turn', async () => {
         await withWindow(80, async () => {

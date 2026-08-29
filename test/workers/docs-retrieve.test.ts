@@ -45,12 +45,12 @@ test('retrieveChunks OR-joins multi-token queries', () => {
     }
 })
 
-// REGRESSION. tokenize() used to split on /\s+/ and then strip punctuation INSIDE each
+// REGRESSION. Splitting on /\s+/ and then stripping punctuation INSIDE each
 // token, welding a multi-part identifier into one string that occurs nowhere in the
 // corpus: "UserService.list" -> "UserServicelist", "src/server/UserService.ts" ->
 // "srcserverUserServicets". buildFtsQuery ORs the tokens, so such a query produced NO
 // match and fell through to fallbackChunks() — which ignores the query entirely and
-// returns the first .d.ts + README slices. On mx5 run 13 that cost 18% of project queries
+// returns the first .d.ts + README slices. That costs a real share of project queries
 // any chunk from the file they named.
 //
 // Asserting on content alone would NOT catch this: the fallback returns the fixture's only

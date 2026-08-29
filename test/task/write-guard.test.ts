@@ -78,7 +78,7 @@ describe('findForbiddenDeletions', () => {
         expect(findForbiddenDeletions(parseTreeChanges(' M src/a.ts\n?? src/b.ts'))).toEqual([])
     })
 
-    // mx5 run 20. Three Playwright FAILURE screenshots that TASK_0027's own
+    // Playwright FAILURE screenshots that a task's own
     // `git add -A` had swept in read as deliverables, and two consecutive fix
     // attempts were discarded whole over them — each losing a real
     // `src/client/api.test.tsx` repair. The exempt list is a strict subset of the
@@ -164,10 +164,10 @@ describe('parseNameStatusChanges', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL (mx5 run 19). The pure half of the lever: which ignored
+ * IGNORED-PATH CHANNEL. The pure half of the lever: which ignored
  * paths a gate may rule on, how a write is attributed to the child that made it,
  * and the record it produces. Every fixture here pins one A/B invariant
- * (scripts/ignored-writes-ab.ts).
+ *.
  */
 describe('classifyIgnoredPath (inv-build-output-exempt)', () => {
     test('node_modules and its interior are a dependency tree, never a finding', () => {

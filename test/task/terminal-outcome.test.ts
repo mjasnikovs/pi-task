@@ -32,7 +32,7 @@ test('every gate outcome has a row — a sixth kind is a compile error, not a fa
 })
 
 describe('persistence — the two questions each outcome answers', () => {
-    // These used to be answered twice, 600 lines apart, in two switches with
+    // Answered twice, hundreds of lines apart, in two switches with
     // line-for-line correspondence. Now they are one table test.
     const expected: Record<TerminalOutcomeKind, {markResumable: boolean; failParent: boolean}> = {
         done: {markResumable: false, failParent: false},

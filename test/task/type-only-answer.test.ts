@@ -1,7 +1,7 @@
 import {test, expect, describe} from 'bun:test'
 import {isTypeOnlyAnswer, proseOf} from '../../src/task/type-only-answer.js'
 
-// Every POSITIVE and every real NEGATIVE below is VERBATIM from mx5 run 15's
+// Every POSITIVE and every real NEGATIVE below is VERBATIM from a real run's
 // research-cache.json (answer bodies extracted from the formatted `text`, i.e. the prose
 // between the `Per <pkg>@<ver>:` header and `Source excerpt:`). The detector is judged
 // against real emitted text, not text invented to make it pass. Questions are the cache

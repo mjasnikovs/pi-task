@@ -34,7 +34,7 @@ describe('findSkipEscapes', () => {
     })
 
     test('does NOT flag benign teardown / setup / negative-test uses of || true (FP guard)', () => {
-        // Every one of these is a real historical VERIFY line from ~/hub/mx5/.pi-tasks;
+        // Every one of these is a real historical VERIFY line off a run's `.pi-tasks`;
         // a blanket `|| true` flag false-positived on all of them. The scanner keys on
         // the skip-ANNOUNCING fallback text, so none of these fire.
         for (const line of [

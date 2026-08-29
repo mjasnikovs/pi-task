@@ -25,7 +25,7 @@ function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
 }
 
 /**
- * Route the collapsed `recordDebt` dep to per-ORIGIN sinks. The gate used to take one
+ * Route the collapsed `recordDebt` dep to per-ORIGIN sinks. A gate taking one
  * dep per debt class, and the tests used that to assert PROVENANCE — that an
  * unattended auto-pick records 'yolo-accepted' and never the 'accepted' class a human
  * decision earns. Filtering on the origin argument keeps exactly that discrimination:
@@ -361,7 +361,7 @@ test('runGatesForTask: recommended AUTOFIX loops back UNATTENDED (no picker) unt
 })
 
 test('runGatesForTask: UNOBSERVED verify FAIL forces the picker — never unattended AUTOFIX', async () => {
-    // rule 5c (run-8 F2): a spec-required behavioral check could not run because its
+    // rule 5c: a spec-required behavioral check could not run because its
     // tooling is absent. An unattended AUTOFIX cannot install a missing tool, so the
     // gate must (a) skip the recommendation research (moot), (b) NOT auto-fix, and
     // (c) show the human picker — even though the default tint is AUTOFIX, which for an
@@ -479,7 +479,7 @@ test('runGatesForTask: an empty commit warns but still completes', async () => {
 })
 
 // ─── Gate trail (deps.record) ────────────────────────────────────────────────
-// The durable per-task record of every gate outcome. Motivated by the mx5 audit:
+// The durable per-task record of every gate outcome. Motivated by the audit:
 // verdict text and enforce mode lived only in terminal notifies, so gate behavior
 // was unauditable from artifacts.
 
@@ -558,7 +558,7 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
         // The revert line also carries WHY the attribution filter did not save the
-        // edits (nexttask 4) — here: no touchedFiles dep, so the enforce diff is
+        // edits — here: no touchedFiles dep, so the enforce diff is
         // unknown and the conservative revert stands.
         expect(
             trail.some(l =>
@@ -570,9 +570,9 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
     })
 })
 
-// mx5 run 10 item 3: the re-verify FAIL diagnosis must ALSO be persisted as a durable
+// item 3: the re-verify FAIL diagnosis must ALSO be persisted as a durable
 // defect (not only the per-task trail line that the final gate never re-reads), using
-// the verbatim run 10 TASK_0004 text as fixture.
+// the verbatim one task text as fixture.
 test('record: enforce-revert FAIL is persisted as a durable defect for the final gate', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
@@ -608,13 +608,13 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
     })
 })
 
-// ─── Root-cause repair channel (mx5 run 14 item 5) ───────────────────────────
+// ─── Root-cause repair channel ───────────────────────────
 //
-// Run 14's TWO enforce-reverts (TASK_0013, TASK_0019) were both this shape: the
-// re-verify FAILed on TASK_0007's `test/teardown.ts` TRUNCATE bug, a file neither
+// Two enforce-reverts in one run were both this shape: the
+// re-verify FAILed on a task's `test/teardown.ts` TRUNCATE bug, a file neither
 // the task's work nor the enforce pass ever touched, and the differential reverted
 // enforce's edits anyway — destroying good work over a fault it did not cause while
-// the actual cause stayed unscheduled. Verbatim TASK_0019 text as the fixture.
+// the actual cause stayed unscheduled. Verbatim one task text as the fixture.
 const RUN14_TEARDOWN_FAIL =
     'work did not verify: The shipped `bun test test/photos.test.ts` exits with code 1 due to a '
     + 'pre-existing teardown bug in `test/teardown.ts` (created by TASK_0007) that uses parameterized '
@@ -728,15 +728,15 @@ test('enforce: unknown provenance / unreadable tree falls back to the REVERT pat
     }
 })
 
-// ─── Enforce-differential ATTRIBUTION (mx5 run 18 / nexttask 4) ──────────────
+// ─── Enforce-differential ATTRIBUTION ──────────────
 //
-// Run 18's TASK_0024 enforce commit was one line — redundant parentheses removed in
+// A real enforce commit was one line — redundant parentheses removed in
 // `Admin.tsx` — and it was REVERTED over a Playwright CT failure in
 // `MyListings.spec.tsx`, a file that change cannot reach. The root-cause channel
 // above could not save it: the FAIL text names a BARE `MyListings.spec.tsx:186`
 // (no path separator, so no accused file) and carries no blame cue near a path. The
 // differential now also asks the purely mechanical question — does the failing check
-// name anything the ENFORCE COMMIT touched? Verbatim run-18 text as the fixture.
+// name anything the ENFORCE COMMIT touched? Verbatim text as the fixture.
 const RUN18_CT_FAIL =
     'work did not verify: 1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186 — "toggle Mark as '
     + 'Sold / Undo Sold updates listing status in-place") due to a pre-existing flaky locator collision '
@@ -786,7 +786,7 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
             return Promise.resolve()
         },
         // The enforce commit is the one-line Admin.tsx change; the TASK commit also
-        // rewrote MyListings.tsx — the answer the shipped code used to attribute on.
+        // rewrote MyListings.tsx — the answer a naive attribution would use.
         touchedFiles: (_c, scope) =>
             Promise.resolve(
                 scope === 'enforce-commit' ?
@@ -812,7 +812,7 @@ test('enforce: a FAIL the enforce diff cannot reach KEEPS the edits and records 
         // The whole point: the one-line change survives a failure it cannot cause.
         expect(h.reverted).toEqual([])
         expect(h.revertDebts).toEqual([])
-        // …and keeping the edits does NOT lose the finding (mx5 run 5's mistake).
+        // …and keeping the edits does NOT lose the finding.
         expect(h.keptDebts).toHaveLength(1)
         expect(h.keptDebts[0]).toContain('MyListings.spec.tsx')
         expect(h.queued).toEqual([
@@ -1137,7 +1137,7 @@ test('enforce edits passing repo health commit + differential-guard as before', 
 })
 
 test('enforce with no code edits skips the enforce commit AND the differential re-verify', async () => {
-    // mx5 run 5 regression: enforce had nothing to do (no guideline files), yet the
+    // regression: enforce had nothing to do (no guideline files), yet the
     // "enforce commit" was never empty — the .pi-tasks gate-trail lines made it real —
     // so every task burned a full model re-verify of an UNCHANGED tree, and the 10
     // genuine defect reports those re-verifies produced were "reverted" into the void
@@ -1304,7 +1304,7 @@ test('runGatesForTask: no recommend dep → fixInstruction stays the bare failur
     })
 })
 
-// ─── Frozen-blocked routing (mx5 run 12 / PROMPT 1 layer B) ──────────────────
+// ─── Frozen-blocked routing ──────────────────
 
 test('frozen-blocked: lint-fix frozen-path rejection → no unattended AUTOFIX, no recommend research, durable debt, picker forced', async () => {
     await withTmpTaskDir(async dir => {
@@ -1535,12 +1535,12 @@ test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () 
     })
 })
 
-// ─── nexttask 6: the auto-ACCEPT trail names its real branch, and YOLO spends one
+// ─── : the auto-ACCEPT trail names its real branch, and YOLO spends one
 //     unattended attempt before shipping a defect the judge merely blessed. ────
 
 test('yoloAcceptReason: each of the four branches names ITSELF', () => {
     // The line this replaces said "autofix budget spent" on all four. Measured
-    // false in 2709 of 2709 recorded accepts (scripts/yolo-accept-baserate.ts).
+    // false in 2709 of 2709 recorded accepts.
     expect(
         yoloAcceptReason({
             isUnobserved: true,
@@ -1585,7 +1585,7 @@ test('yoloAcceptReason: each of the four branches names ITSELF', () => {
 })
 
 test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed FAIL', async () => {
-    // mx5 run 19 TASK_0009: recommend ACCEPT, budget 0/3, defect shipped with
+    // The shape: recommend ACCEPT, no budget spent, defect shipped with
     // nothing attempted — and a later single pass fixed it.
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
@@ -1689,7 +1689,7 @@ test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the bu
 })
 
 test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () => {
-    // inv-no-unobserved-autofix. mx5 run 19 TASK_0001: an unattended re-run
+    // inv-no-unobserved-autofix. one task: an unattended re-run
     // cannot install Docker.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
@@ -1725,7 +1725,7 @@ test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () =
 })
 
 test('runGatesForTask: a frozen-blocked repo-health FAIL never triggers the rescue', async () => {
-    // inv-no-frozen-autofix (mx5 run 12): the fix needs a path this spec freezes,
+    // inv-no-frozen-autofix: the fix needs a path this spec freezes,
     // so an impl re-run under the same freeze cannot converge.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)

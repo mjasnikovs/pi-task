@@ -71,11 +71,11 @@ describe('parseVerifyBlock', () => {
     })
 
     test('an UNCLOSED fence swallows the rest of the file — strict rejects it', () => {
-        // mx5 run 19's TASK_0001.md never closes its ```sh, so everything after it —
+        // one task.md never closes its ```sh, so everything after it —
         // the phase-timings table, every appended gate-trail line — parses as a
         // "command". Harmless when the question is "is there anything runnable here",
         // and NOT harmless when a parsed line is treated as provenance for a command
-        // the run will re-execute (accept-debt.ts, nexttask 5).
+        // the run will re-execute.
         const runaway = 'VERIFY:\n```sh\nnpm test\n\n## phase timings\nrefine 22.2s\n'
         expect(parseVerifyBlock(runaway)!.map(c => c.raw)).toEqual(['npm test', 'refine 22.2s'])
         expect(parseVerifyBlockStrict(runaway)).toBeNull()

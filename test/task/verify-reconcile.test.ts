@@ -1,7 +1,6 @@
 /**
- * verify-reconcile tests — the deterministic plan-contradiction scanner (mx5
- * run 11, goal D). The regression case is the VERBATIM check #7 from the real
- * TASK_0009 spec, alongside the spec's legitimate absence checks (#5/#6/#8)
+ * verify-reconcile tests — the deterministic plan-contradiction scanner. The regression case is the VERBATIM check #7 from the real
+ * one task's spec, alongside the spec's legitimate absence checks (#5/#6/#8)
  * that must stay silent, and the real sibling titles/contracts they ran with.
  */
 import {describe, expect, test} from 'bun:test'
@@ -19,7 +18,7 @@ function spec(lines: string[]): string {
     return `GOAL\nx\n\nVERIFY:\n\`\`\`bash\n${lines.join('\n')}\n\`\`\`\n`
 }
 
-// The VERBATIM run-11 TASK_0009 checks (— check #7 is the defect; #5/#6/#8 are
+// The VERBATIM one task checks (check #7 is the defect; #5/#6/#8 are
 // legitimate style/scope greps that must stay silent).
 const RUN11_CHECK_5 = [
     `if grep -rn 'rounded-[0-9]\\{2,\\}' src/client/ --include='*.tsx' --include='*.ts'; then`,
@@ -40,14 +39,14 @@ const RUN11_CHECK_7 = [
     'fi'
 ]
 
-// The real run-11 sibling titles (heads, as stamped in TASK_AUTO_0001).
+// The real sibling titles (heads, as stamped in TASK_AUTO_0001).
 const RUN11_TITLES = [
     'Scaffold project structure — package.json, tsconfig, ESLint, Prettier, docker-compose Postgres 18, Bun SQL connection, migrations runner, admin seed script',
     'Implement authentication layer — argon2id password hashing, cookie sessions in Postgres, login/logout/me routes, session middleware with requireAuth/requireAdmin guards',
     'Implement admin features — user listing with ban/unban toggle, cross-user listing deletion, /admin page with moderation UI',
     'Polish and finalize — empty/error/loading states, responsive layout, branded placeholder for listings without photos, final brand pass'
 ]
-// TASK_0009 (polish) is THIS task; the rest are its siblings.
+// one task (polish) is THIS task; the rest are its siblings.
 const RUN11_SIBLINGS = RUN11_TITLES.slice(0, 3)
 
 const RUN11_CONTRACTS = [

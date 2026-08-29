@@ -265,7 +265,7 @@ describe('runWorker', () => {
     })
 
     /**
-     * mx5-n 2026-08-27: worker:tooling made 550 tool calls over exactly 20
+     * A worker can make hundreds of tool calls over exactly
      * distinct files, ~36 reads each, for 20 minutes, and LoopDetector(20,5,5)
      * returned null on every one of them — a cycle as long as the window leaves
      * every key occurring once per window (asserted in loop-detector.test.ts).
@@ -332,7 +332,7 @@ describe('runWorker', () => {
         expect(r.restarts).toHaveLength(1)
         expect(r.restarts[0]?.reason).toBe('loop')
         // Named as a stall, not as a loop shape: a stall hit has no meaningful
-        // windowSize, so `read ×8/0` would misreport why the attempt died.
+        // windowSize, so a `read ×N` line would misreport why the attempt died.
         expect(r.restarts[0]?.detail).toContain('no-new-ground')
     })
 
@@ -375,7 +375,7 @@ describe('runWorker', () => {
      *
      * The reason gate-child.ts disabled the OTHER guards does not apply here.
      * They mislabelled an edit pass because they judge ARGUMENTS, and re-reading
-     * one file IS the job (mx5 TASK_0002). This one judges RESULTS: an edit
+     * one file IS the job. This one judges RESULTS: an edit
      * changes the bytes, so the read that follows it is new ground and the streak
      * resets. This test is that claim, asserted.
      *
@@ -549,7 +549,7 @@ describe('runWorker', () => {
         // Measured live: pi already retries a connection failure 4× over ~15s, so a
         // surfaced "Connection error." means an outage that outlasted pi's own
         // budget. A phase child re-spawns there (runPhaseChild); a research
-        // worker used to fail the whole task instead.
+        // worker would fail the whole task instead.
         const slept: number[] = []
         const spawn = fakeSpawnQueue([
             agentErrorResponse('Connection error.'),
@@ -699,8 +699,8 @@ describe('runWorker', () => {
         expect(receivedArgs[receivedArgs.indexOf('--tools') + 1]).toBe('read,grep')
     })
 
-    // ── restart accounting (nexttask 5A) ────────────────────────────────────────
-    // mx5 run 18: 30 wall-clock timeouts / 120 min of compute discarded, 21 of the
+    // ── restart accounting ────────────────────────────────────────
+    // Wall-clock timeouts discard hours of compute, and most of the
     // 23 affected workers returning exit=0. None of it was visible from the result
     // or any log — waitMs/workMs describe the FINAL attempt only.
     describe('restart accounting', () => {
@@ -723,7 +723,7 @@ describe('runWorker', () => {
         })
 
         test('a wall-clock timeout is reported as a discarded attempt on a clean result', async () => {
-            // The exact run-18 shape: attempt 1 times out, attempt 2 answers, and
+            // The exact shape: attempt 1 times out, attempt 2 answers, and
             // the caller sees exit=0 with nothing to say an attempt was thrown away.
             const spawn = fakeSpawnQueue([
                 {events: [], closeDelayMs: 80},
@@ -909,7 +909,7 @@ describe('runWorker', () => {
         })
 
         test('a discarded attempt is returned when the final attempt has less', async () => {
-            // The run-18 shape at its worst: the budget is spent, and the attempt
+            // The shape at its worst: the budget is spent, and the attempt
             // that happens to be last is the one that got least far. Returning it
             // unconditionally reports the worst of three attempts as the answer.
             // A realistic partial section: entry-shaped lines, which is what
@@ -1042,8 +1042,8 @@ describe('runWorker', () => {
         })
 
         test('salvage refuses a partial that is only preamble (live carry-arm regression)', async () => {
-            // The exact text salvage shipped as an APIS section on TASK_0020 and
-            // TASK_0021 of the live carry arm: all three attempts timed out, the
+            // The exact text salvage shipped as an APIS section on one task and
+            // one task of the live carry arm: all three attempts timed out, the
             // longest partial was one filler sentence, and both fixtures scored 2
             // entries and DEGRADED against 22 and 5 in baseline.
             const preamble =
@@ -1100,7 +1100,7 @@ describe('runWorker', () => {
             expect(prompts[0]).not.toContain('WORK ALREADY DONE')
         })
 
-        // `finalAttemptFailed` used to be an inline eight-term disjunction — a
+        // As an inline eight-term disjunction, `finalAttemptFailed` is a
         // fifth statement of the taxonomy `worker-failure.ts` owns — and it was
         // missing two of FAILURE_RULES' rows. A crashed final attempt with a
         // non-empty tail counted as NOT failed, so salvage was skipped and a good
@@ -1261,7 +1261,7 @@ describe('runWorker', () => {
             expect(r.timedOut).toBe(true)
         })
 
-        // inv-no-unbounded-worker (nexttask 9). The progress deadline SHIPPED ON,
+        // inv-no-unbounded-worker. The progress deadline SHIPPED ON,
         // so "a worker that is progressing may run to 20 minutes" is now the
         // default path, and the question stops being hypothetical: what bounds a
         // worker whose model endpoint is simply gone?
@@ -1332,7 +1332,7 @@ describe('runWorker', () => {
     })
 
     describe('nexttask 5B levers', () => {
-        // ── SCALE arm of nexttask 5B (UNWIRED; see task/research-fanout-budget.ts) ──
+        // ── SCALE arm of  (UNWIRED; see task/research-fanout-budget.ts) ──
         test('fanoutTimeout extends the deadline on a project-source docs call', async () => {
             const docsCall = {
                 type: 'tool_execution_start',

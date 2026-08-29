@@ -46,7 +46,7 @@ test('formatChildFailure caps the stderr tail at 500 chars', () => {
 /**
  * THE DEFECT THESE PIN.
  *
- * `formatChildFailure` used to answer `if (aborted) return abortedMessage`, and
+ * Answering `if (aborted) return abortedMessage`, `formatChildFailure` would
  * every kill path also sets `aborted` — so a 240s wall-clock kill, a hung
  * command, a dead model backend and a user pressing ESC all printed the same
  * four words. Measured cost: across 53 recorded `pi-worker` invocations in eight
@@ -310,7 +310,7 @@ test('a different run id does not see the prior run cache (isolation through the
 
 // ─── An `unavailable` outcome is never stored ────────────────────────────────
 //
-// This is the rule the four `cacheable` predicates used to carry as
+// This is the rule the four `cacheable` predicates would each carry as
 // `childExitCode === 0`, and got wrong: `runChild` reports `code ?? 0`, so a
 // SIGTERM-killed child arrives with exit code 0, every clause passed, and
 // "Docs lookup aborted." was memoised for the whole run and re-served to every

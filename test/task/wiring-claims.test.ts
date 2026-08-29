@@ -9,7 +9,7 @@ import {
     readReferencedDocs
 } from '../../src/task/wiring-claims.js'
 
-// The run-8 F3 fixture: the design pins ENDPOINTS (photos span two roots); the spec
+// The a F3 fixture: the design pins ENDPOINTS (photos span two roots); the spec
 // invented a uniform mount table. The registry holds the verbatim pinned facts.
 const REGISTRY = [
     '"POST /api/listings/:id/photos" [anchor: Photos]',

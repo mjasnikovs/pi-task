@@ -99,7 +99,7 @@ describe('runFocusedExtraction — verifyAgainst is a named knob, not the prompt
 
 describe('runFocusedExtraction — child failure is handled in ONE place', () => {
     test('a non-zero exit is a failure whose stdout is NEVER read as an answer', async () => {
-        // The bug this makes unrepresentable: docsFocused used to hand the caller
+        // The bug this makes unrepresentable: docsFocused handing the caller
         // parseChildOutput(stdout) regardless of exit code, so this error dump arrived as if
         // it were the package's documentation.
         const r = await runFocusedExtraction({

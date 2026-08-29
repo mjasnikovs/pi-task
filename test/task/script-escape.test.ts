@@ -8,7 +8,7 @@ import {
     scriptEscapeVerifyFindings
 } from '../../src/task/script-escape.js'
 
-/** The verbatim mx5 run-13 lint script — the true positive this module exists for. */
+/** The verbatim lint script — the true positive this module exists for. */
 const MX5_LINT =
     "prettier --log-level warn --write --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' "
     + '&& eslint --fix --no-error-on-unmatched-pattern . '

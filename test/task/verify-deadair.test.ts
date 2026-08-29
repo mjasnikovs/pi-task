@@ -10,10 +10,10 @@
  * appears once the CHILD starts — after a whole-repo static-analysis run and ten
  * probes. That run was `spawnSync`, so the event loop was blocked too: even the
  * `verifying…` notify could not paint, because pi-tui schedules renders on
- * `process.nextTick`. MEASURED on real repos (scripts/verify-deadair-step0.ts):
- * 15s on mx5, 69s on aiz-client, with 0 of 686 expected 100ms timer ticks
- * delivered. A/B (scripts/verify-deadair-ab.ts, 12 reps on mx5): silent windows
- * ≥3s, baseline 12/12 → treatment 0/12.
+ * `process.nextTick`. MEASURED on real repos:
+ * for tens of seconds at a time, with none of the expected timer ticks
+ * delivered. A/B: silent windows
+ * for three seconds or more, on every trial.
  *
  * These tests hold the two halves of the fix: the deterministic stage REPORTS
  * itself, and the gate keeps painting while it runs.

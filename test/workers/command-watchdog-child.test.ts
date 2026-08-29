@@ -17,7 +17,7 @@ import {DEFAULT_LOOP_DETECTOR, DEFAULT_LOOP_PROGRESS} from '../../src/workers/wo
  * inside a verify / lint-fix / recommend / final-fix child was unguarded. Proven
  * live before the fix — a gate child ran a never-returning `./verify.sh` and was
  * still running 240s later with `timedOut=false stalled=false`, killed only by
- * the harness's own outer cap (scripts/hung-command-gate-probe.ts).
+ * the harness's own outer cap.
  *
  * The hung-command cases use fakeSpawnKillable, whose child never closes on its
  * own — so if the watchdog fails to fire, the test hangs rather than fails.

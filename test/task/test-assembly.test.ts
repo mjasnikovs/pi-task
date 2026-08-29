@@ -7,9 +7,9 @@ import {
     type RepoFile
 } from '../../src/task/test-assembly.js'
 
-// The run-8 F4 fixture, distilled to import shape. The production entry composes five
+// The a F4 fixture, distilled to import shape. The production entry composes five
 // route leaves; test/photos.test.ts imports two of them (auth + photos) and mounts its
-// OWN app at a different prefix than production — 102/102 green while the shipped upload
+// OWN app at a different prefix than production — wholly green while the shipped upload
 // path is dead. Its siblings (admin/invites/listings) do the same; auth.test imports one
 // leaf; the page test shares only utilities; the source-grep test asserts on strings.
 const ENTRY: RepoFile = {

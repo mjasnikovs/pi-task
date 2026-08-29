@@ -138,7 +138,7 @@ describe('formatStallHint', () => {
 })
 
 /**
- * The case that put this detector into runWorker (mx5-n, 2026-08-27).
+ * The case that put this detector into runWorker.
  *
  * worker:tooling rotated through 20 distinct files, ~36 reads each, 550 calls,
  * for 20 minutes. LoopDetector(20, 5, 5) returned null on every one of them —

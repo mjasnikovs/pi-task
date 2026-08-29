@@ -248,8 +248,7 @@ test('packageRootOf maps a subpath specifier to its package.json key', () => {
 /**
  * INSTRUMENTATION COVERAGE for the project-source branch.
  *
- * `module: "."` is the MAJORITY of what worker:apis asks — 13 of 17 docs calls in run 15's
- * fatal task, 7 of 12 in the first live termination-diagnostic rep — and that branch returns
+ * `module: "."` is the MAJORITY of what worker:apis asks — 13 of 17 docs calls in a * fatal task, 7 of 12 in the first live termination-diagnostic rep — and that branch returns
  * long before the package path's logDocsAnswer call. With it uninstrumented, "the last docs
  * answer before the worker stopped" was unanswerable: the sink's last row was routinely not
  * the worker's last answer, and every project-source abstention scored as a valid answer.
@@ -297,7 +296,7 @@ test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', asy
 })
 
 /**
- * CAP arm of nexttask 5B (src/task/research-fanout-budget.ts) — UNWIRED: the
+ * CAP arm of  (src/task/research-fanout-budget.ts) — UNWIRED: the
  * budget is off unless PI_TASK_PROJECT_DOCS_BUDGET is set, which only
  * scripts/live-research-fanout-budget-ab.ts does.
  *

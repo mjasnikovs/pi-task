@@ -124,8 +124,8 @@ test('store is best-effort — an unwritable tasks dir does not throw', async ()
     expect(await lookupResearch(cwd, 'r', 'k')).toBeUndefined()
 })
 
-// ─── resume reuse (mx5 run 13: three resumes discarded a 201-entry cache) ─────
-// ─── per-package invalidation (mx5 run 14: a greenfield run installs as it goes,
+// ─── resume reuse ─────
+// ─── per-package invalidation (a greenfield run installs as it goes,
 //     so a whole-file freshness gate wiped the cache on all five of its resumes) ──
 
 const DOCS_HONO = 'pi-worker-docs hono::hc client'
@@ -280,7 +280,7 @@ test('resume with caching disabled clears the token and reuses nothing', async (
     expect(process.env[RESEARCH_RUN_ID_ENV]).toBeUndefined()
 })
 
-// ─── concurrent writers (nexttask TASK 4) ────────────────────────────────────
+// ─── concurrent writers ──────────────────────────────────────────────────────
 //
 // storeResearch is a read-modify-write over one file, and its writers are
 // concurrent on two axes: the research tools are registered executionMode

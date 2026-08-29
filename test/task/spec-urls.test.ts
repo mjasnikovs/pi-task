@@ -1,10 +1,10 @@
 /**
- * Unit tests for the PROMPT 4 lever. Every fixture here is REAL run-15 text — the design's
- * own §13 reference list, the manifest mx5 actually shipped, the refined tasks that ran — so
+ * Unit tests for the PROMPT 4 lever. Every fixture here is REAL text — the design's
+ * own §13 reference list, the manifest actually shipped, the refined tasks that ran — so
  * a passing test means the lever behaves on the corpus it was measured against, not on
  * strings invented to make it pass.
  *
- * The live A/B (scripts/live-spec-url-fetch-ab.ts) measures whether the WORKER then fetches
+ * The live A/B measures whether the WORKER then fetches
  * the page. These tests measure only what this module deterministically produces, which is
  * the half that can be pinned.
  */
@@ -19,7 +19,7 @@ import {
     MAX_SPEC_URLS
 } from '../../src/task/spec-urls.js'
 
-/** The 21 URLs mx5's DESIGN/PROJECT.md cites, verbatim (scripts/spec-url-reach.ts prints them). */
+/** The 21 URLs DESIGN/PROJECT.md cites, verbatim. */
 const DESIGN_URLS = [
     'https://bun.com/docs/api/file-io',
     'https://bun.com/docs/api/hashing',
@@ -44,7 +44,7 @@ const DESIGN_URLS = [
     'https://zod.dev/'
 ]
 
-/** mx5's package.json dependencies + devDependencies, in manifest order. */
+/** package.json dependencies + devDependencies, in manifest order. */
 const MX5_MANIFEST = [
     '@radix-ui/react-dialog',
     '@radix-ui/react-select',
@@ -80,7 +80,7 @@ describe('extractSpecUrls', () => {
     })
 
     test('drops localhost and placeholder hosts — a dev URL is not documentation', () => {
-        // Run 15's task texts contain 25+ of these (curl examples, redirect targets); ranking
+        // A task's text can contain dozens of these (curl examples, redirect targets); ranking
         // them as fetch candidates would send the worker at its own dev server.
         const text =
             'curl http://localhost:3000/api/auth/login and http://127.0.0.1:3911/admin '

@@ -7,7 +7,7 @@ import {
 } from '../../src/task/user-directives.js'
 
 describe('extractUserDirectives — web search', () => {
-    // The exact mx5 run-9 raw prompt that refine silently stripped.
+    // The exact raw prompt that refine silently stripped.
     const MX5_RAW =
         'Research Playwright best practices via web search — focus on E2E testing patterns for Next.js apps with auth sessions'
 
@@ -70,7 +70,7 @@ describe('directiveSurvives / enforceDirectives (the backstop lever)', () => {
     })
 
     test('a refined spec that DROPPED the directive gets it appended verbatim', () => {
-        // The real mx5 refined text: no web-search mention anywhere.
+        // The real refined text: no web-search mention anywhere.
         const refined =
             'GOAL\n  Produce a concise research summary from the local files.\nCONSTRAINTS\n  - research-only\n'
         expect(directiveSurvives(refined, directive)).toBe(false)

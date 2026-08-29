@@ -13,7 +13,7 @@ import {
     serveEntryGateFailureText
 } from '../../src/task/serve-entry.js'
 
-/** The shipped run-18 entry, verbatim in shape (mx5 @ a9c6145, src/server/index.ts). */
+/** The shipped entry, verbatim in shape. */
 const RUN18_ENTRY =
     "import {Hono} from 'hono'\n"
     + "import {admin} from './routes/admin'\n"

@@ -70,7 +70,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('rule 3d forbids the verifier itself substituting a copy for the artifact', () => {
-        // Regression guard for the mx5 run-5 class: the VERIFY CHILD (not the work)
+        // Regression guard for the class: the VERIFY CHILD (not the work)
         // wrote final_verify.ts into the worktree, re-implemented the photos handler
         // "EXACTLY as in photos.ts", served the copy on a scratch port, and passed a
         // route the shipped app could not even serve (no Bun.serve existed). Rule 3b
@@ -112,7 +112,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids grep-theater: static-only checks are not a PASS when execution was possible', () => {
-        // Regression guard for the mx5 grep-theater class: a schema.sql with INVALID
+        // Regression guard for the grep-theater class: a schema.sql with INVALID
         // SQL was "verified" by grepping for its own (broken) text while a live
         // Postgres sat reachable in the same container. The prompt must (a) say a
         // grep-only VERIFY block does not cap the obligation to execute/apply the
@@ -130,9 +130,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids test-the-copy: substitution rule always present (A/B: rule + probe = 5/5)', () => {
-        // Regression guard for the mx5 test-the-copy class: "integration tests"
+        // Regression guard for the test-the-copy class: "integration tests"
         // re-implemented every protected route inline (own Bun.serve / fake Hono),
-        // ran 26/26 green, and the old prompt false-PASSed 5/5 on the real tree.
+        // ran wholly green, and a prompt without this rule false-PASSes it.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('substitution')
         expect(p).toMatch(/proves only the copy/)
@@ -159,7 +159,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids violation excusal: a violated spec prohibition is a FAIL, no waiver authority', () => {
-        // Regression guard for the mx5 run-7 class (F5): the child saw "Do NOT modify
+        // Regression guard for the class (F5): the child saw "Do NOT modify
         // server-side code" violated, waived it as "additive, tests pass with it", and
         // PASSed. The verdict on a violated prohibition is not the verifier's to relax.
         const p = buildVerifyPrompt('GOAL\nx')
@@ -312,10 +312,10 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids test-authored repair: a suite that patches the product is not verification', () => {
-        // Regression guard for the mx5 run-4 class, A/B-proven live (silent fixture:
+        // Regression guard for the class, A/B-proven live (silent fixture:
         // suite green ONLY because test setup ALTERs the schema and seeds around the
-        // broken seed script): shipped prompt false-PASSed 3/5, prompt with this rule
-        // 0/5 false-PASS naming the exact gap; honest fixture 3/3 PASS in both arms.
+        // broken seed script): the shipped prompt false-PASSes it, the prompt with this rule
+        // never does, and names the exact gap; the honest fixture PASSes in both arms.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('test-authored repair')
         expect(p).toMatch(/read its setup\/bootstrap/)
@@ -335,7 +335,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('negative control: a success that cannot fail on wrong input is void evidence', () => {
-        // Regression guard for the mx5 run-8 F5 class: a catch-all fallback answered
+        // Regression guard for the a F5 class: a catch-all fallback answered
         // ANY method on ANY path with 200 + HTML, so the broken upload endpoint
         // "succeeded" and the verify curl could not fail — the child false-PASSed.
         // The rule must require a deliberately-wrong control and treat same-success on
@@ -362,7 +362,7 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('rule 5c: a spec-required check that self-skips or lacks tooling is UNOBSERVED, not PASS', () => {
-        // Regression guard for the mx5 run-8 F2 class: the only behavioral checks ever
+        // Regression guard for the a F2 class: the only behavioral checks ever
         // authored (browser smokes) were wrapped in `|| echo skipping`; the tool was
         // absent, the checks silently skipped, and the verify child called it "correctly
         // skipped" → PASS. The rule must (a) draw the line from rule 5's external-service
@@ -469,7 +469,7 @@ describe('buildVerifyPrompt — cross-task deletion (rule 4d, mx5 run 12 PROMPT 
         expect(p).toContain('CROSS-TASK DELETION NOTICE')
         expect(p).toContain('`playwright/index.ts`')
         expect(p).toContain('TASK_0020')
-        // The notice itself carries the verdict mandate — buried rules score 0/5.
+        // The notice itself carries the verdict mandate — a buried rule is not read.
         expect(p).toMatch(/verdict is FAIL naming the deleted file and its owning task/)
         // No findings → no notice block.
         expect(buildVerifyPrompt('GOAL\nx')).not.toContain('CROSS-TASK DELETION NOTICE')
@@ -856,7 +856,7 @@ describe('runWorkVerification', () => {
     })
 
     test('mutated run → verdict discarded (even a PASS), retried once on the restored tree', async () => {
-        // The mx5 run 6 shape: the child stashed the work away and judged the wrong
+        // The shape: the child stashed the work away and judged the wrong
         // tree. The git-state guard restored the state; the first verdict must be
         // discarded regardless of its direction and the verify re-run.
         let runs = 0

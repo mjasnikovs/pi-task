@@ -1,7 +1,7 @@
 /**
  * The table is the single statement of what a worker tool is.
  *
- * These names used to be four literals in three directories — a tools string
+ * These names would otherwise be four literals in three directories — a tools string
  * paired by eye with an `-e` path list, a grounding set, and a debug-log
  * summariser that also re-stated each tool's parameter shape. A rename was five
  * edits with no compile error linking them.

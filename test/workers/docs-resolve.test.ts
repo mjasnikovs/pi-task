@@ -129,10 +129,10 @@ test('detectTypesRedirect returns null for an aggregator package', () => {
     expect(detectTypesRedirect(resolvePackage('target-types', FIXTURES))).toBeNull()
 })
 
-// --- the empty-entry rule (nexttask 1) ---------------------------------------
+// --- the empty-entry rule ---------------------------------------
 // `sharp` ships ONE 1971-line .d.ts whose line 28 is `/// <reference types="node" />`.
 // The file-count guard cannot tell that apart from `@types/bun`'s one-line stub, so
-// every sharp question in mx5 run 19 was answered out of @types/node (tty.d.ts,
+// every sharp question in was answered out of @types/node (tty.d.ts,
 // zlib.d.ts). The discriminator is what is IN the entry file, not how many there are.
 
 test('detectTypesRedirect does not follow an ambient `reference types` in a package that declares its own API', () => {

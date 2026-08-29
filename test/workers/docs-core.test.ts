@@ -450,7 +450,7 @@ describe('acquirePackage', () => {
         fs.rmSync(dir, {recursive: true, force: true})
     })
 
-    // docsRaw used to write a bare `undefined` into the signal slot to reach the
+    // Writing a bare `undefined` into the signal slot to reach the
     // fourth positional, so a user cancel during the MAIN npm install of a
     // model-chosen package was not delivered — while a redirect-hop install
     // honoured it. Driven through docsRaw because that is the call site that

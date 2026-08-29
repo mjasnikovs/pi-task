@@ -76,7 +76,7 @@ export interface FakeCtxHandle {
      * throws out of prompt() when a message arrives with no streamingBehavior
      * while it is streaming, so any delivery that does not queue itself takes
      * the whole run down — reproduced live on pi 0.82.1 (issue #8): a browser
-     * message during a child phase ended the run with "TASK_0001 failed: Agent
+     * message during a child phase ended the run with "one task failed: Agent
      * is already processing."
      */
     setForeignTurnStreaming: (streaming: boolean) => void

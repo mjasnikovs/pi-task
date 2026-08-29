@@ -114,7 +114,7 @@ describe('yolo bounded-loop policies', () => {
     test('final gate autofixes only WHILE the card is offered, then leaves the run FAILED', () => {
         expect(yoloFinalGateChoice(true, true)).toEqual({action: 'autofix'})
         // canAutofix goes false at MAX_FINAL_GATE_AUTOFIX — never 'accept', which
-        // would complete a run whose whole-repo gate is red (mx5 run 13).
+        // would complete a run whose whole-repo gate is red.
         expect(yoloFinalGateChoice(true, false)).toEqual({action: 'leave'})
     })
 })

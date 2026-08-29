@@ -1,11 +1,11 @@
 /**
  * Stream-watchdog integration: a child whose model stream goes SILENT.
  *
- * The run-14 hang cannot be reproduced by asking a real model to hang, and the
+ * The hang cannot be reproduced by asking a real model to hang, and the
  * child here is a `pi` PROCESS (not an HTTP client we own), so the seam a test can
  * actually drive is the child's event stream: a fake `pi` that emits N json events
  * and then produces nothing, ever, closing only when killed. That is byte-for-byte
- * what the host saw in run 14 — events, then silence, no error, no exit.
+ * what the host saw in a — events, then silence, no error, no exit.
  *
  * BEFORE this guard the run below never resolves (the child is killed only by the
  * test's own teardown); AFTER it, the watchdog aborts at the configured inactivity
@@ -208,7 +208,7 @@ describe('phase child A/B: hang then retry', () => {
         cfg.streamInactivityMs = WINDOW_MS
         try {
             const s = scriptedSpawn([
-                // Attempt 1: streams, then hangs forever — the run-14 shape.
+                // Attempt 1: streams, then hangs forever — the shape.
                 {events: [THINKING, TEXT('half an ans')], hang: true},
                 // Attempt 2: the same request against a working stream.
                 {events: agentEndResponse('FINAL ANSWER').events}

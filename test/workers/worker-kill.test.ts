@@ -1,7 +1,7 @@
 /**
  * THE GUARD THAT MAKES THE KILL ROSTER TRUE.
  *
- * A kill cause used to be named in six unlinked places, and only two of them
+ * A kill cause would otherwise be named in six unlinked places, and only two of them
  * failed to compile if you forgot one. `worker-failure.ts`'s own header records
  * what that cost: `streamStalled` reached the result and the restart ladder but
  * never grew an arm in the enforce ladder, so a child killed for a hung model

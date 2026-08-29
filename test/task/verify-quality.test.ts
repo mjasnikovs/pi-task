@@ -8,7 +8,7 @@ import {
 const spec = (cmds: string[]): string =>
     ['GOAL', 'Create build.ts.', '', 'VERIFY:', '```bash', ...cmds, '```'].join('\n')
 
-/** The real mx5 run-13 TASK_0018 VERIFY shape: tsc + greps, never `bun build.ts`. */
+/** The real one task VERIFY shape: tsc + greps, never `bun build.ts`. */
 const MX5_VERIFY = spec([
     'bunx tsc --noEmit',
     "grep -q 'Bun\\.mkdirSync.*dist.*recursive' build.ts",
@@ -64,7 +64,7 @@ describe('findGrepOnlyVerify', () => {
     })
 
     test('shell-control shapes (if/then/fi, `{ echo; exit 1; }`) are not execution', () => {
-        // The real run-13 incident VERIFY shape — greps wrapped in OK/FAIL guards.
+        // The real incident VERIFY shape — greps wrapped in OK/FAIL guards.
         const s = spec([
             'tsc --noEmit',
             'grep -q \'import\\.meta\\.main\' build.ts && echo "OK" || { echo "FAIL"; exit 1; }',

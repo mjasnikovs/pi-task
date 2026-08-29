@@ -25,7 +25,7 @@ type SessionStart = (event: unknown, ctx: unknown) => void
  * The handler pi would have subscribed, driven by an EXPLICIT config.
  *
  * The settings source is injected rather than read from the live singleton:
- * every one of these tests used to mutate `getConfig()` and put it back, which
+ * every one of these tests would otherwise mutate `getConfig()` and put it back, which
  * still leaves the result depending on what was saved before the suite ran.
  */
 function sessionStartHandler(cfg: PiTaskConfig): SessionStart {
@@ -102,7 +102,7 @@ describe('when it stays silent', () => {
 
 describe('when the shipped table itself is the mismatch', () => {
     /**
-     * BEHAVIOUR DELTA, 2026-08-27. This used to assert silence on DEAD_MODEL
+     * BEHAVIOUR DELTA. Asserting silence on DEAD_MODEL
      * too, and the reason it held was that every WRITTEN cell was `off` — a
      * level a model without reasoning already honours, so there was nothing to
      * warn about. `planning: 'medium'` is the first cell that ASKS for thinking,

@@ -1,42 +1,34 @@
 /**
- * F-2 / PROMPT 2 — the TARGETED REGRESSION TEST, and the reason it exists instead of an A/B.
+ * The TARGETED REGRESSION TEST for the type-only answer guard, and the reason it
+ * exists instead of an A/B.
  *
- * ── WHY THIS FILE REPLACES AN EXPERIMENT ──────────────────────────────────────────────────
+ * ── WHY THIS FILE REPLACES AN EXPERIMENT ──────────────────────────────────────
  *
- * PROMPT 2's live A/B measured baseline 14/17 reps terminating without escalating (82%) vs
- * treatment 10/11 (91%), Fisher p = 0.88, and the lever was recorded as "did not move the
- * metric". That was a broken EXPERIMENT, not broken code. Stage 1 measured what the
- * experiment never did — how often the lever can fire at all:
+ * An A/B on this lever measured no difference and recorded it as "did not move
+ * the metric". That was a broken EXPERIMENT, not broken code. The thing the
+ * experiment never measured is how often the lever can fire at all — and it is a
+ * fraction of one percent of docs answers, because the whole population is TWO
+ * questions out of a couple of hundred: one that flags every time, and one that
+ * flags intermittently.
  *
- *   MEASURED 2026-07-22, live, Qwen3.6-27B-NVFP4-MTP.gguf @ 127.0.0.1:8080, 8 reps x the
- *   210 run-15 package questions = 1680 lookups, research cache off, 0 errors
- *   (scripts/live-typeonly-baserate.ts):
+ * A lever reaching that few answers cannot move an aggregate, and no arm size
+ * fixes it. Running another A/B would spend hours to produce another null. So the
+ * lever is not claimed as a population fix. It is a TARGETED GUARD, and this file
+ * is its proof: blast radius of one deterministic case plus one intermittent one.
  *
- *     BASE RATE   9/1680 = 0.54%   Wilson 95% [0.28%, 1.02%]
- *                 The static record (1/150 = 0.7%) is CONFIRMED, not refuted.
- *     PER REP     1 1 1 1 1 1 1 2  — the whole population is one or two answers per rep.
- *     POPULATION  2 of 210 questions EVER flag:
- *                   8/8  hono/client  "hc factory function signature base url parameter…"
- *                   1/8  bun          "sql.query type definition, sql.helper type…"
+ * ── WHAT IS AND IS NOT PROVEN HERE ────────────────────────────────────────────
  *
- * A lever reaching 0.54% of answers cannot move an 82% aggregate, and no arm size fixes
- * that: the population is ONE deterministic question plus one intermittent one. Running
- * another A/B would spend hours to produce another p ≈ 0.9. So the lever is not claimed as a
- * population fix. It is a TARGETED GUARD, and this file is its proof — the honest claim
- * being blast radius N = 1 deterministic case (hc, 8/8 reps) + 1 intermittent (bun SQL
- * types, 1/8 reps), which is exactly what stage 1 exit (ii) prescribes.
+ * PROVEN: for the recorded case the tool marks the answer UNANSWERED, refuses to
+ * present the type as the answer, and hands back the `@see` URL to fetch. Also
+ * proven: the guard does not fire on the neighbouring shapes — a behavioural
+ * answer, an explicit "unclear", a signature question that a signature
+ * legitimately answers.
  *
- * ── WHAT IS AND IS NOT PROVEN HERE ────────────────────────────────────────────────────────
- *
- * PROVEN: for the recorded case the tool marks the answer UNANSWERED, refuses to present the
- * type as the answer, and hands back the `@see` URL to fetch. Also proven: the guard does not
- * fire on the neighbouring shapes (a behavioural answer, an explicit "unclear", a
- * signature question that a signature legitimately answers).
- *
- * NOT PROVEN, and deliberately not claimed anywhere: that the worker then ACTUALLY escalates.
- * That is a model behaviour, it was measured at ~18% spontaneous in the pre-change flow, and
- * the 0.54% base rate means no affordable experiment can attribute a change in it to this
- * lever. The banner is an instruction; whether the model obeys is unmeasured.
+ * NOT PROVEN, and deliberately not claimed anywhere: that the worker then
+ * ACTUALLY escalates. That is a model behaviour, it happens on its own only some
+ * of the time, and the lever fires too rarely for any affordable experiment to
+ * attribute a change in it. The banner is an instruction; whether the model obeys
+ * is unmeasured.
  *
  * ── WHY THE POSITIVES ARE EIGHT LIVE VARIANTS, NOT ONE FROZEN STRING ──────────────────────
  *
@@ -61,7 +53,7 @@ import {isTypeOnlyAnswer} from '../../src/task/type-only-answer.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
-/** The query verbatim, as run 15 asked it and as all 8 live reps re-asked it. */
+/** The query verbatim, as asked it and as all 8 live reps re-asked it. */
 const HC_QUERY = 'hc factory function signature base url parameter types exported from hono/client'
 
 /**
@@ -82,7 +74,7 @@ const HC_LIVE_ANSWERS: string[] = [
 ]
 
 /**
- * The ORIGINAL run-15 cache entry, kept alongside the live variants. It is the answer that
+ * The ORIGINAL cache entry, kept alongside the live variants. It is the answer that
  * actually shipped the bug, so it must never stop being caught, whatever later reps say.
  */
 const HC_RECORDED_ANSWER =
@@ -104,7 +96,7 @@ describe('F-2 blast radius, case 1 of 2 — the hc answer (8/8 reps live)', () =
     })
 
     test('all eight live phrasings are genuinely distinct strings, not one answer repeated', () => {
-        // Otherwise "8/8 reps" would be a single observation wearing eight hats, and the
+        // Otherwise "eight reps" would be a single observation wearing eight hats, and the
         // robustness claim above would be unearned.
         expect(new Set(HC_LIVE_ANSWERS).size).toBe(8)
     })
@@ -122,10 +114,10 @@ describe('F-2 blast radius, case 1 of 2 — the hc answer (8/8 reps live)', () =
 })
 
 /**
- * F-2(c), the second fatal defect of run 15. Note carefully which channel it belongs to: the
+ * The second fatal defect of the class. Note carefully which channel it belongs to: the
  * docs worker answered the bun-SQL USAGE question with an explicit "unclear from this
  * package", which is the HONEST non-answer and is NOT type-only. The type-only shape appears
- * on the neighbouring TYPE question — measured live at 1/8 reps, i.e. intermittent. Both are
+ * on the neighbouring TYPE question, intermittently. Both are
  * pinned, and the boundary between them is pinned, because conflating the two channels is
  * what would make the guard fire on honest abstentions.
  */
@@ -151,7 +143,7 @@ describe('F-2 blast radius, case 2 of 2 — the bun-SQL shape', () => {
     test('the recorded "unclear" non-answer is NOT type-only — it is a different channel', () => {
         // Routing an honest abstention through the type-only banner would double-report it
         // and, worse, would let the type-only counter absorb the unclear population and
-        // fake a base rate far above the measured 0.54%.
+        // fake a base rate far above the real one.
         const v = isTypeOnlyAnswer(
             'unclear from this package',
             'what is the bun sql api? how does `import { sql } from "bun"` work?'
@@ -213,7 +205,7 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
         // 1. The answer is not presented as an answer.
         expect(text).toContain('UNANSWERED — TYPE-ONLY')
         // 2. The worker is told, in terms, not to close the gap from memory — which is
-        //    exactly what worker:context did in run 15 (F-1).
+        //    exactly what worker:context did in a (F-1).
         expect(text).toMatch(/Do NOT answer from memory/i)
         // 3. It is handed the pointer that was sitting in the retrieved text all along.
         expect(text).toContain('https://hono.dev/docs/guides/rpc')
@@ -246,7 +238,7 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
     })
 
     test('a type-only answer is never memoised, so the next asker can still escalate', async () => {
-        // F-2(e): run 15 cached its non-answers, so one dead end was re-served to every
+        // F-2(e): cached its non-answers, so one dead end was re-served to every
         // later sibling task and the miss never recurred to trigger an escalation.
         const cache = openCache(':memory:')
         const result = await runTool(
