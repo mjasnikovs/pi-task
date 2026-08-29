@@ -5,18 +5,19 @@
  * Without it each spawn site keeps this state by hand — `let lastLine; let contextUsage;`
  * plus two callbacks (`onChildOutput` writes the line, `onContextUsage` folds a
  * snapshot through `resolveContextUsage` with the parent window), a reset before
- * every child, and a loader whose every tick read both — in `/task-auto`'s
- * planning `runChild`, `/task-plan`'s `child`, `buildGateDeps` (an accessor box
- * handed to `makeGateChild`), and the single-task `TaskRunner`. The first three
- * are one ritual and are now this class; the fourth stays where it is (see
- * `orchestrator.ts`: its state is the whole-run `WidgetState`, shared by
- * reference with `PhaseContext` and written by the phases themselves).
+ * every child, and a loader whose every tick reads both.
+ *
+ * Three sites share that ritual and are now this class: `/task-auto`'s planning
+ * `runChild`, `buildGateDeps`, and `/task-plan` — one `new ChildStatus` each, and
+ * no others. The single-task `TaskRunner` deliberately stays where it is: its
+ * state is the whole-run `WidgetState`, shared by reference with `PhaseContext`
+ * and written by the phases themselves (see `orchestrator.ts`).
  *
  * `track` is the loader ritual: reset, raise the loader reading this status on
  * every tick, run, always stop. The status OUTLIVES a track — `buildGateDeps`
  * shares one across every gate child, and the verify gate raises its own
- * gate-wide loader over a child that renders none (`frame: null`), so both must
- * see the same object.
+ * gate-wide loader over a child that renders none (`frame: null`, reached when
+ * `deps.loader === false` in gate-child), so both must see the same object.
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -84,12 +85,17 @@ export class ChildStatus {
 
     /**
      * Run `run` under the loader: reset, raise a loader whose every tick is
-     * `frame()` plus the live line and gauge, and stop it in a `finally` — a
-     * throwing child must not leave the widget up. `frame` wins on a clash, which
-     * is how the verify gate shows its deterministic-stage label until the child
-     * has a line of its own. `frame: null` renders NO loader (the caller already
-     * has one reading this status) but still resets, so the previous child's
-     * trailer is cleared either way.
+     * `frame()` spread OVER the live line and gauge, and stop it in a `finally`.
+     * All four behaviours were run against a fake loader:
+     *   - the reset lands first, so the previous child's line never reaches the
+     *     new loader's first tick;
+     *   - `frame` wins on a clash, because it is spread last — which is how the
+     *     verify gate shows its deterministic-stage label until the child has a
+     *     line of its own;
+     *   - `frame: null` raises NO loader at all (the caller already has one
+     *     reading this status) but still resets;
+     *   - a child that THROWS still stops the loader, so a failure never leaves
+     *     the widget up.
      */
     async track<T>(
         ctx: ExtensionCommandContext,
@@ -154,7 +160,8 @@ export async function runPlanningChild(opts: {
 
 /**
  * Wire a `ChildStatus` as a phase child's stream callbacks — plus the window the
- * child must be TOLD, since pi's event stream never reports one (issue #16).
+ * child must be TOLD, since pi's `--mode json` stream reports token counts but no
+ * context window.
  */
 export function statusCallbacks(
     status: ChildStatus
