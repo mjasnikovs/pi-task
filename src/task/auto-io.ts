@@ -2,8 +2,11 @@
  * AUTO-file I/O & parsing for /task-auto.
  *
  * Thin layer over task-io/task-parsers: a TASK_AUTO_NNNN.md is a normal task
- * file (same front matter) whose body holds feature prompt, clarifications, and
- * a markdown checkbox list of task titles. The checkboxes are the resume cursor.
+ * file — the same front matter, parsed by the same `parseFrontMatter` — whose
+ * body holds `## feature prompt`, `## clarifications`, `## tasks` and optionally
+ * `## coverage`. The checkbox list under `## tasks` is the resume cursor, and the
+ * loop finds its next step with `entries.find(e => !e.done)` rather than a
+ * remembered position.
  */
 import * as fsp from 'node:fs/promises'
 import * as path from 'node:path'
@@ -40,12 +43,16 @@ export async function allocateAutoId(cwd: string): Promise<string> {
 /**
  * Parse a decompose-phase model output into a clean list of titles.
  *
- * No cap: every title the model emits is kept. An arbitrary ceiling (was 30)
- * silently dropped the tail of a large plan AND re-clipped every coverage retry,
- * so a design that genuinely needed >N tasks could never escape the ceiling —
- * it burned its coverage rounds and shipped a knowingly-gapped plan. The real
- * bound on task count is the design's own grounded-requirement scope, enforced
- * downstream by the coverage loop; this parser must not pre-empt it.
+ * No cap: every title the model emits is kept — 100 lines in, 100 titles out.
+ * A ceiling here would be invisible and self-defeating, because it would clip the
+ * tail of a large plan AND re-clip every coverage retry, so a design that
+ * genuinely needs more tasks than the ceiling could never grow past it — it would
+ * burn its coverage rounds and ship a knowingly-gapped plan. The real bound is
+ * the design's own grounded-requirement scope, enforced downstream by the
+ * coverage loop; this parser must not pre-empt it.
+ *
+ * Accepts checkbox, bare-dash and numbered forms (`1.` and `2)`), indented or
+ * not, and skips prose lines and empty bullets.
  */
 export function parseDecomposeList(raw: string): string[] {
     const out: string[] = []
@@ -63,9 +70,13 @@ export interface CoverageVerdict {
 }
 
 /**
- * Parse the coverage-triage child's verdict. Returns null when no COVERAGE tag
- * is present (the model wrote prose) — the caller treats that as "accept the
- * list as-is", so a malformed judgment can never block planning.
+ * Parse the coverage-triage child's verdict. Returns null when no COVERAGE tag is
+ * present (the model wrote prose), and the caller reads a null verdict as an
+ * empty missing-list, so a malformed judgment can never block planning.
+ *
+ * `COVERAGE: INCOMPLETE` with no MISSING lines also returns null, deliberately:
+ * it names nothing to reprompt with, so treating it as a verdict would loop
+ * blind. Confirmed by running both shapes.
  */
 export function parseCoverageVerdict(raw: string): CoverageVerdict | null {
     const tag = /^\s*COVERAGE:\s*(COMPLETE|INCOMPLETE)\s*$/im.exec(raw)
@@ -111,8 +122,9 @@ export function parseTaskList(body: string): TaskEntry[] {
 }
 
 /** Build the initial AUTO-file body. `coverage` is the requirement-level
- *  accounting summary (goal A(c) — a durable, user-visible record of what was
- *  carried cross-cutting and what stayed unowned); '' omits the section. */
+ *  accounting summary — a durable, user-visible record of what was carried
+ *  cross-cutting and what stayed unowned. An empty string omits the section
+ *  entirely rather than emitting a blank heading. */
 export function buildAutoBody(
     feature: string,
     clarifications: string,
@@ -210,14 +222,20 @@ function entryTitle(line: string): string | null {
  * land BEFORE the next dependent task, not at the end of the plan, or the defect
  * keeps failing everything in between.
  *
- * MONOTONIC by construction: this only ever
- * SPLICES a line in. No existing entry is rewritten, reordered, or dropped, and
- * an already-present title is a no-op — so a plan can grow mid-run but never
- * shrink, and a retried insert cannot duplicate. Returns whether a line was added.
+ * MONOTONIC by construction: this only ever SPLICES a line in. No existing entry
+ * is rewritten, reordered or dropped, and an already-present title is a no-op —
+ * so a plan can grow mid-run but never shrink, and a retried insert cannot
+ * duplicate. Returns whether a line was added.
+ *
+ * Run against a real plan: inserting a new title after entry 0 returns true and
+ * lands it directly after that entry; the same title again returns false; a title
+ * that is already present AND CHECKED also returns false; an empty title returns
+ * false. Everything else keeps its order.
  *
  * Later entries shift down by one, which is safe because the /task-auto loop
  * re-reads and re-parses the plan at the top of every iteration and locates its
- * next step by "first unchecked" rather than by a cached index.
+ * next step with `entries.find(e => !e.done)` — first unchecked — rather than a
+ * cached index.
  */
 export async function insertTaskAfter(
     cwd: string,
@@ -242,8 +260,13 @@ export async function insertTaskAfter(
         insertAt = i + 1
         if (seen === afterIndex) break
     }
-    // An out-of-range index appends after the LAST checkbox rather than throwing:
-    // a plan that grew underneath the caller must still receive the entry.
+    // An out-of-range afterIndex is not an error: the loop above leaves `insertAt`
+    // just past the LAST checkbox, so the entry is appended rather than lost — a
+    // plan that grew underneath the caller must still receive it. Confirmed with
+    // afterIndex 99 on a five-entry plan.
+    //
+    // The guard below is the different case: a `## tasks` section with NO checkbox
+    // lines at all, where there is no position to splice into.
     if (insertAt === -1) return false
     lines.splice(insertAt, 0, `- [ ] ${clean}`)
     await setTaskSection(cwd, id, 'tasks', lines.join('\n'))
@@ -255,12 +278,17 @@ export async function insertTaskAfter(
  * last-write time the resume banner reports (see resume-gap.ts). Null when there
  * is nothing resumable.
  *
- * `states` narrows which states count as resumable, and the UNATTENDED path passes
- * UNATTENDED_STATES so the search answers the question that path actually asks —
- * "is there an IN-FLIGHT run to pick up?". Selecting the newest human-resumable run
- * and only then refusing it on state let one failed run shadow an in-flight one
- * behind it: the boot hook refused every restart and the in-flight run stayed in
- * exactly the dead air this feature exists to end.
+ * `states` narrows which states count as resumable BEFORE the newest-wins sort,
+ * and that ordering is the whole point. The UNATTENDED path passes
+ * UNATTENDED_STATES so the search answers the question it actually asks — "is
+ * there an IN-FLIGHT run to pick up?"
+ *
+ * Filtering after the sort instead would let one failed run shadow an in-flight
+ * one behind it. Demonstrated on two files, the newer `failed` and the older
+ * `in_progress`: the default states pick the newer failed one, while
+ * UNATTENDED_STATES picks the older in-progress one. Had the newest been chosen
+ * first and only then refused on state, the restart would find nothing and the
+ * in-flight run would sit in exactly the dead air this exists to end.
  */
 export async function findResumableAutoDetailed(
     cwd: string,
