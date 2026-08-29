@@ -127,8 +127,8 @@ test('ENFORCE_TOOLS is read,edit — no write (no new files), no grep/find/ls (n
 // ─── flag-only mode (no signal ⇒ no license to rewrite) ──────────────────────
 
 test('ENFORCE_FLAG_TOOLS is read only — flag-only cannot edit/write/run', () => {
-    // A/B-proven: with no verification signal to guard against, demoting the pass to
-    // read-only is what stops it trashing working code.
+    // With no verification signal to guard against, demoting the pass to read-only
+    // is what stops it trashing working code.
     expect(ENFORCE_FLAG_TOOLS).toBe('read')
     expect(ENFORCE_FLAG_TOOLS).not.toContain('edit')
     expect(ENFORCE_FLAG_TOOLS).not.toContain('write')

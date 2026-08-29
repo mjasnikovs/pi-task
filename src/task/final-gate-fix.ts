@@ -385,7 +385,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
 
     // FROZEN-PATH WRITE-DENY: undo the child's edits to any path a task's spec
     // froze, before anything downstream can act on them — same mechanical deny
-    // the enforce pass carries (prompt framing is A/B-proven insufficient).
+    // the enforce pass carries (prompt framing is not enough on its own).
     // Non-fatal: the rest of the fix survives, only the frozen edits are undone.
     if (deps.frozenPaths && deps.revertFrozen) {
         const frozen = await deps.frozenPaths()

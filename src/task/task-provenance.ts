@@ -106,8 +106,8 @@ export async function findCrossTaskDeletions(
 
 /**
  * Finding lines for the verify prompt (the substitution-probe injection pattern:
- * the rule alone is A/B-proven ignored, the rule plus a concrete finding naming
- * the file is what lands).
+ * a rule on its own is ignored; the rule plus a concrete finding naming the
+ * file is what lands).
  */
 export function crossTaskDeletionVerifyFindings(found: CrossTaskDeletion[]): string[] {
     return found.map(

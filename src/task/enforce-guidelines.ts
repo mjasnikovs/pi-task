@@ -61,9 +61,8 @@ const ENFORCE_TOOLS = 'read,edit'
  * This is the "no signal ⇒ no license to rewrite logic" half of the gate. When a
  * task ships no behavioral verification to guard a destructive edit (no runnable
  * VERIFY, or the verify gate did not produce a genuine clean pass), letting the
- * weak model rewrite working code is exactly what trashes the build — A/B-proven:
- * with `read,edit` and no guard the model degrades a clean tree while declaring
- * CLEAN. Demoted to `read`, it cannot trash anything and still names the real
+ * weak model rewrite working code is exactly what trashes the build. With
+ * `read,edit` and no guard it degrades a clean tree while declaring CLEAN. Demoted to `read`, it cannot trash anything and still names the real
  * violation. So with no signal to revert against, the
  * pass reports the violation as a warning instead of editing.
  */

@@ -228,8 +228,8 @@ describe('startServer', () => {
     // just stop accepting new ones. An undrained client socket stays an active
     // event-loop handle, and headless print mode exits by natural loop drain (no
     // process.exit()), so a lingering socket keeps the pi process alive forever —
-    // blocking `docker stop` / OS shutdown until SIGKILL. A/B-proven: old stop()
-    // never fired the client's close; the fix closes it in ~ms.
+    // blocking `docker stop` / OS shutdown until SIGKILL. Without the explicit
+    // terminate below, the client's close never fires at all.
     it('stop() terminates an open WebSocket client (so the event loop can drain)', async () => {
         handle = await startServer(
             () => {},

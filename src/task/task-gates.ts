@@ -251,7 +251,8 @@ export interface GateDeps {
     /**
      * Restore the given frozen paths to their committed (HEAD) state, discarding a
      * gate child's edits to them, and return the files actually reverted. Prompt
-     * framing is A/B-proven insufficient for this class, so the deny is mechanical:
+     * framing is insufficient for this class (see frozen-path-guard.ts), so the
+     * deny is mechanical:
      * the write is undone, not merely warned about. Absent → the guard warns only.
      */
     revertFrozenPaths?: (cwd: string, paths: string[]) => Promise<string[]>

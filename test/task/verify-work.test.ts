@@ -312,9 +312,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids test-authored repair: a suite that patches the product is not verification', () => {
-        // Regression guard for the class, A/B-proven live (silent fixture:
-        // suite green ONLY because test setup ALTERs the schema and seeds around the
-        // broken seed script): the shipped prompt false-PASSes it, the prompt with this rule
+        // Regression guard for the class, checked live against a silent fixture —
+        // a suite green ONLY because its setup ALTERs the schema and seeds around a
+        // broken seed script. The shipped prompt false-PASSes it, the prompt with this rule
         // never does, and names the exact gap; the honest fixture PASSes in both arms.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('test-authored repair')

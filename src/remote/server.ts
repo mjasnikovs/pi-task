@@ -185,8 +185,8 @@ export async function startServer(
     // exits by natural event-loop drain (it sets process.exitCode and returns,
     // with no process.exit()), so these lingering handles keep the pi process
     // alive indefinitely — which blocks `docker stop` / OS shutdown until the
-    // SIGKILL grace timeout fires. A/B-proven: terminating clients + destroying
-    // sockets here makes the loop drain in ~2ms instead of never.
+    // SIGKILL grace timeout fires. Terminating clients and destroying sockets
+    // here is what lets the loop drain at all.
     const sockets = new Set<import('node:net').Socket>()
     httpServer.on('connection', s => {
         sockets.add(s)

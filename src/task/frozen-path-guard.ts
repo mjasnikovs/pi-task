@@ -10,12 +10,16 @@
  * committed as an "ENFORCE GUIDELINES" snapshot on top of the verified task. The
  * frozen contract is silently mutated by the very pass meant to police the work.
  *
- * Prompt framing is A/B-PROVEN insufficient for this class (the "FROZEN CONTRACT,
- * MUST NOT edit" instruction does not hold on its own — the weak
- * local model ignores an explicit capitalized MUST-NOT most of the time). A
- * chmod-style physical deny holds, but makes the model THRASH on the bare
- * EACCES (1000+ futile re-attempts observed) — unacceptable on the enforce child,
- * which runs UNGUARDED (no wall-clock timeout). pi itself has no path-level edit
+ * Prompt framing is insufficient for this class. Put a "FROZEN CONTRACT, MUST
+ * NOT edit `X`" line in front of a local model and hand it a build error whose
+ * obvious fix is inside `X`, and a large minority of the time it answers "I will
+ * add … to `X`". Most of the rest of the time it does find a legitimate way
+ * round — a new `.d.ts`, a `/// <reference>` — which is exactly why undoing the
+ * violation afterwards is workable: the honest answers are already there.
+ *
+ * A chmod-style physical deny holds, but makes the model THRASH on the bare
+ * EACCES — unacceptable on the enforce child, which runs UNGUARDED (no
+ * wall-clock timeout). pi itself has no path-level edit
  * interception (only tool-NAME allow/deny), so the achievable, thrash-free,
  * stack-agnostic realization of a tool-layer deny is this: let the pass edit
  * freely, then deterministically UNDO any frozen-path change it made before those
