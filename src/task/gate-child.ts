@@ -191,6 +191,7 @@ export function makeGateChild(
                         log(
                             `=== ${deps.kind} RESTART (attempt ${rs.attempt} discarded)`
                                 + ` reason=${rs.reason} wall=${rs.wallMs}ms`
+                                + ` discarded=${rs.partialChars}ch`
                                 + (rs.detail ? ` — ${rs.detail}` : '')
                                 + ' ==='
                         ),

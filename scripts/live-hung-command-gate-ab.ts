@@ -120,8 +120,8 @@ async function arm(
     try {
         const r = await runWorker({
             prompt: PROMPT,
-            profile: 'adhoc',
-            // NOT `profile: 'gate'`, on purpose. `timeoutMs` and
+            profile: 'adhoc', contextWindow: 'unknown',
+            // NOT `profile: 'gate', contextWindow: 'unknown'`, on purpose. `timeoutMs` and
             // `commandTimeoutMs` are this A/B's two ARMS — swept, not policy —
             // so naming the gate profile would overwrite the experiment with
             // config values and arm a stream watchdog no arm asked for. Only the

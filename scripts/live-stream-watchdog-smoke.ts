@@ -158,7 +158,7 @@ async function arm(label: string, prompt: string, ceilingMs: number): Promise<bo
     const t0 = Date.now()
     const r = await runWorker({
         prompt,
-        profile: 'adhoc',
+        profile: 'adhoc', contextWindow: 'unknown',
         override: {
             'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
             'stream-stall': ceilingMs

@@ -79,6 +79,7 @@ describe('real pi smoke', () => {
                 const r = await runWorker({
                     prompt: 'Reply with the single word READY and nothing else.',
                     profile: 'adhoc',
+                    contextWindow: 'unknown',
                     override: {
                         'worker-timeout': {timeoutMs: 90_000, progressCeilingMs: null, fanout: null}
                     },

@@ -45,6 +45,15 @@ import {
 const DEFAULT_TOOLS = 'read,grep,find,ls'
 
 /**
+ * The one place `'unknown'` becomes the 0 both consumers already treat as
+ * "no window". Written once so a future reader cannot re-introduce the optional
+ * by handling the union at only one of the two sites that read it.
+ */
+function contextWindowTokens(cw: number | 'unknown'): number {
+    return cw === 'unknown' || cw <= 0 ? 0 : cw
+}
+
+/**
  * Tool calls that can GROUND an APIS claim — i.e. return content a signature or
  * command could be cited from. `pi-worker-docs` (the primary), `read` and `grep`
  * (project source), and the web escalations `pi-worker-search`/`pi-worker-fetch`.
@@ -200,12 +209,29 @@ export interface RunWorkerInput {
      */
     onContextUsage?: (snapshot: ContextSnapshot) => void
     /**
-     * The worker child's context window in tokens. pi's event stream carries no
-     * window (issue #16), so a caller that wants a progress bar rather than a
-     * bare token count has to supply the parent session's — which is the child's
-     * too, since workers are spawned without `-m`.
+     * The worker child's context window in tokens, or `'unknown'` when the
+     * caller genuinely has none.
+     *
+     * REQUIRED, and required for the same reason `profile` below is. This was
+     * `contextWindow?: number`, and two of the three production call sites simply
+     * did not write it: `pi-worker.ts` and `research-worker.ts`. pi's event
+     * stream carries no window (issue #16), so `noteContext` only ever saw 0, and
+     * `StallDetector`'s CONTEXT CHURN rule — gated on a positive window
+     * (`stall-detector.ts`) — could never fire for the ad-hoc worker or for any
+     * of the four research workers. Nothing was red. The optional was the whole
+     * defect: a rule that silently does not exist reads exactly like a rule that
+     * exists and did not trip.
+     *
+     * WHY A WORD AND NOT `0` OR `null`. Both of those are what a caller types
+     * when it has not thought about the question, and both disarm the rule
+     * silently — which is the state this replaces. `'unknown'` cannot be typed by
+     * accident, is greppable, and shows up in a diff as a decision.
+     *
+     * Two consumers read it: the churn rule, and the caller's progress bar, which
+     * shows a bare token count without a window. Both degrade exactly as before
+     * on `'unknown'`.
      */
-    contextWindow?: number
+    contextWindow: number | 'unknown'
     /**
      * WHICH KIND of worker child this is — the whole guard policy, in one word.
      *
@@ -384,6 +410,23 @@ export interface WorkerRestart {
     workMs: number
     /** Reason-specific diagnosis: the looping call, the hung tool, the error text. */
     detail?: string
+    /**
+     * Characters of ANSWER TEXT this attempt had produced at the moment it was
+     * thrown away.
+     *
+     * Recorded whatever `carryForward` says, because the DISCARD is the thing a
+     * reader cannot otherwise see. A restart line reported how long an attempt
+     * ran and why it died, and never what died with it — so "the guards worked
+     * and the run still returned 52 characters" and "the guards worked and the
+     * run threw away a finished answer" print identically. Measured on the
+     * ad-hoc `pi-worker` corpus: T024 lost an attempt to a dropped model socket
+     * at 275s and returned 52 chars over 620s; nothing in the run said whether
+     * those 275s held anything.
+     *
+     * It is an OBSERVATION, not a decision: harvesting into `salvage` is still
+     * gated on the profile, and this number changes no behaviour.
+     */
+    partialChars: number
 }
 
 export interface RunWorkerResult {
@@ -894,7 +937,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // Arm the churn rule BEFORE the first tool call. pi's stream carries no
         // context event (issue #16), so waiting for one leaves the rule
         // permanently disarmed. The parent knows the window at spawn time.
-        stallDetector?.noteContext(input.contextWindow ?? 0)
+        stallDetector?.noteContext(contextWindowTokens(input.contextWindow))
         // Capture the hit the detector reports (it also returns it to the unified
         // runner, which kills the child on a hit). Without capturing it here the
         // SIGTERM that kill produces would surface as a bare non-zero exit the
@@ -984,8 +1027,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         stallDetector?.noteContext(snapshot.contextWindow)
                         input.onContextUsage?.(snapshot)
                     },
-                    ...(input.contextWindow && input.contextWindow > 0 ?
-                        {contextWindow: input.contextWindow}
+                    ...(contextWindowTokens(input.contextWindow) > 0 ?
+                        {contextWindow: contextWindowTokens(input.contextWindow)}
                     :   {})
                 },
                 input.spawn
@@ -1007,6 +1050,7 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 wallMs: tEnd - tAttemptStart,
                 waitMs,
                 workMs,
+                partialChars: text.trim().length,
                 ...(detail ? {detail} : {})
             }
             restarts.push(record)

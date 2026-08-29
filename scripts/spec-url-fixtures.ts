@@ -48,6 +48,7 @@ import * as path from 'node:path'
 import {REFINED_27, buildCheckpointTree} from './run15-fixture-tree.js'
 import {extractUrls} from './spec-url-reach.js'
 import type {WorkerProfileId} from '../src/workers/worker-profiles.js'
+import type {RunWorkerInput} from '../src/workers/pi-worker-core.js'
 
 const HERE = path.dirname(new URL(import.meta.url).pathname)
 const REPO = path.resolve(HERE, '..')
@@ -347,6 +348,7 @@ export async function assertFetchToolReachable(
         prompt: string
         cwd: string
         profile: WorkerProfileId
+        contextWindow: RunWorkerInput['contextWindow']
         tools: string
         extensions: string[]
         onLine: (l: string) => void
@@ -364,7 +366,7 @@ export async function assertFetchToolReachable(
                 `Call pi-worker-fetch with url ${probeUrl} and query "what does the hc base `
                 + 'URL argument mean". Then reply with one sentence. /no_think',
             cwd,
-            profile: 'adhoc',
+            profile: 'adhoc', contextWindow: 'unknown',
             tools: 'read,pi-worker-docs,pi-worker-search,pi-worker-fetch',
             extensions: [path.join(REPO, 'dist', 'workers', 'docs-extension.js'), stub],
             onLine: () => {}

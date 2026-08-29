@@ -67,6 +67,13 @@ export interface ResearchWorkerSpec {
  */
 export interface ResearchWorkerRun {
     runWorker: (label: string, input: RunWorkerInput) => Promise<RunWorkerResult>
+    /**
+     * The parent session's context window, forwarded to every worker child.
+     * `PhaseDeps.contextWindow` already carried it and this driver dropped it, so
+     * the churn rule was dead for all four workers — see
+     * `RunWorkerInput.contextWindow`.
+     */
+    contextWindow: number | 'unknown'
     cwd: string
     taskId: string
     signal: AbortSignal
@@ -357,6 +364,7 @@ export async function runResearchWorker(
             run.runWorker(spec.label, {
                 prompt: extraPreamble ? `${extraPreamble}\n\n${basePrompt}` : basePrompt,
                 cwd: run.cwd,
+                contextWindow: run.contextWindow,
                 signal: run.signal,
                 spawn: run.spawn,
                 // ONE CELL PER WORKER since 2026-08-28. They used to share
@@ -399,6 +407,7 @@ export async function runResearchWorker(
                     run.logDebug?.(
                         `${spec.label}: RESTART (attempt ${rs.attempt} discarded)`
                             + ` reason=${rs.reason} wall=${rs.wallMs}ms`
+                            + ` discarded=${rs.partialChars}ch`
                             + ` wait=${rs.waitMs}ms work=${rs.workMs}ms`
                             + (rs.detail ? ` — ${rs.detail}` : '')
                     )

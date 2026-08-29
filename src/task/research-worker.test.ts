@@ -60,6 +60,7 @@ function harness(attempts: RunWorkerResult[], opts: {cached?: string} = {}): Har
         seenInput,
         done: 0,
         run: {
+            contextWindow: 'unknown' as const,
             runWorker: (_label, input) => {
                 // The prompt is `${preamble}\n\n${base}`; BASE is the last line.
                 const idx = input.prompt.lastIndexOf('\n\nBASE')

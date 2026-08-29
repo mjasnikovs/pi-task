@@ -188,7 +188,7 @@ async function trial(n: number): Promise<{searched: boolean; docs: number}> {
 
     await runWorker({
         prompt: PROMPT,
-    profile: 'adhoc',
+    profile: 'adhoc', contextWindow: 'unknown',
         cwd: dir,
         tools: 'read,pi-worker-docs,pi-worker-search',
         extensions: [ext],

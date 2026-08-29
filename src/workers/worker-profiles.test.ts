@@ -279,7 +279,7 @@ describe('applyOverride — whole rows, tests only', () => {
                 }
                 if (!e.name.endsWith('.ts') || e.name.includes('.test.')) continue
                 const src = readFileSync(full, 'utf8')
-                if (!/^\s*profile: 'adhoc',?$/m.test(src)) continue
+                if (!/^\s*profile: 'adhoc', contextWindow: 'unknown',?$/m.test(src)) continue
                 if (!/streamInactivityMs/.test(src)) offenders.push(full)
             }
         }
@@ -338,6 +338,7 @@ describe('the resolved policy is what runWorker actually runs on', () => {
             cwd: process.cwd(),
             spawn,
             profile: 'gate',
+            contextWindow: 'unknown',
             policyInputs: {commandTimeoutMs: 900_000, streamInactivityMs: 600_000},
             onPolicy: p => (seen.p = p)
         })
@@ -353,6 +354,7 @@ describe('the resolved policy is what runWorker actually runs on', () => {
             cwd: process.cwd(),
             spawn,
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {'worker-timeout': {timeoutMs: 7, progressCeilingMs: null, fanout: null}},
             onPolicy: p => (seen.p = p)
         })
@@ -366,6 +368,7 @@ describe('the resolved policy is what runWorker actually runs on', () => {
             cwd: process.cwd(),
             spawn,
             profile: 'adhoc',
+            contextWindow: 'unknown',
             onPolicy: p => seen.push(p)
         })
         expect(seen.length).toBe(1)

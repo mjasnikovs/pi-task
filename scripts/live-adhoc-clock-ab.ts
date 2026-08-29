@@ -163,7 +163,7 @@ async function runOne(row: Row): Promise<Trial> {
     const r = await runWorker({
         prompt: row.prompt,
         cwd: row.cwd,
-        profile: 'adhoc',
+        profile: 'adhoc', contextWindow: 'unknown',
         // WHAT THE REAL TOOL PASSES. `pi-worker.ts` resolves the `research`
         // group — it is the same read-only exploration loop, just dispatched by
         // a model rather than the pipeline — and it currently resolves to

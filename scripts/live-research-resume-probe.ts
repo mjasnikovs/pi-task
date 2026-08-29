@@ -422,7 +422,7 @@ export default function (pi) {
     )
 
     await runWorker({
-        profile: 'adhoc',
+        profile: 'adhoc', contextWindow: 'unknown',
         prompt:
             'You are the APIS research worker for a task implementing JSON endpoints on a '
             + 'Hono server.\n\nAnswer this, grounded in tool output only — do NOT answer from '

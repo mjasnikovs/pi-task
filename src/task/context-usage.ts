@@ -5,16 +5,19 @@
  * directly, because its state is the whole-run `WidgetState`, not one child's.
  */
 
-import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import type {ContextSnapshot} from '../shared/child-process.js'
 
-/** The parent session's context window, or 0 when the model doesn't expose it. */
-export function getParentContextWindow(ctx: ExtensionCommandContext): number {
-    return (
-        ((ctx as unknown as {model?: {contextWindow?: number}}).model?.contextWindow as
-            | number
-            | undefined) ?? 0
-    )
+/**
+ * The parent session's context window, or 0 when the model doesn't expose it.
+ *
+ * The parameter is the STRUCTURAL MINIMUM this reads, not one of pi's context
+ * interfaces. It took `ExtensionCommandContext` and immediately cast it away,
+ * which is a lie that also excluded the plain `ExtensionContext` a TOOL is
+ * handed — the very caller (`workers/pi-worker.ts`) that needs the window to arm
+ * the churn rule. Both pi contexts satisfy this shape.
+ */
+export function getParentContextWindow(ctx: {model?: {contextWindow?: number}}): number {
+    return ctx.model?.contextWindow ?? 0
 }
 
 /**

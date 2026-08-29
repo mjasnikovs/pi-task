@@ -159,6 +159,7 @@ describe('gate/worker child A/B: hang then restart', () => {
         const r = await runWorker({
             prompt: 'inspect the repo',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'stream-stall': WINDOW_MS,
@@ -181,6 +182,7 @@ describe('gate/worker child A/B: hang then restart', () => {
         const r = await runWorker({
             prompt: 'inspect the repo',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'stream-stall': WINDOW_MS,

@@ -922,6 +922,7 @@ export async function phaseResearch(deps: PhaseDeps, refined: string): Promise<s
             spec,
             {
                 runWorker: runWorkerFn,
+                contextWindow: deps.contextWindow ?? 'unknown',
                 cwd: deps.cwd,
                 taskId: deps.taskId,
                 signal: deps.signal,

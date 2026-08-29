@@ -13,6 +13,7 @@ import {Type} from '@sinclair/typebox'
 import {getConfig} from '../config/config.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
 import {runWorker} from './pi-worker-core.js'
+import {getParentContextWindow} from '../task/context-usage.js'
 import {
     childFailureReason,
     formatChildFailure,
@@ -71,6 +72,11 @@ export function registerPiWorker(pi: ExtensionAPI): void {
                 // not policy for the same reason the gate's two ceilings are: the
                 // number is the user's, the decision to arm it is the profile's.
                 policyInputs: {streamInactivityMs: getConfig().streamInactivityMs},
+                // The session's own window, handed down. The child is spawned
+                // without `-m`, so the parent's model IS the child's model and
+                // its window is the honest one. Without this the churn rule
+                // cannot fire — see RunWorkerInput.contextWindow.
+                contextWindow: getParentContextWindow(ctx) || 'unknown',
                 thinking: groupThinkingArgs('research')
             })
             const details: WorkerDetails = {exitCode: result.exitCode}

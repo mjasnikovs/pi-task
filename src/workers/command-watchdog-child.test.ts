@@ -74,6 +74,7 @@ describe('command watchdog — child side', () => {
             prompt: 'verify the task',
             // as the gate children run: unbounded worker
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 30,
@@ -97,6 +98,7 @@ describe('command watchdog — child side', () => {
         await runWorker({
             prompt: 'verify the task',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 30,
@@ -156,6 +158,7 @@ describe('command watchdog — child side', () => {
         const r = await runWorker({
             prompt: 'verify the task',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 40,
@@ -210,6 +213,7 @@ describe('command watchdog — child side', () => {
         const r = await runWorker({
             prompt: 'verify the task',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 60_000,
@@ -247,6 +251,7 @@ describe('command watchdog — child side', () => {
         const r = await runWorker({
             prompt: 'research the thing',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 stalled: false
             },
@@ -277,6 +282,7 @@ describe('command watchdog — child side', () => {
         const r = await runWorker({
             prompt: 'verify',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 40,
@@ -312,6 +318,7 @@ describe('command watchdog — child side', () => {
         await runWorker({
             prompt: 'verify',
             profile: 'adhoc',
+            contextWindow: 'unknown',
             override: {
                 'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null},
                 'command-timeout': 60_000,
