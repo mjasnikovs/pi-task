@@ -2,25 +2,30 @@
  * env-template-closure — a shipped source file requires an env var the shipped
  * template never mentions.
  *
- * The failure this closes: `src/server/seed.ts`
- * reads `process.env.ADMIN_PHONE` / `ADMIN_PASSWORD` with no default, the tracked
- * `.env.example` declares only `DATABASE_URL` + `APP_URL`, and `bun run seed` was
- * one of the run's final-gate commands. It exited 1; the gate's autofix wrote the
- * two vars into `.env`, which is GITIGNORED — so the committed tree
- * still cannot seed and nothing at run end ever said why. Coverage credits the
- * CONSUMING side (seed.ts exists, is owned, passes its own VERIFY); the template is
- * a separate artifact nobody re-reads after the task that wrote it.
+ * The failure this closes: a seed script reads `process.env.ADMIN_PHONE` and
+ * `ADMIN_PASSWORD` with no default while the tracked `.env.example` declares only
+ * `DATABASE_URL` and `APP_URL`. The seed command then exits 1, and an autofix
+ * "resolves" it by writing the two vars into `.env` — which is GITIGNORED, so the
+ * COMMITTED tree still cannot seed and nothing at run end says why.
+ *
+ * Coverage cannot see it: it credits the CONSUMING side, because the script exists,
+ * is owned, and passes its own VERIFY. The template is a separate artifact nobody
+ * re-reads after the task that wrote it.
+ *
+ * That exact shape, run against a real repo, produces the two findings and no
+ * others — `DATABASE_URL` is declared and stays silent.
  *
  * THE RULE. Every REQUIRED env read in TRACKED source must appear in the TRACKED
  * env template. One-directional: a variable DECLARED but never read is silence, not
- * a finding (dace-pro ships 13 declared / 7 required and must stay clean).
+ * a finding — a template carrying entries nothing reads yields zero findings, which
+ * is what keeps a deliberately over-declared template clean.
  *
  * REQUIRED is mechanical. A read steps aside when it:
  *   1. carries a default — `?? …`, `|| …`, `os.getenv('X', d)`, `environ.get('X', d)`;
  *   2. is compared, not consumed — `===`, `!==`, `==`, `!=` on either side;
  *   3. is an assignment TARGET — `process.env.DATABASE_URL = testDbUrl`, which is
- *      what a test file typically does, and is the single largest FP
- *      source in the corpus;
+ *      what a test file typically does, and is the readiest source of false
+ *      positives;
  *   4. names an AMBIENT variable — a short fixed allowlist (below) of things the
  *      platform, not the project, supplies.
  *
@@ -32,14 +37,19 @@
  *     untracked scratch file can neither declare nor require anything.
  *   • generated/vendored trees (`dist/`, `build/`, `node_modules/`, …) are not
  *     authored source and are skipped; they only ever mirror a read we already saw.
- *   • NO TEMPLATE IN THE TREE ⇒ THE CHECK IS INERT (as `repo-health-check` does
- *     with a missing manifest). This must never invent a file the project chose
- *     not to have.
+ *   • NO TEMPLATE IN THE TREE ⇒ THE CHECK IS INERT, the way `repo-health-check`
+ *     treats a missing manifest. Confirmed: a repo with a required read and no
+ *     template at all yields zero findings, and so does a directory that is not a
+ *     git repo. This must never invent a file the project chose not to have.
  *
- * Not npm-shaped: JS/TS
- * (`process.env` / `Bun.env`), Python (`os.environ[…]`, `os.environ.get`,
- * `os.getenv`) and Go (`os.Getenv`) read the same way. Go's `os.LookupEnv` is the
- * explicit may-be-absent API and is treated as its own step-aside.
+ * Not npm-shaped: JS/TS (`process.env` / `Bun.env`), Python (`os.environ[…]`,
+ * `os.environ.get`, `os.getenv`) and Go (`os.Getenv`) all read the same way. Go's
+ * `os.LookupEnv` is the explicit may-be-absent API and gets its own step-aside,
+ * `optional-api`.
+ *
+ * Every rule above was run: each of the four step-asides fires with its own label,
+ * comparison is caught on either side, all three languages produce a REQUIRED read,
+ * `os.LookupEnv` steps aside, and both dynamic forms extract nothing at all.
  */
 import {spawnSync} from 'node:child_process'
 import {readFileSync} from 'node:fs'
@@ -74,10 +84,10 @@ export const AMBIENT_ENV = new Set([
 ])
 
 /** The same rule by MECHANISM rather than by name: a variable INJECTED by a
- *  platform (CI runner, package manager, freedesktop base dirs). STEP 0 found
- *  `GITHUB_ENV` (written by GitHub Actions), `npm_execpath` and `XDG_CACHE_HOME`
- *  classified as required in real trees; a template that declared them would be
- *  wrong, so the exclusion is the prefix, not a growing list of names. */
+ *  platform — a CI runner, a package manager, freedesktop base dirs. `GITHUB_ENV`,
+ *  `npm_execpath` and `XDG_CACHE_HOME` all read as "required" to a naive scan in
+ *  real trees, and a template that declared any of them would be wrong. So the
+ *  exclusion is the PREFIX, not a list of names that would have to keep growing. */
 export const AMBIENT_PREFIXES = ['npm_', 'GITHUB_', 'RUNNER_', 'CI_', 'XDG_', 'BUN_', 'NODE_']
 
 /** Rule 4: is this variable the platform's to supply? */
