@@ -64,7 +64,7 @@ line counts as a comment line but opens no block.
 | `src/task/auto-prompts.ts` | 157 | 36 | 4 | true |
 | `src/task/autofix-ledger.ts` | 193 | 86 | 25 | true |
 | `src/task/batch-test-task.ts` | 439 | 205 | 31 | true |
-| `src/task/boot-probe.ts` | 1172 | 475 | 95 | false |
+| `src/task/boot-probe.ts` | 1172 | 475 | 95 | true |
 | `src/task/cancel-input.ts` | 252 | 109 | 24 | false |
 | `src/task/cancel-points.ts` | 88 | 56 | 8 | false |
 | `src/task/child-runner.ts` | 962 | 443 | 79 | false |

@@ -2,22 +2,21 @@
  * boot-probe — does the assembled product actually START, and does the page it
  * serves actually render?
  *
- * Lifted out of final-gate.ts, where it was the largest
- * of seven unrelated concerns. Nothing inside `src/` imported any of it except the
- * one call site in `runFinalIntegrationGate`; the de-facto module boundary already
- * existed in the CONSUMERS — seven validation harnesses under `scripts/` import
- * exactly this surface and nothing else from the gate.
+ * Its one consumer is final-gate.ts, which imports twelve names from here, calls
+ * `discoverBootCommand` at three sites and `runBootSection` at one, and re-exports
+ * six of them plus `BootSectionVerdict` for its own callers.
  *
- * The public surface is those six names: `discoverBootCommand`, `detectsServedApp`,
- * `runBootCheck`, `bootSkipVerdict`, `nonLaunchScriptReason` and `BootDeps`. The
- * listener parsers stay exported because their tests are worth keeping, but they are
- * now a sibling module's surface rather than noise in the gate's. Everything else —
- * orphan-port recovery, pgid probing, the HTTP evidence probe, port reservation —
- * is private, which it could not be while it shared a file with the gate.
+ * The entry points are `discoverBootCommand`, `detectsServedApp`, `runBootCheck`,
+ * `runBootSection` and `bootSkipVerdict`. Much else is exported too — the three
+ * listener parsers, the port helpers (`pickFreePort`, `isPortFree`,
+ * `preferredDeclaredPort`), `canEnumerateListeners`, `defaultFindPortHolder`,
+ * `recoverOrphanPort`, `rejectedLaunchScript` — because the gate or their own
+ * tests reach for them. Only the pgid helpers, the HTTP evidence probe, the reap
+ * and the spawn/teardown defaults are private.
  *
- * The boot check is deliberately NOT a CLOSURE_SCANS row: it is an async, stateful,
- * port-binding exercise, and every row would need its own escape hatch. This is a
- * file move, not a re-shaping.
+ * The boot check is deliberately NOT a CLOSURE_SCANS row (final-gate.ts): it is an
+ * async, stateful, port-binding exercise, and every row would need its own escape
+ * hatch.
  */
 import {spawn, spawnSync} from 'node:child_process'
 import {existsSync, readFileSync} from 'node:fs'
@@ -124,15 +123,22 @@ function isWatcherOnlyMultiplexer(member: string, scripts: Record<string, string
  * producing an unfalsifiable skip.
  *
  * CONSERVATIVE AND LEXICAL BY CONSTRUCTION. Only two shapes are rejected, both
- * decidable from the script text alone:
+ * decidable from the script text alone, and both run against every case named
+ * below:
  *   1. the chain OPENS with container orchestration (docker/podman/nerdctl … up|start|run);
  *   2. the whole body is a multiplexer (concurrently/npm-run-all/run-p/run-s/turbo)
  *      whose every child is an ASSET watcher in watch mode (tailwind/tsc/esbuild/…),
  *      i.e. nothing in it can ever listen.
- * Anything else — `vite`, `next dev`, `node dist/index.js`, `nodemon`, `bun --watch
- * src/index.ts`, and any multiplexer with one non-asset child — is accepted
- * unchanged. Deciding whether a watcher actually SERVES is not attempted here; that
- * is exactly what the static serve-entry check is for.
+ * Anything else — `vite`, `next dev`, `node dist/index.js`, `nodemon`, `bun run
+ * --watch src/index.ts`, and any multiplexer with one non-asset child — is accepted
+ * unchanged. All of those were run and accepted; so was a bare
+ * `tailwindcss … --watch`, which is only rejected INSIDE a multiplexer. A chain
+ * opening `docker compose … up` is rejected even when a real launch follows it,
+ * while `bun run docker-compose.dev.yml` is accepted, since the verb must be a
+ * bare token.
+ *
+ * Deciding whether a watcher actually SERVES is not attempted here; that is exactly
+ * what the static serve-entry check is for.
  */
 export function nonLaunchScriptReason(
     body: string,
@@ -404,11 +410,14 @@ export function parseSsListeners(stdout: string): Array<{pid: number; port: numb
 }
 
 /**
- * `netstat -tlnp` rows → {pid, port} (the agent-sandbox
- * image ships NEITHER ss NOR lsof — only ps and netstat — so the served-app boot
- * check could never observe a listener and failed unfalsifiably). The pid rides
- * in the trailing "PID/Program name" column ("1234/bun"); rows the kernel will
- * not attribute to us print "-" there and are skipped.
+ * `netstat -tlnp` rows → {pid, port}. Three parsers exist because no single
+ * enumerator is present everywhere — a box may ship netstat and no ss, or ss and
+ * no netstat — and without SOME enumerator the served-app check can never observe
+ * a listener and fails unfalsifiably.
+ *
+ * The pid rides in the trailing "PID/Program name" column ("1234/bun"); rows the
+ * kernel will not attribute to us print "-" there and are skipped. Both run as
+ * described.
  */
 export function parseNetstatListeners(stdout: string): Array<{pid: number; port: number}> {
     const out: Array<{pid: number; port: number}> = []
@@ -479,8 +488,10 @@ function listeningSockets(): Array<{pid: number; port: number}> {
  * must degrade to the survival rule exactly like win32 — never a false FAIL on a
  * platform we cannot probe.
  *
- * "Ran" = spawned without ENOENT and either exited 0 or printed something (lsof
- * exits 1 on an empty match set; a netstat that rejects `-p` prints nothing).
+ * "Ran" = spawned without ENOENT and either exited 0 or printed something. Both
+ * halves of that disjunction are load-bearing: `lsof` really does exit 1 on an
+ * empty match set (checked), and a netstat that rejects `-p` prints nothing, so
+ * neither an exit code nor output alone would answer the question.
  * Memoised: the answer is a property of the box, not of the run.
  */
 let listenerToolCapability: boolean | null = null
@@ -501,10 +512,10 @@ export function canEnumerateListeners(): boolean {
 
 /**
  * A free TCP port on the loopback interface, or null if one cannot be reserved.
- * The boot check hands this to the child as PORT so that a successful HTTP
- * request to it is OWNERSHIP evidence: nobody else knows the number (orphaned
- * servers from earlier checks answer curl on the
- * conventional :3000 and passed checks the app had not earned).
+ * The boot check hands this to the child as PORT so that a successful HTTP request
+ * to it is OWNERSHIP evidence: nobody else knows the number, whereas an orphaned
+ * server left by an earlier check still answers on a conventional port and would
+ * pass a check the app had not earned.
  */
 export function pickFreePort(): Promise<number | null> {
     return new Promise(resolve => {
@@ -522,7 +533,8 @@ export function pickFreePort(): Promise<number | null> {
     })
 }
 
-/** Can we bind 127.0.0.1:`port` right now? (Free ⇒ the boot child can have it.) */
+/** Can we bind 127.0.0.1:`port` right now? Free ⇒ the boot child can have it.
+ *  Run: true for a just-reserved port, false while anything holds it. */
 export function isPortFree(port: number): Promise<boolean> {
     return new Promise(resolve => {
         try {
@@ -548,8 +560,9 @@ export async function preferredDeclaredPort(cwd: string): Promise<number | null>
 }
 
 /**
- * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all (404, 500 —
- * a status is a listener) counts; only a connection error or timeout is a no.
+ * Does anything answer HTTP on 127.0.0.1:`port`? Any response at all counts — a
+ * status IS a listener, and a live server answering 404 on an unknown path is the
+ * ordinary case — so only a connection error or a timeout is a no.
  * Runs in a throwaway child of our own runtime so it needs no curl on PATH and
  * stays synchronous inside the boot poll.
  */
@@ -657,9 +670,10 @@ function defaultSpawnBoot(bin: string, args: string[], o: BootSpawnOptions): Boo
 /**
  * The real group teardown, best-effort. A group already gone is not an error.
  *
- * Windows has no process groups / negative-pid kill: `taskkill /T` tears down the
- * whole tree (the detached child plus any grandchildren it spawned) and `/F`
- * forces it, so the SIGTERM→SIGKILL escalation collapses to one idempotent call.
+ * On POSIX the negative pid signals the whole group, which is what makes a
+ * `detached` spawn reapable together with anything it backgrounded. Windows has
+ * neither process groups nor a negative-pid kill, so that branch shells out to
+ * `taskkill /T /F` as a single forced tree teardown instead of escalating.
  */
 function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
     try {
@@ -674,8 +688,11 @@ function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
 }
 
 /**
- * Exercise the start command ONCE. For a CLI project (`expectServer` false) the
- * command's own fate within the grace window decides:
+ * Exercise the start command ONCE. All four outcomes below were run against real
+ * child processes in throwaway projects.
+ *
+ * For a CLI project (`expectServer` false) the command's own fate within the grace
+ * window decides:
  *
  *   - non-zero exit (or signal death) before the window closes → FAIL, output tail;
  *   - exit 0 before the window closes → PASS (a CLI-style "run" that finished);
@@ -690,12 +707,11 @@ function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
  * command exits, or the grace window closes, with no listener ever seen → FAIL naming
  * that a listening server was expected.
  *
- * OBSERVABILITY is a precondition of that FAIL. The listener
- * requirement needs pgid-attributed socket enumeration; win32 has none, and neither
- * does a Linux image shipping no ss/netstat/lsof,
- * so the check emitted "never opened a listening socket" against an app that
- * demonstrably served, three autofix passes could not falsify it, and the run was
- * recorded failed. Two defences, in order:
+ * OBSERVABILITY is a precondition of that FAIL. The listener requirement needs
+ * pgid-attributed socket enumeration; win32 has none, and neither does a Linux
+ * image shipping no ss, netstat or lsof. Without a defence the check would emit
+ * "never opened a listening socket" against an app that demonstrably serves, and
+ * no amount of fixing could falsify it. Two defences, in order:
  *
  *   - the child is spawned with a freshly reserved, otherwise-unused PORT, and an
  *     HTTP answer on THAT port proves a listener regardless of tooling. The private
@@ -708,8 +724,10 @@ function defaultKillGroup(pid: number, sig: NodeJS.Signals): void {
  *     not an app defect, and it may not be reported as one.
  *
  * A child that EXITS non-zero still FAILs in every environment: "the process died"
- * needs no socket probe, so the original true positive (a `--hot` runtime
- * pinning a crashed app) stays reportable wherever the tooling exists.
+ * needs no socket probe. Confirmed — a start script exiting 3 comes back as
+ * `exited 3` with the output tail attached, with no listener question asked. That
+ * is what keeps a crashed app reportable even where a hot-reloading runtime would
+ * otherwise hold the process open.
  *
  * Env-gap contract as everywhere: spawn error (ENOENT) or a command-not-found
  * inside the chain (exit 127, or the runner's own wording where the platform
