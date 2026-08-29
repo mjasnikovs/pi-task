@@ -1,5 +1,2 @@
-# Normalise all text to LF on checkout. Without this, Windows checks out files
-# (notably the test __fixtures__ .md docs) with CRLF, which broke the paragraph-
-# split recall floors on windows-latest CI. The parsers now also tolerate CRLF,
-# but keeping the tree LF everywhere makes the fixture-driven tests deterministic.
+# LF everywhere; CRLF on Windows CI breaks fixture-driven tests.
 * text=auto eol=lf
