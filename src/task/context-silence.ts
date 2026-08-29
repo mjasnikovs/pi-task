@@ -1,27 +1,26 @@
 /**
- * Deterministic classifier for a SILENT worker:context — a rep whose CONTEXT section
- * carries zero parseable bullets. The open question this answers (STEP 0 of the
- * worker:context ZERO-BULLETS thread) is whether a silent rep is a genuine LOSS (the
- * architectural context was there to surface and the worker dropped all of it) or a
- * LEGITIMATE empty answer (the task truly had nothing worth a bullet). Only the former
- * is a defect worth a lever.
+ * Deterministic classifier for a SILENT worker:context — a run whose CONTEXT
+ * section carries zero parseable bullets. The question it answers is whether that
+ * silence is a genuine LOSS (architectural context was there to surface and the
+ * worker dropped all of it) or a LEGITIMATE empty answer (there was nothing worth
+ * a bullet). Only the first is worth re-running for.
  *
- * WHY A SILENT WORKER IS NEVER LEGITIMATELY EMPTY. Every silent rep observed
- * fell into one of two failure shapes:
+ * TWO SILENT SHAPES ARE LOSSES, and both are recognisable from the output alone:
  *
- *   LOOP_DEGRADE: the worker thrashed the SAME grep until the loop-killer fired
- *     (exit 143), leaving only the degrade banner in place of a section. Verbatim:
- *       "(degraded: research CONTEXT worker stuck in a loop — called grep(...) ×5...)"
+ *   LOOP_DEGRADE: the worker thrashed the same call until the loop-killer fired,
+ *     leaving the degrade banner in place of a section. research-worker.ts writes
+ *     that banner as "stuck in a loop — called <tool>(<args>) ×<n> in the last <m>
+ *     calls…", which is the substring this keys on.
  *
- *   GENERATION_GARBAGE: the worker exited 0 almost immediately and emitted a hallucinated
- *     non-bullet fragment instead of context. Verbatim: "Users deleted" and
- *       "[SYSTEM NOTE This message received a positive feedback reward/+20...]"
+ *   GENERATION_GARBAGE: the worker exited 0 and emitted a non-bullet fragment
+ *     instead of context — a stray sentence, or a hallucinated system note.
  *
- * The fixture is IDENTICAL across all reps and non-silent reps
- * reliably emit 11–21 architectural bullets from it, so the input-empty rival is refuted:
- * the content was always there; a silent rep dropped it. Both shapes are therefore genuine
- * loss. This classifier keys on those shapes so the same verdict is reproducible and so a
- * PHASE-1 gate can reuse it to decide when a retry is warranted.
+ * The third silent shape, an honest "nothing to surface" declaration, is NOT a
+ * loss and must not trigger a retry. Separating the three is the whole job.
+ *
+ * This is wired: research-worker gates its silent-retry on
+ * `verdict.silent && verdict.genuineLoss`, and keeps the retry only if
+ * `countBullets` says it produced any.
  */
 
 /** Why a CONTEXT section came out with no bullets — or that it did not (productive). */
@@ -51,9 +50,14 @@ const LOOP_BANNER = /stuck in a loop/i
 const EMPTY_DECLARATION = /^\s*(none|n\/a|no relevant (context|architectural)|nothing\b)/i
 
 /**
- * Classify one worker:context output. `workerLog` is optional and only consulted for the
- * loop banner, which the degrade machinery writes to the debug log even on the reps where
- * it never reached the persisted section (e.g. a mid-loop SIGTERM before any write).
+ * Classify one worker:context output.
+ *
+ * `workerLog` is optional and only consulted for the loop banner, which the degrade
+ * machinery writes to the debug log even when it never reached the persisted
+ * section — a mid-loop SIGTERM before any write. Confirmed by running it: a
+ * garbage-looking section plus a log carrying the banner classifies as
+ * `loop-degrade`, not `generation-garbage`. The production call site passes no
+ * log, so that path is currently reachable only by a caller that supplies one.
  */
 export function classifyContextSilence(contextText: string, workerLog = ''): SilenceVerdict {
     const bulletCount = countBullets(contextText)
@@ -101,8 +105,15 @@ export function classifyContextSilence(contextText: string, workerLog = ''): Sil
 }
 
 /**
- * Wilson score interval for a binomial proportion. Normal-approximation (Wald) intervals are badly wrong at the
- * small counts and near-boundary rates this measurement lives at; Wilson is not.
+ * Wilson score interval for a binomial proportion.
+ *
+ * A normal-approximation (Wald) interval is useless exactly where this kind of
+ * measurement lives — at small counts and rates near 0 or 1. At 0 successes of 12,
+ * Wald collapses to the zero-width [0, 0], claiming certainty from no evidence,
+ * while Wilson gives roughly [0, 0.24]. Checked both ways, including 12 of 12,
+ * which Wilson bounds below 1 rather than pinning at it.
+ *
+ * No production caller: this is a reporting helper, exercised by its own tests.
  */
 export function wilsonInterval(
     successes: number,
