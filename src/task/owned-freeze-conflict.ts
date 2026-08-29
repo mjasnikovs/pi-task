@@ -1,77 +1,43 @@
 /**
- * owned-freeze-conflict — the FIFTH unsatisfiable-pair family:
- * an AUTHORITATIVE owned requirement whose file falls inside a CATEGORY freeze
- * written by the same spec.
+ * owned-freeze-conflict — an unsatisfiable spec pair: an AUTHORITATIVE owned
+ * requirement whose file falls inside a CATEGORY freeze written by the same spec.
  *
- * WHY frozen-conflict.ts does not see it. The owned
- * channel worked: `.pi-tasks/requirements-owned.md` carried the design clause
- * "**Server:** `bun run --watch src/server/index.ts` — serves `/api` + static
- * `dist/`." and the composed spec carried it verbatim under CONSTRAINTS, marked
- * AUTHORITATIVE. The same CONSTRAINTS block then said "Do not modify
- * `docker-compose.dev.yml`, …, or any source files outside of `package.json`",
- * and the spec's ACCEPTANCE/VERIFY converted the behavioural half of the clause
- * ("serves `/api` + static `dist/`") into a string-match on `package.json`. The
- * only file that could implement it — `src/server/index.ts` — was frozen. The
- * requirement was structurally unsatisfiable inside its owning task, VERIFY
- * PASSed honestly, and the app shipped with no static route.
+ * THE SHAPE. A spec carries a design clause verbatim under CONSTRAINTS, marked
+ * AUTHORITATIVE, whose behavioural half can only be satisfied inside one file —
+ * and the same spec freezes a category of files that covers that file. The task's
+ * own VERIFY can then only assert strings in the files it is allowed to touch, so
+ * it PASSes honestly while the requirement is never met.
  *
- * The existing detector misses this shape twice over (both visible in its own
- * header): its freeze side needs a NAMED path (`pathNamedIn`), and a * freeze names a CATEGORY ("any source files outside of `package.json`"); its
- * statement side must match one of four measured phrasing families, and a plain
- * behavioural claim matches none of them.
+ * WHY frozen-conflict.ts does not see it. Its freeze side needs a NAMED path
+ * (`pathNamedIn`), and a category freeze names a CLASS instead. Its statement side
+ * must match one of a fixed set of registration phrasings, and a plain behavioural
+ * claim matches none of them.
  *
  * HIGH-PRECISION BY CONSTRUCTION — the statement side needs no NLP:
  *   - owned requirement lines are MACHINE-MARKED. `appendOwnedConstraints`
- *     stamps every one it appends with "owned requirement from the source
- *     design (AUTHORITATIVE; …)"; when compose folded the quote in by itself
- *     the marker is absent, so the caller may also pass the run's ledger
- *     entries and the quote is matched verbatim against the spec text.
+ *     (requirements.ts) stamps every bullet it appends with "— owned requirement
+ *     from the source design (AUTHORITATIVE; satisfy it in this task, do not
+ *     narrow it)". When compose folded the quote in by itself the marker is
+ *     absent, so the caller may also pass the run's ledger entries and the quote
+ *     is matched verbatim against the spec text.
  *   - the requirement names its path literally, so the intersection is lexical.
- *   - category freezes are a small closed lexical set ("any source files
- *     outside of X", "any files other than X", "only X may be modified",
- *     "no files outside X").
+ *   - category freezes are a small closed lexical set ("any source files outside
+ *     of X", "any files other than X", "only X may be modified", "no files
+ *     outside X").
  *
- * ── STATUS, 2026-08-05: WIRED — but as a DETACH, not as a rewrite. ──────────
- *
- * `owned-freeze-reassign.ts` consumes this detector at the last spec-producing
- * step (`phases.ts`, right after `appendOwnedConstraints`) and resolves a finding
+ * WHERE IT RUNS, AND WHY IT CANNOT RUN EARLIER. `owned-freeze-reassign.ts`
+ * consumes this detector inside `critiquePhase`, immediately after
+ * `appendOwnedConstraints` — the last spec-producing step. It resolves a finding
  * by BOOKKEEPING: the requirement leaves the task that cannot satisfy it and is
  * claimed later by the task whose refined prompt says it writes the frozen file.
- * The quote is never edited, so the deletion failure below cannot recur. A/B-1
- * PASSes on the corpus with five
- * invariants. The rewrite lever recorded below stays REFUTED and unwired.
+ * The quote itself is never edited.
  *
- * ── The critique-REWRITE seam FAILED its A/B, 2026-08-04. ────────────────────
+ * A critique-time probe cannot work, because `critiquePhase` calls
+ * `critiqueWithFallback` BEFORE `appendOwnedConstraints`: when critique runs, the
+ * stamped line does not exist yet, and compose's own folding is a paraphrase, so
+ * neither the stamp nor a verbatim quote is there to match.
  *
- * The detector is precise — 1 finding over 58 real composed specs, and it is the
- * true positive, with a false-positive suite and a base rate behind it. What
- * failed is the LEVER built on it,
- * for two independent reasons, both measured:
- *
- *  1. THE SEAM IS BLIND IN PRODUCTION. `appendOwnedConstraints` — the BRACES that
- *     stamp the machine-marked owned bullet this detector keys on — runs AFTER
- *     `critiqueWithFallback`, inside the `critique` step (phases.ts). When
- *     critique runs, the stamped line does not exist yet; compose's own folding
- *     is a PARAPHRASE ("The server watch command must match the contract exactly:
- *     `…` — serves `/api` + static `dist/`"), so neither the stamp nor the
- *     verbatim quote is there to match. Compose drafts carry the clause
- *     semantically but not in a detectable pair, so a critique-time probe
- *     cannot see the shape it was designed for.
- *  2. THE REWRITE RESOLVES IT BY DELETING THE REQUIREMENT. Forced through the
- *     controlled critique seam on a real draft, the pair does disappear — but
- *     about half the time the resolution is to remove the AUTHORITATIVE clause
- *     outright and rationalise it ("this references an existing file; no edits
- *     are required or permitted"), never reassigning it to the task that owns
- *     the file. Behaviour observation in VERIFY is unchanged either way: the
- *     delivered spec still verifies the requirement by grepping `package.json`.
- *
- * Removal of the pair is not satisfaction of the requirement — the same lesson
- * as any delivery metric that counts the symptom. Anything built here
- * next has to act AFTER the braces, where the pair actually exists, and cannot
- * be a model rewrite: the braces are the last spec-producing step.
- *
- * It is a pure text function so the base rate, the FP suite and the live A/B all
- * measure the same object.
+ * It is a pure text function, so a test measures the same object production does.
  */
 import {PROHIBITION_RE} from './prohibition-probe.js'
 import {pathNamedIn} from './frozen-path-guard.js'
@@ -88,13 +54,11 @@ export interface CategoryFreeze {
 /**
  * One unsatisfiable pair, keyed by the REQUIREMENT rather than by the path.
  *
- * Grouping matters for the resolution's size. a task carries
- * two owned build-contract clauses that between them name three frozen paths;
- * per-path findings would demand three separate ownership grants (and the same
- * pair twice over, because that spec states its freeze in CONSTRAINTS and again
- * in ACCEPTANCE). Per requirement, the rewrite is told which files that one
- * obligation names and grants only what it needs — which is what keeps
- * `inv-no-spec-inflation` satisfiable at all.
+ * Grouping this way bounds the resolution. A requirement naming several frozen
+ * files would otherwise yield one finding per file, and a spec that states its
+ * freeze in CONSTRAINTS and again in ACCEPTANCE would yield each of those twice.
+ * Per requirement, the resolution is told which files that ONE obligation names
+ * and grants only what it needs.
  */
 export interface OwnedFreezeConflict {
     /** The owned requirement line, verbatim. */
@@ -125,9 +89,9 @@ const MOD_VERB = 'modif|touch|edit|chang|alter|rewrit|overwrit'
 
 /**
  * A category noun phrase with an exception: "any source files outside of X",
- * "any existing file other than X", "no files except X". `\w+` slots absorb the
- * qualifiers seen in the corpora (source/existing/other), bounded so the phrase
- * cannot span a whole paragraph.
+ * "any existing file other than X", "no files except X". The `\w+` slots absorb
+ * qualifiers like source/existing/other, and are bounded so the phrase cannot
+ * span a whole paragraph.
  */
 const CATEGORY_NOUN = String.raw`(?:any|no)\s+(?:\w+\s+){0,3}?files?\b`
 const EXCEPT_KEYWORD = String.raw`(?:outside(?:\s+of)?|other\s+than|except(?:\s+for)?|besides|apart\s+from|beyond)`
@@ -146,7 +110,8 @@ const ACTIVE_CATEGORY_RE = new RegExp(
 )
 
 /**
- * Passive family: "No files other than `package.json` are modified." — a * ACCEPTANCE line, identical in force to the CONSTRAINTS freeze above it.
+ * Passive family: "No files other than `package.json` are modified." — the shape
+ * an ACCEPTANCE line takes, identical in force to a CONSTRAINTS freeze.
  */
 const PASSIVE_CATEGORY_RE = new RegExp(
     String.raw`\b${CATEGORY_NOUN}[^\n]{0,40}?\b${EXCEPT_KEYWORD}\b`
@@ -203,8 +168,8 @@ function tokensWithOrigin(text: string): Token[] {
                 continue
             }
             // A leading `/` is a route literal or an absolute path — never a
-            // repo-relative source file, and `/api` is named by the very clause
-            // that is the true positive, so this one is not hypothetical.
+            // repo-relative source file. Behavioural clauses routinely name routes
+            // (`/api`) beside the file that serves them.
             if (token.startsWith('/')) continue
             const n = token.replace(/^\.\//, '').replace(/\/+$/, '')
             if (n.length === 0 || seen.has(n)) continue
@@ -336,12 +301,11 @@ export interface OwnedFreezeOptions {
      * will run against? Supplied by the caller (compose knows its cwd; the
      * usual implementation is "tracked by git" — see `trackedSourceOracle`).
      *
-     * Two false-positive classes die here, both observed on real specs:
-     * route literals and build outputs (`/api`, `dist/`,
-     * `dist/app.css` — named by the very clause that is the true positive, but
-     * not files anyone can edit), and files a task is about to CREATE, which a
-     * freeze on the existing tree does not block. Omitted → every path-shaped
-     * token counts, which is the broad reading.
+     * Two false-positive classes die here: build outputs (`dist/app.css` — named
+     * by the same clause that names the real file, but not something anyone
+     * edits), and files a task is about to CREATE, which a freeze on the existing
+     * tree does not block. Omitted → every path-shaped token counts, which is the
+     * broad reading.
      */
     isSource?: (p: string) => boolean
 }
@@ -392,7 +356,7 @@ export function findOwnedFreezeConflicts(
 }
 
 /**
- * The measured `isSource` oracle: a token counts only when git tracks it in
+ * The production `isSource` oracle: a token counts only when git tracks it in
  * `cwd`. Tracked ⇒ it exists, it is not a build output, and it is not ignored —
  * exactly the "source file" the category freezes talk about. `git` missing or
  * the tree not a repo ⇒ every token counts (the broad reading), so the detector
@@ -413,11 +377,15 @@ export function trackedSourceOracle(
 }
 
 /**
- * The forced critique-rewrite defect text, in the shape the existing four
- * families use: MANDATORY, self-contained, naming the exact resolutions. Prose
- * surrender and silently dropping the requirement are called out as
- * non-resolutions: narrowing the clause and freezing its file are both ways a
- * rewrite makes the contradiction disappear without satisfying the requirement.
+ * A forced-rewrite defect block in the shape the CRITIQUE_PROBES entries use:
+ * MANDATORY, self-contained, naming the exact resolutions. Prose surrender and
+ * silently dropping the requirement are called out as non-resolutions — narrowing
+ * the clause and freezing its file are both ways a rewrite makes the
+ * contradiction disappear without satisfying the requirement.
+ *
+ * UNWIRED. Nothing in src/ or test/ calls this. The shipped resolution is the
+ * DETACH in `owned-freeze-reassign.ts`, which needs no model rewrite; this text
+ * is what a rewrite-based resolution would say if one were ever added.
  */
 export function ownedFreezeConflictProbeText(conflicts: OwnedFreezeConflict[]): string {
     const items = conflicts.map(
