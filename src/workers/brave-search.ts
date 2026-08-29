@@ -14,9 +14,9 @@ export interface BraveSearchOpts {
     timeoutMs?: number
     signal?: AbortSignal
     /**
-     * Injectable fetch. Brave was the ONE provider without this: exa and ddg both
-     * took a `fetchImpl`, so brave's status ladder — the widest of the three — was
-     * the only one no test could drive at the request level.
+     * Injectable fetch. All three providers take one, and brave needs it most:
+     * its status ladder is the widest of the three, so without this seam the
+     * ladder is the only one no test can drive at the request level.
      */
     fetchImpl?: FetchLike
 }

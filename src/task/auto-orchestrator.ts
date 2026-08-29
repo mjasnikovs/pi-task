@@ -701,8 +701,9 @@ export async function orientFeature(
  * settles is auto-resolved and never shown — only genuine open forks reach the user.
  * The model emits NONE when nothing remains.
  *
- * The ONLY stage that talks to the user, and so the only one that can be dismissed:
- * `null` means the user cancelled and the cancellation has already been announced.
+ * The ONLY stage that ASKS the user anything, and so the only one that can be
+ * dismissed — the others only notify, which cannot be. `null` means the user
+ * cancelled and the cancellation has already been announced.
  * Every other outcome is a transcript, possibly empty.
  */
 export async function elicitClarifications(
