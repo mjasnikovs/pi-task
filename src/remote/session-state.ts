@@ -3,12 +3,15 @@
 // Every change funnels through a mutator that (1) updates this object and (2)
 // broadcasts the matching live delta. On (re)connect the server serializes the
 // whole object with snapshot() and the client replaces its entire view. Because
-// the snapshot and the live deltas read/write the same object, they can never
-// disagree — which is what kills the duplicate-transcript / orphaned-widget /
-// two-task-widget drift that ad-hoc broadcasting causes.
+// the snapshot and the live deltas read/write the same object, they cannot
+// disagree.
 //
-// State lives on globalThis so it survives jiti module re-evaluation on session
-// switches, the same pattern broadcast.ts and bridge.ts use.
+// updateTool is the one mutator that only broadcasts: a partial tool result is
+// transient, endTool carries the real one, and no browser module listens for
+// `tool_update` at all.
+//
+// State lives on globalThis so it survives the module being re-evaluated, the
+// same pattern broadcast.ts and bridge.ts use.
 
 import {broadcast as wsBroadcast} from './broadcast.js'
 import {HistoryBuffer} from './history.js'
@@ -16,10 +19,11 @@ import type {Turn, Part, ToolPart} from './history.js'
 import type {ContextUsage, PromptMessage, WidgetData} from './protocol.js'
 
 export interface LiveTurn {
-    /** Ordered assistant content (text segments + tool calls) for this run. */
+    /** Ordered assistant content — text, thinking and tool parts — for this run. */
     parts: Part[]
-    /** Is the trailing text part still accumulating deltas? Closed by text_end /
-     *  a tool start, so the next text begins a fresh segment (separate bubble). */
+    /** Is the trailing text part still accumulating deltas? Closed by text_end, a
+     *  thinking delta and a tool start, so the next text begins a fresh segment
+     *  (separate bubble). */
     textOpen: boolean
 }
 
@@ -45,7 +49,7 @@ interface SessionState {
     taskWidgetData: WidgetData | null
     prompt: PromptMessage | null
     context: ContextUsage | null
-    /** Human-readable active model name (e.g. "Qwen3.6 27B"), for the header chip. */
+    /** Human-readable active model name, as pi reports it, for the header chip. */
     model: string | null
     /** Lines typed while a task run owned the session, waiting for the next task
      *  turn to steer. Mirrors src/task/mid-run-input.ts so the browser can show
