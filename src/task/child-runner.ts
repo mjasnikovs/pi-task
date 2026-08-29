@@ -536,7 +536,11 @@ async function triageChildResult(
     verb: 'retry' | 'restart'
 ): Promise<LadderStep> {
     if (r.exitCode !== 0) {
-        throw new Error(`${name} child failed: ${r.stderr || '(no stderr)'}`)
+        // The exit code is the only signal when stderr is empty, and pi exits
+        // silently on several paths (143 = SIGTERM/loop-kill, 137 = SIGKILL/OOM).
+        // Dropping it left "(no stderr)" as the whole diagnosis.
+        const why = r.stderr || `no stderr, exit ${r.exitCode}`
+        throw new Error(`${name} child failed: ${why}`)
     }
     if (r.modelError) {
         // The model/provider failed (pi exited 0 with a stopReason "error"
