@@ -4,20 +4,22 @@
  * The command is a thin wiring layer. Everything it does is already in the
  * codebase and is reused as-is:
  *
- *   • the adaptive question loop, the duplicate backstop, the boxed picker and
- *     the A/B answer mapping        → plan-session.ts (which reuses parsers.ts,
- *                                     question-dedup.ts, inline-markdown.ts,
- *                                     question-box.ts, yolo.ts)
+ *   • the question loop, the duplicate backstop and the A/B answer mapping
+ *                              → plan-session.ts, via question-source.ts (which
+ *                                uses parsers.ts and question-dedup.ts),
+ *                                question-dialog.ts, inline-markdown.ts, yolo.ts
  *   • the child process, its loop/leak/stall guards and retries → child-runner.ts
- *   • local TUI + remote browser prompt fan-out                 → remote/bridge.ts
- *   • the status widget                                         → widget.ts
+ *   • local TUI + remote browser prompt fan-out, and the boxed
+ *     picker the TUI half renders                              → remote/bridge.ts
+ *   • the status widget                 → child-status.ts, which drives widget.ts
  *   • the plan file (.pi-tasks/TASK_PLAN_NNNN.md)               → task-io.ts
  *   • the handoff itself                                        → orchestrator.ts
  *
  * The handoff is deliberately the SAME call /task makes for a typed prompt —
  * gated when `verify work` / `enforce guidelines` is on, fire-and-forget
- * otherwise — so a planned task is not a second kind of task. The only thing
- * /task receives that a bare /task would not is the decisions block.
+ * otherwise — so a planned task is not a second kind of task. What /task
+ * receives beyond a bare /task is HANDOFF_DELIVERABLE_RULE, which rides on every
+ * handoff, and the decisions block when anything was settled.
  */
 
 import * as path from 'node:path'
@@ -137,8 +139,10 @@ export function buildPlanDeps(
                 }
             })
         } finally {
-            // Outside a git repo `before` is null and there is nothing to compare
-            // against — the same degrade every other tree-reading guard here takes.
+            // `before` is null only when the snapshot itself failed, and there
+            // is then nothing to compare against. A non-repo cwd does NOT take
+            // that path: `git status` exits 128 and collectTreeChanges answers an
+            // empty summary, so the comparison runs and finds nothing.
             if (before) {
                 const after = await collectTreeChanges(cwd, signal).catch(() => null)
                 const touched = after ? newTreeChanges(before, after) : null
