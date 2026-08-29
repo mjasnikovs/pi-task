@@ -3,63 +3,49 @@
  * project's own tracked template DECLARES is absent from this box is an
  * ENVIRONMENT GAP, not a code fault.
  *
- * THE EPISODE. Attempt 3 of the final-gate autofix passed every guard, fixed the
- * failing test, and still lost the run:
- *
- *     autofix attempt 3 failed — did not converge: launch script: `bun run seed`
- *     exited 1 — $ bun run src/server/seed.ts  Missing required environment
- *     variable: ADMIN_PHONE  error: script "seed" exited with code 1
- *
- * Single-failure phrasing (final-gate.ts uses a numbered list for ≥2), so the
- * suite was green and this was the only remaining failure. The run failed on
- * exactly this, and it is self-inflicted at the last moment: pre-gate
- * `package.json` had no `seed` script at all, so `if (!present.has(name)) continue`
- * skipped it. Attempt 3 added the script to clear the launch-contract diff — and
- * thereby armed the check that killed the run.
- *
- * The loop was closed by construction. The gate runs every declared non-boot
- * script with `runnerEnv(runner)` = `process.env` plus a PATH prefix and nothing
- * else; "Missing required environment variable" matches neither ENV_GAP_OUTPUT_RE
- * nor INFRA_GAP_OUTPUT_RE, so it is a hard FAIL; and the only way to supply the
- * value is a gitignored `.env`, whose writes the gate correctly refuses to
- * credit. The static half of this already shipped and WORKED — `.env.example`
- * declares ADMIN_PHONE/ADMIN_PASSWORD, so `findMissingEnvDeclarations` was
- * correctly silent. This is the execution half.
+ * WHY THE GATE CANNOT SETTLE THIS ON ITS OWN. final-gate.ts runs every declared
+ * non-boot script (`runnableDeclaredScripts`, which filters on `BOOT_CLASS_RE`)
+ * as `bun run <name>`, with `runnerEnv(runner)` — `process.env` plus at most a
+ * PATH prefix, and nothing else. A project's own "missing environment variable"
+ * message matches neither `ENV_GAP_OUTPUT_RE` nor `INFRA_GAP_OUTPUT_RE`, so it
+ * lands as a hard FAIL. The only way to supply the value is a gitignored `.env`,
+ * and final-gate-fix.ts downgrades a converged PASS to UNOBSERVED when the gate
+ * stops passing with the ignored paths moved aside. Without this check the loop
+ * has no exit.
  *
  * FOUR STATIC CONDITIONS, ALL REQUIRED. Deliberately over-constrained: the
  * failure mode of getting this wrong is a gate that excuses real breakage.
  *
- *   1. the script's resolved body names a TRACKED SOURCE FILE
- *      (`bun run src/server/seed.ts` → `src/server/seed.ts`);
+ *   1. the script's resolved body names a TRACKED SOURCE FILE;
  *   2. that file REQUIRES an env var `X` under `scanSource` — i.e. none of its
- *      step-asides (default / compared / assigned / ambient / …) applies;
+ *      step-asides (`default`, `compared`, `assigned`, `ambient`,
+ *      `optional-api`, `probe`) applies;
  *   3. `X` is DECLARED in the tracked template. If it is NOT,
  *      `findMissingEnvDeclarations` has already failed the gate statically and
  *      this path must not fire — otherwise the two checks would cancel out and a
  *      project with no template at all would gain a blanket excuse;
  *   4. `X` is ABSENT from the env the gate spawned the child with.
  *
- * NOTHING IS PARSED FROM THE CHILD'S STDERR. `Missing required environment
- * variable: ADMIN_PHONE` is a string the PROJECT authored; matching on it would
- * be a rule about one project's phrasing, and every other project would phrase it
- * differently or not at all.
+ * NOTHING IS PARSED FROM THE CHILD'S STDERR. A "missing variable" message is a
+ * string the PROJECT authored; matching on it would be a rule about one project's
+ * phrasing, and the next project phrases it differently or not at all.
  *
  * THE FIFTH CONDITION IS DYNAMIC, AND IT IS WHAT MAKES THE RULE HONEST. The four
  * above cannot tell "exited BECAUSE the variable is absent" from "exited for its
  * own reasons, and also happens to read an absent variable". A script that throws
- * a TypeError on line 1 and also reads ADMIN_PHONE on line 3 satisfies all four.
+ * a TypeError on line 1 and also reads the variable on line 3 satisfies all four.
  * So the script is re-run once with the gap variables supplied as OBVIOUSLY
  * SYNTHETIC placeholders, and the exit code decides:
  *
- *     still non-zero → the absence did not cause it → FAIL, as today
- *     now zero       → the absence did cause it     → skip + UNOBSERVED + debt
+ *     still non-zero -> the absence did not cause it -> FAIL, unchanged
+ *     now zero       -> the absence did cause it     -> skip + UNOBSERVED + debt
  *
- * The probe run is a DIAGNOSTIC, never an observation. Its success is not
- * reported, and the verdict it produces is UNOBSERVED with debt — never a PASS
- * The placeholder is a fixed
- * harness-authored string; `.env.example`'s own values are never injected,
- * because they are placeholders too (`change-me`) and a green seed run against
- * them would be a fabricated observation.
+ * The probe run is a DIAGNOSTIC, never an observation. On a passing probe
+ * final-gate.ts calls `tally.unobserve()` and files the script as skipped, so the
+ * verdict is UNOBSERVED with debt and never a PASS. The placeholder is one fixed
+ * harness-authored string ({@link CONFIG_GAP_PROBE_VALUE}); the template's own
+ * values are never injected, because those are placeholders too and a green run
+ * against them would be a fabricated observation.
  */
 import {readFileSync} from 'node:fs'
 import * as path from 'node:path'
