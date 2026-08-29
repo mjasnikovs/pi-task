@@ -1,30 +1,33 @@
 /**
  * Anti-synthesis guard for grill/clarify auto-answers.
  *
- * The grill auto-answer channel invented `Bun.mkdirSync` (does not exist) while
- * the task's own research APIS section carried the correct list (Bun.build,
- * Bun.spawn). Nothing cross-checked the answer against it, so the invention was
- * promoted into the task's title, requirements, acceptance criteria AND VERIFY
- * block, and the implementer shipped a fake ambient declare to compile it.
+ * The failure: an auto-answer names an API that does not exist, and nothing
+ * cross-checks it against the research the task already gathered. A
+ * plausible-looking invention is then promoted into the title, the requirements,
+ * the acceptance criteria and the VERIFY block, and the implementation fakes a
+ * declaration to make it compile. `Bun.mkdirSync` is the shape of it, and it is
+ * real: against the runtime, `typeof Bun.mkdirSync` is `undefined`, while
+ * `Bun.build` and `Bun.spawn` are both functions.
  *
- * Lever: the same verbatim-substring anti-synthesis check as the F3 contract
- * registry. Extract API-shaped identifiers (`Namespace.member`) from the answer;
- * an identifier is SYNTHESIZED when
+ * The lever is verbatim-substring membership, never a model judgement — the same
+ * technique the contract registry uses to reject a paraphrased key. Extract
+ * API-shaped identifiers (`Namespace.member`) from the answer; an identifier is
+ * SYNTHESIZED when
  *   (a) the full identifier appears nowhere in the research (APIS/docs/context
- *       sections, verbatim substring, case-sensitive) and nowhere in the
- *       question itself, AND
+ *       sections, case-sensitive substring) and nowhere in the question, AND
  *   (b) the research DOES mention that namespace's API surface (`Bun.` appears
- *       somewhere) — i.e. research claims coverage of the namespace, so a
- *       member absent from it is suspicious rather than merely uncovered.
- * Gate (b) is the step-aside rule: when research never mentions the namespace
- * at all (React.StrictMode in a task whose research covered no React API), the
- * check is INCONCLUSIVE and must not fire — the guard may only cost time,
- * never work. Same for the clarify-triage seam, whose research slot is a stub:
- * no namespace coverage ⇒ no findings ⇒ guard inert by construction.
+ *       somewhere) — research claims coverage of the namespace, so a member
+ *       absent from it is suspicious rather than merely uncovered.
  *
- * Caller contract (phaseAutoAnswer): findings ⇒ re-ask ONCE with the research
- * API lines injected (belt); a re-asked answer that still carries a flagged
- * identifier is surfaced to the user as UNKNOWN instead of being promoted.
+ * Gate (b) is the step-aside rule, and it is what keeps the guard costing time
+ * rather than work. Run both ways: `React.StrictMode` against research that
+ * mentions only `Bun.` produces NO finding, and research that is empty produces
+ * none either — so a caller with nothing gathered leaves the guard inert by
+ * construction instead of trigger-happy.
+ *
+ * Caller contract (phaseAutoAnswer): findings ⇒ re-ask exactly ONCE with the
+ * verified research lines injected; an answer that STILL carries a flagged
+ * identifier is surfaced to the user as `unknown` rather than promoted.
  */
 
 export interface SynthesizedApiFinding {
@@ -36,16 +39,19 @@ export interface SynthesizedApiFinding {
 
 /**
  * `Namespace.member` where the namespace starts uppercase (Bun, React, Deno —
- * the global/imported-namespace API shape; a TP is exactly this) and
- * both sides are ≥2 chars (kills "U.S.", "e.G" prose shapes). Member may start
- * either case: `Bun.mkdirSync` and `React.StrictMode` are both API-shaped.
+ * the global or imported-namespace API shape) and BOTH sides are at least two
+ * characters. Run against the prose shapes it has to survive: `U.S. policy`,
+ * `e.G thing`, `A.b` and `fs.readFile` all extract nothing, while
+ * `Bun.mkdirSync` and `React.StrictMode` both match — the member may start
+ * either case.
  */
 const API_IDENT_RE = /\b([A-Z][A-Za-z0-9_$]+)\.([A-Za-z_$][A-Za-z0-9_$]+)\b/g
 
 /**
  * Member names that make the match a file name, domain, or version-ish token
- * rather than an API (Node.js, App.tsx, README.md, Fly.io, Express.com). All
- * lowercase-compared, so `INDEX.HTML` is excluded too.
+ * rather than an API (Node.js, App.tsx, README.md, Fly.io, Express.com). The
+ * comparison is lowercased, so shouting does not slip through: `INDEX.HTML`
+ * extracts nothing, same as `App.tsx`.
  */
 const NON_API_MEMBERS = new Set([
     'js',
