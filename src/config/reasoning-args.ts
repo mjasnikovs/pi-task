@@ -1,9 +1,10 @@
 /**
  * The live-config bridge for reasoning profiles: group in, argv fragment out.
  *
- * Separate from reasoning.ts because that module must stay import-free — see its
- * header. This file is the one hop that reads `getConfig()`, so it imports both
- * and neither imports it back: a tree, not a cycle.
+ * Separate from reasoning.ts because that module must take no import with a
+ * runtime side effect — see its header. The `getConfig()` read lives here
+ * instead: this file imports both, and nothing in config/ imports it back, so
+ * the graph stays a tree.
  *
  * Read PER CALL, never cached at module scope, so a /task-config change lands on
  * the next child without a restart. Same contract `childBaseArgs` keeps.
