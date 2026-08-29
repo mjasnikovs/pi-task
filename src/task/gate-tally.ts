@@ -2,32 +2,35 @@
  * The final gate's tally: everything its sections RECORD, and the one pure
  * function that turns the record into a `FinalGateOutcome`.
  *
- * Carried inline, this is twelve mutable locals in `runFinalIntegrationGate` — the
- * ranked failure list, four dynamic counters, three note lists, a warning list,
- * the boot verdict — threaded through ~400 lines by closure, with three sections
- * hand-incrementing the same counters and one branch doing `dynObserved -= 1`.
- * The verdict assembly at the end was pure, but reachable only through a temp
- * dir and real spawns. Here the sections call named methods (an attempt is
- * `attempted(bin)`, the config-gap un-count is `unobserve()`, a probe that looked
- * and saw something bad is `failObserved(...)`) and `verdict()` is the ONE place
- * the PASS / FAIL / UNOBSERVED polarity, note ordering and debt attachment live,
- * testable with no tree at all.
+ * The alternative is a dozen mutable locals threaded through
+ * `runFinalIntegrationGate` by closure — the ranked failure list, four dynamic
+ * counters, three note lists, a warning list, the boot verdict — with several
+ * sections hand-incrementing the same counters and one branch decrementing one.
+ * Here the sections call named methods (an attempt is `attempted(bin)`, the
+ * config-gap un-count is `unobserve()`, a probe that looked and saw something bad
+ * is `failObserved(...)`), and `verdict()` is the ONE place the PASS / FAIL /
+ * UNOBSERVED polarity, the note ordering and the debt attachment live. All of it
+ * is decidable with no tree at all: a fresh GateTally verdicts to UNOBSERVED, one
+ * `attempted`+`observed`+`ran` verdicts to `statics + \`…\` passed`, and a rank-0
+ * plus a rank-1 failure verdicts to the numbered list with boot first.
  *
- * The two verdict predicates the gate has always exported — `observabilityGapFailure`
- * and `unobservedVerdict` (the third, non-blocking
- * verdict) — live here because they read exactly the counters the tally owns;
- * `final-gate.ts` re-exports them so every existing importer is unchanged.
+ * `observabilityGapFailure` and `unobservedVerdict` live here because they read
+ * exactly the counters the tally owns. `final-gate.ts` re-exports them, which is
+ * how the gate's own test file reaches them.
  */
 import type {AcceptDebt} from './accept-debt.js'
 import type {FinalGateOutcome} from './final-gate.js'
 
 /**
- * Full-skip blindness guard. Per-command env-gap skips stay
- * legitimate (a missing browser must not fail a suite); what may never happen
- * again is ALL of them skipping while the gate still reports PASS — a gate that
- * observed nothing dynamic has no basis to vouch for the assembled app. Pure so
- * the semantics are unit-tested; the tally feeds it its own counters plus runner
- * resolvability.
+ * Full-skip blindness guard. Per-command env-gap skips stay legitimate — a missing
+ * browser must not fail a suite — but ALL of them skipping while the gate reports
+ * PASS may not: a gate that observed nothing dynamic has no basis to vouch for the
+ * assembled app.
+ *
+ * Measured on the four boundary cases: `attempted: 0` → null, any `observed > 0` →
+ * null, spawnFailures BELOW attempted → null (a tool-level gap proves the runner
+ * works), and only all-attempts-spawn-failed returns the failure text. Pure, so
+ * the tally feeds it its own counters plus runner resolvability.
  */
 export function observabilityGapFailure(args: {
     /** Dynamic commands the gate discovered and tried to run. */
@@ -62,40 +65,33 @@ export function observabilityGapFailure(args: {
 }
 
 /**
- * The THIRD verdict. observabilityGapFailure above covers "commands were DISCOVERED
- * but every one failed to spawn" — a rank-0 FAIL. It deliberately returns null for
- * `attempted === 0`, and until now that silence fell straight through to
- * `PASS — no integration command found (statics passed)`: the blindness class
- * entering through a different door, where "we never checked" reads exactly like "we
- * checked and it was fine". Measured 2026-07-27: one real project (C++/CMake, no package.json)
- * shipped that verdict TWICE while carrying 2 and 3 open verify-FAIL debts, and
- * godot-engine (package.json whose only script is `verify`) reproduces it live today.
+ * The THIRD verdict. `observabilityGapFailure` above covers "commands were
+ * DISCOVERED but every one failed to spawn" — a rank-0 FAIL. It returns null for
+ * `attempted === 0`, and that silence would otherwise fall straight through to a
+ * PASS: the same blindness entering through a different door, where "we never
+ * checked" reads exactly like "we checked and it was fine".
  *
  * So: observed anything dynamic ⇒ PASS; discovered-but-all-spawn-failed ⇒ the
- * existing FAIL; observed NOTHING ⇒ this note, carried on an `ok: true` outcome.
+ * FAIL above; observed NOTHING ⇒ this note, carried on an `ok: true` outcome.
  *
- * WHY NON-BLOCKING (decided, not deferred — the evidence cuts both ways and this is
- * the resolution):
- *  - Blocking's case: both real occurrences also carried open verify-FAIL debt, so
- *    the runs with no dynamic evidence were exactly the runs already known to be
- *    carrying defects.
- *  - Against, and decisive: (1) that debt is ALREADY surfaced unconditionally at the
- *    gate moment, on PASS as on FAIL — the one real project records literally read "PASS — no
- *    integration command found … UNRESOLVED VERIFY-FAIL DEBT still open (2)". The
- *    missing signal was never the debt, it was the word PASS endorsing the run, and
- *    that is what this fixes. (2) `ok: false` routes into the autofix picker, whose
- *    seed is `reason`; "no integration command is discoverable" is not fixable by
- *    editing code, so the highest-probability child response is to FABRICATE a
- *    runnable command to satisfy the gate — the same fabrication class that refuted
- *    the `## verified tooling` harvest (see discoverIntegrationCommands) and that had
- *    a fix child `rm` a sibling's deliverable. (3) That harvest being refuted
- *    means one real project and godot-engine can NEVER discover a command, so blocking would end
- *    every non-npm run in `failed` permanently, with no remedy — the task's own I3
- *    is unsatisfiable, and
- *    its stated consequence is to downgrade to a warning and say so. This is that.
- * The teeth are elsewhere and are real: the verdict word changes, the gate trail says
- * UNOBSERVED, and the caller records a durable final-gate debt that the NEXT run's
- * gate re-surfaces (it can never auto-close — it is not static-class).
+ * WHY NON-BLOCKING, decided rather than deferred:
+ *  1. The open ACCEPT debts are ALREADY surfaced at the gate moment, on PASS as on
+ *     FAIL (`surfaceOpenDebts` in run-final-gate.ts sits outside the ok branch).
+ *     The missing signal was never the debt; it was the word PASS endorsing the
+ *     run, and that is what this changes.
+ *  2. `ok: false` routes into the autofix picker, whose seed is `reason`. "No
+ *     integration command is discoverable" cannot be fixed by editing code, so the
+ *     likeliest child response is to FABRICATE a runnable command to satisfy the
+ *     gate — the same fabrication class that rules out the `## verified tooling`
+ *     harvest (see discoverIntegrationCommands).
+ *  3. Because that harvest is ruled out, a project outside the manifest allowlist
+ *     can NEVER discover a command, so blocking would end every such run in
+ *     `failed` permanently with no remedy.
+ *
+ * The teeth are real and elsewhere: the verdict word changes, the gate trail line
+ * says UNOBSERVED, and the caller records a durable final-gate debt the next run's
+ * gate re-surfaces. It can never auto-close — measured, `isStaticClassDebt` on
+ * this exact text returns false.
  */
 export function unobservedVerdict(args: {
     /** Dynamic commands the gate discovered and tried to run (0 ⇒ nothing existed). */
@@ -153,12 +149,12 @@ export class GateTally {
      *  `recordDebt(cwd, id, fin.unobserved, 'final-gate')` writes the debt —
      *  never a PASS. */
     private readonly configGapNotes: string[] = []
-    /** The inert-launch-contract note (16A): "declared scripts, but no manifest to
-     *  diff against" — a note, never a failure, never a silent pass. */
+    /** The inert-launch-contract note: "declared scripts, but no manifest to diff
+     *  against" — a note, never a failure, never a silent pass. */
     private readonly contractNotes: string[] = []
     /** The boot section's own UNOBSERVED verdict (bootSkipVerdict / rejected launch
-     *  script). Lives outside the dynamic counters ON PURPOSE: the
-     *  test/build commands that did run cannot cancel it. */
+     *  script). Lives outside the dynamic counters ON PURPOSE, so the test and
+     *  build commands that DID run cannot cancel it. */
     private bootNote: string | null = null
 
     /** A failure at `rank` (default 1). Rank 0 is boot/render, the most load-bearing. */
@@ -253,31 +249,32 @@ export class GateTally {
      *
      * FAIL when anything failed: stable-sorted so boot/render (rank 0) leads and
      * everything else keeps execution order. One failure keeps the exact
-     * single-failure wording; several become a numbered list so the trail, the
-     * ACCEPT picker, and the autofix seed all carry the complete ranked picture.
-     * The observed subset rides along by exact text identity (19A) — the demote
-     * decision downstream reads THIS, instead of re-deriving observability from
-     * the failure string.
+     * single-failure wording; several become a numbered list, so the trail, the
+     * ACCEPT picker and the autofix seed all carry the complete ranked picture. The
+     * observed subset rides along by exact text identity — the demote decision
+     * downstream reads THAT, instead of re-deriving observability from the failure
+     * string. Measured on a rank-1 `b` plus a rank-0 observed `boot`: the reason is
+     * the two-item numbered list with `boot` first, and `observedFailures` is
+     * `["boot"]` alone.
      *
      * Otherwise `ok: true`, with the UNOBSERVED note when the gate could not
-     * observe something it meant to. Two independent notes, either or both of which
-     * may apply: the boot never ran, and/or NOTHING dynamic ran at all
-     * (unobservedVerdict — commands WERE discovered, none spawn-failed so the
-     * blindness guard correctly stayed silent, and yet nothing ran. Reported as
-     * `statics passed (integration commands not runnable here)` that is the
-     * identical "we never checked" silence wearing different words). The boot note leads because it
-     * names a concrete command and the trail line is sliced at 300 chars; then the
-     * config-gap notes, then the inert-contract note. Unchanged when anything at all
-     * was observed, so a project with runnable commands is byte-for-byte unaffected.
+     * observe something it meant to. Two independent notes, either or both: the
+     * boot never ran, and/or nothing dynamic ran at all (unobservedVerdict — where
+     * commands WERE discovered, none spawn-failed so the blindness guard correctly
+     * stayed silent, and yet nothing ran). The boot note leads because it names a
+     * concrete command and the trail line is sliced at 300 chars; then the
+     * config-gap notes, then the inert-contract note. Nothing here changes when
+     * anything at all was observed.
      *
-     * ZERO ATTEMPTS IS UNOBSERVED, NEVER A PASS: when nothing dynamic was even
-     * attempted, the note IS the reason — there is no `statics passed (…)` suffix,
-     * because "we never checked" must not read like "we checked and it was fine".
-     * one real project shipped that verdict TWICE while carrying open verify-FAIL debt.
+     * ZERO ATTEMPTS IS UNOBSERVED, NEVER A PASS. Measured on a fresh tally: the
+     * note IS the reason, with no `statics passed (…)` suffix, because "we never
+     * checked" must not read like "we checked and it was fine". One `attempted` +
+     * `observed` + `ran('bun run test')` instead gives `statics + \`bun run test\`
+     * passed`.
      *
-     * The debt note rides in its OWN field: `reason` stays the mechanical failure
-     * because it seeds the autofix child's prompt (see FinalGateOutcome.reason —
-     * a fix child executed a recorded claim as an instruction).
+     * The debt note rides in its OWN field. `reason` stays the mechanical failure
+     * because it seeds the autofix child's prompt, and a write-enabled child reads
+     * a recorded defect claim as an instruction to act on it.
      */
     verdict(debts: GateDebts): FinalGateOutcome {
         const withDebts = (o: FinalGateOutcome): FinalGateOutcome => ({
