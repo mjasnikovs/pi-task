@@ -20,7 +20,7 @@
  *
  * And it was still live on the fetch channel. pi-worker-docs documents F-2(e) at
  * length — an "unclear" non-answer exits 0, so it was memoised into the research
- * cache and re-served to every sibling task (52 of run 15's cached entries were
+ * cache and re-served to every sibling task (52 of a cached entries were
  * "unclear" with hitCache true), one dead end paid for many times, with
  * escalation unable to re-fire because the miss never recurred. `pi-worker-fetch`
  * cached on `childExitCode === 0` alone, so "unclear from this page" reproduced

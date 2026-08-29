@@ -2,7 +2,7 @@
  * research-cache — a per-run cache of docs/search/fetch worker RESULTS, shared
  * across the sibling task pipelines of one /task-auto run.
  *
- * The failure this serves (mx5 run 8, F10): the research phase alone burned 75 of
+ * The failure this serves: the research phase alone burned 75 of
  * 363 minutes because ~20 sibling task pipelines each re-fetched the SAME external
  * docs and re-ran the SAME searches (the tailwind CLI docs fetched anew for task
  * after task). Each of those worker results is a deterministic function of (tool,
@@ -25,7 +25,7 @@
  * a run started with the feature flag OFF (no id in the environment) does not cache
  * at all — the cache is inert unless the orchestrator turned it on for this run.
  *
- * RESUME REUSE (mx5 run 13, measured from the file's own git history — the cache is
+ * RESUME REUSE (measured from the file's own git history — the cache is
  * committed with every task, so the whole run is recoverable): a 32-task run built the
  * cache to 201 entries over 20 tasks under one run id, then three /task-auto-resume
  * invocations each stamped a fresh id and the first store of each dropped everything —
@@ -37,10 +37,10 @@
  * So a resume now REUSES the interrupted run's id — but only on POSITIVE evidence that
  * the digests still describe the same dependency surface.
  *
- * PER-PACKAGE INVALIDATION (mx5 run 14). The first shape of that evidence was one md5
+ * PER-PACKAGE INVALIDATION. The first shape of that evidence was one md5
  * over the whole dependency block: any change anywhere ⇒ wipe. That gate can never hold
  * on the projects /task actually builds — a greenfield run ADDS dependencies every few
- * tasks (run 14: hono/zod at T10, shadcn at T25, playwright-ct at T28), so all five of
+ * tasks, so all five of
  * its resumes saw a moved fingerprint and the run ended with ONE cached entry. Adding a
  * package invalidates nothing that was already cached; only the package a digest is
  * ABOUT going stale does.
@@ -62,7 +62,7 @@
  * to tell its docs entries apart, so it still falls back to a fresh id: every
  * inconclusive path costs time, never correctness.
  *
- * CONCURRENT WRITERS (nexttask TASK 4). Storing is a read-modify-write over ONE file,
+ * CONCURRENT WRITERS. Storing is a read-modify-write over ONE file,
  * and its writers are concurrent on two axes at once: makeWorkerTool registers the
  * research tools with executionMode 'parallel', so a single child can issue 4-6 docs
  * calls in the same millisecond, and the research phase runs four worker children as
@@ -82,9 +82,9 @@
  * this cache is never allowed to do.
  *
  * WHAT THE FIX IS WORTH, measured before it was built (scripts/research-cache-
- * write-loss-step0.ts, re-runnable): the lost updates are real but nearly free. mx5 lost
+ * write-loss-step0.ts, re-runnable): the lost updates are real but nearly free. lost
  * ~70 of 204 attempted keys, all in the docs channel — and asked ZERO of them twice, so
- * nothing lost was ever wanted again. IAR1 and godot-engine retained more distinct keys
+ * nothing lost was ever wanted again. one real project and godot-engine retained more distinct keys
  * than the logs show attempted, i.e. lost nothing at all. Estimated recovery on all three
  * projects: 0s per run. This is a correctness fix, not a performance one; it stops the
  * cache silently discarding work, and it will matter to a run whose research phase does

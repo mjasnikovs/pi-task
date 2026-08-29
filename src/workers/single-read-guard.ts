@@ -7,8 +7,8 @@
  * and-kill only re-spawns a model that deterministically re-thrashes.
  *
  *   - SingleReadGuard: "read each LINE of a file once". Validated against every
- *     recorded mx5 run — a healthy TOOLING worker reads each file exactly once
- *     (max same-file reads = 1 across 7 tasks). TASK_0017 re-read one file 50×.
+ *     recorded run — a healthy TOOLING worker reads each file exactly once
+ *     (max same-file reads = 1 across 7 tasks). a task re-read one file 50×.
  *
  *     It used to key on the resolved path alone, blocking any second read
  *     "regardless of offset". That made a file bigger than one read into a trap.
@@ -23,7 +23,7 @@
  *     the furthest line already delivered is forward paging and passes; one that
  *     lies entirely within ground already delivered is a re-read and is blocked.
  *
- *   - RepeatedCallGuard: "no identical search twice", for grep/find/ls. TASK_0017
+ *   - RepeatedCallGuard: "no identical search twice", for grep/find/ls. a task
  *     also looped on grep({pattern:"^\\s*}",path:".../index.ts"}) ×5 — a path the
  *     read guard never covered, so the call fell back to the ineffective detect→
  *     restart path. Keyed on (toolName, stableStringify(args)) — the *same* key

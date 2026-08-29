@@ -76,7 +76,7 @@ export async function fetchRaw(input: FetchRawInput): Promise<FetchRawResult> {
 /**
  * How the page content is turned into the child's prompt. Injectable so an A/B harness can
  * run the shipped strategy against a frozen legacy one in the SAME process, and assert per
- * rep that the two arms differ by exactly the lever (see scripts/live-fetch-abstention-ab.ts).
+ * rep that the two arms differ by exactly the lever.
  * Production always uses {@link shippedStrategy}.
  */
 export interface PromptStrategy {

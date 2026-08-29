@@ -1,7 +1,7 @@
 /**
  * STAGE 1 INSTRUMENTATION for F-2 / PROMPT 2 — firing-rate observability, no behaviour.
  *
- * WHY THIS EXISTS. PROMPT 2's live A/B measured 82% baseline vs 91% treatment, p = 0.88,
+ * WHY THIS EXISTS. The lever it was built for did not separate the arms,
  * and was written off as "the lever does not work". It was a broken EXPERIMENT, and it was
  * broken for a reason this module fixes: the metric counted ALL research terminations while
  * the lever touches only TYPE-ONLY answers, and nothing anywhere recorded how often a
@@ -29,7 +29,7 @@
  *     docs extension) can exit immediately after the tool returns and a queued async write
  *     would be lost.
  *
- * THE FULL ANSWER TEXT IS RETAINED, deliberately. Run 15's audit could not decide F-3(f) —
+ * THE FULL ANSWER TEXT IS RETAINED, deliberately. An audit cannot decide —
  * whether an `excerptVerified === false` was fabrication or a normaliser gap — because the
  * text it judged was kept nowhere. The same hole would make every stability question here
  * unanswerable: whether a question is type-only in EVERY rep or churns between identical

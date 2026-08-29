@@ -180,7 +180,7 @@ export interface Declaration {
  * the package itself, its DefinitelyTyped package, and the terminal the type
  * resolution chain landed on. A project that uses Bun declares `@types/bun`, not
  * `bun`; asking only about the terminal `bun-types` finds nothing at all, which
- * is how 35 of run 20's 48 banners came to report on a package nobody asked
+ * is how 35 of a 48 banners came to report on a package nobody asked
  * about.
  */
 export function declarationChain(asked: string, resolved?: string): string[] {

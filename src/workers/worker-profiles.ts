@@ -83,7 +83,7 @@ import type {WorkerKillId} from './worker-kill.js'
 export const RESEARCH_WORKER_TIMEOUT_MS = 240_000
 
 /**
- * Output-stall window before the dead-backend probe fires (mx5 run 7: model
+ * Output-stall window before the dead-backend probe fires (model
  * server died mid-gate-child, the child hung MUTE for 64 minutes). This is NOT
  * a wall-clock cap — output progress resets it, and even a fully stalled child
  * is only killed when the model endpoint is actually unreachable. Sized so a
@@ -123,7 +123,7 @@ export interface StalledGuard {
  * bigger file — and must not cost the user their answer; the second is a real
  * fault, and one the dead-backend probe already catches on its own terms.
  *
- * `fanout` is the SCALE arm of nexttask 5B and is OFF unless both its env vars
+ * `fanout` is the SCALE arm of  and is OFF unless both its env vars
  * are set — see task/research-fanout-budget.ts for why it was not the fix.
  */
 export interface WorkerTimeoutGuard {
@@ -149,10 +149,10 @@ export interface WorkerTimeoutGuard {
  * `detector` judges ARGUMENTS over a 20-call window, so a child that rotates
  * through MORE DISTINCT CALLS THAN THE WINDOW HOLDS is invisible to it — every
  * key occurs once per window and the count never reaches the threshold.
- * Measured: mx5-n 2026-08-27, worker:tooling made 550 calls over exactly 20
- * distinct files, ~36 reads each, and neither the exact rule nor the path rule
- * ever tripped. It died 20 minutes later on the absolute progress ceiling,
- * having done 25s of useful work.
+ * That is not hypothetical: a worker can make hundreds of calls over exactly as
+ * many distinct files as the window holds, reading each of them dozens of times,
+ * without either the exact rule or the path rule ever tripping. It then dies on
+ * the absolute progress ceiling, having done seconds of useful work.
  *
  * `progress` judges RESULTS, which a rotating reader cannot vary. It was written
  * for exactly that class and was wired only into phase children until

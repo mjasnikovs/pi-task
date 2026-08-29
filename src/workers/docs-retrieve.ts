@@ -55,7 +55,7 @@ interface ChunkRow {
  * Because buildFtsQuery ORs the tokens, such a token contributes no MATCH at all, so the
  * single most informative term in the query — the path, or the dotted API symbol — was
  * dropped and ranking fell to the surrounding prose. Measured on the 141 real project
- * queries of mx5 run 13, that cost 18% of them any chunk from the file they named
+ * queries, that costs a real share of them any chunk from the file they named
  * (82% -> 99% retrieved once split on punctuation); on the 44 gradable npm queries,
  * discriminative-symbol recall 89.5% -> 96.4%.
  * See scripts/live-project-docs-retrieval-ab.ts and scripts/live-npm-tokenizer-regression.ts.

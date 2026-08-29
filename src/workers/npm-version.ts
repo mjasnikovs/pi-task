@@ -3,7 +3,7 @@
  *
  * Solves a real failure mode: the auto-answer/research workers have no live
  * source for "what's the latest published version of X", so they answer from
- * training data, which goes stale. TASK_0005 hit this — the worker said
+ * training data, which goes stale. a task hit this — the worker said
  * "18.3.1, the latest stable React" when React 19.x had shipped months earlier.
  *
  * This module fetches the npm registry's metadata endpoint and returns just

@@ -2,7 +2,7 @@
  * model-endpoint — discovery + reachability probe for the model backend(s) a
  * child pi process talks to.
  *
- * The failure this serves (mx5 run 7, validated): the model server went down
+ * The failure this serves: the model server went down
  * mid-gate-child and the child hung MUTE for 64 minutes — pi's own
  * connection-error handling only fires when a request FAILS, not when the
  * backend freezes and the open request simply never answers. The stall guard in

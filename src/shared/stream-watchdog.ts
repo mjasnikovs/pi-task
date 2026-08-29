@@ -2,7 +2,7 @@
  * Model-stream watchdog — the inactivity machine for a stream that goes SILENT
  * without erroring.
  *
- * WHY (mx5 run 14): three main-session implementation turns died mid-turn — the
+ * WHY: three main-session implementation turns died mid-turn — the
  * session jsonl's last event is an ordinary assistant message, then nothing,
  * forever, while the model server stayed Up(healthy) the whole time. A hung or
  * silently-dropped stream throws NOTHING, so:
@@ -11,7 +11,7 @@
  *   - the command watchdog never fires: it only covers TOOL executions,
  *   - the child stall guard never fires: it treats a reachable endpoint as proof
  *     of life, which it is — the endpoint was fine, the stream was not.
- * Cost in run 14: ~2.9h of dead air awaiting manual restarts.
+ * The cost is hours of dead air waiting on a manual restart.
  *
  * WHAT THIS MEASURES: time since the LAST stream event of ANY kind — text token,
  * tool-call delta, thinking delta, provider response header. NOT wall-clock, and

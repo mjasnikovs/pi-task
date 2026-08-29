@@ -277,7 +277,7 @@ export async function findDeliveryPhantoms(spec: string, cwd: string): Promise<P
  * import the installed types prove, so NO affirmative occurrence of the non-existent
  * specifier survives downstream. This is the half an appended correction can't do:
  * REFINE preserves identifiers verbatim, so `bun:sql` otherwise rides into the
- * composed GOAL (proven: compose re-leaks it 4/4) and on to the implementer. Strike
+ * composed GOAL, because compose re-leaks it, and on to the implementer. Strike
  * it at the source and compose has nothing to contradict.
  *
  * Deterministic, no LLM. Idempotent on healthy input: once a specifier is replaced

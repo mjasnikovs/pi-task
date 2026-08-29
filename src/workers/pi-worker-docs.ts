@@ -74,7 +74,7 @@ interface DocsDetails {
  * Pull `@see {@link https://…}` pointers out of retrieved .d.ts/README text.
  *
  * F-2(d): the answer to a type-only lookup usually is not in the package at all — it lives
- * at the `@see` URL that the very excerpt being returned already carries. In run 15,
+ * at the `@see` URL that the very excerpt being returned already carries.
  * hono.dev appeared in cache values ONLY inside these JSDoc links, and was never fetched.
  * Surfacing the link is therefore free: the pointer is already in hand.
  */
@@ -145,12 +145,12 @@ export function registerPiWorkerDocs(
     pi: ExtensionAPI,
     internals: PiWorkerDocsInternals = {}
 ): void {
-    // CAP arm of nexttask 5B — OFF unless PI_TASK_PROJECT_DOCS_BUDGET is set, and
+    // CAP arm of  — OFF unless PI_TASK_PROJECT_DOCS_BUDGET is set, and
     // then per-ATTEMPT by construction: the extension is loaded into a fresh pi
     // child on every spawn, so a restarted attempt starts this counter at 0. The
     // budget it enforces is the one the worker was told about in its prompt
     // (projectDocsBudgetNotice) — enforcement without the notice would be a
-    // silent tool failure, and the notice without enforcement is what run 18
+    // silent tool failure, and the notice without enforcement is what
     // already shows does not bind.
     let projectLookups = 0
     makeWorkerTool<typeof Params, DocsDetails>(pi, {
@@ -281,7 +281,7 @@ export function registerPiWorkerDocs(
                 const {extraction, excerptVerified: verified, body: text} = r
                 // SAME instrumentation channel as the package path below, extended to the
                 // project-source branch because that branch is the MAJORITY of what
-                // worker:apis asks — 13 of 17 docs calls in run 15's fatal task, 7 of 12 in
+                // worker:apis asks — 13 of 17 docs calls in a fatal task, 7 of 12 in
                 // the first live diagnostic rep. With only the package path recorded, "the
                 // last docs answer before the worker stopped" was unanswerable: the sink's
                 // last row was routinely not the worker's last answer.
@@ -491,7 +491,7 @@ export function registerPiWorkerDocs(
         //
         // F-2(e): process health is NOT answer quality. A child that ran fine and answered
         // "unclear from this package" exits 0, so the NON-ANSWER was memoised and re-served
-        // as a cache hit to every later sibling task — 52 of run 15's cached entries were
+        // as a cache hit to every later sibling task — 52 of a cached entries were
         // "unclear" with hitCache true. One dead end, paid for many times, and escalation
         // could never re-fire because the miss never recurred. So a non-answer is now never
         // stored: the next task that asks pays for a real lookup and can escalate.

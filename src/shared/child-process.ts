@@ -48,8 +48,7 @@ export type SpawnFn = (
         env?: NodeJS.ProcessEnv
         /** true → give the child its own process group (POSIX `detached`), so any
          *  server it backgrounds (`bun run dev &`) can be reaped as a group when the
-         *  child exits instead of leaking as an orphan holding a port (mx5 run 9
-         *  item 3). Set only for model children (json-events); plumbing stays put. */
+         *  child exits instead of leaking as an orphan holding a port (*  item 3). Set only for model children (json-events); plumbing stays put. */
         detached?: boolean
     }
 ) => ProcLike
@@ -167,7 +166,7 @@ export interface RunChildJsonEventsOptions {
     contextWindow?: number
     onToolCall?: (call: ToolCall) => LoopHit | null
     /**
-     * Fires when a tool call finishes, carrying its RESULT (mx5 run 10 item 6: the
+     * Fires when a tool call finishes, carrying its RESULT (the
      * verify debug log recorded the `bash:` command but never its output, so "verify
      * claimed curl PASS on a server that cannot serve" was undecidable from the log).
      * Text is the tool's combined output; `isError` distinguishes a failed call.
@@ -180,7 +179,7 @@ export interface RunChildJsonEventsOptions {
     }) => void
     onFirstByte?: () => void
     /**
-     * Dead-backend stall guard (mx5 run 7: model server died mid-child, the
+     * Dead-backend stall guard (model server died mid-child, the
      * child hung MUTE for 64 minutes). Liveness is OUTPUT PROGRESS, not wall
      * time: any stdout/stderr chunk resets the window, so honest long work is
      * never killed. Only when nothing arrived for `afterMs` is `probe` asked
@@ -422,7 +421,7 @@ export function runChild(
         const usesStdin = invocation.stdin !== undefined
         // Model children (json-events) run arbitrary bash — they can `bun run dev &`
         // a server that outlives the child and holds a port, wrecking the final gate
-        // with a self-inflicted EADDRINUSE (mx5 run 9 item 3). Spawn them in their
+        // with a self-inflicted EADDRINUSE. Spawn them in their
         // OWN process group so every such grandchild can be reaped as a unit on exit.
         // Plumbing (git, mode:'text') never backgrounds anything and stays in-group.
         const ownGroup = opts?.mode === 'json-events'
@@ -575,13 +574,13 @@ export function runChild(
         // an uncaughtException and the enclosing promise never settles (measured),
         // so it would kill the host, not fail the child.
         //
-        // Measured volume, real runs not synthetic: the largest single tool output
-        // in a full mx5 run is 5,043 bytes and that whole run's verify-debug.log is
-        // 112,216 bytes. The heaviest commands in the system are far under —
-        // pi-task's own 2,452-test suite emits 162 bytes of stderr, mx5's
-        // prettier+eslint+tsc lint 90, a cached `bun install` 0. Observed max is
-        // ~106,000x below the node ceiling; reaching it inside the 15-min command
-        // bound would need ~596 KB/s sustained on stderr for the full window.
+        // Measured volume, on real runs rather than synthetic ones: the largest
+        // single tool output in a whole run is a few kilobytes, and the heaviest
+        // commands in the system emit far less than that on stderr — a full test
+        // suite a couple of hundred bytes, a lint run under a hundred, a cached
+        // install nothing at all. That is orders of magnitude below the node
+        // ceiling, and reaching it inside the command bound would need a sustained
+        // stderr write rate nothing here comes close to.
         //
         // The structural reason is the population of children that reach here:
         // `pi` model children (stderr near-empty), `git`, and one
@@ -593,7 +592,7 @@ export function runChild(
         //
         // A symmetric `discardStderr` would therefore have no caller, and a naive
         // cap here would be actively unsafe: consumers disagree about which end
-        // carries the cause — phases.ts:474 takes the tail (-500), phases.ts:936
+        // carries the cause — phases.ts:474 takes the tail (500), phases.ts:936
         // takes the head (0, 300), and child-runner.ts:172 feeds the whole string
         // into failure classification.
         proc.stderr?.on('data', (d: Buffer) => {

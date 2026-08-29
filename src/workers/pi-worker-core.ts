@@ -91,7 +91,7 @@ const WORKER_TIMEOUT_HINT =
  * A restart used to hand the re-spawn nothing but a hint — which is why
  * WORKER_TIMEOUT_HINT above can tell a worker "do not re-explore ground you have
  * already covered" while giving it no record of what that ground was. It could
- * not comply. mx5 run 18 shows the cost: on tasks with >=46 project-source
+ * not comply. a shows the cost: on tasks with >=46 project-source
  * lookups, 5 of 5 workers burned the FULL restart budget, because every attempt
  * re-read the same files against the same clock and died in the same place.
  *
@@ -120,7 +120,7 @@ const CARRY_FORWARD_REASONS: ReadonlySet<WorkerKillId> = CARRY_FORWARD_IDS
  * throat?
  *
  * Salvage originally kept the LONGEST partial, which is not the same question. On
- * the live carry arm, TASK_0020 and TASK_0021 both timed out on all three
+ * the live carry arm, a task and a task both timed out on all three
  * attempts and salvage shipped this as the section:
  *
  *     "Now let me get more details on the specific APIs and components I need:"
@@ -194,7 +194,7 @@ export interface RunWorkerInput {
     /** Called for each tool execution start and text-writing event inside the worker. */
     onLine?: (line: string) => void
     /** Called when a tool call FINISHES, with its (truncatable) result — lets a caller
-     *  log tool OUTPUTS, not just the command (mx5 run 10 item 6). */
+     *  log tool OUTPUTS, not just the command. */
     onToolResult?: (result: {
         name: string
         isError: boolean
@@ -291,8 +291,7 @@ export interface RunWorkerInput {
      *
      * WHY: every restart branch below throws away a whole attempt's wall clock
      * along with its text, and `waitMs`/`workMs` describe the FINAL attempt only.
-     * With no hook here those attempts were structurally invisible: mx5 run 18
-     * burned 30 wall-clock timeouts / 120 minutes of compute that appeared in no
+     * With no hook here those attempts were structurally invisible: a * burned 30 wall-clock timeouts / 120 minutes of compute that appeared in no
      * log and no timing widget, and 21 of the 23 affected workers reported
      * `exit=0` — clean successes as far as the run could tell. The discrepancy
      * was only recoverable by subtracting reported wait+work from the timestamps
@@ -354,7 +353,7 @@ function workerTimeout(
     return {
         signal: ctrl.signal,
         timedOut: () => timedOut,
-        // SCALE arm of nexttask 5B, inert unless a caller calls it: push the
+        // SCALE arm of, inert unless a caller calls it: push the
         // deadline out, never past `started + ceilingMs`. A disabled timeout
         // (nothing armed) stays disabled — extending "never" is meaningless — and
         // an already-fired timer is not resurrected.
@@ -740,9 +739,9 @@ export const RESTART_RULES: readonly RestartRule[] = [
         // recovers no longer reports modelError at all (see JsonEventSink). So a
         // surfaced connection error means pi's own ~15s budget is already spent, and
         // a re-spawn only helps when the outage outlasts it. It does: at a 20s
-        // outage the baseline never recovered and this policy always did, 0/8 → 8/8
-        // (Fisher p=0.00016), and the same at 35s. Below ~15s pi absorbs it alone —
-        // 8/8 both arms, so the retry neither helps nor costs there. Beyond ~46s
+        // outage the baseline never recovers and this policy always does. Below
+        // about fifteen seconds pi absorbs the outage alone, so the retry neither
+        // helps nor costs there. Beyond ~46s
         // (three spawns' combined budget) both arms fail. The price is paid only on
         // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
         // scripts/connection-retry-ab.ts.
@@ -795,7 +794,7 @@ interface CommandKill {
  * LIMIT: the group kill only reaches processes still IN the group. A hung
  * command that detached a daemon (setsid/nohup dev server) leaves it running —
  * the fresh attempt can then hit a port the dead attempt's escapee still holds
- * (the run-9 orphan-dev-server → false-EADDRINUSE shape). No cheap fix from
+ *. No cheap fix from
  * here; the restart hint's "check current state" line is the mitigation.
  *
  * Returns null when the watchdog is off, so the caller keeps the plain timeout
