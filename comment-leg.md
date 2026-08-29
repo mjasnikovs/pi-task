@@ -43,7 +43,7 @@ line counts as a comment line but opens no block.
 | `src/remote/ui-tools.ts` | 117 | 7 | 2 | true |
 | `src/remote/ui.ts` | 96 | 0 | 0 | true |
 | `src/shared/child-extensions.ts` | 53 | 26 | 3 | true |
-| `src/shared/child-output.ts` | 98 | 42 | 8 | false |
+| `src/shared/child-output.ts` | 98 | 42 | 8 | true |
 | `src/shared/child-process.ts` | 690 | 243 | 56 | false |
 | `src/shared/command-watchdog.ts` | 206 | 104 | 17 | false |
 | `src/shared/fs-text.ts` | 26 | 16 | 3 | false |

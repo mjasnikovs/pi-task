@@ -1,9 +1,10 @@
 /**
  * Shared utilities for parsing and formatting child pi output.
  *
- * Used by both fetch-core (web page extraction) and docs-core (npm package
- * docs extraction). The child pi outputs <answer> and <excerpt> XML tags;
- * these functions parse, verify, and format the result.
+ * An extraction child is prompted to answer inside `<answer>` and cite inside
+ * `<excerpt>` — the rule blocks that ask for it live in fetch-core and
+ * abstention. These functions parse those tags, check the citation against the
+ * source it was drawn from, and format the result.
  */
 import {createHash} from 'node:crypto'
 
@@ -23,20 +24,21 @@ export function normaliseWhitespace(s: string): string {
 }
 
 /**
- * THE excerpt predicate: does this excerpt appear verbatim in the source content
- * (whitespace-normalised)? {@link verifyExcerpt} delegates to it, so there is exactly one
- * definition of "verified" in the codebase.
+ * THE excerpt predicate: does this excerpt appear verbatim in the source content,
+ * whitespace-normalised? {@link verifyExcerpt} delegates to it, and
+ * `normaliseWhitespace` has no caller outside this file, so the codebase holds
+ * exactly one definition of "verified".
  *
- * False for an excerpt that is empty OR whitespace-only. The emptiness test is applied to
- * the NORMALISED excerpt, not the raw one: `"   "` is a non-empty string that normalises to
- * `""`, and `content.includes('')` is true for every content — so the raw-string guard let a
- * whitespace-only excerpt "verify" against anything, while `verifyExcerpt` (which tested the
- * normalised length) called the same input unverified. A citation with no characters in it is
- * not evidence, so both now answer false.
+ * The emptiness test runs on the NORMALISED excerpt, not the raw one, and the
+ * distinction is load-bearing. `"   "` has length 3 but normalises to `""`, and
+ * `content.includes("")` is true for every content — so a raw-length guard would
+ * let a whitespace-only citation verify against anything at all. A citation with
+ * no characters in it is not evidence.
  *
- * Unreachable from the shipped extractors — `parseChildOutput` already maps a whitespace-only
- * `<excerpt>` to `undefined` via `.trim() || undefined`, and every call site guards on that —
- * so this is a latent-disagreement fix, not a behaviour change to any recorded verdict.
+ * The shipped extractor cannot reach that input: `parseChildOutput` maps a
+ * whitespace-only `<excerpt>` to `undefined` via `.trim() || undefined`, and its
+ * one call site tests `parsed.excerpt` before calling in. This guard is what
+ * keeps the predicate honest if a second call site appears.
  */
 export function isExcerptInContent(excerpt: string, content: string): boolean {
     const ne = normaliseWhitespace(excerpt)
@@ -46,16 +48,15 @@ export function isExcerptInContent(excerpt: string, content: string): boolean {
 
 /**
  * The same verdict as {@link isExcerptInContent}, PLUS a retained record of what was
- * actually checked — the whitespace-normalised excerpt and a hash+length of the normalised
- * content it was searched in. This is PROMPT-3 item 4: make an `excerptVerified === false`
- * DIAGNOSABLE after the fact, so it can be attributed to fabrication (the excerpt is nowhere
- * near the content) versus a normaliser gap (it is a markdown-escape or entity variant of
- * text that IS present) WITHOUT re-fetching. It deliberately does NOT loosen the verifier:
- * `.verified` IS `isExcerptInContent` — delegated, not re-implemented, so the two cannot
- * drift apart again (they had: a whitespace-only excerpt verified there and failed here).
- * F-3(f) — whether the normaliser needs
- * markdown-escape handling — is left unproven on purpose; you decide that from the retained
- * evidence, not by weakening the one working hallucination detector first.
+ * actually checked: the whitespace-normalised excerpt, and a sha256 and length of the
+ * normalised content it was searched in.
+ *
+ * The retained fields make a `verified === false` diagnosable without re-fetching the
+ * source. They separate fabrication (the excerpt is nowhere near the content) from a
+ * normaliser gap (it is an escape or entity variant of text that IS present), and the
+ * content hash says whether two verdicts were even looking at the same page.
+ *
+ * Adding evidence is the whole change: the verdict itself is not loosened.
  */
 export interface ExcerptVerification {
     verified: boolean
@@ -79,8 +80,14 @@ export function verifyExcerpt(excerpt: string, content: string): ExcerptVerifica
     }
 }
 
-/** Format the child's parsed output with a header and optional excerpt block.
- *  When `verified === false` a warning is prepended. */
+/**
+ * Format the child's parsed output with a header and optional excerpt block.
+ *
+ * The warning is prepended only on the excerpt path, and only for an explicit
+ * `false`. With no excerpt the function returns before the warning is built, and
+ * an `undefined` verdict — nothing was checked — prints no warning either. So the
+ * warning means "checked and not found", never "not checked".
+ */
 export function formatResultText(
     header: string,
     parsed: {answer: string; excerpt?: string},
