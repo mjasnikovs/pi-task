@@ -1,65 +1,49 @@
 /**
  * owned-freeze-reassign — the DETERMINISTIC resolution for the owned/freeze
- * unsatisfiable pair: an AUTHORITATIVE owned requirement whose only
- * implementing file the same spec FREEZES. No model, no prose edit. The
- * requirement text is never altered — only which task's ledger entry carries it,
- * so "resolution by deletion" is structurally impossible.
- *
- * WHY NOT A REWRITE. Measured against recorded specs
- * -ab.ts, 20 trials/arm): forcing the pair through the critique seam drives
- * a rewrite does remove the contradiction, but half its resolutions DELETE the
- * AUTHORITATIVE clause instead of moving it, and the delivered VERIFY still
- * requirement rather than reassigning it. Removal of the pair is not
- * satisfaction of the requirement.
+ * unsatisfiable pair: an AUTHORITATIVE owned requirement whose only implementing
+ * file the same spec FREEZES. No model, no prose edit. The requirement text is
+ * never altered — only which task's ledger entry carries it, so "resolution by
+ * deletion" is structurally impossible. That is the whole point: a model asked to
+ * remove a contradiction can satisfy the request by deleting the requirement, and
+ * removal of the pair is not satisfaction of the requirement.
  *
  * ── THE MECHANISM: DETACH, then CLAIM ───────────────────────────────────────
  *
  * Two steps, each run where the information it needs actually exists:
  *
- *   DETACH  at the conflicting task's own critique (right after the braces
- *           stamp the bullet, which is the first moment the pair exists): the
- *           entry is marked `pending: [frozen paths]` in the ledger and its
- *           stamped bullet is dropped from this spec. It is now owned by
- *           nobody; `ownedForTitle` skips it; the quote is still there, byte for
- *           byte.
- *   CLAIM   at every LATER task's compose, before the belt block is built: if
- *           that task's REFINED PROMPT shows a write intent on one of the
- *           pending paths, the entry becomes that task's own — belt into its
- *           compose, braces onto its spec.
+ *   DETACH  at the conflicting task's own critique (`critiquePhase`, right after
+ *           `appendOwnedConstraints` stamps the bullet, which is the first moment
+ *           the pair exists): the entry is marked `pending: [frozen paths]` in the
+ *           ledger and its stamped bullet is dropped from this spec. It is now
+ *           owned by nobody; `ownedForTitle` skips it; the quote is still there,
+ *           byte for byte.
+ *   CLAIM   at every LATER task's compose, before the belt block is built: if that
+ *           task's REFINED PROMPT shows a write intent on one of the pending
+ *           paths, the entry becomes that task's own — belt into its compose,
+ *           braces onto its spec. First claimant wins.
  *
  * ── WHY NOT "PICK THE TARGET AT DETACH TIME" ─────────────────────────────────
  *
- * The obvious rule is "if exactly one OTHER task in the plan names path `P` — its
- * title or its spec's file list contains `P` — move the requirement there". Two
- * things break it.
+ * The obvious rule is "if exactly one OTHER task in the plan names path `P`, move
+ * the requirement there". It needs COMPOSED SPECS, and at the conflicting task's
+ * compose the later tasks are still bare plan titles. A plan title describes a
+ * slice of behaviour, not a file list, so a path-lexical target rule at detach
+ * time finds nothing to point at.
  *
- * "Exactly one" does not hold. Against composed specs on disk, a single conflicting
- * path draws several candidates by title and more by FILES list, so the rule never
- * fires with a unique target.
+ * The claimant knows what the planner did not. By its own compose the later task
+ * has a REFINED prompt, which does say which files it will write — and
+ * `writeIntent` reads exactly that, while its negation fence keeps every sibling
+ * that merely mentions the path in order to fence itself off it.
  *
- * Worse, that reading needs COMPOSED SPECS, which production does not have. At the
- * conflicting task's compose the later tasks are still bare plan titles, and a plan
- * title almost never contains a file path — it says "Client API layer — typed
- * client, fetch hooks, SPA fallback route on server" where the path is
- * `src/server/index.ts`. A path-lexical target rule at detach time is therefore
- * BLIND IN PRODUCTION: zero candidates, every time.
- *
- * The claimant knows what the planner did not. By its own compose, the later task
- * has a refined prompt that says "add an SPA fallback route to the existing server
- * `src/server/index.ts`" — and `writeIntent` on that path fires on it and on the
- * task that created the file, and on nothing else. Other specs mention the path
- * only to fence themselves off it.
- *
- * ── WHY NOT BRANCH 2, CARRY EVERYTHING CROSS-CUTTING ────────────────────────
+ * ── WHY NOT CARRY IT AS CROSS-CUTTING ────────────────────────────────────────
  *
  * The cross-cutting channel is for prohibitions and product-wide rules
- * (`isCrossCuttingRequirement`; `accountCoverage` only routes those there). The
- * corpus conflict is a task-specific deliverable clause — carrying it would push
- * "the server serves static `dist/`" into the 11 tasks that had not yet run,
- * none of which owns the server file. That is spec inflation dressed as a fix.
- * An entry nobody claims stays `pending` and is surfaced at the end of the run
- * (`unclaimedPendingRequirements`), which is a debt the run can see rather than
- * an obligation that quietly evaporated.
+ * (`isCrossCuttingRequirement`; `accountCoverage` only routes those there). A
+ * task-specific deliverable clause carried that way lands in every task that has
+ * not run yet, none of which owns the file — spec inflation dressed as a fix. An
+ * entry nobody claims stays `pending` and `unclaimedPendingRequirements` surfaces
+ * it at the end of the run (run-final-gate.ts), so it becomes a debt the run can
+ * see rather than an obligation that quietly evaporated.
  */
 import {
     findOwnedFreezeConflicts,
@@ -87,11 +71,10 @@ export interface DetachResult {
  * Does this text CLAIM a write on `p` — a create/modify verb reaching a mention
  * of the path, not fenced by a negation?
  *
- * The negation half is not decoration. Every sibling task's refined prompt names
- * the files it must not touch ("Do not create or modify any other files outside
- * this slice (e.g., no changes to `src/server/index.ts`, …)". Without the fence
- * check that spec claims the server file; with it, the plan's refined prompts
- * yield exactly the tasks that really do write it.
+ * The negation half is not decoration. A refined prompt routinely names the files
+ * its task must NOT touch, in the same sentence as a write verb — "Do not create
+ * or modify any other files outside this slice (e.g. no changes to `X`)". Without
+ * the fence check, every such sibling claims `X`.
  */
 export function writeIntent(text: string, p: string): boolean {
     const re = new RegExp(
@@ -207,8 +190,9 @@ export interface ClaimResult {
  * pending paths its refined prompt writes. Run at the START of compose, so the
  * claimed obligation rides the same belt block every owned requirement does.
  *
- * First claimant wins (`inv-single-owner`): the entry stops being pending the
- * moment it is claimed, so a later task cannot take it as well.
+ * First claimant wins: `delete entry.pending` runs before the entry is retitled,
+ * so a later task finds nothing pending to take. The test named
+ * `inv-single-owner` pins that.
  */
 export function claimPendingRequirements(args: {
     /** The claiming task's refined prompt — the text that says what it will write. */
