@@ -1,32 +1,23 @@
 /**
  * Running ONE bounded fix child and deciding what its ending MEANS.
  *
- * Two graduated-resolution passes drive a fix child through the same four rungs —
- * cancel propagates, a thrown child is an error, a self-declared BLOCKED ends the
- * attempt, anything else is DONE — and `final-gate-fix.ts:12` says so out loud:
- * it "mirrors the per-task graduated-resolution shape (lint-fix.ts)". This is that
- * ladder, once.
+ * Two graduated-resolution passes — `lint-fix.ts` and `final-gate-fix.ts` — drive
+ * a fix child through the same four rungs: a cancel propagates as a throw, a
+ * child that threw for any other reason is an `error`, a self-declared BLOCKED is
+ * `blocked`, and anything else is `done`. `final-gate-fix.ts`'s own header says
+ * it "mirrors the per-task graduated-resolution shape (lint-fix.ts)". This is
+ * that ladder, written once.
  *
- * NOT the rejected sharing. CONTEXT.md's "the two resolution loops stay two" is
- * about `runGatesForTask` vs `runFinalGateStage` — the LOOPS, at two altitudes.
- * This is one altitude down: the single child invocation inside each, where the
- * two had actually drifted.
+ * Both prompts instruct the marker their pass parses: `LINT-FIX: DONE` /
+ * `LINT-FIX: BLOCKED <why>` and `FINAL-GATE-FIX: DONE` / `FINAL-GATE-FIX:
+ * BLOCKED <why>`.
  *
- *  - **The lint-fix marker was a DEAD protocol.** `buildLintFixPrompt` instructs
- *    the child to end with `LINT-FIX: DONE` or `LINT-FIX: BLOCKED <why>`, and the
- *    call site was `await deps.runChild(...)` with the return value DISCARDED —
- *    nothing in `src/` or `scripts/` parsed it. The twin parsed its own marker and
- *    used it to skip the expensive gate re-run. So a lint-fix child that reported
- *    BLOCKED still paid the full guard stack plus a whole repo-health run (15–69s
- *    measured), and the user was told `did not converge: <health.reason>` instead
- *    of the child's own stated reason. The suite fed `'LINT-FIX: DONE'` as fake
- *    output, so it stayed green whether the marker was parsed or deleted.
- *  - **The cancel rung re-typed its constant.** `lint-fix.ts` compared against a
- *    literal `'__user_cancelled__'`; it was the only production site in `src/` not
- *    importing `USER_CANCELLED`.
- *
- * What stays per-site: the arbiter (a gate re-run vs a repo-health re-run), the
- * result shape, and the guard sets. Only the child call is shared.
+ * What stays per-site: the arbiter, the result shape, and the guard sets. Only
+ * the child call is shared. The arbiters differ in kind — `final-gate-fix` calls
+ * `deps.gate`, `lint-fix` calls `deps.repoHealth` — and so does what BLOCKED
+ * buys: `final-gate-fix` skips its gate re-run on a blocked child, while
+ * `lint-fix` runs repo-health regardless and uses the marker only to word the
+ * failure.
  */
 
 import {USER_CANCELLED} from './child-runner.js'
@@ -49,9 +40,12 @@ export interface FixChildInput {
 
 /**
  * Parse a fix child's final marker. Last match wins: the model reasons before
- * concluding, and bash output can echo the words. No marker → DONE, because the
- * pass's own arbiter re-runs either way; a missing marker only forfeits the
- * early-out on a self-declared BLOCKED.
+ * concluding, and both passes give the child `bash`, so its own command output is
+ * in the text being scraped.
+ *
+ * No marker → DONE. Neither pass treats the marker as the verdict — the arbiter
+ * decides — so a missing marker costs at most the blocked early-out in
+ * `final-gate-fix`, and nothing at all in `lint-fix`.
  */
 export function parseFixMarker(marker: string, text: string): {blocked: boolean; note?: string} {
     const re = new RegExp(`${marker}:\\s*(DONE|BLOCKED)\\b[ \\t]*(.*)`, 'gi')
