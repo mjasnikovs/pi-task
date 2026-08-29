@@ -1,5 +1,6 @@
 // Wire format shared by the WS server and the inline browser app.
-// Keep these shapes in sync with the hand-written switch in ui.ts.
+// Keep these shapes in sync with the hand-written `switch (msg.type)` in
+// ui-script.ts, which is where the browser decodes them.
 
 export interface PromptMessage {
     type: 'prompt'
@@ -10,7 +11,8 @@ export interface PromptMessage {
     /**
      * Buttons that answer with their own `value` instead of with an answer to the
      * question — /task-plan's "ask the model" and "proceed to execution". Absent
-     * on every other prompt, so an older card renders exactly as before.
+     * on every other prompt, and the browser's makeActionBtns then appends
+     * nothing to the card.
      */
     actions?: {label: string; value: string}[]
     allowSkip: boolean
@@ -75,8 +77,10 @@ export interface ContextUsage {
     percent?: number
 }
 
-/** Seeds the context-usage bar for a freshly-connected client (the live value is
- *  otherwise only carried on agent_end). */
+/** A standalone context-usage update. The browser handles it, but nothing in
+ *  `src/` sends one: a connecting client is seeded from the snapshot's `context`
+ *  field, and the live value rides on `agent_end`. The only caller of
+ *  `setContext`, which emits this, is the test suite. */
 export interface ContextMessage {
     type: 'context'
     contextUsage: ContextUsage
