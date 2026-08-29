@@ -12,11 +12,6 @@ nexttask*.md
 !src/workers/__fixtures__/node_modules/
 !src/workers/__fixtures__/node_modules/**
 
-# Patched dist copies built by the A/B harnesses (scripts/spec-url-dist.ts).
-.ab-dist/
-
-# Measurement pools produced by scripts/extraction-*-step0.ts (large, regenerable).
-.measure/
 
 # The shipped-at-BASELINE_REF copy of final-gate.ts that
 # scripts/boot-skip-verdict-ab.ts writes next to the real one so the baseline
