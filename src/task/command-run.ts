@@ -9,23 +9,24 @@
  * Only a command that demonstrably ran and exited non-zero for a reason of its
  * own is a failure, and only exit 0 is a pass.
  *
- * Why a module. That ladder was written three times inside final-gate.ts —
- * `runGateCommand`, `runVerifyCommandLine`, `rerunDebtVerifyCommand` — in the
- * same order with different labels, and the copies had already drifted (the
- * infrastructure pattern applied unconditionally in one and only on request in
- * another). repo-health-check.ts had solved exactly this shape years earlier:
- * `classifyHealthRun` is pure over a value, extracted so its sync and async
- * runners "cannot drift apart". The gate never adopted it.
+ * Why a module. The same ladder is needed by every caller that runs a project
+ * command and must decide what its ending MEANS — the gate's own
+ * `runGateCommand`, `runVerifyCommandLine` here, and accept-debt's
+ * `rerunDebtVerifyCommand`. Stated separately at each site the copies drift: one
+ * applies the infrastructure pattern unconditionally, the next only on request,
+ * and two trails then disagree about whether the same output was a gap or a
+ * failure. repo-health-check.ts defers to this module rather than carrying its
+ * own version — its header says so in as many words.
  *
  * The second half is the seam. Classification is now pure over a `CommandRun`
  * value, and SPAWNING is a `CommandRunner` the caller injects. That is what lets
  * the gate's tests state a case as `{status: 1, stdout: "…"}` instead of writing
- * a real `node -e` child, creating a temp directory for it, and — for the three
- * cases only reachable that way — shadowing a binary on `process.env.PATH` and
- * resetting a module-level cache, which made those tests order-sensitive and
- * needed a Windows carve-out. Note the asymmetry this closes: `BootDeps` already
- * carried nine injectable probes for the gate's boot half while its command half
- * had none.
+ * a real `node -e` child, creating a temp directory for it, and — for the cases
+ * only reachable that way — shadowing a binary on `process.env.PATH` and
+ * resetting a module-level cache, which makes those tests order-sensitive.
+ *
+ * It also closes an asymmetry: `BootDeps` carries twelve injectable probes for
+ * the gate's boot half, while its command half had none.
  */
 
 import {spawn} from 'node:child_process'
@@ -63,27 +64,29 @@ export interface CommandSpec {
  * The injectable half. The gate takes one of these so its tests can script
  * verdicts instead of paying process-spawn cost for every classification case.
  *
- * ASYNC by contract. It was `(spec) => CommandRun`, so the only implementation
- * could be `spawnSync`, and the run-end gate blocked the event loop end to end:
- * repo-health under a 600s cap, then every lockfile/test/build/launch command
- * under a 900s cap, then every ACCEPT-debt re-run under a 300s cap, with no
- * loader able to paint through any of it. That freeze is MEASURED — 0 of 686
- * expected 100ms ticks fired during a 69s run — and `repo-health-check.ts`'s own
- * doc comment already told gate callers not to do it, while `final-gate.ts`'s
- * repo-health call did exactly that.
+ * ASYNC by contract, and the type is what enforces it. A synchronous
+ * `(spec) => CommandRun` can only be implemented with `spawnSync`, which blocks
+ * the event loop for the whole command — so the run-end gate, which runs
+ * repo-health and then every lockfile, test, build, launch and ACCEPT-debt
+ * command in sequence, would hold the loop for all of it and no loader could
+ * paint a single frame through it.
  */
 export type CommandRunner = (spec: CommandSpec) => Promise<CommandRun>
 
 /**
  * How much of ONE stream may be held in the HOST process, and how it is split.
  *
- * `spawnSync` bounded this at its 1 MB default `maxBuffer`. The async runner had
- * no bound at all: two strings grew in the TUI's own process for as long as a
- * command under the 900s cap kept talking.
+ * `spawnSync` came with a bound for free — its default `maxBuffer` is 1 MiB, and
+ * exceeding it fails the call with ENOBUFS (checked: 2 MiB of output truncates at
+ * 1,114,112 bytes). An async runner has no such bound, so without this two
+ * strings grow in the host's own process for as long as the command keeps
+ * talking.
  *
- * BOTH ENDS are kept, because both are read. `isCommandNotFound` and the two gap
- * regexes match wording a runner prints FIRST; `outputTail` and every failure
- * reason take the LAST 400 characters. A single-ended cap loses one of them.
+ * BOTH ENDS are kept, because both are read: `isCommandNotFound` and the gap
+ * regexes match wording a runner prints FIRST, while `outputTail` and every
+ * failure reason take the LAST 400 characters. A single-ended cap loses one of
+ * them. Run against a real 2 MB command, the capture keeps its opening bytes,
+ * its closing bytes, and an elision marker between them.
  */
 const OUTPUT_HEAD_CAP = 256 * 1024
 const OUTPUT_TAIL_CAP = 768 * 1024
@@ -130,9 +133,13 @@ const DRAIN_MS = 50
  * THE RUN SETTLES ON THE CHILD, NOT ON THE PIPE. `close` fires only once every
  * stdio pipe has reached EOF, and a backgrounded grandchild INHERITS stdout: a
  * seed script that starts a daemon, a build that leaves a watcher, a launch
- * script. Waiting for `close` there is waiting for the grandchild, which no
- * timeout can reach — SIGKILL goes to the direct child and the inherited pipe
- * survives it. So `exit` settles the run, and the deadline settles it itself.
+ * script.
+ *
+ * Measured on exactly that shape — a child that backgrounds a sleeper and exits
+ * at once — `exit` fired after 1ms and `close` NEVER fired. Sending SIGKILL to
+ * the direct child did not release it either, because the grandchild holds the
+ * pipe. Waiting for `close` is therefore waiting for something no timeout can
+ * reach. `exit` settles the run, and the deadline settles it itself.
  */
 export const spawnCommand: CommandRunner = spec =>
     new Promise<CommandRun>(resolve => {
@@ -147,8 +154,8 @@ export const spawnCommand: CommandRunner = spec =>
             cwd: spec.cwd,
             // stdin CLOSED. `spawnSync` gave the child none; the default `spawn`
             // stdio is a live pipe nobody ever ends, so a check that reads stdin —
-            // a `cat`-style pipeline, a tool that prompts, a pager — blocked until
-            // the kill timer: 600s for repo-health, 900s for a gate command.
+            // a `cat`-style pipeline, a tool that prompts, a pager — would block
+            // until the kill timer fires instead of returning at once.
             stdio: ['ignore', 'pipe', 'pipe'],
             ...(spec.env ? {env: spec.env} : {})
         })
@@ -187,12 +194,12 @@ export const spawnCommand: CommandRunner = spec =>
             clearTimeout(drain)
             drain = setTimeout(() => done(null), DRAIN_MS)
         }
-        // NOT unref'd. With `spawnSync`'s own `timeout` gone this timer is the only
-        // bound left on every gate command, repo-health command and ACCEPT-debt
-        // re-run — and an unref'd timer is MEASURED in this repo never to fire at
-        // all on Windows (0/20s), which would leave all of them unbounded. It is
-        // cleared the moment the run settles, so it holds the loop open only while
-        // a command the caller is awaiting anyway is still running.
+        // NOT unref'd. This timer is the only bound left on every gate command,
+        // repo-health command and ACCEPT-debt re-run, and an unref'd timer is only
+        // guaranteed to fire while something ref'd is still pending — not a
+        // guarantee this can rely on. It is cleared the moment the run settles, so
+        // it holds the loop open only while a command the caller is awaiting
+        // anyway is still running.
         const timer = setTimeout(killAndSettle, spec.timeoutMs)
         if (spec.signal) {
             if (spec.signal.aborted) killAndSettle()
