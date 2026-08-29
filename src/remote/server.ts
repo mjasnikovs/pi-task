@@ -63,8 +63,9 @@ export function getLocalIPs(nets = networkInterfaces()): LocalIPs {
 
 /** Build the labeled URL lines shown under the QR code. Both Tailscale and LAN
  *  when present; a single unlabeled primary URL when neither resolves. The
- *  Tailscale line uses the MagicDNS host when known (resolves to the same node,
- *  but is what SSH and webpush certs need), falling back to the raw IP. */
+ *  Tailscale line uses the MagicDNS host when known — it resolves to the same
+ *  node as the raw IP, but it is the name `tailscale cert` and the https URL in
+ *  tailscale.ts are issued for — falling back to the raw IP. */
 export function formatAddresses(ips: LocalIPs, port: number, tsHost?: string): AddressLine[] {
     const out: AddressLine[] = []
     if (tsHost) out.push({label: 'Tailscale', url: `http://${tsHost}:${port}`})
@@ -81,12 +82,12 @@ export function formatAddresses(ips: LocalIPs, port: number, tsHost?: string): A
  *
  *  Binding the real server directly (rather than probing a throwaway socket with
  *  createServer()/listen()/close() first, then binding the real one) removes a
- *  TOCTOU race: between "probe says port free" and "real listen", the port can be
- *  taken by someone else, and on Windows/Bun the PROBE socket's own port isn't
- *  fully released before the real listen runs — so the real bind hits EADDRINUSE
- *  on the very port that just tested free, and (with no 'error' listener on the
- *  real server) escapes as an uncaughtException that crashes pi (issue #7).
- *  Retrying the real bind has no probe and no window. */
+ *  TOCTOU race: between "probe says port free" and "real listen" the port can be
+ *  taken — including by the probe's own socket, if the runtime has not released
+ *  it yet — so the real bind hits EADDRINUSE on the very port that just tested
+ *  free. With no 'error' listener on the real server that escapes as an
+ *  uncaughtException and takes pi down; that is issue #7. Retrying the real bind
+ *  has no probe and no window. */
 export function listenWithRetry(
     server: import('node:http').Server,
     start: number,
@@ -181,12 +182,12 @@ export async function startServer(
     // keep-alive / WebSocket connections. Without this, httpServer.close() only
     // stops accepting new connections and waits for existing ones to drain — an
     // open browser tab never drains, so the listening server and its sockets
-    // stay as active event-loop handles forever. In headless print mode the host
-    // exits by natural event-loop drain (it sets process.exitCode and returns,
-    // with no process.exit()), so these lingering handles keep the pi process
-    // alive indefinitely — which blocks `docker stop` / OS shutdown until the
-    // SIGKILL grace timeout fires. Terminating clients and destroying sockets
-    // here is what lets the loop drain at all.
+    // stay as active event-loop handles forever. In print mode pi exits by
+    // natural event-loop drain: main.js sets `process.exitCode` and returns with
+    // no process.exit(), unlike the package-command path right above it which
+    // calls process.exit precisely so a bad extension cannot keep a one-shot
+    // command alive. Terminating clients and destroying sockets here is what
+    // lets the loop drain at all.
     const sockets = new Set<import('node:net').Socket>()
     httpServer.on('connection', s => {
         sockets.add(s)
