@@ -57,7 +57,7 @@ line counts as a comment line but opens no block.
 | `src/task/accept-debt.ts` | 770 | 314 | 42 | true |
 | `src/task/api-synthesis.ts` | 172 | 54 | 10 | true |
 | `src/task/apis-contract.ts` | 38 | 27 | 1 | true |
-| `src/task/artifact-closure.ts` | 1112 | 282 | 82 | false |
+| `src/task/artifact-closure.ts` | 1112 | 282 | 82 | true |
 | `src/task/auto-commit.ts` | 299 | 105 | 23 | false |
 | `src/task/auto-io.ts` | 293 | 75 | 18 | false |
 | `src/task/auto-orchestrator.ts` | 2005 | 737 | 150 | false |

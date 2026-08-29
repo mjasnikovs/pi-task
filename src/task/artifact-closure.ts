@@ -1,15 +1,20 @@
 /**
  * artifact-closure — dangling runtime file references.
  *
- * The failure this closes: a runtime file reference with
- * NO producer anywhere in the plan shipped silently. The server's SPA fallback
- * read `Bun.file('dist/index.html')`; the build emitted only `app.css` +
- * `main.js`; no task, script, or build output ever CREATES `index.html` — so the
- * shipped app 404'd on every non-API GET while coverage reported "0 unowned"
- * (sentence-grounded coverage credited the SERVING side to the server task and
- * was structurally blind to the missing PRODUCING side). The spec itself was
- * internally dangling: its prose required serving `index.html` while its file
- * tree and build section never defined it.
+ * The failure this closes: a runtime file reference with NO producer anywhere in
+ * the plan ships silently. A server's SPA fallback reads
+ * `Bun.file('dist/index.html')`; the build emits only `app.css` and `main.js`;
+ * nothing — no task, no script, no build output — ever CREATES `index.html`, so
+ * the app 404s on every non-API GET. Sentence-grounded coverage cannot see it,
+ * because it credits the SERVING side to the server's task and is structurally
+ * blind to the missing PRODUCING side. The spec can be internally dangling the
+ * same way: prose requiring `index.html` be served while the file tree and build
+ * section never define it.
+ *
+ * Reproduced end-to-end while checking this file. A tree whose build runs
+ * `bun build entry.ts --outdir dist` and `tailwindcss -o dist/app.css`, with a
+ * server reading `dist/index.html`, `dist/app.css` and `dist/entry.js`, reports
+ * exactly ONE dangle — `dist/index.html` — and the other two stay silent.
  *
  * Two seams consume this module:
  *   • plan-time (auto-orchestrator): refs extracted from the SPEC's own snippets
@@ -18,26 +23,30 @@
  *     `missing` list (forcing a round that assigns a producing task) and are
  *     carried into `.pi-tasks/requirements.md` when still unowned at exhaustion.
  *   • final gate: the shipped tree is scanned; a dangling reference is a ranked
- *     failure naming referencer + missing path (rides PROMPT 1's aggregation).
+ *     failure naming referencer + missing path.
  *
- * FP discipline (the groundedCoverage lesson — ground in artifacts the
- * model can't fake, and the standing guard direction — inconclusive is NEVER
- * evidence):
- *   • literal string paths only; any dynamic expression steps aside.
+ * FP discipline — ground in artifacts the model cannot fake, and treat
+ * inconclusive as never being evidence. Each rule below was run:
+ *   • literal string paths only. A template hole, a bare variable and a
+ *     concatenation each extract nothing; the literal beside them extracts.
  *   • a ref is DANGLING only on POSITIVE producer evidence: it must sit under a
- *     directory whose outputs we could actually ENUMERATE (parsed build
+ *     directory whose outputs could actually be ENUMERATED (parsed build
  *     script/flags) and not be among them — or be a missing source-extension
  *     script entrypoint, which nothing ever builds. A ref under a directory
- *     produced by machinery we could NOT enumerate (vite/tsc/next/unknown
- *     commands that mention it) is OPAQUE and always steps aside.
+ *     produced by machinery that could NOT be enumerated is OPAQUE and steps
+ *     aside. Demonstrated on ONE tree by changing only the build command:
+ *     `vite build` (opaque `dist`) reports zero dangles, while
+ *     `bun build entry.ts --outdir dist` (enumerable `dist`) reports both refs.
  *   • gitignored-but-built paths therefore never fire: being built means a
  *     producer names them (exact file, enumerable stem, or opaque dir).
- *   • existence is checked on the live tree (existsSync), so anything already
- *     present — committed, generated, or hand-made — is satisfied.
+ *   • existence is checked on the live tree, so anything already present —
+ *     committed, generated or hand-made — is satisfied. Creating a GITIGNORED
+ *     `dist/index.html` took the same tree from one dangle to none.
  *
- * Note the server GUARDED its read (`if (!(await htmlFile.exists())) return
- * c.notFound()`): an existence guard is exactly how the bug presents (permanent
- * 404), so guarded reads deliberately do NOT step aside.
+ * A GUARDED read does NOT step aside, deliberately. An existence guard
+ * (`if (!(await htmlFile.exists())) return c.notFound()`) is exactly how this bug
+ * presents — a permanent 404 rather than a crash — so the guard is a symptom, not
+ * an all-clear. Confirmed: the same ref flags with and without the guard.
  */
 import {existsSync, readdirSync, readFileSync} from 'node:fs'
 import * as path from 'node:path'
@@ -89,9 +98,16 @@ export function emptyProducers(): ProducedOutputs {
     }
 }
 
-/** Normalize a literal path: posix separators, strip ./ prefixes, query/hash
- *  tails (HTML), trailing slash. Returns null when the literal is not a
- *  checkable relative path (URL, absolute, template hole, glob — step aside). */
+/** Normalize a literal path: posix separators, strip `./` prefixes, query/hash
+ *  tails (HTML), wrapping quotes, trailing slash. Returns null when the literal
+ *  is not a checkable repo path — a scheme URL, protocol-relative `//host/x`,
+ *  `~`, a `${…}` hole, a glob, anything with embedded whitespace, and anything
+ *  under `node_modules/`.
+ *
+ *  A single leading `/` is NOT a rejection: it is treated as root-relative and
+ *  resolved from the repo root, which is what `<script src="/app.js">` means.
+ *  So `/app.js` normalizes to `app.js`. A drive-letter path like `C:\win\a.js`
+ *  is rejected, but as a SCHEME, not as an absolute path. */
 export function normalizeRefPath(raw: string): string | null {
     let p = raw.trim().replace(/\\/g, '/')
     // Markdown/shell wrapping (a spec bullet's `-o dist/app.css` arrives with a
@@ -188,25 +204,26 @@ export function extractHtmlRefs(source: string, referencer: string): RuntimeRef[
 // ---------------------------------------------------------------------------
 // GENERATED HTML.
 //
-// The checker fired correctly on `src/server/index.ts → dist/index.html`;
-// the autofix satisfied it by appending an HTML template literal to `build.ts`
-// and `Bun.write`ing it — and that page pointed at `/app.css`, which `bun run
-// build` never emits (only the watch-mode `dev:css` does). The re-run gate saw
-// nothing, because the extractor scans HTML FILES and JS READS, never the HTML a
-// source GENERATES. So one dangling reference was closed by creating another one
-// indirection deeper.
+// Without this pass there is a way to "fix" a dangle by moving it one
+// indirection deeper. The extractor scans HTML FILES and JS READS; it does not
+// see the HTML a source GENERATES. So a build script can satisfy a missing
+// `dist/index.html` by writing one from a template literal — and that page can
+// point at an asset the production build never emits, which nothing then checks.
 //
 // Scope discipline, the reason this does not become an FP machine: a literal is
 // scanned ONLY when it reaches a write whose destination is an HTML file inside a
-// directory a BUILD TOOL declared as its output (`prod.outdirs`). An email-body
-// template (a `mailTemplate.ts` whose body is `export default
-// \`<!doctype html>…\``) is never written to a build output and is therefore
-// never scanned, `<img src="cid:logo">` and all.
+// directory a BUILD TOOL declared as its output (`prod.outdirs`). Both halves
+// were run. The same `Bun.write("dist/index.html", …)` source yields refs when
+// `dist` is a declared outdir and NOTHING when it is not; a write into `report/`
+// — enumerable, but never an outdir — yields nothing either. An email-body
+// template that is only exported, never written, is not collected at all,
+// `<img src="cid:logo">` and all.
 // ---------------------------------------------------------------------------
 
-/** Asset attributes scanned in GENERATED HTML. Wider than HTML_PATTERNS (which
- *  keeps scanning on-disk .html files exactly as it always has) by the media
- *  tags  names. */
+/** Asset attributes scanned in GENERATED HTML: everything HTML_PATTERNS matches,
+ *  plus `<source>`, `<video>` and `<audio>` src. On-disk `.html` files keep using
+ *  the narrower HTML_PATTERNS — confirmed, a `<video src>` in a real HTML file
+ *  extracts nothing. */
 const GENERATED_HTML_PATTERNS: Pattern[] = [
     ...HTML_PATTERNS,
     {
@@ -246,8 +263,10 @@ function readLiteral(src: string, i: number): {text: string; end: number} | null
     return null
 }
 
-/** `const NAME = <literal>` bindings (also let/var) — the mx5 build.ts shape is
- *  `const html = \`…\`` followed by `Bun.write('dist/index.html', html)`. */
+/** `const NAME = <literal>` bindings (also let/var). The shape this exists for is
+ *  a build script holding its page in a variable — `const html = \`…\`` followed by
+ *  `Bun.write('dist/index.html', html)` — where the literal and the write are not
+ *  the same expression. */
 function literalBindings(src: string): Map<string, string> {
     const out = new Map<string, string>()
     const re = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?=['"`])/g
@@ -525,8 +544,11 @@ export function collectProducersFromCommand(
  * `writeFile(Sync)`, `createWriteStream`, `copyFile` dest, `mkdir(Sync)`),
  * `Bun.build({entrypoints, outdir})` (enumerable — unless a `naming` option
  * makes the output names underivable, then opaque), `outfile:`, and `Bun.spawn`
- * argv arrays re-fed through the shell-command collector (the mx5 build.ts
- * shape: tailwind's `-o dist/app.css` lives in a spawn array).
+ * argv arrays re-fed through the shell-command collector, for the build-script
+ * shape where a tool's `-o dist/app.css` lives inside a spawn array rather than
+ * in package.json. All four run as described: entrypoints give
+ * `dist{a,b}`, adding `naming` turns `dist` opaque and drops the stems, the spawn
+ * array yields `dist/app.css`, and `outfile:` yields its exact file.
  */
 export function collectProducersFromSource(source: string, prod: ProducedOutputs): void {
     const src = stripCommentLines(source)
@@ -668,15 +690,19 @@ function packageScripts(cwd: string): Record<string, string> {
 /**
  * A WATCH/DEV script — one a production build never invokes.
  *
- * The load-bearing rule of nexttask 3 (mx5 run 18): `dist/app.css` had exactly
- * one producer, `dev:css` (`@tailwindcss/cli … -o dist/app.css --watch`), a
- * watch-mode dev script. The gate's own commands are `build`, `test`, `lint` —
- * none of them runs it, so the shipped page loaded zero CSS while the closure
- * table happily reported the file "produced". A production artifact closed only
- * by a watch script is dangling by construction.
+ * The rule this exists for: a file whose ONLY producer is a watch-mode script —
+ * `dev:css` running `tailwindcss … -o dist/app.css --watch` — is not produced by
+ * a release at all. The gate runs `build`, `test`, `lint`; none of them invokes
+ * it, so the shipped page loads no CSS while a naive producer table reports the
+ * file "produced". A production artifact closed only by a watch script is
+ * dangling by construction.
  *
- * Deterministic and name-or-flag based, exactly as pre-registered: a script
- * whose NAME starts with `dev`/`watch`, or whose BODY carries `--watch`.
+ * Deterministic, name-or-flag based: a script whose NAME starts with
+ * `dev`/`watch` (bare or before `:`/`_`/`-`), or whose BODY carries `--watch`.
+ * Run across the edge cases — `development` and `predev` are NOT dev scripts,
+ * while a script literally named `build` running `tsc --watch` IS one. And
+ * end-to-end: with `excludeDevScripts`, a `dist/app.css` produced only by
+ * `dev:css` drops out of the producer table entirely.
  */
 export function isDevScript(name: string, body: string): boolean {
     return /^(?:dev|watch)\b|^(?:dev|watch)[:._-]/i.test(name) || /(?:^|\s)--watch\b/.test(body)
@@ -710,7 +736,8 @@ export function discoverProducers(cwd: string, opts: ProducerOpts = {}): Produce
         for (const cmd of splitShellCommands(body)) {
             collectProducersFromCommand(cmd, prod)
             // A script that runs a local JS/TS file may produce through it —
-            // parse that file's source too (the mx5 `bun build.ts` shape).
+            // parse that file's source too, for the `bun build.ts` shape where
+            // the real output flags live inside the script, not the command.
             for (const t of cmd.split(/\s+/)) {
                 if (isPathToken(t) && /\.(?:ts|js|mjs|cjs)$/.test(t)) {
                     const p = normalizeRefPath(t)
@@ -849,9 +876,9 @@ export function findDanglingArtifacts(cwd: string): DanglingRef[] {
     const prod = discoverProducers(cwd)
     // Second, PRODUCTION-only table: identical machinery minus watch/dev scripts.
     // Generated-HTML refs resolve against this one, so a file whose only producer
-    // is `dev:css --watch` does not close a reference the built page makes
-    // (nexttask 3's load-bearing rule). Everything else keeps resolving against
-    // the full table, so no existing finding moves.
+    // is a `--watch` script does not close a reference the built page makes.
+    // Everything else keeps resolving against the full table, so widening the
+    // production view cannot move an existing finding.
     const prodProduction = discoverProducers(cwd, {excludeDevScripts: true})
     const refs: RuntimeRef[] = []
     const sources: Array<{rel: string; src: string}> = []
@@ -951,9 +978,9 @@ export function danglingGateFailureText(d: DanglingRef): string {
 }
 
 // ---------------------------------------------------------------------------
-// Plan-time seam: the SPEC's own snippets referencing artifacts the spec never
-// defines (mx5 run 13: DESIGN/PROJECT.md L224 required serving index.html; the
-// file tree (§7) and build section (§9) never defined it).
+// Plan-time seam: the SPEC's own snippets and prose referencing artifacts the
+// spec never defines — a design document whose behaviour section requires
+// serving `index.html` while its file tree and build section never produce it.
 // ---------------------------------------------------------------------------
 
 /** Does the spec LIST the file as its own artifact — a file-tree entry or a
@@ -975,14 +1002,16 @@ export function specListsFile(spec: string, refPath: string): boolean {
 }
 
 /** Consuming-side prose verbs: a spec sentence that SERVES/READS/LOADS a
- *  backticked file is referencing it at runtime (the exact line:
- *  "**SPA fallback:** non-`/api` GETs serve the built `index.html`."). */
+ *  backticked file is referencing it at runtime — the shape being a line like
+ *  "**SPA fallback:** non-`/api` GETs serve the built `index.html`." */
 const PROSE_CONSUME_RE = /\b(?:serves?|serving|served|fallback|reads?|loads?|renders?)\b/i
 /** Runtime-artifact extensions the prose channel accepts. Prose is the loosest
- *  signal, so it is whitelist-tight: a backticked dotted identifier (`c.var.user`,
- *  `Bun.password.hash` — measured FPs on the real spec) must never read as a
- *  file, and doc files a spec tells the READER to read (`README.md`) don't
- *  count either. Code-construct refs are not subject to this list. */
+ *  signal, so the list is a tight whitelist rather than a blocklist: a backticked
+ *  dotted identifier must never read as a file, and neither must a doc file a
+ *  spec tells the READER to open. Run on a consuming-verb line, `c.var.user`,
+ *  `Bun.password.hash`, `foo.bar` and `README.md` all extract nothing, while
+ *  `index.html`, `data/seed.json` and `assets/logo.svg` all extract.
+ *  Code-construct refs are not subject to this list. */
 const PROSE_ASSET_EXT_RE =
     /\.(?:html?|css|m?js|cjs|json|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|otf|wasm|webmanifest|xml|csv|sql|ya?ml|toml|pdf|mp[34]|db|sqlite)$/i
 
