@@ -99,7 +99,7 @@ export class FetchAndCleanError extends Error {
         message: string,
         public readonly kind:
             'invalid-url' | 'http-error' | 'not-html' | 'too-large' | 'network' | 'aborted',
-        public readonly cause?: unknown
+        public override readonly cause?: unknown
     ) {
         super(message)
         this.name = 'FetchAndCleanError'

@@ -35,7 +35,7 @@ export class HttpRequestError extends Error {
         readonly kind: 'aborted' | 'network',
         /** The underlying cause, already rendered — callers put it in their own message. */
         readonly detail: string,
-        readonly cause?: unknown
+        override readonly cause?: unknown
     ) {
         super(detail)
         this.name = 'HttpRequestError'

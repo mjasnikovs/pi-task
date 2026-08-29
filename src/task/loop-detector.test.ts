@@ -85,7 +85,7 @@ describe('LoopDetector — the window-length rotation it cannot see', () => {
 
 describe('LoopDetector', () => {
     test('empty buffer never hits', () => {
-        const _d = new LoopDetector(20, 5)
+        new LoopDetector(20, 5)
         // No record calls — just constructed.
         // Re-create instead of querying internal state, since we record-then-check.
         expect(new LoopDetector(20, 5)).toBeInstanceOf(LoopDetector)

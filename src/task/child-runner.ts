@@ -944,7 +944,7 @@ export class LoopExhaustedError extends Error {
 export class ModelError extends Error {
     constructor(
         public readonly phase: string,
-        public readonly cause: string
+        public override readonly cause: string
     ) {
         super(`${phase} child: model error — ${cause}`)
         this.name = 'ModelError'

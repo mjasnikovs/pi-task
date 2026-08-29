@@ -1,6 +1,7 @@
 import js from '@eslint/js'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import prettierConfig from 'eslint-config-prettier/flat'
 
 export default tseslint.config(
     {ignores: ['dist', 'node_modules', 'src/**/__fixtures__/**']},
@@ -28,14 +29,14 @@ export default tseslint.config(
             }
         },
         rules: {
-            '@typescript-eslint/no-unsafe-call': 'warn',
-            '@typescript-eslint/no-unsafe-member-access': 'warn',
-            '@typescript-eslint/require-await': 'warn',
-            '@typescript-eslint/no-unsafe-argument': 'warn',
-            '@typescript-eslint/no-misused-promises': 'warn',
+            '@typescript-eslint/no-unsafe-call': 'error',
+            '@typescript-eslint/no-unsafe-member-access': 'error',
+            '@typescript-eslint/require-await': 'error',
+            '@typescript-eslint/no-unsafe-argument': 'error',
+            '@typescript-eslint/no-misused-promises': 'error',
 
             '@typescript-eslint/no-unused-vars': [
-                'warn',
+                'error',
                 {
                     args: 'all',
                     argsIgnorePattern: '^_',
@@ -47,8 +48,8 @@ export default tseslint.config(
                 }
             ],
 
-            '@typescript-eslint/unbound-method': 'warn',
-            '@typescript-eslint/no-floating-promises': 'warn',
+            '@typescript-eslint/unbound-method': 'error',
+            '@typescript-eslint/no-floating-promises': 'error',
             '@typescript-eslint/no-explicit-any': 'error',
             'no-empty': ['error', {allowEmptyCatch: true}],
             'linebreak-style': ['error', 'unix'],
@@ -68,8 +69,8 @@ export default tseslint.config(
             'eol-last': [2],
             'no-trailing-spaces': [2],
             'no-redeclare': 2,
-            'no-shadow': [2, {allow: ['_']}],
-            properties: 0,
+            'no-shadow': 0,
+            '@typescript-eslint/no-shadow': [2, {allow: ['_']}],
             camelcase: 0
         }
     },
@@ -79,5 +80,7 @@ export default tseslint.config(
         rules: {
             '@typescript-eslint/require-await': 'off'
         }
-    }
+    },
+    // Last: turns off every rule prettier already owns.
+    prettierConfig
 )
