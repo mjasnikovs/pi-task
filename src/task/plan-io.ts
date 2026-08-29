@@ -99,13 +99,12 @@ export function formatPlanDecisions(entries: readonly PlanEntry[]): string {
 /**
  * The line that pins the DELIVERABLE, and it is not optional.
  *
- * The task prompt leads the handoff verbatim, and users reach /task-plan by
- * phrasing the request as planning — live (aiz-client TASK_PLAN_0001,
- * 2026-08-05): "Lets plan new tab and report @src/app/reports/". /task's refine
- * read the verb as the deliverable and produced a task titled "Plan the addition
- * of a new sub-tab…", whose ACCEPTANCE was "a planning document exists with
- * placeholder sections" and whose VERIFY asserted that no `.ts`/`.tsx` file had
- * changed. It passed. Nothing was built.
+ * The task prompt leads the handoff VERBATIM (see `buildHandoffPrompt`), and the
+ * way a user reaches /task-plan is by phrasing the request as planning — "let's
+ * plan X". Handed that verb, /task's refine can read PLANNING as the deliverable:
+ * the task becomes "plan X", its ACCEPTANCE becomes "a planning document exists",
+ * and its VERIFY asserts that no source file changed. Such a task passes its own
+ * gate with nothing built.
  *
  * Planning already happened — this prompt IS its output — so the handoff says so
  * rather than letting the request's own wording re-open it. It rides on every
