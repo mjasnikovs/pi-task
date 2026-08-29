@@ -3,24 +3,29 @@ import {CHILD_BASE_ARGS} from './child-process.js'
 import {getConfig} from '../config/config.js'
 
 /**
- * Extension whitelist → child argv (GitHub issue #4).
+ * Extension whitelist → child argv.
  *
- * Child pi sessions run with `--no-extensions`, so a provider registered by a
- * host extension (e.g. pi-lmstudio) doesn't exist in them — the child can't
- * resolve the default model and demands OAuth/API keys. pi's `--no-extensions`
- * explicitly preserves explicit `-e <path>` loads (only discovery is disabled),
- * so injecting the user's whitelisted entry paths restores the provider while
- * keeping every non-whitelisted extension out. Same mechanism pi-task already
- * uses for its own worker-tool extensions (see runWorker's `extensions` input).
+ * Child pi sessions run with `--no-extensions` (see CHILD_BASE_ARGS). That flag
+ * disables extension DISCOVERY only: pi still loads every explicit `-e <path>`.
+ * An extension can be the sole source of a model provider — pi's `ExtensionAPI`
+ * exposes `registerProvider` — and with discovery off such an extension never
+ * runs in the child, so the provider it would register is absent there.
+ * Injecting the user's whitelisted entry paths loads exactly those back and
+ * leaves every non-whitelisted extension out.
+ *
+ * Same mechanism `runWorker` uses for the internal worker-tool extensions, via
+ * its `extensions` input.
  */
 
 /**
  * Map whitelisted entry paths to `-e` argv pairs. Pure given `exists`.
  *
- * A path whose file is gone (extension uninstalled since it was whitelisted)
- * is skipped silently: pi itself would record "Extension path does not exist"
- * as a load ERROR, and a stale toggle must never break every child spawn.
- * Duplicates collapse so a path can't be loaded twice.
+ * The existence filter is load-bearing. A missing `-e` path is fatal to pi, not
+ * a warning: it prints `Extension path does not exist: <path>` and exits 1
+ * without reaching the model. So a whitelist entry left pointing at an
+ * uninstalled extension would kill every child spawn, and is dropped here
+ * instead. Blank and duplicate entries are dropped for the same reason — a
+ * hand-edited config must not be able to shape the argv into a failure.
  */
 export function extensionArgs(
     paths: readonly string[],
@@ -38,11 +43,18 @@ export function extensionArgs(
 }
 
 /**
- * The base argv every child pi invocation starts from: internal worker
- * extensions (verbatim — they always exist, shipped in dist), then the user's
- * whitelisted extensions (existence-filtered, deduped against the internal
- * ones), then CHILD_BASE_ARGS. Computed per spawn, not at module load, so a
- * /task-config toggle takes effect for the next child without a restart.
+ * The base argv every child pi invocation starts from: all three argv builders
+ * (`childArgs`, `focusedChildArgs`, `runWorker`) begin here.
+ *
+ * Order: internal worker extensions, then the user's whitelisted extensions
+ * (existence-filtered, and deduped against the internal ones), then
+ * CHILD_BASE_ARGS. Internal paths go in verbatim with no existence check
+ * because every one of them is resolved against `import.meta.url`, so it names
+ * a sibling of the module that asked for it and ships wherever that ships.
+ *
+ * The config is read on every call rather than at module load, so a
+ * `/task-config` toggle reaches the next child: the toggle saves through
+ * `saveConfig`, which replaces the object `getConfig` hands back.
  */
 export function childBaseArgs(internalExtensions: readonly string[] = []): string[] {
     const internal = internalExtensions.flatMap(e => ['-e', e])
