@@ -7,12 +7,13 @@
  *   • `aborted`     — a user ESC (or the command watchdog) cut the turn short;
  *   • `compaction`  — a threshold auto-compaction parked the turn at idle without
  *                     auto-continuing (the runtime expects a manual continue);
- *   • `error`       — the model/provider died mid-turn after pi's own retries;
+ *   • `error`       — the model or provider failed after pi exhausted the retries
+ *                     in its own retry settings;
  *   • `stop`        — genuine completion.
- * `classifyTurnEnd` reads the session entries and names ONE of those, in the
- * precedence the supervision sequence needs; `superviseImplementation` then
- * resumes across compactions, lets the user steer after an interrupt, and reports
- * the terminal outcome. The orchestrator calls it once.
+ * `classifyTurnEnd` reads the session entries and names ONE of those;
+ * `superviseImplementation` then resumes across compactions, lets the user steer
+ * after an interrupt, and reports the terminal outcome. The orchestrator calls it
+ * from one place, inside the `sendSpec` closure.
  */
 
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
@@ -55,21 +56,20 @@ function tailPositions(entries: ReadonlyArray<SessionEntryLike>): {
 /**
  * Classify how the most recent turn ended, from the session entries alone.
  *
- * Precedence, when several signals are present at once (this is the order the
- * supervision sequence has always applied, now stated in one place):
+ * Precedence, when several signals are present at once:
  *   1. `aborted`    — the last assistant message has stopReason "aborted". A user
  *                     ESC (or watchdog abort) wins over everything: it is not a
  *                     compaction pause, and the steer loop owns it.
  *   2. `compaction` — a `compaction` entry sits AFTER the last assistant message.
- *                     Position-based, not timestamp-based: the runtime appends the
- *                     boundary to the tail of the branch after the message that
- *                     triggered it (`appendCompaction` → `_appendEntry` push), so a
+ *                     Position-based, not timestamp-based: `appendCompaction`
+ *                     pushes the boundary onto the tail of the entry list, and
+ *                     `getEntries()` returns that list in append order, so a
  *                     trailing compaction means we are parked with no continuation.
- *                     A finished turn ends on an assistant message; an *overflow*
- *                     compaction self-retries and never leaves us idle here.
- *   3. `error`      — the last assistant message has stopReason "error": the
- *                     model/provider died (context-overflow 400, disconnect, 5xx)
- *                     after pi exhausted its own retries.
+ *                     A finished turn ends on an assistant message. An overflow
+ *                     compaction that is going to retry continues the turn itself
+ *                     and never reaches us idle.
+ *   3. `error`      — the last assistant message has stopReason "error": the model
+ *                     or provider failed after pi exhausted its own retries.
  *   4. `stop`       — anything else, including a session with no assistant turn.
  */
 export function classifyTurnEnd(entries: ReadonlyArray<SessionEntryLike>): TurnEnd {
@@ -139,10 +139,11 @@ export type SteerCtx = ExtensionCommandContext & {
 
 /**
  * Timing knobs for the watchdog-abort guard in {@link steerUntilDone}, injectable
- * so tests exercise the grace expiry without a 10-second wait. `graceMs` bounds
- * how long the loop waits for the watchdog's follow-up to be DELIVERED (not to
- * finish — its turn may legitimately run for minutes afterwards); delivery is
- * normally near-instant, so the grace only expires on a stale flag.
+ * so a test can exercise the grace expiry without waiting it out. `graceMs`
+ * bounds how long the loop waits for the watchdog's follow-up to be DELIVERED,
+ * not to finish: once it lands, the wait for its turn is unbounded. `onFire`
+ * sends the follow-up in the same block that raised the flag, so the grace
+ * expires only when the flag was already stale.
  */
 export interface SteerWatchdogDeps {
     consume: () => boolean
@@ -231,9 +232,10 @@ export function turnDepsFor(ctx: SteerCtx, opts: SuperviseOptions = {}): Impleme
 /**
  * Nudge that resumes an implementation turn the runtime parked at a compaction
  * boundary. It must let a turn that was genuinely finished (then tipped over the
- * threshold by its own final message) confirm completion without inventing busywork
- * — we cannot tell "paused mid-task by compaction" from "finished, then compacted"
- * from the boundary alone, so the wording lets a done turn end in one line.
+ * threshold by its own final message) confirm completion without inventing busywork.
+ * The classifier sees only the boundary's POSITION, so it cannot tell "paused
+ * mid-task by compaction" from "finished, then compacted"; the wording lets a done
+ * turn end in one line.
  */
 export const CONTINUE_AFTER_COMPACTION =
     'Your context was automatically compacted. Continue implementing this task from '
@@ -243,11 +245,10 @@ export const CONTINUE_AFTER_COMPACTION =
 
 /**
  * Safety cap on compaction-driven resumes for a single implementation turn. Each
- * resume follows a real compaction (which only fires after the model produced a
- * turn large enough to cross the threshold), so a legitimately large task may
- * resume a handful of times; the cap exists only to stop a pathological loop from
- * auto-sending forever with no user in the loop. Hitting it stops resuming and lets
- * the verify gate / `/task-auto-resume` catch any leftover incompleteness.
+ * resume follows a real compaction, which pi only runs once `shouldCompact` says
+ * the context crossed its threshold. The cap exists to stop a pathological loop
+ * from auto-sending forever with no user watching. Hitting it stops resuming and
+ * lets the verify gate and `/task-auto-resume` catch any leftover incompleteness.
  */
 export const MAX_COMPACTION_RESUMES = 20
 
@@ -301,10 +302,12 @@ async function awaitWatchdogFollowUp(deps: ImplementationTurnDeps): Promise<bool
  * `waitForIdle` resolves both on natural completion AND on an ESC (which aborts
  * the turn → idle). When the last turn was aborted, the host's main input loop is
  * blocked inside our command handler, so a message typed in the editor would only
- * queue, never run (interactive-mode routes idle input through onInputCallback,
- * which is unset while we hold the loop). We therefore solicit the steering text
- * ourselves and feed it back as another turn via sendUserMessage — which runs to
- * completion when the session is idle. Repeat until a turn finishes uninterrupted.
+ * queue, never run: interactive-mode's submit handler calls `onInputCallback` when
+ * the session is idle, and that callback is set only inside `getUserInput()` — the
+ * REPL loop we are holding — so the text lands in `pendingUserInputs` instead. We
+ * therefore solicit the steering text ourselves and feed it back as another turn
+ * via `sendUserMessage`, which forwards to `prompt()` and, on an idle session, runs
+ * the turn rather than queueing it. Repeat until a turn finishes uninterrupted.
  *
  * A WATCHDOG abort also ends the turn with stopReason 'aborted' — indistinguishable
  * from a human ESC by the session entries alone at that instant. The watchdog
