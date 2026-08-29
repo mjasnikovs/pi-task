@@ -9,11 +9,12 @@
  * {@link parseClarifyList} parses this output UNCHANGED, and the boxed picker,
  * the duplicate backstop and the YOLO picker all work here with no new code.
  *
- * What differs is the JOB. /task-auto's clarify asks what changes how a feature is
- * SPLIT INTO TASKS; every question it asks is about plan shape, ordering, and which
- * subsystems are in or out. /task-plan is planning a single unit of work that /task
- * will implement in one run, so a "how do we split this" question is off-topic here
- * and the prompt below rules it out explicitly.
+ * What differs is the JOB. /task-auto's clarify asks for what most changes how a
+ * feature is SPLIT INTO TASKS — scope boundaries, which subsystems are in or out,
+ * ordering, the cross-cutting choices that fork the breakdown. /task-plan is
+ * planning a single unit of work that /task will implement in one run, so a "how
+ * do we split this" question is off-topic here, and the SCOPE RULES below rule it
+ * out explicitly.
  */
 
 /**
