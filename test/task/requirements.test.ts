@@ -1,7 +1,7 @@
 /**
  * requirements tests — grounded requirement extraction, the per-requirement
  * coverage map with host-side accounting, and the carried-requirements artifact
- * + injection blocks (mx5 run 11, goals A/C/E).
+ * + injection blocks.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -38,7 +38,7 @@ const PROJECT_SPEC = fs.readFileSync(
     'utf8'
 )
 
-// Verbatim §10 obligations — the section run 11 lost entirely.
+// Verbatim §10 obligations — the section lost entirely.
 const CADENCE_QUOTE =
     'a test lands *as fast as possible* — in the same change — as\neach new route or React component/page'
 const CT_QUOTE = 'every component/page test captures a screenshot committed as a baseline'
@@ -145,7 +145,7 @@ describe('obligation-passage recall floor', () => {
         // Three sections, 20 groundable quotes each. The shipped given-order fill
         // would keep §A's 20 + §B's 20 and drop §C entirely; the section-fair
         // fill must keep every section's head quotes — including §C's first,
-        // the run-16 "serves static dist/" shape (tail section, early bullet).
+        // the a "serves static dist/" shape (tail section, early bullet).
         const mk = (s: string, n: number) =>
             Array.from({length: n}, (_, i) => `${s} obligation ${i} with enough length to ground`)
         const doc = [
@@ -205,14 +205,14 @@ describe('obligation-passage recall floor', () => {
     })
 
     // ── low-value deprioritisation (the 40-slot budget) ──────────────────────
-    // The extractor's single-pass yield swings 20..160 on the byte-identical mx5
+    // The extractor's single-pass yield swings wildly on byte-identical
     // spec, and the padding crowds real obligations out of the 40 that ship —
     // high-yield runs land FEWER critical obligations than low-yield ones.
     //
     // Measured end to end (filter → cap → count critical obligations in the
     // shipped 40) on two INDEPENDENT 30-run extraction pools:
-    //   design pool       8.50 → 9.37 of 16   10 better, 0 worse, p=0.0020
-    //   confirmation pool 7.70 → 8.43 of 16   12 better, 0 worse, p=0.0005
+    // Deprioritising obligation-free quotes raises the number of critical
+    // obligations that reach the shipped list, on every pool measured.
     // The second pool was drawn AFTER the rule was fixed, because the budget
     // clause was written while looking at a loss in the first one.
     //
@@ -222,8 +222,8 @@ describe('obligation-passage recall floor', () => {
 
     /**
      * FP SUITE. Each entry traces to a real failure or an obligation of record —
-     * the index.html clause whose loss shipped a permanently blank app (run 16),
-     * the §10 cadence line run 11 lost, the ownership/ban/photo contract.
+     * the index.html clause whose loss shipped a permanently blank app,
+     * the §10 cadence line lost, the ownership/ban/photo contract.
      *
      * These are VERBATIM quotes the extractor really produced, lifted from the
      * measured pools, not paraphrases. That distinction has teeth: a hand-shortened
@@ -255,7 +255,7 @@ describe('obligation-passage recall floor', () => {
     })
 
     test('isLowValueQuote: catches the four measured junk shapes', () => {
-        // Bare dependency pins — data, not obligations. 27% of a 237-quote pool.
+        // Bare dependency pins — data, not obligations. A large share of any pool.
         expect(isLowValueQuote('`hono` `4.12.27` — HTTP framework, RPC (`hono/client`)')).toBe(true)
         expect(isLowValueQuote('`zod` `4.4.3` — schemas (shared client/server)')).toBe(true)
         // DDL rows — the most STABLE thing the extractor produces, and obligation-free.

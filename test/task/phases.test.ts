@@ -137,7 +137,7 @@ describe('refineExistingFilesBlock', () => {
 })
 
 describe('scopedToolingGoal', () => {
-    // Shape of the failing TASK_0017 refined prompt: a GOAL block whose tail is a
+    // Shape of the failing one task refined prompt: a GOAL block whose tail is a
     // long per-file edit checklist, then CONSTRAINTS. The checklist is what made
     // the TOOLING worker spelunk source and loop.
     const bulletHeavy = [
@@ -566,7 +566,7 @@ describe('phaseResearch per-worker persistence', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 const which = classify(args)
                 spawns[which] = (spawns[which] ?? 0) + 1
-                // TOOLING (the last worker) hits a FATAL failure on run 1 — a reported
+                // TOOLING (the last worker) hits a FATAL failure on a — a reported
                 // model error, the untrustworthy mode that still throws (unlike a
                 // runaway, which would degrade-and-cache, or a plain empty answer,
                 // which is now retried and accepted — issue #10). It fails the phase
@@ -816,7 +816,7 @@ describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', ()
 })
 
 describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
-    // Verbatim from TASK_0027.md — the bullet that killed the run. worker:context has
+    // Verbatim from one task.md — the bullet that killed the run. worker:context has
     // read+grep only, so the base-URL half necessarily came from model memory; fused with
     // the true pinned-version half under one attribution it read as sourced.
     const FATAL =
@@ -991,9 +991,9 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
     })
 })
 
-// mx5 run 9 item 5 — GUARANTEE the never-before-exercised search path stays wired.
+// item 5 — GUARANTEE the never-before-exercised search path stays wired.
 // Live validation showed the provider dispatch is healthy (exa + ddg return real
-// results) and the model DOES invoke pi-worker-search 5/5 when the task needs a
+// results) and the model DOES invoke pi-worker-search when the task needs a
 // fresh fact and the hint is present; the "0 search calls" across runs traced to the
 // TASK never signalling a web need (item 4's dropped directive), not a broken path.
 // This deterministic guard fails if a refactor ever drops search from the APIS worker
@@ -1042,7 +1042,7 @@ describe('phaseResearch search-path wiring (run 9 item 5)', () => {
         expect(toolsCsv).toContain('pi-worker-fetch')
         // …the search extension is loaded via -e…
         expect(apisArgs.some(a => /search-extension/.test(a))).toBe(true)
-        // …and the trigger hint (the working lever, live-proven 5/5) is in the prompt.
+        // …and the trigger hint, which is the lever that works, is in the prompt.
         expect(apisPrompt).toContain('pi-worker-search')
         expect(apisPrompt.toLowerCase()).toContain('live web')
     })
@@ -1131,7 +1131,7 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                 const spawn = fakeSpawnByPrompt(args => {
                     const which = classify(args)
                     spawns[which] = (spawns[which] ?? 0) + 1
-                    // APIS fails fatally on run 1 while the others succeed
+                    // APIS fails fatally on while the others succeed
                     // slower — allSettled must still persist all three.
                     if (which === 'apis' && apisShouldFail)
                         return agentErrorResponse('fetch failed')
@@ -2448,7 +2448,7 @@ describe('phaseCritique conditional rewrite', () => {
 })
 
 describe('phaseCompose VERIFY block gate', () => {
-    // The exact shape that failed TASK_0022: GOAL/CONSTRAINTS/ACCEPTANCE all
+    // The exact shape that failed one task: GOAL/CONSTRAINTS/ACCEPTANCE all
     // present, but the `VERIFY:` header has no fenced command block after it.
     // validateSpecShape accepts this (header exists); parseVerifyBlock rejects
     // it (no runnable commands). Compose must apply the stricter bar so it never
@@ -3381,7 +3381,7 @@ describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadl
         })
     })
 
-    // nexttask 9 — the plumbing test for the ONE lever in this file that shipped.
+    //  — the plumbing test for the ONE lever in this file that shipped.
     // `workerProgressCeilingMs()`'s default and `runWorker`'s behaviour under a
     // ceiling both have their own unit tests; this covers the line between them,
     // which is the only place the wiring can silently come undone.
@@ -3573,7 +3573,7 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
 
 describe('PhaseResearchDeps.runWorker seam', () => {
     // Every decision runSpec makes is a pure function of RunWorkerResult fields.
-    // Reaching one used to mean driving a fake process that emits JSON events —
+    // Without this seam, reaching one means driving a fake process that emits JSON events —
     // including a forged tool_execution_start, because otherwise the APIS
     // zero-retrieval gate fired and broke the spawn counts of unrelated tests.
     // With the seam the fields are stated directly, and workers are told apart by

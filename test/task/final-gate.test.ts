@@ -86,7 +86,7 @@ describe('discoverIntegrationCommands', () => {
         ])
     })
 
-    // mx5 run 10 item 2: EVERY test-shaped script must run, not just `test`.
+    // item 2: EVERY test-shaped script must run, not just `test`.
     test('every test*/test:* script runs — plain test leads, then test:* / test-*, build last', async () => {
         const dir = makeDir({
             scripts: {
@@ -198,7 +198,7 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).toContain('`bun run build` exited 2')
     })
 
-    // mx5 run 10 item 2: `test:ct` (Playwright CT) must RUN in the gate, but on a box
+    // item 2: `test:ct` (Playwright CT) must RUN in the gate, but on a box
     // with no browsers installed it is an ENVIRONMENT gap, not a code FAIL. Playwright
     // exits non-zero (not 127) with a recognisable "Executable doesn't exist" message.
     test('a browser suite with no browsers installed is an env gap → skipped, not failed', async () => {
@@ -229,7 +229,7 @@ describe('runFinalIntegrationGate', () => {
         expect(out.ok).toBe(true)
     })
 
-    // mx5 run 10 item 4: a script the design declared but the manifest never exposed
+    // item 4: a script the design declared but the manifest never exposed
     // (migrate/seed) is a launch-surface defect the final gate must FAIL on.
     test('a declared script missing from the manifest FAILs the gate naming it', async () => {
         const dir = makeDir({scripts: {dev: 'exit 0', build: 'exit 0', test: 'exit 0'}})
@@ -257,7 +257,7 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).not.toContain('launch contract')
     })
 
-    // mx5 run 13: the gate AGGREGATES — an earlier section failure no longer
+    // The gate AGGREGATES — an earlier section failure does not
     // shadows the later sections (the boot + render probe was ordered last and
     // never ran, so the user accepted a FAIL seeing 1 CT test while the app
     // 404'd on /). Statics failing now reports the integration failure too.
@@ -344,7 +344,7 @@ describe('runFinalIntegrationGate', () => {
     })
 })
 
-// mx5 run 9 item 3, layer (b): the final gate must reap OUR OWN orphaned dev server
+// item 3, layer (b): the final gate must reap OUR OWN orphaned dev server
 // and retry, or — if the port is held by something we cannot attribute to ourselves
 // — surface a HARNESS diagnosis rather than a bare app FAIL.
 describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', () => {
@@ -477,7 +477,7 @@ describe('discoverGateCommandBodies', () => {
     })
 })
 
-// mx5 runs 8/11: the whole gate must FAIL when the served app renders blank, and
+// The whole gate must FAIL when the served app renders blank, and
 // surface UNOBSERVED when no browser could observe it. Injected render probe +
 // listener keep it hermetic (a real alive start script, faked observation).
 describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () => {
@@ -546,7 +546,7 @@ describe('runFinalIntegrationGate — served-page render check (runs 8/11)', () 
     })
 })
 
-// mx5 run 13: runFinalIntegrationGate early-returned on the FIRST failing section,
+// Early-returning on the FIRST failing section,
 // so the boot + render probe (ordered last, and the run's most load-bearing signal)
 // never executed once any test failed — the user accepted the FAIL having seen only
 // 1 failing CT test while the shipped app 404'd on every non-API GET. The gate now
@@ -584,7 +584,7 @@ describe('runFinalIntegrationGate — failure aggregation + ranking (run 13)', (
         expect(out.failures![1]).toContain('`bun run test` exited 1')
     })
 
-    // The run-13 replay (nexttask PROMPT 1 item 5): a failing bun-test glob (the
+    // The replay: a failing bun-test glob (the
     // playwright .spec collision) PLUS an unservable app (listener up, page never
     // renders — no index.html producer). Baseline (early-return) showed ONLY the
     // test failure; the aggregate must carry BOTH with the render failure FIRST.
@@ -645,7 +645,7 @@ describe('runFinalIntegrationGate — failure aggregation + ranking (run 13)', (
 
 describe('runFinalIntegrationGate — dangling-artifact closure (run 13, PROMPT 2)', () => {
     test('a runtime ref with no producer FAILS the gate, ranked with the load-bearing class', async () => {
-        // The run-13 shape: server reads dist/index.html; the build enumerable
+        // The shape: server reads dist/index.html; the build enumerable
         // outputs are main.js (Bun.build entrypoint) + app.css (tailwind -o) —
         // index.html has no producer anywhere. Statics/tests are green.
         const dir = makeDir({scripts: {test: 'exit 0', build: 'node build.js'}})
@@ -717,7 +717,7 @@ describe('runFinalIntegrationGate — env-template closure (run 19, nexttask 10)
     const envFailures = (out: {failures?: string[]}): string[] =>
         (out.failures ?? []).filter(f => f.startsWith('env closure:'))
 
-    /** mx5 run 19 in miniature: `seed.ts` requires two variables the tracked
+    /** A real run in miniature: `seed.ts` requires two variables the tracked
      *  `.env.example` never declares, and every command passes. */
     const SEED_TS =
         'const phone = process.env.ADMIN_PHONE\n'
@@ -815,7 +815,7 @@ describe('runFinalIntegrationGate — env-template closure (run 19, nexttask 10)
 })
 
 describe('runFinalIntegrationGate — serve-entry closure (run 18, nexttask 2B)', () => {
-    /** The run-18 shape in miniature: a Hono app with an SPA fallback and no bind. */
+    /** The failing shape in miniature: a Hono app with an SPA fallback and no bind. */
     function makeUnservableTree(scripts: Record<string, string>): string {
         const dir = makeDir({name: 'x', dependencies: {hono: '4'}, scripts})
         fs.mkdirSync(path.join(dir, 'src', 'server'), {recursive: true})
@@ -1006,7 +1006,7 @@ describe('runFinalIntegrationGate — ACCEPT-debt re-check (run 4 B3 / run 8 TAS
             {taskId: 'TASK_0012', reason: 'modified frozen path src/main.tsx'}
         ])
         // The note rides in its own field: `reason` stays mechanical because it
-        // seeds the autofix child (mx5 run 11 — a debt in the seed became an `rm`).
+        // seeds the autofix child.
         expect(out.debtNote).toContain('UNRESOLVED VERIFY-FAIL DEBT still open (1)')
         expect(out.debtNote).toContain('TASK_0012')
         expect(out.reason).not.toContain('UNRESOLVED VERIFY-FAIL DEBT')
@@ -1076,7 +1076,7 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
         if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.toString()}`)
     }
 
-    /** A throwaway repo where TASK_0008's commit introduces the admin page. */
+    /** A throwaway repo where a task's commit introduces the admin page. */
     function makeRepoWithTaskCommits(): string {
         const dir = makeDir()
         git(dir, 'init', '-q')
@@ -1095,7 +1095,7 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
     test('resolves the ORIGINAL introducing task commit, even after deletion', async () => {
         const dir = makeRepoWithTaskCommits()
         expect(taskThatIntroduced(dir, 'src/client/pages/admin.tsx')).toBe('TASK_0008')
-        // The run-11 shape: the file was rm'd from the worktree — attribution holds.
+        // The shape: the file was rm'd from the worktree — attribution holds.
         fs.rmSync(path.join(dir, 'src/client/pages/admin.tsx'))
         expect(taskThatIntroduced(dir, 'src/client/pages/admin.tsx')).toBe('TASK_0008')
     })
@@ -1123,15 +1123,15 @@ describe('taskThatIntroduced + end-to-end conflict annotation (mx5 run 11)', () 
         expect(out.openDebts).toHaveLength(1)
         expect(out.openDebts![0].conflict).toContain("TASK_0008's committed deliverable")
         expect(out.debtNote).toContain('⚠ CONFLICTING CLAIM')
-        // The autofix seed (reason) must not carry the claim (run 11: it became `rm`).
+        // The autofix seed (reason) must not carry the claim.
         expect(out.reason).not.toContain('admin.tsx')
     })
 })
 
-// mx5 run 11: existence is not launchability — declared launch scripts must RUN.
+// Existence is not launchability — declared launch scripts must RUN.
 describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)', () => {
     test('a declared script that dies on first call FAILs the gate with its output', async () => {
-        // The run-11 shape: migrate/seed shipped with a first-call TypeError
+        // The shape: migrate/seed shipped with a first-call TypeError
         // (`.rows` on a Bun sql array result) and every gate stayed green.
         const dir = makeDir({
             scripts: {
@@ -1147,7 +1147,7 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
     })
 
     test('a declared launch script RUNS even when no integration/boot command is discoverable', async () => {
-        // The zero-discovery return used to fire BEFORE the launch-script loop
+        // Firing the zero-discovery return BEFORE the launch-script loop
         // (found and left unfixed in f5d7110): a package.json whose only scripts
         // are `migrate`/`seed` discovers no test/build/start, so the gate returned
         // UNOBSERVED without ever running the launch contract it had been handed.
@@ -1202,7 +1202,7 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
             }
         })
         await appendDeclaredScripts(dir, ['migrate', 'test'])
-        // The verbatim run-11 excuse-note class: the note excused the exact
+        // The verbatim excuse-note class: the note excused the exact
         // scripts that shipped broken.
         await appendEnvNotes(
             dir,
@@ -1325,12 +1325,12 @@ describe('observabilityGapFailure — full-skip is never a PASS (mx5 run 16)', (
 })
 
 /**
- * The THIRD verdict (IAR1, validated 2026-07-27): zero discovery used to return
+ * The THIRD verdict. Zero discovery returning
  * `PASS — no integration command found (statics passed)`, so "we never checked" read
- * exactly like "we checked and it was fine" — the same blindness class as run 16,
+ * exactly like "we checked and it was fine" — the same blindness class,
  * entering through the door observabilityGapFailure deliberately leaves open
  * (attempted === 0 → null). The two guards are complementary and BOTH are asserted
- * here on the same inputs, because the run-16 guard must not be softened to make room
+ * here on the same inputs, because the guard must not be softened to make room
  * for this one.
  */
 describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IAR1)', () => {
@@ -1438,9 +1438,9 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
 })
 
 /**
- * A SKIPPED boot check is a verdict, not a silence (mx5 run 18, validated).
+ * A SKIPPED boot check is a verdict, not a silence.
  *
- * The run-18 shape reproduced exactly: a served app whose boot command was
+ * The shape reproduced exactly: a served app whose boot command was
  * discovered and env-gap-skipped, while every other dynamic command ran and
  * passed — so dynObserved > 0, observabilityGapFailure stayed correctly quiet, and
  * "the app was never observed to boot" produced byte-identical output to "the app
@@ -1449,7 +1449,7 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
  */
 describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
     /** A served app (hono in deps is what detectsServedApp reads) whose `dev`
-     *  script exits 127 inside the chain — run 18's docker-less skip, in miniature. */
+     *  script exits 127 inside the chain — a docker-less skip, in miniature. */
     const servedSkipPkg = (extra: Record<string, string> = {}) => ({
         dependencies: {hono: '4.12.27'},
         scripts: {test: 'exit 0', build: 'exit 0', dev: 'pi-task-no-such-binary-9f3c', ...extra}
@@ -1489,7 +1489,8 @@ describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx
     })
 
     test('observations from OTHER commands cannot cancel it — the CT-tests trap', async () => {
-        // Run 18 had 51 green Playwright CT tests and no server: CT mounts components,
+        // A suite can be green on dozens of Playwright CT tests with no server at all:
+        // CT mounts components,
         // it never assembles or starts one. Six observed commands here, boot still
         // unobserved, and the zero-observation note must NOT fire (things did run).
         const dir = makeDir(
@@ -1721,7 +1722,7 @@ test('rerunDebtVerifyCommand: a FAILING command never reaches the tracked-state 
 
 // ─── The config-gap demotion, reachable at last ──────────────────────────────
 //
-// nexttask 20 shipped this branch and it has never executed under test. Not by
+//  shipped this branch and it has never executed under test. Not by
 // oversight: reaching it needs `scanEnvTemplateClosure` to find a TRACKED
 // `.env.example` in a real git work tree, and every launch-contract test uses a
 // bare `makeDir()` with no `git init` — so `closure.templates` was always empty

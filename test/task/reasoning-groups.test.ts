@@ -11,7 +11,7 @@
  * It reads the source rather than a registry because the child name is a string
  * literal at the call site and there is no other place it is written down.
  *
- * It covers the four RESEARCH WORKERS too. Their groups used to live in a second
+ * It covers the four RESEARCH WORKERS too. Their groups could live in a second
  * table keyed on the section heading, guarded by a second scanner that sliced
  * `phases.ts` between two string offsets — and whose failure mode was a SILENT
  * fallback to `research` rather than a build failure. One roster, one scanner,
@@ -134,7 +134,7 @@ describe('the /no_think soft switch is gone and stays gone', () => {
     /**
      * It was applied to eight prompts and read by none of them: measured live
      * against Qwen3.8-27B, thinking on and `/no_think` still in the prompt gave a
-     * median 17k-char trace anyway (n=25). The chat-template kwarg that
+     * a full-length reasoning trace anyway. The chat-template kwarg that
      * `--thinking` sets beats it, so the suffix is a dead knob that LOOKS live —
      * the exact thing that stopped anyone wiring the real one for a year.
      *

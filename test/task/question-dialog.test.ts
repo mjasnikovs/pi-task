@@ -8,7 +8,7 @@ import {
     type SettleQuestionInput
 } from '../../src/task/question-dialog.js'
 
-// The mapping these cover used to exist in three places — grill, clarify and the
+// The mapping these cover would otherwise exist in three places — grill, clarify and the
 // plan session — and the plan session's own docstring said the other two were
 // mirrors of it. They were not: they had drifted in three ways. These tests now
 // hold for all three call sites at once.
@@ -118,7 +118,7 @@ test('isTwoOption needs BOTH sides', () => {
 
 describe('settleQuestion — the whole dialog, once', () => {
     /**
-     * The COMPOSITION grill and clarify each used to write out at ~50 lines: YOLO
+     * The COMPOSITION grill and clarify would each write out at about fifty lines: YOLO
      * short-circuit, cards, ask, cancel, record. The pieces were already shared;
      * this is what was not, and the two copies had drifted on `recommended2`.
      */

@@ -304,7 +304,7 @@ describe('runFinalGateAutofix', () => {
     })
 })
 
-// ─── Write-guard stack (mx5 run 11: the unguarded final-fix child) ───────────
+// ─── Write-guard stack ───────────
 
 describe('runFinalGateAutofix — write-guard stack', () => {
     const clean = {modified: [], deleted: [], added: []}
@@ -439,8 +439,8 @@ describe('runFinalGateAutofix — write-guard stack', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL at the fix seam (mx5 run 19). The A/B
- * (scripts/ignored-writes-ab.ts) replays this against a real mx5 clone, but it
+ * IGNORED-PATH CHANNEL at the fix seam. The A/B
+ * replays this against a real clone, but it
  * ABSTAINS without a Postgres, so the module contract is pinned here with fakes:
  * attribution, the trail line's position relative to the guards, the downgrade,
  * and every path where the channel must stay silent.
@@ -599,7 +599,7 @@ describe('runFinalGateAutofix — ignored-path channel', () => {
 
     test('with no channel wired the result carries the outcome and nothing else', async () => {
         const r = await runFinalGateAutofix(base({}))
-        // The gate outcome rides whole now — it used to be four flattened `gate*`
+        // The gate outcome rides whole. Four flattened `gate*`
         // mirrors, and the flattening is what dropped `openDebts`.
         expect(r).toEqual({
             ok: true,

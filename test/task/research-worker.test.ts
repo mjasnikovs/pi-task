@@ -120,7 +120,7 @@ describe('the EMPTY-SECTION gate', () => {
 
     test('two empty answers are recorded as an empty section, not a failure', async () => {
         // issue #10: on a task that touches nothing, silence is the CORRECT
-        // answer and used to kill the whole run.
+        // answer and would kill the whole run.
         const h = harness([result({text: ''}), result({text: ''})])
 
         const out = await runResearchWorker(SPEC, h.run)
@@ -263,7 +263,7 @@ describe('the outcome', () => {
  * THE CALL SITE NAMES THE PROFILE.
  *
  * `workers/worker-profiles.test.ts` proves the `research` profile RESOLVES to
- * what the three lever spreads here used to produce. This proves the driver
+ * what the three lever spreads here produce. This proves the driver
  * still asks for it, and still hands it the only two facts it owns: which worker
  * is docs-capable, and the phase's FROZEN lever reader.
  */

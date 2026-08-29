@@ -158,7 +158,7 @@ describe('revertFrozenPaths (real git — live repro)', () => {
     test('undoes a gate pass edit to a frozen file, keeps its edit to a free file', async () => {
         const dir = makeRepo()
         // Simulate the enforce EDIT pass: it mutates the frozen contract AND an
-        // ordinary file (mx5 run 6 / contract-framing shape).
+        // ordinary file.
         fs.writeFileSync(path.join(dir, 'schema.ts'), 'export const price = nonnegative\n')
         fs.writeFileSync(path.join(dir, 'app.ts'), 'export const app = 2 // enforce fix\n')
 

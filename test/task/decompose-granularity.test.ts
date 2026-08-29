@@ -60,7 +60,7 @@ describe('granularityFloor', () => {
 
 describe('isPlanShapeQuestion', () => {
     test('fires on the fork the triage kept answering for itself', () => {
-        // Both live mx5 runs, verbatim.
+        // Both live runs, verbatim.
         expect(
             isPlanShapeQuestion(
                 'Should the task breakdown follow the 12 milestones in §12 as-is (one task per'

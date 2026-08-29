@@ -1,5 +1,5 @@
 /**
- * render-check tests — the RENDERED-DOM judgment (mx5 runs 8/11: the blank-page /
+ * render-check tests — the RENDERED-DOM judgment (/11: the blank-page /
  * no-Switch classes that curl can never catch) and the discover-don't-install
  * browser lookup. judgeRenderedDom is pure; runRenderCheck is exercised with an
  * injected browser path (a tiny node script standing in for chrome --dump-dom) so
@@ -138,7 +138,7 @@ describe('runRenderCheck', () => {
     // unreliable last resort (it stalls/varies under --dump-dom --virtual-time-
     // budget), so a hard-`pass` assertion through one is wrong — that is exactly
     // how CI's system google-chrome (no PW cache) failed this. The shell is what
-    // real mx5-class projects ship; when it is absent (CI), skip rather than
+    // real projects ship; when it is absent (CI), skip rather than
     // assert through the unreliable path.
     const realBrowser = playwrightCachedChromium()
     const smoke = realBrowser ? test : test.skip
@@ -157,18 +157,18 @@ describe('runRenderCheck', () => {
     })
 })
 
-// ─── nexttask 19B: the probe carries the evidence it already had ─────────────
+// ─── : the probe carries the evidence it already had ─────────────
 //
-// mx5 run 21's fix child was told "the body is EMPTY" and nothing else. It burned
+// a fix child was told "the body is EMPTY" and nothing else. It burned
 // 45 minutes on tests, bundler config and static serving, read the offending line
 // twice, and moved on. The probe was holding the cause the whole time.
 //
-// MEASURED on this box (2026-08-14) against the shipped run-21 bundle: adding
+// MEASURED on this box (2026-08-14) against the shipped bundle: adding
 // `--enable-logging=stderr --v=0` leaves stdout BYTE-IDENTICAL at 318 bytes on
 // both discoverable binaries, and turns /usr/bin/chromium's 0 console lines into
 // 2 — one of them the cause.
 
-/** A real Chrome stderr capture from the run-21 bundle, verbatim. */
+/** A real Chrome stderr capture from the bundle, verbatim. */
 const RUN21_STDERR =
     'Fontconfig warning: We will not regenerate the cache because some cache files were generated '
     + 'by a newer version (0x2012001) of Fontconfig.\n'

@@ -9,7 +9,7 @@ import {
     resolveRepoPath
 } from '../../src/task/foreign-path.js'
 
-/** A synthetic repo tree mirroring the shape of the real mx5 run-13 checkout. */
+/** A synthetic repo tree mirroring the shape of a real checkout. */
 const REPO = new Set([
     'src/shared',
     'src/shared/types.ts',
@@ -38,8 +38,8 @@ const scan = (file: string, ...texts: string[]) =>
     )
 
 describe('findForeignPaths — the real mx5 run-13 true positive', () => {
-    // Verbatim from ~/hub/mx5/playwright-ct.config.ts L15-16, the leak that made
-    // `bun run test:ct` collect 63 tests and run 0 (ENOENT at build time).
+    // Verbatim from a real `playwright-ct.config.ts`, the leak that made
+    // `bun run test:ct` collect 63 tests and a (ENOENT at build time).
     const CONFIG_LINES = [
         "          '../../shared': '/workspace/src/shared',",
         "          '../api': '/workspace/src/client/api',"
@@ -169,10 +169,10 @@ describe('findForeignPaths — false-positive guards', () => {
     })
 
     // The three classes the real-repo FP suite caught before wiring
-    // (scripts/foreign-path-fp-suite.ts). Each is pinned here so a future pattern
+    //. Each is pinned here so a future pattern
     // change cannot silently reintroduce it.
     test('tool caches and reports are out of scope (FP suite catch #1)', () => {
-        // mx5's committed .playwright-cache/metainfo.json records the sandbox path
+        // committed .playwright-cache/metainfo.json records the sandbox path
         // of all 38 modules the CT runner compiled — a faithful log of a past
         // build, not an authored decision.
         const line = '"filename": "/workspace/src/client/pages/Admin.tsx",'

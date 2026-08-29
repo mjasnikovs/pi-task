@@ -129,7 +129,7 @@ test('runBoundedLintFix: deleted pre-existing untracked file trips the guard', a
 })
 
 test('runBoundedLintFix: git failing AFTER the fix → guard inconclusive, converged fix kept', async () => {
-    // The mx5 run-4 misfire: the child verifiably edited only lint findings, but a
+    // The misfire: the child verifiably edited only lint findings, but a
     // git failure after it made every comparison read as "work gone" → two GOOD
     // converged fixes rolled back. A git error must be inconclusive, never evidence.
     const calls: string[][] = []

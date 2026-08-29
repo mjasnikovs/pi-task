@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {findFrozenPathConflicts, frozenConflictProbeText} from '../../src/task/frozen-conflict.js'
 
-/** The real mx5 run-12 TASK_0020 pair, verbatim shape (freeze + prose surrender). */
+/** A real freeze-and-prose-surrender pair, verbatim shape. */
 const MX5_SPEC = [
     'GOAL',
     'Create the Playwright component-testing scaffold: `playwright-ct.config.ts` at project',
@@ -88,7 +88,7 @@ describe('findFrozenPathConflicts', () => {
     })
 
     test('sentence scoping: a giant one-line GOAL with "must include" (response shape) three paths from the frozen one never fires', () => {
-        // The real mx5 TASK_0012 false-positive shape: one enormous GOAL line where
+        // The real one task false-positive shape: one enormous GOAL line where
         // "must include `field`" (a response contract) coexists with frozen paths in
         // OTHER sentences of the same line.
         const spec = [

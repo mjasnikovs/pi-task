@@ -1,9 +1,9 @@
 /**
- * The WIRED path (nexttask 2): `resolveOwnedFreezeForThisTask` as `phases.ts`
+ * The WIRED path: `resolveOwnedFreezeForThisTask` as `phases.ts`
  * calls it at critique, over a real `.pi-tasks` directory — the owned ledger on
  * disk and the spec the braces just produced.
  *
- * The fixture is mx5 run 19's TASK_0015: the §9 Build & run server clause owned
+ * The fixture is one task: the §9 Build & run server clause owned
  * by the build-tooling task, whose own CONSTRAINTS freeze every file but
  * `package.json`. What the wired half must show is that the quote survives the
  * detach byte for byte, that it stops being this task's obligation, and that a
@@ -68,8 +68,8 @@ function fixture(opts: FixtureOpts = {}): string {
         {title: SHELL, id: 'TASK_0016'},
         {title: CLIENT_API, id: 'TASK_0017'}
     ]
-    // TASK_0014's title states it CREATES the server file; TASK_0017's states it
-    // ADDS a route to it; TASK_0016 only imports from it.
+    // a task's title states it CREATES the server file; a task's states it
+    // ADDS a route to it; one task only imports from it.
     const intents = [
         `${SERVER_WIRING} — create \`src/server/index.ts\` mounting all five route groups`,
         BUILD_TOOLING,
@@ -199,7 +199,7 @@ describe('resolveOwnedFreezeForThisTask (wired, DETACH)', () => {
     })
 })
 
-/** mx5 run 19's TASK_0017 refined prompt, reduced to the sentence that claims. */
+/** one task refined prompt, reduced to the sentence that claims. */
 const CLAIMANT_REFINED =
     'Create `src/client/api.ts` with a typed Hono RPC client, and add an SPA fallback route to the'
     + ' existing server `src/server/index.ts` so that non-`/api` GET requests serve the built'
@@ -278,7 +278,7 @@ describe('claimOwnedFreezeForThisTask (wired, CLAIM)', () => {
 // asserted by a test that CALLED them in sequence — which proves the sequence the
 // test wrote, not the sequence the phase runs. `critiquePhase` is that row's whole
 // body now, so the order is drivable: the braces write the stamp, the detach reads
-// it, and a critique-time probe once measured 0/40 because that stamp did not exist
+// it, and a critique-time probe finds nothing because that stamp does not exist
 // yet. Reversing the two inside `critiquePhase` fails this test.
 
 /** A compose draft with a runnable VERIFY, so triage may short-circuit the rewrite. */

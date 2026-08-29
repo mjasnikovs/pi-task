@@ -13,7 +13,7 @@ import {ChildStatus, type ChildStatusDeps} from '../../src/task/child-status.js'
  * None of this was reachable before. The runner lived inside buildGateDeps'
  * ~700-line closure, which no test calls, so the git-state-guard wiring — the
  * mechanism that discards a verify verdict computed on a tree the child mutated
- * (mx5 run 6) — could only be observed indirectly through a fake `mutationCheck`
+ * — could only be observed indirectly through a fake `mutationCheck`
  * one layer up. `runWorker` and the git helpers are injected now.
  */
 
@@ -137,7 +137,7 @@ test('enforce now logs its tree changes too — it is a WRITE-capable child', ()
     // Deliberate consequence of the capability rule. The old inline enforce copy
     // had no tree-change block at all, so a read,edit child rewrote files with no
     // record of what it touched — the same invisibility the rule was written for
-    // after the final-fix child's `rm` (mx5 run 11). Exempting enforce by KIND
+    // after the final-fix child's `rm`. Exempting enforce by KIND
     // would reintroduce exactly the per-phase exception the rule replaces.
     expect(GATE_CHILD_KINDS.enforce.guarded).toBe(false)
 })
@@ -186,7 +186,7 @@ describe('the git-state guard', () => {
     })
 
     test('BENIGN cleanup is trailed but never notified — the verdict stands', async () => {
-        // mx5 run 9: 7 of 9 guard firings were pure test-results churn. Notifying
+        // Most guard firings are pure test-results churn. Notifying
         // on those trains the user to ignore the warning that matters.
         const {deps, log, notices} = harness({
             reconcileGitState: () =>
@@ -216,7 +216,7 @@ describe('the git-state guard', () => {
 })
 
 describe('tree-change capture keys on TOOLS, not on kind', () => {
-    // mx5 run 11: the final-fix child's `rm` ran invisibly. Deciding by capability
+    // A final-fix child's `rm` runs invisibly otherwise. Deciding by capability
     // rather than by phase is what stops a future write-capable kind repeating it.
     for (const tools of ['read,edit', 'read,bash', 'read,write']) {
         test(`${tools} logs its tree changes`, async () => {
@@ -379,7 +379,7 @@ describe('the live-state callbacks', () => {
  *
  * The other half of the no-behaviour-change proof lives in
  * `workers/worker-profiles.test.ts`, which checks that the `gate` profile
- * RESOLVES to what this call site used to spell out inline. That says nothing
+ * RESOLVES to what this call site would otherwise spell out inline. That says nothing
  * about whether this call site still asks for `gate`, or still hands it the two
  * config ceilings — which is the mistake a refactor actually makes. This closes
  * the chain: call site -> profile -> policy -> behaviour.
@@ -400,7 +400,7 @@ describe('gate child guard policy', () => {
         // An override here would be the hand-picked subset WORKER_PROFILES
         // exists to stop. `worker-profiles.test.ts` fails the build if one
         // appears anywhere in production source; this says it about the one
-        // call site that used to carry four guard literals.
+        // call site that would otherwise carry four guard literals.
         const h = harness()
         await makeGateChild(h.deps)('read,edit', 'do it')
         expect(h.seenInput[0]!.override).toBeUndefined()

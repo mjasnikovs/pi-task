@@ -22,7 +22,7 @@ describe('RUN_END_POLICY', () => {
     test('a USER STOP is never marked resumable-as-failed', () => {
         // The whole point. `markResumable` writes `failed`; doing that to a
         // cancelled run lies in the ledger and turns a deliberate stop into a red
-        // error. This is the arm `/task-cancel` used to land in.
+        // error. This is the arm `/task-cancel` lands in.
         expect(RUN_END_POLICY.cancelled.resumable).toBe(false)
         expect(RUN_END_POLICY.cancelled.failsRun).toBe(false)
         expect(RUN_END_POLICY.cancelled.level).toBe('warning')

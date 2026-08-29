@@ -53,7 +53,7 @@ describe('keepGroundedContracts — the anti-synthesis (F3) guard', () => {
     })
 
     test('DROPS a fabricated/paraphrased quote absent from the design (the F3 bug)', () => {
-        // The exact run-8 fabrication: a uniform mount table the design never states.
+        // The exact fabrication: a uniform mount table the design never states.
         const kept = keepGroundedContracts(
             [
                 {quote: 'POST /api/photos/listings/:id/photos', anchor: 'made up'},

@@ -92,7 +92,7 @@ describe('decideAdoption', () => {
     })
 
     // ── the zero-gain growth tiebreak ────────────────────────────────────────
-    // mx5 2026-07-28 went 26 → 32 → 60 titles with the owned-set pinned at 27 in
+    // 2026-07-28 went 26 → 32 → 60 titles with the owned-set pinned at 27 in
     // all three rounds, both retries adopted as "preserves owned coverage". The
     // old rule could not object: past the drop check the retry's owned-set is a
     // superset, and groundedCoverage is monotone in the title set while the
@@ -369,7 +369,7 @@ test('A/B: a genuine SUPERSET regeneration is still adopted under treatment', ()
 // ownership: it mapped a "--json output" requirement to a generic "scaffold +
 // argument parser" task, so a plan with no --json task still reported owning it,
 // and the monotonic guard — trusting those TASK numbers — dropped the area anyway
-// (treatment held only 1/5). groundedCoverage takes the drop-signal off the model
+// groundedCoverage takes the drop-signal off the model
 // and onto requirement↔title token overlap, which the model cannot inflate.
 const noCross = () => false
 describe('groundedCoverage', () => {

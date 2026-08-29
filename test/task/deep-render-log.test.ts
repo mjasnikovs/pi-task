@@ -1,6 +1,6 @@
 /**
  * The request-log half of deep-render-check: the derivation that replaced the two
- * counters, and the two rules that read the log the counters used to hide.
+ * counters, and the two rules that read the log those counters would hide.
  *
  * The verdict table for everything else lives in deep-render-check.test.ts and is
  * unchanged — these are the cases that could not be expressed before, because the
@@ -119,7 +119,7 @@ describe('rule A — a status that means the route is not mounted', () => {
 })
 
 describe('rule B — an XHR answered with the SPA shell', () => {
-    // The mx5 mut-one-of-eight shape: sign-in and /api/auth/me are healthy JSON,
+    // The mut-one-of-eight shape: sign-in and /api/auth/me are healthy JSON,
     // the listings route is unmounted, and the catch-all answers its XHR with
     // index.html at 200. Both counters say healthy; the app is not.
     test('200 text/html on an XHR FAILS even when every counter is green', () => {

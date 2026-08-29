@@ -47,7 +47,7 @@ describe('gatherExternalContext', () => {
     })
 
     test('gives EVERY named dep a live npm version block, not just the docs-capped 3', async () => {
-        // Six named runtime deps — the real mx5 TASK_0001 shape. The heavy docs
+        // Six named runtime deps — the real one task shape. The heavy docs
         // fetch still caps at 3, but a version block must exist for all six so a
         // later "which version?" question is grounded for tailwindcss too (the bug:
         // deps past the cap fell back to the model's stale training-data version).

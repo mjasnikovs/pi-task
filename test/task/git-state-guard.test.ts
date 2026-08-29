@@ -2,7 +2,7 @@
  * git-state-guard tests — run against REAL throwaway git repos (temp dirs), since
  * the module's whole job is faithful git plumbing; a mocked spawn would test the
  * mock. Each scenario replays a mutation class actually observed from a live gate
- * child (mx5 runs 4/6): stash-and-abandon, checkout-and-stay, `--fix`-style file
+ * child: stash-and-abandon, checkout-and-stay, `--fix`-style file
  * rewrites, junk file creation, and untracked-file deletion.
  */
 import {describe, expect, setDefaultTimeout, test} from 'bun:test'
@@ -165,7 +165,7 @@ describe('reconcileGitState', () => {
     })
 })
 
-// mx5 run 9 items 1 & 2: a gate child that only leaves test-runner output behind
+// items 1 & 2: a gate child that only leaves test-runner output behind
 // judged an equivalent tree — its verdict must stand (only the artifacts are cleaned),
 // and every restored path must be itemised so the trail says WHICH files moved.
 describe('verdict-taint classification', () => {
@@ -198,7 +198,7 @@ describe('verdict-taint classification', () => {
         fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), 'new-run\n')
         const rec = await reconcileGitState(dir, snap)
         expect(rec.mutated).toBe(true)
-        expect(rec.verdictTainted).toBe(false) // the 7-of-9 mx5 run-9 false discard
+        expect(rec.verdictTainted).toBe(false) // the false-discard class
         // Content restored, and the trail names the exact artifact (item 2).
         expect(fs.readFileSync(path.join(dir, 'test-results', '.last-run.json'), 'utf8')).toBe(
             'old\n'
@@ -244,7 +244,7 @@ describe('verdict-taint classification', () => {
         expect(rec.actions).toContain('restored modified file dist/bundle.js')
     })
 
-    // mx5 run 10 item 5: the ctCacheDir build cache (`.playwright-cache/*`) and the
+    // item 5: the ctCacheDir build cache (`.playwright-cache/*`) and the
     // runner `.last-run.json` were COMMITTED, so a `test:ct` run rewriting them tripped
     // the tracked→graded rule and discarded 3 verify verdicts. They are regenerable
     // machine state — benign even when tracked — while snapshot PNGs stay tainting.

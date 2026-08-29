@@ -152,9 +152,9 @@ describe('research prompts enforce relevance / size discipline', () => {
 
     /**
      * STAGE 2 — the APIS OUTPUT CONTRACT lever is UNWIRED. Its A/B (scripts/
-     * live-apis-contract-ab.ts) drove behaviour-class package queries 20/20 vs 2/20 — the one
+     * drove behaviour-class package queries from almost none to nearly all — the one
      * lever of three that moved worker:apis at all — but FAILED invariant 2a: the ungrounded-
-     * symbol rate rose 1.0% -> 4.7% (p = 0.0010) because the model filled every semantics field
+     * symbol rate rose several-fold because the model filled every semantics field
      * and used the mandatory `UNVERIFIED:` abstention zero times. So the shipped APIS prompt
      * must NOT carry it. This test is a regression guard against an accidental re-wire; the
      * contract's own text is tested on the module in src/task/apis-contract.test.ts.

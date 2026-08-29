@@ -1,6 +1,6 @@
 /**
  * Driver-level tests for deep-render-check's `launchBrowser()` half (via `drive()`) — the part of the module
- * that needs a browser and was therefore the only untested half (59% of its
+ * that needs a browser and is therefore the otherwise-untested half (most of its
  * functions never ran).
  *
  * The browser here is a FAKE: a WebSocket server that prints the DevTools banner

@@ -1,7 +1,7 @@
 /**
  * launch-contract tests — the declared-script extraction (parse + grounding) and the
- * deterministic manifest diff the final gate FAILs on (mx5 run 10 item 4). Parse and
- * grounding are pure; record/read run against a real throwaway .pi-tasks dir.
+ * deterministic manifest diff the final gate FAILs on. Parse and
+ * grounding are pure; record/read run against a real throwaway.pi-tasks dir.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -23,7 +23,7 @@ function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-launch-contract-'))
 }
 
-// The verbatim mx5 DESIGN §9 line that declares the required scripts.
+// The verbatim DESIGN §9 line that declares the required scripts.
 const SCRIPTS_LINE = '- **Scripts:** `dev`, `build`, `migrate`, `seed`, `test`.'
 
 describe('parseScriptLines', () => {
@@ -134,7 +134,7 @@ describe('LAUNCH_EXTRACT_PROMPT candidates block', () => {
 describe('missingDeclaredScripts (the deterministic diff lever)', () => {
     test('flags declared scripts the manifest is missing — the real mx5 case', () => {
         const declared = ['dev', 'build', 'migrate', 'seed', 'test']
-        const shipped = ['dev', 'build', 'lint', 'test', 'test:ct'] // the run-10 package.json
+        const shipped = ['dev', 'build', 'lint', 'test', 'test:ct'] // the package.json
         expect(missingDeclaredScripts(declared, shipped)).toEqual(['migrate', 'seed'])
     })
 

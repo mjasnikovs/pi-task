@@ -1,6 +1,6 @@
 /**
  * The five A/B-1 invariants, pinned as fixtures, plus the two corpus shapes that
- * decided the closed negation set (STEP 0, scripts/refuted-constraint-baserate.ts).
+ * decided the closed negation set.
  */
 import {describe, expect, test} from 'bun:test'
 
@@ -9,7 +9,7 @@ import {applyRefutations, detectRefutations, dropToken} from '../../src/task/ref
 const OWNED_STAMP =
     'owned requirement from the source design (AUTHORITATIVE; satisfy it in this task, do not narrow it)'
 
-/** The lead's own lines, verbatim from ~/hub/mx5 @ dfbdd6f TASK_0001. */
+/** The lead's own lines, verbatim from a real spec. */
 const LEAD_CONSTRAINT =
     '- Preserve every existing field in `package.json`: name (`mx5-private`), private, type, all existing scripts'
     + ' (`lint`, `test`). Add only new entries the task requires (e.g., `hono`, `bun-sql`-equivalent,'

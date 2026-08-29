@@ -25,7 +25,7 @@ describe('research fan-out budget (5B: CAP/SCALE unwired; 9: progress deadline s
         expect(fanoutTimeoutPolicy(env({}))).toBeNull()
     })
 
-    // nexttask 9: the progress deadline is the one lever here that SHIPPED, so its
+    // : the progress deadline is the one lever here that SHIPPED, so its
     // env var flipped meaning — it is the off switch now. These four cases are the
     // whole contract, and the last one is the one that bites: a run that means to
     // measure the old behaviour must SPELL it.
@@ -55,7 +55,7 @@ describe('research fan-out budget (5B: CAP/SCALE unwired; 9: progress deadline s
 
     test('carry-forward is still OFF by default — only the progress half shipped', () => {
         // The full 2x2 attributed the win to the progress deadline alone. Carry
-        // alone was HARMFUL (TASK_0020: exit=143 on all three attempts where
+        // alone was HARMFUL (one task: exit=143 on all three attempts where
         // baseline's third completed) and produced the only observed fabrication.
         expect(workerCarryForward(env({}))).toBe(false)
         expect(workerCarryForward(env({[WORKER_CARRY_FORWARD_ENV]: '1'}))).toBe(true)

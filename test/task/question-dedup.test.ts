@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {isDuplicateQuestion, jaccard, tokenizeQuestion} from '../../src/task/question-dedup.js'
 
-// The exact 10 questions /task-auto asked on the real mx5 run (.pi-tasks/
+// The exact 10 questions /task-auto asked on the real run (.pi-tasks/
 // TASK_AUTO_0001.md). The user's complaint: it kept re-asking the same
 // "Bun bundler vs Vite / how to build+serve the SPA" decision. Q2, Q3, Q8 and Q9
 // are all that same fork worded differently; Q1/Q4/Q5/Q6/Q7/Q10 are genuinely

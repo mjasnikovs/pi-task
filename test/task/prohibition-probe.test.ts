@@ -1,7 +1,7 @@
 import {describe, expect, test} from 'bun:test'
 import {extractProhibitions, findProhibitionViolations} from '../../src/task/prohibition-probe.js'
 
-// Real run-7 constraint shape (the F5 task): prohibition line naming several paths,
+// Real constraint shape (the F5 task): prohibition line naming several paths,
 // with backticked NON-path tokens (API routes, identifiers) mixed into the prose.
 const MX5_CONSTRAINT =
     '- **Do NOT modify** any server-side code: `src/server/routes/listings.ts`, '

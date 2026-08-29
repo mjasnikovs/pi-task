@@ -1,16 +1,16 @@
 /**
- * root-cause-repair tests — the mx5 run 14 fixture A/B (PROMPT item 5).
+ * root-cause-repair tests — the fixture A/B (PROMPT item 5).
  *
- * The FAIL reasons below are VERBATIM from run 14's `.pi-tasks/accept-debt.md`.
- * TASK_0013 and TASK_0019 both ended in an enforce-revert over the SAME cause —
- * TASK_0007's `test/teardown.ts` TRUNCATE bug — and nothing ever scheduled a fix,
+ * The FAIL reasons below are VERBATIM from a `.pi-tasks/accept-debt.md`.
+ * one task and one task both ended in an enforce-revert over the SAME cause —
+ * a task's `test/teardown.ts` TRUNCATE bug — and nothing ever scheduled a fix,
  * so it survived ~24h. The contract this file pins:
  *
  *   - both FAILs resolve to `test/teardown.ts` (not to the test file each names in
  *     passing, and not to the paths the spec boilerplate quotes),
  *   - the two together yield EXACTLY ONE repair task, correctly scoped,
- *   - the environment-blamed FAIL (TASK_0006, "no PostgreSQL … in this
- *     environment") and the this-task-touched-it FAIL (TASK_0010) yield none.
+ *   - the environment-blamed FAIL (one task, "no PostgreSQL … in this
+ *     environment") and the this-task-touched-it FAIL yield none.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -37,7 +37,7 @@ function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-root-cause-'))
 }
 
-// ─── Verbatim mx5 run 14 ledger entries ──────────────────────────────────────
+// ─── Verbatim ledger entries ──────────────────────────────────────
 
 const TASK_0013_FAIL =
     'work did not verify: test/teardown.ts has a pre-existing bug (parameterized table names in '
@@ -65,7 +65,7 @@ const TASK_0010_FAIL =
     + 'existing files on disk (`src/server/db.ts`, `src/server/seed.ts`, `package.json`, '
     + '`tsconfig.json`, `eslint.config.js`). Do not'
 
-/** run 14's provenance: TASK_0007 created the teardown; everything else is older. */
+/** a provenance: one task created the teardown; everything else is older. */
 const RUN14_PROVENANCE: Record<string, string> = {
     'test/teardown.ts': 'TASK_0007',
     'test/invite.test.ts': 'TASK_0013',
@@ -77,7 +77,7 @@ const run14IntroducedBy = (rel: string): string | null => RUN14_PROVENANCE[rel] 
 
 describe('accusation extraction', () => {
     test('the blamed file is the one NEAREST the blame cue, not the first path named', () => {
-        // TASK_0019 names photos.test.ts BEFORE teardown.ts; only teardown.ts is accused.
+        // one task names photos.test.ts BEFORE teardown.ts; only teardown.ts is accused.
         expect(findAccusedFile(TASK_0019_FAIL)?.file).toBe('test/teardown.ts')
         expect(findAccusedFile(TASK_0013_FAIL)?.file).toBe('test/teardown.ts')
     })

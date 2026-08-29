@@ -25,8 +25,8 @@ describe('shouldLogDebug', () => {
     })
 
     // The whole point of three levels rather than a boolean: the default keeps the
-    // guard/verdict record (~15% of a real log's bytes) and drops the model chatter
-    // and tool dumps (~85%), measured on a 247 KB verify-debug.log.
+    // guard/verdict record, a small fraction of a real log's bytes, and drops the
+    // model chatter and tool dumps, which are nearly all of them.
     test('events keeps decisions and drops stream chatter', () => {
         expect(shouldLogDebug('event', 'events')).toBe(true)
         expect(shouldLogDebug('stream', 'events')).toBe(false)

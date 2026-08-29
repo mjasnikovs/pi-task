@@ -8,7 +8,7 @@ import {
     runnerGlobVerifyFindings
 } from '../../src/task/runner-globs.js'
 
-/** The mx5 run-13 scripts, verbatim (the shape that collided in runs 7 AND 13). */
+/** The scripts, verbatim. */
 const MX5_SCRIPTS = {
     lint: 'prettier --write . && eslint --fix .',
     test: 'AGENT=1 bun test',
@@ -17,7 +17,7 @@ const MX5_SCRIPTS = {
     build: 'bun build.ts'
 }
 
-/** mx5's playwright-ct.config.ts, reduced to the fields the assessor reads. */
+/** playwright-ct.config.ts, reduced to the fields the assessor reads. */
 const MX5_PW_CONFIG = `
 export default defineConfig({
   testDir: './src/client/pages',
@@ -25,7 +25,7 @@ export default defineConfig({
 })
 `
 
-/** bunfig.toml as it stood at HEAD when run 13 ended — no exclusion. */
+/** bunfig.toml as it stood at HEAD when ended — no exclusion. */
 const MX5_BUNFIG_HEAD = '[test]\nenvFile = ".env.test"\n'
 /** bunfig.toml as the stranded (uncommitted) fix left it. */
 const MX5_BUNFIG_FIXED =

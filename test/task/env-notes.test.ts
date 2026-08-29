@@ -2,7 +2,7 @@
  * env-notes tests — the per-run environment-facts cache gate children share.
  * Extraction, parsing, excuse-detection and the prompt block are pure;
  * read/append run against a real throwaway .pi-tasks dir (the artifact contract
- * is the point). Provenance + re-validation guards close run-8 F7.
+ * is the point). Provenance + re-validation guards close a F7.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -63,7 +63,7 @@ describe('appendEnvNotes / readEnvNotes', () => {
         expect(await readEnvNotes(cwd)).toBe('')
         await appendEnvNotes(cwd, ['fact one', 'fact two'], 'TASK_0001')
         await appendEnvNotes(cwd, ['Fact One', 'fact three'], 'TASK_0005')
-        // "Fact One" is a case-insensitive duplicate — dropped, TASK_0001 origin kept.
+        // "Fact One" is a case-insensitive duplicate — dropped, one task origin kept.
         expect(parseEnvNotes(await readEnvNotes(cwd))).toEqual([
             {fact: 'fact one', origin: 'TASK_0001'},
             {fact: 'fact two', origin: 'TASK_0001'},
@@ -108,7 +108,7 @@ describe('appendEnvNotes / readEnvNotes', () => {
 
 describe('isExcuseNote', () => {
     test('flags standing-excuse wording (the run-8 F7 propagation smell)', () => {
-        // Verbatim run-8 F7 false facts and the excused-but-real schema mismatch.
+        // Verbatim a F7 false facts and the excused-but-real schema mismatch.
         expect(
             isExcuseNote(
                 'The project build tree-shakes all route components from the minified bundle — a pre-existing issue affecting ALL pages'

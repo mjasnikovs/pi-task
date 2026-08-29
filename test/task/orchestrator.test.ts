@@ -400,7 +400,7 @@ VERIFIED-TOOLING
     // whatever `## refined prompt` holds — which is deliberately the text refine
     // wrote, refuted constraint and all — and CRITIQUE_PROMPT calls that GROUND
     // TRUTH whose CONSTRAINTS "MUST be preserved in spirit". The drop that closed
-    // the mx5 run-19 defect was reachable only on the live path.
+    // the defect was reachable only on the live path.
     test('resume at critique replays compose’s refutation drop', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
@@ -596,7 +596,7 @@ describe('runSingleTask', () => {
     // Live repro (pi 0.82.1, local model, issue #8): a chat message sent from the
     // browser during a child phase starts a host turn, and if it is still
     // streaming when the pipeline delivers its spec, the delivery throws and the
-    // run dies — "TASK_0001 failed: Agent is already processing." Delivery must
+    // run dies — "one task failed: Agent is already processing." Delivery must
     // queue itself instead, whatever else happens to be on the session.
     test('runSingleTask: a foreign streaming turn does not kill spec delivery', async () => {
         await withTmpTaskDir(async cwd => {
@@ -862,7 +862,7 @@ describe('TaskRunner — failure modes', () => {
         })
     })
 
-    // ISSUE #10. An empty research section used to fail the whole task, which is exactly
+    // GitHub issue #10. An empty research section failing the whole task is exactly
     // what an extremely simple task provokes — nothing on disk to survey, no external
     // symbol in play, so silence is the correct answer. It is now retried once and then
     // recorded as an explicitly empty section. What stays fatal is silence with a
@@ -1036,7 +1036,7 @@ ACCEPTANCE
             const end = await runnerHolder.runner.run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('cancelled')
-            // The runner NAMES the ending. It used to return void, so the caller
+            // The runner NAMES the ending. Returning void, it leaves the caller
             // re-read this file, narrowed `state` to `ok: boolean`, and reported a
             // user's own cancel as a failure — see run-end.ts.
             expect(end).toEqual({kind: 'cancelled'})
@@ -1082,7 +1082,7 @@ ACCEPTANCE
 
 describe('the phase-seam bag', () => {
     /**
-     * `TaskRunnerOptions` used to declare four separate seam fields, and
+     * Declaring four separate seam fields on `TaskRunnerOptions`, and
      * `runSingleTask` re-forwarded each by name. Four of `PhaseDeps`' seams had
      * been left out of that list entirely, so nothing reached them from here.
      * These two drive the ones that were unreachable.

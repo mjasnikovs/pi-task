@@ -151,7 +151,7 @@ describe('judgeDeepSession', () => {
         expect((r as {note: string}).note).toContain('401')
     })
 
-    // mx5 run 17, exactly: login 200 + session cookie, zero /api/auth/me calls ever
+    // The exact failing shape: login 200 + session cookie, zero /api/auth/me calls ever
     // issued, app bounces back to /login forever.
     test('authenticated but never left the wall → FAIL naming the missing evidence', () => {
         const r = judgeDeepSession({

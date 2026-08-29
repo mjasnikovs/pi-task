@@ -65,7 +65,7 @@ describe('the step-aside rules', () => {
     test('rule 1 — a default, in every shape STEP 0 met', () => {
         expect(asideOf("const u = process.env.APP_URL || 'http://x'", 'APP_URL')).toBe('default')
         expect(asideOf("const u = process.env.APP_URL ?? 'http://x'", 'APP_URL')).toBe('default')
-        // wrapped in a call — `Number(process.env.X) || 32` (gofer-rag)
+        // wrapped in a call — `Number(process.env.X) || 32` (another project)
         expect(asideOf('const n = Number(process.env.RAG_BATCH) || 32', 'RAG_BATCH')).toBe(
             'default'
         )
@@ -80,7 +80,7 @@ describe('the step-aside rules', () => {
                 'BRAVE_API_KEY'
             )
         ).toBe('default')
-        // a ternary names both outcomes (gofer-rag `npm_execpath`)
+        // a ternary names both outcomes (another project `npm_execpath`)
         expect(asideOf("const c = process.env.PY ? [process.env.PY] : ['python3']", 'PY')).toBe(
             'default'
         )
@@ -133,7 +133,7 @@ describe('the step-aside rules', () => {
         expect(asideOf(probe, 'PI_BIN')).toBe('probe')
         // negated guard that only RETURNS ⇒ an optional flag (push.ts)
         expect(asideOf('if (!process.env.PUSH_DEBUG) return', 'PUSH_DEBUG')).toBe('probe')
-        // negated guard that THROWS ⇒ required (gofer's wdio journey)
+        // negated guard that THROWS ⇒ required (another project's wdio journey)
         expect(
             asideOf(
                 "if (!process.env.GODOT_BIN) {\n    throw new Error('required')\n}",

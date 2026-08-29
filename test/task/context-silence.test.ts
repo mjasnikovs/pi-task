@@ -92,7 +92,7 @@ describe('wilsonInterval', () => {
         expect(lo).toBeLessThan(5 / 48)
         expect(hi).toBeGreaterThan(5 / 48)
         expect(hi).toBeLessThan(1)
-        // Known value for 5/48 at 95%: ~[4.5%, 22.2%].
+        // A known-good pair: 5 of 48 at 95% gives roughly [4.5%, 22.2%].
         expect(lo).toBeCloseTo(0.045, 2)
         expect(hi).toBeCloseTo(0.222, 2)
     })

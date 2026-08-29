@@ -13,7 +13,7 @@ import type {ScoredPlan} from '../../src/task/coverage-loop.js'
  *     expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
  *
  * — which is exactly what CONTEXT.md's `AutofixLedger` entry indicts: *"The suite
- * could previously only observe this loop through trail strings."*
+ * can only observe this loop through trail strings."*
  */
 
 function plan(over: {
@@ -69,7 +69,7 @@ describe('CoverageLedger', () => {
         expect(l.best()).toBe(seed)
     })
 
-    // THE BUG THE COMMENT DESCRIBES. It used to be two assignments, and the second
+    // THE BUG THE COMMENT DESCRIBES. As two assignments, the second
     // kept the OLD plan's accounting whenever the candidate's coverage-map child
     // faulted — binding requirements to titles they were never mapped against.
     test('an adopted plan whose coverage-map FAULTED keeps the new (null) accounting', () => {

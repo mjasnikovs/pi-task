@@ -1,8 +1,8 @@
 /**
  * decompose-fidelity tests — grounding of decompose [source: "…"] citations and
- * the deterministic dropped-`+`-fragment restoration (mx5 run 11, goal B). The
+ * the deterministic dropped-`+`-fragment restoration. The
  * regression cases use the VERBATIM §12 milestone lines and the VERBATIM titles
- * run 11 actually produced (TASK_AUTO_0001.md, head part before the threaded
+ * actually produced (TASK_AUTO_0001.md, head part before the threaded
  * "| spec:" tail).
  */
 import {describe, expect, test} from 'bun:test'
@@ -20,12 +20,12 @@ const PROJECT_SPEC = fs.readFileSync(
     'utf8'
 )
 
-// The verbatim §12 lines whose "+ tests" suffix run 11 dropped.
+// The verbatim §12 lines whose "+ tests" suffix dropped.
 const AUTH_LINE = '2. **Auth** — sessions, login/logout/me, guards + tests.'
 const LISTINGS_LINE =
     '4. **Listings API** — CRUD + search/filter/sort/pagination + sold + contact + tests.'
 
-// The verbatim titles run 11 produced for those milestones (tests suffix gone).
+// The verbatim titles produced for those milestones (tests suffix gone).
 const RUN11_AUTH_TITLE =
     'Implement authentication layer — argon2id password hashing, cookie sessions in '
     + 'Postgres, login/logout/me routes, session middleware with requireAuth/requireAdmin guards'
@@ -102,7 +102,7 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
 
     // THE BACKTICK REGRESSION, the larger half of the same class. A code span
     // renders as bare text, so the model copies `/join/:token` without its
-    // backticks. Measured on the n=30/arm planning run: 8 of 19 ungrounded
+    // backticks. On a real planning run, most ungrounded
     // clauses were this and nothing else.
     test('a quote copied without its code backticks still grounds', () => {
         const rendered = 'Invites — create/validate/redeem, /join/:token page.'

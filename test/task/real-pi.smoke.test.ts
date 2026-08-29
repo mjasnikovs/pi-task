@@ -55,7 +55,7 @@ describe('real pi smoke', () => {
                 // The orchestrator's job is to turn the raw prompt into a
                 // structured spec. If --mode json is missing, refined is
                 // empty and the phase throws "refine child produced no
-                // output" — same wedge as TASK_0005..0007.
+                // output" — same wedge as one task..0007.
                 expect(refined.trim().length).toBeGreaterThan(0)
                 // Loose shape check: refine is supposed to emit GOAL +
                 // CONSTRAINTS + KNOWN-UNKNOWNS. We don't pin exact text

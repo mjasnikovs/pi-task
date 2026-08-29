@@ -16,7 +16,7 @@ import {
     CONFIG_GAP_PROBE_VALUE
 } from '../../src/task/launch-config-gap.js'
 
-/** mx5's real seed.ts, trimmed to the part that decides the classification. */
+/** real seed.ts, trimmed to the part that decides the classification. */
 const SEED = `const phone = process.env.ADMIN_PHONE;
 const password = process.env.ADMIN_PASSWORD;
 if (!phone) {

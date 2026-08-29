@@ -20,7 +20,7 @@ describe('stableStringify', () => {
 })
 
 /**
- * The mx5-n 2026-08-27 shape, and the reason StallDetector had to be wired into
+ * The shape below is the reason StallDetector had to be wired into
  * runWorker: a rotation whose CYCLE LENGTH equals the detector's WINDOW is
  * invisible to both rules, because every key occurs exactly once per window and
  * neither count can ever reach the threshold.
@@ -187,7 +187,7 @@ describe('LoopDetector', () => {
 describe('LoopDetector path-aware detection', () => {
     test('re-reading one file with varied offset/limit trips even though args differ', () => {
         // The exact-match key never matches (offset/limit change every call), so
-        // only path detection catches this — the TASK_0017 failure signature.
+        // only path detection catches this — the one task failure signature.
         //
         // Counted on the RANGE: a bigger limit from the same offset does reach
         // lines the child had not seen, so 80 and 200 are progress and only the
@@ -288,7 +288,7 @@ describe('LoopDetector path-aware detection', () => {
     })
 
     // Why the /task-auto enforcement child runs UNGUARDED (loop: false). Real
-    // loop-kill captured on mx5 TASK_0002 (enforce-debug.log): the fix pass
+    // loop-kill captured on one task (enforce-debug.log): the fix pass
     // read/edited/grepped queries.ts ~23× — its actual job — and the default
     // path-revisit detector killed it at 5. This documents that the default guard
     // is wrong for a single-file fix pass; the enforce path disables it entirely

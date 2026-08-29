@@ -1,6 +1,6 @@
 /**
  * gate-deps tests — the tool-result log summary used by the gate debug log
- * (mx5 run 10 item 6). The summary is pure; the wiring that feeds it real tool
+ *. The summary is pure; the wiring that feeds it real tool
  * output is covered in json-event-sink.test.ts (the sink emits onToolResult).
  */
 import {describe, expect, test} from 'bun:test'
@@ -92,10 +92,10 @@ describe('collectTaskTreeChanges (cross-task deletion probe input)', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL (mx5 run 19) — the impure half, against real repos:
+ * IGNORED-PATH CHANNEL — the impure half, against real repos:
  * `--ignored=matching` collapsing, the exemption in situ, the degrade path, and
  * the dependency probe's move/restore discipline. Pins the A/B invariants
- * (scripts/ignored-writes-ab.ts) that need a worktree rather than a string.
+ * that need a worktree rather than a string.
  */
 describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
     const git = (dir: string, ...args: string[]): void => {
@@ -371,7 +371,7 @@ describe('gate-deps diff collectors', () => {
     })
 
     describe('collectScriptEscapeFindings', () => {
-        /** The verbatim mx5 run-13 lint script — the true positive it exists for. */
+        /** A verbatim lint script — the true positive this exists for. */
         const NEUTERED =
             "prettier --write 'src/**/*.ts' && eslint --fix . "
             + "&& (tsc --noEmit 2>&1 | grep -qv 'TS18003' || true)"
@@ -455,7 +455,7 @@ describe('gate-deps diff collectors', () => {
     })
 
     describe('collectTestAssemblyFindings', () => {
-        // Distilled run-8 F4: the production entry composes route leaves; the task's
+        // Distilled a F4: the production entry composes route leaves; the task's
         // test re-mounts two of them itself and never imports the entry.
         const PRODUCTION = {
             'src/server/index.ts': [

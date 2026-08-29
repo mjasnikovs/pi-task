@@ -2,8 +2,8 @@
  * Log-replay validation for the orientation core (see orientation.ts).
  *
  * Ground truth: the per-worker `read:` sequences captured in a real /task-auto-run
- * over the mx5 codebase (28 tasks, 4 sequential research workers each), extracted
- * verbatim from the debug logs into mx5-read-traces.json along with each file's
+ * over the codebase (28 tasks, 4 sequential research workers each), extracted
+ * verbatim from the debug logs into a read-traces fixture along with each file's
  * real byte size. No live model is involved — we replay the reads the workers
  * actually issued and measure how many the orientation pre-supply would remove.
  *

@@ -89,12 +89,12 @@ test('unobservedDebtReason: names the check and says it was never proven passing
     expect(r).toMatch(/unfalsifiable/)
 })
 
-// ─── nexttask 19A: a demotion may never overrule an observation ──────────────
+// ─── : a demotion may never overrule an observation ──────────────
 //
 // The demote rule was a blind compensator for a probe limitation the probes have
 // self-reported since ELEVEN MINUTES before it landed (`b0f90a7` 23:34:05,
 // `dd3b0c3` 23:45:09, both 2026-07-19). Its only reachable effect was to overrule
-// a probe that DID look. mx5 run 21 is the one recorded instance and it released a
+// a probe that DID look. is the one recorded instance and it released a
 // blank-page product as a `completed` run.
 
 test('19A: a failure a PROBE observed is never non-progress, however identical', () => {

@@ -21,19 +21,19 @@ const CATEGORY_FREEZE =
 const BUILD_TOOLING = 'Build tooling — build.ts, dev/build scripts in package.json'
 const CLIENT_API = 'Client API layer — typed hono/client, SPA fallback route on server'
 
-/** mx5 run 19's refined prompts, reduced to the sentence that names the file. */
+/** a refined prompts, reduced to the sentence that names the file. */
 const REFINED = {
-    /** TASK_0017 — the pending writer. */
+    /** one task — the pending writer. */
     claimant:
         'Create `src/client/api.ts` with a typed Hono RPC client, and add an SPA fallback route to'
         + ' the existing server `src/server/index.ts` so that non-`/api` GET requests serve the built'
         + ' `dist/index.html`.',
-    /** TASK_0008 — a sibling that fences itself off the same file. */
+    /** one task — a sibling that fences itself off the same file. */
     fenced:
         'File layout: routes go in `src/server/routes/listings.ts`, tests in `test/listings.test.ts`.'
         + ' Do not create or modify any other files outside this slice (e.g., no changes to'
         + ' `src/server/index.ts`, `src/shared/schema.ts`).',
-    /** TASK_0016 — imports from it, writes nothing there. */
+    /** one task — imports from it, writes nothing there. */
     importer: 'Create `src/client/main.tsx`. It imports `AppType` from `src/server/index.ts`.'
 }
 
@@ -56,7 +56,7 @@ const specWith = (bullets: string[]): string =>
         '  - `package.json` gains a `dev` script.'
     ].join('\n')
 
-/** The composed spec run 19 shipped: the stamped owned bullet plus the freeze. */
+/** The composed spec shipped: the stamped owned bullet plus the freeze. */
 const conflictSpec = (): string =>
     appendOwnedConstraints(specWith([CATEGORY_FREEZE]), [ledger()[0]])
 

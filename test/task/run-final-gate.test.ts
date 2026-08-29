@@ -739,10 +739,10 @@ test('a record() fault never breaks the gate', async () => {
 
 // ─── The gate outcome crosses the autofix pass WHOLE ─────────────────────────
 //
-// `FinalGateOutcome` used to be re-declared structurally on the way into the fix
+// Re-declaring `FinalGateOutcome` structurally on the way into the fix
 // pass, re-flattened into four `gate*` fields on the way out, and rebuilt as a
-// literal after — each literal dropping `openDebts`, which is the recorded mx5
-// run-18 defect (the fix at the time RE-DERIVED the field instead of keeping the
+// and again after — each literal dropping `openDebts`, which is the recorded
+// defect (the fix at the time RE-DERIVED the field instead of keeping the
 // value). It rides whole now, so the fresh gate's own record is what goes forward.
 test('a fresh gate outcome rides forward whole: every ranked failure is re-trailed', async () => {
     await withTmpTaskDir(async dir => {

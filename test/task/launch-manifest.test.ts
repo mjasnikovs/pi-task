@@ -1,7 +1,7 @@
 /**
  * launch-manifest tests — which manifest a launch contract may be diffed against.
  * The end-to-end proof (baseline reports 3 phantom misses, treatment goes inert,
- * mx5's real miss is byte-identical) is scripts/launch-contract-inert-ab.ts; these
+ * real miss is byte-identical) is scripts/launch-contract-inert-ab.ts; these
  * pin the resolution rules the gate depends on.
  */
 import {expect, test, describe} from 'bun:test'

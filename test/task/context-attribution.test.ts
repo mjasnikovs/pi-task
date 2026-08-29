@@ -7,7 +7,7 @@ import {
     splitBulletSpans
 } from '../../src/task/context-attribution.js'
 
-// Every bullet below is VERBATIM from mx5 run 15's task files. The detector is judged
+// Every bullet below is VERBATIM from a task files. The detector is judged
 // against real emitted text, not against text invented to make it pass.
 
 const PACKAGES = [
@@ -22,13 +22,13 @@ const PACKAGES = [
     'bun'
 ]
 
-/** The fatal bullet — TASK_0027.md, the one that killed the product. */
+/** The fatal bullet, verbatim from a real spec — the one that killed the product. */
 const FATAL =
     '- The `hono` dependency is pinned at `^4.12.31` in package.json, and the external '
     + 'context confirms `hc<AppType>` pattern with base URL `/api` for same-origin '
     + 'relative paths works correctly (per Hono RPC docs LIVE data).'
 
-/** EXTERNAL CONTEXT as TASK_0027 actually had it: an npm block, and no hono.dev fetch.
+/** EXTERNAL CONTEXT as the task actually had it: an npm block, and no hono.dev fetch.
  *  F-2(b) verified ZERO hono.dev fetches in the whole run. */
 const EC_NPM_ONLY = `EXTERNAL CONTEXT
 ### npm: hono
@@ -83,7 +83,7 @@ The hc client takes a base URL...`
     })
 
     test('a bullet with no attribution cue is never flagged, however wrong', () => {
-        // This is the OTHER TASK_0027 bullet asserting the same false thing without
+        // This is the OTHER one task bullet asserting the same false thing without
         // claiming provenance. Out of scope by design: PROMPT 1 governs laundering,
         // not correctness. Recorded so the boundary is deliberate, not an oversight.
         const noCue =
@@ -150,7 +150,7 @@ c.req.ip() returns the client address`
 })
 
 describe('which EXTERNAL CONTEXT blocks can source a semantics claim', () => {
-    // TASK_0027's own enrichment produced exactly one block of this shape — verified by
+    // a task's own enrichment produced exactly one block of this shape — verified by
     // running extractEnrichTargets over the verbatim refined task: services=[Hono RPC
     // client], urls=[], packages=[any, api, hc]. If a service block counted as a source,
     // "Hono RPC client" would match the package `hono` and the fatal bullet would pass.

@@ -1,6 +1,6 @@
 /**
  * enforce-attribution — unit coverage for the enforce-differential attribution
- * filter (mx5 run 18 / nexttask 4). The run-18 incident is the anchor fixture; the
+ * filter. The incident is the anchor fixture; the
  * rest pin the invariants that keep this from becoming a way to ignore regressions.
  */
 import {expect, test, describe} from 'bun:test'
@@ -11,7 +11,7 @@ import {
     resolveNamedFile
 } from '../../src/task/enforce-attribution.js'
 
-/** Verbatim from run 18's `.pi-tasks/accept-debt.md` (origin `enforce-revert`). */
+/** Verbatim from a real `.pi-tasks/accept-debt.md` (origin `enforce-revert`). */
 const RUN18_FAIL =
     'work did not verify: 1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186 — "toggle Mark as '
     + 'Sold / Undo Sold updates listing status in-place") due to a pre-existing flaky locator collision '
@@ -30,7 +30,7 @@ const RUN18_REPO = [
 describe('extractFailingFiles', () => {
     test('finds a BARE file name with a line number — the run-18 shape', () => {
         // root-cause-repair.ts's path-token regex requires a separator and sees
-        // nothing here; that blindness is half of why run 18 could not attribute.
+        // nothing here; that blindness is half of why could not attribute.
         expect(extractFailingFiles(RUN18_FAIL)).toEqual(['MyListings.spec.tsx'])
     })
 
@@ -41,7 +41,7 @@ describe('extractFailingFiles', () => {
     })
 
     test('does not mistake property access, versions or call chains for files', () => {
-        // `usersData.error` is literally what run 18's enforce diff edited; an
+        // `usersData.error` is literally what a enforce diff edited; an
         // ungated name.ext regex would name it as the failing file.
         const text =
             "setApiError(usersData.error ?? 'x') at v1.2.3 — expect(component.getByText('SOLD')).toBeVisible()"
