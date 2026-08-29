@@ -76,7 +76,7 @@ line counts as a comment line but opens no block.
 | `src/task/context-attribution.ts` | 345 | 127 | 27 | true |
 | `src/task/context-silence.ts` | 119 | 46 | 10 | true |
 | `src/task/context-usage.ts` | 40 | 21 | 3 | true |
-| `src/task/contracts.ts` | 245 | 88 | 17 | false |
+| `src/task/contracts.ts` | 245 | 88 | 17 | true |
 | `src/task/coverage-loop.ts` | 390 | 171 | 19 | false |
 | `src/task/critique-probes.ts` | 221 | 95 | 24 | false |
 | `src/task/debug-log.ts` | 97 | 57 | 8 | false |

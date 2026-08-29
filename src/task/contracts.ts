@@ -2,13 +2,13 @@
  * contracts — a per-run registry of CROSS-SLICE INTERFACE FACTS, recorded once at
  * decompose time and read (never written) by every downstream slice.
  *
- * The failure this serves: the
- * SOURCE design pins an interface contract (a SPLIT route table: `POST
- * /api/listings/:id/photos` but `GET/DELETE /api/photos/:id`). One slice's refine
- * FABRICATED a uniform mount table ("/api/photos → photosRoutes") with no anchor in
- * the doc; the consumer slices followed the spec, the assembly slice followed the
- * fabrication, and the seam between them shipped broken while each slice was locally
- * "right". Class: refine synthesizes plausible interface specifics instead of citing.
+ * The failure this serves: a source design pins an interface contract that is not
+ * uniform — say a split route table, `POST /api/listings/:id/photos` alongside
+ * `GET/DELETE /api/photos/:id`. One slice's refine then FABRICATES the tidy version
+ * it expected ("/api/photos → photosRoutes") with no anchor in the doc. Consumer
+ * slices follow the spec, the assembly slice follows the fabrication, and the seam
+ * between them ships broken while every slice is locally "right". The class is
+ * refine synthesizing plausible interface specifics instead of citing them.
  *
  * Mechanism (mirrors env-notes.ts): interface facts that MORE THAN ONE task will
  * touch — endpoint paths, exported signatures, file layouts, env var names, whatever
@@ -17,12 +17,16 @@
  * file (no artifact corruption). It lives under `.pi-tasks/`, surviving discardEdits
  * and the git-state guard.
  *
- * HARD DESIGN RULE (this is exactly how F3 happened): a registry entry is a VERBATIM
- * QUOTE from the source doc plus a source anchor — NEVER a model-synthesized summary.
- * The anti-synthesis guard is deterministic: a candidate quote is kept only if it is
- * an actual substring of the source document (normalised for whitespace). A quote the
- * model paraphrased or invented is not in the doc, so it is dropped — a fabricated
- * contract can never enter the registry.
+ * HARD DESIGN RULE: a registry entry is a VERBATIM QUOTE from the source doc plus a
+ * source anchor — NEVER a model-synthesized summary. The anti-synthesis guard is
+ * deterministic: a candidate quote is kept only if it is an actual substring of the
+ * source document, normalised for whitespace and case. A quote the model
+ * paraphrased or invented is not in the doc, so it is dropped.
+ *
+ * Run on the shape above: fed both real route lines AND the fabricated
+ * "/api/photos → photosRoutes", the guard keeps the two that are in the doc and
+ * drops the invention. Reflowed whitespace and different casing still match, so
+ * quoting across a line wrap does not defeat it.
  *
  * Stack-agnostic: an "interface fact" is any pinned boundary string; the guard is
  * pure substring matching over the source text, with no assumption about its shape.
@@ -84,9 +88,11 @@ export async function readContracts(cwd: string): Promise<string> {
 /**
  * Normalise for substring matching: collapse all whitespace runs to one space and
  * lowercase. Quoting across a line wrap or with reflowed spacing still matches the
- * source; casing differences do not defeat the anti-synthesis guard. Exported as
- * the ONE grounding normaliser every "verbatim quote from the source doc" guard
- * shares (contracts, decompose source anchors), so the rule can't drift.
+ * source, and casing differences do not defeat the anti-synthesis guard.
+ *
+ * Exported as the ONE grounding normaliser every "verbatim quote from the source
+ * doc" guard shares, so the rule cannot drift: decompose-fidelity and requirements
+ * both import it from here alongside this module's own use.
  */
 export function normalise(s: string): string {
     return s.replace(/\s+/g, ' ').trim().toLowerCase()
@@ -98,7 +104,9 @@ export function normalise(s: string): string {
  *   CONTRACT: "<verbatim quote>" [anchor: <where>]
  * The quote (between the first pair of double quotes) is the pinned fact; the
  * optional `[anchor: …]` trailer records provenance. A line without a quoted span
- * is skipped — an unquoted "contract" is a summary, which this registry rejects.
+ * is skipped — an unquoted "contract" is a summary, which this registry rejects —
+ * and so is a quote shorter than MIN_QUOTE_LENGTH or longer than
+ * MAX_CONTRACT_LENGTH. All three skips were run.
  */
 export function parseContractLines(text: string): ContractEntry[] {
     const entries: ContractEntry[] = []
