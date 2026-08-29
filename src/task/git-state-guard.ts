@@ -2,41 +2,43 @@
  * git-state-guard — deterministic repo-state snapshot/reconcile around the
  * read-only gate children (verify, recommend).
  *
- * The failure this closes: those children hold a `read,bash`
- * contract whose "never modify the tree" clause is prompt-level only, and the live
- * local model breaks it. A verify child will run `git stash; git checkout HEAD~1;
- * tsc; git checkout HEAD` with NO pop — the task's whole uncommitted implementation
- * vanished into a stash, the verify judged an empty tree (a full re-implementation
- * was burned), and the orphaned stash detonated two days later when a later impl
- * turn popped it onto a 14-commits-newer HEAD (unresolvable UU conflict, the
- * /task-auto checklist reverted to a stale state). The same child has been observed
- * running `eslint --fix.` mid-verification and ad-hoc DDL against the test DB.
+ * Those children hold a `read,bash` contract whose "never modify the tree" clause
+ * is PROMPT-LEVEL ONLY: `bash` can stash, check out, commit and rewrite files, and
+ * nothing but the prompt says not to. A child that stashes the task's uncommitted
+ * work and never pops it leaves the verify judging an empty tree AND leaves an
+ * orphan stash that only detonates when something later pops it onto a moved HEAD.
+ * So this is capability-shaped rather than prompt-shaped: snapshot the repo state
+ * BEFORE the child runs, deterministically restore whatever it moved afterwards,
+ * no model in the loop.
  *
- * Prompt rules are evidence-insufficient for this class (FROZEN-CONTRACT framing
- * a prompt rule does not hold), so this is a capability-shaped fix: snapshot the repo
- * state BEFORE the child runs, and afterwards deterministically restore anything
- * it moved — no model in the loop.
- *
- * What is captured / reconciled:
- *   - HEAD (sha + symbolic branch ref): a child that checked out another commit
- *     and never came back is checked back out.
- *   - The WORKTREE CONTENT as a git tree object, built through a temporary index
- *     (`read-tree --empty` + `add -A` + `write-tree`, excluding.pi-tasks — the
- *     gate's own debug logs land there DURING the run). This snapshots tracked
- *     *and* untracked (non-ignored) files without touching the real index or the
- *     stash. Restoration re-materialises every changed/deleted file from the
- *     snapshot tree and deletes files the child created.
+ * What is captured and reconciled — each one run against a real repo:
+ *   - HEAD (sha + symbolic branch ref). A child that checked out another commit,
+ *     detached, is put back on its branch AND its sha. LIMIT: a child that COMMITS
+ *     on the current branch is NOT undone — the restore checks out
+ *     `before.branchRef`, and that branch now points at the child's commit, so the
+ *     `checked HEAD back out to <branch>` line is honest about the ref and says
+ *     nothing about the sha. The move is still classed verdict-tainting, so the
+ *     verdict is discarded; the commit stays.
+ *   - The WORKTREE CONTENT as a git tree object, built through a THROWAWAY index
+ *     (`read-tree --empty` + `add -A` + `write-tree`, excluding `.pi-tasks` — the
+ *     gate's own debug logs land there DURING the run). Measured on a repo with a
+ *     staged file, an untracked file, a gitignored file and a `.pi-tasks/` log: the
+ *     tree holds the tracked and untracked files and neither of the other two, and
+ *     the REAL index still shows the same staged path afterwards. Restoration
+ *     re-materialises every changed or deleted file and deletes what the child
+ *     created.
  *   - The STASH ref: entries the child pushed are dropped AFTER the worktree is
- *     restored from the snapshot (the snapshot, not the stash, is the source of
- *     truth), so no landmine stash survives the reconcile.
+ *     restored from the snapshot — the snapshot, not the stash, is the source of
+ *     truth — so no orphan stash survives the reconcile.
  *
  * The real index's staging state is deliberately NOT restored: pre-commit gate
  * children run against a tree whose work is unstaged, and the auto-commit that
- * follows re-stages everything with `add -A` anyway.
+ * follows re-stages everything with `git add -A` (auto-commit.ts:192).
  *
- * Everything is best-effort: a repo where git itself fails (not a work tree, git
- * missing) disables the guard (capture returns ok:false and reconcile no-ops) —
- * the gate must keep working in non-git projects exactly as before.
+ * Everything is best-effort: a repo where git fails disables the guard — capture
+ * returns `ok: false` and reconcile no-ops. Measured: a fresh `git init` with no
+ * commits answers non-zero to `rev-parse -q --verify HEAD`, which is the unborn-HEAD
+ * case the capture bails on.
  */
 import {readFileSync} from 'node:fs'
 import * as fsp from 'node:fs/promises'
@@ -71,12 +73,16 @@ export interface ReconcileResult {
      *  non-artifact (source-shaped) file was modified/deleted. This is the real
      *  mutate-to-pass class; a verdict computed on such a tree is discarded.
      *
-     *  Deliberately false for child-CREATED files and for modified/deleted untracked
-     *  *test-runner artifacts* (test-results/, playwright-report/, coverage output,
-     *  *.tsbuildinfo,.last-run.json …): a gate child that merely ran the suite and
-     *  left its report behind judged a tree whose only difference from pre-run is
-     *  regenerable output — discarding a 49-min verify over that is the F-class this
-     *  splits off. */
+     *  Deliberately false for child-CREATED files and for modified or deleted
+     *  untracked *test-runner artifacts* (test-results/, playwright-report/,
+     *  coverage output, `*.tsbuildinfo`, `.last-run.json` …): a child that merely
+     *  ran the suite and left its report behind judged a tree whose only difference
+     *  from pre-run is regenerable output, and discarding the whole verify over
+     *  that costs a re-run for nothing.
+     *
+     *  Measured against a real repo: rewriting a tracked source file taints;
+     *  creating `test-results/r.json` does not; rewriting a tracked
+     *  `*-snapshots/*.png` baseline DOES taint. */
     verdictTainted: boolean
     /** Human-readable restore actions, for the debug log / notify / gate trail. */
     actions: string[]
@@ -84,30 +90,31 @@ export interface ReconcileResult {
 
 /**
  * Untracked paths that are regenerable test/build OUTPUT, not graded source. A gate
- * child creating or rewriting one of these has not mutated the work under judgement,
- * so its verdict stands. Gitignored files never reach the snapshot (git add -A skips
- * them); this list is for the ones a typical project leaves UNIGNORED — Playwright's
- * `test-results/` and `playwright-report/` above all, the exact churn that discarded
- * verify verdicts. Kept deliberately narrow: anything not matched
- * here that a child modifies/deletes is treated as graded state (verdict-tainting).
+ * child creating or rewriting one of these has not mutated the work under
+ * judgement, so its verdict stands. Gitignored files never reach the snapshot at
+ * all — measured, `add -A` skips them — so this list is for the ones a typical
+ * project leaves UNIGNORED, `test-results/` and `playwright-report/` above all.
+ * Kept deliberately narrow: anything NOT matched here that a child modifies or
+ * deletes is graded state, and taints the verdict.
  *
- * The list itself now lives in `regenerable-artifacts.ts` — the deletion guard and
- * the per-task commit need the same knowledge, and three private copies of it is
- * how a run spends most of its repair budget on a handful of screenshots.
+ * The list lives in `regenerable-artifacts.ts` because three call sites need the
+ * same knowledge — this guard, the write-guard's deletion check, and the per-task
+ * commit — and three private copies would drift.
  */
 const isBenignArtifact = isRegenerableArtifact
 
 /**
- * Regenerable machine state that is benign EVEN WHEN TRACKED — a project that
- * mistakenly commits it must not have a gate child's
- * incidental rewrite of it discard the verdict. Two classes:
- *   - Playwright component-test build cache (`ctCacheDir` — a run commits dozens of
- *     `.playwright-cache/assets/*.js` bundles; a `test:ct` run rewrites them every
- *     time), and
- *   - the test runner's `.last-run.json` run-state file.
- * DELIBERATELY narrow: snapshot BASELINE images (`*-snapshots/*.png`) are NOT here —
+ * Regenerable machine state that is benign EVEN WHEN TRACKED, so a project that
+ * commits it does not have a child's incidental rewrite discard the verdict. Two
+ * classes: the component-test build cache under `ctCacheDir`, which a component
+ * test run rewrites every time, and the test runner's `.last-run.json` run-state
+ * file.
+ *
+ * DELIBERATELY narrow. Snapshot BASELINE images (`*-snapshots/*.png`) are NOT here:
  * a child that rewrites a baseline to make a screenshot test pass is the real
- * mutate-to-pass catch, so those stay verdict-tainting.
+ * mutate-to-pass catch. Measured on a real repo — a tracked file under a custom
+ * `ctCacheDir` and a tracked `.last-run.json` both restore WITHOUT tainting, while
+ * a tracked `tests/a-snapshots/x.png` taints.
  */
 const ALWAYS_REGENERABLE_PATTERNS: readonly RegExp[] = [/(?:^|\/)\.last-run\.json$/]
 
@@ -119,7 +126,10 @@ const CT_CONFIG_FILES = [
     'playwright.config.js'
 ] as const
 
-/** ctCacheDir defaults Playwright uses when a config does not override it. */
+/** The ctCacheDir values assumed when no config declares one. Playwright is not a
+ *  dependency here, so these are not verifiable against an installed package —
+ *  what IS verified is that a config declaring `ctCacheDir: './custom-cache/'` is
+ *  parsed and its directory treated as regenerable. */
 const DEFAULT_CT_CACHE_DIRS = ['.playwright-cache', 'playwright/.cache']
 
 /**
@@ -228,14 +238,15 @@ function pushCapped(actions: string[], verb: string, paths: string[]): void {
 
 /**
  * Restore every file recorded in `beforeTree` (content + deletions) and remove
- * files that exist in `afterTree` but not in `beforeTree` (files the child
- * created). Uses a throwaway index seeded from the snapshot tree; `checkout-index
+ * files that exist in `afterTree` but not in `beforeTree` — the ones the child
+ * created. Uses a throwaway index seeded from the snapshot tree; `checkout-index
  * -a -f` re-materialises the snapshot verbatim.
  *
- * Returns whether any restored change was *verdict-tainting* — a modified/deleted
- * path that is tracked-in-HEAD or an untracked non-artifact (see isBenignArtifact).
- * Creations and test-runner-artifact churn restore identically but do NOT taint.
- * Each changed path is itemised (capped) so the gate trail says WHICH files moved.
+ * Returns whether any restored change was *verdict-tainting*: a modified or
+ * deleted path that is tracked-in-HEAD, or an untracked non-artifact (see
+ * isBenignArtifact). Creations and test-runner-artifact churn restore identically
+ * but do NOT taint. Each changed path is itemised, capped, so the gate trail says
+ * WHICH files moved.
  */
 async function restoreWorktree(
     cwd: string,
@@ -264,8 +275,11 @@ async function restoreWorktree(
             for (const line of status.stdout.split('\n')) {
                 const trimmed = line.trim()
                 if (trimmed.length === 0) continue
-                // "M\tpath", "A\tpath", "D\tpath", "T\tpath" — no -M, so renames show
-                // as a D + an A pair; both get classified on their own merits.
+                // "M\tpath", "A\tpath", "D\tpath", "T\tpath" — no -M, so a rename
+                // shows as a D + an A pair and each half is classified on its own
+                // merits. Measured: renaming a tracked `a.txt` to `b.txt` yields
+                // "removed child-created file b.txt" plus "restored deleted file
+                // a.txt", and taints.
                 const tab = trimmed.indexOf('\t')
                 if (tab < 0) continue
                 const code = trimmed[0]
@@ -320,11 +334,11 @@ async function restoreWorktree(
  * whatever a gate child moved. Ordering matters:
  *
  *   1. HEAD first — a child parked on another commit must be back on the original
- *      ref before the worktree comparison/restore makes sense.
- *   2. Worktree content from the snapshot TREE (not from any stash the child may
- *      have pushed — the snapshot is the authoritative "as the child found it").
- *   3. Child-pushed stash entries are dropped LAST, once the work they swallowed
- *      is already restored — this is exactly the orphan that detonates later.
+ *      ref before the worktree comparison and restore make sense.
+ *   2. Worktree content from the snapshot TREE, never from a stash the child may
+ *      have pushed: the snapshot is the authoritative "as the child found it".
+ *   3. Child-pushed stash entries are dropped LAST, once the work they swallowed is
+ *      already restored — dropping first would destroy the only other copy.
  *
  * Never throws; failures degrade to actions[] lines so the caller can log them.
  */
@@ -378,9 +392,9 @@ export async function reconcileGitState(
     }
 
     // 3. Stash entries the child pushed. Drop stash@{0} until the ref matches the
-    //    snapshot again (bounded — a child pushes at most a handful; 10 is beyond
-    //    anything observed). A stash the child POPPED (ref gone/behind) cannot be
-    //    reconstructed — report it instead of guessing.
+    //    snapshot again, bounded at 10 so a runaway cannot loop here. A stash the
+    //    child POPPED — the ref is gone or no longer contains the snapshot's tip —
+    //    cannot be reconstructed, so report it instead of guessing.
     const stashNow = async (): Promise<string | null> => {
         const s = await git(['rev-parse', '-q', '--verify', 'refs/stash'])
         return s.exitCode === 0 ? s.stdout.trim() : null
