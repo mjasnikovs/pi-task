@@ -1,47 +1,37 @@
 /**
- * final-gate-fix — the bounded, model-driven fix pass offered when the FINAL
- * integration gate fails.
+ * final-gate-fix — the bounded, model-driven fix pass the FINAL integration
+ * gate's resolution picker offers as its second card.
  *
- * The failure this closes: the final gate's first live
- * firing was a TRUE POSITIVE — the project's own `test` command genuinely failed
- * whole-repo while every per-slice check was green — but the resolution picker
- * offered only "Leave failed" / "Accept". There was NO automated path to fix a
- * defect the run itself shipped; the user had to leave the run failed, fix by
- * hand, and resume.
- *
- * This mirrors the per-task graduated-resolution shape (lint-fix.ts): a bounded
- * write-enabled child (read, edit, bash) is seeded with the gate's exact failure
- * (command + exit code + output tail), fixes the defect in place, and the gate
- * itself is re-run as the only arbiter — the child's self-report is never
- * trusted. The user always chooses this path from the picker ("Leave failed"
- * stays the recommended default), and attempts are capped so a non-converging
- * loop hands control back to a person.
+ * This mirrors the per-task graduated-resolution shape (lint-fix.ts) and shares
+ * its child ladder through `runFixChild`: a write-enabled child limited to
+ * `read,edit,bash` is seeded with the gate's own failure text, edits in place,
+ * and then the gate is RE-RUN. The child's self-report can only end an attempt
+ * early as BLOCKED; it can never produce a PASS. `run-final-gate.ts` keeps
+ * "Leave failed" as the recommended card and stops offering Autofix after
+ * MAX_FINAL_GATE_AUTOFIX attempts, so a non-converging loop hands control back
+ * to a person.
  *
  * CHEAT GUARD (deterministic): the cheapest way for a fix child to "converge" is
  * to remove the failing command itself — delete the `test` script, drop the
- * Makefile target — so the gate discovers nothing and vacuously passes. Both
- * live lint-fix validation runs cheated exactly this way (via git checkout)
- * until a guard existed. So the discovered gate commands are snapshotted before
- * the child runs; any previously-discovered command that is no longer
- * discoverable afterwards rejects the attempt and discards its edits. A fix may
- * change what a command DOES, never make it disappear.
+ * Makefile target — so the gate discovers nothing and vacuously passes. The
+ * discovered gate commands are therefore snapshotted before the child runs; a
+ * previously-discovered command that is no longer discoverable afterwards
+ * rejects the attempt and discards its edits, and so does one whose resolved
+ * BODY narrowed. A fix may change what a command DOES, never make it disappear
+ * or shrink what it covers.
  *
- * WRITE-GUARD STACK: this child was added after the guard
- * generation and inherited none of them — it ran `rm` on a sibling task's
- * verified deliverable to satisfy a recorded debt claim and hand-copied a pinned
- * contract to green the lint, with free bash and no trace. Every attempt now
- * runs, deterministically and in order: frozen-path revert (when a freeze set is
- * wired — see below) → deletion guard (a tracked file deleted without relocation
- * rejects the attempt) → shrink guard (above) → probe-gaming scan over the added
- * lines (a fix that SAYS it games a check rejects the attempt). Diff capture for
- * every write-capable gate child lives at the gate-deps seam, keyed on the
- * child's TOOLS, so the next write-capable kind cannot run invisibly either.
+ * WRITE-GUARD STACK, in the order `runFinalGateAutofix` runs it: frozen-path
+ * revert (only when a freeze set is wired) → deletion guard (a tracked file
+ * deleted without relocation rejects the attempt) → shrink guard → scope-shrink
+ * guard → probe-gaming scan over the added lines. Diff capture is NOT here: it
+ * lives at the gate-child seam, where a `/\b(?:edit|bash|write)\b/` test on the
+ * child's TOOLS decides it, so any future write-capable kind is logged too.
  *
- * The frozen-path deny is implemented but NOT wired by gate-deps: per-task
- * frozen fences are task-SCOPED (they fence a task off a sibling's territory),
- * and the measured union over the specs would have reverted the one
- * legitimate whole-repo fix that run needed (migrate.ts — frozen by its own
- * producing task). It activates only when a run-GLOBAL freeze source exists.
+ * The frozen-path deny is implemented here but NOT wired by gate-deps — the
+ * `finalGateFix` wiring there passes every other dep and omits these two.
+ * Per-task frozen fences are task-SCOPED, so their union across a run's specs
+ * can fence off a file a legitimate whole-repo fix has to touch. It activates
+ * only when a run-GLOBAL freeze source exists.
  */
 import {parseFixMarker, runFixChild} from './fix-child.js'
 import type {FinalGateOutcome} from './final-gate.js'
@@ -61,14 +51,16 @@ export const FINAL_FIX_TOOLS = 'read,edit,bash'
 
 /**
  * How many fix passes the user may launch from the picker before the option is
- * withdrawn (mirrors the per-task MAX_AUTO_AUTOFIX budget). Each attempt is a
- * full model child plus a full gate re-run — after this many that still FAIL,
- * only Leave-failed / Accept remain so a person breaks the loop.
+ * withdrawn. Same value as the per-task MAX_AUTO_AUTOFIX budget. Each attempt is
+ * a full model child plus a full gate re-run — after this many that still FAIL,
+ * `run-final-gate.ts` drops the Autofix card and only Leave-failed / Accept
+ * remain, so a person breaks the loop.
  */
 export const MAX_FINAL_GATE_AUTOFIX = 3
 
-/** Picker labels/values. Classification accepts the value token, the label, or
- *  free text (→ autofix guidance), same contract as the per-task resolution. */
+/** Picker labels/values. Each label starts with its own value word, so
+ *  `classifyFinalGateAnswer` accepts the value token and the label alike;
+ *  anything else is free text and becomes autofix guidance. */
 export const FINAL_LEAVE_VALUE = 'fail'
 export const FINAL_ACCEPT_VALUE = 'accept'
 export const FINAL_AUTOFIX_VALUE = 'autofix'
@@ -77,8 +69,8 @@ export const FINAL_ACCEPT_LABEL = 'Accept — complete the run anyway'
 export const FINAL_AUTOFIX_LABEL = 'Autofix — run a bounded fix pass and re-run the gate'
 
 export interface FinalGateChoice {
-    /** What the user decided. 'leave' = leave the run failed (also the dismissal
-     *  default — identical to the pre-autofix behavior). */
+    /** What the user decided. 'leave' = leave the run failed, and also what a
+     *  dismissed picker means. */
     action: 'leave' | 'accept' | 'autofix'
     /** Free-text guidance typed instead of picking a card; folded into the fix
      *  child's failure seed. Only set with 'autofix'. */
@@ -87,9 +79,9 @@ export interface FinalGateChoice {
 
 /**
  * Map a final-gate picker answer to an action. Dismissal (undefined/empty) and
- * an explicit leave stay "leave" — exactly what the two-option picker did.
- * Free text becomes autofix guidance, mirroring classifyResolutionAnswer; the
- * caller demotes autofix back to "leave" when the option was not offered.
+ * an explicit leave both stay "leave". Free text becomes autofix guidance; the
+ * caller's `choice.action === 'autofix' && canAutofix` test demotes autofix back
+ * to leave when the card was not offered.
  */
 export function classifyFinalGateAnswer(answer: string | undefined): FinalGateChoice {
     if (answer === undefined) return {action: 'leave'}
@@ -102,10 +94,11 @@ export function classifyFinalGateAnswer(answer: string | undefined): FinalGateCh
 }
 
 /**
- * The gate's fail reason always carries the failing command in backticks
- * (`` `bun run test` exited 1 — … `` / ``static checks: `make lint` exited 2``).
- * Extract it for reporting; the shrink guard itself compares the FULL
- * discovered-command sets, so a reason this cannot parse still guards.
+ * The gate's fail reason carries the failing command in backticks — final-gate
+ * mints `` `<label>` exited <status> — <tail> ``, with a `lockfile check: ` or
+ * `launch script: ` prefix on two of the sections. Extract it for reporting
+ * only; the shrink guard compares the FULL discovered-command sets, so a reason
+ * this cannot parse still guards.
  */
 export function exitedCommandFromReason(reason: string): string | null {
     const m = /`([^`]+)`\s+exited\b/.exec(reason)
@@ -114,11 +107,11 @@ export function exitedCommandFromReason(reason: string): string | null {
 
 /**
  * Build the fix child's prompt. Generic by construction: the only project facts
- * in it are the gate's own failure text — the command comes from the project's
- * discovered manifest, never from a hardcoded ecosystem. The seed may carry
- * SEVERAL failures (the gate aggregates every section, ranked
- * most load-bearing first); convergence means the WHOLE list is empty, so the
- * child is told to fix all of them.
+ * in it are the gate's own failure text, whose command labels come from the
+ * project's discovered manifest. The seed may carry SEVERAL failures — the gate
+ * runs every section and aggregates, emitting "N failures (ranked, most
+ * load-bearing first)" — and it reports `ok` only when that list is empty, so
+ * the child is told to fix all of them.
  */
 export function buildFinalFixPrompt(failReason: string): string {
     return [
@@ -163,12 +156,8 @@ export function buildFinalFixPrompt(failReason: string): string {
     ].join('\n')
 }
 
-/**
- * Parse the child's final marker. Last match wins (the model reasons before
- * concluding and bash output can echo the words). No marker → treated as DONE:
- * the gate re-run is the arbiter either way, so a missing marker only skips the
- * early-out on a self-declared BLOCKED.
- */
+/** This pass's marker word, parsed by the shared `parseFixMarker` (last match
+ *  wins; no marker → DONE). */
 export function parseFinalFixMarker(text: string): {blocked: boolean; note?: string} {
     return parseFixMarker('FINAL-GATE-FIX', text)
 }
@@ -176,29 +165,20 @@ export function parseFinalFixMarker(text: string): {blocked: boolean; note?: str
 /**
  * STRANDED SUB-FIXES.
  *
- * A fix attempt that does not converge keeps its edits: they are NOT discarded
- * (only a guard trip discards), and `deps.commit` runs only on `fix.ok`. So a
- * partial fix that genuinely repaired something sits in the working tree, uncommitted,
- * and if the user then ACCEPTs the FAIL the run completes around it — leaving HEAD
- * broken while the repair is invisible unless someone runs `git status`.
+ * An attempt that does not converge KEEPS its edits — only a guard trip
+ * discards — and the caller commits only on `fix.ok`. So a partial fix that
+ * genuinely repaired something sits uncommitted in the working tree while HEAD
+ * still carries the defect, invisible unless someone runs `git status`.
  *
- * The shape: the fix child's config change makes the test command pass, attempt 1
- * does not converge overall, the user accepts
- * the FAIL, and the tree still shows the file modified while HEAD's `bun run test` is
- * broken. The repair and the breakage were BOTH real; only the repair was discarded
- * by default.
+ * The rule: a partial fix is either committed as its own named commit or
+ * explicitly surfaced — never silently stranded. `run-final-gate.ts` calls
+ * `commitStranded` on BOTH terminal outcomes, accept and leave-failed, so an
+ * unattended run that ends on LEAVE does not leave real repairs one `git
+ * checkout` from gone.
  *
- * The rule: a partial fix is either committed (its own commit, named in the trail) or
- * explicitly surfaced — never silently stranded.
- *
- * The committing half can end up reachable only on the ACCEPT path. The run
- * ended on LEAVE (YOLO, budget spent) and 13 real repairs — the dev script, the
- * teardown bug, test serialization, the migrate script: the changes that make that
- * app work today — were left dirty in the tree, one `git checkout` from gone, after
- * an UNATTENDED run nobody was watching. So EVERY terminal non-converged outcome
- * commits them now, not just ACCEPT. Only guard-CLEAN edits qualify: an attempt a
- * write-guard rejected without discarding leaves REJECTED edits in the tree, and
- * those are never committed (the guard is not weakened to make committing easier).
+ * Only guard-CLEAN edits qualify. `AutofixLedger.mayCommitTree()` goes false
+ * once a guard has rejected an attempt whose edits could not be discarded, and
+ * never flips back: the guard is not weakened to make committing easier.
  */
 
 /** Commit subject for partial fixes committed alongside a terminal gate FAIL. */
@@ -233,38 +213,32 @@ export interface FinalFixResult {
     /** Human-readable outcome (converged gate reason, or why the attempt failed). */
     reason: string
     /**
-     * The re-run gate's OUTCOME, whole — present whenever the gate actually ran
-     * (absent only when the fix child self-declared blocked and the re-run was
-     * skipped).
-     *
-     * Four flattened `gate*` mirrors here would lose
-     * things. `openDebts` never crossed at all, so `runFinalGateStage` rebuilt
-     * `fin` as a literal three times and each literal dropped it — the recorded
-     * defect, fixed by RE-DERIVING the field (`reconcileDebts`) rather
-     * than by keeping the value. Then 19A had to push `observedFailures` across the
-     * same wall as a third parallel field and re-pair it downstream by
-     * `gateObservedFailures?.includes(detail)` — a membership test that exists only
-     * because the pairing was broken in transit.
+     * The re-run gate's OUTCOME, whole — present whenever the gate actually ran,
+     * absent only when the fix child self-declared BLOCKED and the re-run was
+     * skipped. The whole `FinalGateOutcome` crosses, not a hand-picked copy of
+     * some of its fields: a copy silently drops whatever it forgot, and the
+     * pairing between `failures` and `observedFailures` only holds inside it.
      */
     gate?: FinalGateOutcome
     /** On a converged outcome: the UNOBSERVED note the CALLER should show. It is
      *  the gate's own note plus any downgrade this fix pass added (see the
      *  ignored-dependency probe below), so it is not simply `gate.unobserved`. */
     unobserved?: string
-    /** Gitignored path(s) this fix pass wrote, exempt classes already removed (see
-     *  write-guard.ts). Present whether or not the gate converged — the caller
-     *  trails them either way; path names only, never contents. */
+    /** Gitignored path(s) this fix pass wrote, with the exempt classes already
+     *  removed (task dir, `.git`, node_modules, build output — write-guard.ts).
+     *  Present whether or not the gate converged; path names only, never
+     *  contents. */
     ignoredWrites?: string[]
     /** …and the mechanical dependency probe found the converged gate does NOT pass
      *  without them, so `unobserved` above carries the downgrade. Absent when the
-     *  probe could not answer (no probe wired, restore risk, too many paths). */
+     *  probe could not answer: no probe wired, a path that would not move, or more
+     *  paths than its bound allows. */
     ignoredDependent?: boolean
     /** A write-guard rejected this attempt (deletion / shrink / probe-gaming). */
     guardTripped?: boolean
-    /** …and its edits were discarded. When a guard tripped and this is false, the
-     *  working tree still holds REJECTED edits, so the caller must NOT commit what
-     *  it finds there (commit surviving fix-pass edits — but
-     *  only guard-CLEAN ones; the cheat guard is never weakened to ease committing). */
+    /** …and its edits were discarded. False here with `guardTripped` true means
+     *  the tree still holds REJECTED edits, and the caller must not commit what it
+     *  finds: that is what `AutofixLedger.mayCommitTree()` latches off. */
     editsDiscarded?: boolean
 }
 
@@ -278,42 +252,45 @@ export interface FinalFixDeps {
     runChild: (tools: string, prompt: string, signal?: AbortSignal) => Promise<string>
     /** Re-run the final integration gate — the only arbiter of convergence.
      *  Converges only when the gate's FULL aggregated failure list is empty
-     *  (ok=true); `failures` rides through so the caller sees every entry. */
-    /** Returns the gate's own outcome type, not a structural copy of five of its
-     *  fields — a re-declaration is how `openDebts` came to be silently absent. */
+     *  (ok=true); `failures` rides through so the caller sees every entry.
+     *  Typed as the gate's own outcome, not a structural copy of some fields. */
     gate: (cwd: string) => Promise<FinalGateOutcome>
-    /** Labels of every currently-discoverable gate command (static + integration),
-     *  for the shrink guard. Pure discovery — nothing is executed. */
+    /** Labels of every currently-discoverable gate command — health, lockfile,
+     *  integration and boot — for the shrink guard. Pure discovery: nothing
+     *  runs. */
     discoverLabels: (cwd: string) => string[]
     /** The same commands' RESOLVED BODIES (`label → scripts[name]` / Makefile
      *  recipe), for the scope-shrink half of the guard. Absent → only the label
-     *  comparison runs, i.e. the pre-behaviour. */
+     *  comparison runs. */
     discoverBodies?: (cwd: string) => Record<string, string>
     /** Discard the fix child's working-tree edits (guard trips only). Absent
      *  → the violation is still rejected, edits are left for inspection. */
     discard?: (cwd: string) => Promise<void>
-    // ── Write-guard stack (unguarded, this child gets a free `rm`,
-    //    no diff capture, no frozen-path deny, no probe scan). All optional so
-    //    tests and older wirings degrade to the previous behavior; gate-deps
-    //    wires every one of them.
-    /** The fix child's tree changes (`git status --porcelain` shape) — diff capture
-     *  for the log and the deletion guard's input. The tree was clean before the
-     *  child ran (every task committed), so status IS the child's work. */
+    // ── Write-guard stack. All optional, so a wiring that omits one degrades to
+    //    not running that guard rather than throwing. gate-deps wires all of
+    //    them EXCEPT frozenPaths/revertFrozen — see the header.
+    /** Tree changes in `git status --porcelain` shape — the deletion guard's input
+     *  and the "created by this fix" set the scope-shrink guard consults. Every
+     *  task is committed before this stage, so what status reports is fix-pass
+     *  work; on a second attempt that includes the first attempt's kept edits,
+     *  since a non-converged attempt is not discarded. */
     treeChanges?: () => Promise<TreeChangeSummary>
     /** The union of every task spec's frozen (Do-NOT-modify) paths — the whole-run
      *  write-deny set, since this child works across all slices at once. */
     frozenPaths?: () => Promise<string[]>
-    /** Restore the given frozen paths to HEAD; returns the files actually reverted
-     *  (same mechanical deny the enforce pass carries — see frozen-path-guard.ts). */
+    /** Restore the given frozen paths to HEAD; returns the files actually reverted.
+     *  `frozen-path-guard.ts`'s `revertFrozenPaths`, the same one the per-task
+     *  passes use. */
     revertFrozen?: (paths: string[]) => Promise<string[]>
-    /** Deterministic probe scan over the child's ADDED lines (probe-gaming, F6):
-     *  a fix written to game a check rather than meet it rejects the attempt —
-     *  an autofix can replace the typed client with a hand-written contract
-     *  copy to green the lint. Findings are verbatim offending lines. */
+    /** Deterministic probe scan over the child's ADDED lines: a fix whose own
+     *  added text says it is gaming a check rather than meeting it rejects the
+     *  attempt. There is no verify child downstream of this pass to judge such a
+     *  finding. Findings are the verbatim offending lines. */
     probeScan?: () => Promise<string[]>
-    // ── Ignored-path channel (a fix pass can green a command by
-    //    writing credentials into a gitignored `.env`, invisible to every guard
-    //    above because porcelain does not report ignored paths).
+    // ── Ignored-path channel. Every guard above consumes `git status
+    //    --porcelain`, which does not report ignored paths, so a pass that greens
+    //    a command by writing into a gitignored `.env` is invisible to all of
+    //    them.
     /** Fingerprint of the ACTIONABLE ignored paths (build output and node_modules
      *  already exempt). Called before and after the child; the difference is what
      *  this pass wrote. Absent → the channel is off and behaviour is unchanged. */
@@ -332,10 +309,11 @@ export interface FinalFixDeps {
 }
 
 /**
- * Run one bounded final-gate fix attempt: snapshot discovery → child → write-guard
- * stack (diff capture → frozen-path revert → deletion guard → shrink guard → probe
- * scan) → gate re-run. Never throws for an outcome; only a user cancel inside
- * runChild propagates (the caller's USER_CANCELLED path handles it).
+ * Run one bounded final-gate fix attempt: snapshot discovery and ignored paths →
+ * child → frozen-path revert → deletion guard → shrink guard → scope-shrink
+ * guard → probe scan → gate re-run. Never throws for an outcome; only a user
+ * cancel inside runChild propagates, and the caller's USER_CANCELLED path
+ * handles that.
  */
 export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixResult> {
     const before = deps.discoverLabels(deps.cwd)
@@ -345,7 +323,7 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
     // from one that was already sitting in the worktree.
     const ignoredBefore = deps.ignoredSnapshot ? await deps.ignoredSnapshot() : null
 
-    // The four-rung ladder is task/fix-child.ts, shared with the per-task pass.
+    // The child ladder is task/fix-child.ts, shared with the per-task pass.
     const end = await runFixChild({
         runChild: deps.runChild,
         tools: FINAL_FIX_TOOLS,
@@ -380,13 +358,14 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
             editsDiscarded: deps.discard !== undefined
         })
 
-    // (Diff capture — what the pass changed, durably — happens at the gate-deps
-    // seam for every write-capable child; here only the guards act on it.)
+    // (Diff capture — what the pass changed, durably — happens in gate-child.ts,
+    // which logs the tree changes of any child whose TOOLS include edit/bash/
+    // write; here only the guards act on them.)
 
     // FROZEN-PATH WRITE-DENY: undo the child's edits to any path a task's spec
-    // froze, before anything downstream can act on them — same mechanical deny
-    // the enforce pass carries (prompt framing is not enough on its own).
-    // Non-fatal: the rest of the fix survives, only the frozen edits are undone.
+    // froze, before anything downstream can act on them — the same mechanical
+    // revert the per-task passes carry, not prompt framing. Non-fatal: the rest
+    // of the fix survives, only the frozen edits are undone.
     if (deps.frozenPaths && deps.revertFrozen) {
         const frozen = await deps.frozenPaths()
         if (frozen.length > 0) {
@@ -399,8 +378,10 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         }
     }
 
-    // DELETION GUARD (post-revert state): a tracked file the pass deleted without
-    // relocating it is a committed deliverable destroyed — reject the attempt.
+    // DELETION GUARD (post-revert state): a tracked file the pass deleted is a
+    // completed task's committed deliverable destroyed — reject the attempt. A
+    // deletion paired with an added file of the SAME BASENAME is a relocation and
+    // passes, as do the regenerable artifacts write-guard.ts exempts.
     const changes = deps.treeChanges ? await deps.treeChanges() : null
     if (changes) {
         const gone = findForbiddenDeletions(changes)
@@ -425,14 +406,12 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return rejected(`fix pass removed the gate's own command(s) (${vanished.join(', ')})`)
     }
 
-    // SCOPE-SHRINK GUARD: the label surviving is not enough. The
-    // autofix kept `bun run test` and rewrote its BODY from `AGENT=1 bun test`
-    // to `AGENT=1 bun test ./test`, so the set difference above was empty while
-    // the suite stopped covering the repository — and the gate re-ran, went
-    // green, and reported "converged". Compare the resolved bodies and reject a
-    // fix that shrinks what the gate measures (command-shrink.ts: four
-    // mechanical shapes, measured at 3 hits in 274 manifest-touching corpus
-    // commits, all three read by hand as real narrowings).
+    // SCOPE-SHRINK GUARD: the label surviving is not enough. A child can keep
+    // `bun run test` and rewrite its BODY to run a subdirectory instead of the
+    // repository — the set difference above stays empty while the suite stops
+    // covering what the gate is meant to measure, and the re-run then goes green
+    // and reports "converged". So compare the resolved bodies too
+    // (command-shrink.ts holds the mechanical narrowing shapes).
     if (deps.discoverBodies) {
         const addedByFix = new Set((changes?.added ?? []).map(p => p.replace(/^\.\//, '')))
         const narrowed = findNarrowedCommands(bodiesBefore, deps.discoverBodies(deps.cwd), {
@@ -449,10 +428,10 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         }
     }
 
-    // PROBE SCAN (F6): added lines whose stated purpose is to make a check pass
-    // rather than meet the requirement reject the attempt — there is no verify
-    // child downstream of this pass to judge the finding, and the probe is
-    // FP-measured at 1 true hit in 50,735 added lines on the real corpus.
+    // PROBE SCAN: added lines whose own stated purpose is to make a check pass
+    // rather than meet the requirement reject the attempt. Nothing downstream of
+    // this pass would judge such a finding — the gate re-run only sees exit
+    // codes.
     if (deps.probeScan) {
         const findings = await deps.probeScan()
         if (findings.length > 0) {
@@ -475,15 +454,14 @@ export async function runFinalGateAutofix(deps: FinalFixDeps): Promise<FinalFixR
         return withIgnored({ok: false, reason: `did not converge: ${fin.reason}`, gate: fin})
     }
 
-    // IGNORED-DEPENDENCY DOWNGRADE. The gate says PASS; the question
-    // this answers is whether that PASS belongs to the REPOSITORY or only to this
-    // worktree. Decided mechanically, never by judgement: move the ignored files
-    // the pass wrote aside, re-run the gate once, put them back. Still passing ⇒
-    // they were incidental and the PASS stands. Failing ⇒ the checks were passing
-    // on state no fresh clone has, which is the definition of UNOBSERVED (see
-    // final-gate.ts unobservedVerdict) — not a FAIL: the fix is real, it just did
-    // not ship. The probe runs only here, so a run with no ignored writes (the
-    // overwhelming majority — 1 of 68 recorded child logs) pays nothing.
+    // IGNORED-DEPENDENCY DOWNGRADE. The gate says PASS; this decides whether the
+    // PASS belongs to the REPOSITORY or only to this worktree. Mechanical, never
+    // judgement: move the ignored files the pass wrote aside, re-run the gate
+    // once, put them back. Still passing ⇒ incidental, the PASS stands. Failing ⇒
+    // the checks were passing on state no fresh clone has, which is UNOBSERVED
+    // (final-gate.ts unobservedVerdict), not a FAIL — the fix is real, it just
+    // did not ship. Guarded on a non-empty `ignoredWrites`, so a pass that wrote
+    // no ignored paths runs no extra gate.
     let ignoredDependent: boolean | undefined
     if (ignoredWrites.length > 0 && deps.gateWithoutIgnored) {
         const passesWithout = await deps.gateWithoutIgnored(ignoredWrites)
