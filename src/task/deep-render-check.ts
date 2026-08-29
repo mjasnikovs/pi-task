@@ -5,15 +5,16 @@
  * The failure class this closes: the shallow render check (render-check.ts) loads
  * ONE url and judges the rendered DOM. An app can satisfy it completely while
  * being unusable — GET / redirects to /login, the login page renders fully, and
- * that is the whole check. Behind it, src/client/hooks/useAuth.ts called
- * `typedClient.api.auth.me.get()`; hono RPC methods are `$get`/`$post`, so a bare
- * `.get` is just another path segment in hono's createProxy and the call returns a
- * request BUILDER that never issues a request. Login POSTs 200 and sets the
- * session cookie, zero /api/auth/me requests are ever made, and the app bounces to
- * /login forever. Seven call sites were dead the same way, mixed in the same files
- * with correct `$get` ones — the signature of code no runtime ever executed. The
- * server healthy throughout: whole suite green, tsc clean, login 200, me-with-
- * cookie 200. Nothing static could see it.
+ * that is the whole check.
+ *
+ * Behind that wall lives the DEAD CLIENT CALL. A typed RPC client whose method
+ * names are proxied (hono's `$get`/`$post`, say) turns a wrong-but-plausible
+ * spelling into just another path segment: the call returns a request BUILDER and
+ * never issues a request. Login POSTs 200 and sets the session cookie, the
+ * follow-up data call is never made at all, and the app bounces back to the wall
+ * forever. The dead spellings sit in the same files as correct ones, which is the
+ * signature of code no runtime ever executed — and everything static stays green:
+ * the suite passes, tsc is clean, and both endpoints answer 200 to curl.
  *
  * The generic instrument is a NETWORK FACT: after a real sign-in, did the client
  * actually leave the wall, and did its data calls actually reach the server. No
@@ -54,7 +55,9 @@ export type DeepRenderOutcome =
 export interface LoginCredentials {
     identifier: string
     password: string
-    /** Key names only — the value is never logged or surfaced anywhere. */
+    /** Key NAMES only. The values are read from the project's own dotenv and typed
+     *  into the page; neither ever reaches a log line, a skip note or a failure
+     *  detail — those quote the key names and the request paths only. */
     identifierKey: string
     passwordKey: string
 }
@@ -63,7 +66,9 @@ export interface LoginCredentials {
 const IDENTIFIER_SUFFIXES = ['PHONE', 'EMAIL', 'USERNAME', 'USER', 'LOGIN', 'IDENTIFIER']
 const PASSWORD_SUFFIXES = ['PASSWORD', 'PASSWD', 'PASS']
 /** Prefixes whose `_PASSWORD` belongs to infrastructure, not to an app account.
- *  `DB_USER`/`DB_PASSWORD` pair perfectly and would otherwise be tried as a login. */
+ *  `DB_USER`/`DB_PASSWORD` pair perfectly and would otherwise be tried as a login.
+ *  Confirmed: that pair alone yields no credentials, and so does POSTGRES_*, while
+ *  an ADMIN pair in the same file is chosen over both. */
 const INFRA_PREFIX_RE =
     /^(DATABASE|DB|POSTGRES|POSTGRESQL|PG|MYSQL|MARIADB|MONGO|MONGODB|REDIS|RABBIT|RABBITMQ|AMQP|KAFKA|SMTP|IMAP|MAIL|MAILER|S3|MINIO|AWS|GCP|AZURE|DOCKER|REGISTRY|NPM|GITHUB|GITLAB|PROXY|LDAP|VAULT|GRAFANA|SENTRY)$/i
 /** Prefixes that name a seeded APP account, tried before any other pair. */
@@ -83,10 +88,11 @@ function splitKey(key: string, suffixes: string[]): {prefix: string; suffix: str
 }
 
 /**
- * Parse a dotenv-style file into a plain record. Deliberately minimal (KEY=VALUE,
- * `export ` prefix, # comments, optional matching quotes) — this reads the same
- * file the app's own runtime reads, and anything it cannot parse simply yields no
- * credentials, which is a SKIP.
+ * Parse a dotenv-style file into a plain record. Deliberately minimal — KEY=VALUE,
+ * an optional `export ` prefix, `#` comments, and matching quotes that preserve
+ * inner spaces while an unquoted value drops a trailing ` #` comment. This reads
+ * the same file the app's own runtime reads, and anything it cannot parse simply
+ * yields no credentials, which is a SKIP rather than a failure.
  */
 export function parseEnvFile(text: string): Record<string, string> {
     const out: Record<string, string> = {}
@@ -304,11 +310,16 @@ const MISSING_ROUTE_STATUS = new Set([404, 405, 501])
  * Everything else is an environment or shape gap and SKIPs. Note what is NOT a
  * failure: zero data calls attempted after sign-in. A server-rendered app that
  * redirects to a fresh document legitimately issues no XHR at all, so the missing
- * half is reported UNOBSERVED in the detail instead. (The task text asked for
- * "≥1 same-origin /api/* 2xx during the session" as a hard assertion; STEP 0
- * refuted that wording — a BROKEN build satisfies it with the probe's own
- * login POST — so the assertion is registered post-auth and excludes the sign-in
- * request. See the scratch REGISTERED-METRIC record quoted in the commit.)
+ * half is reported UNOBSERVED in the detail instead.
+ *
+ * The data assertion is deliberately POST-AUTH and EXCLUDES the sign-in request.
+ * A plain "at least one same-origin 2xx during the session" would be satisfied by
+ * the probe's own login POST and nothing else — a broken build passes it.
+ *
+ * Run across every branch: only those three FAIL. No wall PASSes; no credentials,
+ * an undriveable form, no sign-in request, a server that REJECTED the credentials,
+ * and a client pinned to a foreign origin all SKIP; and zero post-auth data calls
+ * PASSes with the gap noted.
  */
 export function judgeDeepSession(f: DeepSessionFacts): DeepRenderOutcome {
     if (!f.landingHadAuthWall) {
@@ -960,9 +971,9 @@ export async function driveSession(
     await settle(() => lastActivity, POST_SUBMIT_CAP_MS, quietMs)
 
     // The sign-in request: the first same-origin non-GET issued by the submit. Its
-    // own 2xx is the precondition for judging anything, and it is excluded from the
-    // data evidence (STEP 0: the broken build satisfies "≥1 same-origin 2xx" with
-    // exactly this request and nothing else).
+    // own 2xx is the precondition for judging anything, and it is EXCLUDED from the
+    // data evidence — a broken build satisfies "at least one same-origin 2xx" with
+    // exactly this request and nothing else.
     const after = new Map([...requests].filter(([, r]) => r.at >= submitMark))
     let authId: string | null = null
     for (const [id, r] of after) {
