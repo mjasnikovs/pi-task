@@ -24,7 +24,7 @@ function makeCwd(): string {
 }
 
 // The verbatim mx5 DESIGN §9 line that declares the required scripts.
-const MX5_SCRIPTS_LINE = '- **Scripts:** `dev`, `build`, `migrate`, `seed`, `test`.'
+const SCRIPTS_LINE = '- **Scripts:** `dev`, `build`, `migrate`, `seed`, `test`.'
 
 describe('parseScriptLines', () => {
     test('extracts bare names, stripping backticks and trailing tokens', () => {
@@ -45,9 +45,11 @@ describe('parseScriptLines', () => {
 describe('keepGroundedScripts (the anti-fabrication guard)', () => {
     test('keeps only names the design backticks', () => {
         // `deploy` is NOT backticked in the design → dropped (a hallucinated script).
-        expect(keepGroundedScripts(['dev', 'migrate', 'seed', 'deploy'], MX5_SCRIPTS_LINE)).toEqual(
-            ['dev', 'migrate', 'seed']
-        )
+        expect(keepGroundedScripts(['dev', 'migrate', 'seed', 'deploy'], SCRIPTS_LINE)).toEqual([
+            'dev',
+            'migrate',
+            'seed'
+        ])
     })
 
     test('a design that never backticks a script name grounds nothing', () => {
@@ -55,25 +57,25 @@ describe('keepGroundedScripts (the anti-fabrication guard)', () => {
     })
 
     test('dedups case-insensitively', () => {
-        expect(keepGroundedScripts(['seed', 'SEED'], MX5_SCRIPTS_LINE)).toEqual(['seed'])
+        expect(keepGroundedScripts(['seed', 'SEED'], SCRIPTS_LINE)).toEqual(['seed'])
     })
 })
 
 describe('enumerateScriptCandidates (the mechanical recall floor — mx5 run 11)', () => {
-    const mx5Doc = fs.readFileSync(
-        path.join(import.meta.dir, '__fixtures__', 'planning', 'mx5-project.md'),
+    const projectSpec = fs.readFileSync(
+        path.join(import.meta.dir, '__fixtures__', 'project-spec.md'),
         'utf8'
     )
 
     test('the real run-11 doc yields every declared script, including the §2-only test:ct', () => {
-        const candidates = enumerateScriptCandidates(mx5Doc)
+        const candidates = enumerateScriptCandidates(projectSpec)
         for (const name of ['dev', 'build', 'migrate', 'seed', 'test', 'lint', 'test:ct']) {
             expect(candidates).toContain(name)
         }
     })
 
     test('package names never enter the checklist (their paragraphs do not say "script")', () => {
-        const candidates = enumerateScriptCandidates(mx5Doc)
+        const candidates = enumerateScriptCandidates(projectSpec)
         for (const pkg of ['hono', 'zod', 'sharp', 'react', 'wouter']) {
             expect(candidates).not.toContain(pkg)
         }

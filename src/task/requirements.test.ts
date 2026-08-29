@@ -33,8 +33,8 @@ import {
 import {AUTO_DECOMPOSE_PROMPT} from './auto-prompts.js'
 import {buildAutoBody, parseTaskList} from './auto-io.js'
 
-const MX5_DOC = fs.readFileSync(
-    path.join(import.meta.dir, '__fixtures__', 'planning', 'mx5-project.md'),
+const PROJECT_SPEC = fs.readFileSync(
+    path.join(import.meta.dir, '__fixtures__', 'project-spec.md'),
     'utf8'
 )
 
@@ -72,7 +72,7 @@ describe('keepGroundedRequirements (anti-synthesis guard)', () => {
                 {quote: CT_QUOTE, anchor: '10'},
                 {quote: 'all endpoints must respond in under 100ms', anchor: 'perf'} // invented
             ],
-            MX5_DOC
+            PROJECT_SPEC
         )
         expect(kept.map(e => e.anchor)).toEqual(['10', '10'])
     })
@@ -83,7 +83,7 @@ describe('keepGroundedRequirements (anti-synthesis guard)', () => {
                 {quote: CT_QUOTE, anchor: 'a'},
                 {quote: CT_QUOTE.toUpperCase(), anchor: 'b'}
             ],
-            MX5_DOC
+            PROJECT_SPEC
         )
         expect(kept).toHaveLength(1)
     })
@@ -91,7 +91,7 @@ describe('keepGroundedRequirements (anti-synthesis guard)', () => {
 
 describe('obligation-passage recall floor', () => {
     test('mx5: both §10 paragraphs and the §5 RPC mandate are enumerated', () => {
-        const passages = enumerateObligationPassages(MX5_DOC)
+        const passages = enumerateObligationPassages(PROJECT_SPEC)
         expect(passages.some(p => p.includes('Test-first cadence (required)'))).toBe(true)
         expect(passages.some(p => p.includes('RPC only (no hand-rolled types)'))).toBe(true)
     })
@@ -115,7 +115,7 @@ describe('obligation-passage recall floor', () => {
     })
 
     test('uncoveredPassages: a passage with no overlapping kept quote is hard evidence', () => {
-        const passages = enumerateObligationPassages(MX5_DOC)
+        const passages = enumerateObligationPassages(PROJECT_SPEC)
         const cadence = passages.find(p => p.includes('Test-first cadence'))!
         // A §5 quote covers its own passage but not the cadence passage.
         const kept = [{quote: 'server↔client communication MUST go through Hono', anchor: '5'}]
