@@ -2,25 +2,30 @@
  * Model-stream watchdog — the inactivity machine for a stream that goes SILENT
  * without erroring.
  *
- * WHY: three main-session implementation turns died mid-turn — the
- * session jsonl's last event is an ordinary assistant message, then nothing,
- * forever, while the model server stayed Up(healthy) the whole time. A hung or
- * silently-dropped stream throws NOTHING, so:
- *   - the connection-error retry (child-runner.ts) never fires: it needs a
- *     thrown/reported ModelError,
- *   - the command watchdog never fires: it only covers TOOL executions,
- *   - the child stall guard never fires: it treats a reachable endpoint as proof
- *     of life, which it is — the endpoint was fine, the stream was not.
- * The cost is hours of dead air waiting on a manual restart.
+ * WHY: a turn can die mid-stream — the last thing recorded is an ordinary
+ * assistant message, then nothing, while the model server stays healthy. A hung
+ * or silently-dropped stream throws NOTHING, so none of the three guards that
+ * already exist can see it:
+ *   - the connection-error retry never fires. child-runner reaches it only
+ *     inside `if (r.modelError)`, and a silent hang reports no error at all.
+ *   - the command watchdog never fires: it arms per tool call and covers only
+ *     TOOL executions.
+ *   - the child stall guard never fires: it kills only when a probe finds the
+ *     endpoint UNREACHABLE, and here the endpoint answers fine. The stream is
+ *     what died, not the server.
  *
- * WHAT THIS MEASURES: time since the LAST stream event of ANY kind — text token,
- * tool-call delta, thinking delta, provider response header. NOT wall-clock, and
- * NOT "time to first token". One token every 30s is a working local model and
- * must never be killed; zero events for the whole window is a hang.
+ * WHAT THIS MEASURES: time since the last sign of life, NOT wall-clock and NOT
+ * time-to-first-token. What counts as a sign differs by surface — for the main
+ * session it is any of six pi events (`before_provider_request`,
+ * `after_provider_response`, `turn_start`, `message_start`, `message_update`,
+ * `message_end`), with every text, thinking and tool-call delta arriving as
+ * `message_update`; for a child it is any stdout or stderr CHUNK. A slow model
+ * that emits something occasionally is working and must never be killed. Zero
+ * for the whole window is a hang.
  *
- * WHY THE DEFAULT IS GENEROUS: on a local llama-server a 32k-context prompt can
- * spend many minutes in prompt processing emitting nothing at all. A 60-120s
- * ceiling would kill every long prompt on local hardware. See
+ * WHY THE DEFAULT IS GENEROUS: prompt processing legitimately emits nothing
+ * while it runs, so a tight ceiling would kill honest long prompts. This guard
+ * exists to bound dead air, not to police slowness. See
  * DEFAULT_STREAM_INACTIVITY_MS.
  *
  * TWO SURFACES, one machine (same split as command-watchdog.ts):
@@ -41,22 +46,27 @@ import type {TimerHandle} from './command-watchdog.js'
 export type {TimerHandle}
 
 /**
- * Default inactivity ceiling: 10 minutes. Chosen from the constraint that a local
- * model's first token can legitimately be many minutes away — the guard exists to
- * turn hours of dead air into minutes, not to police slowness.
+ * Default inactivity ceiling. Sized by the constraint that a local model's first
+ * token can legitimately be a long way off, so the number has to clear honest
+ * prompt processing rather than sit close to it.
  */
 export const DEFAULT_STREAM_INACTIVITY_MS = 10 * 60_000
 
-/** Whole minutes, floored at 1, for the human-facing window in every message. */
+/** Whole minutes for the human-facing window in every message: rounded to
+ *  nearest, then floored at 1 so a sub-minute window never reads "0 minutes". */
 function minutes(ms: number): string {
     const mins = Math.max(1, Math.round(ms / 60_000))
     return `${mins} minute${mins === 1 ? '' : 's'}`
 }
 
 /**
- * How often the machine checks the idle clock. A poll (rather than re-arming a
- * timeout on every token) keeps cost O(1) per window instead of O(1) per token —
- * a streaming turn emits thousands of events. Same idiom as the child stall guard.
+ * How often the machine checks the idle clock. A poll, rather than re-arming a
+ * timeout on every token, keeps the cost per window constant instead of per
+ * event — and "thousands of events" is not a figure of speech: one captured turn
+ * emitted over two thousand, nearly all of them `message_update`.
+ *
+ * A quarter of the window, clamped: never tighter than 50ms, never looser than
+ * 30s. The child stall guard polls with the same shape and its own divisor.
  */
 export function pollIntervalMs(timeoutMs: number): number {
     return Math.max(50, Math.min(Math.floor(timeoutMs / 4), 30_000))
@@ -82,12 +92,14 @@ export class StreamWatchdog {
      * legitimately idle, and that window belongs to the command watchdog, not to
      * this one — without it a 10-minute build looks identical to a hung stream.
      *
-     * A SET, not a boolean: pi runs a tool batch in parallel (agent-loop.js
-     * `executeToolCallsParallel` emits every tool_execution_start up front, then one
-     * end per call as each settles, and answers an immediate call inline while an
-     * earlier one is still running). A boolean would be cleared by the FIRST end and
-     * leave the still-running sibling — the long build — exposed to a false fire.
-     * Same per-toolCallId idiom the command watchdog uses.
+     * A SET, not a boolean, and pi's own loop is why. `executeToolCallsParallel`
+     * in agent-loop.js emits EVERY `tool_execution_start` up front, before any
+     * call is prepared; a call that prepares "immediate" gets its end emitted
+     * inline right there, while the rest are deferred as closures and settle
+     * through a `Promise.all`. So an end can arrive while earlier siblings are
+     * still running. A boolean would be cleared by that first end and leave the
+     * long build exposed to a false fire. Same per-toolCallId idiom the command
+     * watchdog uses.
      */
     private readonly active = new Set<string>()
     /** Nesting depth for callers that cannot supply an id, counted so an unkeyed
@@ -168,15 +180,20 @@ export class StreamWatchdog {
  * cancels it on stop/fire, and runChild's cleanup() stops the watchdog on every
  * settle path (close, error, abort), so it cannot outlive the child it watches.
  *
- * The poll is REF'd, deliberately. Unref'd reads better — a pending watchdog
- * poll should never keep the process alive at exit — but under Bun on WINDOWS an
- * unref'd timer does not fire at all once nothing ref'd is pending. On Linux it
- * fires either way, which is why only Windows CI catches this.
+ * The poll is REF'd, deliberately. Unref'd reads better — a pending watchdog poll
+ * should never keep the process alive at exit — but an unref'd timer is only
+ * guaranteed to fire while something ref'd is still pending, and that guarantee
+ * is not the platform-independent thing it looks like.
  *
- * That state — no ref'd work outstanding — is EXACTLY the state this watchdog
- * exists to police: a child whose model stream has gone silent. So the unref
- * disabled the guard precisely when it was needed, and every stream-stall
- * integration test hangs forever on windows.
+ * Measured here, on both runtimes: with nothing else pending an unref'd timer
+ * never fires at all, the process just exits; with a spawned child holding its
+ * stdout and stderr pipes open it fires on schedule throughout. A silent child
+ * is the SECOND case — its pipes are still ref'd work — so on this platform the
+ * unref would not have broken the child guard. The reason to keep it ref'd is
+ * that this machine also runs in the main session, where no such handle is
+ * guaranteed, and the failure mode is silent: a watchdog that never fires looks
+ * exactly like a stream that never hung.
+ *
  * A poll that can delay exit by one interval is the cheaper failure.
  */
 export const realStreamTimerDeps: Pick<StreamWatchdogDeps, 'now' | 'schedule' | 'cancel'> = {
@@ -187,10 +204,13 @@ export const realStreamTimerDeps: Pick<StreamWatchdogDeps, 'now' | 'schedule' | 
 
 /**
  * The cause string a CHILD's stream stall is reported as. Phrased so
- * {@link isConnectionError} (child-runner.ts) matches it — the whole point is to
- * route a silent hang into the retry path that already exists for a LOUD
- * connection failure, rather than inventing a second one. Honest about who
- * killed it: pi-task aborted the request, the provider did not report anything.
+ * {@link isConnectionError} (child-runner.ts) matches it — checked by running the
+ * round-trip, and it does. The whole point is to route a silent hang into the
+ * retry path that already exists for a LOUD connection failure rather than
+ * inventing a second one, so the phrase "connection lost" is load-bearing, not
+ * decoration: reword it past that predicate and stream stalls stop retrying.
+ * Honest about who killed it, too — pi-task aborted the request, the provider
+ * reported nothing.
  */
 export function streamStallCause(idleMs: number): string {
     return (
