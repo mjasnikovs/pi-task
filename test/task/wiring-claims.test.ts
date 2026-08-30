@@ -9,8 +9,9 @@ import {
     readReferencedDocs
 } from '../../src/task/wiring-claims.js'
 
-// The a F3 fixture: the design pins ENDPOINTS (photos span two roots); the spec
-// invented a uniform mount table. The registry holds the verbatim pinned facts.
+// The registry pins ENDPOINTS, and the photo ones span two roots
+// (/api/listings/:id/photos and /api/photos/:id). The spec below answers with a
+// uniform mount table that gives photos one prefix — a mapping nothing pinned.
 const REGISTRY = [
     '"POST /api/listings/:id/photos" [anchor: Photos]',
     '"GET /api/photos/:id" [anchor: Photos]',
@@ -39,7 +40,7 @@ describe('findSynthesizedWiring', () => {
     test('flags every mount mapping in the run-8 assembly table (probe surfaces all 5)', () => {
         const w = findSynthesizedWiring(MOUNT_TABLE, REGISTRY, REGISTRY)
         expect(w.length).toBe(5)
-        // includes the actual seam bug
+        // including the mapping the registry contradicts: photos under one prefix
         expect(w.some(c => /\/api\/photos/.test(c.from) && /photosRoutes/.test(c.to))).toBe(true)
     })
 
