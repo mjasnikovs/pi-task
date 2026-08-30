@@ -86,8 +86,10 @@ export function formatContextDetail(usage: ContextSnapshot, theme?: WidgetTheme)
     return null
 }
 
-/** The current-action string for the structured widget (the browser ellipsizes
- *  it to one line, so send it lightly capped rather than terminal-truncated). */
+/** The current-action string for the structured widget. The browser's
+ *  `.widget-action` is `white-space: nowrap` + `text-overflow: ellipsis`, so it
+ *  ellipsizes to one line itself — send it capped at 200 rather than truncated to
+ *  the terminal's narrower WIDGET_LAST_LINE_MAX. */
 function widgetAction(lastLine: string | undefined): string | undefined {
     if (!lastLine) return undefined
     return lastLine.length > 200 ? lastLine.slice(0, 199) + '…' : lastLine
@@ -144,11 +146,12 @@ export function startWidget(
     getState: () => WidgetState | null
 ): () => void {
     if (!ctx.hasUI) return () => {}
-    // `ctx.ui` THROWS once the ctx goes stale (/reload, session replacement), so
-    // the theme read belongs INSIDE the guard, not one line above it. render()
-    // runs from a timer, where an unguarded throw is an uncaughtException that
-    // kills the whole pi process — and a swallowed one would throw again on
-    // every tick, so a stale ctx latches and stops the timer. Issue #15.
+    // pi's `ctx.ui` getter calls `runner.assertActive()`, which THROWS once the
+    // ctx goes stale (/reload, session replacement) — so the theme read belongs
+    // INSIDE the guard, not one line above it. render() runs from a timer, and a
+    // throw out of a timer callback is an uncaughtException that terminates the
+    // process. Merely swallowing it would throw again every tick, so the stale
+    // flag latches and the timer is cleared.
     let stale = false
     const render = () => {
         if (stale) return
@@ -165,9 +168,9 @@ export function startWidget(
         setTaskWidget(plain, s ? buildWidgetData(s) : null)
     }
     // The timer is created BEFORE the first render so `timer` is always bound
-    // when render's catch reaches for it: a ctx already stale on the very first
-    // paint now stops the loop there, instead of arming an interval that wakes
-    // up and returns early forever.
+    // when render's catch reaches for it. Calling render() first instead would
+    // hit the `const timer` temporal dead zone — "Cannot access 'timer' before
+    // initialization" — on a ctx that is already stale at the first paint.
     const timer = setInterval(render, WIDGET_REFRESH_MS)
     ;(timer as unknown as {unref?: () => void}).unref?.()
     render()
@@ -184,9 +187,9 @@ export function startWidget(
 
 // ─── Auto-planning loader ──────────────────────────────────────────────────
 // /task-auto's feature-level children (clarify, decompose) run before any TASK
-// id exists, so they can't use the phase widget. This loader renders the SAME
-// status block — head · step/elapsed/context · ↳ last line — so planning looks
-// and feels like a normal /task run while it works toward the drill dialog.
+// id exists, so they can't use the phase widget, and they have no UI of their
+// own. This loader renders the SAME status block — head · step/elapsed/context ·
+// ↳ last line — so planning is never silent.
 
 export interface AutoLoaderState {
     title: string
@@ -196,17 +199,16 @@ export interface AutoLoaderState {
     startedAt: number
     lastLine?: string
     contextUsage?: ContextSnapshot
-    /** Which /task-auto stage this loader is for. Defaults to 'planning' (the
-     *  numbered clarify/decompose steps); 'enforce' is the per-task guideline
-     *  pass and 'verify' is the per-task work-verification pass, neither of which
-     *  has step numbering. 'recommend' is the read-only research that picks the
-     *  recommended action after a verify FAIL. 'lint-fix' is the bounded fix pass
-     *  for a repo-health verify FAIL; 'final-fix' the bounded fix pass for a
-     *  final-integration-gate FAIL. */
+    /** Which stage this loader is for. Defaults to 'planning', the numbered
+     *  clarify/decompose steps — the ONLY kind that carries step numbering. The
+     *  other five mirror `GateChildKind` in gate-child.ts: 'enforce' is the
+     *  guideline pass, 'verify' the work-verification pass, 'recommend' the
+     *  research that picks the recommended action after a verify FAIL, 'lint-fix'
+     *  the bounded fix pass for a repo-health verify FAIL, and 'final-fix' the
+     *  bounded fix pass for a final-integration-gate FAIL. */
     kind?: 'planning' | 'enforce' | 'verify' | 'recommend' | 'lint-fix' | 'final-fix'
-    /** Command shown in the head line. Defaults to '/task-auto', which is what
-     *  every existing producer is; /task-plan reuses this same loader and only
-     *  needs its own name on it. */
+    /** Command shown in the head line. Defaults to '/task-auto'; plan-orchestrator
+     *  is the one producer that overrides it, with '/task-plan'. */
     command?: string
 }
 
@@ -230,8 +232,9 @@ export function buildAutoLoaderLines(s: AutoLoaderState, theme?: WidgetTheme): s
     return lines
 }
 
-/** Structured mirror of buildAutoLoaderLines. Only the numbered planning stage
- *  carries done/total; the enforce/verify/recommend/lint-fix passes are unnumbered. */
+/** Structured mirror of buildAutoLoaderLines. Only the planning kind (or an
+ *  absent one) carries done/total; the other five kinds are unnumbered, and the
+ *  browser draws its progress bar only when both are present. */
 export function buildAutoLoaderData(s: AutoLoaderState): WidgetData {
     const phase =
         s.kind === 'enforce' ? 'enforcing guidelines'
@@ -282,9 +285,9 @@ export function startAutoLoader(
         setTaskWidget(plain, s ? buildAutoLoaderData(s) : null)
     }
     // The timer is created BEFORE the first render so `timer` is always bound
-    // when render's catch reaches for it: a ctx already stale on the very first
-    // paint now stops the loop there, instead of arming an interval that wakes
-    // up and returns early forever.
+    // when render's catch reaches for it. Calling render() first instead would
+    // hit the `const timer` temporal dead zone — "Cannot access 'timer' before
+    // initialization" — on a ctx that is already stale at the first paint.
     const timer = setInterval(render, WIDGET_REFRESH_MS)
     ;(timer as unknown as {unref?: () => void}).unref?.()
     render()
@@ -300,11 +303,12 @@ export function startAutoLoader(
 }
 
 // ─── Implementation-turn loader ──────────────────────────────────────────────
-// The phase widget is disposed at spec-handoff, so the implementation turn — the
-// host agent actually building the spec, the longest-running and most visible
-// part — would otherwise show only pi's bare "⠸ Working…" indicator. This renders
-// the SAME status block (head · implementing/elapsed/context · ↳ last line) during
-// that turn, driven by the host's own live context usage. Lives in impl-widget.ts.
+// `TaskRunner` calls `_disposeWidget()` before `_deliverSpec`, so the phase widget
+// is gone by the time the host agent builds the spec. Without these builders that
+// turn would show only pi's own working indicator, whose default message is the
+// literal "Working...". They render the SAME status block (head ·
+// implementing/elapsed/context · ↳ last line); impl-widget.ts owns the lifecycle
+// that drives them from the host's live context usage.
 
 export interface ImplState {
     taskId: string
@@ -330,8 +334,9 @@ export function buildImplLines(s: ImplState, theme?: WidgetTheme): string[] {
     return lines
 }
 
-/** Structured mirror of buildImplLines (the host implementation turn — no step
- *  numbering, so no progress bar; just the phase badge and elapsed clock). */
+/** Structured mirror of buildImplLines. The host implementation turn has no step
+ *  numbering, so `done`/`total` stay unset and the browser draws no progress bar —
+ *  just the phase badge and the elapsed clock. */
 export function buildImplData(s: ImplState): WidgetData {
     const d: WidgetData = {
         title: `${s.taskId} · ${titleForDisplay(s)}`,
