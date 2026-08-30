@@ -1,20 +1,15 @@
 /**
  * Smoke tests that spawn the REAL `pi` binary.
  *
- * Why this file exists:
- *   The rest of the suite uses fakeSpawn, which can only assert that the
- *   orchestrator parses what the fake emits. It cannot catch "we sent pi
- *   the wrong flags" — which is exactly what regressed in 4e34f96 when
- *   `--mode json` was dropped from `childArgs`. None of the unit tests
- *   noticed; every fake child happily emitted JSON regardless of flags.
+ * The rest of the suite runs on fakeSpawn, which can only prove the orchestrator
+ * parses what the fake emits. It cannot catch "we sent pi the wrong flags": a fake
+ * child emits its JSON events whatever argv it was handed, so dropping
+ * `--mode json` from `childArgs` would leave every unit test green. These launch
+ * real pi through the orchestrator's own wiring, so argv and events are checked
+ * against each other.
  *
- *   These tests launch real pi via the orchestrator's actual wiring. If
- *   the args we send no longer match the events we expect back, the test
- *   blows up with the same error the user sees in `/task`.
- *
- * Cost:
- *   Real pi takes ~3–10s per phase call. Tests skip cleanly when pi is
- *   not on PATH (CI, sandbox), and can be force-skipped with PI_SKIP_SMOKE=1.
+ * They spawn a real model, so they are slow. `findPi` below skips them when `pi`
+ * is not on PATH, and PI_SKIP_SMOKE=1 forces the skip.
  */
 
 import {describe, expect, test, beforeAll, afterAll} from 'bun:test'
@@ -52,10 +47,9 @@ describe('real pi smoke', () => {
                     signal: new AbortController().signal
                 }
                 const refined = await phaseRefine(deps, 'run lint')
-                // The orchestrator's job is to turn the raw prompt into a
-                // structured spec. If --mode json is missing, refined is
-                // empty and the phase throws "refine child produced no
-                // output" — same wedge as one task..0007.
+                // With `--mode json` missing, the runner reads no assistant text,
+                // `refined` is empty, and the phase throws "refine child produced
+                // no output" rather than reporting a flag problem.
                 expect(refined.trim().length).toBeGreaterThan(0)
                 // Loose shape check: refine is supposed to emit GOAL +
                 // CONSTRAINTS + KNOWN-UNKNOWNS. We don't pin exact text
@@ -71,11 +65,11 @@ describe('real pi smoke', () => {
         'runWorker drives real pi through the timeout-wrapped spawn path',
         async () => {
             await withTmpTaskDir(async cwd => {
-                // The research workers spawn pi through runWorker, which now wraps
-                // every run in a combined external-abort + wall-clock-timeout
-                // signal. A real spawn confirms that wrapper does not break the
-                // child wiring (right flags, json events parsed) and that a healthy
-                // worker finishes well under the timeout — no false loopHit/timedOut.
+                // The research workers spawn pi through runWorker, which hands the
+                // child an `AbortSignal.any` of the wall-clock timeout and the
+                // command watchdog. A real spawn is what shows that wrapper leaves
+                // the child wiring intact and that a healthy worker finishes without
+                // a false loopHit or timedOut.
                 const r = await runWorker({
                     prompt: 'Reply with the single word READY and nothing else.',
                     profile: 'adhoc',
