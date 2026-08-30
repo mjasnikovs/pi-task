@@ -32,15 +32,13 @@ test('every gate outcome has a row — a sixth kind is a compile error, not a fa
 })
 
 describe('persistence — the two questions each outcome answers', () => {
-    // Answered twice, hundreds of lines apart, in two switches with
-    // line-for-line correspondence. Now they are one table test.
     const expected: Record<TerminalOutcomeKind, {markResumable: boolean; failParent: boolean}> = {
         done: {markResumable: false, failParent: false},
         paused: {markResumable: true, failParent: true},
         // Nothing ran, so there is nothing to demote.
         'session-cancelled': {markResumable: false, failParent: false},
-        // The USER stopped it. The file already says `cancelled`; demoting it
-        // would write `failed` over that.
+        // The USER stopped it. The file already says `cancelled`, and
+        // markResumable (orchestrator.ts) writes `state: failed` — over that.
         cancelled: {markResumable: false, failParent: false},
         // ESC, and the user declined to steer — the parent run stays in_progress
         // so a resume picks up where it left off.
@@ -126,16 +124,14 @@ test('a failed outcome reads the same from both commands apart from step and ver
 })
 
 /**
- * REGRESSION — a CANCELLED autofix re-run is a user stop, not a fault.
+ * A CANCELLED autofix re-run is a user stop, not a fault.
  *
- * `RUN_END_POLICY` exists because folding `cancelled` into a "not ok" arm made
- * `markResumable` write `failed` over the file's `cancelled`: it lies in the
- * ledger and turns a deliberate stop into a red error. `runGatedTaskInner` and
- * `runAutoLoop` honour that policy for the FIRST implementation run.
- *
- * The gate's autofix re-run does not. It folds `cancelled` into `interrupted`,
- * whose row here says `markResumable: true` — the same overwrite, one level down.
- * The outcome needs its own row.
+ * Folding it into any row whose `markResumable` is true makes markResumable
+ * write `state: failed` over the `cancelled` the cancel itself wrote: a lie in
+ * the ledger, and a deliberate stop announced in red. `interrupted` is such a
+ * row, so the outcome needs its own — and it must give the same three answers
+ * RUN_END_POLICY gives for the first implementation run, which
+ * `runGatedTaskInner` and `runAutoLoop` read.
  */
 describe('a cancelled gate re-run', () => {
     test('has a row of its own, and it never demotes the task file', () => {
