@@ -4,7 +4,9 @@ import {addClient, removeClient, broadcast, sendTo} from '../../src/remote/broad
 function mockWs(open = true) {
     const sent: string[] = []
     const ws = {
-        readyState: open ? 1 : 3, // 1=OPEN, 3=CLOSED
+        // The installed `ws` numbers its states CONNECTING 0, OPEN 1, CLOSING 2,
+        // CLOSED 3, so these two are the real values a live socket reports.
+        readyState: open ? 1 : 3,
         OPEN: 1,
         send(data: string) {
             sent.push(data)
@@ -15,7 +17,9 @@ function mockWs(open = true) {
 
 describe('broadcast', () => {
     beforeEach(() => {
-        // Each test adds/removes its own clients; counts are relative
+        // Deliberately empty. The client Set lives on globalThis and survives
+        // between tests, so each test adds its own client and removes it again
+        // rather than relying on a reset here.
     })
 
     it('broadcast sends JSON to open clients', () => {
