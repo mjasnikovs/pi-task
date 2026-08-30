@@ -1,14 +1,15 @@
 /**
- * batch-test-task tests — the fixture A/B (PROMPT item 6).
+ * batch-test-task tests.
  *
- * The plan titles and the decision text below are VERBATIM from a * (`.pi-tasks/TASK_AUTO_0001.md` and the `[decisions: …]` clause carried onto
- * one task). What this file pins:
+ * The plan titles below are the shapes a decompose actually produces, kept at
+ * full length because the failures here are all about long titles that carry a
+ * borrowed spec citation. What this file pins:
  *
- *   - the plan's ONE batch title is found, and none of the
- *     five per-area "Write <area> route tests" tasks, the two test-INFRA tasks,
- *     or the "+ tests" feature tasks are,
- *   - with the cadence decision present the batch task is dropped when another
- *     task already grounds its requirements, and replaced by a SCOPED sweep when
+ *   - in a whole plan, only the ONE batch title is found — not the per-area
+ *     "Write <area> route tests" tasks, not the test-INFRA tasks, and not the
+ *     "+ tests" feature tasks,
+ *   - with the cadence decision present the batch task is DROPPED when another
+ *     task already grounds its requirements, and REPLACED by a scoped sweep when
  *     it is the sole owner — never silently deleted in the second case,
  *   - total planned coverage (groundedCoverage) never falls,
  *   - with no cadence decision the plan is returned untouched.
@@ -24,15 +25,16 @@ import {
 import {groundedCoverage} from '../../src/task/coverage-loop.js'
 import {isCrossCuttingRequirement} from '../../src/task/requirements.js'
 
-// ─── Verbatim material ────────────────────────────────────────────
+// ─── Plan material ────────────────────────────────────────────────
 
-/** The decision carried onto a task's own title, verbatim. */
+/** A cadence decision as it is carried onto a task's own title. */
 const CADENCE_DECISION =
     'a test lands *as fast as possible* — in the same change — as each new route or'
     + ' React component/page. No route or component is considered done until its test'
     + " exists and passes. Don't batch testing to the end of a milestone."
 
-/** §10 of DESIGN/PROJECT.md, verbatim (the spec-internal side of the conflict). */
+/** The spec side of the conflict: a testing section whose milestone structure
+ *  induces a batch task while its own cadence rule forbids one. */
 const SPEC_TESTING_SECTION =
     '## 10. Testing\n\n'
     + '**Test-first cadence (required):** '
@@ -44,7 +46,7 @@ const SPEC_TESTING_SECTION =
     + '**Client/component tests** — Playwright React component tests; every'
     + ' component/page test captures a screenshot committed as a baseline.\n'
 
-/** a plan, verbatim (decisions/spec suffixes stripped as parsePlan sees it). */
+/** A whole plan, with the decisions/spec suffixes stripped as parsePlan sees it. */
 const RUN14_PLAN = [
     'Set up project scaffold — package.json, tsconfig.json, ESLint flat config, Prettier .prettierrc.cjs with pinned versions and settings',
     'Set up docker-compose for local Postgres 18 development',
@@ -82,14 +84,14 @@ const RUN14_PLAN = [
     'Implement edit listing page — same fields as new, pre-populated, with photo management',
     'Implement my listings page — own listings grid with edit/sold/delete actions and "Invite a member" button',
     'Implement admin page — user list with ban/unban toggle, listing deletion capability',
-    // one task — the batch title this module exists for (index 36).
+    // The one batch title in the plan — the shape this module exists for.
     'Write component and page tests — Playwright CT tests with screenshot baselines for all components and pages',
     'Implement polish — empty states, error states, loading states, responsive layout, final brand pass against DESIGN/brand-spec.md'
 ]
 
 const BATCH_INDEX = 36
 
-/** The §10 obligation the batch task was nominally discharging. */
+/** The testing obligation the batch task was nominally discharging. */
 const SCREENSHOT_REQ = 'every component/page test captures a screenshot committed as a baseline'
 
 describe('mandatesTestsInSameChange', () => {
@@ -135,11 +137,11 @@ describe('findBatchTestTitles', () => {
         expect(hits).toEqual([0, 1, 2, 3])
     })
 
-    // Both titles VERBATIM from a live decompose rep.
     // reconcileTitleSources leaves a malformed `[source: "…" [§]]` citation in
-    // place, so the cadence line it quotes ("…as each new route…") became part of
-    // the title text — and the bare scope check called the scoped auth-test task a
-    // batch. Only the second title here is a batch task.
+    // place, so the cadence line it quotes ("…as each new route…") ends up inside
+    // the title text. A scope check that reads the whole title then calls the
+    // SCOPED auth-test task a batch, on a quantifier it never wrote. Only the
+    // second title here is a batch task.
     test('a leaked [source: …] citation is provenance, not scope', () => {
         const live = [
             'Write route/API tests for auth — login, logout, me, guards, banned-user rejection'
@@ -154,9 +156,9 @@ describe('findBatchTestTitles', () => {
         expect(findBatchTestTitles(live)).toEqual([1])
     })
 
-    // Rep 2, verbatim: the same leak plus an inline quoted spec fragment. With the
-    // raw citation counted, SIX of this plan's titles read as batch tasks; only
-    // the last one is.
+    // The same leak plus an inline quoted spec fragment, repeated across a whole
+    // plan. Count the raw citation and nearly every title here reads as a batch
+    // task; only the last one is.
     test('a leaked citation does not batch-flag five scoped API test tasks', () => {
         const cadence =
             ' [source: "**Test-first cadence (required):** a test lands *as fast as possible*'
@@ -186,9 +188,9 @@ describe('findBatchTestTitles', () => {
         expect(findBatchTestTitles(live)).toEqual([6])
     })
 
-    // Rep 5, verbatim: the citation arrives as a BARE quote (no `[source: …]`
-    // wrapper) plus a [decisions: …] clause — both carrying the cadence line, whose
-    // "each new route" is the only quantifier in the title.
+    // The citation arrives as a BARE quote — no `[source: …]` wrapper — plus a
+    // [decisions: …] clause, both carrying the cadence line. Its "each new route"
+    // is the only quantifier anywhere in the title, and the task never wrote it.
     test('a bare quoted citation does not batch-flag a scoped test task', () => {
         const live =
             'Write auth route tests — login, logout, me, guards, banned user rejection via'
@@ -200,9 +202,9 @@ describe('findBatchTestTitles', () => {
         expect(findBatchTestTitles([live])).toEqual([])
     })
 
-    // Rep 3, verbatim: a ONE-component test task whose "all" governs a sub-aspect.
-    // A bare-quantifier rule flagged it and the rewrite DROPPED it — deleting
-    // exactly the per-change test the cadence decision asks for.
+    // A ONE-component test task whose "all" governs a sub-aspect (badge
+    // combinations), not the project. A bare-quantifier rule flags it, and the
+    // rewrite then deletes exactly the per-change test the cadence asks for.
     test('a quantifier over a sub-aspect is not whole-project scope', () => {
         expect(
             findBatchTestTitles([
@@ -212,11 +214,11 @@ describe('findBatchTestTitles', () => {
         ).toEqual([])
     })
 
-    // Rep 4 of the 8-rep live A/B,
-    // verbatim. The citation arrives as BARE PROSE — no quotes, no `[source: …]`
-    // wrapper — and is then repeated inside one, so neither earlier guard sees it.
-    // Its borrowed "every component/page" was the title's only quantifier, and the
-    // rewrite DROPPED this correctly per-change-scoped Login task.
+    // The third variant, and the one the syntactic defenses miss: the citation
+    // arrives as BARE PROSE — no quotes, no `[source: …]` wrapper — and is then
+    // repeated inside one, so stripQuotedSpans and splitDecisions both see
+    // nothing. Its borrowed "every component/page" is the title's only
+    // quantifier, and this is a correctly per-change-scoped Login task.
     test('an unmarked spec echo in the detail is provenance, not scope', () => {
         const spec =
             '**Client/UI:** Playwright `1.61.1` React component tests'
@@ -304,9 +306,9 @@ describe('rewriteBatchTestPlan (run 14 fixture)', () => {
     })
 
     test('AFTER: dropped when another task already grounds its requirement', () => {
-        // one task ("… __screenshots__/ directory") grounds the screenshot
-        // obligation, and the cadence puts each component's test in its own task —
-        // so nothing is lost by removing the batch task.
+        // Another task grounds the screenshot obligation, and the cadence puts
+        // each component's test in its own task — so nothing is lost by removing
+        // the batch task.
         const r = rewrite(RUN14_PLAN, [SCREENSHOT_REQ])
         expect(r.actions).toHaveLength(1)
         expect(r.actions[0].kind).toBe('dropped')
@@ -316,8 +318,9 @@ describe('rewriteBatchTestPlan (run 14 fixture)', () => {
     })
 
     test('AFTER: scoped sweep when the batch task is the SOLE owner', () => {
-        // Same plan without one task — now no other title mentions screenshots or
-        // baselines, so dropping outright would reduce planned coverage.
+        // The same plan with that task removed: now NO other title mentions
+        // screenshots or baselines, so dropping outright would reduce planned
+        // coverage. This is the replace branch, not the drop branch.
         const plan = RUN14_PLAN.filter(t => !t.startsWith('Set up Playwright component testing'))
         const r = rewrite(plan, [SCREENSHOT_REQ])
         expect(r.actions).toHaveLength(1)
