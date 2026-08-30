@@ -98,8 +98,11 @@ describe('collectProjectEnv', () => {
     })
 })
 
-// The verdict table. Only ONE row may fail: a session the SERVER authenticated whose
-// client could not use it. Every other row is an environment/shape gap → skip.
+// The verdict table. Exactly ONE CLASS may FAIL — a session the SERVER
+// authenticated that the client could not then use — and the three failing rows
+// below are all of it: never left the wall, every data call failed, page renders
+// blank. Every other row is an environment or shape gap and must SKIP, because a
+// check that could not look has not found a defect.
 describe('judgeDeepSession', () => {
     const base: DeepSessionFacts = {
         landingHadAuthWall: true,
@@ -151,8 +154,10 @@ describe('judgeDeepSession', () => {
         expect((r as {note: string}).note).toContain('401')
     })
 
-    // The exact failing shape: login 200 + session cookie, zero /api/auth/me calls ever
-    // issued, app bounces back to /login forever.
+    // The failing shape in full: login answers 200 and sets a session cookie, the
+    // client then issues no authenticated data call at all, and the app bounces
+    // back to the sign-in page forever. The server worked; the client cannot use
+    // what it was given.
     test('authenticated but never left the wall → FAIL naming the missing evidence', () => {
         const r = judgeDeepSession({
             ...base,
@@ -190,9 +195,10 @@ describe('judgeDeepSession', () => {
         expect((r as {detail: string}).detail).toContain('6/6')
     })
 
-    // A server-rendered app that redirects to a fresh document issues no XHR at all.
-    // STEP 0 registered this as UNOBSERVED, not a failure: the false-FAIL class the
-    // task's literal "≥1 same-origin /api/* 2xx" wording would have created.
+    // A server-rendered app that redirects to a fresh document issues no XHR at
+    // all. That is UNOBSERVED, not a failure — a rule worded as "at least one
+    // same-origin /api/* 2xx" would fail every such app for having no client-side
+    // data layer to observe.
     test('no data calls attempted after sign-in → PASS but the half is UNOBSERVED', () => {
         const r = judgeDeepSession({...base, postAuthDataAttempted: 0, postAuthData2xx: 0})
         expect(r.outcome).toBe('pass')
