@@ -18,7 +18,9 @@ afterEach(() => {
     if (g.__piRemote) g.__piRemote.server = null
 })
 
-/** Minimal ExtensionAPI stand-in: registerRemote only needs `on` + `registerCommand`. */
+/** Minimal ExtensionAPI stand-in. `on` DISCARDS its handler, so no event handler
+ *  ever runs here — which is why `registerCommand` is the only other member the
+ *  registrars under test reach. */
 function fakePi() {
     const commands = new Map<string, {handler: (args: string, ctx: unknown) => unknown}>()
     const pi = {
@@ -87,9 +89,10 @@ test('/compact from the browser reaches ctx.compact', () => {
     expect(notifications().some(m => m.includes('Unknown command'))).toBe(false)
 })
 
-// The browser's suggestion list is a promise: picking an entry must do something.
-// Advertising /clear, /help or /fast — none of which are pi commands at all —
-// makes every pick toast "Unknown command: /x" (github issue #8).
+// The browser's suggestion list is a promise: picking an entry must do
+// something. A name advertised there with no dispatchable command behind it
+// toasts "Unknown command: /x" on every pick. The list is read out of the shipped
+// client script, so adding an entry there without a command fails this test.
 test('every command the web UI advertises is dispatchable', () => {
     const {pi} = fakePi()
     registerConfig(pi)
@@ -106,7 +109,9 @@ test('every command the web UI advertises is dispatchable', () => {
     const dispatchable = getBridge().commands
     const orphans = advertised.filter(entry => {
         const name = entry.split(' ')[0]!
-        return name !== 'new' && !dispatchable.has(name) // /new is special-cased in register.ts
+        // `/new` never reaches `bridge.commands`: register.ts matches the literal
+        // text and calls `dispatchRemoteNewSession` instead.
+        return name !== 'new' && !dispatchable.has(name)
     })
     expect(orphans).toEqual([])
 })
