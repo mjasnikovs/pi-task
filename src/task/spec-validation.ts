@@ -20,15 +20,15 @@ export function parseVerifyBlock(spec: string): VerifyCommand[] | null {
 /**
  * parseVerifyBlock, but only when the fenced block is actually CLOSED.
  *
- * An unterminated fence makes the lenient parser swallow the rest of the file:
- * a `a task.md` opens ```sh and never closes it, so its "VERIFY
- * commands" include the phase-timings table and every appended gate-trail line.
+ * An unterminated fence makes the lenient parser swallow the rest of the file: a
+ * task file that opens ```sh and never closes it yields "VERIFY commands" that
+ * include every line appended after the spec — a timings table, a gate-trail line.
  * That is harmless where the parser only asks "is there something runnable here",
- * and NOT harmless where a parsed line is treated as provenance — a debt reason
- * quoting `bun run lint` would match a gate-trail sentence and mint a stored,
+ * and NOT harmless where a parsed line is treated as PROVENANCE: a debt reason
+ * quoting `bun run lint` would then match a trail sentence and mint a stored,
  * re-runnable command the spec never asked for (accept-debt.ts
- * verifyCommandFromReason, `inv-command-provenance`). Callers that need the block
- * to MEAN something use this one: an unclosed fence is no block at all.
+ * `verifyCommandFromReason`, `inv-command-provenance`). Callers that need the
+ * block to MEAN something use this one: an unclosed fence is no block at all.
  */
 export function parseVerifyBlockStrict(spec: string): VerifyCommand[] | null {
     const scan = scanVerifyBlock(spec)
@@ -123,24 +123,21 @@ export const REFINE_SECTIONS = [
 /**
  * Is a refine child's output shaped like a refined prompt?
  *
- * Refine shipped with NO shape check at all — `phaseRefine` passes no validator,
- * unlike compose and critique — and every downstream reader of a refined prompt
- * is a PARTIAL parser that tolerates a missing section SILENTLY:
- * `extractCapsSection` (refuted-constraint.ts) returns null, `scopedToolingGoal`
- * (phases.ts) returns the whole text, `deriveTitle` and `extractEnrichTargets`
- * fall back. So a refine answer that dropped a heading degrades four features at
- * once and says nothing. This names the contract in one place.
+ * Every downstream reader of a refined prompt is a PARTIAL parser that tolerates a
+ * missing section SILENTLY: `extractCapsSection` (refuted-constraint.ts) returns
+ * null, `scopedToolingGoal` (phases.ts) returns the whole text, and `deriveTitle`
+ * (parsers.ts) and `extractEnrichTargets` (enrichment.ts) fall back. So a refine
+ * answer that dropped a heading degrades four features at once and says nothing.
+ * This names the contract in one place; phases.ts calls it after refine.
  *
  * WHAT IT CHECKS, and why it is only this. Every one of those consumers looks
  * for a BARE ALL-CAPS heading alone on its own line — `l.trim() === heading`,
  * `/^GOAL[ \t]*\n/m`. That is the operative contract, so that is the test.
  *
- * It does NOT require the text to START with GOAL, even though REFINE_PROMPT
- * says "four sections, exact headings, in this order" and forbids a preamble.
- * Measured over a real multi-task corpus: nearly every non-empty refined prompt
- * carries all four bare headings, but fewer than half open with one — a preamble is what real
- * refine output usually looks like, and production has always consumed it fine.
- * A validator stricter than its consumers would reject work that works.
+ * It does NOT require the text to START with GOAL, even though REFINE_PROMPT asks
+ * for the four headings in order and forbids a preamble. None of the four
+ * consumers above cares where the heading sits, so a validator that did would
+ * reject work every one of them handles.
  *
  * Returns a problem string, or null when the shape is good — same contract as
  * `validateSpecShape` above.
