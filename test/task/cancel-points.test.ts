@@ -49,8 +49,9 @@ describe('cancel-points', () => {
         cancelCheckpoint('pre-final-gate')
         resetCancel()
         expect(isCancelRequested()).toBe(false)
-        // The run's `finally` calls resetCancel; a caller inspecting where the run
-        // stopped reads the trail after that, so it must survive.
+        // The run's `finally` calls resetCancel, which clears only the requested
+        // flag — the trail has its own clearCheckpoints. A caller inspecting
+        // where the run stopped reads the trail after that, so it must survive.
         expect(checkpointsCrossed()).toEqual(['pre-final-gate'])
     })
 
@@ -133,16 +134,18 @@ describe('runAutoLoop cancel checkpoints', () => {
             await writeTaskFile(dir, autoFm('TASK_AUTO_0001'), autoBody(['A', 'B']))
             const d: AutoDeps = {
                 runChild: () => Promise.resolve(''),
-                // A phase-boundary cancel reaches the loop exactly like this. The
-                // runner catches its own USER_CANCELLED, writes state 'cancelled'
-                // to the inner file — and NAMES the ending.
+                // A phase-boundary cancel reaches the loop exactly like this:
+                // the runner catches its own USER_CANCELLED, writes state
+                // 'cancelled' to the inner file, and NAMES the ending.
                 //
-                // Note what is NOT here: `requestAutoCancel()`. Seeing a plain
-                // `!ok`, the loop has to consult `isCancelRequested()` — a
-                // module global `/task-cancel` never sets — to tell a user stop
-                // from a fault, so a `/task-cancel` was announced in red as
-                // "stopped … fix and run", and `markResumable` overwrote the
-                // inner file's `cancelled` with `failed`.
+                // Note what is NOT here: `requestAutoCancel()`. Its only callers
+                // are the two /task-auto-cancel paths, so a /task-cancel never
+                // sets that module global. A loop that told a user stop from a
+                // fault by consulting `isCancelRequested()` alone would therefore
+                // read this as a fault — announcing it in red as "stopped … fix
+                // and run", and letting `markResumable` overwrite the inner
+                // file's 'cancelled' with 'failed'. The ending has to be read
+                // from what the runner NAMED.
                 runTask: () => Promise.resolve({taskId: 'TASK_0006', end: {kind: 'cancelled'}}),
                 commit: () => Promise.resolve({committed: false})
             } as unknown as AutoDeps
@@ -182,8 +185,9 @@ describe('runAutoLoop cancel checkpoints', () => {
                 commit: () => Promise.resolve({committed: false})
             } as unknown as AutoDeps
             await runAutoLoop(ctx, dir, 'TASK_AUTO_0001', d)
-            // `markResumable` writes `failed`. A cancel is not resumable-as-failed:
-            // the user stopped it, and the ledger must not say otherwise.
+            // `markResumable` writes `state: 'failed'` (orchestrator.ts:739). A
+            // cancel is not resumable-as-failed: the user stopped it, and the
+            // ledger must not say otherwise.
             expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('cancelled')
         })
     })
