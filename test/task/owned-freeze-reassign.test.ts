@@ -21,19 +21,20 @@ const CATEGORY_FREEZE =
 const BUILD_TOOLING = 'Build tooling — build.ts, dev/build scripts in package.json'
 const CLIENT_API = 'Client API layer — typed hono/client, SPA fallback route on server'
 
-/** a refined prompts, reduced to the sentence that names the file. */
+/** Refined prompts, each cut down to the sentence that names the file. `writeIntent`
+ *  reads only that sentence, so the rest of a real prompt is noise here. */
 const REFINED = {
-    /** one task — the pending writer. */
+    /** Says it will CREATE the file — the task a detached path should land on. */
     claimant:
         'Create `src/client/api.ts` with a typed Hono RPC client, and add an SPA fallback route to'
         + ' the existing server `src/server/index.ts` so that non-`/api` GET requests serve the built'
         + ' `dist/index.html`.',
-    /** one task — a sibling that fences itself off the same file. */
+    /** Names the same file only to fence itself OFF it, so it must not claim. */
     fenced:
         'File layout: routes go in `src/server/routes/listings.ts`, tests in `test/listings.test.ts`.'
         + ' Do not create or modify any other files outside this slice (e.g., no changes to'
         + ' `src/server/index.ts`, `src/shared/schema.ts`).',
-    /** one task — imports from it, writes nothing there. */
+    /** Names the file as an import source, writes nothing there, so it must not claim. */
     importer: 'Create `src/client/main.tsx`. It imports `AppType` from `src/server/index.ts`.'
 }
 
@@ -56,15 +57,15 @@ const specWith = (bullets: string[]): string =>
         '  - `package.json` gains a `dev` script.'
     ].join('\n')
 
-/** The composed spec shipped: the stamped owned bullet plus the freeze. */
+/** A composed spec carrying both halves of the conflict: the stamped owned bullet
+ *  and the category freeze that forbids the file it names. */
 const conflictSpec = (): string =>
     appendOwnedConstraints(specWith([CATEGORY_FREEZE]), [ledger()[0]])
 
 /**
- * Stands in for the git oracle: a repo-relative source file, i.e. something with
- * a directory and not under the build output. Modelling it as "any token that
- * looks path-shaped" would count API names like `Bun.password` as frozen files —
- * production never does, because the oracle is `git ls-files`.
+ * Stands in for `trackedSourceOracle`, which answers from `git ls-files`. Requiring
+ * a directory separator is what keeps a dotted API name like `Bun.password` — which
+ * the second ledger entry quotes — from being read as a frozen file path.
  */
 const anySource = (p: string): boolean => p.includes('/') && !p.startsWith('dist')
 
@@ -261,8 +262,9 @@ describe('claim → detach cycle', () => {
         // Provenance follows the last owner, and the quote is still verbatim.
         expect(entry.title).toBe(CLIENT_API)
         expect(entry.quote).toBe(QUOTE)
-        // A task claims at most once (it composes once), so the cycle is finite:
-        // re-running the claim for the same task now finds nothing to take.
+        // The two functions are pure and would ping-pong if driven in a loop: run
+        // the claim again on this ledger and it takes the path straight back. What
+        // bounds it is the caller — a task composes once, so it claims once.
         expect(
             claimPendingRequirements({
                 intent: REFINED.claimant,
