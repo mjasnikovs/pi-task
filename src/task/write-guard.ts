@@ -1,23 +1,20 @@
 /**
  * write-guard — deterministic tree-change accounting for WRITE-CAPABLE gate
- * children.
+ * children (`FINAL_FIX_TOOLS` and `LINT_FIX_TOOLS` are both `read,edit,bash`).
  *
- * The failure class: the final-gate autofix child (read,edit,bash) was added after
- * the guard generation and inherited NONE of the guards the other
- * write-capable passes carry — no diff capture, no frozen-path deny, no probe
- * scans, free `rm`. It will delete a file like `src/client/pages/admin.tsx` (a task
- * verified deliverable) to satisfy a recorded debt claim, and the deletion was
- * invisible: nothing even logged what the pass changed.
+ * The failure class it exists for: a fix child with `bash` can `rm` a tracked
+ * file to satisfy a recorded claim, and nothing else in the gate would log what
+ * that pass changed.
  *
  * This module is the pure half of the guard stack: parse `git status --porcelain`
- * into a change summary (the diff-capture log line every write-capable child now
- * gets at the gate-deps seam), and classify tracked-file DELETIONS. A fix pass
- * exists to repair the assembled repository, not to shrink it: every tracked file
- * is a committed task's deliverable, so deleting one is rejected outright — with
- * one allowance, a RELOCATION (the same file name reappears as an added file
- * elsewhere, e.g. moving a test the runner was never meant to pick up out of its
- * glob — a legitimate fix shape). Pure text/path analysis; no git
- * execution, no stack assumptions.
+ * (or `git diff --name-status`) into a change summary — the diff-capture log line
+ * every write-capable child gets at the gate-deps seam — and classify tracked-file
+ * DELETIONS. A fix pass exists to repair the assembled repository, not to shrink
+ * it: every tracked file is a committed task's deliverable, so deleting one is
+ * rejected outright, with two allowances. A RELOCATION, where the same file NAME
+ * reappears among the added files (moving a test out of a runner's glob is a
+ * legitimate fix shape), and the regenerable test output `regenerable-artifacts.ts`
+ * exempts. Pure text and path analysis; no git execution, no stack assumptions.
  */
 import {isDeletionExemptArtifact} from './regenerable-artifacts.js'
 
@@ -31,7 +28,8 @@ export interface TreeChangeSummary {
     added: string[]
 }
 
-/** Porcelain v1 line: `XY <path>` or `XY <orig> -> <new>` (rename/copy). */
+/** Porcelain v1 line: `XY <path>`, or `XY <orig> -> <new>` for a staged rename or
+ *  copy. A path git had to quote arrives wrapped in `"` and is unwrapped here. */
 function splitEntry(raw: string): {x: string; y: string; from: string; to: string} | null {
     if (raw.length < 4) return null
     const x = raw[0]
@@ -52,10 +50,11 @@ function splitEntry(raw: string): {x: string; y: string; from: string; to: strin
 
 /**
  * Parse `git status --porcelain` output into the change summary. A rename entry
- * contributes its source to `deleted` and its target to `added` (unstaged child
- * edits show the same reality as separate ` D old` + `?? new` lines, so both
- * shapes classify identically). Deterministic and pure so it is unit-tested
- * without a repo.
+ * contributes its source to `deleted` and its target to `added`. An unstaged child
+ * edit shows the same reality as separate ` D old` + `A  new` (or `?? new`) lines,
+ * and both shapes produce the identical summary — which is what lets the
+ * relocation allowance below read either one. Deterministic and pure, so it is
+ * unit-tested without a repo.
  */
 export function parseTreeChanges(porcelain: string): TreeChangeSummary {
     const modified = new Set<string>()
@@ -89,12 +88,12 @@ export function parseTreeChanges(porcelain: string): TreeChangeSummary {
 
 /**
  * Parse `git diff --name-status` output (tab-separated: `M\tpath`, `A\tpath`,
- * `D\tpath`, `R100\told\tnew`, `C75\told\tnew`) into the same change summary. Used
- * where the working tree is already clean and the last COMMIT's diff is the record
- * of the task's changes (the post-enforce re-verify fallback). A rename entry
- * contributes its source to `deleted` and its target to `added`, matching
- * parseTreeChanges so the relocation allowance below reads both shapes identically;
- * a copy's source still exists, so only its target counts (as added).
+ * `D\tpath`, `R100\told\tnew`, `C100\told\tnew`) into the same change summary.
+ * Used where the working tree is already clean and the last COMMIT's diff is the
+ * record of the task's changes. A rename entry contributes its source to `deleted`
+ * and its target to `added`, matching parseTreeChanges so the relocation allowance
+ * below reads both shapes identically; a copy's source still exists, so only its
+ * target counts (as added).
  */
 export function parseNameStatusChanges(nameStatus: string): TreeChangeSummary {
     const modified = new Set<string>()
@@ -132,20 +131,15 @@ const basename = (p: string): string => {
 }
 
 /**
- * The deletions a fix pass may NOT make: every deleted tracked file whose name does
- * not reappear among the added files (a relocation keeps the file, under the same
- * name, somewhere in the tree). Anything returned here rejects the whole fix
- * attempt — a `rm src/client/pages/admin.tsx` had no corresponding add and
- * destroyed a sibling task's verified deliverable.
+ * The deletions a fix pass may NOT make: every deleted tracked file whose BASENAME
+ * does not reappear among the added files. A relocation keeps the file, under the
+ * same name, somewhere in the tree; a RENAME does not, and is reported. Anything
+ * returned here makes final-gate-fix discard the whole attempt.
  *
- * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT. The guard is pure git: no
- * ecosystem, no exemption list, so three Playwright FAILURE screenshots that
- * a task's own `git add -A` had swept into a commit read as deliverables. Two
- * consecutive attempts were discarded whole over them — each taking a real
- * `src/client/api.test.tsx` repair with it, which attempt 3 then re-did and kept.
- * 6m14s of an 8m16s gate. And the pipeline committed those same three deletions at
- * the end anyway, in the stranded-fix commit, so the guard did not
- * even preserve what it rejected two attempts to protect.
+ * REGENERABLE TEST-RUNNER OUTPUT IS EXEMPT. Without an exemption the guard is pure
+ * git, so a failure screenshot a task's own `git add -A` swept into a commit reads
+ * as a deliverable and its removal discards a whole attempt — including the real
+ * repair that attempt also made.
  *
  * The exempt list is a strict SUBSET of the verdict-level artifact list and lives
  * in `regenerable-artifacts.ts`. `dist/`, `build/`, `.next/`, `.turbo/` and
@@ -162,29 +156,26 @@ export function findForbiddenDeletions(changes: TreeChangeSummary): string[] {
 // ─────────────────────────────────────────────────────────────────────────────
 // IGNORED-PATH CHANNEL
 //
-// The final-gate autofix greened `bun run seed` by writing DATABASE_URL and
-// ADMIN_* into `/workspace/.env`, which `.gitignore:14` ignores. Everything
-// above consumes `git status --porcelain`, which does not report ignored paths,
-// so the edit was invisible to the diff capture, the deletion guard, the probe
-// scan and the stranded-fix commit. The gate then certified a PASS that a fresh
-// clone cannot reproduce: `.env` is not in the commit and `.env.example` never
-// grew the ADMIN_* keys the seed requires.
+// A fix child can green a check by writing a gitignored file — credentials into
+// `.env` is the canonical case. Everything above consumes `git status
+// --porcelain`, which does NOT report ignored paths: run against a repo ignoring
+// `.env` and `logs/`, with both present and modified, it prints neither. So such a
+// write is invisible to the diff capture, the deletion guard and the commit, and
+// the gate can certify a PASS a fresh clone cannot reproduce.
 //
 // The rule is NOT to reject the write. A local `.env` is often the only way to
 // make a check run at all, and rejecting it would leave the gate unable to test
 // anything. What is illegitimate is the VERDICT: a PASS that depends on a file
 // the repository does not contain is not an observation of the shipped product.
 // So the write is recorded, carried as debt, and any gate PASS proven to depend
-// on it is downgraded to UNOBSERVED (the verdict class settled in final-gate.ts
-// unobservedVerdict: zero reproducible observation is UNOBSERVED, not PASS).
+// on it is downgraded to UNOBSERVED (`unobservedVerdict` in gate-tally.ts: zero
+// reproducible observation is UNOBSERVED, not PASS).
 //
-// EXEMPT BY MECHANISM, not by hope: build output and dependency trees are
-// ignored too and a rule that fires on every `dist/` write is unusable. The real
-// shape, measured over recorded child logs: gate children announce a few dozen
-// writes, a minority to ignored paths, and nearly all of those are `.env` (the
-// rest `node_modules`, from an install). Gate children do not hand-write build output; the
-// COMMANDS they run do, and that never enters this channel because it is
-// attributed by a before/after snapshot of the child's own window.
+// EXEMPT BY MECHANISM, not by hope: build output and dependency trees are ignored
+// too, and a rule that fires on every `dist/` write is unusable — so
+// classifyIgnoredPath below excludes them. Gate children do not hand-write build
+// output; the COMMANDS they run do, and that never enters this channel because it
+// is attributed by a before/after snapshot of the child's own window.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Why an ignored path is (or is not) something the gate may rule on. */
@@ -219,8 +210,10 @@ const BUILD_DIR_NAMES = new Set([
 
 /**
  * Classify one repo-relative ignored path. `outdirs` are build output directories
- * parsed from the project's own build commands. Only `actionable` may produce a
- * finding — everything else is reproducible from the repository by running the
+ * parsed from the project's own build commands (gate-deps' `parseBuildOutdirs`),
+ * matched by whole leading path SEGMENTS — outdir `artifacts` matches
+ * `artifacts/a.js` and not `artifactsx/a.js`. Only `actionable` may produce a
+ * finding; everything else is reproducible from the repository by running the
  * project's own tooling, which is exactly what makes it not a gate concern.
  */
 export function classifyIgnoredPath(rel: string, outdirs: string[]): IgnoredClass {
@@ -249,16 +242,18 @@ export function findActionableIgnoredWrites(paths: string[], outdirs: string[]):
 }
 
 /**
- * A fingerprint per ignored path (`mtimeMs:size`, or a marker for a directory),
- * taken before and after a write-capable child so a write is ATTRIBUTED to that
- * child rather than to the tree's pre-existing state. Ignored files are untracked,
- * so git cannot tell "changed" from "was always there" — only the snapshot can.
+ * A fingerprint per ignored path (`<mtimeMs>:<size>` for a file, `dir:<mtimeMs>`
+ * for a directory), taken before and after a write-capable child so a write is
+ * ATTRIBUTED to that child rather than to the tree's pre-existing state. Ignored
+ * files are untracked, so git cannot tell "changed" from "was always there" — only
+ * the snapshot can.
  */
 export type IgnoredSnapshot = Record<string, string>
 
 /**
- * Paths whose fingerprint appeared or changed across the child's window. Pure, so
- * the attribution rule is unit-testable without a repo.
+ * Paths whose fingerprint appeared or changed across the child's window, sorted.
+ * A path that VANISHED is not reported — the channel exists to catch writes.
+ * Pure, so the attribution rule is unit-testable without a repo.
  */
 export function diffIgnoredSnapshots(before: IgnoredSnapshot, after: IgnoredSnapshot): string[] {
     const out: string[] = []
@@ -283,12 +278,12 @@ export function ignoredWriteTrailLine(paths: string[]): string {
 /**
  * The durable debt reason for the same event. Path names only, same rule.
  *
- * The wording tracks what was actually PROVEN. `dependent === true` is the probe's
- * answer that the gate does not pass without these files; `undefined` is an
- * unanswered probe (the attempt never converged, or the probe could not run), which
- * is still worth carrying because the file is on disk and can green a LATER attempt.
- * A debt that overstates its evidence is the same defect this whole channel exists
- * to fix, one level up.
+ * The wording tracks what was actually PROVEN. Only `dependent === true` — the
+ * probe's answer that the gate does not pass without these files — earns the strong
+ * head. Anything else, `false` or an unanswered `undefined`, gets the weaker one:
+ * the write is still worth carrying because the file is on disk and can green a
+ * LATER attempt. A debt that overstates its evidence is the same defect this whole
+ * channel exists to fix, one level up.
  */
 export function ignoredWriteDebtReason(paths: string[], dependent?: boolean): string {
     const head =
@@ -315,8 +310,8 @@ export function ignoredWriteUnobservedNote(paths: string[]): string {
 
 /**
  * One-line summary for the gate debug log — the diff capture every write-capable
- * child gets so "what did this pass change" is answerable from artifacts (the
- * a `rm` left no trace outside the bash stream).
+ * child gets, so "what did this pass change" is answerable from the artifacts
+ * rather than only from the child's bash stream.
  */
 export function formatTreeChanges(changes: TreeChangeSummary): string {
     if (
