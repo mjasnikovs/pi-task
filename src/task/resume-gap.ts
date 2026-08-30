@@ -1,25 +1,24 @@
 /**
  * Resume gating & the honest resume banner.
  *
- * a lost ~10 hours to dead air that looked like a stall: the host was
- * powered off overnight, both containers stopped at 20:00Z, and the run picked
- * up cleanly the moment they were restarted at 06:01Z. Nothing was wrong with
- * the run — the only defect was that nobody could tell. Two things follow.
+ * A host that is powered off mid-run produces dead air that looks exactly like a
+ * stall. Nothing is wrong with the run; the defect is that nobody can tell. Two
+ * things follow.
  *
- * (1) A restart-time resume can be automated (`restart: unless-stopped` on the
- * containers plus a boot hook that runs `/task-auto-resume --unattended`), which
- * turns that 10h of nothing into minutes.
+ * (1) A restart-time resume can be automated — a boot hook that runs
+ * `/task-auto-resume --unattended` (the flag auto-orchestrator.ts parses).
  *
  * (2) An automated resume must not resume everything. `RESUMABLE_STATES`
- * deliberately includes `failed` and `cancelled` because a HUMAN typing
- * /task-auto-resume has decided to continue; a boot hook has decided nothing. A
- * failed run stopped for a reason a power cycle does not clear, and re-entering
- * it unattended burns the whole loop against the same wall. Unattended resume
- * therefore covers in-flight states only (see UNATTENDED_STATES), and refuses
- * the rest by name rather than silently doing nothing.
+ * (task-types.ts) deliberately includes `failed` and `cancelled`, because a HUMAN
+ * typing /task-auto-resume has decided to continue; a boot hook has decided
+ * nothing. A failed run stopped for a reason a power cycle does not clear, and
+ * re-entering it unattended burns the whole loop against the same wall.
+ * Unattended resume therefore covers in-flight states only (see
+ * UNATTENDED_STATES), and refuses the rest BY NAME rather than silently doing
+ * nothing.
  *
- * The banner follows the honest-restart-hint rule (70a8497): say exactly what
- * was observed and exactly what it does not tell you. All this process knows is
+ * The banner says exactly what was observed and exactly what it does not tell
+ * you. All this process knows is
  * when the AUTO file was last written — it cannot distinguish a stopped host
  * from a hung child from a slow task, so it reports the gap and attributes no
  * cause. It is equally careful about the tree: nothing is rolled back between
