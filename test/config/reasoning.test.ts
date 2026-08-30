@@ -17,7 +17,12 @@ import {
 
 const cfgWith = (over: Partial<PiTaskConfig>): PiTaskConfig => ({...DEFAULT_CONFIG, ...over})
 
-/** A table with a distinct, recognisable level per group. */
+/**
+ * A custom table that DISAGREES with the default one on nine of its eleven cells,
+ * using every level the menu offers. Its job is to make a resolver that consulted
+ * the wrong table visible; the levels are not unique per group and do not need to
+ * be.
+ */
 const distinct = (): Record<ReasoningGroup, GroupSetting> => ({
     research: 'off',
     'research:files': 'minimal',
@@ -187,8 +192,10 @@ describe('effectiveReasoning', () => {
     })
 
     test('is a fresh object, so a caller cannot write through it into the config', () => {
-        // `applyReasoningLevel` seeds custom mode from this. Handing back a live
-        // reference would make freezing the table an alias of it.
+        // `applyReasoningLevel` (register.ts) does `cfg.reasoningLevels =
+        // effectiveReasoning(cfg)` when a group row switches the mode to custom.
+        // Handing back a live reference would make that seeding an alias of the
+        // config it was seeded from.
         const cfg = {...DEFAULT_CONFIG, reasoningLevels: {...DEFAULT_CONFIG.reasoningLevels}}
         const table = effectiveReasoning(cfg)
         table.planning = 'high'

@@ -146,11 +146,12 @@ AFTER
 
 Comments only. No constant, timeout, threshold or default changes value.
 
-One exception, already agreed: `test/config/reasoning.test.ts` has a `describe`
-block, `every shipped cell is measured or inherit`, whose three tests **require**
-a comment matching `A/B`, `n=\d+/arm`, `\.gguf` and `RUNG [123]` beside every
-reasoning cell. That block enforces the thing these rules delete, so it goes.
-Every behavioural test in that file stays.
+One exception was agreed: `test/config/reasoning.test.ts` had a `describe` block,
+`every shipped cell is measured or inherit`, whose three tests **required** a
+comment matching `A/B`, `n=\d+/arm`, `\.gguf` and `RUNG [123]` beside every
+reasoning cell. That block enforced the thing these rules delete. It is already
+gone — removed in `9979c07`, before this pass started — and every behavioural
+test in that file stayed. Nothing is owed here.
 
 ## Never edited mechanically
 
