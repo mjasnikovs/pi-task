@@ -3,13 +3,16 @@
  * task/spec but NOT actually declared by the runtime's installed types.
  *
  * A real `<runtime>:<sub>` builtin appears as `declare module "<runtime>:<sub>"`
- * in the runtime's type files (bun-types declares bun:sqlite/bun:test/bun:ffi/…;
- * @types/node declares node:fs/…). A specifier with no such declaration is a
- * hallucination — the symbol, if it exists at all, lives on the base module. This
- * is the exact `bun:sql` failure class: a design doc invented `bun:sql`, every
- * phase echoed it, and the implementer fabricated a `declare module "bun:sql"`
- * shim to make it compile. Verifying the specifier against the installed types
- * catches it deterministically, with no false positives and no LLM call.
+ * in the runtime's type files: bun-types declares exactly bun:bundle, bun:ffi,
+ * bun:jsc, bun:sqlite and bun:test, and @types/node declares node:assert,
+ * node:buffer, node:child_process and the rest. A specifier with no such
+ * declaration is a hallucination — the symbol, if it exists at all, lives on the
+ * base module. `bun:sql` is the canonical case: bun-types declares no such module,
+ * but `declare module "bun"` does declare `const sql: SQL`, so the correct import
+ * is from `"bun"` and a `declare module "bun:sql"` shim only hides the mistake.
+ *
+ * The check is deterministic and needs no LLM call. It can only be as good as the
+ * installed types: a runtime whose types are not on disk is skipped entirely.
  */
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -44,9 +47,9 @@ const DECLARE_MODULE_RE = /declare module "([^"]+)"/g
 export function extractRuntimeSpecifiers(text: string): string[] {
     const seen = new Set<string>()
     for (const m of text.matchAll(SPEC_RE)) {
-        // Normalise: drop a trailing punctuation the word boundary may include is
-        // already excluded by the class; lowercase the runtime only (subpaths are
-        // case-sensitive). splitRuntimeNamespace lowercases the runtime itself.
+        // Kept exactly as written, including case: `BUN:SQL` and `bun:sql` are two
+        // entries here. `splitRuntimeNamespace` lowercases the runtime downstream,
+        // and the subpath is case-sensitive, so nothing is folded at this layer.
         if (!seen.has(m[0])) seen.add(m[0])
     }
     return [...seen]
@@ -80,8 +83,8 @@ export function classifyRuntimeImport(
     if (!real) {
         const leaf = sub.split('/').pop() ?? sub
         // Does the base runtime module declare a symbol named like the submodule
-        // leaf (e.g. `bun:sql` → `const sql` / `class SQL` in `declare module "bun"`)?
-        // Case-insensitive so `sql` matches the `SQL` class too.
+        // leaf? Case-insensitive, which is what makes `bun:sql` find the real
+        // `const sql: SQL` and report `SQL` as the symbol to import.
         const re = new RegExp(
             `\\b(?:const|class|function|let|var|namespace|interface|type)\\s+(${escapeRe(leaf)})\\b`,
             'i'
@@ -221,7 +224,9 @@ export function formatApiCorrections(phantoms: PhantomImport[]): string {
 }
 
 /**
- * A top-of-handoff override banner (Layer B). The deterministic check has proven —
+ * A top-of-handoff override banner (Layer B — orchestrator.ts names the two layers:
+ * A strips phantoms from the refined spec, B overrides at delivery). The check has
+ * proven —
  * against the installed type definitions — that the spec, or a design doc it
  * references, names an API that does NOT exist. The implementer is told the spec/doc
  * is authoritative, so a residual affirmative that survived into the composed spec, or
@@ -274,18 +279,19 @@ export async function findDeliveryPhantoms(spec: string, cwd: string): Promise<P
 
 /**
  * Subtractively rewrite every flagged phantom specifier in `text` to the canonical
- * import the installed types prove, so NO affirmative occurrence of the non-existent
- * specifier survives downstream. This is the half an appended correction can't do:
- * REFINE preserves identifiers verbatim, so `bun:sql` otherwise rides into the
- * composed GOAL, because compose re-leaks it, and on to the implementer. Strike
- * it at the source and compose has nothing to contradict.
+ * import the installed types prove, so NO affirmative occurrence of the specifier
+ * survives downstream. This is the half an APPENDED correction cannot do: later
+ * phases copy identifiers verbatim, so a `bun:sql` left in the text keeps being
+ * re-stated no matter what a correction says about it.
  *
- * Deterministic, no LLM. Idempotent on healthy input: once a specifier is replaced
- * the literal is gone, so a second pass is a no-op (the only residue is a `declare
- * module` comment that quotes the spec inside a slash-star, which the bare-word rule
- * skips via its lookbehind). Handles the four forms a phantom takes: an import/require
- * `from "<spec>"`, a fabricated `declare module "<spec>"`, a backticked prose mention
- * `` `<spec>` ``, and a bare word `<spec>`.
+ * Deterministic, no LLM. Handles the four forms a phantom takes: an import/require
+ * `from "<spec>"`, a fabricated `declare module "<spec>"`, a backticked prose
+ * mention `` `<spec>` ``, and a bare word. A path-like `./bun:sql/x` is left alone
+ * by the bare-word rule's lookbehind.
+ *
+ * Idempotent: once a specifier is replaced the literal is gone. The `declare
+ * module` replacement deliberately does not echo the spec, so a second pass over
+ * the output returns it byte for byte.
  */
 export function rewritePhantomSpecifiers(text: string, phantoms: PhantomImport[]): string {
     let out = text
