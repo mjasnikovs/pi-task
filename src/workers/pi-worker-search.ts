@@ -70,8 +70,9 @@ export function registerPiWorkerSearch(
             }
 
             const {results} = result
-            // Zero results IS an answer: the search ran and the web has nothing.
-            // Only a search that could not run is unavailable.
+            // Zero results IS an answer: the search ran and the web has nothing, so it
+            // comes back as `workerAnswer` with resultCount 0. Only a search that could
+            // not run — no key, or an engine error — is `unavailable`.
             if (results.length === 0) {
                 return workerAnswer(`No results for: ${params.query}`, {resultCount: 0})
             }
@@ -91,13 +92,16 @@ export function registerPiWorkerSearch(
             return new Text(text, 0, 0)
         },
 
-        // Cache search results per run (the same query re-run across sibling tasks hits
-        // the live web anew otherwise). Count is part of the key — a larger request is a
-        // different result set — and so is the provider: two engines' result sets for
-        // one query are different answers and must not serve for each other.
+        // Cache search results per run, or the same query re-run by a sibling task hits
+        // the live web again. Three parts key the entry: the PROVIDER, because two
+        // engines' result sets for one query are different answers and must not serve
+        // for each other; the query, lowercased and whitespace-collapsed by
+        // `normalizeQuery` so phrasing variants share an entry; and the COUNT, because a
+        // larger request is a different result set.
         cacheKey: params => `${provider()}::${normalizeQuery(params.query)}::${params.count ?? ''}`,
-        // Only a non-empty result set is worth caching; no-key, error, and empty results
-        // (resultCount 0) fall through so a later attempt can succeed.
+        // Only a non-empty result set is worth caching. An empty one falls through so a
+        // later attempt can succeed; no-key and engine errors never reach this at all,
+        // since makeWorkerTool refuses to store an `unavailable` outcome.
         cacheable: d => d.resultCount > 0
     })
 }
