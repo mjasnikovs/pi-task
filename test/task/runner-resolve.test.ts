@@ -122,7 +122,7 @@ describe('runnerEnv', () => {
 
 describe('isCommandNotFound — the env-gap contract survives a shell that is not posix', () => {
     test('exit codes that say it outright', () => {
-        // POSIX shell (linux/macOS: bun hands the script to /bin/sh).
+        // What a POSIX shell returns when the command is not on PATH.
         expect(isCommandNotFound(127, '')).toBe(true)
         // cmd.exe's equivalent.
         expect(isCommandNotFound(9009, '')).toBe(true)
@@ -132,10 +132,10 @@ describe('isCommandNotFound — the env-gap contract survives a shell that is no
         expect(isCommandNotFound(0, '')).toBe(false)
     })
 
-    test('the windows shape: exit 1 + the RUNNER saying it (CI regression)', () => {
-        // Windows has no /bin/sh, so bun runs the script in its own shell and
-        // reports the miss itself — exit 1, indistinguishable by status from a
-        // real code fault. This exact output failed 5 final-gate tests on CI.
+    test('a runner that resolves the command itself: exit 1 plus its own wording', () => {
+        // When the runner resolves the command rather than handing the script to a
+        // shell, it reports the miss and still exits 1 — a status indistinguishable
+        // from a real code fault. COMMAND_NOT_FOUND_OUTPUT_RE is what separates them.
         const bunWin =
             '$ pi-task-no-such-bin\nbun: command not found: pi-task-no-such-bin\n'
             + 'error: script "dev" exited with code 1'
@@ -149,9 +149,9 @@ describe('isCommandNotFound — the env-gap contract survives a shell that is no
     })
 
     test('narrow by design: a real failure that merely MENTIONS it stays a failure', () => {
-        // The bare phrase is not enough — a suite asserting on this text, or a
-        // build printing it in a diagnostic, must still FAIL. The genuine posix
-        // shape always arrives as 127 anyway.
+        // The regex requires a runner name before "command not found", so a suite
+        // asserting on that phrase, or a build printing it in a diagnostic, still
+        // FAILs. The genuine POSIX shape arrives as 127 and needs no text match.
         expect(isCommandNotFound(1, 'expected "command not found" but got ""')).toBe(false)
         expect(isCommandNotFound(1, '2 tests failed')).toBe(false)
     })
