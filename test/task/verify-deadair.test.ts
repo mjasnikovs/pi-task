@@ -1,22 +1,15 @@
 /**
  * DEAD AIR in the validation gate.
  *
- * Reported live (2026-08-06): "/task-auto finishes implementing, then nothing
- * happens — the model looks stopped, the scrolling stops — and then the validation
- * gate pops up and it works."
+ * The gap is structural. At `agent_end` the implementation widget is cleared, and
+ * the gate's first UI — the verify child's loader — only appears once that CHILD
+ * starts, which is after a whole-repo static-analysis run and every deterministic
+ * probe. A SYNCHRONOUS health run makes it worse than slow: it blocks the event
+ * loop, and pi-tui schedules its renders on `process.nextTick`
+ * (pi-tui/dist/tui.js), so not even a notify can paint.
  *
- * The window was real and it was structural: at `agent_end` the implementation
- * widget is cleared, and the gate's first UI (the verify child's loader) only
- * appears once the CHILD starts — after a whole-repo static-analysis run and ten
- * probes. That run was `spawnSync`, so the event loop was blocked too: even the
- * `verifying…` notify could not paint, because pi-tui schedules renders on
- * `process.nextTick`. MEASURED on real repos:
- * for tens of seconds at a time, with none of the expected timer ticks
- * delivered. A/B: silent windows
- * for three seconds or more, on every trial.
- *
- * These tests hold the two halves of the fix: the deterministic stage REPORTS
- * itself, and the gate keeps painting while it runs.
+ * These tests hold the two halves: the deterministic stage REPORTS itself, and
+ * the gate keeps painting while it runs.
  */
 import {describe, expect, test} from 'bun:test'
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs'
@@ -89,9 +82,9 @@ describe('the deterministic stage reports its progress', () => {
 
 describe('the gate paints while the deterministic stage runs', () => {
     test('the loader is live during the repo-health run, before any child starts', async () => {
-        // A repo whose only static check sleeps: the health run IS the window the
-        // user stared at. No task file, so the gate returns right after it — this
-        // measures the pre-child stage alone, with no model child involved.
+        // A repo whose only static check sleeps, so the health run IS the gap. No
+        // task file, so the gate returns straight after it: this exercises the
+        // pre-child stage alone, with no model child involved.
         const dir = mkdtempSync(path.join(tmpdir(), 'deadair-'))
         try {
             writeFileSync(
@@ -117,9 +110,9 @@ describe('the gate paints while the deterministic stage runs', () => {
             } finally {
                 getConfig().verifyWork = verifyWork
             }
-            // The loader refreshes every 500ms, so a ~1.2s health run must have
-            // drawn at least twice. Before the fix this was zero — the loop was
-            // blocked inside spawnSync and nothing could render at all.
+            // startAutoLoader repaints on a WIDGET_REFRESH_MS interval (widget.ts),
+            // so a health run of more than twice that must have drawn more than
+            // once. An event loop blocked in a synchronous check draws zero.
             expect(handle.captured.widgets.length).toBeGreaterThanOrEqual(2)
         } finally {
             rmSync(dir, {recursive: true, force: true})
