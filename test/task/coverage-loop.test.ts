@@ -13,7 +13,7 @@ import {
     type RequirementEntry
 } from '../../src/task/requirements.js'
 
-// ─── isCrossCuttingRequirement (Fix A) ───────────────────────────────────────
+// ─── isCrossCuttingRequirement ───────────────────────────────────────────────
 // A requirement no task can OWN — a prohibition or a product-global policy — must
 // be classified cross-cutting so it stops driving the coverage loop's regeneration.
 // Precision matters: an ordinary ownable feature line must NOT be swept up (that
@@ -57,7 +57,7 @@ describe('isCrossCuttingRequirement', () => {
     })
 })
 
-// ─── decideAdoption (Fix B/C) ─────────────────────────────────────────────────
+// ─── decideAdoption ──────────────────────────────────────────────────────────
 describe('decideAdoption', () => {
     const plan = (titles: number, covered: number[], missing: string[] = []): CoveragePlan => ({
         titles: Array.from({length: titles}, (_, i) => `t${i}`),
@@ -82,9 +82,10 @@ describe('decideAdoption', () => {
     })
 
     test('adopts an equal owned-set in FEWER titles (the smaller plan wins)', () => {
-        // Bounded by the collapse floor above: a retry under HALF the current
-        // title count is still the degenerate flake and is rejected on that rule,
-        // so "smallest among equals" only ranges down to half.
+        // Bounded by the collapse floor above, which is
+        // `retry.titles.length * 2 < current.titles.length` — a retry under HALF
+        // the current count is the degenerate flake and is rejected there. So
+        // "smallest among equals" only ever ranges down to half.
         expect(decideAdoption(plan(9, [0, 1]), plan(5, [0, 1]), true).adopt).toBe(true)
         expect(decideAdoption(plan(9, [0, 1]), plan(4, [0, 1]), true).reason).toContain(
             'collapse floor'
@@ -92,11 +93,12 @@ describe('decideAdoption', () => {
     })
 
     // ── the zero-gain growth tiebreak ────────────────────────────────────────
-    // 2026-07-28 went 26 → 32 → 60 titles with the owned-set pinned at 27 in
-    // all three rounds, both retries adopted as "preserves owned coverage". The
-    // old rule could not object: past the drop check the retry's owned-set is a
-    // superset, and groundedCoverage is monotone in the title set while the
-    // reprompt explicitly asks for a superset of the previous titles.
+    // A plan can more than double in titles across two retries while its owned
+    // set never moves, and a rule that only rejects DROPS cannot object: past the
+    // drop check the retry's owned-set is a superset, groundedCoverage is
+    // monotone in the title set, and the reprompt explicitly asks for a superset
+    // of the previous titles. So growth with zero coverage gain needs its own
+    // tiebreak.
     test('rejects growth that buys no new coverage', () => {
         const d = decideAdoption(plan(26, [0, 1, 2]), plan(60, [0, 1, 2]), true)
         expect(d.adopt).toBe(false)
@@ -143,19 +145,20 @@ describe('decideAdoption', () => {
     })
 })
 
-// ─── A/B harness: baseline reproduces the drop, treatment prevents it ─────────
+// ─── Two algorithms over the same fixtures ───────────────────────────────────
 //
-// The failure class (spec-agnostic): a coverage-retry regenerates the WHOLE plan,
+// The failure class, spec-agnostic: a coverage-retry regenerates the WHOLE plan,
 // drops a feature-area the current plan already covered, and — because the loop
-// adopts on a size floor alone and ships the last round — the covered area is lost.
-// Un-ownable NEGATIVE/GLOBAL requirements keep the verdict INCOMPLETE, so the loop
-// keeps regenerating and rolling that dice.
+// adopts on a size floor alone and ships the last round — that area is lost.
+// Un-ownable NEGATIVE/GLOBAL requirements keep the verdict INCOMPLETE, so the
+// loop keeps regenerating and rolling the dice again.
 //
-// This drives the SAME fixtures through the OLD algorithm (baseline: last-wins +
-// size floor, negatives counted as uncovered) and the NEW one (treatment:
-// monotonic adoption via the shipping decideAdoption + negatives classified
-// cross-cutting via the shipping accountCoverage). Three NON-web archetypes prove
-// the fix is the class, not a web-app special case.
+// Below, the same fixtures run through BOTH: a baseline algorithm written here
+// (last-wins + size floor, negatives counted as uncovered) and the shipping one
+// (monotonic adoption via decideAdoption, negatives classified cross-cutting via
+// accountCoverage). The baseline is what makes the fixtures honest — it has to
+// reproduce the drop, or the shipping rule is not being shown to prevent
+// anything. Three NON-web archetypes, so the rule reads as general.
 
 interface AreaReq {
     quote: string
@@ -332,7 +335,7 @@ test('A/B: monotonic coverage loop — baseline drops the covered area, treatmen
         if (ownsArea(a, runBaseline(a), a.droppedArea)) baselineKept++
         if (ownsArea(a, runTreatment(a), a.droppedArea)) treatmentKept++
     }
-    // Explicit before/after counts (also the paste-able A/B result).
+    // Explicit counts on both algorithms, so a regression names which one moved.
 
     console.log(
         `[A/B coverage-loop] area retained — baseline ${baselineKept}/${ARCHETYPES.length}`
@@ -363,14 +366,17 @@ test('A/B: a genuine SUPERSET regeneration is still adopted under treatment', ()
     expect(ownsArea(a, shipped, 'json-output')).toBe(true) // and nothing dropped
 })
 
-// ─── groundedCoverage — the model-independent owned-set (live-A/B-driven) ─────
+// ─── groundedCoverage — the model-independent owned-set ──────────────────────
 //
-// The live A/B (Qwen3.6-27B) exposed that the coverage-map model OVER-CREDITS
-// ownership: it mapped a "--json output" requirement to a generic "scaffold +
-// argument parser" task, so a plan with no --json task still reported owning it,
-// and the monotonic guard — trusting those TASK numbers — dropped the area anyway
-// groundedCoverage takes the drop-signal off the model
-// and onto requirement↔title token overlap, which the model cannot inflate.
+// The coverage-map model OVER-CREDITS ownership. Asked which task owns a
+// "--json output" requirement it will answer with a generic "scaffold + argument
+// parser" task, so a plan with NO --json task still reports owning it — and a
+// monotonic guard trusting those task numbers drops the area anyway.
+//
+// groundedCoverage takes the drop-signal off the model and onto requirement/title
+// token overlap: content tokens minus stopwords, with any token shared by more
+// than half the ownable requirements discarded as undiscriminating. The model
+// cannot inflate that.
 const noCross = () => false
 describe('groundedCoverage', () => {
     test('a requirement is covered only when a TITLE shares a distinctive token', () => {
@@ -388,9 +394,9 @@ describe('groundedCoverage', () => {
     })
 
     test('REGRESSION (live over-crediting): a plan with no --json task does NOT own it', () => {
-        // The exact failure: the model maps "--json" → the scaffold/parser task, so
-        // ownedRequirementIndices would say owned. groundedCoverage must not — no
-        // title carries a --json/machine-readable token.
+        // The failure in one case: the model maps "--json" to the scaffold/parser
+        // task, so ownedRequirementIndices reports it owned. groundedCoverage must
+        // not — no title here carries a --json or machine-readable token.
         const quotes = [
             'a --json flag makes it emit machine-readable output instead of the human table'
         ]
