@@ -1,13 +1,15 @@
 /**
  * The run-end resolution loop's record, driven directly.
  *
- * Before this existed the same state was six closure-threaded locals inside a
- * ~235-line loop, and the only way to observe a decision was to run the whole
- * stage over a temp task dir and match a TRAIL STRING
- * (`startsWith('final-gate: check DEMOTED')`). The demotion rule in particular
- * was applied downstream from the evidence it judges — the shape
- * `final-gate-progress.ts`'s own comment names as the defect, which
- * shipped a product whose every page was blank as a `completed` run.
+ * AutofixLedger holds no I/O — no user, no ledger file, no git — so a verdict can
+ * be asserted on its own instead of by running the whole stage over a temp task
+ * dir and matching a trail string. That is the point of the split: a record that
+ * performs effects cannot be driven by a test that only wants the judgement.
+ *
+ * The demotion rule is the one that most needs it. It has to sit BESIDE the
+ * evidence it judges — `judge` reads `observedFailures` off the same outcome the
+ * failure came from — because applied downstream it demotes a real, still-broken
+ * check to debt.
  */
 import {describe, expect, test} from 'bun:test'
 import {AutofixLedger} from '../../src/task/autofix-ledger.js'
@@ -52,11 +54,12 @@ describe('AutofixLedger — the demotion decision', () => {
     })
 
     test('a failure a PROBE OBSERVED is never demoted, however often it repeats', () => {
-        // , and the defect: a deterministic un-fixed defect emits
-        // an IDENTICAL failure by definition, so string equality reads
-        // reproducibility as evidence against the instrument. A probe that LOOKED
-        // overrules that, and the check now sits with the evidence rather than
-        // downstream of it.
+        // A deterministic un-fixed defect emits an IDENTICAL failure by
+        // definition — a CLI that exits 2 twice, a build failing on the same
+        // symbol twice. So string equality alone reads reproducibility as
+        // evidence against the INSTRUMENT and demotes a check that is simply
+        // still broken. A probe that LOOKED and saw the defect has already
+        // answered that question, so `observedFailures` wins outright.
         const l = new AutofixLedger(3)
         const outcome = {reason: RED, failures: [RED], observedFailures: [RED]}
         l.judge(outcome, true)
