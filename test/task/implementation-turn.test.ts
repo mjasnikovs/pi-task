@@ -36,20 +36,21 @@ describe('classifyTurnEnd', () => {
             'compaction'
         ],
         ['a compaction with no assistant message at all', [compactionEntry()], 'compaction'],
-        // A compaction FOLLOWED by a fresh assistant turn was already continued.
+        // lastCompaction < lastAssistant, so the boundary is behind the turn.
         [
             'a compaction before the last assistant message',
             [compactionEntry(), assistantEntry('stop')],
             'stop'
         ],
-        // Only the LAST assistant message counts: an earlier abort answered by a
-        // later clean turn is history.
+        // tailPositions keeps only the LAST assistant index, so an earlier abort
+        // answered by a later clean turn cannot decide the outcome.
         [
             'an earlier abort answered by a clean turn',
             [assistantEntry('aborted'), userEntry('go on'), assistantEntry('stop')],
             'stop'
         ],
-        // Non-assistant messages after the last assistant one do not change it.
+        // Only a `compaction` entry moves lastCompaction; any other trailing entry
+        // leaves both positions where they were.
         ['a trailing user message', [assistantEntry('stop'), userEntry('hi')], 'stop']
     ]
     for (const [name, entries, want] of single) {
@@ -58,8 +59,8 @@ describe('classifyTurnEnd', () => {
         })
     }
 
-    // Precedence when several signals are present at once — the order the
-    // supervision sequence has always applied: aborted > compaction > error > stop.
+    // Precedence when several signals are present at once. classifyTurnEnd tests
+    // them in this order: aborted > compaction > error > stop.
     const combined: Array<[string, unknown[], TurnEnd]> = [
         [
             'aborted + trailing compaction → aborted (ESC beats the boundary)',
@@ -104,8 +105,8 @@ describe('turnErrorMessage', () => {
         expect(turnErrorMessage([])).toBeUndefined()
     })
     test('reads the last assistant message even under a trailing compaction', () => {
-        // Mirrors runSingleTask: after the resume cap is hit, the error is still
-        // read off the last assistant message regardless of the boundary.
+        // superviseWith reads the error with turnErrorMessage after the resume loop,
+        // and that reads the last assistant message whatever follows it.
         expect(turnErrorMessage([e(assistantEntry('error', 'x')), e(compactionEntry())])).toBe('x')
     })
 })
@@ -207,11 +208,12 @@ describe('resumeAcrossCompactions', () => {
         expect(f.sent).toHaveLength(MAX_COMPACTION_RESUMES)
     })
 
-    // The ctx binding used by production, over the shared fake ctx.
+    // turnDepsFor is the binding production uses: superviseImplementation is
+    // superviseWith(turnDepsFor(ctx)). Driven here over the shared fake ctx.
     test('turnDepsFor binds a live ctx (sendUserMessage as followUp + waitForIdle + entries)', async () => {
         const {ctx, captured, setIdleEntries} = makeFakeCtx('/tmp/x')
         setIdleEntries([[compactionEntry()], [compactionEntry()], [assistantEntry('stop')]])
-        // Mirror runSingleTask: the first idle has already happened.
+        // Mirror runSingleTask, which awaits waitForIdle before supervising.
         await ctx.waitForIdle()
         const resumes = await resumeAcrossCompactions(turnDepsFor(ctx as SteerCtx))
         expect(resumes).toBe(2)
@@ -258,7 +260,7 @@ describe('steerUntilDone', () => {
             ],
             consume: () => true
         })
-        expect(await steerUntilDone(f.deps)).toBe(false) // implementation completed, no pause
+        expect(await steerUntilDone(f.deps)).toBe(false)
         expect(f.asks()).toBe(0)
     })
 
