@@ -5,22 +5,16 @@
  * The failure class: a test file re-constructs wiring that ALSO exists in production
  * — it builds its own app assembly / its own entry point out of the same leaf modules
  * the production entry composes, then tests THAT private copy. The copy can be wired
- * differently from production and stay green while the shipped wiring is broken. A real
- * example: `test/photos.test.ts` imports the real `authRoutes` + `photosRoutes` leaves,
- * mounts them into its OWN app at a DIFFERENT prefix than the production entry, and
- * runs green end to end — while the shipped upload path is dead because production mounts
- * the same leaf at the wrong prefix. The verify child, judging "do the tests pass",
- * saw green and counted the photos area verified. The seam the test was supposed to
- * cover is exactly the seam it re-implemented away.
+ * differently from production and stay green while the shipped wiring is broken: the
+ * test mounts the same leaf at one prefix, production mounts it at another, and the
+ * seam the test was supposed to cover is the seam it re-implemented away.
  *
  * This is the VERIFY-SIDE complement of the generation-side wiring probe
- * (wiring-claims.ts, item #5) and shares the load-bearing lesson of
- * substitution-probe / skip-escape / wiring-claims: a deterministic finding that NAMES
- * the suspect file is the reliable lever; a bare prompt rule is weak. rule 3b already
- * tells the child to spot-check that self-authored tests exercise the real artifact,
- * but F4 slips through because these tests DO import the real leaf modules — they just
- * bypass the real ASSEMBLY, which rule 3b's "did it import and call the module" check
- * does not catch. This probe supplies the missing concrete fact.
+ * (wiring-claims.ts). Rule 3b already tells the child to spot-check that
+ * self-authored tests exercise the real artifact, but this shape slips past it:
+ * these tests DO import the real leaf modules — they just bypass the real ASSEMBLY,
+ * which "did it import and call the module" does not catch. This probe supplies the
+ * missing concrete fact.
  *
  * THE SIGNAL is pure import-graph SHAPE, zero stack/framework assumptions (no "app",
  * no "route", no "mount", no language runtime): a test file T is flagged when there is
@@ -33,10 +27,10 @@
  * shared-utility imports out: a test importing an api client + a schema module that
  * every page also imports is NOT re-assembly (those utilities have many production
  * importers); a test importing two route modules that only the server entry composes
- * IS re-assembly. Measured on the fixture tree: flags exactly the four backend
- * tests that rebuild the server entry's route composition (including the real
- * photos seam bug) and leaves clean the single-leaf direct test, the utility-sharing
- * page test, and the source-grepping test — 0 false positives.
+ * IS re-assembly. What that leaves clean, by construction: a test importing ONE
+ * leaf, a test importing utilities several production files also import, a test that
+ * imports the assembly itself, and a source-grepping test whose "imports" are quoted
+ * strings inside assertions.
  *
  * Findings are ADVISORY (probe+rule): they mandate the child to exercise the REAL
  * shipped assembly directly before counting the area verified; they never auto-FAIL.
