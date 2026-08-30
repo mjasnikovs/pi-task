@@ -56,8 +56,9 @@ test('decideResume: unattended covers in-flight states only', () => {
     )
 })
 
-test('decideResume: the run-14 gap is reported as measured, with no cause attributed', () => {
-    // Containers stopped 2026-07-18T20:00:13Z, restarted 06:01Z.
+test('decideResume: a long gap is reported as measured, with no cause attributed', () => {
+    // The task file's last write and NOW are ten hours apart, which is what the
+    // banner has to state.
     const lastWriteMs = Date.parse('2026-07-18T20:00:13.000Z')
     const d = decideResume({id: 'TASK_AUTO_0001', state: 'in_progress', lastWriteMs}, NOW, true)
     expect(d.resume).toBe(true)
@@ -107,10 +108,9 @@ test('findResumableAutoDetailed: carries state and last-write time of the newest
 })
 
 // The newest run being unresumable says nothing about an in-flight run behind it.
-// Choosing the candidate by mtime across the HUMAN-resumable states and only then
-// refusing on state let one failed run shadow a genuinely in-flight one — the boot
-// hook refuses every restart and the in-flight run sits in the dead air this
-// feature exists to end.
+// Picking the candidate by mtime across the HUMAN-resumable states and only THEN
+// refusing on state lets one failed run shadow a genuinely in-flight one: the boot
+// hook would refuse every restart while that run sat in dead air.
 test('findResumableAutoDetailed: a failed newer run does not shadow an in-flight one', async () => {
     await withTmpTaskDir(async dir => {
         await writeTaskFile(dir, fm('TASK_AUTO_0002', 'in_progress'), '\n## tasks\n')
