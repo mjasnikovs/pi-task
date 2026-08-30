@@ -439,11 +439,13 @@ describe('runFinalGateAutofix — write-guard stack', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL at the fix seam. The A/B
- * replays this against a real clone, but it
- * ABSTAINS without a Postgres, so the module contract is pinned here with fakes:
- * attribution, the trail line's position relative to the guards, the downgrade,
- * and every path where the channel must stay silent.
+ * IGNORED-PATH CHANNEL at the fix seam.
+ *
+ * A gitignored file a fix pass writes is invisible to `discard` — which reverts
+ * tracked edits only — so nothing but the trail records that it happened. The
+ * whole contract is pinned here with fakes: attribution, the trail line's
+ * position relative to the guards, the downgrade, and every path where the
+ * channel must stay SILENT.
  */
 describe('runFinalGateAutofix — ignored-path channel', () => {
     /** Two snapshots in sequence: the second call models what the child wrote. */
@@ -599,8 +601,10 @@ describe('runFinalGateAutofix — ignored-path channel', () => {
 
     test('with no channel wired the result carries the outcome and nothing else', async () => {
         const r = await runFinalGateAutofix(base({}))
-        // The gate outcome rides whole. Four flattened `gate*`
-        // mirrors, and the flattening is what dropped `openDebts`.
+        // The gate outcome rides WHOLE, as a single `gate` field. Copying a
+        // hand-picked few of its properties instead silently drops whatever the
+        // copy forgot — and the pairing between `failures` and `observedFailures`
+        // only holds inside the outcome anyway (see FinalFixResult.gate).
         expect(r).toEqual({
             ok: true,
             reason: 'statics + `bun run seed` passed',
