@@ -62,8 +62,11 @@ describe('loadOrCreateVapidKeys', () => {
 })
 
 describe('subscription store', () => {
-    // addSubscription/clearSubscriptions now mirror to disk under data-home;
-    // point that at a temp dir so the suite never touches the real store.
+    // addSubscription and clearSubscriptions MIRROR TO DISK, and
+    // `subscriptionsStorePath` resolves under `XDG_DATA_HOME` or, with that
+    // unset, `~/.local/share/pi-task/subscriptions.json`. There is no other
+    // override, so without this temp dir the suite would write — and
+    // clearSubscriptions would erase — the real user store.
     let dir: string
     let prevXdg: string | undefined
     beforeEach(() => {
@@ -155,7 +158,9 @@ describe('logPush', () => {
         const body = readFileSync(pushLogPath(), 'utf8')
         expect(body).toContain('subscribe foo')
         expect(body).toContain('push bar')
-        // ISO-8601 timestamp prefix on each line
+        // `logPush` writes `${new Date().toISOString()} ${line}\n`, so every line
+        // opens with an ISO-8601 timestamp. The regex is unanchored per line, so
+        // what this pins is the FIRST one.
         expect(body).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     })
 })
