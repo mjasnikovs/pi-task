@@ -1,60 +1,52 @@
 /**
- * Deterministic detector for the F-2 shape: a pi-worker-docs answer that RESTATES a type
- * signature or declaration for a USAGE question, without ever saying what the API DOES.
+ * Deterministic detector for a pi-worker-docs answer that RESTATES a type signature
+ * or declaration for a USAGE question, without ever saying what the API DOES.
  *
- * THE FATAL CASE, from a (research-cache.json, verbatim):
+ * The shape, in one example. Asked "hc factory function signature base url parameter
+ * types", a docs child answers that `hc` "accepts a generic type `T` extending
+ * `Hono`… and takes two parameters: `baseUrl` of type `Prefix`". Every clause is
+ * type-level: it names the parameter's TYPE, and `Prefix` is itself an opaque type
+ * variable, while saying nothing about what `baseUrl` MEANS — is it an origin, or a
+ * mount prefix? Escalation to search/fetch never fires, because the answer looks
+ * complete: it named the very parameter that was asked about. The caller then fills
+ * the semantic gap from memory, and a wrong guess about that one word can kill every
+ * request the client makes.
  *
- *   query : "hc factory function signature base url parameter types exported from hono/client"
- *   answer: "The `hc` factory function exported from `hono/client` accepts a generic type
- *            `T` extending `Hono`, an optional string prefix type `Prefix` (defaulting to
- *            `string`), and takes two parameters: `baseUrl` of type `Prefix` and an optional
- *            `options` of type `ClientRequestOptions`. It returns a
- *            `UnionToIntersection<Client<T, Prefix>>`."
+ * The lever: when a docs answer for a usage question is ONLY a signature restatement
+ * with no behavioural statement, treat it as UNANSWERED so the caller escalates
+ * (follow the `@see` pointer, fetch the spec-cited URL) instead of accepting a type
+ * as the answer.
  *
- * Every clause is type-level. "`baseUrl` of type `Prefix`" names the parameter's TYPE — and
- * `Prefix` is itself an opaque type variable — while saying nothing about what `baseUrl`
- * MEANS (is it an origin, or a mount prefix?). Escalation to search/fetch never fired
- * because the answer looked complete: it named the very parameter asked about. worker:context
- * then filled the semantic gap from memory and shipped `hc<AppType>('/api')`, so every request
- * went to `/api/api/...` ⇒ 404 ⇒ the product's entire API surface was dead (F-2 → F-1).
- *
- * The lever (PROMPT 2 DO item 1): when a docs answer for a usage question is ONLY a
- * signature/declaration restatement with no behavioural statement, treat it as UNANSWERED so
- * the caller escalates (follow the `@see` pointer / fetch the spec-cited URL) instead of
- * accepting a type as the answer.
- *
- * ── PRECISION/RECALL TRADEOFF (chosen deliberately; documented per the task) ────────────────
- * A FALSE POSITIVE here (flagging a real answer as type-only) forces a needless escalation:
- * wall-clock cost against PROMPT 2 invariant 1, which caps added child spawns. A false
- * NEGATIVE (missing a type-only answer) merely leaves the pre-existing bug unfixed for that
- * one borderline case. So this detector is tuned for HIGH PRECISION on real answers, accepting
- * low recall — "better to miss a borderline type-only answer than to flag a real one." Three
- * independent gates must ALL hold before an answer is called type-only; any one failing clears
- * it. Calibrated against the corpus: of the 149 valid (non-"unclear") pi-worker-docs
- * answers, this rule flags EXACTLY ONE — the recorded `hc` case — and clears the other 148,
- * including every legitimate signature answer to an explicit "give me the type/signature"
- * question (bun.password.hash, toBuffer, BuildOutput, …). See type-only-answer.test.ts.
+ * ── PRECISION OVER RECALL, deliberately ─────────────────────────────────────────
+ * A FALSE POSITIVE (flagging a real answer as type-only) forces a needless
+ * escalation and costs a child spawn. A false NEGATIVE merely leaves one borderline
+ * answer un-escalated. So three independent gates must ALL hold before an answer is
+ * called type-only, and any one failing clears it. That is what keeps a legitimate
+ * signature answer to an explicit "give me the type" question out.
  *
  * THE THREE GATES (all required):
- *   1. USAGE QUESTION. The question must seek usage/semantics — "how", "use", "work", "chain",
- *      "example", "call", "rpc", "mean", or it names a usage concept whose meaning is being
- *      sought ("base url"). A question that asks only for a TYPE / SIGNATURE / DEFINITION /
- *      FIELDS is legitimately answered by a signature, so it is NOT gated in. (The recorded hc
- *      query is signature-shaped but names "base url", the concept whose meaning was needed.)
- *   2. NO BEHAVIOURAL CONTENT IN PROSE. The answer must contain no statement of what the API
- *      DOES: no usage verb ("use/call/pass/import"), no runtime-effect verb ("executes/
- *      prepends/enables/wraps"), no concrete usage example, no semantic meaning ("means/
- *      represents/so pass"), no concrete default VALUE or value RANGE ("default of 80", "from
- *      1 to 100"). Any one clears. This scan runs over `proseOf(answer)`, NOT the raw answer:
- *      a verb that is really a method name inside a declaration ("methods route(url, handler)
- *      and use(...handlers)") is an identifier, not behaviour, and must not clear the answer.
- *   3. SIGNATURE RESTATEMENT. The answer must actually be a declaration/signature restatement —
- *      "of type", "takes N parameters", "accepts", "returns a…", "extends", "interface",
- *      "declare const/function". Without this it is not type-only, it is just terse prose.
+ *   1. USAGE QUESTION. The question must seek usage/semantics — "how", "use",
+ *      "work", "chain", "example", "call", "rpc", "mean" — or name a usage concept
+ *      whose meaning is being sought ("base url"). A question asking only for a
+ *      TYPE / SIGNATURE / DEFINITION is legitimately answered by a signature, so it
+ *      is NOT gated in. (The `hc` query above is signature-shaped but names "base
+ *      url", the concept whose meaning was needed.)
+ *   2. NO BEHAVIOURAL CONTENT IN PROSE. The answer must contain no statement of what
+ *      the API DOES: no usage verb ("use/call/pass/import"), no runtime-effect verb
+ *      ("executes/prepends/enables/wraps"), no concrete example, no semantic meaning
+ *      ("means/represents/so pass"), no concrete default VALUE or range ("default of
+ *      80", "from 1 to 100"). Any one clears. This scan runs over `proseOf(answer)`,
+ *      NOT the raw answer: a verb that is really a method name inside a declaration
+ *      ("methods route(url, handler) and use(...handlers)") is an identifier, not
+ *      behaviour, and must not clear the answer.
+ *   3. SIGNATURE RESTATEMENT. The answer must actually be a declaration restatement —
+ *      "of type", "takes N parameters", "accepts", "returns a…", "extends",
+ *      "interface", "declare const/function". Without this it is not type-only, it
+ *      is just terse prose.
  *
- * An explicit "unclear from this package/page" is NOT type-only — it is the HONEST non-answer,
- * already handled by the escalation path (PROMPT 2 DO item 2 escalates BOTH). It is cleared
- * here with a distinct reason so the caller can route it through the existing unclear channel.
+ * An explicit "unclear from this package/page" is NOT type-only — it is the HONEST
+ * non-answer, and it is cleared here with a distinct reason so the caller routes it
+ * through the existing unclear channel instead.
  *
  * Pure and side-effect free; unit-tested in type-only-answer.test.ts against real text.
  */
@@ -194,7 +186,7 @@ function firstMatch(text: string, patterns: RegExp[]): string | null {
  * declaration. Without this, a bare type-only answer like
  *   "It has methods route(url, handler) and use(...handlers)."
  * is wrongly cleared, because `use(...handlers)` matches /\buse\b/ and `handler` matches
- * /handle/ — the F-3(a) router-fixture shape. So before scanning for behaviour we remove:
+ * /handle/. So before scanning for behaviour we remove:
  *   - `name(args)` call fragments, whose args are identifiers, not prose (this is what
  *     carries the method-name verbs);
  *   - `declare const|function|module|class|namespace …` declaration lines.
