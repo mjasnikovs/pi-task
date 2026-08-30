@@ -78,9 +78,9 @@ describe('makeGit', () => {
     })
 
     test('env entries MERGE over process.env rather than replacing it', async () => {
-        // A sentinel we own, rather than PATH: on Windows `process.env` is
-        // case-insensitive, so it answers to `PATH` while spreading it yields a
-        // key cased `Path`. Asserting on PATH would test that quirk, not the merge.
+        // A sentinel we own, rather than PATH. The key an inherited variable ends up
+        // under after a spread is a property of the platform's environment object,
+        // not of this merge — asserting on PATH would test that instead.
         const sentinel = 'PI_TASK_GIT_RUNNER_MERGE_PROBE'
         process.env[sentinel] = 'inherited'
         try {
