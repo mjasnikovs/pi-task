@@ -1,16 +1,16 @@
 /**
- * root-cause-repair tests — the fixture A/B (PROMPT item 5).
+ * root-cause-repair tests. The FAIL reasons below are VERBATIM accept-debt ledger
+ * text, not paraphrases, because the extraction reads real model prose.
  *
- * The FAIL reasons below are VERBATIM from a `.pi-tasks/accept-debt.md`.
- * one task and one task both ended in an enforce-revert over the SAME cause —
- * a task's `test/teardown.ts` TRUNCATE bug — and nothing ever scheduled a fix,
- * so it survived ~24h. The contract this file pins:
+ * Two of them blame the SAME file — a teardown whose TRUNCATE statements
+ * parameterise table names — while each also names its own test file in passing.
+ * The contract pinned here:
  *
- *   - both FAILs resolve to `test/teardown.ts` (not to the test file each names in
- *     passing, and not to the paths the spec boilerplate quotes),
+ *   - both resolve to that teardown, not to the test file each names first and not
+ *     to the paths a spec quote lists,
  *   - the two together yield EXACTLY ONE repair task, correctly scoped,
- *   - the environment-blamed FAIL (one task, "no PostgreSQL … in this
- *     environment") and the this-task-touched-it FAIL yield none.
+ *   - a FAIL blaming the environment, and one where THIS task touched the file,
+ *     yield none.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -65,19 +65,21 @@ const TASK_0010_FAIL =
     + 'existing files on disk (`src/server/db.ts`, `src/server/seed.ts`, `package.json`, '
     + '`tsconfig.json`, `eslint.config.js`). Do not'
 
-/** a provenance: one task created the teardown; everything else is older. */
-const RUN14_PROVENANCE: Record<string, string> = {
+/** Who introduced each file. The teardown belongs to a task that is neither of the
+ *  two failing ones, which is what makes it a CROSS-task repair. */
+const PROVENANCE: Record<string, string> = {
     'test/teardown.ts': 'TASK_0007',
     'test/invite.test.ts': 'TASK_0013',
     'test/photos.test.ts': 'TASK_0019',
     'src/server/db.ts': 'TASK_0002',
     'src/server/seed.ts': 'TASK_0002'
 }
-const run14IntroducedBy = (rel: string): string | null => RUN14_PROVENANCE[rel] ?? null
+const introducedBy = (rel: string): string | null => PROVENANCE[rel] ?? null
 
 describe('accusation extraction', () => {
     test('the blamed file is the one NEAREST the blame cue, not the first path named', () => {
-        // one task names photos.test.ts BEFORE teardown.ts; only teardown.ts is accused.
+        // TASK_0019's text names photos.test.ts BEFORE teardown.ts, and only the
+        // teardown is accused.
         expect(findAccusedFile(TASK_0019_FAIL)?.file).toBe('test/teardown.ts')
         expect(findAccusedFile(TASK_0013_FAIL)?.file).toBe('test/teardown.ts')
     })
@@ -113,7 +115,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
             failReason: TASK_0013_FAIL,
             currentTaskId: 'TASK_0013',
             touched: ['test/invite.test.ts', 'src/server/routes/invite.ts'],
-            introducedBy: run14IntroducedBy
+            introducedBy: introducedBy
         })
         expect(c?.file).toBe('test/teardown.ts')
         expect(c?.owner).toBe('TASK_0007')
@@ -127,7 +129,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
             failReason: TASK_0019_FAIL,
             currentTaskId: 'TASK_0019',
             touched: ['test/photos.test.ts', 'src/server/routes/photos.ts'],
-            introducedBy: run14IntroducedBy
+            introducedBy: introducedBy
         })
         expect(c?.file).toBe('test/teardown.ts')
         expect(c?.owner).toBe('TASK_0007')
@@ -139,7 +141,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
                 failReason: TASK_0006_FAIL,
                 currentTaskId: 'TASK_0006',
                 touched: [],
-                introducedBy: run14IntroducedBy
+                introducedBy: introducedBy
             })
         ).toBeNull()
     })
@@ -151,7 +153,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
                 currentTaskId: 'TASK_0013',
                 // This time the task itself edited the teardown.
                 touched: ['test/teardown.ts'],
-                introducedBy: run14IntroducedBy
+                introducedBy: introducedBy
             })
         ).toBeNull()
     })
@@ -162,7 +164,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
                 failReason: TASK_0013_FAIL,
                 currentTaskId: 'TASK_0007',
                 touched: [],
-                introducedBy: run14IntroducedBy
+                introducedBy: introducedBy
             })
         ).toBeNull()
     })
@@ -184,7 +186,7 @@ describe('findRepairCandidate — run 14 fixture', () => {
                 failReason: TASK_0013_FAIL,
                 currentTaskId: 'TASK_0013',
                 touched: null,
-                introducedBy: run14IntroducedBy
+                introducedBy: introducedBy
             })
         ).toBeNull()
     })
@@ -214,7 +216,7 @@ describe('A/B: run 14s two teardown debts produce exactly ONE scoped repair task
                 failReason,
                 currentTaskId: taskId,
                 touched: [...touched],
-                introducedBy: run14IntroducedBy
+                introducedBy: introducedBy
             })
             if (c) candidates.push(c)
         }
