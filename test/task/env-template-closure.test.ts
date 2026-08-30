@@ -1,7 +1,11 @@
 /**
- * env-template-closure tests — the six mechanical rules that decide REQUIRED, each
- * pinned by the real read that demanded it during STEP 0 (see
- * the base-rate measurement for the corpus numbers).
+ * env-template-closure tests — the six mechanical rules that decide whether an
+ * `process.env` read makes a variable REQUIRED.
+ *
+ * Each case is a real reading idiom, not a minimal one, because the rules are
+ * about shape: a read wrapped in a call, behind an optional chain, on the right
+ * of a `??`, inside a ternary, split over a continuation line, or guarded by an
+ * `if`. Several are quoted from this repo and named where they live.
  */
 import {describe, expect, test} from 'bun:test'
 import {spawnSync} from 'node:child_process'
@@ -65,11 +69,12 @@ describe('the step-aside rules', () => {
     test('rule 1 — a default, in every shape STEP 0 met', () => {
         expect(asideOf("const u = process.env.APP_URL || 'http://x'", 'APP_URL')).toBe('default')
         expect(asideOf("const u = process.env.APP_URL ?? 'http://x'", 'APP_URL')).toBe('default')
-        // wrapped in a call — `Number(process.env.X) || 32` (another project)
+        // wrapped in a call — `Number(process.env.X) || 32`
         expect(asideOf('const n = Number(process.env.RAG_BATCH) || 32', 'RAG_BATCH')).toBe(
             'default'
         )
-        // behind an accessor chain — `process.env.X?.trim() || '…'` (push.ts)
+        // behind an accessor chain — the `process.env.X?.trim() || '…'` shape
+        // remote/push.ts uses for its log path and subject
         expect(asideOf("const p = process.env.PUSH_LOG?.trim() || '/tmp/x'", 'PUSH_LOG')).toBe(
             'default'
         )
@@ -80,7 +85,7 @@ describe('the step-aside rules', () => {
                 'BRAVE_API_KEY'
             )
         ).toBe('default')
-        // a ternary names both outcomes (another project `npm_execpath`)
+        // a ternary names both outcomes, so the else-branch IS the default
         expect(asideOf("const c = process.env.PY ? [process.env.PY] : ['python3']", 'PY')).toBe(
             'default'
         )
@@ -106,8 +111,8 @@ describe('the step-aside rules', () => {
             'assigned'
         )
         expect(asideOf('delete process.env.GOFER_GDFORMAT', 'GOFER_GDFORMAT')).toBe('assigned')
-        // the test save/restore idiom: the file writes it, so its reads are not
-        // requirements (push.test.ts)
+        // the test save/restore idiom. The file WRITES the variable, so its own
+        // reads cannot be requirements — they read back what the test just set.
         const saveRestore = [
             'let prev',
             'beforeEach(() => { prev = process.env.PUSH_SUBJECT })',
@@ -133,7 +138,7 @@ describe('the step-aside rules', () => {
         expect(asideOf(probe, 'PI_BIN')).toBe('probe')
         // negated guard that only RETURNS ⇒ an optional flag (push.ts)
         expect(asideOf('if (!process.env.PUSH_DEBUG) return', 'PUSH_DEBUG')).toBe('probe')
-        // negated guard that THROWS ⇒ required (another project's wdio journey)
+        // negated guard that THROWS ⇒ required: nothing runs without it
         expect(
             asideOf(
                 "if (!process.env.GODOT_BIN) {\n    throw new Error('required')\n}",
