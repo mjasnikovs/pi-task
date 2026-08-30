@@ -12,8 +12,10 @@ import {
 import {isConnectionError} from '../../src/task/child-runner.js'
 import {WATCHDOG_CANCEL_MARKER} from '../../src/shared/command-watchdog.js'
 
-/** Fake clock + scheduler: the test drives time explicitly, so a 10-minute
- *  window is exercised without waiting 10 minutes. */
+/** Fake clock + scheduler: `advance` moves `now` and then calls the scheduled
+ *  callback by hand, so a ten-minute window is exercised in no time at all. The
+ *  watchdog reads the clock rather than counting ticks, which is what makes this
+ *  substitution faithful. */
 function harness(timeoutMs: number) {
     let now = 1_000
     const fires: number[] = []
@@ -51,8 +53,9 @@ describe('StreamWatchdog', () => {
         expect(h.fires).toEqual([601_000])
     })
 
-    // The core distinction the audit demanded: a local model dribbling one
-    // token every 30s is HEALTHY. Only total silence is a hang.
+    // The core distinction: a local model dribbling one token every 30s is
+    // HEALTHY. Only TOTAL silence is a hang, so every note() resets the clock
+    // and no amount of slowness can accumulate into a fire.
     test('a slow but steady stream never fires', () => {
         const h = harness(600_000)
         h.wd.start()
@@ -104,8 +107,10 @@ describe('StreamWatchdog', () => {
         expect(h.fires).toEqual([])
     })
 
-    // pi runs a tool BATCH in parallel: every start is emitted up front and each
-    // call ends on its own. The clock must stay paused until the LAST one settles.
+    // pi's agent defaults `toolExecution` to "parallel" (pi-agent-core
+    // agent.js), so a tool BATCH really is in flight together: every start is
+    // emitted up front and each call ends on its own. The clock must therefore
+    // stay paused until the LAST one settles, which is what the keys are for.
     test('a keyed batch stays suspended until the last tool ends', () => {
         const h = harness(600_000)
         h.wd.start()
@@ -154,13 +159,14 @@ describe('StreamWatchdog', () => {
 })
 
 describe('realStreamTimerDeps', () => {
-    // The poll must stay REF'd. Under Bun on windows an unref'd timer never fires
-    // once nothing ref'd is pending — and a child whose stream has gone silent is
-    // exactly that state, so an unref'd poll disabled the guard in the one case it
-    // exists for and hung every stream-stall test on windows for nine days
-    // (measured on a windows-latest runner: unref'd never fired in 20s, ref'd
-    // fired at 101ms; linux fires either way, which is why only CI caught it).
-    // Asserted on the handle rather than by waiting, so this fails on ANY platform.
+    // The poll must stay REF'd. An unref'd timer does not hold the event loop
+    // open, so once nothing else is pending the process exits and the callback
+    // never runs — confirmed by scheduling one and watching it not fire. A child
+    // whose stream has gone silent is EXACTLY that state, so an unref'd poll
+    // would disable the guard in the one case it exists for.
+    //
+    // Asserted on the handle's hasRef() rather than by waiting, so it fails
+    // immediately and on any platform instead of hanging the suite.
     test('schedules a REF’d poll — an unref’d one is dead on windows', () => {
         const h = realStreamTimerDeps.schedule(() => {}, 60_000) as {hasRef?: () => boolean}
         try {
@@ -187,9 +193,12 @@ describe('messages', () => {
         expect(isConnectionError(streamStallCause(600_000))).toBe(true)
     })
 
-    // Same abort channel as the command watchdog: steerUntilDone recognises a
-    // watchdog recovery by this marker, and a missing marker wedges an
-    // unattended run on the abort/steer race (b543d15).
+    // Same abort channel as the command watchdog. The reminder goes out over
+    // pi.sendUserMessage (task/stream-watchdog.ts), and
+    // watchdogReminderDelivered (task/implementation-turn.ts) scans the user
+    // messages after the last assistant one for this marker. Drop the marker and
+    // that scan finds nothing, so an unattended run cannot tell a watchdog
+    // recovery from a stall it should give up on.
     test('the main-session reminder carries the shared watchdog marker', () => {
         const msg = streamStallReminder(600_000, WATCHDOG_CANCEL_MARKER)
         expect(msg).toContain(WATCHDOG_CANCEL_MARKER)
