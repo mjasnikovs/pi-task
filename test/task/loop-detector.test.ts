@@ -20,17 +20,14 @@ describe('stableStringify', () => {
 })
 
 /**
- * The shape below is the reason StallDetector had to be wired into
- * runWorker: a rotation whose CYCLE LENGTH equals the detector's WINDOW is
- * invisible to both rules, because every key occurs exactly once per window and
- * neither count can ever reach the threshold.
+ * The blind spot this detector cannot close, asserted so nobody tries to close it
+ * by widening the window. A rotation whose CYCLE LENGTH equals the WINDOW is
+ * invisible to both rules: every key occurs exactly once per window, so neither
+ * the exact count nor the revisit count can ever reach the threshold. Widening the
+ * window only moves the cycle length that defeats it.
  *
- * Observed: worker:tooling made 550 tool calls over 20 distinct files, ~36 reads
- * each, read -> answer -> read -> answer, for 20 minutes. Neither the exact rule
- * nor the path rule fired. It died on the absolute progress ceiling having done
- * 25s of useful work. This test is the blind spot, asserted, so nobody "fixes"
- * it by widening the window — a wider window just moves the cycle that defeats
- * it. See stall-detector.test.ts for the guard that does catch it.
+ * `runWorker` therefore also constructs a StallDetector, and
+ * test/task/stall-detector.test.ts covers the rule that does catch this shape.
  */
 describe('LoopDetector — the window-length rotation it cannot see', () => {
     const ROTATION = [
@@ -71,8 +68,8 @@ describe('LoopDetector — the window-length rotation it cannot see', () => {
     })
 
     test('shorten the cycle below the window and the exact rule does fire', () => {
-        // The same reader, 19 files instead of 20. Proof the miss above is the
-        // window arithmetic and not something about the paths.
+        // The same reader over 4 of the same paths. Proof the miss above is the
+        // window arithmetic and not something about the paths themselves.
         const d = new LoopDetector(20, 5, 5)
         const short = ROTATION.slice(0, 4)
         let firstHit = -1
@@ -189,10 +186,9 @@ describe('LoopDetector path-aware detection', () => {
         // The exact-match key never matches (offset/limit change every call), so
         // only path detection catches this — the one task failure signature.
         //
-        // Counted on the RANGE: a bigger limit from the same offset does reach
-        // lines the child had not seen, so 80 and 200 are progress and only the
-        // reads that end short of the furthest line already covered are revisits.
-        // Five of those are needed to trip.
+        // countRevisits compares the RANGE END against the furthest line already
+        // covered, so limits 80 and 200 are progress and only the reads ending
+        // short of that high-water mark count. pathThreshold of them trips.
         const d = new LoopDetector(20, 5)
         const reads = [
             {offset: 0, limit: 50},
@@ -212,10 +208,9 @@ describe('LoopDetector path-aware detection', () => {
     })
 
     test('paging that re-asks from the same offset with a bigger limit is progress', () => {
-        // Measured on a real decompose run: {limit:80}, then {offset:80,
-        // limit:400}, then {offset:80, limit:300}. The first two reach 320 lines
-        // the child had never seen. Scoring them as revisits (offset alone did)
-        // killed a child that was paging correctly through a 743-line file.
+        // Keying on the offset alone would score the second and third reads below
+        // as revisits of the same offset, even though the second reaches lines the
+        // child had never seen — so a child paging correctly would be killed.
         const d = new LoopDetector(20, 5)
         const p = '/DESIGN/marketplace.html'
         expect(d.record({name: 'read', args: {file_path: p, limit: 80}})).toBeNull()
@@ -287,13 +282,12 @@ describe('LoopDetector path-aware detection', () => {
         expect(hit?.count).toBe(3)
     })
 
-    // Why the /task-auto enforcement child runs UNGUARDED (loop: false). Real
-    // loop-kill captured on one task (enforce-debug.log): the fix pass
-    // read/edited/grepped queries.ts ~23× — its actual job — and the default
-    // path-revisit detector killed it at 5. This documents that the default guard
-    // is wrong for a single-file fix pass; the enforce path disables it entirely
-    // (covered in pi-worker-core.test.ts: "loop: false disables the detector").
-    test('default guard kills a legit single-file fix pass (why enforce runs unguarded)', () => {
+    // The default path-revisit rule is wrong for a fix pass, whose job IS to
+    // read/edit/grep one file many times. The `gate` profile every gate child runs
+    // on therefore sets `pathThreshold` to Infinity, leaving only the exact-match
+    // rule. `detector: false`, which turns the whole detector off, is covered in
+    // pi-worker-core.test.ts: "loop: false disables the detector".
+    test('default guard kills a legit single-file fix pass (why the gate raises pathThreshold)', () => {
         const QUERIES = '/workspace/src/server/db/queries.ts'
         const enforceFixSequence: ToolCall[] = [
             'read',
