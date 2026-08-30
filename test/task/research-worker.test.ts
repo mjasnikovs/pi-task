@@ -1,15 +1,9 @@
 /**
- * The three research retry gates, driven through the interface instead of past it.
+ * The three research retry gates, driven through the interface rather than past it.
  *
- * Before this module existed, reaching them meant a temp dir, a real task file,
- * and a fake spawn routed on prose lifted out of `prompts.ts` — plus, to tell
- * attempt 1 from attempt 2, a second sentence lifted out of a module-private
- * preamble constant. In a codebase whose workflow is re-wording prompts and
- * measuring what changed, that means a reworded preamble silently stops these
- * tests from testing the gates.
- *
- * Here a test scripts `runWorker` by ATTEMPT and states the `RunWorkerResult`
- * fields each gate reads. Nothing below matches a sentence.
+ * A test here scripts `runWorker` by ATTEMPT NUMBER and states the
+ * `RunWorkerResult` fields each gate reads. Nothing below matches on prompt prose,
+ * so re-wording a preamble cannot quietly stop these from testing the gates.
  */
 import {describe, expect, test} from 'bun:test'
 import {
@@ -81,8 +75,8 @@ function harness(attempts: RunWorkerResult[], opts: {cached?: string} = {}): Har
                 persisted.push({heading, text})
                 return Promise.resolve()
             },
-            // The shipped arm: no lever env var set. Was three hand-set nulls,
-            // which quietly tested a configuration production never runs.
+            // No lever env var set — the shipped configuration. Hand-setting the
+            // resolved lever values instead would test one production never runs.
             leverEnv: () => undefined
         }
     }
@@ -119,8 +113,8 @@ describe('the EMPTY-SECTION gate', () => {
     })
 
     test('two empty answers are recorded as an empty section, not a failure', async () => {
-        // issue #10: on a task that touches nothing, silence is the CORRECT
-        // answer and would kill the whole run.
+        // On a task with nothing for this worker to survey, silence is the CORRECT
+        // answer. Treating it as a failure would kill the whole run.
         const h = harness([result({text: ''}), result({text: ''})])
 
         const out = await runResearchWorker(SPEC, h.run)
@@ -262,10 +256,10 @@ describe('the outcome', () => {
 /**
  * THE CALL SITE NAMES THE PROFILE.
  *
- * `workers/worker-profiles.test.ts` proves the `research` profile RESOLVES to
- * what the three lever spreads here produce. This proves the driver
- * still asks for it, and still hands it the only two facts it owns: which worker
- * is docs-capable, and the phase's FROZEN lever reader.
+ * `workers/worker-profiles.test.ts` asserts what the `research` profile RESOLVES
+ * to. These assert the other end: that the driver still ASKS for that profile, and
+ * still hands it the only two facts it owns — which worker is docs-capable, and the
+ * phase's frozen lever reader.
  */
 describe('research worker guard policy', () => {
     test('asks for the `research` profile and passes the phase lever reader', async () => {
