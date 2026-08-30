@@ -150,8 +150,9 @@ describe('runRepoHealthCheck', () => {
     })
 
     test('exit 127 (command not found inside the script chain) → skipped, not failed', async () => {
-        // Seen live: `bun run lint` exits 127 before node_modules exists — the tool
-        // is missing, not the code faulty. Same environment gap as ENOENT.
+        // A 127 inside the chain means the tool the script invokes is not on PATH —
+        // `bun run lint` before an install, say. The tool is missing, not the code
+        // faulty, so it is the same environment gap as ENOENT.
         const dir = tmpRepo({'package.json': JSON.stringify({scripts: {lint: 'exit 127'}})})
         expect((await runRepoHealthCheck(dir)).ok).toBe(true)
     })
@@ -168,9 +169,9 @@ describe('runRepoHealthCheck', () => {
 })
 
 describe('runRepoHealthCheck — one runner, and it is async', () => {
-    // The gate runs this immediately after the implementation turn, so it must not
-    // block the event loop — the sync runner delivered 0 of 686 expected 100ms timer
-    // ticks during a 69s aiz-client lint, which is why the screen froze.
+    // The gate runs this immediately after the implementation turn, while a loader
+    // is ticking. A synchronous spawn would hold the event loop for the whole lint,
+    // so the interval below would not fire and the TUI would sit frozen.
     test('does not block the event loop while the command runs', async () => {
         const dir = tmpRepo({
             'package.json': JSON.stringify({scripts: {lint: 'sleep 0.6'}})
@@ -187,9 +188,9 @@ describe('runRepoHealthCheck — one runner, and it is async', () => {
     })
 
     test('there is no synchronous runner left to reach for', async () => {
-        // The sync twin is what `final-gate.ts:672` was calling, against this
-        // module's own doc comment telling gate callers not to. Deleting it is what
-        // makes that unrepeatable — a second runner is a second ladder.
+        // There is one runner, and asking for it returns a Promise. A synchronous
+        // twin would be a second copy of the env-gap ladder, and a gate caller could
+        // reach for it by accident.
         expect(runRepoHealthCheck(tmpRepo({}))).toBeInstanceOf(Promise)
     })
 
@@ -202,8 +203,8 @@ describe('runRepoHealthCheck — one runner, and it is async', () => {
         expect(seen).toEqual(['bun run lint', 'bun run typecheck'])
     })
 
-    // Verdict PARITY with the sync runner: the async version exists to stop blocking
-    // the loop, and any behaviour difference would be a silent gate change.
+    // One case per rung of the ladder the module's own doc lists, so a change to
+    // any rung shows up as a verdict change rather than as a timing change.
     const parityCases: Array<[string, Record<string, string>]> = [
         ['no tooling', {}],
         ['pass', {lint: 'true'}],
@@ -232,17 +233,15 @@ describe('runRepoHealthCheck — one runner, and it is async', () => {
 })
 
 /**
- * REGRESSION — the health ladder is NARROWER than the gate's command ladder, and
- * adopting `classifyCommandRun` silently widened it.
+ * The health ladder is deliberately NARROWER than the gate's command ladder. It
+ * skips on exactly three things: the runner never spawned, a null status, and a 127
+ * inside the chain.
  *
- * `classifyHealthRun` skipped on exactly three things: the runner never spawned, a
- * null status, and a 127 inside the chain. `GAP_RULES` carries a fourth row,
- * `missing-runtime`, applied unconditionally — and its pattern matches ordinary
- * English (`browsers are not installed`, `wasn't installed`). A lint or typecheck
- * report that happens to contain that wording now SKIPS instead of failing, and the
- * gate is told the repo is healthy.
- *
- * The browser row exists for the gate's TEST commands. Repo-health only ever runs
+ * `GAP_RULES` carries a fourth row, `missing-runtime`, whose ENV_GAP_OUTPUT_RE
+ * matches ordinary English — `browsers are not installed`, `wasn't installed`.
+ * Adopting the wider ladder here would make a lint or typecheck report that happens
+ * to contain that wording SKIP instead of fail, and the gate would be told the repo
+ * is healthy. That row exists for the gate's TEST commands; repo-health runs only
  * lint and typecheck, which have no browsers to miss.
  */
 describe("the static ladder does not inherit the gate's browser row", () => {
