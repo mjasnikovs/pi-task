@@ -1,31 +1,22 @@
 /**
- * Deterministic synthesized-wiring scanner for a composed spec.
+ * Deterministic synthesized-wiring scanner for a composed spec, wired as the
+ * `synthesized-wiring` critique probe.
  *
- * F3: refine/compose invent a "uniform" wiring
- * table — one module → one mount prefix, `/api/<x>` → `<x>Routes` for every module —
- * though the design pins ENDPOINTS, not mounts, and one module's pinned endpoints do
- * NOT all sit under a single prefix (photos: `POST /api/listings/:id/photos` AND
- * `GET/DELETE /api/photos/:id`). Mounting that module at `/api/photos` double-prefixes
- * the upload; consumers follow the pinned paths, assembly follows the invented table,
- * the seam ships broken. See [[contract-registry-f3]] (#4, the verify-side + registry
- * lever) — this is its GENERATION-side complement.
- *
- * A/B-measured on the live 27B (F3 critique trap): the CROSS-SLICE CONTRACTS registry
- * is NECESSARY but the prompt and registry alone are a WEAK catcher — the
- * model's attention goes to the obvious VERIFY weakness and it rarely
- * does the path-composition reasoning even with the facts in front of it. The reliable
- * lever is the SAME probe+rule pattern as [[skip-escape-scanner-f2]] / [[verify-
- * substitution-ab]]: a deterministic finding that NAMES the exact synthesized mappings
- * and juxtaposes the verbatim pinned facts, forcing focused reconciliation.
+ * The failure it catches: a spec states a "uniform" wiring table — one module to one
+ * mount prefix, `/api/<x>` → `<x>Routes` — while the design pins ENDPOINTS, not
+ * mounts. When a module's pinned endpoints do NOT all sit under a single prefix
+ * (`POST /api/listings/:id/photos` AND `GET /api/photos/:id`), mounting it at
+ * `/api/photos` double-prefixes the upload. Consumers follow the pinned paths,
+ * assembly follows the invented table, and the seam ships broken.
  *
  * This scanner does NOT decide which mapping is wrong — that needs routing-composition
- * knowledge (a forbidden stack assumption). It surfaces every mapping that (a) is not a
- * verbatim substring of the design/registry (so it is INFERRED, not cited) AND (b) touches
- * a pinned cross-slice boundary (an operand appears in the registry) — i.e. it reshapes a
- * shared contract. The 4 coincidentally-correct mappings are surfaced too, but framed as
- * "reconcile each; keep the conforming ones" — the LLM decides, informed. Pure text/
- * substring analysis; no stack, framework, or routing assumptions. Empty registry (single
- * `/task`, or no shared boundary) ⇒ no-op.
+ * knowledge, which would be a stack assumption. It surfaces every mapping that (a) is
+ * not a verbatim substring of the design or registry, so it is INFERRED rather than
+ * cited, AND (b) touches a pinned cross-slice boundary, meaning an operand appears in
+ * the registry. Conforming mappings are surfaced too, framed as "reconcile each; keep
+ * the conforming ones" — the model decides, informed. Pure text and substring analysis;
+ * no stack, framework, or routing assumptions. An empty registry (a single `/task`, or
+ * a design pinning no shared boundary) is a no-op.
  */
 
 import * as fs from 'node:fs'
@@ -41,16 +32,18 @@ const MAPPING_LINE_RE = new RegExp(`^[ \\t]*[-*]?[ \\t]*(.+?)[ \\t]*${ARROW}[ \\
 const MIN_OPERAND_LENGTH = 4
 
 export interface WiringClaim {
-    /** The offending mapping line, verbatim (trimmed). */
+    /** The offending mapping line, trimmed and minus any leading list bullet.
+     *  Backticks are KEPT here — only `from`/`to` have them stripped. */
     line: string
-    /** Left operand (the mapped-from token, e.g. a mount prefix). */
+    /** Left operand (the mapped-from token, e.g. a mount prefix), backticks stripped. */
     from: string
-    /** Right operand (the mapped-to token, e.g. a module name). */
+    /** Right operand (the mapped-to token, e.g. a module name), backticks stripped. */
     to: string
 }
 
-/** Collapse whitespace + lowercase; drop markdown backticks so quoting formatting
- *  differences don't defeat the substring match. Mirrors contracts.ts's normalise. */
+/** Collapse whitespace + lowercase, and drop markdown backticks so a spec that
+ *  quotes `/api/photos` still matches a design that writes it bare. That backtick
+ *  strip is the one thing this does beyond contracts.ts's `normalise`. */
 function normalise(s: string): string {
     return s.replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
 }
@@ -81,9 +74,9 @@ export function findSynthesizedWiring(
         if (key.length === 0 || seen.has(key)) continue
         // Cited, not synthesized: the whole mapping appears verbatim in the source.
         if (groundHay.includes(key)) continue
-        // Only a mapping that touches a PINNED shared boundary is an F3 suspect — this
-        // is the crisp discriminator that keeps internal-flow prose ("input → output")
-        // out. An operand (long enough to be specific) must appear in the registry.
+        // Only a mapping that touches a PINNED shared boundary is a suspect. That is
+        // the discriminator keeping internal-flow prose ("input → output") out: an
+        // operand, long enough to be specific, must appear in the registry.
         const touchesBoundary = [from, to].some(op => {
             const n = normalise(op)
             return n.length >= MIN_OPERAND_LENGTH && regHay.includes(n)
@@ -124,24 +117,27 @@ export function wiringProbeText(findings: WiringClaim[], registry: string): stri
 }
 
 /**
- * Render findings as a critique-rewrite defect block (fed into the FOCUS list): the
- * rewrite must reconcile each mapping against the pinned facts and correct only the
- * one(s) that break. Mirrors skipEscapeDefectText's shape.
+ * The same text under the name the critique-rewrite defect path uses. One rendering
+ * serves both readers, so the probe the model sees and the defect the rewrite is
+ * handed can never drift apart.
  */
 export function wiringDefectText(findings: WiringClaim[], registry: string): string {
     return wiringProbeText(findings, registry)
 }
 
 // An @-file mention in a spec ("@DESIGN/foo.md"), minus trailing prose punctuation.
-// Mirrors phantom-imports' mention rules so grounding sees the same source docs.
+// Byte-identical to auto-orchestrator.ts's pair, so grounding resolves the same
+// mentions the planner already resolved. `@` must follow start-of-string or
+// whitespace, so "mail@DESIGN.md" is not a mention.
 const MENTION_RE = /(?:^|\s)@([^\s]+)/g
 const MENTION_TRAILING_PUNCT = /[.,;:!?)\]}>"']+$/
 
 /**
  * Concatenate the design/spec docs the given texts @-reference (best-effort, readable
  * files only) as extra grounding for findSynthesizedWiring — so a mapping the design
- * states verbatim is treated as CITED, not synthesized. Unreadable/absent mentions are
- * skipped; returns '' when nothing resolves.
+ * states verbatim is treated as CITED, not synthesized. Each path is read once across
+ * all texts; unreadable or absent mentions are skipped; returns '' when nothing
+ * resolves.
  */
 export function readReferencedDocs(cwd: string, ...texts: string[]): string {
     const seen = new Set<string>()
