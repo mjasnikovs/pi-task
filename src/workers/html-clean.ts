@@ -16,9 +16,9 @@ const turndown = new TurndownService({
     bulletListMarker: '-'
 })
 
-// linkedom's parseHTML returns a DOM whose types don't resolve under this
-// tsconfig, so member access lands on an unresolved type. Narrow to the handful
-// of fields we touch; the raw document still goes to Readability untouched.
+// A hand-written narrowing to the two fields this module reads off the parsed
+// document, so it does not depend on linkedom's exported DOM types. The raw
+// document still goes to Readability untouched. ddg-search.ts narrows the same way.
 interface ParsedDocument {
     title: string
     body: {innerHTML: string} | null
@@ -38,7 +38,8 @@ export function cleanHtml(html: string, baseUrl: string): CleanResult {
         }
     }
 
-    // Fallback: turndown the body
+    // Readability found no article — turndown the raw body instead. An empty body
+    // yields empty markdown, and the title falls back to the URL's hostname.
     const body = doc.body
     const bodyHtml = body ? body.innerHTML : ''
     const markdown = turndown.turndown(bodyHtml).trim()
@@ -52,17 +53,20 @@ export function cleanHtml(html: string, baseUrl: string): CleanResult {
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024 // 2 MB
 
-// Read at runtime so the User-Agent never drifts out of sync with releases.
+// Read at runtime — `readPkgVersion` re-reads package.json on every call — so the
+// User-Agent never drifts out of sync with releases and no build step bakes it in.
 const PKG_VERSION = readPkgVersion()
 const USER_AGENT = `pi-worker/${PKG_VERSION} (+https://npmjs.com/package/@mjasnikovs/pi-worker)`
 
 type ContentKind = 'html' | 'text' | 'reject'
 
-// Decide how to handle a response based on its content-type. HTML is run through
-// the readability/turndown pipeline; text-ish formats (markdown, plain text,
-// JSON, XML/feeds) are already clean and pass through verbatim; binary formats
-// (PDF, images, octet-stream, …) are rejected. A missing content-type is treated
-// as text — many plain-text endpoints (llms.txt, robots.txt) omit the header.
+// Decide how to handle a response based on its content-type, case-insensitively
+// and ignoring any `; charset=…` tail. HTML and XHTML run through the
+// readability/turndown pipeline; text-ish formats (any `text/*`, JSON and `+json`,
+// XML and `+xml`, javascript) are already clean and pass through verbatim; anything
+// else — PDF, images, octet-stream — is rejected as `not-html`. A missing
+// content-type is treated as text: many plain-text endpoints (llms.txt,
+// robots.txt) omit the header.
 function classifyContentType(contentType: string): ContentKind {
     const mime = contentType.split(';')[0].trim().toLowerCase()
     if (mime === '') return 'text'
@@ -76,14 +80,17 @@ function classifyContentType(contentType: string): ContentKind {
 
 // Extract the charset from a content-type header, if present and supported by
 // TextDecoder; otherwise fall back to UTF-8 so non-UTF-8 pages aren't mangled.
+// Quotes around the label are stripped, and an unsupported label decodes exactly
+// as UTF-8 would rather than throwing.
 function decoderFor(contentType: string): TextDecoder {
     const match = /charset=([^;]+)/i.exec(contentType)
     const charset = match?.[1]?.trim().replace(/^["']|["']$/g, '')
     if (charset) {
         try {
-            // The runtime accepts any charset label string; the type is narrowed
-            // to a known-encoding union by Bun/Node's lib (DOM's looser signature
-            // is no longer pulled in transitively). Cast to the actual param type.
+            // The runtime accepts any charset label string, but the type here is the
+            // narrow `Encoding` union — passing a plain `string` is TS2345,
+            // "not assignable to parameter of type 'Encoding | undefined'". Cast to
+            // the actual param type rather than widening the guard.
             return new TextDecoder(charset as ConstructorParameters<typeof TextDecoder>[0], {
                 fatal: false
             })
@@ -158,8 +165,9 @@ export async function fetchAndClean(
                 let bytesRead = 0
                 try {
                     while (true) {
-                        // response.body's stream type doesn't resolve here, so the chunk
-                        // surfaces as `any`; pin it to the Uint8Array the reader yields.
+                        // `reader.read()` resolves to `any` under this tsconfig — assigning
+                        // its `value` to a `number` raises no error — so the destructure is
+                        // pinned to the Uint8Array the reader actually yields.
                         const {value, done} = (await reader.read()) as {
                             value?: Uint8Array
                             done: boolean
@@ -168,8 +176,10 @@ export async function fetchAndClean(
                         if (value) {
                             bytesRead += value.byteLength
                             if (bytesRead > maxBytes) {
-                                // OUR abort, told apart from the user's and the clock's
-                                // by the seam — all three abort the same signal.
+                                // OUR abort. All three cancels fire the same signal, so the
+                                // seam is what tells them apart: `ctl.abort()` here,
+                                // `ctl.userAborted()` for the caller's, `ctl.timedOut()` for
+                                // the clock. Only the local `sizeExceeded` flag says it was us.
                                 sizeExceeded = true
                                 ctl.abort()
                                 break
