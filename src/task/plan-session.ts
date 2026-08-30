@@ -1,31 +1,29 @@
 /**
  * The /task-plan interaction loop.
  *
- * Sequential & adaptive, exactly like /task's grill (phases.ts `phaseGrill`) and
- * /task-auto's clarify (auto-orchestrator.ts `planAuto`): ask ONE question at a
- * time, feed every answer back into the next generation call so later questions
- * react to earlier ones, and stop when the model emits NONE. The duplicate
- * backstop (`isDuplicateQuestion` + `DUP_REPROMPT_HINT` + `MAX_DUP_STRIKES`), the
- * markdown handling, the A/B answer-letter mapping and the YOLO policy are the
- * SAME modules those two loops use — none of that is new here.
+ * Sequential and adaptive: ask ONE question at a time, feed the whole transcript
+ * back into the next generation call so later questions react to earlier answers,
+ * and stop when the model emits NONE. Generation, the question cap and the
+ * duplicate backstop live in question-source.ts; the answer cards and the A/B
+ * letter mapping in question-dialog.ts; markdown in inline-markdown.ts; the
+ * unattended policy in yolo.ts. /task's grill (phases.ts `phaseGrill`) and
+ * /task-auto's clarify (auto-orchestrator.ts `planAuto`) drive the same modules.
  *
- * What IS new is the control surface. In grill and clarify the user's only move is
- * to answer the question in front of them. Here three moves are available at every
- * single prompt, in that order of appearance:
+ * What this loop adds is the control surface. Grill and clarify let the user only
+ * answer the question in front of them. Here three moves are on every prompt, in
+ * this order of appearance:
  *
  *   ❓ ask the model a question   — the user asks, the model answers (PLAN_ASK)
- *   ✎ answer in your own words    — the free-text card askQuestionBox already
- *                                    appends to every boxed picker; it is not new,
- *                                    it is simply always present here, and it
- *                                    doubles as "state a decision" when the model
- *                                    has nothing to ask
+ *   ✎ answer in your own words    — the free-text card askQuestionBox appends to
+ *                                    every boxed picker. It doubles as "state a
+ *                                    decision" when the model has nothing to ask.
  *   ▶ proceed to execution        — stop planning, hand the decisions to /task
  *                                    (PLAN_PROCEED). Always the LAST card in the
  *                                    box — it ends the session, so it sits under
  *                                    every move that continues it, including the
  *                                    free-text card (see `manualPosition`).
  *
- * The loop is pure with respect to I/O: every side effect (child calls, dialogs,
+ * The loop performs no I/O of its own: every side effect (child calls, dialogs,
  * persistence) arrives through {@link PlanSessionDeps}, so the whole interaction
  * is unit-testable without a TUI or a model.
  */
@@ -43,8 +41,8 @@ export type {PendingQuestion} from './question-dialog.js'
 
 /**
  * Sentinel values the picker resolves to when the user takes a control action
- * instead of answering. Deliberately shaped like the existing `USER_CANCELLED`
- * sentinel (child-runner.ts): a value no model answer and no human ever types.
+ * instead of answering. Same shape as `USER_CANCELLED` (child-runner.ts): a
+ * value no model answer and no human ever types.
  */
 export const PLAN_ASK = '__plan_ask__'
 export const PLAN_PROCEED = '__plan_proceed__'
@@ -62,19 +60,20 @@ export const PLAN_NO_QUESTIONS =
 
 /**
  * Hard ceiling on model-generated questions for one plan. The loop is open-ended
- * (it stops when the model emits NONE); this only bounds a model that never
- * does. Matches /task-auto's MAX_CLARIFY_QUESTIONS, for the same reason.
+ * — it stops when the model emits NONE — so this only bounds a model that never
+ * does. Same value as /task-auto's MAX_CLARIFY_QUESTIONS.
  */
 export const MAX_PLAN_QUESTIONS = 8
 
 /**
  * Corrective re-prompt for a question reply that did not follow the format —
- * either nothing parseable at all, or a question with no `SUGGESTED:` line. Same
- * shape and same one-shot budget as GRILL_AUTO_FORMAT_HINT (prompts.ts), which
- * exists because the local model drops a required tag every so often and a
- * silent fallback is worse than one extra call: an unparsed reply reads as "no
- * questions left" and a missing SUGGESTED leaves the picker with nothing to
- * recommend.
+ * either nothing the parser could read, or a question with no `SUGGESTED:` line.
+ * Same shape and same one-shot budget as GRILL_AUTO_FORMAT_HINT (prompts.ts).
+ *
+ * Both failures are silent without it. `makeQuestionSource` answers `exhausted`
+ * for a reply it cannot parse, which this loop renders as "no further questions";
+ * and a question with no SUGGESTED reaches `buildOptionCards` with nothing to
+ * build a card from.
  */
 export const PLAN_FORMAT_HINT =
     '[SYSTEM NOTE: Your previous reply did NOT follow the required format. Output exactly '
@@ -84,17 +83,11 @@ export const PLAN_FORMAT_HINT =
     + 'If nothing is left to ask, output the single token NONE and nothing else. No preamble, '
     + 'no analysis, no other text.]'
 
-// Re-exported, NOT re-implemented. After the state machine moved to
-// question-source.ts these were byte-identical copies: production read THAT
-// module's, while plan-session.test.ts and four `scripts/live-*.ts` A/B harnesses
-// read these — so a fix to `pickQuestion`'s heuristic would land in one copy while
-// the harnesses kept measuring the other, and the measurement would silently stop
-// describing shipped behaviour. That is the drift class this pass removes.
 export {isNoneReply, pickQuestion} from './question-source.js'
 
 /**
  * Does the question offer the user a choice between two named alternatives?
- * Deliberately shallow — an "X or Y?" in the question's own clause.
+ * Deliberately shallow: an `or` anywhere before the first question mark.
  */
 export function looksLikeFork(question: string): boolean {
     return /\bor\b/i.test(question.split('?')[0] ?? '')
@@ -103,21 +96,16 @@ export function looksLikeFork(question: string): boolean {
 /**
  * Does the recommended default DEFER the decision instead of making one?
  *
- * The prompt asks for a "concrete, decisive default", and nothing enforced it.
- * Live (aiz-client TASK_PLAN_0001, 2026-08-05): the model asked "what specific
- * report should this new tab display?" and recommended
- * "clarify with the user what the report is meant to show before proceeding".
- * The user pressed enter, so it was recorded `(accepted recommendation)` and rode
- * into /task's handoff as an AUTHORITATIVE decision — an order not to proceed,
- * addressed to a run where no user exists. /task duly built a task whose
- * ACCEPTANCE was "a planning document with placeholder sections" and whose VERIFY
- * asserted that no source file had changed.
- *
  * A deferral is not an answer, and the one place it can never be one is here: the
  * user IS present during planning, so "ask the user" is a null move — that IS the
- * question. Detection is anchored to the START of the default, which keeps it off
- * legitimate product behaviour ("prompt the user to confirm deletion" decides
- * something; "ask the user which report" decides nothing).
+ * question. An accepted recommendation is a `decision` entry, so it rides into
+ * /task's handoff inside the block `buildHandoffPrompt` (plan-io.ts) labels
+ * authoritative — addressed to a run where no user exists.
+ *
+ * Every pattern is anchored to the START of the default, which keeps it off
+ * legitimate product behaviour: "prompt the user to confirm deletion" decides
+ * something and does not match; "ask the user which report" decides nothing and
+ * does.
  */
 export function isDeferralSuggestion(suggested: string): boolean {
     const s = suggested.trim().replace(/^["'`*_\s]+/, '')
@@ -137,9 +125,9 @@ export function isDeferralSuggestion(suggested: string): boolean {
 }
 
 /**
- * Corrective re-prompt for a default that deferred the decision. Same one-shot
- * budget and same quote-it-back shape as {@link planForkHint}, because the child
- * is stateless and cannot otherwise know what it just recommended.
+ * Corrective re-prompt for a default that deferred the decision. Quotes the
+ * question and the default back, because the child is a fresh process carrying
+ * only its prompt and cannot otherwise know what it just recommended.
  */
 export function planDecisiveHint(question: string, suggested: string): string {
     return (
@@ -157,17 +145,12 @@ export function planDecisiveHint(question: string, suggested: string): string {
 
 /**
  * Corrective re-prompt for a fork-shaped question that shipped only ONE option.
+ * With no ALT, `buildOptionCards` emits a single card, so the user has to type
+ * out the alternative the model itself just named.
  *
- * Measured on the local model (scripts/live-task-plan-step0.ts, 15 reps): the
- * SUGGESTED line is always there, but most questions name two alternatives and
- * gave only one of them — so the picker showed a single card and the user had to
- * type out the option the model itself had just proposed.
- *
- * The retry quotes the question back because the child is stateless (a fresh
- * process per call, prompt only), so it cannot otherwise know what it just wrote.
- * Validated before wiring: every fire recovered an ALT, and every one
- * re-asked the SAME question rather than changing the
- * subject. It costs one extra child call on the questions where it fires.
+ * The retry quotes the question back because the child is a fresh process
+ * carrying only its prompt, so it cannot otherwise know what it just wrote. It
+ * costs one extra child call on the questions where it fires.
  */
 export function planForkHint(question: string): string {
     return (
@@ -185,11 +168,8 @@ export function planForkHint(question: string): string {
  * A default that DEFERS decides nothing, and an accepted deferral reaches the
  * consumer dressed as an authoritative decision.
  *
- * Declared as its own constant because it is the one rule BOTH dialogs use, and
- * `CLARIFY_QUALITY_RULES` referencing it by `id` string would be the retyped
- * literal with no compile link that this pass exists to remove — a rename would
- * silently yield `[undefined]` and throw on the first clarify question of every
- * run.
+ * Its own constant because it is the one rule BOTH tables below hold, shared by
+ * reference so the compiler links them.
  */
 const DEFERRAL_RULE: QuestionRule = {
     id: 'SUGGESTED deferred the decision',
@@ -198,9 +178,10 @@ const DEFERRAL_RULE: QuestionRule = {
             planDecisiveHint(plain, q.suggested)
         :   null,
     // When only the recommendation defers, the ALT is still a real commitment:
-    // promote it so the question keeps a usable default. With no ALT the option is
-    // DROPPED rather than shown, so an empty submit records an unanswered question
-    // instead of a decision the user never made.
+    // promote it so the question keeps a usable default. With no ALT the default
+    // is dropped, `buildOptionCards` returns undefined, and `resolveAnswer` maps
+    // an empty submit to '(skipped)' rather than to a decision the user never
+    // made.
     repair: q => {
         const {alt: _alt, suggested: _suggested, ...rest} = q
         return q.alt !== undefined ? {...rest, suggested: q.alt} : {...rest}
@@ -210,16 +191,15 @@ const DEFERRAL_RULE: QuestionRule = {
 /**
  * PLAN's quality rules, in order.
  *
- * Each is worth exactly one corrective re-prompt (the child is stateless, so each
- * hint quotes the question back), and each DEGRADES rather than discards when the
- * defect survives — a question with a weak default still beats no question.
+ * The corrective-re-prompt budget is per QUESTION and shared across the whole
+ * table (question-source.ts): at most one rule fires per draw, and a defect that
+ * survives its re-prompt DEGRADES through `repair` rather than discarding the
+ * question — a weak default still beats no question. Each hint quotes the
+ * question back, because the child is a fresh process carrying only its prompt.
  *
  * Only {@link CLARIFY_QUALITY_RULES} is shared with `/task-auto`, and only the
- * deferral rule is in it. The other two were measured here (fork-shaped
- * questions shipped one option; the SUGGESTED requirement is in both prompts) but
- * each costs one extra child call every time it fires, and clarify is the most
- * A/B'd path in the codebase — moving them there is its own experiment, not a
- * side effect of sharing a state machine. Recorded rather than done.
+ * deferral rule is in it. The other two cost an extra child call every time they
+ * fire.
  */
 export const PLAN_QUALITY_RULES: ReadonlyArray<QuestionRule> = [
     {
@@ -243,12 +223,9 @@ export const PLAN_QUALITY_RULES: ReadonlyArray<QuestionRule> = [
 /**
  * The deferral rule alone — the one clarify shares.
  *
- * It exists because an accepted "clarify with the user before proceeding" rode
- * into `/task`'s handoff AS AN AUTHORITATIVE DECISION and produced a task whose
- * ACCEPTANCE was "a planning document with placeholder sections" and whose VERIFY
- * asserted that no source file had changed. Clarify's answers ride into the
- * decompose prompt and the AUTO file with exactly the same authority and had no
- * guard at all — the same bug, one command over, waiting.
+ * Clarify's answers ride into the decompose prompt and the AUTO file with the
+ * same authority /task-plan's decisions ride into the handoff, so an accepted
+ * "clarify with the user before proceeding" lands there as an instruction too.
  *
  * It is also the only one of the three that costs nothing on the happy path: a
  * decisive default never triggers it.
@@ -257,9 +234,9 @@ export const CLARIFY_QUALITY_RULES: ReadonlyArray<QuestionRule> = [DEFERRAL_RULE
 
 // ─── Deps ────────────────────────────────────────────────────────────────────
 
-/** The ask spec the session hands to the UI: an {@link AskSpec} plus the picker
- *  entries. Kept structurally identical to what phaseGrill/planAuto build so the
- *  same SessionUI.ask serves all three. */
+/** The ask spec the session hands to the UI: an {@link AskSpec} whose optional
+ *  picker fields are all required here. The same SessionUI.ask serves grill,
+ *  clarify and this loop. */
 export type PlanAskSpec = AskSpec & {
     options: {label: string; value: string}[]
     manualLabel: string
@@ -268,7 +245,8 @@ export type PlanAskSpec = AskSpec & {
 }
 
 export interface PlanSessionDeps {
-    /** Run the question-generation child. `hint` is the duplicate reprompt. */
+    /** Run the question-generation child. `hint` is whatever corrective
+     *  re-prompt question-source.ts chose, or null. */
     generateQuestion(priorQA: string, hint: string | null): Promise<string>
     /** Run the child that answers a question the USER asked. */
     answerUserQuestion(priorQA: string, question: string): Promise<string>
@@ -283,7 +261,7 @@ export interface PlanSessionDeps {
     onEntries?(entries: readonly PlanEntry[]): void | Promise<void>
     /** Theme-aware markdown renderer for displayed text; identity when absent. */
     renderMarkdown?(text: string): string
-    /** Status line while a child runs (the widget's `lastLine`). */
+    /** Status line while a child runs. */
     setStatus?(line: string | undefined): void
     yolo?: boolean
     logDebug?(msg: string): void
@@ -365,7 +343,8 @@ export const ASK_QUESTION =
 export async function runPlanSession(deps: PlanSessionDeps): Promise<PlanOutcome> {
     const entries: PlanEntry[] = []
     const render = (s: string): string => deps.renderMarkdown?.(s) ?? s
-    /** The model has nothing (more) to ask: NONE, the cap, or the dup backstop. */
+    /** The model has nothing (more) to ask — any `exhausted` draw: NONE, the
+     *  cap, the duplicate backstop, or a reply the parser could not read. */
     let exhausted = false
     let pending: PendingQuestion | null = null
 
