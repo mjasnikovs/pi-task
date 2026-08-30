@@ -1,10 +1,12 @@
 /**
  * ChildStatus — the live line + context gauge a running child feeds and a
- * loader reads, and the loader ritual around one child.
+ * loader reads, plus the loader ritual around one child.
  *
- * Without one owner for this state, every assertion here is reachable only
- * through a site that keeps its own copy — one as a `widget` field, others as
- * closure `let`s that nothing covers at all.
+ * Three sites construct one and no others do: auto-orchestrator.ts:1491,
+ * gate-deps.ts:694 and plan-orchestrator.ts:101. Because the state has ONE
+ * owner, the window-fallback order and the reset semantics can be asserted
+ * directly here — held as a widget field or a closure `let` at each site
+ * instead, they would only be reachable by driving that whole site.
  */
 
 import {test, expect, describe, mock} from 'bun:test'
