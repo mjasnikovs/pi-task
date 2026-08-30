@@ -24,9 +24,10 @@ describe('shouldLogDebug', () => {
         expect(shouldLogDebug('stream', 'full')).toBe(true)
     })
 
-    // The whole point of three levels rather than a boolean: the default keeps the
-    // guard/verdict record, a small fraction of a real log's bytes, and drops the
-    // model chatter and tool dumps, which are nearly all of them.
+    // The whole point of three levels rather than a boolean. There are exactly
+    // two line kinds, so the matrix is: `off` writes nothing, `full` writes both,
+    // and `events` writes events and drops stream. The default therefore keeps
+    // the guard/verdict record and drops the model chatter and tool dumps.
     test('events keeps decisions and drops stream chatter', () => {
         expect(shouldLogDebug('event', 'events')).toBe(true)
         expect(shouldLogDebug('stream', 'events')).toBe(false)
@@ -113,8 +114,9 @@ describe('makeDebugAppender', () => {
 })
 
 describe('gateDebugWriter', () => {
-    // Returning undefined (rather than a no-op) is what lets the ~39 `logDebug?.(…)`
-    // sites short-circuit before they format a message string.
+    // Returning undefined rather than a no-op function is what lets every
+    // `logDebug?.(…)` site short-circuit at the `?.` — before it formats a
+    // message string. A no-op would still cost every one of those formats.
     test('returns undefined at off, so every optional call site skips its work', () => {
         expect(gateDebugWriter(() => {}, env({[DEBUG_LOG_ENV]: 'off'}))).toBeUndefined()
     })
