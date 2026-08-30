@@ -33,14 +33,20 @@ export function cwdKey(cwd: string): string {
 /**
  * Which source files make up the project.
  *
- * `git ls-files` is the source of truth when there is one — it already knows
+ * `git ls-files` is the source of truth whenever it answers: it already knows
  * what is tracked and what `.gitignore` excludes, which no hand-rolled walk gets
- * right — and the walk is the fallback for a directory that is not a repo.
+ * right. `walkTsFiles` is the fallback, and it is reached in TWO cases — no git
+ * repo, and a repo where git matched nothing.
  *
- * Injectable through `projectDocsRaw` because it is the only unmockable
- * dependency left in the docs cluster: without a seam, ANY test of the project
- * path needs a real temp directory, real files on disk, and a machine where git
- * is installed and the temp dir is not itself inside a repo.
+ * The two disagree in both directions, so which one ran is observable:
+ *   - git honours `.gitignore`; the walk does not, so a repo whose only `.ts`
+ *     files are all gitignored falls through and indexes them anyway.
+ *   - the walk skips node_modules, .git, dist, build and coverage outright; git
+ *     lists whatever those contain unless `.gitignore` says otherwise.
+ *
+ * Injectable through `projectDocsRaw` because without a seam, ANY test of the
+ * project path needs a real temp directory, real files on disk, git installed,
+ * and a temp dir that is not itself inside a repo.
  */
 export function getProjectFiles(cwd: string): string[] {
     try {
@@ -124,7 +130,8 @@ export function ensureProjectIndexed(
     const t0 = Date.now()
     cache.db.exec('BEGIN IMMEDIATE')
     try {
-        // Clear all old versions of this project
+        // Delete by NAME with no version: unlike the package index, a project
+        // keeps only its newest max-mtime version, so every older one goes.
         cache.db.prepare('DELETE FROM chunks WHERE name = ?').run(name)
         cache.db.prepare('DELETE FROM packages WHERE name = ?').run(name)
 
@@ -285,9 +292,9 @@ export function buildProjectPrompt(projectName: string, query: string, content: 
 /**
  * The PROJECT corpus row: the current repo's own indexed `.ts`/`.tsx` source.
  *
- * Named after the project so a reader of the answer can tell a project-source
- * citation from a package one at a glance — they are read and cited the same way
- * and mean very different things.
+ * The header reads `Per <name> (project source):`, where the package corpus reads
+ * `Per <name>@<version>:`. Both are read and cited the same way and mean very
+ * different things, so the answer has to say which it came from.
  */
 export function projectCorpus(projectName: string): DocsCorpus {
     return {
