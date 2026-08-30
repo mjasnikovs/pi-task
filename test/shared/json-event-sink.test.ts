@@ -49,11 +49,10 @@ describe('JsonEventSink', () => {
     })
 
     test('clears modelError when a LATER agent_end answers (pi retried past a blip)', () => {
-        // Measured live (flaky proxy dropping the first connection): pi retries a
-        // failed turn itself and emits agent_end(error) → auto_retry_start →
-        // agent_end(text). Latching the first one reports a failure for a run that
-        // actually succeeded — which is how one dropped fetch fails a phase that
-        // had a perfectly good answer in hand.
+        // pi retries a failed turn ITSELF: the stream carries agent_end(error),
+        // then auto_retry_start, then agent_end(text). Latching the first one
+        // reports a failure for a run that actually succeeded — one dropped socket
+        // then fails a phase that had a perfectly good answer in hand.
         const s = sink()
         s.feed(
             line({
@@ -155,24 +154,21 @@ describe('JsonEventSink', () => {
         expect(s.text).toBe('final')
     })
 
-    // ─── Context usage (GitHub issue #16) ────────────────────────────────────
+    // ─── Context usage ───────────────────────────────────────────────────────
     //
-    // `context_usage` is NOT, and never was, a pi event. Verified against the
-    // published tarballs: zero occurrences of the string in
-    // @earendil-works/pi-coding-agent AND @earendil-works/pi-agent-core at BOTH
-    // 0.80.2 (the devDependency this handler was written against) and 0.84.2.
-    // pi's own docs/json.md prints the whole wire union — session, agent_*,
-    // turn_*, message_*, tool_execution_*, queue_update, compaction_*,
-    // auto_retry_* — and none of its members carries a context window; the
-    // session header is {type,version,id,timestamp,cwd,parentSession}, and
-    // `contextUsage` exists only as the IN-PROCESS `ctx.getContextUsage()`
-    // extension API, which a `--mode json` child never speaks to its parent.
+    // `context_usage` is not a pi event. The string occurs ZERO times anywhere in
+    // the installed @earendil-works/pi-coding-agent or pi-agent-core, and pi's own
+    // docs/json.md — which prints the wire union: session, agent_start/end,
+    // turn_start/end, message_start/update/end, tool_execution_start/update/end,
+    // queue_update, compaction_start/end — documents no member carrying a context
+    // window. `contextUsage` exists only as the IN-PROCESS `getContextUsage():
+    // ContextUsage | undefined` API, which a `--mode json` child never speaks to
+    // its parent.
     //
-    // So the branch that read `context_usage` was unreachable from the day it
-    // was written, and that is what hid the real defect: the ONLY live path
-    // (`message_end`) reported `contextWindow: 0`, which left
-    // StallDetector.churnTripped() permanently disabled and the widget's gauge
-    // reliant on a downstream substitution.
+    // A branch reading `context_usage` is therefore unreachable, and an unreachable
+    // branch HIDES things: the only live path (`message_end`) carries no window, so
+    // a caller that supplies none leaves `contextWindow: 0`, which disables
+    // StallDetector's churn rule silently.
     test('ignores a phantom context_usage event — no pi version has ever emitted one', () => {
         const seen: ContextSnapshot[] = []
         const s = sink({contextWindow: 1000, onContextUsage: snap => seen.push(snap)})
@@ -222,9 +218,9 @@ describe('JsonEventSink', () => {
         expect(seen).toEqual([{tokens: 500, contextWindow: 100, percent: 100}])
     })
 
-    // The exact event sequence pi 0.84.2 puts on stdout for one tool-free turn
-    // (docs/json.md "Output Format"). No `context_usage` anywhere in it — this is
-    // the whole point: the readout must come out of THIS stream, not a phantom.
+    // The event sequence pi puts on stdout for one tool-free turn, as its own
+    // docs/json.md documents it. No `context_usage` anywhere in it — which is the
+    // point: the readout must come out of THIS stream, not a phantom.
     test('a real pi 0.84.2 turn yields a windowed snapshot with no context_usage event', () => {
         const seen: ContextSnapshot[] = []
         const s = sink({contextWindow: 250_000, onContextUsage: snap => seen.push(snap)})
