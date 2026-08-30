@@ -1,12 +1,11 @@
 /**
  * How a run ended, and what each ending implies.
  *
- * `TaskRunner.run` returned `void`, so `runSingleTask` re-read the task file's
- * front matter to learn what it had just done and narrowed that to `ok: boolean`.
- * A `/task-cancel` writes `cancelled`, which is not `completed`, so `ok` was
- * false, so the `!ok` arm ran: `markResumable` overwrote `cancelled` with
- * `failed` and the user got a red "stopped — fix and run /task-resume" for a stop
- * they asked for.
+ * Five endings, and none of the three consequences — resumable, failsRun, level —
+ * follows from any other. Collapsing them to one boolean is what turns a
+ * `/task-cancel` into a red fault: `cancelled` is not `completed`, so a
+ * success/failure split puts it in the failure arm, where `markResumable` writes
+ * `failed` over the state the user asked for.
  */
 import {describe, expect, test} from 'bun:test'
 import {RUN_END_POLICY, runSucceeded, type RunEndKind} from '../../src/task/run-end.js'
