@@ -1,8 +1,11 @@
 /**
  * command-shrink tests — the resolved-body narrowing rules behind the final-gate
- * scope-shrink guard. Every case here is either the measured lead,
- * a hand-read corpus hit, or one of the six pre-registered A/B invariants
- *. Pure: no fs, no git.
+ * scope-shrink guard.
+ *
+ * The rules are pure: two command bodies in, a classification out. No fs, no
+ * git, so every case here is a literal pair. The interesting ones are the
+ * near-misses — a flag value that looks like a path, an exclusion that is really
+ * a relocation, a separator inside quotes — and each is named as such below.
  */
 import {describe, expect, test} from 'bun:test'
 import {
