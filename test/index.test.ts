@@ -1,10 +1,13 @@
 /**
- * The extension ENTRY POINTS — the four files whose whole job is wiring, and
- * which nothing else imports (so nothing else could ever have covered them).
+ * Three extension ENTRY POINTS whose whole job is wiring: `src/index.ts` and the
+ * two standalone worker bundles. Nothing in src/ IMPORTS them — worker-channels
+ * names the two bundles as `-e` path strings only — so no other test can reach
+ * their bodies. (`single-read-extension` is the fourth of that shape and has its
+ * own file.)
  *
- * What this proves is exactly what wiring can get wrong: a module that exists,
- * is tested, and is never registered. Every command and tool pi-task claims to
- * ship is asserted by name here, so deleting a `register…(pi)` line fails a test
+ * What this proves is exactly what wiring gets wrong: a module that exists, is
+ * tested, and is never registered. Every command and tool pi-task claims to ship
+ * is asserted BY NAME here, so deleting a `register…(pi)` line fails a test
  * instead of silently shipping an extension missing half its surface.
  *
  * The registrars are called with a RECORDING fake `pi`. Registration is pure
