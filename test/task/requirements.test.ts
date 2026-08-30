@@ -38,7 +38,8 @@ const PROJECT_SPEC = fs.readFileSync(
     'utf8'
 )
 
-// Verbatim §10 obligations — the section lost entirely.
+// Two verbatim obligations from the fixture spec's last section — the tail
+// position sectionFairFill has to protect.
 const CADENCE_QUOTE =
     'a test lands *as fast as possible* — in the same change — as\neach new route or React component/page'
 const CT_QUOTE = 'every component/page test captures a screenshot committed as a baseline'
@@ -90,7 +91,7 @@ describe('keepGroundedRequirements (anti-synthesis guard)', () => {
 })
 
 describe('obligation-passage recall floor', () => {
-    test('mx5: both §10 paragraphs and the §5 RPC mandate are enumerated', () => {
+    test('the fixture spec\u2019s two cadence paragraphs and its RPC mandate are enumerated', () => {
         const passages = enumerateObligationPassages(PROJECT_SPEC)
         expect(passages.some(p => p.includes('Test-first cadence (required)'))).toBe(true)
         expect(passages.some(p => p.includes('RPC only (no hand-rolled types)'))).toBe(true)
@@ -104,10 +105,10 @@ describe('obligation-passage recall floor', () => {
         )
     })
 
-    test('CRLF line endings split into passages like LF (windows-latest checkout)', () => {
-        // A Windows-authored spec separates paragraphs with \r\n; the recall floor
-        // must still enumerate each marked passage (regression: windows CI kept the
-        // whole doc as one passage, so per-passage coverage evidence was impossible).
+    test('CRLF line endings split into passages like LF', () => {
+        // A spec written with CRLF separates paragraphs with \r\n. A passage split
+        // that only matches \n\n keeps the whole doc as ONE passage, and per-passage
+        // coverage evidence becomes impossible.
         const lf = 'Intro prose.\n\nThe api MUST be RPC-only.\n\nTests are required per route.'
         const crlf = lf.replace(/\n/g, '\r\n')
         expect(enumerateObligationPassages(crlf)).toEqual(enumerateObligationPassages(lf))
@@ -141,11 +142,10 @@ describe('obligation-passage recall floor', () => {
         expect(capped[0]).toEqual(marked) // survives although it arrived last
     })
 
-    test('capRequirements with a source doc fills ROUND-ROBIN across sections — a tail section is never wholesale dropped (mx5 run 16)', () => {
-        // Three sections, 20 groundable quotes each. The shipped given-order fill
-        // would keep §A's 20 + §B's 20 and drop §C entirely; the section-fair
-        // fill must keep every section's head quotes — including §C's first,
-        // the "serves static dist/" shape (tail section, early bullet).
+    test('capRequirements with a source doc fills ROUND-ROBIN across sections — a tail section is never wholesale dropped', () => {
+        // Three sections, 20 groundable quotes each, against a cap of 40. A
+        // given-order fill would keep A's 20 and B's 20 and drop C entirely. The
+        // section-fair fill has to keep every section's HEAD quotes instead.
         const mk = (s: string, n: number) =>
             Array.from({length: n}, (_, i) => `${s} obligation ${i} with enough length to ground`)
         const doc = [
@@ -205,32 +205,21 @@ describe('obligation-passage recall floor', () => {
     })
 
     // ── low-value deprioritisation (the 40-slot budget) ──────────────────────
-    // The extractor's single-pass yield swings wildly on byte-identical
-    // spec, and the padding crowds real obligations out of the 40 that ship —
-    // high-yield runs land FEWER critical obligations than low-yield ones.
-    //
-    // Measured end to end (filter → cap → count critical obligations in the
-    // shipped 40) on two INDEPENDENT 30-run extraction pools:
-    // Deprioritising obligation-free quotes raises the number of critical
-    // obligations that reach the shipped list, on every pool measured.
-    // The second pool was drawn AFTER the rule was fixed, because the budget
-    // clause was written while looking at a loss in the first one.
-    //
-    // Tail-section coverage — what sectionFairFill protects, and the thing a
-    // ranking change is most likely to break — is unchanged on both pools, with
-    // zero regressions in 60 runs.
+    // The extractor's yield varies run to run on the same spec, and the extra
+    // quotes are mostly obligation-free padding: dependency pins, DDL rows,
+    // fragments. Since only 40 quotes ship, that padding competes for slots with
+    // real obligations. Deprioritising it is a RANKING change, not a filter — the
+    // tests below pin that it never drops a quote the cap had room for.
 
     /**
-     * FP SUITE. Each entry traces to a real failure or an obligation of record —
-     * the index.html clause whose loss shipped a permanently blank app,
-     * the §10 cadence line lost, the ownership/ban/photo contract.
+     * The FALSE-POSITIVE suite: quotes that carry a real obligation and must never
+     * be deprioritised, however pin-shaped they look.
      *
-     * These are VERBATIM quotes the extractor really produced, lifted from the
-     * measured pools, not paraphrases. That distinction has teeth: a hand-shortened
-     * stand-in for the ESLint line ("ESLint `10.6.0` with `no-explicit-any: error`
-     * …", 65 chars) trips the length-gated dependency-pin rule, while the 226-char
-     * line the extractor actually emits does not. Paraphrasing the suite would test
-     * the paraphrase.
+     * They are VERBATIM extractor output, not paraphrases, and the difference has
+     * teeth. `isDependencyPin` is gated on MAX_PIN_LENGTH, so a hand-shortened
+     * stand-in for the ESLint line falls under the gate and IS read as a bare pin,
+     * while the full line the extractor emits is several times that length and is
+     * not. Paraphrasing the suite would test the paraphrase.
      */
     const CRITICAL_OBLIGATIONS = [
         'TypeScript `6.0.3` — one strict `tsconfig.json`: `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals/Parameters`, `noFallthroughCasesInSwitch`, `verbatimModuleSyntax`, `forceConsistentCasingInFileNames`.',
@@ -306,10 +295,9 @@ describe('obligation-passage recall floor', () => {
     })
 
     test('capRequirements: BUDGETED — low-value quotes come back rather than undershoot the cap', () => {
-        // The filter exists to free contested slots. Below the cap nothing is
-        // contested, so dropping there destroys information and buys nothing: one
-        // measured run filtered 55 quotes to 20 and lost its only carrier of the
-        // Argon2id obligation while 20 slots sat empty.
+        // Deprioritisation exists to free CONTESTED slots. Below the cap nothing is
+        // contested, so dropping there would destroy information and buy nothing —
+        // it could lose the only carrier of an obligation while slots sat empty.
         const pins = Array.from({length: 30}, (_, i) => `\`pkg${i}\` \`1.${i}.0\` — a dependency`)
         const rules = Array.from({length: 15}, (_, i) => `rule ${i} states a real obligation here`)
         const doc = [
@@ -342,7 +330,7 @@ describe('obligation-passage recall floor', () => {
         expect(capRequirements(entries, [], 'doc')).toEqual(entries)
     })
 
-    test('capRequirements: the A/B seam reproduces the pre-budget rule', () => {
+    test('capRequirements: with deprioritisation off, pins take half the budget', () => {
         // 45 pins and 45 obligations, two sections. With the rule OFF the
         // section-fair fill splits the budget evenly and pins take half of it;
         // with it ON the obligations alone already fill the cap, so no pin ships.
