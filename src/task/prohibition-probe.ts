@@ -2,21 +2,18 @@
  * prohibition-probe — deterministic detection of VIOLATED SPEC PROHIBITIONS,
  * feeding the verify gate's prompt.
  *
- * The failure class: the spec's CONSTRAINTS
- * said "**Do NOT modify** any server-side code: `src/server/index.ts`, …"; the
- * implementation modified `src/server/index.ts` anyway; the verify child SAW it
- * ("VIOLATES 'Do NOT modify server-side code'"), waived it ("BUT: this is
- * additive, tests pass with it"), and PASSed. Worse, the reproduction fixture
- * showed the baseline child usually never LOOKS: it consults no
- * diff at all and several affirmatively claimed the forbidden file was untouched.
+ * The failure class: the spec's CONSTRAINTS say "**Do NOT modify** any
+ * server-side code: `src/server/index.ts`, …", the implementation modifies that
+ * file anyway, and the verify child either waives the violation ("this is
+ * additive, tests pass with it") or never looks. Nothing else in the gate makes it
+ * run `git diff`, and rule 4b says it plainly: a forbidden file can be modified
+ * without any test noticing.
  *
- * So — like the substitution probe (see substitution-probe.ts, where prompt
- * language alone gets a fraction of the model's attention and a concrete
- * deterministic finding gets all of it) — the fix is a pre-check whose finding is
- * injected into the prompt: extract the concrete paths the spec forbids
- * modifying, intersect with the task's changed files (pure git shape, already
- * collected for the substitution probe), and hand the child each hit with the
- * exact constraint wording.
+ * So — like the substitution probe (substitution-probe.ts) — the fix is a
+ * pre-check whose finding is injected into the prompt: extract the concrete paths
+ * the spec forbids modifying, intersect with the task's changed files (pure git
+ * shape, from the same `collectChangedFiles` the substitution probe uses), and
+ * hand the child each hit with the exact constraint wording.
  *
  * The finding is advisory, not an auto-FAIL, for one reason: prohibitions in
  * real specs are prose and can be CONDITIONAL ("Do NOT modify `api.ts` beyond
@@ -24,8 +21,9 @@
  * false-FAIL legitimate work. The finding therefore carries the constraint line
  * verbatim and the prompt's no-waiver rule (4b in verify-work.ts) forbids
  * excusing an ABSOLUTE prohibition while directing conditional ones to be judged
- * against their own stated exception. A violation that was fully reverted before
- * verify produces no diff entry, so it never fires — reverted = not violated.
+ * against their own stated exception. A violation fully reverted before verify
+ * leaves no entry in `git diff HEAD`, so it never fires — reverted = not
+ * violated.
  */
 import type {ChangedFile} from './substitution-probe.js'
 
