@@ -14,9 +14,10 @@ export interface BraveSearchOpts {
     timeoutMs?: number
     signal?: AbortSignal
     /**
-     * Injectable fetch. All three providers take one, and brave needs it most:
-     * its status ladder is the widest of the three, so without this seam the
-     * ladder is the only one no test can drive at the request level.
+     * Injectable fetch. All three search providers accept one. Brave gets the most
+     * out of it: its status ladder is the widest — three branches (auth,
+     * rate-limit, http) against DuckDuckGo's two and Exa's one — and
+     * http-request.test.ts drives 401/403/429/503 straight through this seam.
      */
     fetchImpl?: FetchLike
 }
@@ -56,8 +57,11 @@ export async function braveSearch(query: string, opts: BraveSearchOpts): Promise
                 }
             },
             async response => {
-                // Brave's own status policy: a rejected key and a rate limit are
-                // different problems for the user, and neither is a plain HTTP fault.
+                // A rejected key and a rate limit are different problems for the
+                // user, so each throws its own MESSAGE rather than the generic
+                // `Brave Search HTTP <n>`. That message is what reaches the user:
+                // search-core turns any BraveSearchError into
+                // `{kind: 'error', message}` and passes the text through verbatim.
                 if (response.status === 401 || response.status === 403) {
                     throw new BraveSearchError(
                         `Brave Search rejected the key (HTTP ${response.status}). Check BRAVE_SEARCH_API_KEY.`,
