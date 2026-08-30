@@ -107,9 +107,10 @@ describe('runChild json-events mode', () => {
         expect(lines).toContain('bash: ls -la')
     })
 
-    // GitHub issue #16: no released pi has ever emitted a `context_usage` event,
-    // so a test fed on one asserts nothing. `message_end` is the real and only
-    // readout, and the window comes from the caller because the stream carries none.
+    // The string `context_usage` appears in no installed @earendil-works package,
+    // so a test fed on such an event would assert nothing. `message_end` is the
+    // real and only readout, and the WINDOW comes from the caller because the
+    // stream carries none.
     test('emits onContextUsage from message_end, windowed by the caller', async () => {
         const events = [
             {
@@ -344,10 +345,10 @@ describe('summarizeToolArgs — search/fetch workers', () => {
     })
 })
 
-// item 3: model children run arbitrary bash and can `bun run dev &` a
-// server that outlives the child, holding a port and wrecking the final gate's own
-// `bun run start` with a self-inflicted EADDRINUSE. They must be spawned in their
-// own process group and that group reaped on exit; plumbing (text mode) must not be.
+// Model children run arbitrary bash and can background a server that outlives the
+// child, holding a port and wrecking the final gate's own `bun run start` with a
+// self-inflicted EADDRINUSE. They must be spawned in their OWN process group and
+// that group reaped on exit; plumbing children (text mode) must not be.
 describe('runChild process-group reaping', () => {
     /** A spawn that records the options it was handed and returns a controllable proc. */
     function recordingSpawn(pid: number | undefined): {spawn: SpawnFn; opts: {detached?: boolean}} {
@@ -374,8 +375,9 @@ describe('runChild process-group reaping', () => {
         expect(opts.detached).toBeUndefined()
     })
 
-    // Negative-pid group signalling is POSIX-only; on Windows the reap path uses
-    // `taskkill /T /F` (a spawn), which this process.kill spy does not observe.
+    // `reapGroup` branches on the platform: it calls `process.kill(-pid, sig)` off
+    // win32 and spawns `taskkill /pid <pid> /T /F` on it. Only the first is
+    // observable through this `process.kill` spy, so the assertion is scoped to it.
     const itPosix = process.platform === 'win32' ? test.skip : test
     itPosix('reaps the whole process group on close (negative-pid signal)', async () => {
         const {spawn} = recordingSpawn(4242)
@@ -412,15 +414,16 @@ describe('runChild process-group reaping', () => {
     })
 })
 
-// ─── Abort-listener lifecycle (GitHub issue #9) ──────────────────────────────
+// ─── Abort-listener lifecycle ────────────────────────────────────────────────
 
 /**
  * A TaskRunner shares ONE AbortController across every child of a run, so any
  * listener a finished child leaves behind lives until the whole run ends — and
  * `killProc`'s closure retains that child, its invocation (prompt included) and
- * `opts` with it. `{once: true}` does not help: it removes the listener only
- * when an abort actually fires, which is exactly the path a healthy run never
- * takes. These tests pin the detach on every terminal path.
+ * `opts` with it. The registration IS `{once: true}`, and that does not help: it
+ * removes the listener only when an abort actually fires, which is exactly the
+ * path a healthy run never takes. The explicit `removeEventListener` is what
+ * detaches it; these tests pin that on every terminal path.
  */
 describe('runChild abort-listener lifecycle', () => {
     const listeners = (s: AbortSignal): number => getEventListeners(s, 'abort').length
