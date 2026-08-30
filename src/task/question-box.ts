@@ -1,14 +1,15 @@
 /**
  * Boxed question dialog for the clarify / grill phases.
  *
- * The built-in `ctx.ui.select` renders every option as a bare line under one
- * outer frame — the question, the recommendation, and the choices all read as a
- * single blob. The remote (browser) prompt card instead gives each response its
- * own bounded panel, tints the recommended one green, and separates everything
- * with margins. This module mirrors that remote style in the terminal: a custom
- * `ctx.ui.custom` component that draws each answer in its own bounding box with a
- * green RECOMMENDED tag, an accent-highlighted cursor box, and clear vertical
- * spacing.
+ * The built-in `ctx.ui.select` takes `options: string[]` and builds one
+ * `SelectList` inside a single `frame` (pi-coding-agent's llama/ui.js), so the
+ * question, the recommendation and the choices read as one blob and no option can
+ * be styled apart from the rest. The remote prompt card instead puts the
+ * recommendation in its own panel with a green left border and a green label
+ * (`.rec-panel` / `.rec-label` in remote/ui-styles.ts). This module mirrors that in
+ * the terminal: a `ctx.ui.custom` component that draws each answer in its own
+ * bounding box with a green RECOMMENDED tag, an accent cursor bar, and vertical
+ * spacing between cards.
  *
  * `renderQuestionBox` is the pure layout — width in, lines out — so the visual
  * structure (borders, tag, cursor arrow, padding) is unit-testable without a
@@ -90,16 +91,17 @@ function renderCard(card: BoxCard, selected: boolean, boxWidth: number, c: BoxCo
     )
     const bottom = borderFn(`└${dash(boxWidth - 2)}┘`)
 
-    // A full-height accent bar in the gutter marks the selected card — far more
-    // visible than a single "▸" glyph on the top border alone.
+    // A full-height accent bar in the gutter marks the selected card; it occupies
+    // the two GUTTER columns every card reserves, so nothing shifts.
     const cursor = selected ? c.arrow('▌') + ' ' : '  '
     return [cursor + top, ...body.map(b => cursor + b), cursor + bottom]
 }
 
 /**
  * Lay the whole dialog out for `width` columns: a QUESTION label + wrapped
- * question, one bounding box per card (recommended tinted green, the cursor box
- * highlighted with an accent border and "▸" arrow), and a key-hint footer.
+ * question, one bounding box per card (the recommended one tinted green, the
+ * selected one given an accent border and a "▌" bar in the gutter), and a
+ * key-hint footer.
  */
 export function renderQuestionBox(
     width: number,
@@ -143,12 +145,14 @@ export function boxColors(theme: ThemeLike): BoxColors {
 
 // ─── Component ─────────────────────────────────────────────────────────────────
 
-/** Focusable picker component; navigation mirrors the built-in select dialog. */
+/** Focusable picker component. Navigation is pi-tui's own `tui.select.up`,
+ *  `.down`, `.confirm` and `.cancel` bindings, plus `j`/`k`. */
 export class QuestionBoxComponent implements Component {
     private selected = 0
 
-    /** Card labels in display order (recommended first, manual last). Read-only
-     *  view for tests that drive the picker without parsing rendered output. */
+    /** Card labels in display order, free-text card included at whatever index
+     *  `manualPosition` put it. Read-only view for tests that drive the picker
+     *  without parsing rendered output. */
     get cardLabels(): string[] {
         return this.cards.map(c => c.label)
     }
