@@ -3,31 +3,19 @@
  * content it was given cannot answer the question, and the one place both halves
  * of that contract live.
  *
- * Why one module. The sentinel has two halves that MUST agree: the sentence a
+ * WHY ONE MODULE. The sentinel has two halves that MUST agree: the sentence a
  * prompt instructs the child to emit, and the predicate that later recognises it.
- * Left independent, three prompts write three phrasings — two of them as bare
- * string literals buried in a template — and four regexes match different
- * subsets of the three:
+ * Held apart, each corpus grows its own phrasing and its own regex, and a regex
+ * that names only some of the corpora scores the rest as real answers — silently,
+ * because a non-answer is well-formed output. Here `buildExtractionPrompt` and
+ * `ABSTENTION_RE` are both built from `NOUNS`, so a new corpus is one row in that
+ * table and cannot be half-wired.
  *
- *   pi-worker-docs   /unclear from this package/i          (package only)
- *   typeonly-log     /unclear from this (package|project)/i (no page)
- *   type-only-answer /unclear from this (package|page)/i    (no project)
- *   pi-worker-fetch  no check at all
- *
- * That already cost one bug, recorded in typeonly-log: matching only the first
- * silently scored every PROJECT abstention as a valid answer. The fix went into
- * that one regex; the other three never learned.
- *
- * And it was still live on the fetch channel. pi-worker-docs documents F-2(e) at
- * length — an "unclear" non-answer exits 0, so it was memoised into the research
- * cache and re-served to every sibling task (52 of a cached entries were
- * "unclear" with hitCache true), one dead end paid for many times, with
- * escalation unable to re-fire because the miss never recurred. `pi-worker-fetch`
- * cached on `childExitCode === 0` alone, so "unclear from this page" reproduced
- * exactly that failure on pages instead of packages.
- *
- * With emitter and matcher reading one table, a fourth corpus is one row and
- * cannot be half-wired.
+ * The consumers split two ways. It must not be SCORED as an answer
+ * (typeonly-log.ts, task/type-only-answer.ts) and it must not be CACHED as one
+ * (`docsCacheable` in pi-worker-docs.ts, `fetchCacheable` in pi-worker-fetch.ts) —
+ * a non-answer exits 0 like any other, so a cache keyed on exit code alone
+ * memoises the dead end and re-serves it to every later sibling.
  */
 
 /** The content a focused extractor was pointed at. One row per corpus. */
@@ -57,45 +45,36 @@ export function abstentionSentence(kind: AbstentionKind): string {
  * Matches any corpus's abstention. Built from the same table the prompts read, so
  * adding a corpus cannot leave a matcher behind.
  *
- * Deliberately a SUBSTRING match, unlike fetch-core's separate
- * `not covered by this page` sentinel, which is anchored. The two differ because
- * the instructions differ: the "not covered" rule asks for a partial answer that
- * NAMES what is missing, so a sourced answer can legitimately contain the phrase
- * and an anchored match is required to avoid filing it as a coverage miss. The
- * abstention rule asks for the sentinel INSTEAD of an answer, and models wrap it
- * ("Unclear from this package — the README does not mention it."), so anchoring
- * here would miss the real non-answers this exists to catch.
+ * A SUBSTRING match, unlike fetch-core's separate `not covered by this page`
+ * sentinel, which is anchored. The instructions differ, so the matchers must. The
+ * "not covered" rule asks for a partial answer that NAMES what is missing, so a
+ * sourced answer legitimately contains the phrase and only an anchored match keeps
+ * it from being filed as a coverage miss. Rule 4 below asks for this sentinel
+ * INSTEAD of an answer, so nothing sourced can contain it, and a substring match
+ * still catches a child that wraps the sentence in an explanation.
  */
 const ABSTENTION_RE = new RegExp(
     `unclear\\s+from\\s+this\\s+(${Object.values(NOUNS).join('|')})\\b`,
     'i'
 )
 
-/**
- * True when the child declined to answer rather than answering.
- *
- * Callers use this for two different decisions and both matter: it must not be
- * SCORED as an answer (typeonly-log, type-only-answer), and it must not be
- * CACHED as one (pi-worker-docs, pi-worker-fetch) — a memoised non-answer is
- * re-served to every later sibling and permanently suppresses escalation.
- */
+/** True when the child declined to answer rather than answering. See the header
+ *  for the two decisions this drives. */
 export function isAbstention(text: string): boolean {
     return ABSTENTION_RE.test(text)
 }
 
 /**
- * The extraction prompt every corpus shares.
+ * The extraction prompt every corpus shares — docs-core.ts and docs-project.ts
+ * both build theirs here, differing only in the nouns this signature takes.
  *
- * Rules 1–5 were word-for-word identical in the npm and project prompt builders,
- * differing only in the four nouns this signature takes — and one of those, the
- * abstention sentence in rule 4, was a bare literal that the matchers above then
- * had to guess at. Building the prompt from the same table that recognises its
- * output is the whole point: rule 4 tells the child to write EXACTLY the sentence
- * `isAbstention` looks for, by construction.
+ * Rule 4 interpolates `abstentionSentence`, so the sentence the child is told to
+ * write is by construction the sentence `isAbstention` looks for. Typing the words
+ * instead is what lets the two drift.
  *
  * `subject` is the prose noun ("npm package", "local project's source code");
- * `tag` names both the identity element and the content element, which must match
- * because rules 1, 2 and 4 all refer to `<{tag}-content>`.
+ * `tag` names both the identity element and the content element, and the two must
+ * match because rules 1, 2 and 4 all refer to `<{tag}-content>`.
  */
 export function buildExtractionPrompt(opts: {
     kind: AbstentionKind
