@@ -1,10 +1,10 @@
 /**
  * The one bounded request, and the three ways it can end.
  *
- * Five modules would otherwise hand-roll this, and the copies drift —
- * `npm-version.ts` never grew the `userAborted` flag, so a user cancel came back
- * as `null`, indistinguishable from a registry that is down. These tests pin the
- * distinction that drift erased.
+ * Five modules call it — exa-search, brave-search, ddg-search, npm-version and
+ * html-clean — so the distinction these pin holds for all of them. It is a
+ * distinction a hand-rolled copy loses easily: without `userAborted`, a user
+ * cancel and a server that is down look the same to the caller.
  */
 import {describe, expect, test} from 'bun:test'
 import {httpRequest, HttpRequestError, type FetchLike} from '../../src/workers/http-request.js'
@@ -90,9 +90,8 @@ describe('httpRequest', () => {
 })
 
 describe('brave-search is now driveable at the request level', () => {
-    // Brave was the ONE provider without an injectable fetch, so its status ladder
-    // — the widest of the three — could not be exercised without a live key and a
-    // live endpoint. The seam gives every provider the same door.
+    // Every provider takes a `FetchLike`, brave-search included, so a status ladder
+    // can be exercised without a live key or a live endpoint.
     const cases = [
         {status: 401, kind: 'auth', match: /rejected the key/},
         {status: 403, kind: 'auth', match: /rejected the key/},
