@@ -2,7 +2,9 @@ import {describe, it, expect} from 'bun:test'
 import {renderModule} from '../../src/remote/ui-render.js'
 import {highlightModule} from '../../src/remote/ui-highlight.js'
 
-// syntaxHighlight depends on escHtml (ui-render.ts); eval both together.
+// syntaxHighlight calls escHtml, which lives in ui-render.ts — so both module
+// strings have to be evaluated together, exactly as ui.ts concatenates them into
+// one <script>.
 function loadHighlight(): (code: string, lang: string) => string {
     const factory = new Function(
         renderModule() + '\n' + highlightModule() + '\n;return syntaxHighlight;'
