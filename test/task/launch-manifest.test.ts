@@ -1,8 +1,8 @@
 /**
- * launch-manifest tests — which manifest a launch contract may be diffed against.
- * The end-to-end proof (baseline reports 3 phantom misses, treatment goes inert,
- * real miss is byte-identical) needs a harness; these
- * pin the resolution rules the gate depends on.
+ * launch-manifest tests — which manifest a launch contract may be diffed against,
+ * and what the gate is told when there is none. A wrong answer here is a phantom
+ * miss: the final gate FAILs on scripts a manifest it should never have read does
+ * not expose.
  */
 import {expect, test, describe} from 'bun:test'
 import * as fs from 'node:fs'
@@ -96,8 +96,8 @@ describe('makeTargets', () => {
     })
 
     test('pattern rules and dot-targets are skipped, prerequisites are not harvested', () => {
-        // `.PHONY: publish` names a prerequisite, not a rule: `publish` is NOT a target
-        // here, and claiming it were would turn a real miss into a false pass.
+        // makeTargets harvests only the left of the colon, so `publish` is a
+        // prerequisite and never a target. `.PHONY` and `%.o` fail TARGET_NAME_RE.
         expect(
             makeTargets('.PHONY: publish\n%.o: %.c\n\t$(CC) -c $<\nbuild: %.o\n\techo\n')
         ).toEqual(['build'])
