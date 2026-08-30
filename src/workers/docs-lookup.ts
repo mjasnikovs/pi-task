@@ -1,31 +1,23 @@
 /**
  * The docs TAIL — concatenate the chunks, extract against them, verify the
- * citation, format the answer — written once, with the corpus as a row.
+ * citation, format the answer — written once, with the corpus as a row. Its three
+ * callers are pi-worker-docs' project arm, its package arm, and `docsFocused` in
+ * docs-core.
  *
- * WHY. This sequence existed three times: the project-source arm of
- * `pi-worker-docs`, its package arm, and `docsFocused` in `docs-core`. The fetch
- * channel proves the shape is avoidable — `fetchFocused` is one core and
- * `pi-worker-fetch`'s `run` is 60 lines, while the docs registration was 293 for
- * the same job over two corpora.
- *
- * The copies had drifted, in the place hand-flattening always drifts: the
- * package arm's ERROR path dropped `autoInstallPin`, which both of its sibling
- * paths keep — so a package that was auto-installed and then failed to re-resolve
- * lost the `versionSource`/`declaredRange` provenance the last defect in this
- * area was about.
- *
- * A CORPUS is what genuinely varies: the prompt, the header the answer is
- * introduced by, and what an abort of it is called. Everything a corpus does NOT
- * vary — where the content comes from, the version banner, the type-only
- * detector, the details bag — stays with its caller, because those differ in kind
- * and not in value.
+ * A CORPUS is exactly what varies between them, and it is three fields: the
+ * prompt, the header the answer is introduced by, and what an abort is called.
+ * Everything a corpus does NOT vary — where the content comes from, the version
+ * banner, the type-only detector, the details bag — stays with the caller,
+ * because those differ in kind rather than in value.
  */
 
 import type {SpawnFn} from '../shared/child-process.js'
 import {formatResultText} from '../shared/child-output.js'
 import {runFocusedExtraction, type FocusedAnswer, type FocusedFailure} from './focused-extractor.js'
 
-/** The two corpora a docs lookup can read. A third (`page`) already has a prompt. */
+/** The two corpora a docs lookup can read. A fetched `page` is a third corpus in
+ *  spirit, but it lives on the fetch channel: fetch-core builds its own prompt and
+ *  never comes through here. */
 export type DocsCorpusId = 'package' | 'project'
 
 export interface DocsCorpus {
@@ -69,9 +61,10 @@ export type DocsLookup =
 /**
  * Run one docs lookup over already-retrieved chunks.
  *
- * The citation is verified against exactly the text that was prompted with — the
- * concatenation, not a superset. (`fetch` is the one site that verifies against a
- * superset; see `FocusedRequest.verifyAgainst`.)
+ * The citation is verified against exactly the text that was prompted with: the
+ * `\n\n`-joined chunks are passed as BOTH the prompt content and `verifyAgainst`.
+ * fetch-core is the only call site in this repo that passes a superset instead —
+ * see `FocusedRequest.verifyAgainst`.
  */
 export async function docsLookup(input: DocsLookupInput): Promise<DocsLookup> {
     const content = input.chunks.map(c => c.content).join('\n\n')
