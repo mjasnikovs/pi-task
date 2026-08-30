@@ -60,8 +60,9 @@ describe('runFocusedExtraction — the answer path', () => {
         expect(r.ok).toBe(true)
         if (!r.ok) return
         expect(r.excerptVerified).toBe(false)
-        // The evidence that makes a false verdict diagnosable without re-running the lookup
-        // (typeonly-log.ts F-3(f)): what was searched for, and a fingerprint of where.
+        // The evidence that makes a false verdict diagnosable without re-running the
+        // lookup: what was searched for, and a fingerprint of where. typeonly-log.ts
+        // carries the same `excerptCheck` through to its record.
         expect(r.excerptCheck?.normalisedExcerpt).toBe('invented quote')
         expect(r.excerptCheck?.contentSha256).toMatch(/^[0-9a-f]{64}$/)
         expect(r.excerptCheck?.contentLength).toBe('nothing like it here'.length)
@@ -70,10 +71,9 @@ describe('runFocusedExtraction — the answer path', () => {
 })
 
 describe('runFocusedExtraction — verifyAgainst is a named knob, not the prompt', () => {
-    // The whole reason knob 2 is a parameter: fetch prompts with an anchored #fragment slice
-    // but verifies against the FULL page, while both docs paths verify against exactly what
-    // they prompted with. Before the seam this difference lived in a comment at one of four
-    // copies, and was invisible at the other three.
+    // Why verifyAgainst is a parameter and not the prompt: fetch prompts with an
+    // anchored #fragment slice but verifies against the FULL page, while both docs
+    // paths verify against exactly what they prompted with.
     test('an excerpt absent from the prompt but present in the verify target VERIFIES', async () => {
         const r = await runFocusedExtraction({
             prompt: 'PROMPT CONTENT: only the anchored section',
@@ -99,9 +99,9 @@ describe('runFocusedExtraction — verifyAgainst is a named knob, not the prompt
 
 describe('runFocusedExtraction — child failure is handled in ONE place', () => {
     test('a non-zero exit is a failure whose stdout is NEVER read as an answer', async () => {
-        // The bug this makes unrepresentable: docsFocused handing the caller
-        // parseChildOutput(stdout) regardless of exit code, so this error dump arrived as if
-        // it were the package's documentation.
+        // A caller that ran parseChildOutput(stdout) regardless of exit code would
+        // hand this error dump up as the package's documentation. The failure shape
+        // below has no `answer` at all, so that is unrepresentable.
         const r = await runFocusedExtraction({
             prompt: 'p',
             verifyAgainst: 'c',
