@@ -4,17 +4,15 @@ import path from 'node:path'
 import {SRC_ROOT} from '../test-utils/src-tree.js'
 
 /**
- * Windows regression guard (GitHub issue #2).
+ * `new URL(..., import.meta.url).pathname` is NOT a filesystem path.
  *
- * `new URL('../x.js', import.meta.url).pathname` returns `/C:/Users/...` on
- * Windows — a leading-slash + drive-letter string that pi then resolves against
- * the current drive, yielding `C:\C:\Users\...` and a "Failed to load extension"
- * crash in the second phase. `.pathname` also URL-decodes, so a path containing
- * a space breaks on POSIX too. The correct conversion is `fileURLToPath()`.
+ * It is the URL's path component, still percent-encoded: a file under
+ * `/tmp/a b/` comes back as `/tmp/a%20b/`, which no `fs` call can open.
+ * `fileURLToPath()` is the conversion that decodes it, and it is also the only
+ * one that handles a drive-lettered file URL correctly.
  *
- * This test scans the whole source tree for the broken idiom so the fix can't
- * silently regress. It is a cross-platform stand-in for actually running on
- * Windows: it catches the specific bug class without a Windows runner.
+ * This test scans the whole source tree for the broken idiom, so a reintroduction
+ * fails here rather than at load time on someone's machine.
  */
 
 const ROOTS = [SRC_ROOT, path.resolve(import.meta.dir, '..')]
@@ -34,8 +32,9 @@ function walk(dir: string): string[] {
 }
 
 describe('import.meta.url path resolution (Windows guard)', () => {
-    // Matches `new URL(..., import.meta.url) ... .pathname`, tolerating a newline
-    // before `.pathname` (prettier wraps long lines).
+    // Matches `new URL(..., import.meta.url).pathname`, tolerating whitespace or a
+    // newline before `.pathname` because prettier wraps long lines. It does not
+    // match `fileURLToPath(new URL(..., import.meta.url))` or a `.href` read.
     const BROKEN = /new URL\([^)]*import\.meta\.url[^)]*\)\s*\.pathname/
 
     test('no source file resolves an import.meta.url URL via .pathname', () => {
