@@ -131,15 +131,15 @@ describe('startServer', () => {
         expect(handle.port).toBeLessThan(8900)
     })
 
-    // Regression (issue #7): the old path probed each port with a throwaway
-    // socket then bound the REAL server separately — a TOCTOU window that, on
-    // Windows/Bun, hit EADDRINUSE on a just-tested-free port and escaped as an
-    // uncaughtException. startServer must now bind the real server directly and
-    // retry past an in-use port, resolving on the next free one.
+    // Probing each port with a throwaway socket and then binding the REAL server
+    // separately opens a TOCTOU window: the port can be taken between the probe
+    // and the bind, and the resulting EADDRINUSE escapes as an uncaughtException
+    // rather than a rejection. startServer therefore binds the real server
+    // directly and retries past an in-use port, resolving on the next free one.
     it('skips an occupied first port and binds a later free port', async () => {
         // Hold 8800 (startServer's first port). Tolerate it already being taken
         // externally — either way the first port is occupied, which is the case
-        // under test: the real server must retry past it, not crash (issue #7).
+        // under test: the real server must retry past it, not crash.
         const blocker = createServer()
         const held = await new Promise<boolean>(resolve => {
             blocker.once('error', () => resolve(false))
@@ -224,12 +224,13 @@ describe('startServer', () => {
         await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow()
     })
 
-    // Regression: stop() must forcibly TERMINATE live WebSocket connections, not
-    // just stop accepting new ones. An undrained client socket stays an active
-    // event-loop handle, and headless print mode exits by natural loop drain (no
-    // process.exit()), so a lingering socket keeps the pi process alive forever —
-    // blocking `docker stop` / OS shutdown until SIGKILL. Without the explicit
-    // terminate below, the client's close never fires at all.
+    // stop() must forcibly TERMINATE live WebSocket connections, not just stop
+    // accepting new ones: server.ts loops `wss.clients` calling `terminate()`
+    // BEFORE `wss.close()` and `httpServer.close()`. An undrained client socket
+    // stays an active event-loop handle, and pi's print mode returns an exit code
+    // rather than calling process.exit — its only process.exit is in a signal
+    // handler — so it ends by natural loop drain. One lingering socket then keeps
+    // the process alive until something kills it.
     it('stop() terminates an open WebSocket client (so the event loop can drain)', async () => {
         handle = await startServer(
             () => {},
@@ -335,7 +336,8 @@ describe('listenWithRetry', () => {
         const base = 8870
         const closers = await Promise.all([occupy(base), occupy(base + 1)])
         // Capture any uncaughtException so we can prove the failure came back as a
-        // rejection, not out-of-band (the exact issue-#7 crash mode).
+        // REJECTION, not out-of-band. Out-of-band is the crash mode: nothing
+        // upstream can catch it.
         const uncaught: unknown[] = []
         const onUncaught = (e: unknown) => uncaught.push(e)
         process.on('uncaughtException', onUncaught)
@@ -356,19 +358,18 @@ describe('listenWithRetry', () => {
 })
 
 describe('startServer stress (issue #7 regression)', () => {
-    // The issue-#7 crash was rate-dependent: a probe->real-bind TOCTOU race and a
-    // listener-less bind that only misfire when a port hasn't fully released yet.
-    // A single start/stop can't surface a nonzero-rate regression — the port
-    // reuses cleanly every time on a fast host. Hammering the WHOLE real path
-    // (bind via listenWithRetry -> WebSocketServer attach -> stop() teardown)
-    // many times back-to-back re-creates the "bind a port that was just freed"
-    // pressure this bug lived in, and asserts it stays quiet: every cycle
-    // resolves to a port in range and NOTHING ever escapes as an uncaught.
+    // The crash this guards is RATE-DEPENDENT: a probe-then-bind race and a
+    // listener-less bind only misfire when a port has not fully released yet. A
+    // single start/stop cannot surface that — the port reuses cleanly every time
+    // on a fast host. Hammering the WHOLE real path (bind via listenWithRetry ->
+    // WebSocketServer attach -> stop() teardown) back-to-back re-creates the
+    // "bind a port that was just freed" pressure, and asserts it stays quiet:
+    // every cycle resolves to a port in range and NOTHING escapes as an uncaught.
     it('survives many rapid start/stop cycles with zero uncaught errors', async () => {
         const CYCLES = 100
-        // Any uncaughtException/unhandledRejection here is the exact issue-#7
-        // failure mode (an error escaping ensureServer's catch). Record, don't
-        // let it fail the process, then assert none happened.
+        // Any uncaughtException or unhandledRejection here is the failure mode
+        // under test: an error escaping the catch instead of rejecting. Record it,
+        // do not let it fail the process, then assert none happened.
         const escaped: unknown[] = []
         const onUncaught = (e: unknown) => escaped.push(e)
         process.on('uncaughtException', onUncaught)
