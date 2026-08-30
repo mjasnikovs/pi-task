@@ -1,15 +1,14 @@
 /**
  * Stream-watchdog integration: a child whose model stream goes SILENT.
  *
- * The hang cannot be reproduced by asking a real model to hang, and the
- * child here is a `pi` PROCESS (not an HTTP client we own), so the seam a test can
- * actually drive is the child's event stream: a fake `pi` that emits N json events
- * and then produces nothing, ever, closing only when killed. That is byte-for-byte
- * what the host saw in a — events, then silence, no error, no exit.
+ * A real model cannot be asked to hang, and the child is a `pi` PROCESS rather
+ * than an HTTP client this code owns, so the only seam a test can drive is the
+ * child's event stream. Every child below is a fake `pi` that emits some json
+ * events and then produces nothing, ever, closing only when killed: no error,
+ * no exit, nothing for a promise to settle on.
  *
- * BEFORE this guard the run below never resolves (the child is killed only by the
- * test's own teardown); AFTER it, the watchdog aborts at the configured inactivity
- * and the existing connection-error retry re-spawns, which is what these tests pin.
+ * What these tests pin is that the watchdog aborts at the configured
+ * inactivity and the retry path re-spawns.
  */
 
 import {describe, expect, test} from 'bun:test'
@@ -24,12 +23,13 @@ import {runWorker} from '../../src/workers/pi-worker-core.js'
 import {getConfig} from '../../src/config/config.js'
 import {makeProc, agentEndResponse} from '../test-utils/fake-spawn.js'
 
-/** A short window so a 10-minute production ceiling is exercised in milliseconds. */
+/** A short window, so the guard is exercised in milliseconds, not at its default. */
 const WINDOW_MS = 120
 
 /**
  * Fake `pi` children, one per queued script. `hang: true` emits the events and then
- * goes mute forever — closing only on kill (exit 143, as a SIGTERM'd child does).
+ * goes mute forever, closing only on kill. It closes with 143, the code a shell
+ * reports for a SIGTERM'd child.
  */
 function scriptedSpawn(
     scripts: ReadonlyArray<{events: ReadonlyArray<Record<string, unknown>>; hang?: boolean}>
@@ -208,9 +208,7 @@ describe('phase child A/B: hang then retry', () => {
         cfg.streamInactivityMs = WINDOW_MS
         try {
             const s = scriptedSpawn([
-                // Attempt 1: streams, then hangs forever — the shape.
                 {events: [THINKING, TEXT('half an ans')], hang: true},
-                // Attempt 2: the same request against a working stream.
                 {events: agentEndResponse('FINAL ANSWER').events}
             ])
             const logs: string[] = []
