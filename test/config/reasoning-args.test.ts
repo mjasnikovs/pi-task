@@ -1,11 +1,11 @@
 /**
  * The live-config bridge, driven through the function production calls.
  *
- * `groupThinkingArgs` had seven call sites and no test at all: every assertion
- * about it was written against `thinkingArgs(resolveReasoning(...))`, which is
- * its body retyped. Its one stated invariant — read PER CALL, never cached at
- * module scope — was therefore asserted nowhere, and hoisting the read would
- * have left the whole suite green.
+ * `groupThinkingArgs` is what six production call sites use to build their
+ * `--thinking` fragment. Asserting `thinkingArgs(resolveReasoning(...))` instead
+ * only retypes its body, and leaves its one stated invariant — the config is read
+ * PER CALL, never cached at module scope — asserted nowhere, so hoisting the read
+ * would keep the whole suite green.
  */
 import {describe, expect, test} from 'bun:test'
 import {groupThinkingArgs} from '../../src/config/reasoning-args.js'
@@ -42,9 +42,12 @@ describe('groupThinkingArgs', () => {
     })
 
     test('reads its default config PER CALL, not once at module scope', () => {
-        // The contract this module's header states. It is assertable only because
-        // the config is a parameter: a module-scope read would answer the first
-        // call's value forever, and every other test here would still pass.
+        // The contract stated on `groupThinkingArgs` itself. It is assertable only
+        // because the config is an OPTIONAL PARAMETER: `cfg ?? getConfig()` is
+        // evaluated inside the function, so mutating the same object between two
+        // calls must change the answer. Hoisting that read to module scope would
+        // answer the first call's value forever, and every other test here would
+        // still pass.
         const cfg = cfgIn('custom')
         cfg.reasoningLevels.planning = 'off'
         expect(groupThinkingArgs('planning', cfg)).toEqual(['--thinking', 'off'])
