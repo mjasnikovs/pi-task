@@ -13,7 +13,8 @@ describe('buildLintFixPrompt', () => {
         const p = buildLintFixPrompt('repo health: `bun run lint` exited 1')
         expect(p).toContain('repo health: `bun run lint` exited 1')
         expect(p).toContain('smallest possible edits')
-        // The exact cheat both validation runs used must be named as forbidden.
+        // The prompt's hard constraint names these git commands, because each one
+        // makes every finding vanish by discarding the work under judgement.
         expect(p).toContain('git checkout')
         expect(p).toContain('git stash')
         expect(p).toContain('LINT-FIX: DONE')
@@ -29,7 +30,9 @@ describe('buildLintFixPrompt frozen paths', () => {
         expect(p).toContain('SPEC-FROZEN PATHS')
         expect(p).toContain('- tsconfig.json')
         expect(p).toContain('- src/server/index.ts')
-        // The exact live trap must be named: the checker's error text instructing the edit.
+        // typescript-eslint's own error for a file outside the project says
+        // "Consider either including it in the tsconfig.json …", i.e. it instructs
+        // the very edit the freeze forbids. The prompt quotes that shape back.
         expect(p).toContain('consider including it in the tsconfig.json')
         expect(p).toContain('LINT-FIX: BLOCKED')
     })
@@ -129,9 +132,9 @@ test('runBoundedLintFix: deleted pre-existing untracked file trips the guard', a
 })
 
 test('runBoundedLintFix: git failing AFTER the fix → guard inconclusive, converged fix kept', async () => {
-    // The misfire: the child verifiably edited only lint findings, but a
-    // git failure after it made every comparison read as "work gone" → two GOOD
-    // converged fixes rolled back. A git error must be inconclusive, never evidence.
+    // A git failure after the child makes `dirtyFiles` answer null, which would
+    // otherwise read as "every pre-existing work file is gone" and roll back a
+    // good fix. A git error is inconclusive, never evidence.
     const calls: string[][] = []
     let postChild = false
     const git: LintFixDeps['git'] = args => {
@@ -183,10 +186,10 @@ test('runBoundedLintFix: untracked probe git error → file not flagged as disca
     expect(calls.some(c => c[0] === 'checkout')).toBe(false)
 })
 
-test('runBoundedLintFix: child edit to a clean frozen path → reverted, not applied (mx5 run 12)', async () => {
-    // The live incident shape: work file dirty throughout; tsconfig.json clean
-    // pre-child, modified by the child (status: pre '', post ' M tsconfig.json';
-    // third status call is revertFrozenPaths' own scoped check).
+test('runBoundedLintFix: child edit to a clean frozen path → reverted, not applied', async () => {
+    // Work file dirty throughout; tsconfig.json clean pre-child and modified by
+    // the child. The three scripted status stdouts are, in order: the pre-child
+    // frozen probe, the post-child one, and revertFrozenPaths' own scoped check.
     const {git, calls} = fakeGit({
         diff: ['src/feature.ts', 'src/feature.ts'],
         'ls-files': ['', ''],
@@ -214,8 +217,9 @@ test('runBoundedLintFix: child edit to a clean frozen path → reverted, not app
 })
 
 test('runBoundedLintFix: frozen path ALREADY dirty pre-child → never reverted, fix applied', async () => {
-    // A frozen path carrying pre-existing (possibly task) work is not the
-    // child's doing — the guard must cost time, never work; rule 4b still sees it.
+    // A frozen path already dirty before the child is the task's own work, not the
+    // child's, so the guard must leave it alone. Verify's prohibition probe still
+    // sees it.
     const {git, calls} = fakeGit({
         diff: ['src/feature.ts\ntsconfig.json', 'src/feature.ts\ntsconfig.json'],
         'ls-files': ['', ''],
@@ -253,10 +257,10 @@ test('runBoundedLintFix: no frozenPaths → no status probes, prior behavior int
     expect(calls.some(c => c[0] === 'status')).toBe(false)
 })
 
-test('runBoundedLintFix: child DELETING a sibling task deliverable → restored, not applied (mx5 run 12 PROMPT 2)', async () => {
-    // The 17:53:44 live shape: the sibling's ct files are CLEAN tracked files —
-    // neither pre-dirty nor pre-untracked, so the revert-guard is blind — and
-    // deleting them greens the lint. The provenance guard must catch it.
+test('runBoundedLintFix: child DELETING a sibling task deliverable → restored, not applied', async () => {
+    // The sibling's files are CLEAN tracked files: neither pre-dirty nor
+    // pre-untracked, so the revert-guard cannot see them, while deleting them
+    // greens the lint. Only the provenance guard catches this.
     const {git, calls} = fakeGit({
         diff: ['src/feature.ts', 'src/feature.ts'],
         'ls-files': ['', ''],
@@ -469,11 +473,9 @@ test('runBoundedLintFix: frozen-path trace matches whole path tokens only (tscon
 
 // ─── The BLOCKED rung, and the guard trail ──────────────────────────────────
 //
-// `buildLintFixPrompt` has always instructed the child to end with
-// `LINT-FIX: DONE` / `LINT-FIX: BLOCKED <why>`, and the call site discarded the
-// reply — nothing in src/ or scripts/ parsed it. These tests could not exist
-// while that was true, and the suite's own habit of feeding `'LINT-FIX: DONE'`
-// as fake output is exactly what kept it invisible.
+// `buildLintFixPrompt` instructs the child to end with `LINT-FIX: DONE` or
+// `LINT-FIX: BLOCKED <why>`, and `parseFixMarker` reads it. Feeding a fake child
+// the DONE marker, as most tests above do, never exercises the BLOCKED branch.
 
 test('a BLOCKED child that did NOT converge reports its OWN reason', async () => {
     const {git} = fakeGit({
