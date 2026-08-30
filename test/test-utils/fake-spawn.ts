@@ -7,7 +7,8 @@
  *   - fakeSpawnByPrompt(match) — picks a response by inspecting the prompt arg
  *
  * The shape matches SpawnFn from src/shared/child-process.ts: a function
- * returning a ProcLike (EventEmitter with stdout/stderr/kill/killed).
+ * returning a ProcLike — an EventEmitter carrying stdin, stdout, stderr, killed
+ * and kill().
  */
 
 import {EventEmitter} from 'node:events'
@@ -75,8 +76,8 @@ export function makeProc(): EventEmitter & ProcLike & {stdinData: string} {
     const emitter = new EventEmitter() as EventEmitter & ProcLike & {stdinData: string}
     emitter.stdout = new EventEmitter()
     emitter.stderr = new EventEmitter()
-    // Capture whatever runChild writes to stdin (the prompt, since it no longer
-    // rides on argv). Tests that need the prompt read `stdinData` after the run.
+    // Capture whatever runChild writes to stdin — that is where it delivers the
+    // prompt. Tests that need the prompt read `stdinData` after the run.
     emitter.stdinData = ''
     emitter.stdin = {
         write: (chunk: string) => {
@@ -119,11 +120,11 @@ export function fakeSpawnQueue(responses: ReadonlyArray<SpawnResponse>): SpawnFn
 export function fakeSpawnByPrompt(match: (args: ReadonlyArray<string>) => SpawnResponse): SpawnFn {
     return ((_cmd: string, args: ReadonlyArray<string>) => {
         const p = makeProc()
-        // The prompt now arrives on stdin, which runChild writes synchronously
-        // right after this returns — so defer response selection to a microtask
-        // and append the captured prompt as the final args element. Matchers that
-        // read args[args.length - 1] keep working whether the prompt came via
-        // argv (old) or stdin (new); arg-only spawns (git) get nothing appended.
+        // The prompt arrives on stdin, which runChild writes synchronously right
+        // after this returns — so defer response selection to a microtask and append
+        // the captured prompt as the final args element. A matcher reading
+        // args[args.length - 1] then sees it either way; an arg-only spawn (git)
+        // gets nothing appended.
         queueMicrotask(() => {
             const argsForMatch = p.stdinData.length > 0 ? [...args, p.stdinData] : args
             emitResponse(
@@ -263,10 +264,12 @@ export function agentEndResponse(text: string, exitCode = 0): SpawnResponseJsonE
 }
 
 /**
- * Convenience: a model-failure agent_end — stopReason "error" with the real
- * cause in errorMessage and empty text content, exactly as pi emits when the
- * provider/local model dies after its own retries (see agent.js handleRunFailure).
- * Note exitCode defaults to 0: pi exits cleanly even on a model error.
+ * Convenience: a model-failure agent_end — stopReason "error", the cause in
+ * errorMessage, and empty text content. That is the shape pi-agent-core's
+ * `handleRunFailure` builds: an assistant message with content
+ * [{type: 'text', text: ''}] and stopReason "error", pushed through message_start,
+ * message_end, turn_end and agent_end. exitCode defaults to 0, so the failure
+ * rides in the events rather than in the exit status.
  */
 export function agentErrorResponse(errorMessage: string, exitCode = 0): SpawnResponseJsonEvents {
     return {
