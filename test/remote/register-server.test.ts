@@ -79,9 +79,11 @@ function fakePi(): {pi: ExtensionAPI; on: Handlers} {
     const on: Handlers = new Map()
     const pi = {
         on: (name: string, handler: (event: never, ctx: never) => unknown) => {
-            // setupEvents re-registers many events; the LAST registration for a
-            // name is registerRemote's own only for the two it owns, so keep the
-            // first — registerRemote runs before setupEvents.
+            // Keep the FIRST handler registered under each name. registerRemote
+            // owns exactly two — `session_start` and `session_shutdown` — and it
+            // calls `setupEvents(pi)` from INSIDE its session_start handler, so
+            // setupEvents' ten registrations all arrive later. Keeping the first
+            // leaves this map holding the two handlers these tests drive.
             if (!on.has(name)) on.set(name, handler)
         },
         registerCommand: () => {},
