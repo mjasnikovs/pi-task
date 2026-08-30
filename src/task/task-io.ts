@@ -144,10 +144,10 @@ export async function setTaskSection(
 /**
  * Append one timestamped line to the task's `## gates` section — the durable
  * per-task trail of gate outcomes (verify verdicts, enforce mode/verdict, commit
- * results). Motivated by the audit: verdict text lived only in memory and
- * terminal notifies, so "did enforce run for this task, and in which mode?" was
- * unanswerable from artifacts. Best-effort by design: a failure to record must
- * never break the gate sequence, so all errors are swallowed.
+ * results). A verdict that lives only in memory and a terminal notify cannot
+ * answer "did enforce run for this task, and in which mode?" after the run.
+ * Best-effort by design: a failure to record must never break the gate sequence,
+ * so all errors are swallowed.
  */
 export async function appendGateRecord(cwd: string, id: string, line: string): Promise<void> {
     try {
