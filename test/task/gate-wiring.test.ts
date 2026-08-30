@@ -1,9 +1,8 @@
 /**
- * REGRESSION — two wirings that compile, read as done, and are not.
- *
- * Both are structural: nothing observable at a seam tells them apart from the
- * correct wiring, because the defect IS the argument that was never passed. So
- * they are asserted against the source, in the one place a reader would look.
+ * Two wirings that compile either way, so no seam can observe them: an optional
+ * argument left off a call still type-checks and still returns the right value —
+ * only the cancel and the progress hook silently go missing. Both are therefore
+ * asserted against the source text of the call site itself.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -28,10 +27,10 @@ function callSites(source: string, name: string): string[] {
 }
 
 describe("the gate's cancel reaches the gate", () => {
-    // `FinalGateOptions.signal` was added so a cancel can reach repo-health, the
-    // lockfile/integration/launch sections and every ACCEPT-debt re-run — the
-    // whole reason `CommandRunner` became async. If no production caller supplies
-    // it, that plumbing is inert and the documented behaviour does not hold.
+    // `FinalGateOptions.signal` is optional, and it is what carries the run's
+    // cancel into repo-health, the lockfile/integration/launch sections and the
+    // ACCEPT-debt re-runs. A production caller that omits it leaves that whole
+    // path inert, and nothing about the gate's return value says so.
     for (const file of ['gate-deps.ts', 'auto-orchestrator.ts']) {
         test(`every runFinalIntegrationGate call in ${file} passes a signal`, () => {
             const sites = callSites(src(file), 'runFinalIntegrationGate')
@@ -41,8 +40,9 @@ describe("the gate's cancel reaches the gate", () => {
     }
 
     test('the post-autofix debt recompute passes one too', () => {
-        // Same section, same cancel: `recheckOpenDebts` re-runs every ACCEPT-debt
-        // VERIFY command against the final tree, each under a 300s cap.
+        // Same cancel, same reason: `recheckOpenDebts` wires `deriveOpenDebts`,
+        // which re-runs every ACCEPT-debt VERIFY command against the final tree
+        // under DEBT_RERUN_TIMEOUT_MS.
         for (const site of callSites(src('auto-orchestrator.ts'), 'deriveOpenDebts')) {
             expect(site).toContain('signal')
         }
@@ -51,13 +51,10 @@ describe("the gate's cancel reaches the gate", () => {
 
 describe('the dead-air A/B arms differ', () => {
     test('the baseline arm no longer runs repo-health a second way', () => {
-        // The arm was `Promise.resolve(runRepoHealthCheck(cwd2))` because
-        // `runRepoHealthCheck` was SYNCHRONOUS and blocked the event loop — that
-        // block was the thing being measured. It is async now, so both arms are
-        // non-blocking and a dead-air harness compares treatment
-        // against treatment. Worse, the baseline branch drops the signal and the
-        // progress hook, so `DEADAIR_AB_ARM=baseline` silently makes repo-health
-        // uncancellable and mute.
+        // `runRepoHealthCheck` carries `signal` and `onCommand` in its options bag,
+        // both optional. A bare `runRepoHealthCheck(cwd2)` therefore compiles and
+        // returns a real verdict while the run's cancel and the loader's command
+        // name are both dropped, so no path may call it that way.
         expect(src('gate-deps.ts')).not.toMatch(/runRepoHealthCheck\(\s*cwd2\s*\)/)
     })
 })
