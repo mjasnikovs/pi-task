@@ -1,14 +1,12 @@
 /**
  * render-check — one headless-browser page load against the booted app's live
- * listener, judging whether the client actually RENDERED anything (and
- * 11).
+ * listener, judging whether the client actually RENDERED anything.
  *
- * The failure class: every "renders without runtime errors" check in the pipeline
- * was curl — and curl cannot execute JavaScript. A run can ship an app whose ESM
- * bundle was loaded in a classic script tag: HTTP 200 on every route, permanently
- * BLANK page, all gates green. Or a router with no <Switch> (the 404
- * fallback rendered on every page) — invisible to every gate for the same reason.
- * The gate's boot check proves a LISTENER exists; this proves the
+ * The failure class: every other "renders without runtime errors" check in the
+ * pipeline is curl-shaped (boot-probe.ts says so at its own call site), and curl
+ * cannot execute JavaScript. An app whose client bundle throws on load answers
+ * HTTP 200 on every route and shows a permanently BLANK page, with every such
+ * check green. The gate's boot check proves a LISTENER exists; this proves the
  * listener serves a page whose client code MOUNTS something.
  *
  * Mechanism, deterministic and dependency-free: discover a Chrome-family binary
@@ -17,8 +15,8 @@
  * page's JS under a virtual-time budget), and judge the RENDERED body: it must
  * contain visible text or concrete visual/interactive elements. A blank mount
  * point after JS ran is the class — FAIL with the body's shape. What it
- * deliberately does NOT judge: correctness of what rendered ('s 404-below-
- * login needs app knowledge no generic gate has).
+ * deliberately does NOT judge: whether what rendered is CORRECT. That needs app
+ * knowledge no generic gate has.
  *
  * Env-gap contract as everywhere: no browser found, a browser that cannot launch,
  * or a dump that produced nothing → SKIP with a note (the caller surfaces it as
@@ -54,12 +52,10 @@ function onPath(bin: string): boolean {
 
 /**
  * The newest Playwright-cache Chromium, if any — the HEADLESS SHELL preferred over
- * the full build. Found, never installed: the cache exists on any box that ever ran
- * Playwright browsers (many projects install it as their own test
- * dependency). The headless shell is purpose-built for `--dump-dom` and returns
- * promptly on a network URL where the full system chromium can stall under a
- * virtual-time budget (validated live on this box: shell exits 0 in ~1s, full
- * chromium times out at 30s on the same http:// URL).
+ * the full build. Found, never installed: the cache exists on any box that ever
+ * ran Playwright browsers, which many projects install as a test dependency. The
+ * headless shell is preferred because it is purpose-built for exactly this — one
+ * `--dump-dom` and exit — with no browser UI to bring up.
  */
 export function playwrightCachedChromium(): string | null {
     const cache =
@@ -156,17 +152,17 @@ const RENDER_TIMEOUT_MS = 30_000
 const VIRTUAL_TIME_BUDGET_MS = 8_000
 
 /**
- * A Chrome console line on stderr:
+ * A Chrome console line on stderr, as chrome-headless-shell writes it:
  *
- *     [PID:PID:MMDD/HHMMSS.uuuuuu:INFO:CONSOLE:322] "Uncaught ReferenceError:
- *         process is not defined", source: http://localhost:8791/main.js (322)
+ *     [0830/084427.287122:INFO:CONSOLE:1] "Uncaught ReferenceError: process is
+ *         not defined", source: http://127.0.0.1:8791/boom.html (1)
  *
- * Only the severity and the message survive. The bracketed pid/tid/timestamp
- * prefix is DROPPED on purpose: it changes every run, and the failure detail is
- * the string `normalizeFailureDetail` compares across autofix attempts. A volatile
- * prefix in there would make two runs of the SAME defect look different, which is
- * a change to the non-progress classifier's behaviour — and 19B may not change any
- * verdict, only explain one.
+ * Only the severity and the message survive. The bracketed timestamp prefix — some
+ * builds prepend a pid/tid pair too, which is why the prefix is matched loosely —
+ * is DROPPED on purpose: it changes every run, and the failure detail is the string
+ * `normalizeFailureDetail` (final-gate-progress.ts) compares across autofix
+ * attempts. A volatile prefix in there would make two runs of the SAME defect look
+ * different, silently changing the non-progress classifier's behaviour.
  */
 const CONSOLE_LINE_RE = /^\[[^\]]*:(INFO|WARNING|ERROR|VERBOSE\d*):CONSOLE:\d*\]\s*(.*)$/
 
@@ -176,17 +172,10 @@ const MAX_CONSOLE_LINES = 12
 /**
  * The page's console output, as captured while the DOM was being rendered.
  *
- * MEASURED on this box (2026-08-14) against the shipped bundle, both
- * binaries the probe can discover:
- *
- *     /usr/bin/chromium              --dump-dom alone → 0 bytes of stderr
- *                                    + --enable-logging=stderr --v=0 → 2 CONSOLE
- *                                      lines, one of them the cause
- *     playwright chrome-headless-shell
- *                                    → the 2 CONSOLE lines either way
- *
- * and in ALL FOUR arms stdout was byte-identical at 318 bytes, so the DOM the
- * judge reads is untouched by the flags.
+ * `--enable-logging=stderr --v=0` is what routes the page's console to stderr.
+ * The DOM the judge reads is untouched by those flags: with and without them,
+ * `--dump-dom` writes byte-identical stdout on both binaries this probe can
+ * discover.
  */
 export function parseConsoleLines(stderr: string): string[] {
     const out: string[] = []
@@ -205,11 +194,9 @@ export function parseConsoleLines(stderr: string): string[] {
 /**
  * Append the console output to a FAIL detail — and to nothing else.
  *
- * WHY. A fix child is
- * told "the body is EMPTY" and nothing more. It spent 45 minutes on tests, bundler
- * config and static serving, read the offending line twice, and moved on. The
- * probe was holding the answer the whole time: `Uncaught ReferenceError: process
- * is not defined`, at main.js:322.
+ * Without it the fix child is told "the body is EMPTY" and nothing more, while the
+ * probe was holding the cause the whole time: the page's own
+ * `Uncaught ReferenceError`, with the source file and line Chrome already printed.
  *
  * Strictly additive by construction: it takes an existing FAIL detail and returns
  * it with text appended. It cannot turn a PASS into a FAIL, cannot reach
@@ -243,9 +230,9 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
             '--no-sandbox',
             '--disable-dev-shm-usage',
             `--virtual-time-budget=${VIRTUAL_TIME_BUDGET_MS}`,
-            // Route the page's console to stderr. stdout — the DOM
-            // the judge reads — is byte-identical with and without these; measured
-            // on both discoverable binaries, see withConsoleEvidence.
+            // Route the page's console to stderr. stdout — the DOM the judge
+            // reads — is byte-identical with and without these; see
+            // parseConsoleLines.
             '--enable-logging=stderr',
             '--v=0',
             '--dump-dom',
@@ -268,7 +255,7 @@ export function runRenderCheck(url: string, browser?: string | null): RenderOutc
     }
     const judged = judgeRenderedDom(dom)
     // The verdict is the judge's, unchanged. Only a FAIL grows: it carries the
-    // console output the probe already had at the moment it judged (19B).
+    // console output the probe already had at the moment it judged.
     return judged.ok ?
             {outcome: 'pass', detail: judged.detail}
         :   {outcome: 'fail', detail: withConsoleEvidence(judged.detail, r.stderr ?? '')}
