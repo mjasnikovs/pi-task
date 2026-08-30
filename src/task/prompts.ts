@@ -1,8 +1,8 @@
 /**
  * Prompt templates for every phase of the pi-task pipeline.
  *
- * Each template is a pure function: inputs → prompt string.  No I/O, no side
- * effects, trivially testable.
+ * Each template is a pure function or a plain string constant: inputs → prompt
+ * text. The module imports nothing, so there is no I/O and no side effect.
  */
 
 // Caps both the per-response question count (parseGrillQuestions/parseClarifyList)
@@ -37,8 +37,7 @@ ${title}`
  *
  * Without it, refine is told "the task title is only a pointer into that spec —
  * follow the spec" with no signal that the other steps exist, so a one-step
- * "Scaffold …" title re-expands the entire design into one task (validated: a real
- * /task-auto run implemented all 24 steps under step 1).
+ * "Scaffold …" title can re-expand the entire design into one task.
  */
 const REFINE_PROMPT = (
     raw: string,
@@ -82,11 +81,11 @@ const RESEARCH_READ_ONLY_CONSTRAINT = `IMPORTANT: You are ONLY allowed to READ. 
 
 // Shared guard for every research worker. Open-ended tasks ("analyze the code",
 // "how would you improve X", "write a report") tempt a worker into producing the
-// deliverable itself — e.g. writing the whole code-review report in the CONTEXT
-// section, which then runs for many minutes, gets truncated, and poisons every
-// downstream phase. Research only gathers INPUTS for a later spec; it must never
-// be the deliverable. This also pins the output format (no preamble, no fences,
-// no repeated header) that large/open-ended tasks otherwise drift away from.
+// deliverable itself — writing the whole code-review report into the CONTEXT
+// section instead of the facts that section is for. Research only gathers INPUTS
+// for a later spec; it must never be the deliverable. It also pins the output
+// format: no preamble, no code fences, and no repeat of the section name as a
+// header.
 const RESEARCH_INPUTS_NOT_DELIVERABLE = `CRITICAL — you are gathering INPUTS for a later spec, NOT performing the task. Even if the task asks you to analyze, review, audit, report, plan, design, or write code, you must NOT produce that deliverable here. Do not write the report/analysis/plan/code. Your entire job is to emit the one structured section described below, which feeds a separate phase that writes the spec. Surveying the repo so that section is accurate is right; producing the task's output is wrong and wastes the run.
 
 OUTPUT DISCIPLINE — strict: emit ONLY the raw section lines described below. No preamble (never "I've read the codebase…", never "Here is the … section"), no closing remarks, no Markdown headings, no code fences (no \`\`\`), and do NOT repeat the section name as a header. The first character of your output is the first entry of the list.`
@@ -151,17 +150,8 @@ No section header. No other sections. No preamble.
 Task:
 ${refined}`
 
-// STAGE 2 (2026-07-23): APIS_SEMANTICS_CONTRACT was wired in above and UNWIRED after its A/B
-// FAILED. It is the ONE lever of three that moved worker:apis's behaviour — behaviour-class
-// nearly every package query, where before it was almost none — completion is
-// set by the output CONTRACT, not the answer or the target). But it failed invariant 2a: the
-// ungrounded-symbol rate rose several-fold, and a large share of the semantics clauses it adds
-// are ungrounded, with the mandatory `UNVERIFIED:` abstention never used once. The model obeys
-// "ask a behaviour question" and ignores "abstain when you cannot verify", so it manufactures
-// semantics — the exact laundering the file exists to prevent. The module and its tests are
-// KEPT as the durable asset (like spec-urls.ts); only this
-// interpolation is reverted. Full write-up: nexxtasks.txt "STAGE 2". Re-run: scripts/
-// live-apis-contract-ab.ts. Do NOT re-wire without a lever that closes the abstention gap.
+// `APIS_SEMANTICS_CONTRACT` (apis-contract.ts) is deliberately NOT interpolated
+// into any prompt here. See that module's own docstring before wiring it in.
 
 const RESEARCH_CONTEXT_PROMPT = (
     refined: string
@@ -382,12 +372,13 @@ User Q&A:
 ${qa}
 ${contracts && contracts.trim() ? `\n${contracts.trim()}\n` : ''}`
 
-// Fast triage pass run before the (expensive) full rewrite. It produces either
-// the single token CLEAN — meaning the compose draft needs no rewrite — or a
-// short defect list. When CLEAN, the orchestrator returns the draft unchanged
-// and skips the rewrite entirely; otherwise the defects are fed into
-// CRITIQUE_PROMPT as a focus list so the rewrite targets real problems instead
-// of re-deriving them from scratch.
+// Fast triage pass run before the full rewrite. It produces either the single
+// token CLEAN — meaning the compose draft needs no rewrite — or a short defect
+// list. CLEAN alone does not skip the rewrite: phases.ts only short-circuits when
+// the draft already parses a VERIFY block, no deterministic critique probe forced
+// itself in, and there are no carried-in defects. Otherwise the triage defects are
+// fed into CRITIQUE_PROMPT as a focus list so the rewrite targets real problems
+// instead of re-deriving them from scratch.
 const CRITIQUE_TRIAGE_PROMPT = (
     spec: string,
     refined: string,
