@@ -1,13 +1,14 @@
 /**
- * boot-probe tests — the probe's own suite, moved wholesale out of
- * final-gate.test.ts along with the module.
+ * boot-probe tests — the probe on its own.
  *
- * Every case here is PURE: it drives `runBootCheck` with injected `BootDeps` or
- * feeds a parser a captured `ss`/`netstat`/`lsof` line. None of it needs the gate,
- * a declared launch contract, or a git tree — which is exactly why it separates
- * cleanly. The gate-level cases that happen to exercise boot (orphan-port recovery,
- * the served-page render check, the boot-skip UNOBSERVED verdict) stay with the
- * gate, because they run `runFinalIntegrationGate` end to end.
+ * Every case here drives `runBootCheck` with injected `BootDeps`, or feeds a
+ * parser an `ss` / `netstat` / `lsof` line. The whole file imports from
+ * boot-probe.js and nothing else: no gate, no declared launch contract, no git
+ * tree. That is why the probe separates cleanly.
+ *
+ * The gate-level cases that happen to exercise boot — orphan-port recovery, the
+ * served-page render check, the boot-skip UNOBSERVED verdict — live with the
+ * gate instead, because they run `runFinalIntegrationGate` end to end.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -154,9 +155,10 @@ describe('runBootCheck', () => {
         const dir = makeDir()
         const pidFile = path.join(dir, 'child.pid')
         // A parent that spawns a long-lived grandchild, records its pid, and stays
-        // alive itself. The boot check must tear down the WHOLE tree (grandchild
-        // included), so a leaked server can't mask later boot checks — killGroup
-        // uses a process-group kill on POSIX and taskkill /T on Windows.
+        // alive itself. The boot check must tear down the WHOLE tree, grandchild
+        // included, or a leaked server masks every later boot check. killGroup is
+        // `process.kill(-pid, sig)` on POSIX and `taskkill /pid <pid> /T /F` on
+        // win32 (boot-probe.ts:678), so both are tree teardowns.
         const fixture =
             `const {spawn}=require('child_process');const fs=require('fs');`
             + `const c=spawn(process.execPath,['-e','setTimeout(()=>{},600000)'],{stdio:'ignore'});`
@@ -179,8 +181,8 @@ describe('runBootCheck', () => {
         expect(alive).toBe(false)
     })
 
-    // Death by a Unix signal has no Windows equivalent (child.on('exit') never
-    // reports a signal there), so this behavior is POSIX-only.
+    // Death by a Unix signal has no Windows equivalent, so this behaviour is
+    // POSIX-only and the case is skipped rather than faked.
     itPosix('signal death within the window → FAIL naming the signal', async () => {
         const r = await runBootCheck(os.tmpdir(), ['sh', ['-c', 'kill -SEGV $$']])
         expect(r.outcome).toBe('fail')
@@ -197,8 +199,9 @@ describe('runBootCheck', () => {
         expect(r.outcome).toBe('skip')
     })
 
-    // item 3: a bind collision is an environment condition, not an app
-    // crash — it must be classified distinctly (orphan-port), never a bare FAIL.
+    // A bind collision is an ENVIRONMENT condition, not an app crash. It must be
+    // classified distinctly as orphan-port — the gate reaps and retries — and
+    // never reported as a bare FAIL against the app.
     test('EADDRINUSE bind failure → orphan-port with the port, not a FAIL', async () => {
         const r = await runBootCheck(
             os.tmpdir(),
@@ -230,11 +233,12 @@ describe('runBootCheck', () => {
     })
 })
 
-// item 1: a watcher is not a server. For a served app the boot check must
-// observe a LISTENER before it PASSes — mere survival (a CSS/bundler --watch) or a
-// quick exit 0 (a type-only entrypoint that serves nothing) is a FAIL. The listener
-// probe is injected so these are deterministic without binding a real socket. Skipped
-// on Windows, where the pgid-based listener requirement collapses to survival.
+// A watcher is not a server. For a served app the boot check must observe a
+// LISTENER before it PASSes: mere survival (a CSS or bundler --watch) and a quick
+// exit 0 (a type-only entrypoint that serves nothing) are both FAILs. The
+// listener probe is injected so these are deterministic without binding a real
+// socket. Skipped on win32, where expectServer is forced false and the
+// requirement collapses to survival.
 describe('runBootCheck — served-app listener requirement (run 10 item 1)', () => {
     const alive = nodeScript('setTimeout(()=>{},600000)')
 
@@ -281,9 +285,10 @@ describe('runBootCheck — served-app listener requirement (run 10 item 1)', () 
     )
 })
 
-// A sandbox may ship no ss/netstat/lsof, so the listener requirement
-// was unfalsifiable — it failed a run whose app demonstrably served, three autofix
-// passes could not move it, and 13 real repairs were stranded uncommitted.
+// A sandbox may ship no ss, netstat OR lsof. Then the listener requirement is
+// unfalsifiable: it fails an app that demonstrably serves, no fix attempt can
+// move it, and the repairs those attempts made are stranded. So a box that
+// cannot observe listeners must degrade, not fail.
 describe('runBootCheck — unobservable listener degrades, never false-FAILs (run 14)', () => {
     const alive = nodeScript('setTimeout(()=>{},600000)')
     const blind = {enumerationCapable: () => false, groupHasListener: () => false}
@@ -367,7 +372,7 @@ describe('listener enumeration parsers (run 14)', () => {
         expect(parseSsListeners(out)).toEqual([{pid: 1234, port: 3000}])
     })
 
-    // The tool the sandbox actually had.
+    // netstat is the fallback when ss is absent — some sandboxes ship only this.
     test('netstat -tlnp rows yield pid + port, skipping unattributed rows', () => {
         const out = [
             'Active Internet connections (only servers)',
@@ -685,10 +690,11 @@ describe('detectsServedApp (run 10 item 1)', () => {
 
 // ─── runBootSection: the boot CONCEPT, in one module ─────────────────────────
 //
-// Left in `final-gate.ts`, these branches — the four-armed BootOutcome
-// destructure, the probe defaults, orphan-port recovery, the port-holder
-// diagnosis sentence, the skip verdict and the rejected-launch-script arm — are
-// reachable only by driving the whole run-end gate over a temp tree.
+// runBootSection holds the branches that decide what the boot CONCEPT reports:
+// the four-armed BootOutcome destructure, the probe defaults, orphan-port
+// recovery, the port-holder diagnosis sentence, the skip verdict and the
+// rejected-launch-script arm. In final-gate.ts they would be reachable only by
+// driving the whole run-end gate over a temp tree.
 describe('runBootSection', () => {
     test('no launch surface at all → nothing attempted, nothing observed, no note', async () => {
         const v = await runBootSection(makeDir({scripts: {test: 't'}}))
@@ -699,7 +705,7 @@ describe('runBootSection', () => {
     })
 
     test('a REJECTED launch script on a served app is UNOBSERVED, not silence', async () => {
-        // 2A: "the project has no launch script" and "the project's only launch
+        // "the project has no launch script" and "the project's only launch
         // script is not a launch" are different facts, and the second must not
         // degrade into the first.
         const dir = makeDir({
@@ -714,8 +720,9 @@ describe('runBootSection', () => {
     })
 
     test('a boot that FAILS is a rank-0 failure a probe OBSERVED', async () => {
-        // OBSERVED: the launch command itself exited non-zero, which
-        // is a probe having looked — distinct from the harness conditions below.
+        // OBSERVED: the launch command itself exited non-zero. That is a probe
+        // having LOOKED, distinct from the harness conditions below, where
+        // nothing was observed at all.
         const dir = makeDir({scripts: {start: 'echo boom 1>&2; exit 3'}})
         const v = await runBootSection(dir, {graceMs: 500})
         expect(v.attempted).toBe('bun')
