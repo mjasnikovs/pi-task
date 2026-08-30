@@ -2,7 +2,7 @@ import * as path from 'node:path'
 
 /**
  * Tests live under `test/`, mirroring `src/`. A test that READS or WALKS the
- * source tree must resolve it explicitly: `import.meta.dir` now points inside
+ * source tree must resolve it explicitly: `import.meta.dir` points inside
  * `test/`, where a source scan finds nothing and the assertion passes
  * vacuously. That is a silent failure, so the source root is named here once.
  */
