@@ -1,7 +1,8 @@
 /**
- * launch-contract tests — the declared-script extraction (parse + grounding) and the
- * deterministic manifest diff the final gate FAILs on. Parse and
- * grounding are pure; record/read run against a real throwaway.pi-tasks dir.
+ * launch-contract tests — the declared-script extraction (parse + grounding) and
+ * `missingDeclaredScripts`, whose result the final gate hands straight to
+ * `tally.fail`. Parse and grounding are pure; record/read run against a real
+ * throwaway `.pi-tasks` dir.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -23,7 +24,7 @@ function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-launch-contract-'))
 }
 
-// The verbatim DESIGN §9 line that declares the required scripts.
+// A design line of the shape the grounding guard reads: script names in backticks.
 const SCRIPTS_LINE = '- **Scripts:** `dev`, `build`, `migrate`, `seed`, `test`.'
 
 describe('parseScriptLines', () => {
@@ -35,8 +36,9 @@ describe('parseScriptLines', () => {
 
     test('rejects a non-script-shaped token (a sentence/path)', () => {
         expect(parseScriptLines('SCRIPT: run the migrations\nSCRIPT: src/server/seed.ts')).toEqual([
-            // "run" is the first token of the sentence (script-shaped) — kept;
-            // "src/server/seed.ts" has slashes/dots → rejected.
+            // parseScriptLines takes the FIRST whitespace/comma token, so the
+            // sentence yields "run", which SCRIPT_NAME_RE accepts. The path token
+            // has slashes and dots, which that regex does not.
             'run'
         ])
     })
@@ -61,13 +63,13 @@ describe('keepGroundedScripts (the anti-fabrication guard)', () => {
     })
 })
 
-describe('enumerateScriptCandidates (the mechanical recall floor — mx5 run 11)', () => {
+describe('enumerateScriptCandidates (the mechanical recall floor)', () => {
     const projectSpec = fs.readFileSync(
         path.join(import.meta.dir, '__fixtures__', 'project-spec.md'),
         'utf8'
     )
 
-    test('the real run-11 doc yields every declared script, including the §2-only test:ct', () => {
+    test('a full project spec yields every declared script, including test:ct', () => {
         const candidates = enumerateScriptCandidates(projectSpec)
         for (const name of ['dev', 'build', 'migrate', 'seed', 'test', 'lint', 'test:ct']) {
             expect(candidates).toContain(name)
@@ -104,10 +106,11 @@ describe('enumerateScriptCandidates (the mechanical recall floor — mx5 run 11)
         expect(enumerateScriptCandidates('The `migrate` step runs first.')).toEqual([])
     })
 
-    test('CRLF line endings parse identically to LF (windows-latest checkout)', () => {
-        // A Windows-authored design has \r\n between paragraphs; the paragraph
-        // gate must still split it (regression: windows CI collapsed the whole
-        // doc into one paragraph and capped out on early package backticks).
+    test('CRLF line endings parse identically to LF', () => {
+        // The paragraph split marker is /\n[ \t]*\n/, which cannot match `\r\n\r\n`.
+        // Without the CRLF normalisation the whole doc is one paragraph, so the
+        // "scripts" word gate passes everywhere and MAX_SCRIPTS is spent on the
+        // package-name backticks that appear first.
         const lf = 'Scripts: `dev`, `build`.\n\nDependencies: `hono`, `zod`.'
         const crlf = lf.replace(/\n/g, '\r\n')
         expect(enumerateScriptCandidates(crlf)).toEqual(enumerateScriptCandidates(lf))
@@ -132,7 +135,7 @@ describe('LAUNCH_EXTRACT_PROMPT candidates block', () => {
 })
 
 describe('missingDeclaredScripts (the deterministic diff lever)', () => {
-    test('flags declared scripts the manifest is missing — the real mx5 case', () => {
+    test('flags declared scripts the manifest is missing', () => {
         const declared = ['dev', 'build', 'migrate', 'seed', 'test']
         const shipped = ['dev', 'build', 'lint', 'test', 'test:ct'] // the package.json
         expect(missingDeclaredScripts(declared, shipped)).toEqual(['migrate', 'seed'])
@@ -169,8 +172,8 @@ describe('appendDeclaredScripts / readDeclaredScripts', () => {
     })
 })
 
-describe('runnableDeclaredScripts (mx5 run 11 — existence is not launchability)', () => {
-    test('run-11 contract: boot-class and covered scripts drop, migrate/seed remain', () => {
+describe('runnableDeclaredScripts — existence is not launchability', () => {
+    test('boot-class and covered scripts drop, migrate/seed remain', () => {
         expect(
             runnableDeclaredScripts(['dev', 'build', 'migrate', 'seed', 'test'], ['test', 'build'])
         ).toEqual(['migrate', 'seed'])
