@@ -7,13 +7,12 @@ import {openCache} from '../../src/workers/docs-cache.js'
 import {abstentionSentence, isAbstention} from '../../src/workers/abstention.js'
 
 /**
- * docs-project.ts had NO test file. It could not easily have one: `getProjectFiles`
- * shelled out to a real `git ls-files` with no injection, so any test of the
- * project path needed a real temp directory, real files, and a machine with git
- * where the temp dir was not itself inside a repo. `listFiles` is now injectable.
+ * `projectDocsRaw` takes `listFiles` as a parameter, defaulting to
+ * `getProjectFiles` (which shells out to `git ls-files`). A test injects its own
+ * list instead, so no repo and no git binary are involved.
  *
  * The files still have to EXIST — indexing reads them — but they are ordinary
- * files in a temp dir, with no repo and no git binary involved.
+ * files in a temp dir.
  */
 function withFiles<T>(files: Record<string, string>, fn: (cwd: string, abs: string[]) => T): T {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-'))
@@ -113,7 +112,8 @@ test('the project prompt instructs the abstention the host actually recognises',
     const p = buildProjectPrompt('my-app', 'how do I log in?', 'export function login() {}')
     expect(p).toContain(abstentionSentence('project'))
     expect(isAbstention(abstentionSentence('project'))).toBe(true)
-    // The content tag is referenced by three separate rules; they must agree.
+    // Beyond the wrapper itself, the tag is named by the output-shape template
+    // and by two of the numbered rules; all of them must spell it the same way.
     expect(p).toContain('<project-content>')
     expect(p.match(/<project-content>/g)?.length).toBeGreaterThan(1)
 })
