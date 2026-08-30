@@ -1,10 +1,15 @@
 /**
  * pi-worker — minimal subagent tool.
  *
- * Spawns a sandboxed child `pi --print` for each call, returns its stdout.
- * Child has read+grep+find+ls only (no bash, write, or edit) — no skills,
- * extensions, prompt templates, context files, or session storage. Cannot
- * recurse into another worker.
+ * Spawns one child pi per call and returns its assistant text. `childBaseArgs`
+ * gives the child `--print --no-skills --no-extensions --no-prompt-templates
+ * --no-context-files --no-session`, and runWorker adds `--mode json` plus its
+ * default `--tools read,grep,find,ls`.
+ *
+ * That tool string is what makes the child read-only and non-recursive: no bash,
+ * write or edit, and no `pi-worker` of its own to dispatch. `--no-extensions`
+ * disables DISCOVERY, so the user's whitelisted `-e` extensions are still loaded
+ * — the tool whitelist, not the extension flag, is the bound that holds.
  */
 
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
@@ -58,24 +63,26 @@ export function registerPiWorker(pi: ExtensionAPI): void {
         parameters: WorkerParams,
 
         async run(params, signal, ctx) {
-            // Grouped with `research`: this is the same read-only exploration
-            // loop the four research workers run, just dispatched by a model
-            // rather than by the pipeline. Left ungrouped it would be the one
-            // child that never honoured a profile.
+            // `adhoc` guards, `research` thinking — deliberately not the same word.
+            // Guards answer "how may this child die"; the reasoning group answers
+            // "how hard may it think", and this is the same read-only exploration
+            // loop the research workers run, just dispatched by a model rather than
+            // by the pipeline. See the header of worker-profiles.ts.
             const result = await runWorker({
                 prompt: params.prompt,
                 cwd: ctx.cwd,
                 signal,
                 profile: 'adhoc',
-                // The user's own `stuck reply retry` is what bounds this worker
-                // now — it kills on SILENCE, never on slowness. It is an INPUT and
+                // The `adhoc` profile carries NO wall clock (`timeoutMs: 0`); what
+                // bounds this worker is the user's own `stuck reply retry` setting,
+                // which kills on SILENCE and never on slowness. It is an INPUT and
                 // not policy for the same reason the gate's two ceilings are: the
                 // number is the user's, the decision to arm it is the profile's.
                 policyInputs: {streamInactivityMs: getConfig().streamInactivityMs},
-                // The session's own window, handed down. The child is spawned
-                // without `-m`, so the parent's model IS the child's model and
-                // its window is the honest one. Without this the churn rule
-                // cannot fire — see RunWorkerInput.contextWindow.
+                // The session's own window, handed down. No child argv anywhere in
+                // this codebase passes `-m`, so the parent's model IS the child's
+                // model and its window is the honest one. Without this the churn
+                // rule cannot fire — see RunWorkerInput.contextWindow.
                 contextWindow: getParentContextWindow(ctx) || 'unknown',
                 thinking: groupThinkingArgs('research')
             })
