@@ -59,7 +59,8 @@ describe('renderQuestionBox', () => {
         // The bar spans every line of the selected card (top, body, bottom) — not
         // a single glyph — so it is clearly visible.
         expect(sel0.filter(l => l.startsWith('▌')).length).toBeGreaterThan(1)
-        // Only the selected card carries the bar: card 0 (one body line) marks 3 rows.
+        // Only the selected card carries the bar. Card 0 wraps to one body line, so
+        // its top, body and bottom are the three marked rows.
         expect(sel0.filter(l => l.startsWith('▌')).length).toBe(3)
         // Moving the cursor moves the bar.
         expect(sel0).not.toEqual(sel1)
@@ -86,7 +87,8 @@ describe('renderQuestionBox', () => {
     test('narrow widths drop the tag but keep boxes intact', () => {
         const lines = renderQuestionBox(14, 'Q?', CARDS, 0, PLAIN)
         expect(lines.filter(l => l.includes('┌')).length).toBe(CARDS.length)
-        // Too narrow for "┌─ RECOMMENDED ─┐", so the tag is omitted.
+        // Below TAG_MIN_BOX_WIDTH — the smallest box that fits "┌─ RECOMMENDED ─┐" —
+        // question-box.ts drops the tag rather than breaking the border.
         expect(lines.join('\n')).not.toContain('RECOMMENDED')
     })
 
