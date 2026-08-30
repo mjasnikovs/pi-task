@@ -1,11 +1,10 @@
 import {test, expect, describe} from 'bun:test'
 import {isTypeOnlyAnswer, proseOf} from '../../src/task/type-only-answer.js'
 
-// Every POSITIVE and every real NEGATIVE below is VERBATIM from a real run's
-// research-cache.json (answer bodies extracted from the formatted `text`, i.e. the prose
-// between the `Per <pkg>@<ver>:` header and `Source excerpt:`). The detector is judged
-// against real emitted text, not text invented to make it pass. Questions are the cache
-// keys (whitespace-collapsed + lowercased by normalizeQuery — same rider as the fixtures).
+// The detector reads two strings: a docs answer body, and the question it answered.
+// The question fixtures are shaped like research-cache keys — whitespace-collapsed and
+// lowercased, which is what normalizeQuery in workers/research-cache.ts does. Case is
+// not what decides a verdict: USAGE_INTENT and BEHAVIOURAL match case-insensitively.
 
 // ─── POSITIVES: type-only answers that must be caught ───────────────────────────────────
 
@@ -24,8 +23,8 @@ describe('positives — signature restatements with no behaviour', () => {
     })
 
     test('a bare interface/class declaration restatement is type-only', () => {
-        // Shape of F-2's "bare declaration restatement": every clause names a member and its
-        // type; nothing says what any of it DOES. Question seeks usage ("how do I use").
+        // A bare declaration restatement: every clause names a member and its type, and
+        // nothing says what any of it DOES. The question seeks usage ("how do i use").
         const question = 'how do i use the router fixture? what methods and properties does it have'
         const answer =
             'The `Router` interface extends `BaseRouter` and declares `route` of type `RouteFn`, '
@@ -35,8 +34,8 @@ describe('positives — signature restatements with no behaviour', () => {
     })
 
     test('a signature naming a parameter only by its opaque type is type-only', () => {
-        // "of type Prefix" conveys nothing about what the parameter MEANS or DEFAULTS to in
-        // behaviour — the precise F-2 hole.
+        // "of type Prefix" conveys nothing about what the parameter MEANS or DEFAULTS
+        // to in behaviour.
         const question = 'how does the base url work when creating the client'
         const answer =
             'The factory takes two parameters: `baseUrl` of type `Prefix` and an optional '
@@ -90,9 +89,8 @@ describe('negatives — real run-15 answers that explain behaviour', () => {
     })
 
     test('a signature answer to an explicit TYPE question is not gated in', () => {
-        // The question asks only for the "full signature" — a signature answer is responsive,
-        // so gate 1 (usage intent) clears it. This is why the many legitimate signature
-        // answers in the corpus (toBuffer, BuildOutput, …) are not flagged.
+        // The question asks only for the "full signature", so a signature answer is
+        // responsive and gate 1 (usage intent) clears it before anything else runs.
         const question =
             'tobuffer() full signature with all options - format, quality, resolvewithobject'
         const answer =
@@ -102,12 +100,12 @@ describe('negatives — real run-15 answers that explain behaviour', () => {
     })
 })
 
-// ─── REGRESSION: method names inside a signature are identifiers, not behaviour ─────────
+// ─── Method names inside a signature are identifiers, not behaviour ─────────────────────
 //
-// The behavioural scan once ran over the whole answer, so a method name inside a
-// declaration (`use(...handlers)` matching /\buse\b/, `handler` matching /handle/) cleared
-// a genuinely type-only answer. Gate 2 now scans `proseOf(answer)`. These six cases are the
-// coordinator's stress set and must all hold.
+// A behavioural scan over the WHOLE answer reads a method name in a declaration as a
+// verb: `use(...handlers)` matches /\buse\b/, `handler` matches /handle/, and a genuinely
+// type-only answer clears. Gate 2 scans `proseOf(answer)`, which blanks call fragments
+// first.
 
 describe('prose stripping — signature fragments are not prose', () => {
     test('proseOf removes call fragments so their identifiers cannot read as verbs', () => {
