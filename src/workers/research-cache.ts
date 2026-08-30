@@ -2,13 +2,11 @@
  * research-cache — a per-run cache of docs/search/fetch worker RESULTS, shared
  * across the sibling task pipelines of one /task-auto run.
  *
- * The failure this serves: the research phase alone burned 75 of
- * 363 minutes because ~20 sibling task pipelines each re-fetched the SAME external
- * docs and re-ran the SAME searches (the tailwind CLI docs fetched anew for task
- * after task). Each of those worker results is a deterministic function of (tool,
- * package/url, query) that does not change within a run — so the first pipeline to
- * ask a question can answer every later one from a shared digest instead of a fresh
- * network round-trip plus child-summariser spawn.
+ * The failure it serves: every sibling task pipeline in a run re-fetches the SAME
+ * external docs and re-runs the SAME searches. Each of those worker results is a
+ * deterministic function of (tool, package/url, query) that does not change within a
+ * run — so the first pipeline to ask a question can answer every later one from a
+ * shared digest instead of a fresh network round-trip plus a child-summariser spawn.
  *
  * SCOPE — stable external lookups only: npm-package docs, web search, web fetch. A
  * PROJECT-SOURCE (`.`) docs lookup is deliberately NOT cached: the working tree
@@ -25,27 +23,17 @@
  * a run started with the feature flag OFF (no id in the environment) does not cache
  * at all — the cache is inert unless the orchestrator turned it on for this run.
  *
- * RESUME REUSE (measured from the file's own git history — the cache is
- * committed with every task, so the whole run is recoverable): a 32-task run built the
- * cache to 201 entries over 20 tasks under one run id, then three /task-auto-resume
- * invocations each stamped a fresh id and the first store of each dropped everything —
- * 201 → 11 → 3 → 5 → 8. The audit read the 8-entry tail and concluded the cache was
- * near-useless; it was in fact working, and the resume threw the work away. The old
- * comment called a resume re-fetch "only slightly less reuse", which holds for a
- * 5-task run and fails badly for a 32-task one.
+ * RESUME REUSE. A resume that stamps a fresh id makes the first store drop everything
+ * the interrupted run had built, so the longer the run, the more a resume throws away.
+ * A resume therefore REUSES the interrupted run's id — but only on POSITIVE evidence
+ * that the digests still describe the same dependency surface.
  *
- * So a resume now REUSES the interrupted run's id — but only on POSITIVE evidence that
- * the digests still describe the same dependency surface.
+ * PER-PACKAGE INVALIDATION. One fingerprint over the whole dependency block cannot be
+ * that evidence: a greenfield run ADDS dependencies every few tasks, so every resume
+ * sees a moved fingerprint and keeps nothing. Adding a package invalidates nothing that
+ * was already cached; only the package a digest is ABOUT going stale does.
  *
- * PER-PACKAGE INVALIDATION. The first shape of that evidence was one md5
- * over the whole dependency block: any change anywhere ⇒ wipe. That gate can never hold
- * on the projects /task actually builds — a greenfield run ADDS dependencies every few
- * tasks, so all five of
- * its resumes saw a moved fingerprint and the run ended with ONE cached entry. Adding a
- * package invalidates nothing that was already cached; only the package a digest is
- * ABOUT going stale does.
- *
- * So invalidation is now per entry. Every docs entry records the package it describes
+ * So invalidation is per entry. Every docs entry records the package it describes
  * and the version declared for it at store time (a structured field on the entry, not
  * something re-parsed out of the key — keys embed the tool name with a \0 separator and
  * are the wrong place to carry meaning). A resume keeps the run id and drops only the
@@ -53,45 +41,38 @@
  *
  * STALENESS TRADE, decided deliberately: search and fetch entries are kept
  * unconditionally, even across a dependency bump. A kept search result about package X
- * may describe an older X. That is accepted — docs is the version-sensitive channel (it
- * is version-pinned to the INSTALLED package since pi-worker fixes #1) and search is
- * discovery, where re-running every query on every resume costs far more than the rare
- * staleness costs. A run that must not tolerate it can disable the cache outright.
+ * may describe an older X. That is accepted — docs is the version-sensitive channel,
+ * pinned to the INSTALLED package, and search is discovery, where re-running every query
+ * on every resume costs far more than the rare staleness does. A run that must not
+ * tolerate it can disable the cache outright.
  *
  * A file written before per-entry provenance shipped (no `pkgv` marker) carries no way
  * to tell its docs entries apart, so it still falls back to a fresh id: every
  * inconclusive path costs time, never correctness.
  *
- * CONCURRENT WRITERS. Storing is a read-modify-write over ONE file,
- * and its writers are concurrent on two axes at once: makeWorkerTool registers the
- * research tools with executionMode 'parallel', so a single child can issue 4-6 docs
- * calls in the same millisecond, and the research phase runs four worker children as
- * separate PROCESSES. Unsynchronised, that is a classic lost update — last writer wins,
- * and everything read before it is discarded. Measured on this box: 40 concurrent stores
- * left 1 entry in-process and 11 of 40 across four child processes.
+ * CONCURRENT WRITERS. Storing is a read-modify-write over ONE file, and its writers are
+ * concurrent on two axes at once: makeWorkerTool registers the research tools with
+ * `executionMode: 'parallel'`, so a single child can issue several docs calls in the same
+ * millisecond, and the research phase runs its worker children as separate PROCESSES.
+ * Unsynchronised, that is a classic lost update — last writer wins, and everything read
+ * before it is discarded.
  *
  * So the read-modify-write is serialised twice over: an in-process queue per cache file
  * (siblings inside one child never touch the filesystem lock at all) wrapped in an
  * advisory lock directory beside the file, which is what makes it hold across processes.
- * An atomic `mkdir` is the lock — it is the one primitive that both POSIX and Windows
- * give us with create-or-fail semantics and no fd bookkeeping.
+ * An atomic `mkdir` is the lock — create-or-fail with no fd bookkeeping. With both in
+ * place, 40 concurrent stores keep 40 entries, whether they come from one process or
+ * from four.
  *
  * The lock is BEST-EFFORT LIKE EVERYTHING ELSE HERE: acquisition is bounded, and a
  * writer that cannot get in within the timeout SKIPS its store rather than waiting. A
  * skipped store costs one re-lookup later; a blocked store would stall a worker, which
- * this cache is never allowed to do.
- *
- * WHAT THE FIX IS WORTH, measured before it was built (scripts/research-cache-
- * write-loss-step0.ts, re-runnable): the lost updates are real but nearly free. lost
- * ~70 of 204 attempted keys, all in the docs channel — and asked ZERO of them twice, so
- * nothing lost was ever wanted again. one real project and godot-engine retained more distinct keys
- * than the logs show attempted, i.e. lost nothing at all. Estimated recovery on all three
- * projects: 0s per run. This is a correctness fix, not a performance one; it stops the
- * cache silently discarding work, and it will matter to a run whose research phase does
- * repeat itself. Do not oversell it.
+ * this cache is never allowed to do. This is a correctness fix, not a performance one:
+ * it stops the cache silently discarding work.
  *
  * Stored under `.pi-tasks/` (sibling of env-notes.md / contracts.md), which the
- * git-state guard and discardEdits both exclude. Best-effort throughout: any I/O or
+ * git-state guard excludes by pathspec (`:(exclude).pi-tasks`) and discardEdits leaves
+ * alone. Best-effort throughout: any I/O or
  * parse failure falls back to a live fetch — the cache only ever saves time, it can
  * never change an answer or block a worker.
  */
@@ -104,17 +85,15 @@ const RESEARCH_CACHE_FILE = 'research-cache.json'
 export const RESEARCH_RUN_ID_ENV = 'PI_TASK_RUN_ID'
 /**
  * Cap stored entries so a chatty run cannot grow the file unboundedly; the newest
- * (by write time) are kept. Sized well above a 20-task run's distinct external
- * lookups (dozens), so a real run never evicts a still-useful digest.
+ * (by write time) are kept and the oldest evicted.
  */
 const MAX_ENTRIES = 250
 
 /** Lock directory guarding the cache file's read-modify-write, created beside it. */
 const LOCK_SUFFIX = '.lock'
 /**
- * How long a writer waits for the lock before giving up and skipping its store. Sized
- * well above a real critical section (one small read + one small write, sub-millisecond
- * at these file sizes) and well below anything a worker would notice.
+ * How long a writer waits for the lock before giving up and skipping its store. The
+ * critical section it queues behind is one small read plus one small write.
  */
 const LOCK_TIMEOUT_MS = 2_000
 /** Poll interval while the lock is held by someone else. */
@@ -127,9 +106,9 @@ const LOCK_POLL_MS = 10
 const RENAME_TIMEOUT_MS = 500
 /**
  * A lock older than this is treated as abandoned and removed. Two writers can both
- * decide that and both proceed, which degrades exactly to the pre-lock behaviour (one
- * lost update) — strictly better than a crashed child wedging the cache for the rest of
- * the run. Sized far above the critical section, so a live holder is never stolen from.
+ * decide that and both proceed, which degrades to one lost update — strictly better
+ * than a crashed child wedging the cache for the rest of the run. Sized far above the
+ * critical section, so a live holder is never stolen from.
  */
 const LOCK_STALE_MS = 30_000
 
@@ -137,16 +116,11 @@ const LOCK_STALE_MS = 30_000
  * Filesystem errors that mean "try again in a moment", not "this will never work".
  *
  * POSIX gives `mkdir` two clean answers when someone else holds the lock: it succeeds,
- * or it is EEXIST. Windows has a third. A directory that another process is removing
- * enters a DELETE-PENDING state, and a create against it fails with EPERM/EACCES/EBUSY
- * instead of EEXIST — so the exact moment the previous writer released the lock is a
- * window in which the next writer's `mkdir` fails with a code a POSIX errno check
- * reads as fatal. The store is then silently skipped: no throw, no log, exit code
- * 0, one entry missing. Only Windows CI catches it; POSIX never produces the code.
- *
- * `rename` over an existing file has the same shape on Windows — it fails while any
- * other handle is open on the target, including a scanner's — so the cache write
- * retries on this set too.
+ * or it is EEXIST. Other platforms add more, and a lock contention reported under a code
+ * an EEXIST-only check reads as fatal skips the store SILENTLY — no throw, no log, exit
+ * code 0, one entry missing. `rename` over an existing file has the same shape. Both
+ * therefore retry on this whole set; research-cache.test.ts is what holds the membership
+ * in place.
  */
 const RETRYABLE_FS_CODES = new Set(['EEXIST', 'EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY'])
 
@@ -386,11 +360,10 @@ async function writeCacheFile(cwd: string, out: CacheFile): Promise<void> {
     try {
         await fsp.mkdir(tasksDir(cwd), {recursive: true})
         await fsp.writeFile(tmp, JSON.stringify(out), 'utf8')
-        // The replace, not the write, is the part Windows can transiently refuse — any
-        // other open handle on the target (a reader, a scanner) fails it with EPERM.
-        // The whole point of the lock above is that this write is not lost, so a
-        // transient refusal is retried inside the same bounded budget rather than
-        // swallowed. The lock is still held throughout.
+        // The replace, not the write, is the part a filesystem can transiently refuse
+        // when another handle is open on the target. The whole point of the lock above
+        // is that this write is not lost, so a refusal in RETRYABLE_FS_CODES is retried
+        // inside a bounded budget rather than swallowed. The lock is held throughout.
         const deadline = Date.now() + RENAME_TIMEOUT_MS
         for (;;) {
             try {
@@ -430,10 +403,10 @@ async function acquireLock(lockPath: string, deadline: number): Promise<boolean>
             return true
         } catch (err) {
             if (!isRetryableFsError(err)) return false
-            // Not EEXIST but still retryable ⇒ Windows delete-pending (see
-            // RETRYABLE_FS_CODES). There is no lock to inspect for staleness: the
-            // directory is on its way out, so wait one poll and try to create it again
-            // rather than reporting a hold that nobody has.
+            // Retryable but NOT EEXIST ⇒ the directory is on its way out (see
+            // RETRYABLE_FS_CODES), so there is no lock to inspect for staleness. Wait
+            // one poll and try to create it again rather than reporting a hold that
+            // nobody has.
             if (!isHeldError(err)) {
                 if (Date.now() >= deadline) return false
                 await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS))
