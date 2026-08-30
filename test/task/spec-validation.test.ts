@@ -71,11 +71,10 @@ describe('parseVerifyBlock', () => {
     })
 
     test('an UNCLOSED fence swallows the rest of the file — strict rejects it', () => {
-        // one task.md never closes its ```sh, so everything after it —
-        // the phase-timings table, every appended gate-trail line — parses as a
-        // "command". Harmless when the question is "is there anything runnable here",
-        // and NOT harmless when a parsed line is treated as provenance for a command
-        // the run will re-execute.
+        // An unclosed fence has no end, so every later line — a timings table, an
+        // appended trail — parses as a "command". Harmless for "is anything
+        // runnable here"; accept-debt.ts pulls a command out of this list and
+        // stores it, so it calls the strict form.
         const runaway = 'VERIFY:\n```sh\nnpm test\n\n## phase timings\nrefine 22.2s\n'
         expect(parseVerifyBlock(runaway)!.map(c => c.raw)).toEqual(['npm test', 'refine 22.2s'])
         expect(parseVerifyBlockStrict(runaway)).toBeNull()
