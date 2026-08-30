@@ -5,7 +5,10 @@ import {
     synthesizedApiReaskHint
 } from '../../src/task/api-synthesis.js'
 
-/** A real research APIS section, verbatim shape. */
+/** A research block in the shape the research prompt asks for: FILES carries
+ *  paths, APIS carries bare symbol NAMES and never a path, CONTEXT carries prose
+ *  (RESEARCH_APIS_PROMPT in task/prompts.ts states that split). The synthesis
+ *  check searches all three, so the fixture has to honour it. */
 const RESEARCH = [
     'FILES',
     'build.ts  Build script to be created at project root',
