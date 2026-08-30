@@ -67,10 +67,11 @@ describe('STREAM_INACTIVITY_OPTIONS', () => {
         expect(STREAM_INACTIVITY_OPTIONS.find(o => o.label === 'off')!.ms).toBe(0)
     })
 
-    // The one value that must not drift: a 60-120s ceiling would kill every long
-    // prompt-processing pass on a local backend. Asserted
-    // through the sanitizer, not getConfig, so a developer's own config file
-    // cannot flip the test.
+    // The one value that must not drift. A local backend can sit in prompt
+    // processing emitting nothing at all for minutes, and this ceiling is what
+    // decides whether that healthy silence gets killed. Asserted through the
+    // SANITIZER rather than getConfig, so a developer's own config file cannot
+    // flip the test.
     test('defaults to 10 minutes — generous enough for local first-token latency', () => {
         expect(sanitizeStreamInactivityMs('bogus')).toBe(600_000)
         expect(STREAM_INACTIVITY_OPTIONS.find(o => o.label === '10 min')!.ms).toBe(600_000)
@@ -102,10 +103,11 @@ describe('sanitizeDebugLogs', () => {
     })
 
     /**
-     * The load-bearing assertion, and the reason this knob is not a boolean: the
-     * guard/verdict markers are the only record that a git-state restore or a
-     * write-capable child's deletion happened, and a debug log cannot be recovered
-     * after the run. A nonsense stored value must degrade to KEEPING them.
+     * The load-bearing assertion, and the reason this knob is not a boolean.
+     * debug-log.ts writes NOTHING at `off`, and its `event` lines are the only
+     * record that a guard fired — what the git-state guard restored, what a
+     * write-capable child changed on disk. None of it is recoverable after the run,
+     * so a nonsense stored value must degrade to KEEPING them, never to `off`.
      * Asserted through the sanitizer rather than getConfig so a developer's own
      * ~/.config/pi-task/config.json cannot flip the test.
      */
@@ -118,11 +120,11 @@ describe('sanitizeDebugLogs', () => {
 
 // ─── loadConfig: the whole table, not one key at a time ──────────────────────
 //
-// Every sanitizer above is covered in isolation. What had no coverage at all was
-// the COMPOSITION — which keys the load block ran a sanitizer over, and what the
-// trailing spread did to the ones it skipped. These are that test, and they are
-// possible because `loadConfig` is a pure function rather than a module-eval
-// block reading the developer's own ~/.config/pi-task/config.json.
+// Every sanitizer above is covered in isolation. These cover the COMPOSITION —
+// which keys the load block runs a sanitizer over, and what the trailing spread
+// does to the ones it skips. They are possible at all because `loadConfig` is a
+// pure function; the module-eval read of ~/.config/pi-task/config.json happens
+// elsewhere and is not what these drive.
 
 describe('loadConfig', () => {
     test('a missing file-shape yields the shipped defaults', () => {
@@ -156,9 +158,11 @@ describe('loadConfig', () => {
         expect(loadConfig(JSON.parse(JSON.stringify(stored)))).toEqual(stored)
     })
 
-    // The class the ladder covered for exactly one of eight keys. `yoloMode`'s
-    // guard comment — "a hand-edited `"false"` is a truthy string" — was true
-    // verbatim of the other seven, and none of them had it.
+    // Every boolean key at once, because the hazard is identical on all of them:
+    // config.ts's `asBoolean` is the single loader, and its own comment gives both
+    // shapes — a hand-edited `"off"` is a truthy STRING and a `0` is a falsy
+    // NUMBER. Neither may decide a setting. A per-key ladder would cover one and
+    // leave the rest to be discovered later.
     test('a hostile value on ANY boolean falls back to its default, not to truthiness', () => {
         const booleans = (Object.keys(DEFAULT_CONFIG) as Array<keyof PiTaskConfig>).filter(
             k => typeof DEFAULT_CONFIG[k] === 'boolean'
