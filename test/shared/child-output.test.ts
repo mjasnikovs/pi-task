@@ -20,9 +20,11 @@ describe('verifyExcerpt (PROMPT-3 item 4 diagnostics)', () => {
         const content = 'the actual page text'
         for (const blank of ['   ', '\n', '\t \n ', '']) {
             // A citation with no characters in it is not evidence. The trap is
-            // `content.includes('')`, which is true for every content — so the raw-string
-            // emptiness guard would let "   " verify against anything, while verifyExcerpt
-            // (testing the NORMALISED length) called the identical input unverified.
+            // `content.includes('')`, which is TRUE for every content: a guard on the
+            // RAW excerpt would pass "   " (length 3), then search for its normalised
+            // form — the empty string — and match anything at all. So the emptiness
+            // test has to run on the NORMALISED excerpt, and both functions have to
+            // agree, which the third assertion pins.
             expect(isExcerptInContent(blank, content)).toBe(false)
             expect(verifyExcerpt(blank, content).verified).toBe(false)
             expect(verifyExcerpt(blank, content).verified).toBe(isExcerptInContent(blank, content))
