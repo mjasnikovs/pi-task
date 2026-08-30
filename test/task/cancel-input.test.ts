@@ -92,8 +92,10 @@ describe('installCancelListener', () => {
         installCancelListener(f.ctx, () => fired++)
         const res = f.send('\r')
         expect(fired).toBe(1)
-        // Consuming is what stops pi queueing the line into pendingUserInputs,
-        // where it would resurface after the run as "no loop is running".
+        // Consuming is what stops pi queueing the line. In interactive-mode.js a
+        // submitted line goes to `onInputCallback` if one is set and otherwise to
+        // `this.pendingUserInputs.push(text)`, which a later `shift()` replays —
+        // so an unconsumed cancel is silent now and resurfaces after the run.
         expect(res?.consume).toBe(true)
         expect(f.text()).toBe('')
     })
@@ -120,8 +122,9 @@ describe('installCancelListener', () => {
     })
 
     test('a host without the raw-input hook degrades to a no-op', () => {
-        // The shimmed remote ctx has no ui.onTerminalInput; it does not need one,
-        // since dispatchRemoteLine calls command handlers directly.
+        // The shimmed remote ctx has no ui.onTerminalInput and does not need one:
+        // dispatchRemoteLine (remote/bridge.ts:342) looks the name up in the
+        // bridge's own command map and calls the handler directly.
         const bare = {ui: {notify: () => {}}} as unknown as ExtensionCommandContext
         expect(() => installCancelListener(bare, () => {})()).not.toThrow()
     })
@@ -134,10 +137,12 @@ describe('armCancelListener across session replacement', () => {
         armCancelListener(first.ctx, () => fired.push('first'))
         expect(isCancelListenerArmed()).toBe(true)
 
-        // pi clears every extension terminal-input listener when the old session
-        // is invalidated, which happens at the start of each task — the run must
-        // re-arm against the replacement ctx or the cancel is undeliverable for
-        // the rest of the run.
+        // pi clears every extension terminal-input listener when a session is
+        // invalidated: `setBeforeSessionInvalidate(() => this.resetExtensionUI())`
+        // in interactive-mode.js, and resetExtensionUI calls
+        // clearExtensionTerminalInputListeners. A task replaces the session, so
+        // the run must re-arm against the replacement ctx or the cancel is
+        // undeliverable for the rest of the run.
         const second = fakeUiCtx('/task-auto-cancel')
         rearmCancelListener(second.ctx)
         expect(first.listenerCount()).toBe(0)
@@ -176,10 +181,11 @@ describe('armCancelListener across session replacement', () => {
     })
 })
 
-// ─── Mid-run parity with the browser (issue #8) ───────────────────────────────
+// ─── Mid-run parity with the browser ─────────────────────────────────────────
 //
-// Before this, everything below fed pi's pendingUserInputs queue: silent at the
-// time, then replayed all at once against a finished run.
+// A mid-run line typed in the terminal must reach the run, not pi's
+// pendingUserInputs queue — where it is silent at the time and then replayed all
+// at once against a finished run.
 describe('mid-run terminal input', () => {
     afterEach(() => {
         forceDisarmCancelListener()
@@ -253,9 +259,9 @@ describe('mid-run terminal input', () => {
         expect(f.text()).toBe('/model')
     })
 
-    // The raw listener sees keys BEFORE the focused component, so an open dialog
-    // means this Enter is the user's ANSWER — swallowing it would break clarify
-    // questions and the ESC-steer prompt.
+    // The raw listener is called for keys an open dialog is also waiting on. So
+    // when a dialog is up this Enter is the user's ANSWER, and swallowing it
+    // would break clarify questions and the ESC-steer prompt.
     test('nothing is intercepted while a prompt dialog is open', () => {
         const f = fakeUiCtx('some answer')
         armCancelListener(f.ctx, () => {})
