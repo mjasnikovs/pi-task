@@ -120,9 +120,9 @@ describe('yolo bounded-loop policies', () => {
 })
 
 test("YOLO cannot exceed the final-gate autofix cap — replaying the loop's own budget", () => {
-    // Drive the policy exactly as the orchestrator loop does: canAutofix is
-    // `fixAttempts < MAX_FINAL_GATE_AUTOFIX`, and every 'autofix' spends one attempt.
-    // The loop must terminate at the cap, never spin.
+    // Drive the policy the way AutofixLedger does: canAutofix() is
+    // `attempts < budget` with the budget set to MAX_FINAL_GATE_AUTOFIX, and every
+    // 'autofix' spends one attempt. The loop must terminate at the cap, never spin.
     let fixAttempts = 0
     const actions: string[] = []
     for (let guard = 0; guard < 20; guard++) {
