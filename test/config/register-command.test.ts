@@ -7,8 +7,9 @@
  * below: the flat listing is built from each item's own `format`, so a setting
  * cannot read one way in the panel and another way here.
  *
- * The TUI branch is the settings overlay itself; its per-item behaviour is
- * covered by register.test.ts against ITEMS directly.
+ * The TUI branch is the settings overlay itself. register.test.ts drives the
+ * panel — cursor movement, the extension and tool rows, the body height — and
+ * config-items.test.ts is the one that iterates `ITEMS` per row.
  */
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
