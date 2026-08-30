@@ -38,8 +38,11 @@ test('both surfaces are told', () => {
     expect(b.sent.some(m => (m as {type: string}).type === 'notify')).toBe(true)
 })
 
-// A ctx captured before a session replacement throws on use; the browser copy
-// must still go out.
+// A ctx captured before a session replacement is STALE, and pi throws on use:
+// its runner guards each accessor with `assertActive()`, which raises as soon as
+// a stale message is set. The terminal half is therefore allowed to fail — but
+// the browser copy must still go out, or a remote user loses the notice
+// entirely.
 test('a stale ctx does not swallow the remote notice', () => {
     const b = getBridge()
     b.broadcast = m => b.sent.push(m)
