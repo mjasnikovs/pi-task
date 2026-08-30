@@ -11,11 +11,10 @@
  * It reads the source rather than a registry because the child name is a string
  * literal at the call site and there is no other place it is written down.
  *
- * It covers the four RESEARCH WORKERS too. Their groups could live in a second
- * table keyed on the section heading, guarded by a second scanner that sliced
- * `phases.ts` between two string offsets — and whose failure mode was a SILENT
- * fallback to `research` rather than a build failure. One roster, one scanner,
- * one failure mode.
+ * It covers the four RESEARCH WORKERS too, on the same roster and the same
+ * scanner. A second table keyed on their section heading would need a second
+ * scanner, and its failure mode would be a silent fallback to `research` rather
+ * than a build failure.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -132,14 +131,13 @@ describe('every named child has a reasoning group', () => {
 
 describe('the /no_think soft switch is gone and stays gone', () => {
     /**
-     * It was applied to eight prompts and read by none of them: measured live
-     * against Qwen3.8-27B, thinking on and `/no_think` still in the prompt gave a
-     * a full-length reasoning trace anyway. The chat-template kwarg that
-     * `--thinking` sets beats it, so the suffix is a dead knob that LOOKS live —
-     * the exact thing that stopped anyone wiring the real one for a year.
+     * The `/no_think` prompt suffix is a dead knob. Sent to the local model with
+     * the chat template's thinking kwarg ON, the reply still carries a reasoning
+     * trace; turn that kwarg OFF and the trace is empty. So the kwarg `--thinking`
+     * sets is what decides, and the suffix decides nothing.
      *
-     * Re-adding it would not fail any behaviour test, because it does nothing.
-     * That is why this is asserted against the source.
+     * A dead knob that LOOKS live is worse than none: re-adding it would fail no
+     * behaviour test, because it has no behaviour. Hence a source assertion.
      */
     test('no source file under src/ carries the suffix or its helpers', () => {
         const root = SRC_ROOT
