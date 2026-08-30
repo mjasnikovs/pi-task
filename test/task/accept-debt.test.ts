@@ -1,8 +1,11 @@
 /**
- * accept-debt tests — the durable ledger of tasks the user ACCEPTED despite a
- * verify-FAIL. Parsing, the FP-safe re-check, and
- * the report block are pure; record/read/write/prune run against a real throwaway
- *.pi-tasks dir (the artifact contract is the point).
+ * accept-debt tests — the durable ledger of tasks that shipped despite a
+ * verify-FAIL.
+ *
+ * Parsing, the false-positive-safe re-check and the report block are pure, so
+ * they are asserted directly. record / read / write / prune write a real
+ * `.pi-tasks/accept-debt.md` into a throwaway dir, because the on-disk row
+ * shape IS the contract: a future reader has to parse rows this build wrote.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -31,8 +34,9 @@ function makeCwd(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'pi-accept-debt-'))
 }
 
-// The verbatim one task enforce re-verify FAIL — the terminal defect that
-// was found 8.5h before run end and erased by the revert that found it.
+// A realistic enforce re-verify FAIL: the diagnosis indicts the ORIGINAL work,
+// so reverting the enforce edits does not fix it. That is the case the
+// 'enforce-revert' origin exists to keep on the ledger.
 const TASK_0004_DIAGNOSIS =
     'work did not verify: Missing server entry point (src/server/index.ts) and dev script in '
     + 'package.json — the Hono server cannot be started, so auth endpoints cannot be verified '
@@ -189,8 +193,8 @@ describe('buildAcceptDebtNote', () => {
     })
 })
 
-// item 3: an enforce re-verify FAIL that indicts the ORIGINAL work must
-// survive the revert as a durable, gate-re-checked defect.
+// An enforce re-verify FAIL that indicts the ORIGINAL work must survive the
+// revert as a durable, gate-re-checked defect.
 describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
     test('records a 3-field origin-tagged row that reads back with origin set', async () => {
         const cwd = makeCwd()
@@ -233,19 +237,17 @@ describe("recordDebt origin 'enforce-revert' / origin round-trip", () => {
     })
 })
 
-// The eight per-origin recorders (recordFinalGateUnobservedDebt, recordAcceptDebt, …)
-// carried their class in the NAME, so collapsing them into one recordDebt moved that
-// class into a parameter — and the parameter defaulted to 'accepted'. One migrated
-// call site loses its argument and the default absorbs it
-// silently: a run-level 'final-gate' demotion was written to the ledger as a human
-// 'accepted'. The two classes assert opposite things — 'accepted' says a person
-// weighed the failing artifact and shipped it anyway; 'final-gate' says the gate gave
-// up after two tree-changing fix attempts failed identically. describeDebt prints a
-// different one-liner for each and the final gate re-checks BY class, so the swap
-// rewrites the audit trail of what actually happened.
+// `origin` is a REQUIRED parameter of recordDebt, and it has no default. Give it
+// one and a call site that omits its argument silently gets the wrong class.
 //
-// `origin` is now a required parameter — the compiler is the real guard, and these
-// tests pin the behaviour it protects.
+// That matters because two of the eight origins assert opposite things.
+// 'accepted' says a person weighed the failing artifact and shipped it anyway;
+// 'final-gate' says the gate gave up after two tree-changing fix attempts failed
+// identically, with nobody in the loop. DEBT_LABELS prints a different one-liner
+// for each and the final gate re-checks BY class, so a swap rewrites the audit
+// trail of what happened.
+//
+// The compiler is the real guard. These tests pin the behaviour it protects.
 describe("recordDebt origin 'final-gate' (the class a default must never absorb)", () => {
     test('a final-gate demotion reads back as final-gate, not accepted', async () => {
         const cwd = makeCwd()
@@ -261,7 +263,9 @@ describe("recordDebt origin 'final-gate' (the class a default must never absorb)
         const reason = 'gate PASS depended on an ignored path: .env'
         await recordDebt(cwd, 'AB', reason, 'final-gate')
         await recordDebt(cwd, 'AB', reason, 'accepted')
-        // 'accepted' serialises as the legacy 2-field row, so it reads back undefined.
+        // 'accepted' is the default class, so it writes the legacy 2-field row
+        // with no origin field and reads back undefined. describeDebt still
+        // prints 'accepted despite verify-FAIL' for it.
         expect((await readAcceptDebts(cwd)).map(d => d.origin ?? 'accepted').sort()).toEqual([
             'accepted',
             'final-gate'
@@ -271,9 +275,11 @@ describe("recordDebt origin 'final-gate' (the class a default must never absorb)
 
 // ─── Conflicting-claim classification ───────────────────────────
 //
-// Three VERBATIM debts off a real ledger. Only T9 is an existence-as-failure claim indicting a sibling's
-// deliverable — the final-gate autofix child, seeded with it, ran
-// `rm src/client/pages/admin.tsx` and destroyed a task's verified work.
+// Three realistic debt reasons. Only T9 states a failure as an EXISTENCE claim —
+// "src/client/pages/admin.tsx exists ... introduced by prior TASK_0008" — and a
+// fix child handed that reason unannotated can satisfy it by deleting the file,
+// destroying a sibling task's verified deliverable. The other two name a wrong
+// import and a prohibited edit: nothing about them can be fixed by a deletion.
 const RUN11_T1 =
     'work did not verify: src/server/db.ts imports {SQL} (uppercase class constructor) instead '
     + 'of the spec-mandated {sql} (lowercase tagged template function); the constraint '
@@ -359,8 +365,8 @@ describe('buildAcceptDebtNote — conflicting claims', () => {
     })
 })
 
-// a / PROMPT 1 layer B: a repo-health FAIL whose only fix is an edit to a
-// path this task's spec froze — recorded when the gate loop routes to the picker.
+// A repo-health FAIL whose only fix is an edit to a path this task's spec froze:
+// unsatisfiable by construction, so it is recorded rather than retried.
 describe("recordDebt origin 'frozen-blocked' / origin round-trip", () => {
     const REASON =
         'repo health: `bun run lint` exited 1 — frozen-path: static findings implicate spec-frozen path(s) (tsconfig.json)'
@@ -502,17 +508,19 @@ describe("recordDebt origin 'yolo-accepted' — an auto-pick never masquerades a
 })
 
 /**
- * The VERIFY-COMMAND class. A debt whose reason quotes —
- * verbatim, in backticks — a line of its OWN task's VERIFY block carries that command
- * in the ledger, and the run-end re-check settles it by RUNNING it. reported
- * one task "STILL OPEN" eleven minutes after the autofix fixed exactly the thing its
- * reason named, and the gate's own re-run printed `121 pass 0 fail`; no reachable code
- * path could have closed it, because neither existing class can reach a
- * `work did not verify:` reason.
+ * The VERIFY-COMMAND class.
  *
- * The six invariants below are the whole safety argument. Each is also asserted over
- * the recorded corpus; these are the deterministic
- * copies that cannot drift with a corpus tree.
+ * A debt whose reason quotes — verbatim, in backticks — a line of its OWN task's
+ * VERIFY block carries that command in the ledger, and the run-end re-check
+ * settles it by RUNNING it.
+ *
+ * Without this class such a debt can never close. The other two classes decide
+ * on a static re-run and on file existence, and neither can reach a
+ * `work did not verify:` reason, so a fix that repaired exactly the thing the
+ * reason named still left the debt reported STILL OPEN.
+ *
+ * The invariants below are the whole safety argument for letting a re-run close
+ * a debt at all, so each is asserted on a constructed input that cannot drift.
  */
 describe('verify-command debt class', () => {
     const SPEC = [
@@ -546,8 +554,9 @@ describe('verify-command debt class', () => {
         // A near-miss is a miss: no prefix, no paraphrase, no substring.
         expect(verifyCommandFromReason('… `bun test test/listings.test.ts` fails', cmds)).toBeNull()
         expect(verifyCommandFromReason('… `AGENT=1 bun test` fails', cmds)).toBeNull()
-        // Un-quoted mention is not a claim about a command ('s one task reads
-        // exactly this way and must NOT classify).
+        // An UN-QUOTED mention is not a claim about a command. Reasons that
+        // merely name a command in passing are common, so this is the guard
+        // that keeps them from minting a stored, re-runnable command.
         expect(verifyCommandFromReason('bunx tsc --noEmit could not run', cmds)).toBeNull()
         expect(verifyCommandFromReason(REASON, [])).toBeNull()
     })
@@ -569,10 +578,11 @@ describe('verify-command debt class', () => {
     })
 
     test('inv-command-provenance — an UNCLOSED VERIFY fence stores nothing', async () => {
-        // one task.md opens ```sh and never closes it, so the lenient
-        // parser hands back the phase timings and every appended gate-trail line as
-        // "commands" — including a sentence quoting `bun run lint`. Storing that would
-        // be provenance this project invented.
+        // When a spec opens ```sh and never closes it, the lenient parser hands
+        // back the phase timings and every appended gate-trail line as
+        // "commands" — including a sentence that merely quotes `bun run lint`.
+        // Storing one of those would be provenance this project invented, so the
+        // strict parse is what the class is allowed to trust.
         const runaway = SPEC.replace('```\n\n## gate trail', '\n## gate trail')
         const cwd = await withSpec('TASK_0001', runaway)
         expect(await classifyVerifyCommand(cwd, 'TASK_0001', REASON)).toBeNull()
@@ -584,14 +594,19 @@ describe('verify-command debt class', () => {
         expect(await classifyVerifyCommand(cwd, '', REASON)).toBeNull()
     })
 
-    // ───  ────────────────────────────────────────────────────────
+    // ─── Unfailable commands ────────────────────────────────────────────────
     //
     // The auto-close rests entirely on a ZERO exit meaning "the check passed". A
     // command whose exit status is destroyed by its own construction makes that
-    // meaningless. 16 of the 612 store-eligible VERIFY lines on this box are that
-    // shape — 12 of them in one real project, a CMake/C++ OBS plugin with no database, no
-    // frontend and no HTTP server. Refusing to store one leaves the debt OPEN and
-    // surfaced, which is strictly the smaller claim.
+    // meaningless. Run in a real shell:
+    //
+    //     SO_LIB=/nonexistent/x.so bash -c \
+    //       'test -f "$SO_LIB" && echo "PASS" || echo "FAIL"'
+    //     FAIL
+    //     exit 0
+    //
+    // It prints FAIL and exits 0. Refusing to store such a command leaves the
+    // debt OPEN and surfaced, which is strictly the smaller claim.
 
     const UNFAILABLE_SPEC = [
         'GOAL',
@@ -692,10 +707,10 @@ describe('verify-command debt class', () => {
     })
 
     test('inv-prohibition-never-closes — a prohibition debt stays open even when its VERIFY passes', async () => {
-        // one task: `main.tsx` was edited under a spec freeze. The violation
-        // is permanent; the task's VERIFY (tsc, eslint, a CT spec) can pass all day.
-        // It never classifies, because the reason quotes a PATH, not a command — and
-        // even with the re-runner passing everything it is handed, it stays open.
+        // A file edited under a spec freeze. The violation is PERMANENT — the
+        // task's own VERIFY can pass all day and the edit still happened. It
+        // never classifies, because the reason quotes a PATH, not a command, and
+        // even with a re-runner that passes everything it is handed it stays open.
         const t19: AcceptDebt = {
             taskId: 'TASK_0019',
             reason:
