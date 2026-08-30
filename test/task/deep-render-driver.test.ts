@@ -1,7 +1,7 @@
 /**
- * Driver-level tests for deep-render-check's `launchBrowser()` half (via `drive()`) — the part of the module
- * that needs a browser and is therefore the otherwise-untested half (most of its
- * functions never ran).
+ * Driver-level tests for deep-render-check's `launchBrowser()` half, reached
+ * through `drive()` — the part of the module that needs a browser, and so the
+ * part nothing else in the suite can exercise.
  *
  * The browser here is a FAKE: a WebSocket server that prints the DevTools banner
  * Chrome prints and then answers the exact CDP calls the driver makes. That is
@@ -152,8 +152,9 @@ const loginPost: FakeRequest = {
     mimeType: 'application/json'
 }
 
-/** Every settle window would otherwise cost the 1.2s production quiet period; the
- *  fake answers instantly, so 20ms of silence means the same thing here. */
+/** The production settle window is QUIET_MS (deep-render-check.ts:446), and every
+ *  case here would pay it. The fake answers instantly, so a far smaller window
+ *  reaches the same settled state. */
 function run(
     browser: string,
     over: {timeoutMs?: number; onFacts?: (f: DeepSessionFacts) => void} = {}
@@ -166,8 +167,10 @@ function run(
     })
 }
 
-// The fake browser is launched via a POSIX shell shebang — Windows has neither
-// /bin/sh nor the process-group kill the driver's cleanup uses.
+// The fake browser is launched via a POSIX shell shebang, and the driver's
+// cleanup ends it with a process-group kill — `process.kill(-child.pid,
+// 'SIGKILL')` at deep-render-check.ts:749. Both are POSIX, so these cases are
+// skipped elsewhere rather than faked.
 const posix = process.platform === 'win32' ? test.skip : test
 
 describe('drive: a session that works', () => {
