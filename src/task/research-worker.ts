@@ -1,21 +1,17 @@
 /**
  * ONE research worker, cache-skip to persist.
  *
- * WHY IT IS A MODULE. This was a 228-line closure inside `phaseResearch` over
- * eleven locals, and inside it live the three RETRY GATES and their precedence:
- * the EMPTY-SECTION gate (the only one that can fail the phase), the
- * ZERO-RETRIEVAL gate and the SILENT gate (both of which discard a failed retry
- * and ship the original). Getting that order wrong is how a run either dies on a
- * legitimately empty section or ships one written from memory.
+ * WHY IT IS A MODULE. It holds the three RETRY GATES and their precedence: the
+ * EMPTY-SECTION gate (the only one that can fail the phase), the ZERO-RETRIEVAL
+ * gate and the SILENT gate (both of which discard a failed retry and ship the
+ * original). Getting that order wrong is how a run either dies on a legitimately
+ * empty section or ships one written from memory.
  *
- * The cost was in the TESTS. Reaching the gates meant a temp dir, a real task
- * file, and a fake spawn routed on prose lifted out of `prompts.ts` — plus, for
- * attempt-1-vs-attempt-2, a second sentence lifted out of a module-private
- * preamble constant. In a codebase whose whole workflow is re-wording prompts and
- * measuring what changed, that means a reworded preamble silently stops the gate
- * tests from testing the gate. Behind this interface a test scripts
- * `runWorker(label, attempt)` and states the `RunWorkerResult` fields a gate
- * reads.
+ * Behind `ResearchWorkerRun` a test scripts `runWorker(label, attempt)` and states
+ * the `RunWorkerResult` fields a gate reads. Reaching a gate through the phase
+ * instead would mean a temp dir, a real task file, and a fake spawn routed on
+ * prose lifted out of `prompts.ts` — so re-wording a prompt would silently stop
+ * the gate tests from testing the gate.
  *
  * THE INVARIANT, stated once: the empty gate runs FIRST and is the only one that
  * can throw; the other two keep the original when their retry does not improve a
@@ -31,8 +27,8 @@ import type {DebugLine} from './debug-log.js'
 
 /**
  * One research worker's row. `section` is the heading its output is assembled
- * and cached under; `label` is its child NAME — what the loader, the debug trail
- * and the A/B ledgers print, and the key into `REASONING_GROUP_BY_CHILD`.
+ * and cached under; `label` is its child NAME — what the loader and the debug
+ * trail print, and the key into `REASONING_GROUP_BY_CHILD` (config/reasoning.ts).
  */
 export interface ResearchWorkerSpec {
     section: string
@@ -53,7 +49,7 @@ export interface ResearchWorkerSpec {
      *  loop-degrade banner or a hallucinated non-bullet fragment — is re-run ONCE
      *  with this preamble. A legitimately-empty section is NOT retried. */
     retryIfSilent?: string
-    /** This worker can issue project-source docs lookups, so the 5B fan-out bounds
+    /** This worker can issue project-source docs lookups, so the fan-out bounds
      *  apply to it (see task/research-fanout-budget.ts). */
     fanoutBounded?: true
 }
@@ -69,9 +65,8 @@ export interface ResearchWorkerRun {
     runWorker: (label: string, input: RunWorkerInput) => Promise<RunWorkerResult>
     /**
      * The parent session's context window, forwarded to every worker child.
-     * `PhaseDeps.contextWindow` already carried it and this driver dropped it, so
-     * the churn rule was dead for all four workers — see
-     * `RunWorkerInput.contextWindow`.
+     * Nothing in pi's stream reports one, so a child that is not TOLD sits at 0 and
+     * the churn rule cannot fire — see `RunWorkerInput.contextWindow`.
      */
     contextWindow: number | 'unknown'
     cwd: string
@@ -89,22 +84,20 @@ export interface ResearchWorkerRun {
     /**
      * Read one worker's cached output back, or '' when there is none.
      *
-     * A SEAM, and the symmetric half of `persistSection`. The cache skip is one
-     * of the four outcomes this driver has, and reaching it would otherwise require a
-     * real task file on disk — which is most of why the gate tests needed a temp
-     * dir at all.
+     * A SEAM, and the symmetric half of `persistSection`. The cache skip is one of
+     * the four outcomes this driver has, and reaching it any other way would need a
+     * real task file on disk.
      */
     readCached: (heading: string) => Promise<string>
     /** Write one validated section to the task file. Serialised by the caller. */
     persistSection: (heading: string, text: string) => Promise<void>
     /**
-     * The 5B lever env vars, READ ONCE for the whole phase.
+     * The fan-out lever env vars, READ ONCE for the whole phase.
      *
-     * Was three resolved values (`carryForward`, `fanoutTimeout`,
-     * `progressCeilingMs`). It is one frozen reader now because the `research`
-     * profile owns what those values mean; what this layer still owns is that
-     * every worker in a run sees the SAME arm, which a live `process.env` read
-     * per worker would lose. See `snapshotLeverEnv`.
+     * A frozen reader rather than resolved values, because the `research` profile
+     * (workers/worker-profiles.ts) owns what those values MEAN. What this layer
+     * owns is that every worker in one run sees the same values, which a live
+     * `process.env` read per worker would lose. See `snapshotLeverEnv`.
      */
     leverEnv: (key: string) => string | undefined
 }
@@ -143,15 +136,12 @@ export function researchWorkerCacheHeading(section: string): string {
  *     wrote nothing): NOT a failure. On an extremely simple task ("create a folder
  *     with an index.html in it") three of the four workers have genuinely nothing
  *     to report, and each worker prompt tells the model to emit ONLY what this task
- *     touches and to drop everything else — so silence is the CORRECT answer and
- *     was killing the whole task at research (issue #10). Measured live on the
- *     issue's own prompt (30 reps/worker, local Qwen3.6-27B): every APIS answer was
- *     semantically "there is nothing here", and some are literally zero bytes on a
- *     clean exit — the other 28 survived only because the model happened to wrap the
- *     same non-answer in a parenthetical, which is model style, not signal. The
- *     caller retries once and then accepts an explicit empty section; what stays
- *     fatal is silence WITH a reported cause, which is the masked-disconnect case
- *     this branch was written for and which `modelError` now names outright.
+ *     touches and to drop everything else — so silence is the CORRECT answer, and
+ *     treating it as a failure kills the whole task at research. "Nothing here"
+ *     and zero bytes are the same answer; which one a model writes is style, not
+ *     signal. The caller retries once and then accepts an explicit empty section.
+ *     What stays fatal is silence WITH a reported cause, the masked-disconnect
+ *     case `modelError` names outright.
  *
  * Returns null when the result is trustworthy.
  */
@@ -285,10 +275,9 @@ export function emptySectionBody(name: string): string {
 
 /**
  * A worker answer that IS the word "nothing" and carries no other content:
- * `(none)`, `N/A`, `- none`, `(no content)`, `(no entries)`. Live workers write
- * these often on a task that touches nothing (measured on the issue's prompt:
- * `(no content)`, `(no response)`, a bare `(none)` from the gate's own retry),
- * and each one means exactly what an empty answer means — so they are recorded
+ * `(none)`, `N/A`, `- none`, `(no content)`, `(no entries)`. A worker writes one of
+ * these on a task that touches nothing, and each means exactly what an empty
+ * answer means — so they are recorded
  * with the same marker rather than passed through in whatever shape the model
  * happened to pick. Deliberately NARROW: it matches only a lone token, never
  * prose like "(no APIs to list — this task creates a plain HTML file …)", which
@@ -312,16 +301,9 @@ export function isBareNoneAnswer(text: string): boolean {
  * fires on a normal project where the first attempt died for an unrelated reason,
  * and an easy opt-out there would silence real research.
  *
- * MEASUREMENT OPEN. The recovery path's QUALITY on a real repo is being measured
- * (first FILES answer faulted to
- * empty, every other child live, against an uninterrupted control). First rep on
- * an earlier wording did NOT take the `(none)` exit but drifted into writing code
- * instead of listing paths — the deliverable-not-inputs failure the base prompt
- * already forbids below this preamble. Blast radius is bounded: the gate fires
- * only on a run that would otherwise have FAILED outright, so a mediocre recovered
- * section is strictly better than the dead task it replaces — but if the drift
- * reproduces, this preamble must restate the section's output contract, not just
- * demand an answer.
+ * The blast radius is bounded: this gate fires only on a run that would otherwise
+ * have FAILED outright, so even a mediocre recovered section beats the dead task
+ * it replaces.
  */
 const EMPTY_SECTION_PREAMBLE =
     'STOP. Your previous attempt returned an EMPTY answer — zero characters. An empty '
@@ -367,17 +349,12 @@ export async function runResearchWorker(
                 contextWindow: run.contextWindow,
                 signal: run.signal,
                 spawn: run.spawn,
-                // ONE CELL PER WORKER. Sharing
-                // the `research` cell on the grounds that they are the same
-                // job over four questions; the run logs disagree. All 40.7
-                // wasted research minutes are restarts in
-                // `tooling` and `context`, and `files`/`apis` never
-                // restarted — so the level that pays for one pair is being
-                // paid for the other. THE FOUR CELLS DO NOT SHIP IDENTICAL:
-                // `research:files` is `off` on a measured tie while the
-                // other three are `medium`, so this line changes what the
-                // FILES worker runs at for every default-mode user. The
-                // evidence is on each cell in reasoning.ts.
+                // ONE REASONING CELL PER WORKER, keyed on the spec's LABEL —
+                // the four workers ask four different questions and the four
+                // cells do not ship identical. `REASONING_DEFAULTS` in
+                // config/reasoning.ts is where each one's level lives, so this
+                // line decides what THIS worker runs at for a default-mode
+                // user.
                 thinking: run.thinkingFor(spec.label),
                 ...(spec.tools ? {tools: spec.tools} : {}),
                 ...(spec.extensions ? {extensions: spec.extensions} : {}),
@@ -393,10 +370,8 @@ export async function runResearchWorker(
                     env: run.leverEnv
                 },
                 // One line per DISCARDED attempt. The `done` line below reports
-                // the final attempt only, so a worker that timed out twice at
-                // its ceiling and then answered logs exactly like a clean one —
-                // 8 minutes of burned compute recoverable only by subtracting
-                // its own wait+work from the start/done timestamps.
+                // the FINAL attempt only, so without these a worker that timed
+                // out twice and then answered logs exactly like a clean one.
                 onCarryForward: ci => {
                     run.logDebug?.(
                         `${spec.label}: CARRY-FORWARD injected into attempt ${ci.attempt}`
@@ -423,7 +398,7 @@ export async function runResearchWorker(
             })
         )
     let r = await runOnce()
-    // EMPTY-SECTION GATE (issue #10). A worker that returns zero bytes on a clean run
+    // EMPTY-SECTION GATE. A worker that returns zero bytes on a clean run
     // would fail the whole task ("Research APIS worker produced no output"), which is
     // exactly what an extremely simple task provokes: with nothing on disk to survey and
     // no external symbol in play, silence is the correct answer and the run died on it.
@@ -532,11 +507,9 @@ export async function runResearchWorker(
             + (r.restarts.length > 0 ?
                 ` restarts=[${r.restarts.map(x => x.reason).join(',')}]`
             :   '')
-            // Attribution for the RESCUE arm: a run with zero restarts was
-            // never killed (the progress deadline did it), while a run that
-            // restarted and salvaged was killed but kept its work. Without
-            // this the two are indistinguishable in the logs, and "0
-            // timeouts" cannot be traced to the half that earned it.
+            // A run with zero restarts was never killed; a run that restarted
+            // and salvaged WAS killed but kept its work. Without this flag the
+            // two are indistinguishable in the log.
             + (r.salvagedFromDiscardedAttempt ? ' salvaged=1' : '')
             + (r.stderr ? ` stderr=${r.stderr.slice(0, 300)}` : '')
             + (r.leakedToolCall ? ` leaked=${r.leakedToolCall.trim().slice(0, 80)}` : '')
