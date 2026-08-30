@@ -19,11 +19,10 @@ const ALL_KINDS: QaKind[] = [
 ]
 
 /**
- * None of these could be written before. The provenance decision lived at eight
- * push sites across two files, keyed by which branch of an `if/else` you stood
- * in, and the only way to observe grill's model-facing transcript was to script
- * `runChild` and match the NEXT grill-gen prompt's prose — the exact
- * prompt-prose-as-test-infrastructure practice `PhaseDeps.runChild` exists to end.
+ * QaTranscript holds the provenance decision as data — a policy object and a
+ * suffix per kind — so these read it off the value. The alternative is scripting
+ * `runChild` and matching prose in the NEXT grill-gen prompt, which makes prompt
+ * copy load-bearing test infrastructure.
  */
 
 describe('QA_PROVENANCE', () => {
@@ -71,10 +70,9 @@ describe('numbering', () => {
 })
 
 describe('GRILL_QA_POLICY', () => {
-    // THE INVARIANT. phases.ts stated it in a comment — "this string is fed back
-    // VERBATIM into the next grill-gen prompt, so a suffix would become model
-    // input" — and the YOLO branch twelve lines above pushed `${answer} (YOLO)`
-    // into that very array. It is a property of the value now.
+    // THE INVARIANT: `forGenerator()` is fed back VERBATIM into the next grill-gen
+    // prompt, so any provenance suffix would become model input. Asserted over
+    // every kind at once, so a new one cannot be added without meeting it.
     test('the generator sees NO provenance, for any kind', () => {
         const t = new QaTranscript(GRILL_QA_POLICY)
         for (const kind of ALL_KINDS) t.add(kind, `q-${kind}?`, `a-${kind}`)
