@@ -99,9 +99,10 @@ test('no UI (headless): only remote can answer', async () => {
 })
 
 test('remote off (no server, default broadcast): resolves from local, no crash', async () => {
-    // afterEach restores the production wsBroadcast, which iterates the (empty)
-    // client set — this proves ask() is a clean no-op on the wire when nobody is
-    // connected and still resolves from the local input alone.
+    // afterEach restores the production broadcast, which loops over the client
+    // Set on globalThis — empty here, since no test adds one. So this proves ask()
+    // is a clean no-op on the wire when nobody is connected, and still resolves
+    // from the local input alone.
     const ui = new SessionUI(fakeCtx({onInput: resolve => resolve('local')}))
     await expect(ui.ask({localTitle: 'Q', question: 'Q', allowSkip: true})).resolves.toBe('local')
 })
@@ -284,9 +285,9 @@ test('publishLifecycleNotice: an error becomes a persistent red bubble in the tr
     publishLifecycleNotice('TASK_0001 failed: clarify model error.', 'error')
     // addError → persistent agent_error (survives reconnect via the snapshot),
     // matching the terminal's red text — not a transient toast.
-    // agent_error is a live SessionState delta — intentionally not in the typed
-    // ServerMessage union (see protocol.ts), so cast the literal like the rest of
-    // this file does for sink captures.
+    // `agent_error` is a live SessionState delta: the string appears nowhere in
+    // protocol.ts and is not one of the ServerMessage arms, so the literal is cast
+    // here as the rest of this file does for sink captures.
     expect(b.sent).toContainEqual({
         type: 'agent_error',
         message: 'TASK_0001 failed: clarify model error.'
@@ -391,8 +392,9 @@ test('dispatchRemoteLine toasts when an async command handler rejects', async ()
 test('dispatchRemoteNewSession does not throw when newSession is stale (sync throw)', () => {
     const b = getBridge()
     b.broadcast = msg => b.sent.push(msg)
-    // A stale command ctx still LOOKS command-capable (waitForIdle is a function)
-    // but newSession() throws synchronously from assertActive — this is the crash.
+    // A stale command ctx still LOOKS command-capable — `waitForIdle` is a
+    // function — but pi wires `newSession` as `assertActive(); newSessionHandler()`,
+    // so it throws SYNCHRONOUSLY once the ctx is invalidated. That is the crash.
     b.currentCtx = {
         waitForIdle: () => {},
         newSession: () => {
