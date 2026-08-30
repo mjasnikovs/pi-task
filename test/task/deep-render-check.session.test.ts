@@ -189,7 +189,9 @@ async function run(scenario: Scenario, credentials: LoginCredentials | null = CR
             facts = f
             return judgeDeepSession(f)
         },
-        // The fake answers instantly, so 20ms of silence means what 1.2s means live.
+        // The production settle window is QUIET_MS (deep-render-check.ts:446).
+        // The fake answers instantly, so a much smaller window here reaches the
+        // same state — waiting the real one would only add dead time per case.
         quietMs: 20
     })
     return {verdict, facts: facts as unknown as DeepSessionFacts, cdp}
