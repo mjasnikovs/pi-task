@@ -4,7 +4,6 @@ import {isIntegrationUnknown} from '../../src/task/unknown-routing.js'
 describe('isIntegrationUnknown', () => {
     test('fires on build-wiring / integration unknowns', () => {
         const integration = [
-            // The run's actual unknown (de-projected): plugin wiring + import structure.
             'The spec names a build plugin but does not define how to wire it; should the '
                 + 'stylesheet import structure in the HTML entry be modified?',
             'How should the bundler be configured to pick up this plugin?',
