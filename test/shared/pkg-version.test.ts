@@ -8,8 +8,9 @@ test('reads the shipped version out of package.json', () => {
 })
 
 test('falls back to 0.0.0 rather than throwing when package.json is unreadable', async () => {
-    // Every caller is cosmetic (a User-Agent, a title bar); an unreadable
-    // package.json must never take a run down.
+    // Both callers are cosmetic: html-clean.ts puts it in a fetch User-Agent and
+    // config/register.ts in the /task-config box title. Neither is worth failing
+    // a session over, so an unreadable package.json degrades instead of throwing.
     void mock.module('node:fs', () => ({
         readFileSync: () => {
             throw new Error('ENOENT')
