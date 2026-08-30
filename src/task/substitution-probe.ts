@@ -2,20 +2,15 @@
  * substitution-probe — deterministic detection of SELF-VERIFIED work, feeding the
  * verify gate's prompt.
  *
- * The failure class: the implementation hit a real bug
- * in the shipped app ("Context is not finalized" from a mis-signatured middleware),
- * blamed the framework, and shipped "integration tests" that re-implement the API
- * inline — an own server intercepting protected routes, and a 943-line hand-rolled
- * duplicate in a test-support file that imports the real app and never calls it.
- * The suite runs green while every protected route of the real server 500s.
- * The verify child judged "do the tests pass", saw green, and PASSed.
+ * The failure class: an implementation that hits a real bug in the shipped app
+ * can ship "integration tests" that re-implement the API inline instead — a test
+ * file that stands up its own server, or imports the real app and never calls it.
+ * The suite then runs green while every route of the real server fails, and a
+ * verify child that asks "do the tests pass" sees green and PASSes.
  *
- * A/B on the live local model proved the
- * fix must be a DETERMINISTIC, CONCRETE finding in the prompt, not prompt language
- * alone: the bare substitution rule catches it less than half the time — the
- * verdicts it does reach are right, the attention is not there. The rule PLUS a
- * probe finding naming the suspect file catches it every time, each verdict naming
- * the exact inline handlers and confirming the real app crashes.
+ * The prompt rule alone is weak against that, because the child has to notice the
+ * substitution unprompted. This probe hands it a concrete finding naming the
+ * suspect file, so the rule fires on a line rather than on self-discovery.
  *
  * WHAT THE PROBE ASSERTS is deliberately the class INVARIANT, not any framework
  * shape: when a task's own diff includes the very tests whose green result would
@@ -24,15 +19,16 @@
  * That is computable from pure git diff shape (which changed files live in test
  * paths, and how many lines the task added there): no language parsing, no server-
  * constructor lists, no import syntax — a Python, Go, or Rust project produces the
- * same finding the same way. (An earlier draft pattern-matched JS server
- * constructors; that only re-encoded the one incident. A behavioral canary — rerun
- * the suite with shipped sources removed, still-green ⇒ copy — was also rejected:
- * the real copy still imported the shipped db module, so poisoning sources
- * breaks the copy's tests too and the conviction never fires.)
+ * same finding the same way.
  *
- * Findings are advisory: they mandate the spot-check, they never auto-FAIL. Honest
- * self-authored tests survive the spot-check (control fixtures PASS with the
- * mandate present); only tests that bypass the artifact get named in a FAIL.
+ * A behavioural canary — re-run the suite with the shipped sources removed, and
+ * treat still-green as proof of a copy — does NOT work here: a substituted test
+ * usually still imports SOMETHING real (a db module, a type), so poisoning the
+ * sources breaks it too and the canary never convicts.
+ *
+ * Findings are advisory: they mandate the spot-check, they never auto-FAIL. An
+ * honest self-authored test survives that spot-check; only one that bypasses the
+ * artifact gets named in a FAIL.
  */
 
 /** One changed file as the git-shape collector reports it. */
