@@ -448,9 +448,9 @@ test('every debt this stage writes lands on the RUN id under origin final-gate',
 test('the debt write is a seam: a fake sink observes it with no ledger on disk', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
-        // The run-level twin of GateDeps.recordDebt. Substituting it is what lets a
-        // scenario assert WHICH debts it carries without writing, then re-reading,
-        // the real ledger — the shape task-gates.test.ts has always had.
+        // The run-level twin of GateDeps.recordDebt. Substituting it lets a scenario
+        // assert WHICH debts it carries without writing and re-reading the real
+        // ledger on disk.
         const written: Array<{taskId: string; reason: string; origin: string}> = []
         handle.queueSelect(FINAL_AUTOFIX_LABEL)
         await runFinalGateStage(
@@ -739,11 +739,10 @@ test('a record() fault never breaks the gate', async () => {
 
 // ─── The gate outcome crosses the autofix pass WHOLE ─────────────────────────
 //
-// Re-declaring `FinalGateOutcome` structurally on the way into the fix
-// pass, re-flattened into four `gate*` fields on the way out, and rebuilt as a
-// and again after — each literal dropping `openDebts`, which is the recorded
-// defect (the fix at the time RE-DERIVED the field instead of keeping the
-// value). It rides whole now, so the fresh gate's own record is what goes forward.
+// `FinalGateFixResult.gate` is the whole `FinalGateOutcome`, not a hand-picked copy
+// of some of its fields. A copy drops whatever it forgot — `openDebts`, say — and
+// the pairing between `failures` and `observedFailures` only holds inside the one
+// value. So what the fresh gate recorded is what goes forward.
 test('a fresh gate outcome rides forward whole: every ranked failure is re-trailed', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
