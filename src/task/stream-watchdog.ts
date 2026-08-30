@@ -10,12 +10,12 @@ import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
 /**
  * MAIN-SESSION adapter for the model-stream watchdog.
  *
- * WHY: three implementation turns died mid-turn — the session jsonl's
- * last record is an ordinary assistant message, then silence forever, while the
- * model container stayed Up(healthy). No error is ever thrown for this shape, so
- * the connection-error retry (which needs a reported ModelError) cannot fire and
- * the command watchdog, which only covers tool executions, never arms. The run sat
- * dead for ~2.9h across the three until a human restarted it.
+ * WHY: a turn can die mid-stream — the last thing recorded is an ordinary
+ * assistant message, then silence forever, with the model endpoint still up.
+ * Nothing throws for that shape, so the connection-error retry (which needs a
+ * reported ModelError) cannot fire, and the command watchdog only covers tool
+ * executions, so it never arms. Without this the session sits dead until a human
+ * notices.
  *
  * HOW: pi's extension events ARE the stream. Any of them — a token delta, a
  * thinking delta, a tool-call delta, the provider's response headers — resets the
@@ -25,17 +25,19 @@ import {noteWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
  * blind re-send would re-run them).
  *
  * ONE ABORT CHANNEL: the fire path goes through the command watchdog's existing
- * {@link noteWatchdogAbort} flag and its WATCHDOG_CANCEL_MARKER, so
- * steerUntilDone's already-fixed abort/steer race (b543d15) covers this watchdog
- * too instead of racing a second, parallel abort mechanism.
+ * {@link noteWatchdogAbort} flag and its WATCHDOG_CANCEL_MARKER, so the abort/steer
+ * race steerUntilDone already handles covers this watchdog too, instead of racing a
+ * second, parallel abort mechanism.
  *
  * SUSPENDED DURING TOOLS: while a tool executes the model stream is legitimately
- * idle — a 12-minute build emits nothing. That window belongs to the command
+ * idle — a long build emits nothing on it. That window belongs to the command
  * watchdog (requestTimeoutMs); this one pauses between tool_execution_start and
  * tool_execution_end so the two can never double-fire on the same silence.
  *
- * SCOPE: main session only. Children run `--no-extensions`, so their equivalent
- * guard lives in runChild (shared/child-process.ts) and shares the same machine.
+ * SCOPE: main session only. Children run `--no-extensions` (CHILD_BASE_ARGS), so
+ * none of these events reaches them; their equivalent guard is a second
+ * `StreamWatchdog` inside runChild (shared/child-process.ts), on the same
+ * machine.
  */
 export function registerStreamWatchdog(pi: ExtensionAPI): void {
     // The ctx whose abort() ends the in-flight turn, refreshed on every event so
