@@ -1,14 +1,13 @@
 /**
- * The three silent-failure modes, as named cases.
+ * The three silent-failure modes, as named cases. Each is a way a requested
+ * thinking level is quietly rewritten: pi reports none of them, which is why
+ * the warning exists.
  *
- * Each was captured live on 2026-08-25 against this machine's llama-server, with
- * a logging proxy reading the actual request body pi sent. They are the reason
- * the warning exists, so if this file ever goes green for the wrong reason the
- * warning has stopped being able to see them.
- *
- * This also pins the local copy of pi's clamp against the real thing
- * (@earendil-works/pi-ai's getSupportedThinkingLevels / clampThinkingLevel). If
- * pi changes the rule, these cases are where it surfaces.
+ * This file pins the local copy of pi's clamp against the real thing —
+ * @earendil-works/pi-ai's `getSupportedThinkingLevels` and
+ * `clampThinkingLevel`. Both were run side by side with `clampToModel` and
+ * `supportedThinkingLevels` on every model shape below and agreed on all of
+ * them. If pi changes the rule, these cases are where it surfaces.
  */
 import {describe, expect, test} from 'bun:test'
 import {
@@ -20,7 +19,9 @@ import {
 } from '../../src/shared/reasoning-capability.js'
 import {REASONING_GROUPS, type GroupSetting} from '../../src/config/reasoning.js'
 
-/** The live models.json entry for Qwen3.8 on this box, verbatim. */
+/** A map declaring every level, with high/xhigh/max all folded onto xhigh —
+ *  the shape a real local-model entry takes. Its extended levels are DECLARED,
+ *  which is what makes xhigh and max supported at all. */
 const QWEN38: ReasoningModelFacts = {
     reasoning: true,
     thinkingLevelMap: {
@@ -35,8 +36,9 @@ const QWEN38: ReasoningModelFacts = {
 
 describe('the three silent failures pi never reports', () => {
     test('1. reasoning:false erases the level instead of rejecting it', () => {
-        // LIVE: a model with reasoning:false given `--thinking medium` produced a
-        // request body with NO reasoning field at all. No error, no warning.
+        // `reasoning: false` is the first line of pi's own
+        // getSupportedThinkingLevels: it returns ["off"] and never consults the
+        // map, so EVERY requested level collapses to off. No error, no warning.
         const model: ReasoningModelFacts = {reasoning: false}
         expect(supportedThinkingLevels(model)).toEqual(['off'])
         expect(clampToModel(model, 'medium')).toBe('off')
@@ -44,10 +46,10 @@ describe('the three silent failures pi never reports', () => {
     })
 
     test('2. off:null clamps UP — thinking stays on when you turned it off', () => {
-        // LIVE: thinkingLevelMap {off:null} given `--thinking off` sent
-        // enable_thinking:true with reasoning_effort "medium".
-        // This is the mirror of "reasoning on but unsupported", and it is why the
-        // warning reports both directions.
+        // The clamp scans UPWARD from the requested index before it scans down,
+        // so a nulled `off` resolves to the next level that IS available.
+        // Asking for off leaves thinking ON. This is the mirror of "reasoning on
+        // but unsupported", and it is why the warning reports both directions.
         const model: ReasoningModelFacts = {
             reasoning: true,
             thinkingLevelMap: {off: null, minimal: null, low: null, medium: 'medium'}
@@ -56,7 +58,7 @@ describe('the three silent failures pi never reports', () => {
     })
 
     test('3. a null level clamps to the next one up', () => {
-        // LIVE: `--thinking low` where low:null became medium, silently.
+        // Same upward scan: a nulled level resolves to the next one available.
         const model: ReasoningModelFacts = {
             reasoning: true,
             thinkingLevelMap: {off: null, minimal: null, low: null, medium: 'medium'}
@@ -75,9 +77,10 @@ describe('supportedThinkingLevels', () => {
     })
 
     test('an absent map supports the standard levels but NOT xhigh/max', () => {
-        // The asymmetry that decides which levels /task-config may offer: the
-        // extended two are opt-in and must be declared, so a model with no map
-        // would be sent the raw string.
+        // The asymmetry that decides which levels /task-config may offer. In pi's
+        // filter, xhigh and max are kept only when `mapped !== undefined`, while
+        // every other level is kept unless explicitly null — so the extended two
+        // are opt-in and an absent map excludes exactly those two.
         const supported = supportedThinkingLevels({reasoning: true})
         expect(supported).toEqual(['off', 'minimal', 'low', 'medium', 'high'])
     })
@@ -121,8 +124,9 @@ describe('reasoningMismatches', () => {
         >
 
     test('says nothing when every group inherits — the shipped state', () => {
-        // This is the real anti-nag. With the shipped all-inherit table, a model
-        // with no reasoning at all still produces no warning.
+        // The real anti-nag: an all-`inherit` table asks for nothing, so nothing
+        // can be erased and even a reasoning:false model warrants no warning.
+        // Setting a group back to inherit is therefore what silences the hint.
         expect(reasoningMismatches({reasoning: false}, every('inherit'))).toEqual([])
     })
 
