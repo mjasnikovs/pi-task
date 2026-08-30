@@ -1,11 +1,11 @@
 /**
- * Web search via DuckDuckGo's HTML endpoint — no API key required.
+ * Web search by scraping DuckDuckGo's HTML endpoint. No API key: search-types.ts
+ * gives `ddg` an empty env-var list.
  *
- * DDG has no official web-results API; html.duckduckgo.com/html serves plain
- * HTML result pages that parse cleanly with linkedom. Result links are wrapped
- * in a `duckduckgo.com/l/?uddg=<encoded>` redirect that we unwrap so callers
- * get the destination URL. Ad rows redirect through duckduckgo.com itself and
- * are dropped.
+ * `html.duckduckgo.com/html/?q=…` serves an ordinary result page that linkedom
+ * parses. Its result links are wrapped in a `//duckduckgo.com/l/?uddg=<encoded>`
+ * redirect, which `unwrapDdgRedirect` below decodes so callers get the
+ * destination URL rather than the tracker.
  */
 
 import {parseHTML} from 'linkedom'
@@ -16,7 +16,9 @@ const DDG_ENDPOINT = 'https://html.duckduckgo.com/html/'
 const DEFAULT_COUNT = 10
 const MAX_COUNT = 20
 const DEFAULT_TIMEOUT_MS = 15_000
-// DDG serves a bot-challenge page to clients without a browser-ish UA.
+// Required. Without a browser-ish UA the same request answers HTTP 202 with a
+// different page — no `result__a` rows at all, and the words "anomaly" and
+// "challenge" in the body — so the parser would return an empty list.
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0'
 
 export interface DdgSearchOpts {
@@ -37,8 +39,8 @@ export class DdgSearchError extends Error {
     }
 }
 
-// linkedom's DOM types don't resolve under this tsconfig (see html-clean.ts);
-// narrow to the members the parser touches.
+// A hand-written narrowing to the members the parser touches, so this file does
+// not depend on linkedom's exported DOM types. html-clean.ts narrows the same way.
 interface ParsedElement {
     getAttribute(name: string): string | null
     querySelector(selector: string): ParsedElement | null
@@ -67,7 +69,8 @@ export async function ddgSearch(query: string, opts: DdgSearchOpts = {}): Promis
                 }
             },
             async response => {
-                // DDG's own status policy: 429/403 is throttling, not a plain HTTP fault.
+                // 429 and 403 both mean throttling here, so they share one `kind` and
+                // one message rather than falling into the generic HTTP branch.
                 if (response.status === 429 || response.status === 403) {
                     throw new DdgSearchError(
                         `DuckDuckGo is rate-limiting this client (HTTP ${response.status}). Try again in a moment.`,
@@ -105,7 +108,9 @@ export function parseDdgHtml(html: string): SearchResult[] {
 
         const href = anchor.getAttribute('href')
         const targetUrl = href === null ? null : unwrapDdgRedirect(href)
-        // A row whose link never leaves duckduckgo.com is an ad/module, not a hit.
+        // A row whose link never leaves duckduckgo.com is an ad or a module, not a
+        // hit. This also drops an `l/?` href carrying no `uddg`, and one whose
+        // `uddg` does not decode to a URL.
         if (targetUrl === null) continue
 
         const title = collapse(anchor.textContent ?? '')
@@ -119,9 +124,10 @@ export function parseDdgHtml(html: string): SearchResult[] {
 }
 
 /**
- * Result hrefs look like `//duckduckgo.com/l/?uddg=<encoded-destination>&rut=…`;
- * return the decoded destination, a non-DDG href unchanged, or null for links
- * that stay on duckduckgo.com (ad click-trackers).
+ * Result hrefs look like `//duckduckgo.com/l/?uddg=<encoded-destination>&rut=…`.
+ * Returns the decoded destination, a non-DDG href unchanged, or null for a link
+ * that stays on duckduckgo.com — no `uddg`, an undecodable one, or an unparseable
+ * href.
  */
 function unwrapDdgRedirect(href: string): string | null {
     let parsed: URL
