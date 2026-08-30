@@ -2,22 +2,20 @@
  * task-provenance — file → introducing-task lookup, and the cross-task deletion
  * detection built on it.
  *
- * The failure class: write-enabled gate/fix children can DELETE a sibling task's
- * committed deliverable to turn a red check green. Live (2026-07-16,
- * verify-debug.log 17:53:44): `bun run lint` was permanently red because
- * committed playwright ct files were not registered in a spec-frozen tsconfig —
- * so a lint-fix child deleted a task verified deliverables and the pass
- * returned ok. Every existing guard missed the class:
+ * The failure class: a write-enabled gate or fix child can DELETE a sibling
+ * task's committed deliverable to turn a red check green — a lint that only goes
+ * green once the offending files are gone. Every other guard misses that class:
  *
  *   - the lint-fix revert-guard checks only pre-DIRTY files reverted and
- *     pre-UNTRACKED files gone — a CLEAN tracked sibling file is in neither set;
+ *     pre-UNTRACKED files gone — a CLEAN tracked sibling file is in neither set
+ *     (lint-fix.ts says so at its own site);
  *   - the frozen-path guard covers only paths THIS task's spec froze;
- *   - the deletion guard covers only the final-fix child;
+ *   - `findForbiddenDeletions` (write-guard.ts) was reached only by the final-fix
+ *     child (final-gate-fix.ts);
  *   - the impl turn legitimately deletes files (its own refactors), so a blanket
  *     ban is wrong — the discriminator must be PROVENANCE: who introduced the file.
  *
- * The provenance primitive (extracted from final-gate.ts, where it fed the
- * conflicting-claim annotation) resolves a file to the task whose commit ADDED it
+ * The provenance primitive resolves a file to the task whose commit ADDED it
  * (`git log --diff-filter=A` → oldest task-subject commit). Every unknown — a file
  * predating the run, a non-task commit, any git error — degrades to null:
  * inconclusive is never evidence, so the guards built on this may only cost time,
