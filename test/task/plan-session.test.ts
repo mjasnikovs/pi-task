@@ -476,9 +476,9 @@ describe('planForkHint', () => {
 })
 
 describe('isDeferralSuggestion', () => {
-    test('fires on the live one and its neighbours', () => {
-        // aiz-client TASK_PLAN_0001: accepted, then handed to /task as an
-        // authoritative decision NOT to proceed.
+    test('fires on a deferral suggestion and its neighbours', () => {
+        // A SUGGESTED that defers is worse than no recommendation: accepted, it
+        // reaches /task as an authoritative decision NOT to do the work.
         expect(
             isDeferralSuggestion(
                 'clarify with the user what the report is meant to show before proceeding'
@@ -564,8 +564,8 @@ describe('the deferring-SUGGESTED recovery', () => {
 })
 
 describe('pickQuestion', () => {
-    // The live failure: the model wrote a numbered observation about a file
-    // first, and the SUGGESTED line belonged to the question further down.
+    // A model that writes a numbered observation first leaves the SUGGESTED line
+    // attached to a later entry, so taking parsed[0] would drop the recommendation.
     test('prefers the entry that carries the SUGGESTED line', () => {
         const parsed = [
             {question: 'gateDebugWriter wraps a raw append function'},
