@@ -8,13 +8,14 @@
  *
  * WHY PER-SITE, NOT ONE HOOK (the trap this module exists to avoid): the single
  * interactive choke point is SessionUI.ask() (remote/bridge.ts) — auto-picking
- * "index 0" inside it would be one tiny patch, and it would be wrong. The
- * verify-FAIL picker is reached ONLY AFTER MAX_AUTO_AUTOFIX unattended autofix
- * attempts have already failed, yet it STILL tints AUTOFIX as recommended: a
- * central hook would pick AUTOFIX forever and defeat the exact cap that exists to
- * break a non-converging loop. So every site decides for itself, BEFORE ask() is
- * called — which also means the prompt notification (the lone pushNotify in
- * ask()) is suppressed structurally, with zero suppression code.
+ * "index 0" inside it would be one tiny patch, and it would be wrong. One way the
+ * verify-FAIL picker is reached is after MAX_AUTO_AUTOFIX unattended autofix
+ * attempts have all failed, and it STILL tints AUTOFIX as recommended, because the
+ * research still recommends it. A central hook would pick AUTOFIX forever and
+ * defeat the exact cap that exists to break a non-converging loop. So every site
+ * decides for itself, BEFORE ask() is called — which also means the prompt
+ * notification (bridge.ts holds exactly one pushNotify, inside ask()) is
+ * suppressed structurally, with zero suppression code.
  *
  * Guard direction (repo constraint): an auto-pick may cost time, never work.
  * Anything this module cannot stand behind — no recommendation to take, an answer
@@ -31,10 +32,11 @@ import type {ResolutionChoice} from './verify-resolution.js'
 import type {FinalGateChoice} from './final-gate-fix.js'
 
 /**
- * Visible provenance marker on EVERY artifact an auto-pick writes (gate trails,
- * task-file Q&A, the debt ledger's reason text). A later audit reading only the
- * artifacts must never mistake an auto-pick for a human decision — that is the
- * same confusion the accept-debt origins were introduced to prevent.
+ * Visible provenance marker on the artifacts an auto-pick writes: gate trail lines
+ * and the task file's Q&A record (qa-transcript.ts `QA_PROVENANCE`). A later audit
+ * reading only the artifacts must never mistake an auto-pick for a human decision.
+ * The debt ledger does not use this stamp — it carries the `'yolo-accepted'` ORIGIN
+ * instead, which is stronger: a typed field rather than text.
  */
 export const YOLO_STAMP = '(YOLO)'
 
@@ -53,16 +55,17 @@ export function isYoloMode(): boolean {
 export type YoloPick = {kind: 'answer'; answer: string} | {kind: 'skip'; note: string} | null
 
 /**
- * The clarify/grill policy: take the RECOMMENDED option — which is positional,
- * index 0 of the card list (question-box.ts tints it green), i.e. `suggested`,
- * falling back to the B-side `alt` when a fork offers only that.
+ * The clarify/grill policy: take the RECOMMENDED option — `suggested`, falling
+ * back to the B-side `alt` when a fork offers only that. Recommended is positional
+ * for a human too: bridge.ts marks card index 0, and question-box.ts tints the
+ * marked card green.
  *
  * `unsafe` is the step-aside channel: a caller that KNOWS the recommendation must
- * not be auto-accepted passes why, and the question is skipped instead. Its one
- * producer today is the anti-synthesis demotion — an answer proven to name a
- * hallucinated API identifier. Auto-accepting that would re-promote exactly the
- * invention the demotion was built to stop (it reached requirements AND the VERIFY
- * block), so a machine may never take it; a human still can.
+ * not be auto-accepted passes why, and the question is skipped instead. The only
+ * thing that supplies it is `yoloPickAutoAnswer` below, on the anti-synthesis
+ * demotion — an answer proven to name an unverified API identifier. Auto-accepting
+ * that would re-promote exactly the invention the demotion exists to stop, so a
+ * machine may never take it; a human still can.
  */
 export function yoloPickAnswer(
     enabled: boolean,
@@ -80,12 +83,12 @@ export function yoloPickAnswer(
 }
 
 /**
- * The same policy expressed over an {@link AutoAnswer}, for the grill site. Only
- * the ANTI-SYNTHESIS unknown is unsafe: the other two producers (an integration
- * unknown research could not ground, a child that threw) carry an ordinary
- * best-effort recommendation, which is precisely what a human would be shown as
- * the green card. The variants are told apart by the union's `reason` tag — never
- * by pattern-matching the answer text.
+ * The same policy expressed over an {@link AutoAnswer}, for the grill site. Of the
+ * four `reason` tags an unknown can carry — `api-synthesis`, `integration`,
+ * `threw`, `model-unknown` — only ANTI-SYNTHESIS is unsafe. The other three carry
+ * an ordinary best-effort recommendation, which is precisely what a human would be
+ * shown as the green card. The variants are told apart by that tag, never by
+ * pattern-matching the answer text.
  */
 export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick {
     if (!enabled) return null
@@ -102,26 +105,28 @@ export function yoloPickAutoAnswer(enabled: boolean, auto: AutoAnswer): YoloPick
 /**
  * The verify-FAIL picker policy: ACCEPT (and write a debt), never AUTOFIX.
  *
- * Not a preference — a bound. Every branch that REACHES this picker has already
- * spent its unattended budget: the loop auto-runs AUTOFIX while the research
- * recommends it, up to MAX_AUTO_AUTOFIX consecutive failures, and only then hands
- * over. Answering AUTOFIX here would restart that budget from a site whose whole
- * purpose is that the budget ran out. So YOLO takes the terminal option and
- * records the defect ('yolo-accepted' — an origin a human never produces).
+ * Not a preference — a bound. task-gates.ts consults this only after its own
+ * unattended paths are exhausted: `autoFixNow` has run AUTOFIX up to
+ * MAX_AUTO_AUTOFIX times while the research recommended it, and the YOLO rescue has
+ * spent its one attempt on an ACCEPT recommendation with an untouched budget.
+ * Answering AUTOFIX here would restart that budget from the very site that proves
+ * it ran out. So YOLO takes the terminal option and records the defect under the
+ * `'yolo-accepted'` debt origin, which a human decision never produces.
  */
 export function yoloVerifyResolution(enabled: boolean): ResolutionChoice | null {
     return enabled ? {action: 'accept'} : null
 }
 
 /**
- * The final-integration-gate policy: keep autofixing WHILE the picker still
- * offers that card (the loop withdraws it after MAX_FINAL_GATE_AUTOFIX attempts),
- * then leave the run FAILED.
+ * The final-integration-gate policy: keep autofixing WHILE the picker still offers
+ * that card — run-final-gate.ts withdraws it from `options` after
+ * MAX_FINAL_GATE_AUTOFIX attempts, and passes that as `canAutofix` — then leave the
+ * run FAILED.
  *
  * 'leave', not 'accept': an unattended run that cannot fix the whole-repo gate has
- * not produced a working project, and the honest terminal state is a failed run a
- * resume can re-enter — a ended "FAIL accepted by user" on an app that
- * 404'd at `/`, and that acceptance is what made the failure look like a success.
+ * not produced a working project. The honest terminal state is a failed run a
+ * resume can re-enter. Accepting instead would make the failure read as a success
+ * in every artifact that survives the run.
  */
 export function yoloFinalGateChoice(enabled: boolean, canAutofix: boolean): FinalGateChoice | null {
     if (!enabled) return null
