@@ -13,23 +13,20 @@
  *   2. the raw-stdin interception that makes the terminal behave like the
  *      browser is ARMED (`cancel-input.ts`: `armCancelListener`/`disarm…`).
  *
- * Before this module the pair — begin, arm, … finally disarm, end, report the
- * dropped lines — was written out at four sites in two files, and the `finally`
- * halves disagreed on order (the orchestrator disarmed first; `/task-auto` ended
- * first). The order is not observable — both halves are synchronous, the
+ * The teardown order is not observable — both halves are synchronous, the
  * listener only consults `isRunActive()` on a keystroke, and no keystroke can
  * land between two statements of one tick — so there is ONE order here, not an
  * option: stop listening, then release the hold and report what it dropped.
  *
- * The two refcounts stay two, deliberately. `runDepth` is read by the remote
- * bridge (`isRunActive`) with no ctx in hand and by the listener itself;
- * `armed.depth` guards a live stdin subscription that is re-pointed on every
- * session replacement (`rearmCancelListener`) and is armed on its own by the
- * cancel-latency harness and cancel-points tests. Collapsing them means one
- * module's counter driving the other's lifecycle, or a third counter with both
- * modules demoted to flags — a wider change than the drift it prevents. What
- * prevents drift now is that this bracket is the ONLY production caller of
- * either pair.
+ * The two refcounts stay two, deliberately. `runDepth` (mid-run-input.ts) is read
+ * by the remote bridge through `isRunActive` with no ctx in hand, and by the
+ * listener itself; `armed.depth` (cancel-input.ts) guards a live stdin
+ * subscription that is re-pointed on every session replacement
+ * (`rearmCancelListener`, called from orchestrator.ts) and that
+ * cancel-input.test.ts arms directly. Collapsing them means one module's counter
+ * driving the other's lifecycle, or a third counter with both modules demoted to
+ * flags — a wider change than the drift it prevents. What prevents drift now is
+ * that this bracket is the ONLY production caller of either pair.
  */
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {armCancelListener, disarmCancelListener} from './cancel-input.js'
