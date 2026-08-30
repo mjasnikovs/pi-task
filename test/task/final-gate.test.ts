@@ -86,7 +86,7 @@ describe('discoverIntegrationCommands', () => {
         ])
     })
 
-    // item 2: EVERY test-shaped script must run, not just `test`.
+    // EVERY test-shaped script must run, not just the one named `test`.
     test('every test*/test:* script runs — plain test leads, then test:* / test-*, build last', async () => {
         const dir = makeDir({
             scripts: {
@@ -198,9 +198,11 @@ describe('runFinalIntegrationGate', () => {
         expect(out.reason).toContain('`bun run build` exited 2')
     })
 
-    // item 2: `test:ct` (Playwright CT) must RUN in the gate, but on a box
-    // with no browsers installed it is an ENVIRONMENT gap, not a code FAIL. Playwright
-    // exits non-zero (not 127) with a recognisable "Executable doesn't exist" message.
+    // `test:ct` (Playwright CT) must RUN in the gate, but on a box with no
+    // browsers installed that is an ENVIRONMENT gap, not a code FAIL. Playwright
+    // exits non-zero rather than 127, so the exit status cannot separate the two
+    // — the output is what does it, via the gap regex in command-run.ts:241
+    // ("Executable doesn't exist", "playwright install", and friends).
     test('a browser suite with no browsers installed is an env gap → skipped, not failed', async () => {
         const dir = makeDir({
             scripts: {
@@ -229,8 +231,9 @@ describe('runFinalIntegrationGate', () => {
         expect(out.ok).toBe(true)
     })
 
-    // item 4: a script the design declared but the manifest never exposed
-    // (migrate/seed) is a launch-surface defect the final gate must FAIL on.
+    // A script the design DECLARED but the manifest never exposed — migrate,
+    // seed — is a launch-surface defect: nothing can run it, and no other check
+    // notices. The final gate must FAIL naming it.
     test('a declared script missing from the manifest FAILs the gate naming it', async () => {
         const dir = makeDir({scripts: {dev: 'exit 0', build: 'exit 0', test: 'exit 0'}})
         await appendDeclaredScripts(dir, ['dev', 'build', 'migrate', 'seed', 'test'])
@@ -344,9 +347,9 @@ describe('runFinalIntegrationGate', () => {
     })
 })
 
-// item 3, layer (b): the final gate must reap OUR OWN orphaned dev server
-// and retry, or — if the port is held by something we cannot attribute to ourselves
-// — surface a HARNESS diagnosis rather than a bare app FAIL.
+// The final gate must reap OUR OWN orphaned dev server and retry. If the port is
+// held by something it cannot attribute to itself, it must surface a HARNESS
+// diagnosis instead — a bare app FAIL would blame the code for a busy port.
 describe('runFinalIntegrationGate — orphaned-port recovery (run 9 item 3)', () => {
     // A start script that binds a listener on the injected pid's behalf would need a
     // real server; instead we drive the classifier + recovery with an EADDRINUSE
@@ -1147,11 +1150,11 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
     })
 
     test('a declared launch script RUNS even when no integration/boot command is discoverable', async () => {
-        // Firing the zero-discovery return BEFORE the launch-script loop
-        // (found and left unfixed in f5d7110): a package.json whose only scripts
-        // are `migrate`/`seed` discovers no test/build/start, so the gate returned
-        // UNOBSERVED without ever running the launch contract it had been handed.
-        // The return now asks the tally — no attempt, no failure — after the loop.
+        // Order matters here. Fire the zero-discovery return BEFORE the
+        // launch-script loop and a package.json whose only scripts are
+        // `migrate`/`seed` discovers no test/build/start, so the gate reports
+        // UNOBSERVED without ever running the launch contract it was handed. The
+        // return asks the tally — no attempt, no failure — AFTER the loop.
         const dir = makeDir({
             scripts: {
                 migrate: `node -e "console.error('TypeError: undefined is not an object (evaluating result.rows)'); process.exit(1)"`
@@ -1202,8 +1205,8 @@ describe('runFinalIntegrationGate — launch-contract scripts EXECUTE (run 11)',
             }
         })
         await appendDeclaredScripts(dir, ['migrate', 'test'])
-        // The verbatim excuse-note class: the note excused the exact
-        // scripts that shipped broken.
+        // The excuse-note class: a note that excuses in advance the exact scripts
+        // that then ship broken. It must not license the gate to skip them.
         await appendEnvNotes(
             dir,
             ['pre-existing scripts have .rows bug — migrate and seed fail, unrelated to this task'],
@@ -1440,12 +1443,11 @@ describe('unobservedVerdict — zero observation is UNOBSERVED, never a PASS (IA
 /**
  * A SKIPPED boot check is a verdict, not a silence.
  *
- * The shape reproduced exactly: a served app whose boot command was
- * discovered and env-gap-skipped, while every other dynamic command ran and
- * passed — so dynObserved > 0, observabilityGapFailure stayed correctly quiet, and
- * "the app was never observed to boot" produced byte-identical output to "the app
- * booted fine". Backed by a base rate, a two-armed A/B, and a
- * zero-false-positive suite.
+ * The shape: a served app whose boot command was DISCOVERED and then
+ * env-gap-skipped, while every other dynamic command ran and passed. So
+ * dynObserved > 0, observabilityGapFailure stays correctly quiet, and "the app
+ * was never observed to boot" produces byte-identical output to "the app booted
+ * fine". The skip has to carry its own verdict or it disappears.
  */
 describe('bootSkipVerdict — a discovered boot that never ran is UNOBSERVED (mx5 run 18)', () => {
     /** A served app (hono in deps is what detectsServedApp reads) whose `dev`
@@ -1823,17 +1825,15 @@ describe('launch-script config gap → UNOBSERVED, not FAIL (run 20)', () => {
 
 // ─── The run-end gate no longer blocks the event loop ────────────────────────
 //
-// `CommandRunner` was `(spec) => CommandRun`, so its only implementation could be
-// `spawnSync` and the whole run-end gate ran without ever yielding: repo-health
-// under a 600s cap, then every lockfile/test/build/launch command under a 900s
-// cap, then every ACCEPT-debt re-run under a 300s cap. No loader could paint and
-// no cancel could be noticed through any of it. `repo-health-check.ts`'s own doc
-// comment told gate callers to use the async runner; `final-gate.ts` was a gate
-// caller using the sync one.
+// A synchronous `CommandRunner` would run the whole run-end gate without ever
+// yielding: repo-health under its 600_000ms cap (repo-health-check.ts:186), then
+// every lockfile/test/build/launch command under 900_000ms (final-gate.ts:646),
+// then every ACCEPT-debt re-run under 300_000ms (accept-debt.ts:707). No loader
+// could paint and no cancel could be noticed through any of it.
 //
-// The instrument is the one that found the defect: a 100ms interval counting its
-// own executions is an honest "is the screen frozen", independent of whether
-// pi-task drew anything.
+// The instrument below is deliberately independent of pi-task: an interval
+// counting its own executions is an honest "is the event loop turning", whether
+// or not anything was drawn.
 describe('runFinalIntegrationGate — the event loop keeps turning', () => {
     test('timers fire while the gate runs its commands', async () => {
         const dir = makeDir({name: 'x', scripts: {lint: 'true', test: 'true', build: 'true'}})
@@ -1842,7 +1842,7 @@ describe('runFinalIntegrationGate — the event loop keeps turning', () => {
         const timer = setInterval(() => ticks++, 20)
         try {
             // A runner that takes real asynchronous time, the way a project's own
-            // lint does. Under spawnSync this window delivered ZERO ticks.
+            // lint does. A synchronous one would deliver zero ticks across it.
             await runFinalIntegrationGate(dir, {
                 timeoutMs: 20_000,
                 bootGraceMs: 100,
