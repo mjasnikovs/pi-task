@@ -20,9 +20,10 @@ export interface TaskFrontMatter {
     title: string
     /**
      * Short, human-readable display label compressed from `title`. Visual only —
-     * `title` always holds the full text the pipeline reads. Absent on pre-label
-     * tasks and on small tasks whose title is already short; display falls back to
-     * a deterministic truncation of `title` when missing. See title-label.ts.
+     * `title` always holds the full text the pipeline reads. Absent on a task file
+     * written before the field existed, and on any task that never reached the
+     * phase that writes it; display then falls back to a deterministic truncation
+     * of `title` (`titleForDisplay`, parsers.ts). See title-label.ts.
      */
     label?: string
     reason?: string
