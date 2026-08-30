@@ -184,12 +184,14 @@ describe('applyReasoningLevel', () => {
 
 describe('the rows do not go stale (the bug you saw)', () => {
     /**
-     * REGRESSION. The menu showed `reasoning  off` beside seven `think:` rows
-     * still reading `inherit`. Under mode `off` every group runs at `off`, so
-     * those seven lines were describing a run that could not happen.
+     * The rows describe EACH OTHER, so one keystroke can make several of them
+     * wrong at once. Under mode `off` every group runs at `off`, so a menu showing
+     * `reasoning  off` beside seven `think:` rows still reading `inherit` is
+     * describing a run that cannot happen.
      *
-     * Cause: `panelItems` snapshots `currentValue` when the panel is built, and
-     * the mode row changes what every group row means. Nothing wrote them back.
+     * The mechanism: `panelItems` builds each row's `currentValue` from
+     * `i.format(cfg)` once, when the panel is built. Only `syncRows` re-asks every
+     * row afterwards and writes the answers back.
      */
     test('flipping the mode row updates every think: row', () => {
         const cfg = draft({reasoningMode: 'default'})
