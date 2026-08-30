@@ -1,9 +1,8 @@
 /**
- * git-state-guard tests — run against REAL throwaway git repos (temp dirs), since
- * the module's whole job is faithful git plumbing; a mocked spawn would test the
- * mock. Each scenario replays a mutation class actually observed from a live gate
- * child: stash-and-abandon, checkout-and-stay, `--fix`-style file
- * rewrites, junk file creation, and untracked-file deletion.
+ * git-state-guard tests — run against REAL throwaway git repos in temp dirs. The
+ * module is git plumbing, so a mocked spawn would only test the mock. One scenario
+ * per mutation class the guard must undo: stash-and-abandon, checkout-and-stay,
+ * a `--fix`-style file rewrite, junk-file creation, and untracked-file deletion.
  */
 import {describe, expect, setDefaultTimeout, test} from 'bun:test'
 import {execFileSync} from 'node:child_process'
@@ -16,12 +15,11 @@ import {
     withGitStateGuard
 } from '../../src/task/git-state-guard.js'
 
-// Every test here spawns REAL git (init/config/add/commit) against a temp dir, so
-// each one is 4-6 subprocesses of file I/O. On the Windows CI runner that I/O is
-// scanned by Defender (MsMpEng burned 13.5 CPU-s during the 0.38.15 run), and the
-// three heaviest cases blew bun's 5000ms default *inside makeRepo* — `git commit`
-// took the SIGTERM with empty stdout/stderr, not an assertion. The classification
-// under test has no time budget of its own, so give the subprocesses room.
+// makeRepo alone spawns four real git subprocesses (init, config, add, commit) and
+// several tests add more. A machine that scans that file I/O can blow bun's default
+// per-test timeout inside makeRepo, which surfaces as `git commit` taking a SIGTERM
+// with empty output rather than as an assertion. The classification under test has
+// no time budget of its own, so the subprocesses get room.
 setDefaultTimeout(30_000)
 
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@t'] as const
@@ -35,10 +33,8 @@ function git(cwd: string, ...args: string[]): string {
 function makeRepo(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-guard-test-'))
     git(dir, 'init', '-q', '-b', 'main')
-    // Pin line endings so content round-trips byte-for-byte through git on
-    // Windows (the CI runner defaults to core.autocrlf=true, which would rewrite
-    // the LF fixtures to CRLF on checkout). Repo-level so the product's own git
-    // calls during reconcile honor it too, not just this file's git() helper.
+    // Repo-level, not on this file's git() helper alone, so the product's own git
+    // calls during reconcile round-trip the LF fixtures byte-for-byte too.
     git(dir, 'config', 'core.autocrlf', 'false')
     fs.writeFileSync(path.join(dir, 'committed.txt'), 'committed v1\n')
     fs.writeFileSync(path.join(dir, 'src.ts'), 'export const a = 1\n')
@@ -79,10 +75,10 @@ describe('reconcileGitState', () => {
         expect(rec.actions).toEqual([])
     })
 
-    test('stash-and-abandon (mx5 run 6): work restored, landmine stash dropped', async () => {
+    test('stash-and-abandon: work restored, landmine stash dropped', async () => {
         const dir = makeRepo()
         const snap = await captureGitState(dir)
-        // The observed child behavior: stash everything, poke around, never pop.
+        // The child stashes everything, looks around, and never pops.
         git(dir, 'stash', '-q', '--include-untracked')
         expect(fs.existsSync(path.join(dir, 'new-work.ts'))).toBe(false)
         expect(fs.readFileSync(path.join(dir, 'src.ts'), 'utf8')).toBe('export const a = 1\n')
@@ -147,7 +143,6 @@ describe('reconcileGitState', () => {
         fs.writeFileSync(path.join(dir, '.pi-tasks', 'TASK_0001.md'), 'gate trail\n')
         const rec = await reconcileGitState(dir, snap)
         expect(rec.mutated).toBe(false)
-        // And the log the child appended is untouched.
         expect(fs.readFileSync(path.join(dir, '.pi-tasks', 'verify-debug.log'), 'utf8')).toBe(
             'start\nline from child\n'
         )
@@ -165,9 +160,9 @@ describe('reconcileGitState', () => {
     })
 })
 
-// items 1 & 2: a gate child that only leaves test-runner output behind
-// judged an equivalent tree — its verdict must stand (only the artifacts are cleaned),
-// and every restored path must be itemised so the trail says WHICH files moved.
+// A gate child that only left test-runner output behind judged an equivalent tree,
+// so its verdict must stand and only the artifacts are cleaned. Every restored path
+// is itemised, so the trail says WHICH files moved rather than that some did.
 describe('verdict-taint classification', () => {
     test('created untracked test-results file → cleaned, verdict NOT tainted, itemised', async () => {
         const dir = makeRepo()
@@ -198,8 +193,8 @@ describe('verdict-taint classification', () => {
         fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), 'new-run\n')
         const rec = await reconcileGitState(dir, snap)
         expect(rec.mutated).toBe(true)
-        expect(rec.verdictTainted).toBe(false) // the false-discard class
-        // Content restored, and the trail names the exact artifact (item 2).
+        expect(rec.verdictTainted).toBe(false)
+        // Content restored, and the trail names the exact artifact.
         expect(fs.readFileSync(path.join(dir, 'test-results', '.last-run.json'), 'utf8')).toBe(
             'old\n'
         )
@@ -244,11 +239,10 @@ describe('verdict-taint classification', () => {
         expect(rec.actions).toContain('restored modified file dist/bundle.js')
     })
 
-    // item 5: the ctCacheDir build cache (`.playwright-cache/*`) and the
-    // runner `.last-run.json` were COMMITTED, so a `test:ct` run rewriting them tripped
-    // the tracked→graded rule and discarded 3 verify verdicts. They are regenerable
-    // machine state — benign even when tracked — while snapshot PNGs stay tainting.
-    test('tracked ctCacheDir + .last-run.json rewrites are NOT verdict-tainting (run 10)', async () => {
+    // A project can COMMIT its ctCacheDir build cache and the runner's
+    // `.last-run.json`. Both are regenerable machine state, so the tracked→graded
+    // rule must not apply to them, while snapshot baseline PNGs stay tainting.
+    test('tracked ctCacheDir + .last-run.json rewrites are NOT verdict-tainting', async () => {
         const dir = makeRepo()
         fs.mkdirSync(path.join(dir, '.playwright-cache', 'assets'), {recursive: true})
         fs.writeFileSync(
@@ -259,7 +253,7 @@ describe('verdict-taint classification', () => {
         fs.mkdirSync(path.join(dir, 'test-results'), {recursive: true})
         fs.writeFileSync(path.join(dir, 'test-results', '.last-run.json'), '{"status":"passed"}\n')
         git(dir, 'add', '-A')
-        git(dir, 'commit', '-q', '-m', 'commit ct cache + last-run (as run 10 did)')
+        git(dir, 'commit', '-q', '-m', 'commit ct cache + last-run')
         const snap = await captureGitState(dir)
         // The gate child runs `test:ct`, which rewrites the cache + run state.
         fs.writeFileSync(
@@ -289,7 +283,7 @@ describe('verdict-taint classification', () => {
         expect(rec.verdictTainted).toBe(true)
     })
 
-    test('run-10 combined: ct-cache churn is benign but a co-occurring baseline rewrite taints', async () => {
+    test('combined: ct-cache churn is benign but a co-occurring baseline rewrite taints', async () => {
         const dir = makeRepo()
         fs.mkdirSync(path.join(dir, '.playwright-cache', 'assets'), {recursive: true})
         fs.writeFileSync(path.join(dir, '.playwright-cache', 'assets', 'Badge-CqnzweoZ.js'), 'v1\n')
@@ -347,7 +341,7 @@ describe('verdict-taint classification', () => {
         const rec = await reconcileGitState(dir, snap)
         expect(rec.verdictTainted).toBe(false)
         const itemised = rec.actions.filter(a => a.startsWith('restored test-runner artifact '))
-        // 20 concrete paths + 1 "…and 5 more" summary line.
+        // ITEMIZE_CAP concrete paths, then one "…and N more" line for the rest.
         expect(itemised.length).toBe(21)
         expect(itemised.some(a => a === 'restored test-runner artifact …and 5 more')).toBe(true)
     })
