@@ -10,10 +10,11 @@ import {UNCLEAR_ANSWER} from '../../src/workers/fetch-core.js'
 const KINDS: readonly AbstentionKind[] = ['package', 'project', 'page']
 
 describe('every sentinel a prompt can emit is recognised by the matcher', () => {
-    // The property that could not be written before: the sentences were bare
-    // literals inside three prompt templates, and the four matchers each knew a
-    // different subset of them. typeonly-log records what that cost — matching
-    // only "package" silently scored every PROJECT abstention as a real answer.
+    // Both halves of the sentinel are built from the NOUNS table in
+    // abstention.ts — the sentence a prompt tells the child to write, and the
+    // regex that recognises it — so a corpus cannot be half-wired. A matcher
+    // knowing only some corpora would score the rest as real answers, and do it
+    // silently: a non-answer is well-formed output.
     for (const kind of KINDS) {
         test(`the ${kind} sentinel round-trips`, () => {
             expect(isAbstention(abstentionSentence(kind))).toBe(true)
