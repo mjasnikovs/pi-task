@@ -3,17 +3,12 @@ import {CoverageLedger} from '../../src/task/plan-rounds.js'
 import type {ScoredPlan} from '../../src/task/coverage-loop.js'
 
 /**
- * The plan phase's subtlest carry-forward decisions, with no temp dir, no fake
- * ctx, no scripted children and no log grep.
+ * The plan phase's carry-forward decisions, driven directly: no temp dir, no fake
+ * ctx, no scripted children, no log grep.
  *
- * Before this module, the bonus-round policy was reachable only through
- * `planAuto` and asserted by counting a debug string:
- *
- *     expect(log).toContain('bonus round granted')
- *     expect((log.match(/bonus round granted/g) ?? []).length).toBe(1)
- *
- * — which is exactly what CONTEXT.md's `AutofixLedger` entry indicts: *"The suite
- * can only observe this loop through trail strings."*
+ * CoverageLedger performs no I/O and returns its verdict as a value, so the
+ * bonus-round policy can be asserted on `ConsiderOutcome.grantedBonusRound`
+ * rather than by counting occurrences of a debug string.
  */
 
 function plan(over: {
@@ -69,9 +64,10 @@ describe('CoverageLedger', () => {
         expect(l.best()).toBe(seed)
     })
 
-    // THE BUG THE COMMENT DESCRIBES. As two assignments, the second
-    // kept the OLD plan's accounting whenever the candidate's coverage-map child
-    // faulted — binding requirements to titles they were never mapped against.
+    // `consider` assigns the candidate WHOLE — `this._best = cand`, titles and
+    // accounting in one statement. Split into two assignments, a candidate whose
+    // coverage-map child faulted would keep the OLD accounting, binding
+    // requirements to titles they were never mapped against.
     test('an adopted plan whose coverage-map FAULTED keeps the new (null) accounting', () => {
         const seed = plan({
             titles: ['A'],
