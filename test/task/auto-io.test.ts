@@ -72,9 +72,10 @@ test('parseTaskList: checked line marks done and captures producedId', () => {
 })
 
 test('parseTaskList: unchecked line with a stamped id captures producedId, stays undone', () => {
-    // An in-progress entry: the inner task was allocated (id stamped) but not yet
-    // completed. Resume must see this id so it continues the task instead of
-    // starting a fresh one.
+    // An in-progress entry: the inner task was allocated (id stamped) but not
+    // yet checked off. auto-orchestrator.ts reads this back as `resumeId`,
+    // confirms the task file still exists, and continues that task — so losing
+    // the id here would silently restart work already done.
     const body = '## tasks\n\n- [ ] TASK_0006  Task A\n- [ ] Task B\n'
     const entries = parseTaskList(body)
     expect(entries[0]).toEqual({index: 0, title: 'Task A', done: false, producedId: 'TASK_0006'})
@@ -117,8 +118,11 @@ test('checkOffTask: throws on out-of-range index', async () => {
     })
 })
 
-// insertTaskAfter — the mid-run plan mutation the root-cause repair channel needs
-//. MONOTONIC: splice only, never rewrite/reorder/drop.
+// insertTaskAfter is the one mid-run plan mutation, used by
+// schedulePendingRepairs (auto-orchestrator.ts) to splice a root-cause repair
+// step into a plan that is already executing. MONOTONIC: it splices only — no
+// existing entry is rewritten, reordered or dropped — because entries already
+// checked off are the record of what ran.
 test('insertTaskAfter: splices a new entry directly after the given index', async () => {
     await withTmpTaskDir(async dir => {
         const body = buildAutoBody('feat', '(none)', ['Task A', 'Task B', 'Task C'])
