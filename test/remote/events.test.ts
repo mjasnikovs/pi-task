@@ -218,15 +218,17 @@ describe('setupEvents', () => {
         } finally {
             b.broadcast = prev
         }
-        // Attention toast on start (transient).
+        // Attention toast on start. TRANSIENT: `notify` is only broadcast, never
+        // written to the history, so it is gone after a reconnect.
         expect(toasts).toContainEqual({
             type: 'notify',
             message: 'Context full — compacting…',
             level: 'warning'
         })
-        // Completion is a persistent transcript note: a live delta now…
+        // Completion goes through `addSystemNote`, which does BOTH halves — a live
+        // `system_note` delta for connected clients now…
         expect(captured).toContainEqual({type: 'system_note', text: 'Context compacted'})
-        // …and committed so it survives a reconnect.
+        // …and a `history.addSystemNote` commit, so it survives a reconnect.
         expect(snapshot().turns).toContainEqual({
             role: 'system',
             text: 'Context compacted',
