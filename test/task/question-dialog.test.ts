@@ -8,10 +8,9 @@ import {
     type SettleQuestionInput
 } from '../../src/task/question-dialog.js'
 
-// The mapping these cover would otherwise exist in three places — grill, clarify and the
-// plan session — and the plan session's own docstring said the other two were
-// mirrors of it. They were not: they had drifted in three ways. These tests now
-// hold for all three call sites at once.
+// Three call sites share this module: grill (phases.ts), clarify
+// (auto-orchestrator.ts) and the plan session (plan-session.ts). Held here once,
+// the mapping cannot drift between them.
 
 const fork: PendingQuestion = {
     plain: 'One task or split per call site?',
@@ -118,9 +117,9 @@ test('isTwoOption needs BOTH sides', () => {
 
 describe('settleQuestion — the whole dialog, once', () => {
     /**
-     * The COMPOSITION grill and clarify would each write out at about fifty lines: YOLO
-     * short-circuit, cards, ask, cancel, record. The pieces were already shared;
-     * this is what was not, and the two copies had drifted on `recommended2`.
+     * The composition grill and clarify would otherwise each spell out: YOLO
+     * short-circuit, cards, ask, cancel, record. The individual pieces were already
+     * shared; the ORDER they run in is what this module owns.
      */
     interface Recorded {
         kind: string
@@ -191,8 +190,8 @@ describe('settleQuestion — the whole dialog, once', () => {
         const h = harness('')
         await settleQuestion({...base, ...h, suggested: 'postgres', alt: 'sqlite'})
 
-        // `recommended2` was passed unconditionally by one caller and
-        // conditionally by the other; it is now conditional, once.
+        // question-dialog.ts spreads `recommended2` only when an ALT exists, so an
+        // open question never carries an empty second recommendation.
         expect(h.asked[0]!.recommended).toBe('postgres')
         expect(h.asked[0]!.recommended2).toBe('sqlite')
         expect(h.asked[0]!.allowSkip).toBe(false)
