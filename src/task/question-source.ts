@@ -1,36 +1,12 @@
 /**
- * Where the NEXT question comes from — the other half of `question-dialog.ts`.
+ * Where the NEXT question comes from — the other half of `question-dialog.ts`,
+ * which owns the ANSWER side.
  *
- * `question-dialog.ts` unified the ANSWER side of the adaptive dialogs (the picker
- * cards, the reply mapping) and its own docstring makes the argument for doing so:
- * *"It was written three times… the two mirrors were never converted, and they had
- * already drifted apart in three ways… The next edit to any of them is where the
- * bug lands."* The QUESTION side — generate → parse → pick the real question →
- * dedupe → spend one corrective re-prompt → yield or exhaust — was left behind,
- * and it had drifted between the two loops that use the SAME parser on the SAME
- * prompt format (`plan-prompts.ts` says `parseClarifyList` parses it "UNCHANGED";
- * `auto-prompts.ts` specifies the identical shape).
- *
- * The five drifts, all in clarify's favour of being wrong:
- *
- *  1. **Which entry is the question.** `parseClarifyList` pushes an entry for
- *     EVERY numbered line, and the local model writes numbered analysis notes
- *     before the question it was asked for (measured live). `pickQuestion` prefers
- *     the first entry carrying a `SUGGESTED:` line; clarify took `parsed[0]`
- *     blindly, showing the note as the question and losing the recommendation
- *     attached further down.
- *  2. **NONE vs unparseable.** The parser returns `[]` for both. Clarify's
- *     `if (parsed.length === 0) break` ended the whole clarify — and decomposed the
- *     feature with ZERO clarifications — on a formatting slip.
- *  3. **A re-typed sentinel.** `isNoneReply`'s regex was a byte-identical second
- *     copy of the parser's own.
- *  4. **Missing SUGGESTED** bought one corrective re-prompt in plan and none in
- *     clarify, so clarify showed a card-less question.
- *  5. **The deferral guard.** It exists because an accepted "clarify with the user
- *     before proceeding" rode into `/task`'s handoff AS AN AUTHORITATIVE DECISION
- *     and produced a task whose VERIFY asserted no source file had changed.
- *     Clarify's answers ride into the decompose prompt and the AUTO file with
- *     exactly the same authority, and had no guard.
+ * One state machine: generate → parse → pick the real question → dedupe → spend
+ * one corrective re-prompt → yield or exhaust. Two loops drive it, `/task-auto`'s
+ * clarify and `/task-plan`, and they use the SAME parser on the SAME prompt format
+ * — plan-prompts.ts says `parseClarifyList` parses its output UNCHANGED, and
+ * auto-prompts.ts specifies the identical shape.
  *
  * NOT unified here: grill's generation loop. It uses a different parser
  * (`parseGrillQuestions`, which yields bare strings) and has no `SUGGESTED` at
@@ -45,11 +21,9 @@ import {DUP_REPROMPT_HINT, isDuplicateQuestion, MAX_DUP_STRIKES} from './questio
 import {stripInlineMarkdown} from './inline-markdown.js'
 
 /**
- * The cap on distinct questions ONE adaptive dialog may ask.
- *
- * Clarify and plan each declared their own `8`, linked only by a comment saying
- * "matches /task-auto's MAX_CLARIFY_QUESTIONS, for the same reason". They bound
- * the same thing for the same reason; this is that reason, once.
+ * Default cap on distinct questions ONE adaptive dialog may ask. Both live
+ * callers pass their own constant of the same value instead
+ * (MAX_CLARIFY_QUESTIONS, MAX_PLAN_QUESTIONS); this is what an unset `cap` gets.
  */
 export const MAX_DIALOG_QUESTIONS = 8
 
@@ -62,13 +36,12 @@ export function isNoneReply(raw: string): boolean {
 /**
  * Which of the parsed entries is the actual question.
  *
- * `parseClarifyList` turns EVERY numbered line into an entry, and the local model
- * sometimes writes a numbered analysis note or two before the question it was
- * asked for (measured live: the first numbered line was a note like
- * "1. gateDebugWriter in orchestrator.ts — wraps a raw append function"). Taking
- * entry 0 blindly then shows the note as the question and loses the SUGGESTED line
- * attached further down. The prompt requires exactly one SUGGESTED, and the parser
- * attaches it to the entry it follows.
+ * `parseClarifyList` turns EVERY numbered line into an entry, and a model that
+ * writes a numbered analysis note before the question it was asked for produces
+ * more than one. Taking entry 0 blindly then shows the note as the question and
+ * loses the SUGGESTED line attached further down. The prompt requires exactly one
+ * SUGGESTED, and the parser attaches it to the entry it follows, so preferring the
+ * entry that HAS one lands on the real question.
  */
 export function pickQuestion<T extends {suggested?: string}>(parsed: T[]): T | undefined {
     return parsed.find(q => q.suggested !== undefined && q.suggested.length > 0) ?? parsed[0]
@@ -98,7 +71,8 @@ export interface QuestionSourceDeps {
     generate: (hint: string | null) => Promise<string>
     /** The corrective re-prompt for a reply the parser could not read. */
     formatHint: string
-    /** Ordered quality rules; each may fire at most once per question. */
+    /** Ordered quality rules. At most ONE fires per question: they share a single
+     *  corrective re-prompt, spent by the first rule that detects a defect. */
     rules?: ReadonlyArray<QuestionRule>
     cap?: number
     log?: (msg: string) => void
@@ -142,17 +116,16 @@ export function makeQuestionSource(deps: QuestionSourceDeps): {
             const parsed = parseClarifyList(raw)
             if (parsed.length === 0) {
                 // `[]` means BOTH "deliberate NONE" and "could not parse". Ending
-                // the dialog on the second is how a formatting slip becomes a
-                // feature decomposed with zero clarifications.
+                // the dialog on the second would decompose the feature with zero
+                // clarifications because of one formatting slip.
                 if (!isNoneReply(raw) && hint === null) {
                     deps.log?.('unparseable question reply — one format re-prompt')
                     hint = deps.formatHint
                     continue
                 }
-                // A SECOND unreadable reply is not a NONE. Recording it as one is
-                // the very conflation this module exists to end — it would put
-                // "model has no further questions" on the trail for a run where
-                // the model produced two malformed replies.
+                // A SECOND unreadable reply is not a NONE: the caller is told
+                // 'unparseable', so nothing writes "model has no further
+                // questions" on a run that produced two malformed replies.
                 if (!isNoneReply(raw)) {
                     deps.log?.('second unparseable reply — giving up on this draw')
                     hint = null
@@ -205,8 +178,7 @@ export function makeQuestionSource(deps: QuestionSourceDeps): {
      *
      * `/task-plan` lets the user ask the model a question or state a decision
      * mid-session; that is new context, so a generator that had struck out may now
-     * have something novel. The plan loop reset its own `dupStrikes` at two sites
-     * for exactly this; the budget lives here now, so the reset has to.
+     * have something novel.
      */
     function reopen(): void {
         dupStrikes = 0
