@@ -9,12 +9,10 @@ import {
 import {MAX_DUP_STRIKES} from '../../src/task/question-dedup.js'
 
 /**
- * The whole state machine, as table-driven string tests.
- *
- * Before this module, plan-session's copy was drivable (603 test lines) and
- * clarify's was reachable only through `planAuto` with a temp dir, a fake ctx and
- * a scripted `runChild` — so none of the properties below could be asserted for
- * `/task-auto` at all.
+ * The whole state machine, driven as strings. `makeQuestionSource` takes its
+ * generator as a parameter, so every exit below — a question, a NONE, an
+ * unparseable reply, a duplicate strike-out — is reachable without a temp dir, a
+ * fake ctx or a scripted child.
  */
 
 const FORMAT_HINT = '[FORMAT]'
@@ -36,8 +34,8 @@ const Q = (n: string, suggested = 'do the thing') =>
     `1. **${n}** rationale\nSUGGESTED: ${suggested}`
 
 describe('pickQuestion', () => {
-    // Measured live: the first numbered line was an analysis note, and the
-    // SUGGESTED line belonged to the entry after it.
+    // A model that opens with a numbered analysis note leaves the SUGGESTED line on
+    // a later entry, so taking parsed[0] would drop the recommendation.
     test('prefers the first entry carrying a SUGGESTED line', () => {
         const parsed = [
             {question: 'a note', suggested: undefined},
@@ -94,9 +92,9 @@ describe('makeQuestionSource', () => {
         expect(s.hints).toHaveLength(1)
     })
 
-    // THE DRIFT. Clarify's `if (parsed.length === 0) break` treated an unreadable
-    // reply as "no questions left" — one formatting slip and the whole feature was
-    // decomposed with zero clarifications.
+    // An unreadable reply and "no questions left" are different endings. Treating
+    // the first as the second means one formatting slip decomposes the whole
+    // feature with zero clarifications asked.
     test('an UNPARSEABLE reply buys one format re-prompt, not silence', async () => {
         const s = scripted(['I think we should consider a few things first.', Q('Which store?')])
         const src = makeQuestionSource({generate: s.generate, formatHint: FORMAT_HINT})
@@ -105,9 +103,9 @@ describe('makeQuestionSource', () => {
         expect(s.hints).toEqual([null, FORMAT_HINT])
     })
 
-    // …and it is NOT recorded as a NONE. Doing so would put "model has no further
-    // questions" on the trail for a run where the model produced two malformed
-    // replies — the very conflation this module exists to end.
+    // …and the exhaustion reason says which ending it was. Reporting `none` here
+    // would put "the model has no further questions" on the trail for a run where
+    // it only ever produced malformed replies.
     test('a SECOND unparseable reply exhausts as `unparseable`, not as NONE', async () => {
         const s = scripted(['garbage', 'still garbage', 'still garbage'])
         const src = makeQuestionSource({generate: s.generate, formatHint: FORMAT_HINT})
