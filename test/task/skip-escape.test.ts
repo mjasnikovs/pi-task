@@ -34,9 +34,8 @@ describe('findSkipEscapes', () => {
     })
 
     test('does NOT flag benign teardown / setup / negative-test uses of || true (FP guard)', () => {
-        // Every one of these is a real historical VERIFY line off a run's `.pi-tasks`;
-        // a blanket `|| true` flag false-positived on all of them. The scanner keys on
-        // the skip-ANNOUNCING fallback text, so none of these fire.
+        // SKIP_ANNOUNCE_RE keys on the skip-ANNOUNCING fallback wording, not on
+        // `||` itself, so a bare `|| true` teardown never fires.
         for (const line of [
             'kill $SERVER_PID 2>/dev/null || true',
             'wait "$SERVER_PID" 2>/dev/null || true',
@@ -51,9 +50,6 @@ describe('findSkipEscapes', () => {
     })
 
     test('does NOT flag a && echo PASS || echo FAIL reporting idiom (no skip wording)', () => {
-        // The `|| echo "FAIL: …"` idiom swallows the exit code but does not announce a
-        // SKIP; it is a different (reporting) pattern the runtime rule 5c/negative-control
-        // handles, and flagging it here would be noise. No "skip" wording ⇒ no finding.
         expect(
             findSkipEscapes(
                 spec('grep -q needle out.txt && echo "All present" || echo "FAIL: missing"')
@@ -83,7 +79,7 @@ describe('skipEscapeDefectText / skipEscapeVerifyFindings', () => {
         const t = skipEscapeDefectText(f)
         expect(t).toContain('SKIP-ESCAPE in the VERIFY block')
         expect(t).toContain('RUNS UNCONDITIONALLY')
-        // discourage the observed `command -v`/if-guard reshape (still a silent skip)
+        // the block names the `command -v X`/if-guard reshape, which still skips silently
         expect(t).toContain('command -v X')
         expect(t).toContain('EXIT NON-ZERO')
         expect(t).toContain('1. smoke || echo "skipping (tool missing)"')
