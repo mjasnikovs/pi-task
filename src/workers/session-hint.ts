@@ -1,18 +1,17 @@
 /**
  * A one-line startup hint in the TUI, and the whole widget lifetime around it.
  *
- * WHY IT IS ONE MODULE. Two hints exist (brave-warning, reasoning-warning) and
- * both had written the same ritual out: the `session_start` subscription, the
- * TUI gate, the `setWidget` in a try/catch, the `onTerminalInput` that clears on
- * the first keystroke, the unsubscribe, and the swallow for a stale ctx — down
- * to a byte-identical comment. Two adapters is a real seam, so the ritual lives
- * here once and each hint supplies only its `compose`.
+ * WHY IT IS ONE MODULE. Its two callers — brave-warning and reasoning-warning —
+ * would otherwise each write the same ritual: the `session_start` subscription,
+ * the TUI gate, the `setWidget` in a try/catch, the `onTerminalInput` that clears
+ * on the first keystroke, the unsubscribe, and the swallow for a stale ctx. Here
+ * the ritual lives once and each hint supplies only its `compose`.
  *
  * The REFINE half is why this is not just deduplication. A hint may learn
- * something after it has painted (the reasoning hint probes the model's server),
+ * something after it has painted — the reasoning hint probes the model's server —
  * and the rule that a refinement must never repaint a widget the user already
- * dismissed lived in one closure variable in one of the two files. It is now a
- * property of this module, asserted once.
+ * dismissed is a property of this module rather than a closure variable in one of
+ * the two files. session-hint.test.ts is where it is asserted.
  */
 
 import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
@@ -21,11 +20,11 @@ export interface SessionHint {
     /** The line to paint now. */
     text: string
     /**
-     * A later refinement of that line, if this hint has one. Resolving to null —
-     * or rejecting — leaves the first line standing, so a refinement can never
-     * remove a warning it was only meant to sharpen. It is fire-and-forget: it
-     * cannot delay or prevent the first paint, and it is dropped if the user has
-     * already cleared the hint.
+     * A later refinement of that line, if this hint has one. Resolving to null — or
+     * rejecting — leaves the first line standing, so a refinement can never remove a
+     * warning it was only meant to sharpen. It is fire-and-forget: it cannot delay
+     * or prevent the first paint, and a refinement that lands AFTER the user cleared
+     * the hint repaints nothing.
      */
     refine?: Promise<string | null>
 }
