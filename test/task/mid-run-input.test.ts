@@ -37,12 +37,14 @@ test('held lines are delivered once, oldest first, then gone', () => {
 test('taking clears BEFORE delivery, so a failed steer cannot redeliver', () => {
     beginRun()
     holdInput('once only')
-    takeHeldInput() // caller's own delivery may now throw
+    // takeHeldInput empties `held` before it returns, so a caller whose own
+    // delivery throws cannot get the same payload a second time.
+    takeHeldInput()
     expect(takeHeldInput()).toBeNull()
 })
 
-// The whole point of holding is to never replay into a finished run — the exact
-// surprise the terminal queue produced (issue #8).
+// Holding exists so nothing typed during a run replays into the session after it
+// ends. A queue that survived endRun would do exactly that.
 test('the last endRun drops anything still held instead of replaying it later', () => {
     beginRun()
     holdInput('never delivered')
@@ -54,7 +56,9 @@ test('the last endRun drops anything still held instead of replaying it later', 
 test('listener fires on run bracket, hold, take and clear so surfaces re-render', () => {
     let changes = 0
     setHeldInputListener(() => changes++)
-    beginRun() // composer must switch to "held" mode before anything is typed
+    // register.ts wires this listener to `setHeld(heldInput(), isRunActive())`, so
+    // the remote composer switches to held mode on beginRun, before anything is typed.
+    beginRun()
     expect(changes).toBe(1)
     beginRun() // nested: already in held mode, nothing to re-render
     expect(changes).toBe(1)
