@@ -15,8 +15,8 @@ import {
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
-// resolvePackage returns native filesystem paths (backslashes on Windows). These
-// suffix assertions are written POSIX-style, so normalize separators first.
+// resolvePackage builds its paths with node:path, so the separators are the
+// platform's. These suffix assertions are POSIX-style, so normalise first.
 const norm = (s: string | null | undefined): string => (s ?? '').replace(/\\/g, '/')
 
 test('resolvePackage returns name, version, root, entryDts, readme for tiny-pkg', () => {
@@ -130,10 +130,13 @@ test('detectTypesRedirect returns null for an aggregator package', () => {
 })
 
 // --- the empty-entry rule ---------------------------------------
-// `sharp` ships ONE 1971-line .d.ts whose line 28 is `/// <reference types="node" />`.
-// The file-count guard cannot tell that apart from `@types/bun`'s one-line stub, so
-// every sharp question in was answered out of @types/node (tty.d.ts,
-// zlib.d.ts). The discriminator is what is IN the entry file, not how many there are.
+// A package can ship ONE .d.ts that declares its whole API and also carry an
+// ambient `/// <reference types="node" />` near the top. Counting files cannot
+// tell that apart from `@types/bun`, whose entry is that one reference line and
+// nothing else — `node_modules/@types/bun/index.d.ts` is a single line reading
+// `/// <reference types="bun-types" />`. Follow the second and drop the first, and
+// a question about the package is answered out of @types/node. The discriminator
+// is what is IN the entry file, not how many files there are.
 
 test('detectTypesRedirect does not follow an ambient `reference types` in a package that declares its own API', () => {
     expect(detectTypesRedirect(resolvePackage('ambient-pkg', FIXTURES))).toBeNull()
@@ -206,14 +209,12 @@ test.each(['../etc/passwd', '/abs/path', 'pkg with spaces', '', '@scope/', '@/na
     }
 )
 
-// ─── the redirect WALK, which had no test in either of its two former copies ──
+// ─── the redirect WALK ──────────────────────────────────────────────────────
 //
 // `detectTypesRedirect`, `hasTypeFiles`, `typesPackageName` and
-// `countEntryDeclarations` were exported and covered by 35 references between
-// them — but the loop they exist to serve lived in docs-core.ts and
-// phantom-imports.ts as two byte-identical copies, and NEITHER was exercised:
-// both of their tests pin the zero-hop case only. So `bun → @types/bun →
-// bun-types`, cited by name in five doc comments, was asserted nowhere.
+// `countEntryDeclarations` each answer ONE hop. `resolveTypeSource` is the loop
+// that chains them, and a per-hop test says nothing about a chain, a cycle or the
+// bound — `bun → @types/bun → bun-types` is two hops, not one.
 const pkg = (name: string, root = `/fake/${name}`): ResolvedPackage =>
     ({name, root, version: '1.0.0'}) as ResolvedPackage
 
