@@ -1,9 +1,11 @@
 /**
- * decompose-fidelity tests — grounding of decompose [source: "…"] citations and
- * the deterministic dropped-`+`-fragment restoration. The
- * regression cases use the VERBATIM §12 milestone lines and the VERBATIM titles
- * actually produced (TASK_AUTO_0001.md, head part before the threaded
- * "| spec:" tail).
+ * decompose-fidelity tests — grounding of decompose `[source: "…"]` citations,
+ * and the deterministic restoration of dropped `+`-joined fragments.
+ *
+ * The cases below are milestone lines and the titles a decompose returns for
+ * them, kept at full length: every failure in this module is about markup a
+ * model strips while copying faithfully, so a shortened fixture has nothing to
+ * strip.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -20,12 +22,13 @@ const PROJECT_SPEC = fs.readFileSync(
     'utf8'
 )
 
-// The verbatim §12 lines whose "+ tests" suffix dropped.
+// Milestone lines whose trailing "+ tests" fragment is the additive suffix
+// most often dropped on the way into a title.
 const AUTH_LINE = '2. **Auth** — sessions, login/logout/me, guards + tests.'
 const LISTINGS_LINE =
     '4. **Listings API** — CRUD + search/filter/sort/pagination + sold + contact + tests.'
 
-// The verbatim titles produced for those milestones (tests suffix gone).
+// The titles returned for those milestones, with the tests suffix gone.
 const RUN11_AUTH_TITLE =
     'Implement authentication layer — argon2id password hashing, cookie sessions in '
     + 'Postgres, login/logout/me routes, session middleware with requireAuth/requireAdmin guards'
@@ -67,11 +70,11 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
         expect(r.sources).toEqual([AUTH_LINE])
     })
 
-    // THE GREEDY-REGEX REGRESSION. The prompt asks for one trailing citation and
-    // a quarter of real titles carry more (62 of 244 across the 20 recorded
-    // decompose runs). `\[source: "(.+)"\]$` matched from the FIRST clause to the
-    // LAST quote and produced the superstring `A"] [source: "B`, which grounds
-    // nowhere — so two real citations became zero.
+    // THE GREEDY-REGEX REGRESSION. The prompt asks for ONE trailing citation, and
+    // a model routinely appends more than one. Run
+    // `/\[source: "(.+)"\]$/` against `… [source: "A"] [source: "B"]` and the
+    // capture is the superstring `A"] [source: "B` — a string that grounds
+    // nowhere, so two real citations become zero.
     test('MULTIPLE trailing clauses each ground separately', () => {
         const t = `Build it [source: "${AUTH_LINE}"] [source: "${LISTINGS_LINE}"]`
         const r = extractTitleSource(t, PROJECT_SPEC)
@@ -100,10 +103,10 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
         expect(extractTitleSource(`x [source: "${altered}"]`, PROJECT_SPEC).sources).toEqual([])
     })
 
-    // THE BACKTICK REGRESSION, the larger half of the same class. A code span
-    // renders as bare text, so the model copies `/join/:token` without its
-    // backticks. On a real planning run, most ungrounded
-    // clauses were this and nothing else.
+    // THE BACKTICK REGRESSION, the same class as the markup one. A code span
+    // renders as bare text, so a model copies `/join/:token` without its
+    // backticks — a faithful copy of what it was shown, and one the exact
+    // substring test rejects.
     test('a quote copied without its code backticks still grounds', () => {
         const rendered = 'Invites — create/validate/redeem, /join/:token page.'
         expect(extractTitleSource(`x [source: "${rendered}"]`, PROJECT_SPEC).sources).toEqual([
@@ -112,8 +115,9 @@ describe('extractTitleSource (grounding, contracts.ts pattern)', () => {
     })
 
     test('a backtick-stripped quote does NOT collapse the spacing around it', () => {
-        // `hono` `4.12.27` — dropping the backticks must not leave a gap that a
-        // faithful copy no longer matches. Backtick → nothing, pipe → space.
+        // Two adjacent code spans. Normalisation strips backticks to NOTHING and
+        // turns a pipe into a SPACE (decompose-fidelity.ts:67-68), so `a` `b`
+        // normalises to "a b" and a faithful copy still matches.
         const rendered = 'hono 4.12.27 — HTTP framework, RPC (hono/client)'
         expect(extractTitleSource(`x [source: "${rendered}"]`, PROJECT_SPEC).sources).toEqual([
             rendered
