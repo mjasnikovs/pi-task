@@ -8,8 +8,8 @@ import {
     runnerGlobVerifyFindings
 } from '../../src/task/runner-globs.js'
 
-/** The scripts, verbatim. */
-const MX5_SCRIPTS = {
+/** A manifest declaring TWO test runners: `bun test` and a Playwright config. */
+const SCRIPTS = {
     lint: 'prettier --write . && eslint --fix .',
     test: 'AGENT=1 bun test',
     'test:ct': 'bunx playwright test --config=playwright-ct.config.ts',
@@ -17,26 +17,27 @@ const MX5_SCRIPTS = {
     build: 'bun build.ts'
 }
 
-/** playwright-ct.config.ts, reduced to the fields the assessor reads. */
-const MX5_PW_CONFIG = `
+/** playwright-ct.config.ts, reduced to the fields the assessor reads. Its testDir
+ *  sits under src/, where bun's default scan also looks. */
+const PW_CONFIG = `
 export default defineConfig({
   testDir: './src/client/pages',
   use: {ctPort: 3100},
 })
 `
 
-/** bunfig.toml as it stood at HEAD when ended — no exclusion. */
-const MX5_BUNFIG_HEAD = '[test]\nenvFile = ".env.test"\n'
-/** bunfig.toml as the stranded (uncommitted) fix left it. */
-const MX5_BUNFIG_FIXED =
+/** No pathIgnorePatterns: bun's default scan reaches the Playwright specs. */
+const BUNFIG_HEAD = '[test]\nenvFile = ".env.test"\n'
+/** The same file with the exclusion that separates the two runners. */
+const BUNFIG_FIXED =
     '[test]\nenvFile = ".env.test"\npathIgnorePatterns = ["**/*.spec.*", "src/client/**/*.test.*"]\n'
 
-describe('the mx5 run-13 collision', () => {
-    test('flags the collision at HEAD, where `bun run test` was broken', () => {
+describe('two runners over one file set', () => {
+    test('flags the collision when no exclusion separates the runners', () => {
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_HEAD,
-            playwrightConfig: MX5_PW_CONFIG
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_HEAD,
+            playwrightConfig: PW_CONFIG
         })
         expect(a.status).toBe('collision')
         expect(a.scanningScripts).toEqual(['test'])
@@ -47,9 +48,9 @@ describe('the mx5 run-13 collision', () => {
 
     test('accepts the tree once the stranded bunfig fix is applied', () => {
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_FIXED,
-            playwrightConfig: MX5_PW_CONFIG
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_FIXED,
+            playwrightConfig: PW_CONFIG
         })
         expect(a.status).toBe('disjoint')
         expect(a.detail).toContain('excludes the playwright spec files')
@@ -60,9 +61,9 @@ describe('the two accepted forms of disjointness', () => {
     test('EXCLUSION — bunfig ignores the specs by suffix', () => {
         for (const patterns of ['["**/*.spec.*"]', '[\n  "**/*.spec.ts",\n  "**/*.spec.tsx"\n]']) {
             const a = assessRunnerGlobs({
-                scripts: MX5_SCRIPTS,
+                scripts: SCRIPTS,
                 bunfig: `[test]\npathIgnorePatterns = ${patterns}\n`,
-                playwrightConfig: MX5_PW_CONFIG
+                playwrightConfig: PW_CONFIG
             })
             expect(a.status).toBe('disjoint')
         }
@@ -70,7 +71,7 @@ describe('the two accepted forms of disjointness', () => {
 
     test('EXCLUSION — bunfig ignores the playwright testDir by path', () => {
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
+            scripts: SCRIPTS,
             bunfig: '[test]\npathIgnorePatterns = ["e2e/**"]\n',
             playwrightConfig: "export default {testDir: './e2e'}"
         })
@@ -80,17 +81,17 @@ describe('the two accepted forms of disjointness', () => {
     test('an exclusion that misses the actual testDir is NOT disjointness', () => {
         // `e2e/**` excludes nothing when the specs live in src/client/pages.
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
+            scripts: SCRIPTS,
             bunfig: '[test]\npathIgnorePatterns = ["e2e/**"]\n',
-            playwrightConfig: MX5_PW_CONFIG
+            playwrightConfig: PW_CONFIG
         })
         expect(a.status).toBe('collision')
     })
 
     test('NAMING — playwright testMatch uses a suffix bun does not claim', () => {
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_HEAD,
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_HEAD,
             playwrightConfig: "export default {testMatch: '**/*.e2e.ts'}"
         })
         expect(a.status).toBe('disjoint')
@@ -99,8 +100,8 @@ describe('the two accepted forms of disjointness', () => {
 
     test('a testMatch that still claims *.spec.* is NOT disjointness', () => {
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_HEAD,
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_HEAD,
             playwrightConfig: "export default {testMatch: '**/*.spec.ts'}"
         })
         expect(a.status).toBe('collision')
@@ -135,9 +136,9 @@ describe('unknown steps aside', () => {
     test('a missing bunfig with both runners declared is still a collision', () => {
         // No bunfig means no exclusion — bun's default scan is in force.
         const a = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
+            scripts: SCRIPTS,
             bunfig: null,
-            playwrightConfig: MX5_PW_CONFIG
+            playwrightConfig: PW_CONFIG
         })
         expect(a.status).toBe('collision')
     })
@@ -197,15 +198,15 @@ describe('config parsing', () => {
 describe('rendering', () => {
     test('verify findings appear only for a collision', () => {
         const collision = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_HEAD,
-            playwrightConfig: MX5_PW_CONFIG
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_HEAD,
+            playwrightConfig: PW_CONFIG
         })
         expect(runnerGlobVerifyFindings(collision)).toHaveLength(1)
         const fixed = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_FIXED,
-            playwrightConfig: MX5_PW_CONFIG
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_FIXED,
+            playwrightConfig: PW_CONFIG
         })
         expect(runnerGlobVerifyFindings(fixed)).toEqual([])
     })
@@ -214,9 +215,9 @@ describe('rendering', () => {
         // Recorded even when currently disjoint — the invariant is what later
         // slices must preserve, not a report of today's state.
         const fixed = assessRunnerGlobs({
-            scripts: MX5_SCRIPTS,
-            bunfig: MX5_BUNFIG_FIXED,
-            playwrightConfig: MX5_PW_CONFIG
+            scripts: SCRIPTS,
+            bunfig: BUNFIG_FIXED,
+            playwrightConfig: PW_CONFIG
         })
         expect(runnerGlobContractLine(fixed)).toContain('MUST be disjoint')
         expect(runnerGlobContractLine(fixed)).toContain('pathIgnorePatterns')
