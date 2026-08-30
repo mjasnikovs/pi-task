@@ -49,8 +49,9 @@ describe('normalizeRefPath', () => {
 
 describe('extractJsRefs', () => {
     test('extracts the mx5 run-13 SPA-fallback read (guarded reads still count)', () => {
-        // The real server GUARDED the read (`if (!(await htmlFile.exists())) return
-        // c.notFound()`) — the guard IS the 404, so it must not step aside.
+        // A GUARDED read is still a read. The guard here IS the 404 the user
+        // gets, so treating `if (!exists) return notFound()` as "handled" would
+        // step aside from exactly the case the scan exists to catch.
         const refs = extractJsRefs(
             [
                 "const htmlFile = Bun.file('dist/index.html')",
@@ -407,10 +408,11 @@ describe('findDanglingArtifacts (tree seam)', () => {
     })
 })
 
-// The shape: the final-gate autofix closed `dist/index.html` by
-// APPENDING an HTML template literal to build.ts and Bun.write-ing it — and that
-// page pointed at `/app.css`, which only the watch-mode `dev:css` script emits.
-// Every test below pins one of 's pre-registered invariants.
+// GENERATED HTML. A build script can close a "missing dist/index.html" finding
+// by appending an HTML template literal to build.ts and Bun.write-ing it. The
+// page it writes is then never scanned by the file-based pass, so a stylesheet
+// href in that literal can point at something only a WATCH-mode script emits and
+// nothing notices. Each test below pins one rule of the scan that reads it.
 describe('generated HTML (nexttask 3)', () => {
     const BUILD_HEAD = "await Bun.build({entrypoints: ['src/main.ts'], outdir: 'dist'})"
     const emit = (body: string): string =>
@@ -457,8 +459,9 @@ describe('generated HTML (nexttask 3)', () => {
     })
 
     test('the run-18 replay: a watch-only producer does NOT close a generated ref', () => {
-        // inv-dev-only-is-dangling — the rule the whole task turns on. `bun run
-        // build` never invokes `dev:css`, so the shipped page has no CSS.
+        // The rule this whole section turns on. `dev:css` is a --watch script
+        // and `bun run build` never invokes it, so a producer that only exists
+        // there does not produce anything for the shipped page.
         expect(
             scan(
                 {
@@ -516,9 +519,9 @@ describe('generated HTML (nexttask 3)', () => {
     })
 
     test('inv-non-build-html-ignored: an email-body literal is never scanned', () => {
-        // The real shape: a `src/connections/mailTemplate.ts` that is
-        // `export default \`<!doctype html>…\`` — an email body, written nowhere.
-        // A cid: asset AND a root-relative one must both stay invisible.
+        // An HTML literal that is `export default` and written NOWHERE is not a
+        // page — an email body is the common case. Both its `cid:` asset and its
+        // root-relative one must stay invisible, since neither is ever served.
         expect(
             scan({
                 'build.ts': BUILD_HEAD,
@@ -576,8 +579,9 @@ describe('generated HTML (nexttask 3)', () => {
 })
 
 describe('findSpecDanglingArtifacts (plan-time seam)', () => {
-    // Distilled from the real DESIGN/PROJECT.md: prose serving line (L224), file
-    // tree (§7, no index.html), build section (§9: css file + Bun.build js).
+    // A design doc shaped like the ones this seam reads: a prose serving line, a
+    // file tree that does NOT list index.html, and a build section naming a css
+    // command and a Bun.build. The dangle is only visible across all three.
     const MX5ISH_SPEC = [
         '## 3. File tree',
         '```',
