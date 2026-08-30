@@ -2,8 +2,10 @@ import {describe, expect, test} from 'bun:test'
 import {listGuardableTools, toGuardableTools} from '../../src/config/tool-list.js'
 
 /**
- * Shapes copied verbatim from a live `pi.getAllTools()` dump, so the
- * grouping is exercised against what pi actually reports, not a guess at it.
+ * The two `sourceInfo` fields this module reads, with the `source` values pi
+ * actually emits — `builtin`, `cli`, `auto`. pi's own `SourceInfo` carries
+ * `scope`, `origin` and an optional `baseDir` as well; nothing here looks at them,
+ * so the sample stops at what the grouping is a function of.
  */
 const LIVE_SAMPLE = [
     {name: 'read', sourceInfo: {source: 'builtin', path: '<builtin:read>'}},
@@ -50,8 +52,10 @@ describe('toGuardableTools', () => {
 
 describe('listGuardableTools', () => {
     test('a throwing getAllTools costs the tool rows, not the settings menu', () => {
-        // MEASURED: pi throws "Extension runtime not initialized" from
-        // getAllTools() during extension loading, so this path is real.
+        // Not hypothetical: pi's own extension loader throws
+        // "Extension runtime not initialized. Action methods cannot be called
+        // during extension loading." — and /task-config can be reached from a
+        // boot hook while that is still true.
         const pi = {
             getAllTools: () => {
                 throw new Error('Extension runtime not initialized')
