@@ -41,8 +41,9 @@ describe('detectLeakedToolCall', () => {
     })
 
     test('does not flag a <function=> tag with no accompanying <parameter=>', () => {
-        // A stray "<function=x>" in prose/source is not a confident leak signal;
-        // only the structural combo (or a <tool_call> wrapper) counts.
+        // The detector needs the PAIR: a lone <function=x> returns null, and so
+        // does a lone <parameter=y>. Only both together — anywhere in the text,
+        // they need not be adjacent — or a <tool_call> wrapper flags.
         expect(detectLeakedToolCall('see <function=foo> in the old template')).toBeNull()
     })
 })
