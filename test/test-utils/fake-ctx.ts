@@ -74,10 +74,8 @@ export interface FakeCtxHandle {
      * Model a FOREIGN turn already streaming on the session (a chat message sent
      * from the browser mid-run, a watchdog follow-up, …). pi's agent-session
      * throws out of prompt() when a message arrives with no streamingBehavior
-     * while it is streaming, so any delivery that does not queue itself takes
-     * the whole run down — reproduced live on pi 0.82.1 (issue #8): a browser
-     * message during a child phase ended the run with "one task failed: Agent
-     * is already processing."
+     * while it is streaming, so any delivery that does not queue itself takes the
+     * whole run down.
      */
     setForeignTurnStreaming: (streaming: boolean) => void
 }
@@ -102,7 +100,9 @@ export function compactionEntry(): unknown {
     return {type: 'compaction', summary: 'compacted'}
 }
 
-// Matches the message the real extension runtime throws from a stale ctx.
+// The first two sentences of the message the real extension runtime throws from a
+// stale ctx (agent-session.js `dispose` → `_extensionRunner.invalidate`); the real
+// one continues with advice about withSession.
 const STALE_MSG =
     'This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload().'
 
@@ -112,10 +112,9 @@ export function makeFakeCtx(cwd: string): FakeCtxHandle {
     const editorQueue: Array<string | undefined> = []
     // The stopReason runSingleTask reads after waitForIdle to detect a user ESC.
     // Shared across generations so the value survives session replacement.
-    // Raw terminal-input listeners and editor text. pi clears the listeners when
-    // a session is invalidated (InteractiveMode.resetExtensionUI), so the fake
-    // does too — that teardown is what silently broke /task-auto-cancel delivery
-    // across per-task session replacement.
+    // Raw terminal-input listeners and editor text. pi drops the listeners when a
+    // session is invalidated — InteractiveMode.resetExtensionUI calls
+    // clearExtensionTerminalInputListeners — so the fake does too.
     let terminalHandlers = new Set<
         (data: string) => {consume?: boolean; data?: string} | undefined
     >()
