@@ -345,12 +345,11 @@ describe('docsRaw auto-install version pinning', () => {
 
 // ─── acquirePackage: the ladder both call sites now share ────────────────────
 //
-// Package acquisition was written twice — inline in docsRaw for the requested
-// package, and in the redirect-hop path — and the copies disagreed on the
-// abort signal, the version pin and the provenance. These pin the shared ladder
-// directly, which the hop copy's behaviour was never covered by: no test in the
-// repo named `tryResolveOrInstall`, and the suite's pinning assertion held for
-// the primary path only, while the hop silently installed `latest`.
+// `acquirePackage` is the one ladder both call sites use: docsRaw for the
+// requested package, and `tryResolveOrInstall` for each hop of the type-redirect
+// chain. Driving it directly is what keeps the abort signal, the version pin and
+// the provenance the same on both paths — a hop that acquired its own way could
+// otherwise install `latest` while the primary path pinned.
 describe('acquirePackage', () => {
     function harness() {
         const installArgs: string[][] = []
@@ -450,11 +449,9 @@ describe('acquirePackage', () => {
         fs.rmSync(dir, {recursive: true, force: true})
     })
 
-    // Writing a bare `undefined` into the signal slot to reach the
-    // fourth positional, so a user cancel during the MAIN npm install of a
-    // model-chosen package was not delivered — while a redirect-hop install
-    // honoured it. Driven through docsRaw because that is the call site that
-    // lost it.
+    // Driven through docsRaw rather than acquirePackage: the signal has to survive
+    // the whole call chain, and a caller that drops it — passing a bare `undefined`
+    // to fill a positional — leaves a user cancel undelivered to the npm install.
     test('a cancelled run does not silently complete docsRaw’s own install', async () => {
         const dir = makeProjectDir({dependencies: {}})
         const cache = openCache(':memory:')
@@ -498,11 +495,10 @@ describe('docsFocused', () => {
     })
 
     test('a FAILED child yields no answer — its stdout is not read as documentation', async () => {
-        // Regression: docsFocused was the one focused-extractor site that never asked
-        // formatChildFailure anything. parseChildOutput returns the whole trimmed stdout when
-        // there is no <answer> tag, so a child that died mid-answer had its error dump
-        // returned as `answer` — and phaseAutoAnswer (task/phases.ts, `if (r?.answer)`) pasted
-        // it into the spec as "### docs: <pkg>".
+        // parseChildOutput (shared/child-output.ts) returns the whole trimmed stdout
+        // as `answer` when there is no <answer> tag. So a child that dies mid-answer
+        // hands its error dump up as documentation, and phases.ts pastes whatever
+        // `r.answer` holds into the spec. The failure has to be caught here instead.
         const cache = openCache(':memory:')
         const r = await docsFocused({
             pkg: 'tiny-pkg',
