@@ -1,43 +1,22 @@
 /**
  * A refutation is a DELETION, not an addition.
  *
- * THE LEAD. Refine invented a
- * dependency the design explicitly rules out; the run's own research said so, in
- * writing, in the same file; the composed spec then turned the invention into a
- * capitalised prohibition against the design's own API:
+ * The failure this closes: refine writes a dependency into CONSTRAINTS that the
+ * design rules out, the run's own research says so in its CONTEXT section, and
+ * compose reads both and hardens the invention into a prohibition against the API
+ * the repo actually uses. An appended correction loses to the text it contradicts,
+ * because CONSTRAINTS is what the implementer is told is authoritative.
  *
- *:21   refine CONSTRAINTS   "Add only new entries the task requires (e.g.,
- *                              `hono`, `bun-sql`-equivalent, …, `argon2`, …)"
- *:92   research CONTEXT     "Password hashing uses `Bun.password` (built-in
- *                              argon2id) — no external `argon2` or
- *                              `@node-rs/argon2` dependency needed despite the
- *                              task's mention of it."
- *:132  spec CONSTRAINTS     "Do NOT use built-in `Bun.password` for hashing —
- *                              the refined task explicitly requires `argon2`."
- *
- * `argon2@^0.41.0` shipped as a runtime dependency of a repo that never imports
- * it, locked in by a VERIFY assertion, next to a spec telling the next
- * implementer not to use `Bun.sql` — the API the whole data layer is built on.
- *
- * An appended correction loses to the preserved text it contradicts:
- * the correction was APPENDED to research CONTEXT while the wrong text stayed in
- * refine's CONSTRAINTS, and CONSTRAINTS is what the implementer is told is
- * authoritative.
- *
- * THE LEVER. Deterministic detection, then a scoped removal, BEFORE compose sees
- * the refined task. Never a model rewrite: every model-rewrite lever at this seam
- * has resolved contradictions by deleting the AUTHORITATIVE side
- * This pass can only
- * delete a refine-invented token, and can never touch an owned line.
+ * So the correction is SUBTRACTIVE, and it runs before compose sees the refined
+ * task (phases.ts `composeCarry`). Never a model rewrite: this pass can only
+ * delete a refine-invented token, and it skips any line carrying the
+ * owned-requirement stamp.
  *
  * The match is lexical, never semantic: a research CONTEXT bullet refutes a
  * refine constraint when it carries one of a closed set of negation-of-need
  * shapes AROUND a backticked token, and that same token appears backticked in a
  * refine CONSTRAINTS line. Both sides are already separate strings in the task
  * file.
- *
- * STEP 0 measured the closed set over
- * every recorded task file in the corpus before any of it was wired.
  */
 
 /** Bare ALL-CAPS section header, the boundary convention used across the
@@ -57,9 +36,10 @@ const TOKEN_LIST = `${TOKEN}(?:(?:\\s*,\\s*|\\s+or\\s+|\\s+and\\s+)${TOKEN})*`
  * ("no `@node-rs/argon2` dependency — we use `argon2`") can only ever refute the
  * one inside the phrase.
  *
- * Kept deliberately small. `inv-precision` is a FAIL of the whole task on one
- * false drop, so a shape earns its place here only by surviving a hand-read of
- * every corpus hit it produces.
+ * Kept deliberately small. One false drop silently removes a real constraint, so
+ * a shape belongs here only when it cannot be read as anything but a claim that
+ * the dependency is unnecessary. refuted-constraint.test.ts pins the rejected
+ * shapes under `inv-precision`.
  */
 const NEGATIONS: {name: string; re: RegExp; needsDepWord?: true}[] = [
     {
@@ -81,20 +61,17 @@ const NEGATIONS: {name: string; re: RegExp; needsDepWord?: true}[] = [
     {
         // "no `argon2` dependency is needed".
         //
-        // The trailing need-negation is NOT optional, and STEP 0 is why. The
-        // first cut of this pattern was the bare "no `X` dependency", and it
-        // fired 300 times in 306 corpus hits — every one of them on a
-        // MANIFEST-STATE bullet that says the exact opposite of a refutation:
+        // The trailing need-negation is NOT optional. Without it the pattern is
+        // the bare "no `X` dependency", which matches MANIFEST-STATE bullets that
+        // say the exact opposite of a refutation:
         //
         //   "`package.json` currently lists no `hono` or `@hono/zod-validator`
-        //    dependencies; they MUST BE ADDED at versions 4.12.27 and 0.8.0"
+        //    dependencies; they MUST BE ADDED"
         //   "`package.json` has … and no `sharp` dependency — MUST ADD `sharp`
         //    as devDependency"
         //
-        // Dropping on that signal mutilated real constraints ("use  with the
-        // shared `loginSchema`"). "The repo does not have X yet" is a fact about
-        // the tree; "X is not needed" is a claim about the task. Only the second
-        // one refutes anything.
+        // "The repo does not have X yet" is a fact about the tree; "X is not
+        // needed" is a claim about the task. Only the second refutes anything.
         name: 'no-dep-needed',
         re: new RegExp(
             `\\bno\\s+(${TOKEN_LIST})\\s+dependenc(?:y|ies)\\s+(?:is\\s+|are\\s+)?(?:needed|required|necessary)\\b`,
@@ -102,11 +79,10 @@ const NEGATIONS: {name: string; re: RegExp; needsDepWord?: true}[] = [
         )
     },
     // The two shapes below name no dependency noun of their own, so they carry a
-    // DEP_WORD guard. STEP 0's near-miss census is the reason: "does not require"
-    // appears in 412 corpus CONTEXT bullets, and the shape is overwhelmingly
-    // prose about behaviour, not dependencies — "the `GET /api/listings`
-    // endpoint does NOT require authentication for the `mine` filter". Token
-    // adjacency alone would eventually reach a backticked API expression there.
+    // DEP_WORD guard. "does not require" is mostly prose about behaviour, not
+    // dependencies — "the `GET /api/listings` endpoint does NOT require
+    // authentication for the `mine` filter" — and token adjacency alone would
+    // eventually reach a backticked API expression inside such a bullet.
     {
         // "`argon2` is not needed" / "`argon2` and `sharp` are not required"
         name: 'not-needed',
@@ -124,9 +100,8 @@ const NEGATIONS: {name: string; re: RegExp; needsDepWord?: true}[] = [
 /** The claim has to be ABOUT a dependency for a dependency to be dropped. */
 const DEP_WORD = /\bdependenc(?:y|ies)\b|\bnpm\b|\bpackages?\b|\bdevDependenc(?:y|ies)\b/i
 
-/** The owned-requirement stamp (requirements.ts:813). A line carrying it is a
- *  design-sourced obligation and is NEVER refutable by research — this is the
- *  guard that keeps this pass out of 's failure mode. */
+/** The owned-requirement stamp requirements.ts writes onto every design-sourced
+ *  obligation. A line carrying it is NEVER refutable by research. */
 const OWNED_MARKER = 'owned requirement from the source design'
 
 export type Refutation = {
@@ -279,7 +254,8 @@ export type RefutationResult = {
 
 /**
  * Apply every detected refutation to the refined prompt. Purely subtractive: the
- * result is always a character subsequence of the input (`inv-no-line-invention`).
+ * result is always a character subsequence of the input, which
+ * refuted-constraint.test.ts asserts under `inv-no-line-invention`.
  */
 export function applyRefutations(refined: string, research: string): RefutationResult {
     const refutations = detectRefutations(refined, research)
