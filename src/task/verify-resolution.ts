@@ -1,38 +1,36 @@
 /**
- * Verify-FAIL resolution research for /task-auto.
+ * Verify-FAIL resolution research.
  *
- * When the work-verification gate (verify-work.ts) returns a FAIL, the run no
- * longer dead-stops with "fix and run /task-auto-resume". Instead the user is
- * shown a boxed two-choice picker:
+ * When the work-verification gate (verify-work.ts) FAILs a task, one of two
+ * things has to happen next:
  *
- *   • Autofix   — re-run the task's implementation turn against the failure, then
- *                 re-enter the verify gate.
- *   • Accept    — treat the artifact as good, override the gate, and proceed
- *                 (check off + commit) exactly as a PASS would.
+ *   • Autofix — re-run the task's implementation turn against the failure, then
+ *               re-enter the verify gate.
+ *   • Accept  — treat the artifact as good, override the gate, and proceed
+ *               (check off + commit) exactly as a PASS would.
  *
- * The recommendation now also GATES whether the user is prompted at all: an
- * AUTOFIX recommendation is auto-applied unattended (bounded — see
- * task-gates.ts MAX_AUTO_AUTOFIX), and the picker is shown only when the
- * recommendation is ACCEPT (blessing the artifact is a human's call) or when the
- * unattended-autofix cap is reached. This module only computes which of the two
- * cards is tinted RECOMMENDED, by handing the FAIL reason + the task spec to
- * a fresh read+bash child of the SAME local model and letting it INVESTIGATE the
- * real workspace: is the FAIL a genuine defect in the work (→ recommend AUTOFIX),
- * or a false alarm / an acceptable artifact the gate misjudged (→ recommend
- * ACCEPT)? This is the same shape of judgement a human reviewer makes when a CI
- * check is red — sometimes the code is broken, sometimes the check is wrong.
+ * This module only computes which of the two is RECOMMENDED. It hands the FAIL
+ * reason and the composed spec to a fresh read+bash child and lets it
+ * INVESTIGATE the real workspace: a genuine defect in the work (→ AUTOFIX), or
+ * an artifact the gate misjudged (→ ACCEPT).
  *
- * Tools: `read` + `bash` only — identical to the verify pass. The recommendation
- * observes; it never edits. (Autofix, when chosen, is what edits — and it goes
- * through the full implementation runner, not this pass.) A read-only research
- * step can never itself change the tree it is judging.
+ * The recommendation also decides whether a human is asked at all. In
+ * task-gates.ts an AUTOFIX recommendation is applied UNATTENDED, bounded by
+ * MAX_AUTO_AUTOFIX; the picker is reached on an ACCEPT recommendation, once that
+ * bound is spent, or when the FAIL is UNOBSERVED or frozen-blocked.
  *
- * The verdict defaults to AUTOFIX when missing/garbled — the conservative choice
- * (re-do the work rather than bless it), which is also the auto-applied path.
+ * Tools: `read` + `bash`, the same string as verify-work's VERIFY_TOOLS. That is
+ * a CONTRACT, not a capability — `bash` can write. gate-child.ts marks the
+ * `recommend` kind `guarded`, so the git-state guard restores whatever this pass
+ * moves.
+ *
+ * The verdict defaults to AUTOFIX when missing or garbled: re-doing the work
+ * rather than blessing it.
  */
 import {USER_CANCELLED} from './child-runner.js'
 
-/** Same read-only contract as the verify pass: observe, never edit. */
+/** The observe-only contract handed to the child. The same string as
+ *  verify-work's VERIFY_TOOLS, so both passes are told the same thing. */
 const RESOLUTION_TOOLS = 'read,bash'
 
 /** Which card the picker tints RECOMMENDED. */
@@ -48,8 +46,8 @@ export interface ResolutionOutcome {
 
 /**
  * Build the resolution research child's prompt. Pure, so the wording is
- * unit-tested without spawning pi. The contract: investigate the real workspace
- * and end on exactly one RESOLUTION verdict line.
+ * unit-tested without spawning pi. The contract it states: investigate the real
+ * workspace and end on exactly one `VERIFY-RESOLUTION:` line.
  */
 export function buildResolutionPrompt(spec: string, failReason: string): string {
     return [
@@ -110,13 +108,14 @@ export function buildResolutionPrompt(spec: string, failReason: string): string 
 }
 
 /**
- * Parse the child's recommendation. Scans for the LAST
- * `VERIFY-RESOLUTION: AUTOFIX|ACCEPT` marker (the model reasons before
- * concluding, and bash output may echo these words, so a distinct token and
- * last-match-wins both matter).
+ * Parse the child's recommendation out of the LAST
+ * `VERIFY-RESOLUTION: AUTOFIX|ACCEPT` marker, case-insensitively. Last match
+ * wins: the model reasons before concluding, and a bash command it runs can
+ * print the token back, so an earlier occurrence is not the verdict.
  *
- * No marker → recommend AUTOFIX (conservative: re-do rather than bless), with a
- * rationale that says the research was inconclusive.
+ * No marker → AUTOFIX (re-do rather than bless), with a rationale saying the
+ * research was inconclusive. A marker with no trailing sentence gets a stock
+ * rationale, so `rationale` is never empty.
  */
 export function parseResolutionVerdict(text: string): ResolutionOutcome {
     const re = /VERIFY-RESOLUTION:\s*(AUTOFIX|ACCEPT)\b[ \t]*(.*)/gi
@@ -138,11 +137,11 @@ export function parseResolutionVerdict(text: string): ResolutionOutcome {
 
 // ─── Picker plumbing ─────────────────────────────────────────────────────────
 //
-// The user ALWAYS makes the final call on a verify FAIL. These pure helpers shape
-// the boxed two-choice picker (verify-resolution → SessionUI.ask in the loop) and
-// classify whatever comes back — a card value, a remote button label, or free
-// text typed via the "type a different answer" fallback — so the orchestration
-// stays mechanical and unit-tested.
+// These pure helpers shape the boxed two-choice picker (task-gates.ts
+// `askVerifyResolution` → SessionUI.ask) and classify whatever comes back — a
+// card value, a remote button label, or free text typed via the "type a
+// different answer" fallback — so the orchestration stays mechanical and
+// unit-tested.
 
 export const ACCEPT_VALUE = 'accept'
 export const AUTOFIX_VALUE = 'autofix'
@@ -158,10 +157,10 @@ export interface ResolutionChoice {
 }
 
 /**
- * The two cards for the picker, with the model-recommended one FIRST so the boxed
- * renderer tints it green (it marks index 0 as recommended). Values are the bare
- * tokens; remote buttons use the labels — {@link classifyResolutionAnswer}
- * accepts both.
+ * The two cards for the picker, model-recommended one FIRST because the boxed
+ * renderer marks index 0 as the recommended card (bridge.ts `askLocal` passes
+ * `recommended: i === 0`). Values are the bare tokens; remote buttons carry the
+ * labels — {@link classifyResolutionAnswer} accepts both.
  */
 export function resolutionOptions(
     recommend: ResolutionRecommendation
@@ -180,10 +179,11 @@ export function resolutionOptions(
 }
 
 /**
- * Map a picker answer to an action. Handles the card value tokens, the remote
- * button labels, an empty/undefined dismissal (cancel), and arbitrary free text
- * typed via the fallback — which becomes an AUTOFIX with that text as guidance
- * (the user is steering the re-run rather than blessing the artifact).
+ * Map a picker answer to an action. undefined or blank is a dismissal (cancel).
+ * A LEADING `accept`/`autofix` word matches, which covers both the bare card
+ * values and the remote button labels. Anything else becomes an AUTOFIX carrying
+ * that text as guidance — including a sentence that mentions "accept" further
+ * along, since the user is steering the re-run, not blessing the artifact.
  */
 export function classifyResolutionAnswer(answer: string | undefined): ResolutionChoice {
     if (answer === undefined) return {action: 'cancel'}
@@ -209,9 +209,10 @@ export interface ResolutionDeps {
 
 /**
  * Research a verify FAIL and return which action to recommend. Never throws
- * (except a user cancel, which propagates so the loop's USER_CANCELLED handler
- * reports a clean "cancelled — resume"). A child crash defaults to recommending
- * AUTOFIX — the picker is still shown, only the default tint changes.
+ * except on a user cancel, which propagates so the loop's USER_CANCELLED handler
+ * reports a clean "cancelled — resume". A child crash returns AUTOFIX with a
+ * "could not run" rationale; since AUTOFIX is the unattended path, a crash here
+ * costs an implementation re-run rather than a prompt.
  */
 export async function researchResolution(deps: ResolutionDeps): Promise<ResolutionOutcome> {
     let text: string
