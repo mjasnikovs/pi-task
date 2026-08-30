@@ -2,16 +2,11 @@
  * Progress-based runaway guard for phase children — the replacement for a
  * wall-clock cap.
  *
- * WHY NOT SECONDS. PHASE_CHILD_TIMEOUT_MS was sized against "measured HEALTHY
- * planning children" on one local backend: decompose 89s, so 600s looked like a
- * 6x margin. That sizing is not a property of the pathology, it is a property of
- * that day's model, that day's samplers and that day's design doc. Measured on
- * the same backend with reasoning ON (replays of one
- * captured auto-decompose request, everything else byte-identical): every single
- * healthy run took 610-927s and produced 26-42 correct titles. The cap would
- * have killed 10 out of 10 GOOD runs. A slower model, a bigger design doc or a
- * longer reasoning budget moves that number again — so any constant in seconds
- * is wrong for someone.
+ * WHY NOT SECONDS. A wall clock has to be sized against how long a HEALTHY child
+ * takes, and that is not a property of the pathology — it is a property of the
+ * model, its sampler settings, the reasoning budget and the size of the document
+ * being read. Any of those moving turns the margin into a killer of good runs.
+ * `PHASE_CHILD_TIMEOUT_MS` is 0 (off) for exactly that reason.
  *
  * WHAT REPLACES IT. Two bounds, both dimensionless — invariant to model speed,
  * project size and reasoning budget:
@@ -22,26 +17,25 @@
  *      never trips, however slow it is. A child re-opening the same four files
  *      trips after NO_PROGRESS_LIMIT of them, however fast it is.
  *
- *      Judged on the RESULT, not the arguments, because the arguments lie. The
- *      thrash measured on 2026-08-17 was 197 of 200 calls REFUSED by the
- *      single-read guard, each at a different rising offset — so by arguments it
- *      looked like textbook forward paging, and both an offset rule and the loop
- *      detector's path rule waved all 200 through. By result it is 197 identical
- *      refusals in a row, which is what it actually was.
+ *      Judged on the RESULT, not the arguments, because the arguments lie. A child
+ *      whose reads are all REFUSED — by the single-read guard, say — can issue
+ *      them at steadily rising offsets, so by arguments it looks like textbook
+ *      forward paging and an offset rule waves every one through. By result it is
+ *      one identical refusal after another.
  *
  *   2. CONTEXT CHURN. Sum the bytes of tool RESULTS the child has pulled in. Once
  *      that exceeds CONTEXT_CHURN_FACTOR times its own context window and it
  *      still has not answered, it has necessarily forgotten what it read first
- *      and is re-reading to fill a window pi keeps compacting. That is the
- *      the observed shape: many minutes spent at the very top of the context window,
- *      ~56k tokens of tool output per minute, forward-paging the whole time so
- *      rule 1 alone would not have caught it. The bound scales with the model's
+ *      and is re-reading to fill a window pi keeps compacting. This catches the
+ *      child rule 1 cannot: one that pages FORWARD the whole time, pulling in new
+ *      bytes on every call, and never converges. The bound scales with the model's
  *      OWN window, so a 1M-context model gets a 1M-context allowance.
  *
  *      The window is supplied by the PARENT at spawn (`PhaseDeps.contextWindow`),
- *      not read off the child's event stream: pi emits no context event at all,
- *      which is why this rule sat disarmed from the day it was written until
- *      GitHub issue #16.
+ *      not read off the child's event stream: pi's `--mode json` stream carries no
+ *      context event at all. A detector that waited to be told one sits at 0, and
+ *      `churnTripped` returns false on a non-positive window — so the rule would
+ *      never fire.
  *
  * Neither rule can fire on a child that is thinking rather than calling tools:
  * that case is bounded by the model's max tokens (server-enforced) and by the
@@ -61,11 +55,10 @@ import type {LoopHit, ToolCall} from '../shared/child-process.js'
  *
  * Eight, because the honest reasons to get back something you have already seen
  * are few and bounded: re-checking a file after an edit, a grep that lands in a
- * file already read, a retry after a malformed call, a missing path. A child
- * doing real work interleaves those with progress and resets the counter. In the
- * replayed thrash the counter never resets at all — the observed runs made
- * 188-201 consecutive dead calls. The gap between "a handful" and "two hundred"
- * is wide enough that the exact value is not load-bearing.
+ * file already read, a retry after a malformed call, a missing path. A child doing
+ * real work interleaves those with progress and RESETS the counter, so the streak
+ * only survives when nothing at all is being learned. The exact value is not
+ * load-bearing: a genuine thrash never resets and runs on indefinitely.
  */
 export const NO_PROGRESS_LIMIT = 8
 
@@ -156,8 +149,8 @@ export class StallDetector {
 /**
  * Restart hint for a child killed by the stall detector. Names the specific
  * mistake — re-reading covered ground vs pulling in more than it can hold —
- * because "you ran out of time" (the old wall-clock hint) told a model that was
- * working correctly but slowly to truncate its work for no reason.
+ * because "you ran out of time" tells a model that was working correctly but
+ * slowly to truncate its work for no reason.
  */
 export function formatStallHint(kind: StallKind): string {
     if (kind === 'context-churn') {
