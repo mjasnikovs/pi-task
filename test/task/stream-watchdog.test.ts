@@ -29,7 +29,7 @@ function fakePi() {
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 
-/** Run `fn` with a millisecond-scale window instead of the 10-minute production one. */
+/** Run `fn` with a millisecond-scale window instead of the configured one. */
 async function withWindow(ms: number, fn: () => Promise<void>): Promise<void> {
     const cfg = getConfig()
     const prev = cfg.streamInactivityMs
@@ -43,8 +43,8 @@ async function withWindow(ms: number, fn: () => Promise<void>): Promise<void> {
 }
 
 describe('registerStreamWatchdog', () => {
-    // The exact shape: a turn streams normally, then the stream dies with
-    // no error, no exit, and no further events of any kind.
+    // A turn streams normally, then the stream dies: no error, no exit, and no
+    // further events of any kind. Nothing throws, so nothing else catches it.
     test('aborts the turn and posts a resume reminder when the stream dies mid-turn', async () => {
         await withWindow(80, async () => {
             const f = fakePi()
@@ -94,10 +94,11 @@ describe('registerStreamWatchdog', () => {
         })
     })
 
-    // pi's executeToolCallsParallel emits EVERY tool_execution_start up front and
-    // then one tool_execution_end per call as each settles (agent-loop.js). So a
-    // fast tool ending first must NOT un-suspend the clock while a slow sibling —
-    // the 12-minute build this guard promised never to touch — is still running.
+    // pi's executeToolCallsParallel (pi-agent-core/dist/agent-loop.js) walks the
+    // batch emitting a tool_execution_start per call, then awaits the deferred
+    // ones together under Promise.all — each emitting its tool_execution_end as
+    // it settles. So the ends arrive in completion order, and a fast tool ending
+    // first must NOT un-suspend the clock while a slow sibling still runs.
     test('a fast tool ending does not expose a still-running parallel sibling', async () => {
         await withWindow(80, async () => {
             const f = fakePi()
@@ -105,7 +106,6 @@ describe('registerStreamWatchdog', () => {
             f.emit('turn_start')
             f.emit('tool_execution_start', {toolCallId: 'slow', toolName: 'bash'})
             f.emit('tool_execution_start', {toolCallId: 'fast', toolName: 'read'})
-            // The read returns immediately; the build keeps going.
             f.emit('tool_execution_end', {toolCallId: 'fast', toolName: 'read'})
             await sleep(400)
             expect(f.aborts()).toBe(0)
@@ -115,8 +115,9 @@ describe('registerStreamWatchdog', () => {
         })
     })
 
-    // The same loop emits start+end inline for a tool it can answer immediately
-    // (a denied or cached call) while an earlier async call is still executing.
+    // The same loop answers some calls without executing them — an unknown tool,
+    // one a before-hook blocked, an argument that failed validation. Those emit
+    // start and end inline, mid-batch, while an earlier deferred call still runs.
     test('an immediate tool resolving mid-batch does not expose the running one', async () => {
         await withWindow(80, async () => {
             const f = fakePi()
