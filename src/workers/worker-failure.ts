@@ -10,20 +10,17 @@
  * causes must be matched before the generic `aborted`/`exitCode` ones, or a dead
  * backend is reported to the user as "you cancelled".
  *
- * As prose in three doc comments and as the source order of three hand-written
- * ladders (`classifyEnforceChildFailure`, `classifyResearchWorker`, and the
- * gate's own reading), that rule has three chances to drift — and it does:
- * `streamStalled` gets added to the result and to `finalAttemptFailed`, but the
- * enforce ladder
- * never grew an arm for it, so an enforcement child killed for a hung model
- * stream fell all the way through to `if (aborted) return USER_CANCELLED` — the
- * exact mislabel the comment above that line warns against.
+ * Written as prose, or as the source order of each consumer's own hand-rolled
+ * ladder, that rule gets a fresh chance to drift per consumer — and the failure is
+ * silent: add a new kill cause to the result, forget one ladder's arm for it, and
+ * that consumer falls through to `if (aborted)` and reports a cancel.
  *
- * The fix is to make the order data. `FAILURE_RULES` is ordered, the first
- * matching row wins, and consumers `switch` on the resulting `kind` instead of
- * re-deriving the ladder. A new kill cause is one row here plus a compile error
- * in every consumer that has not handled it — which is what makes the drift that
- * caused the bug impossible rather than merely fixed.
+ * So the order is DATA. `FAILURE_RULES` is ordered, the first matching row wins,
+ * and consumers `switch` on the resulting `kind` — `classifyEnforceChildFailure`
+ * (enforce-guidelines.ts) and `classifyResearchWorker` (research-worker.ts) both
+ * call `classifyWorkerFailure` and say only what each cause means to THEM. A new
+ * kill cause is one row here plus a compile error in every consumer that has not
+ * handled it.
  */
 
 import type {LoopHit} from '../task/loop-detector.js'
@@ -140,26 +137,15 @@ export const FAILURE_RULES: ReadonlyArray<{
 ]
 
 /**
- * Classify a finished child. Returns `undefined` when nothing killed it —
- * which is not the same as "it answered": the text may still be empty, and that
- * judgement belongs to the caller.
- */
-/**
  * What a worker failure SAYS to the caller that asked for the work.
  *
- * WHY IT EXISTS. The ladder above already names the cause exactly, with its
- * detail — which tool hung, how long the stream was idle, which exit code. None
- * of that reached a human. `formatChildFailure` was handed a `ChildOutcome`
- * (`{aborted, exitCode, stderr}`) and answered `if (aborted) return
- * abortedMessage`, so a 240s wall-clock kill, a hung `bash`, a dead model
- * backend, a loop kill and a user pressing ESC all printed the SAME four words.
- * The discriminating value was computed a line later by `childFailureReason` and
- * put in the debug trail, which a user reading a tool result never sees.
- *
- * That is not only unhelpful; it is why the `pi-worker` tool's 240s cap has no
- * base rate. 53 recorded invocations across eight repos carry 14 failures, and
- * NOTHING in the transcript says which of them ran out of time — the honest
- * bound recoverable from timestamps alone is "somewhere between 0 and 8".
+ * WHY IT EXISTS. The ladder above already names the cause exactly, with its detail
+ * — which tool hung, how long the stream was idle, which exit code. Answering
+ * `if (aborted) return abortedMessage` instead throws all of it away: a wall-clock
+ * kill, a hung `bash`, a dead model backend, a loop kill and a user pressing ESC
+ * then print the SAME words, and the discriminating value only reaches a debug
+ * trail a user reading a tool result never sees. Every arm below returns a
+ * different message, and only `aborted` returns the caller's own.
  *
  * A switch, not a table: `WorkerFailure` is a discriminated union carrying a
  * different payload per arm, so the exhaustiveness check is the compiler's and a
@@ -211,6 +197,11 @@ export function describeWorkerFailure(
     }
 }
 
+/**
+ * Classify a finished child against the ladder. Returns `undefined` when nothing
+ * killed it — which is not the same as "it answered": the text may still be empty,
+ * and that judgement belongs to the caller.
+ */
 export function classifyWorkerFailure(r: WorkerFailureInput): WorkerFailure | undefined {
     for (const rule of FAILURE_RULES) {
         const hit = rule.match(r)
