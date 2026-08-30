@@ -61,22 +61,26 @@ interface DocsDetails {
     versionSource?: 'declared-range' | 'npm-latest'
     declaredRange?: string
     /**
-     * The answer restated a declaration for a question that needed usage semantics, so it
-     * is UNANSWERED (F-2). Set by isTypeOnlyAnswer; read by `cacheable` so a non-answer is
-     * never memoised and re-served to a later sibling task.
+     * The answer restated a declaration for a question that needed usage semantics, so
+     * it is UNANSWERED. Set by isTypeOnlyAnswer; read by `docsCacheable` so a non-answer
+     * is never memoised and re-served to a later sibling task.
      */
     typeOnly?: boolean
-    /** The 5B CAP arm refused this call: the attempt's project-lookup budget is spent. */
+    /** The project-lookup budget for this attempt is spent, so the call was refused
+     *  before any work. Only set when PI_TASK_PROJECT_DOCS_BUDGET is configured. */
     budgetSpent?: boolean
 }
 
 /**
  * Pull `@see {@link https://…}` pointers out of retrieved .d.ts/README text.
  *
- * F-2(d): the answer to a type-only lookup usually is not in the package at all — it lives
- * at the `@see` URL that the very excerpt being returned already carries.
- * hono.dev appeared in cache values ONLY inside these JSDoc links, and was never fetched.
- * Surfacing the link is therefore free: the pointer is already in hand.
+ * The answer to a type-only lookup is often not in the package at all — it lives at the
+ * `@see` URL the very excerpt being returned already carries. Surfacing that link costs
+ * nothing: the pointer is already in hand.
+ *
+ * Matches `{@link URL}` and a bare `@link URL`, case-insensitively; strips a trailing
+ * `.`/`,`/`;` the surrounding prose added; deduplicates. A bare URL with no `@see` is
+ * not a pointer and is not returned.
  */
 export function extractSeeUrls(content: string): string[] {
     const out: string[] = []
@@ -110,11 +114,11 @@ function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | '
  * The paths differ only in `prefix`: the npm path leads every result, failures included, with
  * its version banner and npm-version header; the project path has neither.
  *
- * It says UNAVAILABLE, so the cache cannot take it. Saying so by writing a
- * non-zero `childExitCode` and letting `docsCacheable` re-derive the verdict
- * fails on the case it matters most for: a signal-killed child reports exit code
- * 0, so `"Docs lookup aborted."` gets cached for the whole run. An `aborted` flag
- * written here and read by nothing is what lets that hide.
+ * It says UNAVAILABLE, so the cache cannot take it. Writing a non-zero `childExitCode`
+ * and letting `docsCacheable` re-derive the verdict would fail on the case it matters
+ * most for: node reports a signal kill as `close` with `code === null`, and
+ * child-process.ts settles that as `code ?? 0` — so an aborted child carries exit code
+ * ZERO and `"Docs lookup aborted."` would be cached for the whole run.
  */
 function docsFailureResult(
     extraction: FocusedFailure,
@@ -145,13 +149,12 @@ export function registerPiWorkerDocs(
     pi: ExtensionAPI,
     internals: PiWorkerDocsInternals = {}
 ): void {
-    // CAP arm of  — OFF unless PI_TASK_PROJECT_DOCS_BUDGET is set, and
-    // then per-ATTEMPT by construction: the extension is loaded into a fresh pi
-    // child on every spawn, so a restarted attempt starts this counter at 0. The
-    // budget it enforces is the one the worker was told about in its prompt
-    // (projectDocsBudgetNotice) — enforcement without the notice would be a
-    // silent tool failure, and the notice without enforcement is what
-    // already shows does not bind.
+    // Project-lookup budget — OFF unless PI_TASK_PROJECT_DOCS_BUDGET is set, and then
+    // per-ATTEMPT by construction: the extension is loaded into a fresh pi child on
+    // every spawn, so a restarted attempt starts this counter at 0. The budget it
+    // enforces is the one the worker was told about in its prompt
+    // (projectDocsBudgetNotice). Enforcement without the notice would be a silent
+    // tool failure; the notice without enforcement binds nothing.
     let projectLookups = 0
     makeWorkerTool<typeof Params, DocsDetails>(pi, {
         name: 'pi-worker-docs',
@@ -192,12 +195,9 @@ export function registerPiWorkerDocs(
         parameters: Params,
 
         async run(params, signal, ctx) {
-            // Always node:child_process spawn (matching fetch-core and every other
-            // worker). The former globalThis.Bun branch called Bun.spawn — whose signature
-            // is Bun.spawn([cmd, ...args], opts), NOT the node (cmd, args, opts) that
-            // runChild/SpawnFn require — so it threw "cmd must be an array" whenever it ran.
-            // It was DEAD in production (pi runs under node) and BYPASSED under bun test
-            // (internals.spawn is always injected), i.e. untested, unreachable, and wrong.
+            // Always node:child_process spawn, matching fetch-core and every other
+            // worker. `SpawnFn` is the node `(cmd, args, opts)` shape; Bun.spawn takes
+            // `([cmd, ...args], opts)` and would throw here.
             const spawn = internals.spawn ?? (defaultSpawn as unknown as SpawnFn)
 
             // Both arms below run the SAME tail — concatenate, extract, verify,
@@ -279,12 +279,10 @@ export function registerPiWorkerDocs(
                 if (r.kind === 'failed') return docsFailureResult(r.extraction, baseDetails, '')
 
                 const {extraction, excerptVerified: verified, body: text} = r
-                // SAME instrumentation channel as the package path below, extended to the
-                // project-source branch because that branch is the MAJORITY of what
-                // worker:apis asks — 13 of 17 docs calls in a fatal task, 7 of 12 in
-                // the first live diagnostic rep. With only the package path recorded, "the
-                // last docs answer before the worker stopped" was unanswerable: the sink's
-                // last row was routinely not the worker's last answer.
+                // SAME instrumentation channel as the package path below. Both branches
+                // record, or "the last docs answer before the worker stopped" is
+                // unanswerable whenever the last answer came from the branch that does
+                // not log.
                 //
                 // `typeOnly` is recorded FALSE with an explicit reason rather than by running
                 // the detector: this path never applies it, and the record must say what the
@@ -339,11 +337,11 @@ export function registerPiWorkerDocs(
                     hitCache: rawResult.hitCache,
                     cacheError: rawResult.cacheError,
                     autoInstalled: rawResult.autoInstalled,
-                    // BUG FIX. Both sibling arms carry the pin and this one dropped
-                    // it, so a package that WAS auto-installed and then failed to
-                    // re-resolve lost its `versionSource`/`declaredRange` — the
-                    // provenance the last defect in this area was about. `docsRaw`
-                    // sets `autoInstallPin` on three of its five error returns.
+                    // Carry the pin here as the sibling arms do. Without it a package
+                    // that WAS auto-installed and then failed to re-resolve loses its
+                    // `versionSource`/`declaredRange`, and the answer cannot say what
+                    // version it is grounded in. `docsRaw` sets `autoInstallPin` on
+                    // three of its five error returns.
                     ...pinDetails(rawResult.autoInstallPin),
                     ...npmDetails
                 }
@@ -401,18 +399,16 @@ export function registerPiWorkerDocs(
 
             const {extraction, excerptVerified: verified, body, content: concatenated} = r
 
-            // F-2: a TYPE-ONLY answer is the dangerous failure. "unclear from this package"
+            // A TYPE-ONLY answer is the dangerous failure. "unclear from this package"
             // is honest and already escalates; a signature is a well-formed, confident,
             // on-topic answer that names the very parameter asked about, so the worker
-            // stops — and worker:context then fills the semantic gap from memory (F-1).
-            // Measured: 14 of 17 live reps terminated on exactly this shape.
+            // stops asking — and the semantic gap then gets filled from memory.
             //
             // The retrieved type is KEPT (it is real and useful) and an UNANSWERED banner
             // is prepended, naming the gap and — when the excerpt carries one — the `@see`
-            // URL that actually documents the semantics. That pointer is free: a
-            // documentation host is often present in cached values ONLY inside these
-            // JSDoc links, and never fetched. Prompting the escalation beats performing it here: this tool runs in
-            // parallel execution mode and cannot cleanly spawn a fetch of its own.
+            // URL that actually documents the semantics. Prompting the escalation beats
+            // performing it here: this tool runs in parallel execution mode and cannot
+            // cleanly spawn a fetch of its own.
             const typeOnly = isTypeOnlyAnswer(extraction.answer, params.query)
             let text = versionBanner + npmHeader + body
             if (typeOnly.typeOnly) {
@@ -489,12 +485,12 @@ export function registerPiWorkerDocs(
         // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
         // through to a live retry next time.
         //
-        // F-2(e): process health is NOT answer quality. A child that ran fine and answered
-        // "unclear from this package" exits 0, so the NON-ANSWER was memoised and re-served
-        // as a cache hit to every later sibling task — 52 of a cached entries were
-        // "unclear" with hitCache true. One dead end, paid for many times, and escalation
-        // could never re-fire because the miss never recurred. So a non-answer is now never
-        // stored: the next task that asks pays for a real lookup and can escalate.
+        // Process health is NOT answer quality. A child that ran fine and answered
+        // "unclear from this package" exits 0, so caching on exit code alone memoises the
+        // NON-ANSWER and re-serves it as a hit to every later sibling task — one dead end
+        // paid for many times, with escalation unable to re-fire because the miss never
+        // recurs. A non-answer is therefore never stored: the next task that asks pays
+        // for a real lookup and can escalate.
         //
         // `text` is supplied by makeWorkerTool (shared.ts) alongside details, so the
         // content check needs no new plumbing.
@@ -503,15 +499,12 @@ export function registerPiWorkerDocs(
 }
 
 /**
- * The F-2(e) cache rule for the docs channel, as a NAMED export rather than an
- * anonymous property of an adapter literal.
+ * The cache rule for the docs channel, as a NAMED export rather than an anonymous
+ * property of an adapter literal.
  *
- * It was reachable only through `registerTool → execute()`, so
- * pi-worker-docs-typeonly.test.ts gave up and hand-retyped it under a
- * "keep in sync" comment — six tests asserting against a copy that a change to the
- * shipped rule would leave green. That is the same drift class the rule itself
- * exists to prevent: four regexes matching three phrasings, documented at length in
- * abstention.ts, which cost a real bug.
+ * Reachable only through `registerTool → execute()`, a test has to hand-retype it —
+ * and then asserts against a copy that a change to the shipped rule would leave green.
+ * That is the same drift class the rule itself exists to prevent; see abstention.ts.
  */
 export function docsCacheable(
     d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified'>,
@@ -524,15 +517,18 @@ export function docsCacheable(
     return d.typeOnly !== true && d.excerptVerified !== false && !isAbstention(text)
 }
 
-/** The docs cache key: a package's answer is per (module, question). A project-source
- *  `.` lookup is never cached — the working tree mutates as tasks implement. */
+/** The docs cache key: a package's answer is per (module, question), with the question
+ *  lowercased and its whitespace collapsed so phrasing variants share one entry. Returns
+ *  null for the project-source `.` lookup, which is never cached — the working tree
+ *  mutates as tasks implement. */
 export function docsCacheKey(params: {module: string; query: string}): string | null {
     return params.module === '.' ?
             null
         :   `${normalizeQuery(params.module)}::${normalizeQuery(params.query)}`
 }
 
-/** Package provenance for per-entry resume invalidation. */
+/** Package provenance for per-entry resume invalidation: the package ROOT of the
+ *  specifier (`hono/client` → `hono`), and undefined for the project-source `.`. */
 export function docsCachePkg(params: {module: string}): string | undefined {
     return params.module === '.' ? undefined : packageRootOf(params.module)
 }
