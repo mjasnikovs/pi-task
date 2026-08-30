@@ -96,8 +96,8 @@ describe('buildHandoffPrompt', () => {
         expect(p).toContain('PLANNING DECISIONS')
         expect(p).toContain('per-provider')
         expect(p).toContain('DECIDED BY USER: do not touch the brave provider')
-        // A model answer the user merely read is not a decision — it must not
-        // reach the implementer dressed as one.
+        // buildHandoffPrompt filters `kind !== 'note'`: a model answer the user
+        // merely read is not a decision, so it must not arrive dressed as one.
         expect(p).not.toContain('src/workers/index.ts')
         expect(p).not.toContain('THE USER ASKED')
     })
@@ -111,15 +111,15 @@ describe('buildHandoffPrompt', () => {
         expect(buildHandoffPrompt('add rate limiting', notesOnly)).toBe(bare)
     })
 
-    // The live failure: "Lets plan new tab and report" led the handoff, /task's
-    // refine took the verb as the deliverable, and the task it built accepted a
-    // document and verified that no source file had changed.
+    // The task prompt leads the handoff verbatim, so a request that says "plan X"
+    // hands refine a planning verb as the deliverable. HANDOFF_DELIVERABLE_RULE is
+    // what tells the implementer the planning already happened.
     test('pins the deliverable so a "plan X" request is not re-planned by /task', () => {
         const p = buildHandoffPrompt('Lets plan new tab and report @src/app/reports/', ENTRIES)
         expect(p).toContain('PLANNING IS ALREADY DONE')
         expect(p).toContain('Build the thing')
         expect(p).toContain('no user is available')
-        // It sits above the decisions, not buried under them.
+        // Ahead of the decisions block, not buried under it.
         expect(p.indexOf(HANDOFF_DELIVERABLE_RULE)).toBeLessThan(p.indexOf('PLANNING DECISIONS'))
     })
 
