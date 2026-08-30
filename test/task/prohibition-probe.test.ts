@@ -1,9 +1,10 @@
 import {describe, expect, test} from 'bun:test'
 import {extractProhibitions, findProhibitionViolations} from '../../src/task/prohibition-probe.js'
 
-// Real constraint shape (the F5 task): prohibition line naming several paths,
-// with backticked NON-path tokens (API routes, identifiers) mixed into the prose.
-const MX5_CONSTRAINT =
+// The shape the extractor has to survive: one prohibition line naming several
+// paths, with backticked NON-path tokens — an API route, an object literal, a bare
+// identifier — mixed into the same prose.
+const MIXED_CONSTRAINT =
     '- **Do NOT modify** any server-side code: `src/server/routes/listings.ts`, '
     + '`src/server/routes/photos.ts`, `src/server/auth.ts`, `src/server/index.ts`, or the '
     + 'shared schema in `src/shared/schema.ts`. The API contracts (`POST /api/listings` '
@@ -12,7 +13,7 @@ const MX5_CONSTRAINT =
 
 describe('extractProhibitions', () => {
     test('extracts every backticked path from a prohibition line, skipping non-paths', () => {
-        const p = extractProhibitions(`GOAL:\nx\n\nCONSTRAINTS:\n${MX5_CONSTRAINT}`)
+        const p = extractProhibitions(`GOAL:\nx\n\nCONSTRAINTS:\n${MIXED_CONSTRAINT}`)
         expect(p.map(x => x.path)).toEqual([
             'src/server/routes/listings.ts',
             'src/server/routes/photos.ts',
@@ -20,8 +21,9 @@ describe('extractProhibitions', () => {
             'src/server/index.ts',
             'src/shared/schema.ts'
         ])
-        // `POST /api/listings` (space), `{...listingResponse}` (braces) and
-        // `createListingRequest` (bare identifier) must NOT extract as paths.
+        // looksLikePath rejects all three: `POST /api/listings` has a space and
+        // `{...listingResponse}` has braces, so both fail its character class, and
+        // `createListingRequest` has no slash, no extension and no leading dot.
         expect(p[0].constraint).toContain('Do NOT modify')
     })
     test('matches the prohibition verb family and passive form', () => {
@@ -69,7 +71,7 @@ describe('extractProhibitions', () => {
 })
 
 describe('findProhibitionViolations', () => {
-    const prohibitions = extractProhibitions(MX5_CONSTRAINT)
+    const prohibitions = extractProhibitions(MIXED_CONSTRAINT)
     test('flags a changed file the spec forbids, carrying the constraint verbatim', () => {
         const findings = findProhibitionViolations(prohibitions, [
             {path: 'src/client/pages/NewListing.tsx', addedLines: 300},
@@ -89,7 +91,8 @@ describe('findProhibitionViolations', () => {
         ).toEqual([])
     })
     test('no overlap → no findings (honest-clean and violated-then-reverted trees)', () => {
-        // A fully reverted violation produces NO diff entry — reverted = not violated.
+        // findProhibitionViolations only sees the changed-file list, and a fully
+        // reverted file is not in it — so reverted cannot read as violated.
         expect(
             findProhibitionViolations(prohibitions, [
                 {path: 'src/client/pages/NewListing.tsx', addedLines: 300},
