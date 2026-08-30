@@ -47,13 +47,10 @@ function scriptedChildren(
 
 // ─── Research workers: routed by LABEL through the `runWorker` seam ───────────
 //
-// These were the last prompt-matched fakes in this file: PHASES.research called
-// `phaseResearch(d, p.refined)` and the seam sat on a third parameter no row
-// could reach, so a worker had to be recognised by a marker SENTENCE lifted out
-// of prompts.ts — prompt copy this codebase rewords and A/Bs for a living, as
-// load-bearing test infrastructure. `runWorker` is a `PhaseDeps` field now, so a
-// worker is named, and what a gate reads is stated rather than acted out through
-// a fake process that emits JSON events.
+// `runWorker` is a `PhaseDeps` field, so a fake here recognises a worker by its
+// LABEL. Matching on a sentence from prompts.ts instead would make prompt copy
+// load-bearing test infrastructure, and returning a RunWorkerResult directly is
+// what lets a test state what a gate reads rather than emit JSON events for it.
 
 type WorkerName = 'files' | 'apis' | 'context' | 'tooling'
 /** What a scripted worker answers: its text, or the result fields directly. */
@@ -79,8 +76,9 @@ function workerResult(over: Partial<RunWorkerResult> = {}): RunWorkerResult {
         totalWallMs: 2,
         restarts: [],
         salvagedFromDiscardedAttempt: false,
-        // Non-zero so the APIS zero-retrieval gate stays out of the way unless a
-        // test is about it.
+        // research-worker.ts's zero-retrieval gate fires on
+        // `groundingRetrievalCount === 0`, so a non-zero default keeps it out of
+        // the way unless a test is about it.
         groundingRetrievalCount: 3,
         ...over
     }
@@ -396,11 +394,10 @@ VERIFIED-TOOLING
         })
     })
 
-    // A resume past COMPOSE replays compose's `carry`. Without it, `p.refined` is
-    // whatever `## refined prompt` holds — which is deliberately the text refine
-    // wrote, refuted constraint and all — and CRITIQUE_PROMPT calls that GROUND
-    // TRUTH whose CONSTRAINTS "MUST be preserved in spirit". The drop that closed
-    // the defect was reachable only on the live path.
+    // A resume past COMPOSE replays compose's `carry`. Without it `p.refined` is
+    // whatever `## refined prompt` holds — deliberately the text refine wrote,
+    // refuted constraint and all — and CRITIQUE_PROMPT hands that to the model as
+    // GROUND TRUTH whose CONSTRAINTS "MUST be preserved in spirit".
     test('resume at critique replays compose’s refutation drop', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
@@ -491,8 +488,8 @@ ${COMPOSE_SPEC.trim()}
         })
     })
 
-    // The live run already wrote the drop to `## gates`. A replay must not append
-    // a second copy — which is why a carry returns its trail instead of writing it.
+    // The first run already wrote the drop to `## gates`. A replay must not append
+    // a second copy, which is why a carry RETURNS its trail instead of writing it.
     test('the replayed carry does not duplicate the gates trail', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
@@ -593,11 +590,11 @@ describe('runSingleTask', () => {
         })
     })
 
-    // Live repro (GitHub issue #8): a chat message sent from the
-    // browser during a child phase starts a host turn, and if it is still
-    // streaming when the pipeline delivers its spec, the delivery throws and the
-    // run dies — "one task failed: Agent is already processing." Delivery must
-    // queue itself instead, whatever else happens to be on the session.
+    // A chat message sent from the browser during a child phase starts a host turn.
+    // If it is still streaming when the pipeline delivers its spec, pi throws
+    // "Agent is already processing. Specify streamingBehavior ('steer' or
+    // 'followUp') to queue the message." — so delivery must name a mode and queue
+    // itself, whatever else is on the session.
     test('runSingleTask: a foreign streaming turn does not kill spec delivery', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx, captured, setForeignTurnStreaming} = makeFakeCtx(cwd)
@@ -764,9 +761,9 @@ describe('compaction-aware implementation wait', () => {
     const continueCount = (sent: Array<{spec: string}>): number =>
         sent.filter(m => m.spec === CONTINUE_AFTER_COMPACTION).length
 
-    // ── A/B: same harness, the ONLY difference is whether the turn parks at a
-    // compaction boundary. Pre-fix, both jumped straight past the wait; the control
-    // proves no regression, the compaction case proves the resume now fires.
+    // The two tests below share a harness and differ in ONE thing: whether the first
+    // idle reports a compaction boundary. The clean turn is the control — it must
+    // send no continue at all.
 
     test('A (control): a clean turn does NOT send any continue and waits once', async () => {
         await withTmpTaskDir(async cwd => {
@@ -862,11 +859,11 @@ describe('TaskRunner — failure modes', () => {
         })
     })
 
-    // GitHub issue #10. An empty research section failing the whole task is exactly
-    // what an extremely simple task provokes — nothing on disk to survey, no external
-    // symbol in play, so silence is the correct answer. It is now retried once and then
-    // recorded as an explicitly empty section. What stays fatal is silence with a
-    // provider-reported cause (the masked disconnect the old branch was written for).
+    // A task with nothing on disk to survey and no external symbol in play makes
+    // silence the correct research answer, so an empty section must not fail the
+    // task. research-worker.ts retries once with EMPTY_SECTION_PREAMBLE and then
+    // records an explicitly empty section. Silence with a provider-reported cause
+    // stays fatal, because that is a child that died rather than answered.
     test('empty FILES worker, retry answers → the retry becomes the section', async () => {
         await withTmpTaskDir(async cwd => {
             const {ctx} = makeFakeCtx(cwd)
@@ -1036,9 +1033,9 @@ ACCEPTANCE
             const end = await runnerHolder.runner.run()
             const {frontMatter} = await readTaskFile(cwd, 'TASK_0001')
             expect(frontMatter.state).toBe('cancelled')
-            // The runner NAMES the ending. Returning void, it leaves the caller
-            // re-read this file, narrowed `state` to `ok: boolean`, and reported a
-            // user's own cancel as a failure — see run-end.ts.
+            // The runner NAMES the ending rather than returning void: a caller that
+            // has to re-read the file and narrow `state` to a boolean reports the
+            // user's own cancel as a failure. See run-end.ts.
             expect(end).toEqual({kind: 'cancelled'})
             const warn = handle.captured.notifies.find(n => n.level === 'warning')
             expect(warn).toBeDefined()
@@ -1046,10 +1043,9 @@ ACCEPTANCE
     })
 
     test('a cancel is reported as CANCELLED, and its file is not rewritten to failed', async () => {
-        // The end-to-end shape of the /task-cancel defect: `state` is `cancelled`,
-        // which is not `completed`, so `ok` was false, so `!res.ok` ran
-        // `markResumable` (which writes `failed`) and announced a red
-        // "stopped — fix and run /task-resume" for a stop the user asked for.
+        // `cancelled` is not `completed`, so a caller collapsing the ending to a
+        // boolean would run `markResumable` — which writes `failed` — and announce a
+        // red "stopped — fix and run /task-resume" for a stop the user asked for.
         await withTmpTaskDir(async cwd => {
             const handle = makeFakeCtx(cwd)
             const runnerHolder: {runner?: TaskRunner} = {}
@@ -1082,10 +1078,9 @@ ACCEPTANCE
 
 describe('the phase-seam bag', () => {
     /**
-     * Declaring four separate seam fields on `TaskRunnerOptions`, and
-     * `runSingleTask` re-forwarded each by name. Four of `PhaseDeps`' seams had
-     * been left out of that list entirely, so nothing reached them from here.
-     * These two drive the ones that were unreachable.
+     * `PhaseSeams` is `Omit<PhaseDeps, …>`, so it gains a new seam without a second
+     * edit. These two tests drive that end to end: one seam through a real run, and
+     * the derivation itself against the type.
      */
     test('a supplied logDebug seam receives the run trail', async () => {
         await withTmpTaskDir(async cwd => {
@@ -1093,8 +1088,8 @@ describe('the phase-seam bag', () => {
             const trail: string[] = []
             await runOnce(ctx, cwd, {...happy(), logDebug: msg => trail.push(msg)})
 
-            // The ~39 trail decisions were observable only by reading the debug
-            // FILE off disk, because the runner overwrote any supplied writer.
+            // A supplied writer must survive: if the runner overwrote it, the run's
+            // decisions would be observable only by reading the debug file off disk.
             expect(trail.some(l => l.startsWith('run: start phase='))).toBe(true)
             expect(trail).toContain('phase:refine: start')
             expect(trail.some(l => l.startsWith('phase:compose: done ms='))).toBe(true)
@@ -1103,10 +1098,9 @@ describe('the phase-seam bag', () => {
 
     test('the seam roster is derived, so PhaseDeps and PhaseSeams cannot drift', () => {
         // A compile-time property written as a runtime one: every key here is
-        // assignable BOTH ways. If a new PhaseDeps seam were added to a hand-kept
-        // list instead, this file would still compile and the seam would be
-        // unreachable — which is exactly what happened to timeoutMs, sleepFor,
-        // childExtensions and logDebug.
+        // assignable BOTH ways. Against a hand-kept list this file would still
+        // compile while the new seam stayed unreachable; against the `Omit` it
+        // cannot.
         const seams: PhaseSeams = {
             timeoutMs: 1,
             sleepFor: () => Promise.resolve(),
