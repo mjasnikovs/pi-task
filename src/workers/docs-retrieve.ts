@@ -16,13 +16,12 @@ export interface RetrieveOptions {
 }
 
 /**
- * How many chunks a retrieval returns, per corpus.
+ * How many chunks a retrieval returns, per corpus. An npm package gets 8 and
+ * project source gets 50.
  *
- * The two values differ and always have; this is the first place they sit side by
- * side, and no comment in the history explains WHY an npm package gets 8 and
- * project source gets 50. Recorded as-is rather than harmonised: changing either is
- * a retrieval-policy change with its own A/B, not a tidy-up. Before this they were
- * three declarations across three files, so the divergence was invisible.
+ * Nothing in this repo records WHY they differ. They are stated here, together,
+ * so the divergence is at least visible — and changing either is a
+ * retrieval-policy change, not a tidy-up.
  */
 export const PACKAGE_RETRIEVE_LIMIT = 8
 export const PROJECT_RETRIEVE_LIMIT = 50
@@ -30,8 +29,9 @@ export const PROJECT_RETRIEVE_LIMIT = 50
 /** Character budget for the assembled chunk text. The same for both corpora. */
 export const RETRIEVE_CONTENT_BUDGET = 24_000
 
-// Both callers always pass `limit`/`contentBudget` explicitly, so these defaults are
-// only a backstop for a third caller that does not.
+// Both callers pass `limit` and `contentBudget` explicitly — docs-core with the
+// package pair, docs-project with the project pair — so these defaults are only a
+// backstop for a third caller that does not.
 const DEFAULT_LIMIT = PROJECT_RETRIEVE_LIMIT
 const DEFAULT_BUDGET = RETRIEVE_CONTENT_BUDGET
 const MIN_TOKEN_LEN = 2
@@ -52,12 +52,11 @@ interface ChunkRow {
  * multi-part identifiers into one string that occurs nowhere in the corpus:
  *   "src/server/routes/auth.ts"  ->  "srcserverroutesauthts"
  *   "Bun.password.hash"          ->  "Bunpasswordhash"
- * Because buildFtsQuery ORs the tokens, such a token contributes no MATCH at all, so the
- * single most informative term in the query — the path, or the dotted API symbol — was
- * dropped and ranking falls to the surrounding prose. Measured over real project
- * queries, that costs a large share of them any chunk from the file they named,
- * and it costs npm queries a chunk of their discriminative-symbol recall.
- * Splitting on punctuation recovers nearly all of both.
+ * Because buildFtsQuery ORs the tokens, a welded token contributes no MATCH at all.
+ * The single most informative term in the query — the path, or the dotted API
+ * symbol — is then dropped, and when it was the only term the retrieval falls all
+ * the way through to `fallbackChunks`: the alphabetically-first `.d.ts` and the
+ * first README, exactly what an empty query returns.
  */
 function tokenize(query: string): string[] {
     return query.split(/[^a-zA-Z0-9_]+/).filter(t => t.length >= MIN_TOKEN_LEN)
@@ -98,6 +97,11 @@ function fallbackChunks(cache: CacheHandle, name: string, version: string): Retr
     return out
 }
 
+/**
+ * Trim the chunk list to the character budget, in retrieval order. The FIRST
+ * chunk is always kept, whatever its size — a top-ranked chunk larger than the
+ * whole budget would otherwise return nothing at all.
+ */
 function enforceBudget(chunks: RetrievedChunk[], budget: number): RetrievedChunk[] {
     if (!chunks.length) return chunks
     const out: RetrievedChunk[] = []
