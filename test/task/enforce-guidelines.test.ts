@@ -22,8 +22,10 @@ import {USER_CANCELLED} from '../../src/task/child-runner.js'
 
 function fakeReader(files: Record<string, string>) {
     return async (p: string): Promise<string> => {
-        // discoverGuidelines builds the path with path.join → native separators
-        // on Windows; basename handles both '/' and '\'.
+        // discoverGuidelines builds the path with path.join, so the separator is
+        // whatever the platform uses. `basename` is the SAME platform's basename,
+        // so the two always agree — matching on the bare filename is therefore
+        // safe without normalising anything here.
         const name = basename(p)
         if (name in files) return files[name]
         throw new Error('ENOENT')
@@ -82,8 +84,9 @@ test('buildEnforcePrompt: notes an empty diff instead of leaving a blank', () =>
 })
 
 test('buildEnforcePrompt: states the read+edit / no-run / no-create / edit-only-changed contract', () => {
-    // The local model spirals into scratch "runner" files when it thinks it can run
-    // checks; the prompt must tell it plainly that it cannot, matching ENFORCE_TOOLS.
+    // A model that believes it can run checks writes scratch "runner" files to try.
+    // ENFORCE_TOOLS grants no bash, so those files are pure litter — the prompt has
+    // to say plainly that it cannot run anything, matching the tools it is given.
     const p = buildEnforcePrompt('rules', 'diff')
     expect(p).toContain('`read`')
     expect(p).toContain('`edit`')
@@ -116,9 +119,10 @@ test('buildEnforceFlagPrompt: injects CHECK-GAMING findings with a report direct
 })
 
 test('ENFORCE_TOOLS is read,edit — no write (no new files), no grep/find/ls (no roaming)', () => {
-    // Validated against the local model: with no write the pass cannot create files
-    // (edit ENOENTs), and read is kept because the model needs to re-read its edits
-    // and read neighbours for correct imports/types (else it fabricates them).
+    // No `write`, so the pass cannot create files at all — `edit` on a path that
+    // does not exist is an ENOENT. `read` is kept because a fix needs to re-read
+    // its own edit and to read neighbours for the right imports and types;
+    // without it the model fabricates them.
     expect(ENFORCE_TOOLS).toBe('read,edit')
     expect(ENFORCE_TOOLS).not.toContain('write')
     expect(ENFORCE_TOOLS).not.toContain('grep')
@@ -341,10 +345,11 @@ test('classifyEnforceChildFailure: clean run → null (verdict is parsable)', ()
 })
 
 test('classifyEnforceChildFailure: loop is non-fatal (warning), NOT user-cancelled', () => {
-    // A loop-kill ALSO sets aborted (killProc flips it on every kill path). Enforce
+    // A loop-kill ALSO sets aborted: `killProc` (shared/child-process.ts:471)
+    // opens with `aborted = true` and every kill path goes through it. Enforce
     // attaches the detector in nudge-then-warn mode, so a surviving loop is null
-    // here (the caller warns) — but it must still be matched BEFORE the generic
-    // aborted→user-cancel mapping so the kill isn't mislabeled as a user cancel.
+    // here and the caller warns — but it must still be matched BEFORE the generic
+    // aborted→user-cancel mapping, or the kill is mislabeled as a user cancel.
     const failure = classifyEnforceChildFailure(childResult({aborted: true, loopHit: 'read x3'}))
     expect(failure).toBeNull()
     expect(failure).not.toBe(USER_CANCELLED)
@@ -367,12 +372,11 @@ test('classifyEnforceChildFailure: aborted with no specific cause → user-cance
 })
 
 test('classifyEnforceChildFailure: stream-stall kill (also aborted) names the hung stream, NOT a cancel', () => {
-    // REGRESSION. streamStalled was added to the worker result and to
-    // finalAttemptFailed but never to this ladder, so a child killed for a model
-    // stream that went silent fell past every arm to `aborted → USER_CANCELLED`
-    // and a dead backend was reported to the user as their own cancel. The ladder
-    // is now one exhaustive switch over classifyWorkerFailure, so the next cause
-    // added to the union is a compile error here instead of a silent mislabel.
+    // Every kill sets `aborted`, so any cause this ladder does not name falls
+    // through to the generic `aborted → USER_CANCELLED` arm — and a dead backend
+    // gets reported to the user as their own cancel. That is why the ladder is one
+    // EXHAUSTIVE switch over classifyWorkerFailure: a new cause added to the union
+    // is a compile error here rather than a silent mislabel.
     const failure = classifyEnforceChildFailure(
         childResult({aborted: true, exitCode: 143, streamStalled: {idleMs: 120_000}})
     )
@@ -442,10 +446,12 @@ function recordingSpawn(
 }
 
 test('captureCommitDiff: diffs HEAD~1..HEAD and excludes .pi-tasks from every git command', async () => {
-    // The pass runs AFTER the task commit, so it verifies the last commit's diff
-    // (HEAD against its parent). Committable TASK_*/TASK_AUTO_*.md files ride into
-    // that diff (git ignores the fd/ripgrep .ignore), so without the pathspec the
-    // enforce child is handed its own task bookkeeping and edits it.
+    // The pass runs AFTER the task commit, so it verifies the last commit's diff:
+    // HEAD against its parent. `.pi-tasks/` is listed in `.ignore`, which fd and
+    // ripgrep honour and git does NOT — run in a throwaway repo, `git add -A`
+    // stages `.pi-tasks/TASK_0001.md` regardless. So those files ride into the
+    // diff, and without the pathspec the enforce child is handed its own task
+    // bookkeeping and edits it.
     // Calls: [0] rev-parse HEAD~1 (parent exists), [1] diff, [2] name-only.
     const {spawn, calls} = recordingSpawn(['<sha>', 'diff body', 'src/a.ts'])
     await captureCommitDiff('/repo', undefined, spawn)
