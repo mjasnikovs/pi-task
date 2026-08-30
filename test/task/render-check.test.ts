@@ -1,9 +1,10 @@
 /**
- * render-check tests — the RENDERED-DOM judgment (/11: the blank-page /
- * no-Switch classes that curl can never catch) and the discover-don't-install
- * browser lookup. judgeRenderedDom is pure; runRenderCheck is exercised with an
- * injected browser path (a tiny node script standing in for chrome --dump-dom) so
- * the flow is hermetic, plus one real-browser smoke when a browser is present.
+ * render-check tests — the RENDERED-DOM judgment, which catches the blank-page and
+ * no-router classes a `curl` of the same URL cannot see, plus the
+ * discover-don't-install browser lookup. `judgeRenderedDom` is pure;
+ * `runRenderCheck` runs against an injected browser path — a small node script
+ * standing in for `chrome --dump-dom` — so the flow is hermetic. One real-browser
+ * smoke runs when a browser is present.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -102,10 +103,10 @@ describe('runRenderCheck', () => {
         return sh
     }
 
-    // The fake browser is a POSIX shell script (shebang exec) — Windows has no
-    // /bin/sh and won't run it, so the spawn-flow cases are POSIX-only. The
-    // rendered/blank JUDGMENT they cover is the pure judgeRenderedDom above,
-    // exercised on every platform; here we only prove the spawn→judge plumbing.
+    // The fake browser is a `#!/bin/sh` script, so these cases are gated to
+    // platforms that run one. They only prove the spawn-to-judge plumbing; the
+    // rendered/blank JUDGMENT itself is judgeRenderedDom above, which is pure and
+    // runs everywhere.
     const spawnFlow = process.platform === 'win32' ? test.skip : test
 
     spawnFlow('a rendered page → pass', () => {
@@ -114,7 +115,7 @@ describe('runRenderCheck', () => {
         expect(r.outcome).toBe('pass')
     })
 
-    spawnFlow('a blank-mount page → fail (the run-8 class, now caught)', () => {
+    spawnFlow('a blank-mount page → fail', () => {
         const b = fakeBrowser('<html><body><div id="root"></div></body></html>')
         const r = runRenderCheck('http://127.0.0.1:3000/', b)
         expect(r.outcome).toBe('fail')
@@ -133,13 +134,11 @@ describe('runRenderCheck', () => {
         expect(r.outcome).toBe('skip')
     })
 
-    // Real-browser smoke: gated on the Playwright headless SHELL specifically,
-    // not any discovered browser. The module treats a full system chromium as an
-    // unreliable last resort (it stalls/varies under --dump-dom --virtual-time-
-    // budget), so a hard-`pass` assertion through one is wrong — that is exactly
-    // how CI's system google-chrome (no PW cache) failed this. The shell is what
-    // real projects ship; when it is absent (CI), skip rather than
-    // assert through the unreliable path.
+    // Gated on the Playwright headless SHELL specifically, not on whatever
+    // findHeadlessBrowser would return. That function takes a system browser on
+    // PATH only as a last resort, and asserting a hard `pass` through one would
+    // make this test depend on a binary the module itself does not trust. Absent
+    // the shell, skip.
     const realBrowser = playwrightCachedChromium()
     const smoke = realBrowser ? test : test.skip
     smoke('real headless browser executes page JS and renders the mount', () => {
@@ -157,19 +156,16 @@ describe('runRenderCheck', () => {
     })
 })
 
-// ─── : the probe carries the evidence it already had ─────────────
+// ─── The probe carries the evidence it already had ──────────────────────────
 //
-// a fix child was told "the body is EMPTY" and nothing else. It burned
-// 45 minutes on tests, bundler config and static serving, read the offending line
-// twice, and moved on. The probe was holding the cause the whole time.
-//
-// MEASURED on this box (2026-08-14) against the shipped bundle: adding
-// `--enable-logging=stderr --v=0` leaves stdout BYTE-IDENTICAL at 318 bytes on
-// both discoverable binaries, and turns /usr/bin/chromium's 0 console lines into
-// 2 — one of them the cause.
+// "the body is EMPTY" names the symptom and nothing else, while the browser has
+// already printed the cause to stderr. `--enable-logging=stderr --v=0` is what
+// routes it there, and render-check.ts records that those flags leave the
+// `--dump-dom` stdout the judge reads byte-identical.
 
-/** A real Chrome stderr capture from the bundle, verbatim. */
-const RUN21_STDERR =
+/** A verbatim Chrome stderr capture: fontconfig noise, a React DevTools notice,
+ *  and the uncaught error that is the real cause of the empty body. */
+const CHROME_STDERR =
     'Fontconfig warning: We will not regenerate the cache because some cache files were generated '
     + 'by a newer version (0x2012001) of Fontconfig.\n'
     + '[11506:11506:0814/090315.684843:INFO:CONSOLE:226] "%cDownload the React DevTools for a better '
@@ -180,7 +176,7 @@ const RUN21_STDERR =
 
 describe('parseConsoleLines', () => {
     test('extracts the console messages and drops the fontconfig noise', () => {
-        const lines = parseConsoleLines(RUN21_STDERR)
+        const lines = parseConsoleLines(CHROME_STDERR)
         expect(lines).toHaveLength(2)
         expect(lines[1]).toContain('Uncaught ReferenceError: process is not defined')
         expect(lines.join(' ')).not.toContain('Fontconfig')
@@ -215,7 +211,7 @@ describe('withConsoleEvidence', () => {
     const EMPTY = judgeRenderedDom('<html><body></body></html>').detail
 
     test('a FAIL detail GAINS the cause, with the original text intact in front', () => {
-        const out = withConsoleEvidence(EMPTY, RUN21_STDERR)
+        const out = withConsoleEvidence(EMPTY, CHROME_STDERR)
         expect(out.startsWith(EMPTY)).toBe(true)
         expect(out).toContain('Uncaught ReferenceError: process is not defined')
     })
