@@ -310,7 +310,8 @@ describe('truncateLabel', () => {
 
     test('cuts on a word boundary when one falls late enough', () => {
         const out = truncateLabel('alpha beta gamma delta', 18)
-        // boundary cut, not a mid-word chop
+        // truncateLabel takes the last space in the cut slice only when it falls past
+        // 60% of max; here that space is at 16 of 18, so the word survives whole.
         expect(out).toBe('alpha beta gamma…')
     })
 
