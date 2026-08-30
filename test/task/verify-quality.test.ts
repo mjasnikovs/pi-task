@@ -8,7 +8,7 @@ import {
 const spec = (cmds: string[]): string =>
     ['GOAL', 'Create build.ts.', '', 'VERIFY:', '```bash', ...cmds, '```'].join('\n')
 
-/** The real one task VERIFY shape: tsc + greps, never `bun build.ts`. */
+/** A VERIFY block that typechecks and greps the build script, but never runs it. */
 const MX5_VERIFY = spec([
     'bunx tsc --noEmit',
     "grep -q 'Bun\\.mkdirSync.*dist.*recursive' build.ts",
@@ -58,13 +58,13 @@ describe('findGrepOnlyVerify', () => {
         // cat source | grep — still pure inspection ⇒ fires
         const s = spec(["cat build.ts | grep -q 'Bun.build'"])
         expect(findGrepOnlyVerify(s)).toHaveLength(1)
-        // grep piped into an executing segment ⇒ steps aside
+        // grep joined by `&&` to an executing segment ⇒ steps aside
         const s2 = spec(['grep -q x build.ts && bun build.ts'])
         expect(findGrepOnlyVerify(s2)).toEqual([])
     })
 
     test('shell-control shapes (if/then/fi, `{ echo; exit 1; }`) are not execution', () => {
-        // The real incident VERIFY shape — greps wrapped in OK/FAIL guards.
+        // Greps wrapped in OK/FAIL guards, and one inside an if/then/fi.
         const s = spec([
             'tsc --noEmit',
             'grep -q \'import\\.meta\\.main\' build.ts && echo "OK" || { echo "FAIL"; exit 1; }',
