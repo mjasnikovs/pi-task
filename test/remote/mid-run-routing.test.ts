@@ -1,8 +1,11 @@
 /**
  * Where a plain browser line goes, per session state — exercising the SHIPPED
- * routePlainLine, not a copy of it. The three-way decision is the whole of issue
- * #8: before it, an idle-mid-run line opened a second turn beside the run and
- * killed it live on pi 0.82.1.
+ * routePlainLine, not a copy of it.
+ *
+ * The three-way decision is the point. A LIVE turn is steered; an idle session
+ * that a task run still owns HOLDS the line, because pi documents
+ * sendUserMessage as always triggering a turn and that second turn would run
+ * beside the task; anything else is an ordinary message.
  */
 import {afterEach, expect, test} from 'bun:test'
 import {routePlainLine} from '../../src/remote/register.js'
@@ -93,12 +96,12 @@ test('held lines still reach the transcript, so the user sees what they typed', 
 // ─── the divergences the deleted mirror caused ───────────────────────────────
 
 /**
- * SessionState clears `agentRunning` in THREE places — agentEnd, addError and
- * reset — but the deleted remote/state.ts mirror was only ever set alongside
- * agentEnd. So after an errored turn, or a /new that arrives without an
- * agent_end, routePlainLine still believed a turn was live and steered into one
- * SessionState had already finished. Reading the flag from its owner fixes both
- * by construction; these pin it.
+ * SessionState clears `agentRunning` in THREE places — `agentEnd`, `addError` and
+ * `reset`. Anything that mirrored the flag beside `agentEnd` alone would still
+ * believe a turn was live after an errored one, or after a `/new` that arrives
+ * with no agent_end, and would steer into a turn SessionState had already
+ * finished. Reading the flag from its owner rules both out; these two tests pin
+ * the cases a mirror would miss.
  */
 test('a turn ended by an ERROR is no longer treated as live', () => {
     _setSink(() => {})
