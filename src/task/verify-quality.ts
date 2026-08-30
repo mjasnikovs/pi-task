@@ -1,21 +1,14 @@
 /**
- * Grep-theater VERIFY detector, compose-critique side.
+ * Grep-theater VERIFY detector, wired as the `grep-theater` compose-critique
+ * probe in `critique-probes.ts`.
  *
- * a task VERIFY block "verified" a build script with tsc + three greps on
- * build.ts's SOURCE — it never ran `bun build.ts`. The greps asserted the
- * hallucinated `Bun.mkdirSync` line was present, so a broken build shipped
- * green and stayed broken for 14 tasks. Grep-on-source is not verification of
- * a runnable deliverable; only executing the artifact is.
- *
- * Deterministic shape (findSkipEscapes → critique-rewrite pattern): a finding
- * fires when the VERIFY block (a) grep/cat-asserts the SOURCE of a runnable
- * file (.ts/.js/.sh — a build script, server, CLI entry) and (b) contains NO
- * execution command at all — every command is static inspection (grep, test,
- * ls, cat, tsc --noEmit, eslint, prettier). Any real execution anywhere in the
- * block (bun/node/npm run/test, curl,./script) means the deliverable-runs
- * question is at worst partially covered, and we step aside — the guard may
- * only cost time, never work, so recall is floored at the unambiguous
- * all-static case rather than chasing which command exercises which file.
+ * A finding fires when the spec's VERIFY block (a) inspects the source of a
+ * TypeScript/JavaScript/shell file with grep/rg/cat/head/tail/wc and (b)
+ * contains no execution command at all — every pipeline segment's head is in
+ * STATIC_HEADS. One unknown head anywhere in the block (bun, node, npm, yarn,
+ * pnpm, curl, `./script`, python3) counts as execution and the whole block is
+ * skipped. Recall is therefore floored at the unambiguous all-static case
+ * instead of deciding which command exercises which file.
  */
 import {parseVerifyBlock} from './spec-validation.js'
 
@@ -26,7 +19,7 @@ export interface GrepOnlyVerifyFinding {
     lines: string[]
 }
 
-/** Commands that only inspect — they never execute the shipped artifact. */
+/** Commands that only inspect — a segment headed by one never runs the deliverable. */
 const STATIC_HEADS = new Set([
     'grep',
     'rg',
@@ -66,28 +59,36 @@ const STATIC_HEADS = new Set([
     'biome'
 ])
 
-/** A bare (unquoted) path token ending in a runnable-source extension. */
+/**
+ * A bare path token ending in a runnable-source extension: ts, tsx, js, jsx,
+ * mjs, cjs, mts, cts, sh. The character class holds no quote, so a quoted
+ * `'build.ts'` never matches.
+ */
 const RUNNABLE_SRC_RE = /^[\w@./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts|sh)$/
 
-/** Heads whose file arguments count as "inspecting the source of". */
+/**
+ * Heads whose file arguments count as "inspecting the source of". The other
+ * STATIC_HEADS (sed, awk, jq, ls, diff, file …) keep a block static but name
+ * no target of their own.
+ */
 const INSPECT_HEADS = new Set(['grep', 'rg', 'cat', 'head', 'tail', 'wc'])
 
 /**
- * Shell-control noise that precedes (or IS) a segment without being a command:
- * `if grep -q x f; then` splits into an `if`-prefixed segment plus bare `then`;
- * `… || { echo FAIL; exit 1; }` yields `{ echo …` and `}` segments. Treating
- * these as unknown heads would count them as execution and silently blind the
- * detector on exactly the incident shape.
+ * Shell-control noise that precedes (or IS) a segment without being a command.
+ * `if grep -q x f; then` splits into `if grep -q x f` plus a bare ` then`;
+ * `… || { echo FAIL; exit 1; }` yields ` { echo FAIL`, ` exit 1` and ` }`.
+ * An unknown head counts as execution and skips the whole block, so treating
+ * these tokens as heads would blind the detector on any guarded grep.
  */
 const CONTROL_PREFIX = new Set(['if', 'elif', 'while', 'until', 'then', 'else', 'do', '!'])
 const CONTROL_ONLY = new Set(['}', ')', 'fi', 'done', 'esac'])
 
 /**
- * The effective head of one pipeline segment: shell-control prefixes, leading
- * `(`/`{`, VAR=val prefixes and `timeout N` are skipped; `bunx`/`npx` resolve
- * to the tool they invoke (so `bunx tsc --noEmit` is static).
- * `bun`/`npm`/`yarn`/`pnpm`/`node` stay as themselves — whatever they run (a
- * script, a test suite, a file) is execution.
+ * The effective head of one pipeline segment: leading `(`/`{`/`!`,
+ * shell-control prefixes, VAR=val assignments and `timeout N` are skipped;
+ * `bunx`/`npx` resolve to the tool they invoke, so `bunx tsc --noEmit` stays
+ * static. `bun`/`npm`/`yarn`/`pnpm`/`node` stay as themselves and are absent
+ * from STATIC_HEADS, so whatever they run is execution.
  */
 function segmentHead(segment: string): {head: string; args: string[]} | null {
     const tokens = segment.split(/\s+/).filter(t => t.length > 0)
@@ -119,19 +120,20 @@ function segmentHead(segment: string): {head: string; args: string[]} | null {
 }
 
 /**
- * Scan a composed spec's VERIFY block: all-static block that grep/cat-asserts
- * runnable source ⇒ one finding per inspected file. Empty when the block
- * contains any execution command, has no VERIFY block, or inspects no runnable
- * source (doc/config-only tasks).
+ * Scan a composed spec's VERIFY block: one finding per runnable source file the
+ * block inspects, each carrying the verbatim lines that inspect it. Empty when
+ * the block contains any execution command, when the spec has no fenced VERIFY
+ * block, or when nothing runnable is inspected (doc/config-only tasks).
  */
 export function findGrepOnlyVerify(spec: string): GrepOnlyVerifyFinding[] {
     const cmds = parseVerifyBlock(spec)
     if (!cmds) return []
     const inspected = new Map<string, string[]>()
     for (const {raw} of cmds) {
-        // Split into pipeline segments; quotes are rare in VERIFY one-liners and
-        // a mis-split only risks a MISSED finding (a quoted `&&` making a fake
-        // segment whose head is unknown ⇒ counted as execution ⇒ step aside).
+        // Split into pipeline segments. A mis-split — a quoted `&&` making a
+        // fake segment — leaves a segment whose head is unknown, which counts
+        // as execution and skips the block. The error direction is a MISSED
+        // finding, never a false one.
         for (const segment of raw.split(/&&|\|\||;|\|/)) {
             const s = segmentHead(segment)
             if (s === null) continue
@@ -153,16 +155,15 @@ export function findGrepOnlyVerify(spec: string): GrepOnlyVerifyFinding[] {
 export interface VerifyCommandClass {
     /** The command line, verbatim. */
     raw: string
-    /** Every pipeline segment is a STATIC head (grep/test/tsc/…) — it inspects
-     *  files and can never observe the deliverable's behaviour. */
+    /** Every pipeline segment's head is in STATIC_HEADS (grep/test/tsc/…) — it
+     *  inspects files and can never observe the deliverable's behaviour. */
     staticOnly: boolean
     /**
-     * The command observes RUNTIME behaviour: an HTTP request, a port probe, a
-     * process it starts and watches. This is the distinction 's M3
-     * turns on — a task VERIFY is all `node -e "…package.json…"`,
-     * which EXECUTES node yet can only assert that a string is present in a
-     * config file, and the behavioural half of the owned requirement ("serves
-     * `/api` + static `dist/`") is exactly what it cannot see.
+     * The command names an HTTP request (`curl`, `wget`, an http(s) URL,
+     * `fetch(`), a port probe (`nc -z`, `ss -`, `lsof`, `localhost`,
+     * `127.0.0.1`) or `playwright`. Executing something is not enough:
+     * `bun run start` and `node -e "…package.json…"` are both false here — they
+     * run, yet observe only a file's contents.
      */
     observesBehaviour: boolean
 }
@@ -173,7 +174,7 @@ const BEHAVIOUR_RE =
 /**
  * Classify each command of a spec's VERIFY block. Shares `segmentHead` with the
  * grep-theater detector, so "static" means one thing across the two measures.
- * Empty when the spec has no runnable VERIFY block.
+ * Empty when the spec has no fenced VERIFY block.
  */
 export function classifyVerifyCommands(spec: string): VerifyCommandClass[] {
     const cmds = parseVerifyBlock(spec)
@@ -190,10 +191,11 @@ export function classifyVerifyCommands(spec: string): VerifyCommandClass[] {
 }
 
 /**
- * Retry hint when the critique rewrite KEPT the grep-theater block it was told
- * to fix — a rewrite can ignore the injected defect. Prepended to the
- * second rewrite attempt; the defect block naming the exact files is still in
- * the prompt body.
+ * Prepended to the SECOND `runWithEmphasisRetry` attempt when the first critique
+ * rewrite still leaves `findGrepOnlyVerify` non-empty. The generic emphasis line
+ * would claim the previous attempt had no VERIFY block, which is wrong here — it
+ * had one. The defect block naming the exact files stays in the prompt body
+ * underneath the hint.
  */
 export const GREP_THEATER_RETRY_HINT =
     '[SYSTEM NOTE: Your previous rewrite still shipped a VERIFY block whose only signal '
@@ -204,11 +206,7 @@ export const GREP_THEATER_RETRY_HINT =
     + 'assert an observable outcome of that run (exit code, a file the run produces, a '
     + 'served response). Keep greps only as additions to the run, never as the only signal.]'
 
-/**
- * Render the findings as a defect block for the critique rewrite: VERIFY must
- * EXECUTE the runnable deliverable and assert an observable outcome of THAT
- * run, not grep its source.
- */
+/** Render the findings as the defect block handed to the critique rewrite. */
 export function grepOnlyVerifyDefectText(findings: GrepOnlyVerifyFinding[]): string {
     return [
         'GREP-THEATER VERIFY — every command in the VERIFY block is static inspection',
