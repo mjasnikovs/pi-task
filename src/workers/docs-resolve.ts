@@ -36,10 +36,11 @@ function isValidModuleName(name: string): boolean {
 
 // Runtimes whose builtin `<runtime>:<sub>` imports are typed by the runtime's own
 // types package, not by a literal package named "<runtime>:<sub>". `node:fs` and
-// `bun:sqlite` are real imports, but their declarations live in @types/node and
-// bun-types — and a phantom like `bun:sql` (no such submodule) is only disprovable
-// by resolving the runtime and finding the symbol absent. Either way the docs
-// lookup target is the runtime, never the colon-name.
+// `bun:sqlite` are real imports whose declarations live in @types/node and
+// bun-types. `bun:sql` is a phantom — importing it fails with "Cannot find
+// package 'sql'" — and the only way to disprove it is to resolve the runtime and
+// find the symbol absent. Either way the docs lookup target is the runtime, never
+// the colon-name.
 const RUNTIME_NAMESPACES = new Set(['bun', 'node', 'deno'])
 
 /**
@@ -145,7 +146,9 @@ export function resolvePackage(moduleName: string, cwd: string): ResolvedPackage
     }
     const parent = parentPackageName(moduleName)
 
-    // First try: use createRequire (works when package.json is exported)
+    // First try: `createRequire`. It only works when the package EXPORTS
+    // `./package.json`; a package that does not gives ERR_PACKAGE_PATH_NOT_EXPORTED
+    // and falls through. Any other resolve error is rethrown.
     const requireFromCwd = createRequire(path.join(cwd, '__pi-worker-docs-sentinel__'))
     let pkgJsonPath: string | null = null
     try {
@@ -153,10 +156,11 @@ export function resolvePackage(moduleName: string, cwd: string): ResolvedPackage
     } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         if (code !== 'MODULE_NOT_FOUND' && code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw err
-        // Fall through to direct filesystem fallback below
     }
 
-    // Second try: walk node_modules directly (handles packages that don't export package.json)
+    // Second try: walk node_modules upward from cwd. This is what handles a package
+    // that does not export its package.json, and it is the only path that reports
+    // `not_installed`.
     if (!pkgJsonPath) {
         const direct = findPackageJsonInNodeModules(parent, cwd)
         if (!direct) {
@@ -259,16 +263,17 @@ const DECLARATION_RE =
  * lines, and the pointer lines a redirect stub is made of (`/// <reference .. />`
  * and `export * from "X"`).
  *
- * This is the discriminator `detectTypesRedirect` needs: a redirect stub is a
- * file with essentially nothing in it but the pointer, while an API surface that
- * merely *declares an ambient dependency* on another types package (the
- * `sharp` -> `/// <reference types="node" />` shape) carries its own
- * declarations. Counting `.d.ts` FILES cannot tell those apart — sharp ships one
- * 1971-line file and `@types/bun` ships one 1-line file, and both count as 1.
+ * This is the discriminator `detectTypesRedirect` needs. A redirect stub has
+ * nothing in it but the pointer and counts 0. A real API surface that merely
+ * declares an AMBIENT DEPENDENCY on another types package —
+ * `/// <reference types="node" />` above its own declarations — counts those
+ * declarations and is not a stub. A `.d.ts` FILE count cannot tell the two apart:
+ * both ship exactly one file.
  *
- * Deliberately lexical, not a TypeScript parse: this runs in the shipped worker,
- * which has no compiler dependency. Over-counting is the safe direction (a
- * declaration found ⇒ not a stub ⇒ keep the package's own types).
+ * Deliberately lexical, not a TypeScript parse: `typescript` is a devDependency
+ * here, so the shipped worker has no compiler to call. Over-counting is the safe
+ * direction — a declaration found means not a stub, so the package keeps its own
+ * types.
  */
 export function countEntryDeclarations(content: string): number {
     const stripped = content.replace(BLOCK_COMMENT_RE, '')
@@ -316,11 +321,11 @@ export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
     const target = pointerTarget(content)
     if (!target) return null
     // A pointer line is not a redirect when the file it sits in also declares an
-    // API. `/// <reference types="node" />` in a package like sharp is an AMBIENT
-    // DEPENDENCY declaration — "my types need node's" — not "my types ARE node's";
-    // following it answered every sharp question out of @types/node (tty.d.ts,
-    // zlib.d.ts) while sharp's own 1971-line surface sat one file away. The .d.ts
-    // FILE count cannot see this: sharp ships one file and so does @types/bun.
+    // API. `/// <reference types="node" />` above a package's own declarations
+    // means "my types NEED node's", not "my types ARE node's". Following it would
+    // answer every question about that package out of @types/node while its own
+    // surface sat one file away — and the .d.ts FILE count cannot see the
+    // difference, because a stub and a single-file API surface both count 1.
     if (countEntryDeclarations(content) > 0) return null
     return target
 }
@@ -328,19 +333,17 @@ export function detectTypesRedirect(pkg: ResolvedPackage): string | null {
 /**
  * Follow the `@types/<name>` + triple-slash `<reference types>` redirect chain from
  * a package that ships no usable types of its own to the one that actually holds
- * the declarations — `bun` → `@types/bun` → `bun-types`. Bounded to three hops;
- * returns the package it started from when no better source is found.
+ * the declarations — `bun` → `@types/bun` → `bun-types`. Bounded to three hops:
+ * a chain of pure stubs stops after exactly three. The `visited` set cuts a cycle,
+ * and the package it started from comes back when no better source is found.
  *
- * This is what the four predicates above EXIST for. They were exported and heavily
- * tested (35 references between them) while the loop that calls them lived in two
- * byte-identical copies — `docs-core.ts` and `phantom-imports.ts` — and NEITHER was
- * covered: both of their tests pin only the zero-hop case, so the multi-hop
- * behaviour cited by name in five doc comments was asserted nowhere.
+ * This is what the four predicates above exist for, and the walk is written once
+ * for its two callers.
  *
- * `resolveHop` is the one thing the two call sites genuinely disagree about: the
- * docs pipeline resolves the next hop through an auto-installing async lookup, the
- * phantom-import checker through a bare sync resolve that must never install. It
- * returns null to stop the walk.
+ * `resolveHop` is the one thing those callers genuinely disagree about: docs-core
+ * resolves the next hop through an auto-installing async lookup, while
+ * phantom-imports wraps a bare sync `resolvePackage` that must never install.
+ * Returning null stops the walk.
  */
 export async function resolveTypeSource(
     start: ResolvedPackage,
