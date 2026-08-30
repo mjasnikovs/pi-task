@@ -1,8 +1,9 @@
 import {describe, expect, test} from 'bun:test'
 import {renderInlineMarkdown, stripInlineMarkdown} from '../../src/task/inline-markdown.js'
 
-// Stub theme that marks where styling would be applied, so we can assert spans
-// are routed through bold()/fg('mdCode') rather than left as literal markers.
+// A stub `InlineTheme` that marks where styling would land, so the assertions can
+// tell a span routed through bold()/fg('mdCode') from one left as literal markers.
+// `mdCode` is a real ThemeColor in pi's theme type.
 const stubTheme = {
     bold: (t: string) => `<b>${t}</b>`,
     fg: (_color: 'mdCode', t: string) => `<code>${t}</code>`
