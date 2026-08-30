@@ -1,16 +1,15 @@
 /**
  * buildGateDeps — the closures the gate sequence calls.
  *
- * Covered here: every dep whose behaviour is GIT or CONFIG, against a real
- * worktree. Those are the ones that decide whether work is committed, reverted,
- * discarded or attributed, and each has a documented degrade path (a git fault
- * returns null / empty rather than guessing) that only a real repo can prove.
+ * The git-backed deps run against real throwaway worktrees, including their
+ * degrade paths: outside a repo, `repoFiles` and `touchedFiles` answer null and
+ * `frozenPaths` answers [], rather than guessing.
  *
  * The child-spawning deps (verify, enforce, recommend, lintFix, finalGateFix)
- * are not driven here — they need a live pi child; their disabled-by-config
- * short circuits are, because those must never reach a child. The verify dep's
- * DETERMINISTIC half — `buildVerifyProbes`, the one place the collectors are bound
- * to the probe table — IS driven here, against a real worktree and a fake child.
+ * are not driven here — they need a live pi child. Verify's and enforce's
+ * disabled-by-config short circuits are, because those must never reach one. So
+ * is `buildVerifyProbes`, the one place the collectors are bound to the probe
+ * table, against a real worktree and a fake child.
  */
 
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
@@ -46,11 +45,8 @@ function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n
     git(dir, 'init', '-q')
     git(dir, 'config', 'user.email', 't@t')
     git(dir, 'config', 'user.name', 't')
-    // The Windows CI runner defaults to core.autocrlf=true, so every git
-    // restore below (revert, discardEdits, revertFrozenPaths) would hand back
-    // 'export const a = 1\r\n' against an LF expectation — a diff bun renders
-    // as zero changed lines. Repo-level, so the fixture reads the same on
-    // every platform.
+    // Repo-level, so every git restore below (revert, discardEdits,
+    // revertFrozenPaths) hands back the LF bytes these fixtures assert.
     git(dir, 'config', 'core.autocrlf', 'false')
     write(dir, files)
     git(dir, 'add', '-A')
@@ -60,8 +56,8 @@ function makeRepo(files: Record<string, string> = {'a.ts': 'export const a = 1\n
 
 const noGit = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'gate-build-nogit-'))
 
-/** Every dep present — buildGateDeps always supplies them all, and the optional
- *  markers on GateDeps are for the callers that build a partial one. */
+/** Drops the optional markers so a test can call a dep without `!`. The markers
+ *  on GateDeps exist for the partial ones the gate tests hand-build. */
 type AllDeps = {[K in keyof GateDeps]-?: GateDeps[K]}
 
 /** buildGateDeps with a runTask that must never be reached in these tests. */
@@ -234,10 +230,9 @@ describe('the attribution deps', () => {
 })
 
 /**
- * repoHealth is the one non-git, non-child dep: a real async static-analysis run
- * under a live loader. Both matter — the loader is the whole reason this dep is
- * not just a call to runRepoHealthCheckAsync (the sync version froze the TUI for
- * 15-69s per run), and the loader must come down on either verdict.
+ * repoHealth is the one non-git, non-child dep. It wraps `runRepoHealthCheck` in
+ * a `startAutoLoader` whose frame is the only place the running command's name is
+ * exposed, and stops it in a `.finally` so the loader comes down on either verdict.
  */
 describe('repoHealth', () => {
     /** Every widget line this run painted, flattened. */
@@ -245,8 +240,9 @@ describe('repoHealth', () => {
         fake.captured.widgets.map(w => (Array.isArray(w.state) ? w.state.join(' ') : '')).join('\n')
 
     test("runs the project's own lint under a loader that names the command", async () => {
-        // Longer than one widget refresh (500ms), so a tick lands DURING the lint —
-        // that tick is the only place the command name can be observed.
+        // Longer than WIDGET_REFRESH_MS, so a tick lands DURING the lint. The dep's
+        // `onCommand` only writes a local the loader frame reads, so that tick is
+        // the sole observation point for the command name.
         const dir = makeRepo({'package.json': JSON.stringify({scripts: {lint: 'sleep 0.8'}})})
         const fake = makeFakeCtx(dir)
 
@@ -360,9 +356,9 @@ describe('buildVerifyProbes — the one place the collectors meet the probe tabl
     })
 
     test('binds exactly the channels the table reads, and building runs nothing', () => {
-        // Deletion test: drop a key from ProbeRaw and this record is the one
-        // binding line the compiler names. Adding a table row without a binding
-        // shows up here as a missing key.
+        // A bound table row with no binding here is invisible to tsc — VerifyProbes
+        // marks every key optional — so this equality is the only thing that catches
+        // it. Deleting one binding from buildVerifyProbes fails this test, not the build.
         const probes = buildVerifyProbes(params(noGit()))
         expect(Object.keys(probes).sort()).toEqual([...BOUND_PROBE_KEYS].sort())
         for (const key of BOUND_PROBE_KEYS) expect(typeof probes[key]).toBe('function')
