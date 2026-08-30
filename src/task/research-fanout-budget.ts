@@ -1,72 +1,48 @@
 /**
- *  — the two candidate bounds on worker:apis's project-source fan-out.
+ * research-fanout-budget — the levers bounding worker:apis's project-source
+ * fan-out, and which of them is on.
  *
- * ⚠ ONE of the levers in this file is wired: the RESCUE progress deadline
- * (`workerProgressCeilingMs`) SHIPPED ON. CAP, SCALE and RESCUE-CARRY remain OFF
- * unless their env var is set — CAP and SCALE were rejected on argument (see
- * below), carry-forward measured harmful on its own.
+ * `workerProgressCeilingMs` is ON by default; its env var is the OFF switch. CAP
+ * (`projectDocsBudget`), SCALE (`fanoutTimeoutPolicy`) and RESCUE-CARRY
+ * (`workerCarryForward`) are OFF unless their env var is set. They stay in the
+ * shipped build so a harness can run them against the shipped baseline in the SAME
+ * build — patching a copy of the code measures the copy, not the code. Nothing may
+ * read them outside such a harness.
  *
- * The OFF levers exist so a harness can run them against the shipped baseline in
- * the SAME build — the alternative (dist surgery)
- * measures a patched copy of the code and not the code. Nothing may read them
- * outside that harness until it reports PASS; a lever wired on argument rather
- * than measurement is the failure mode to avoid here.
- *
- * THE FAULT THEY TARGET:
- * `worker:apis` fans out `pi-worker-docs(module: ".")` project-source lookups, each
- * of which spawns its own summarising child, and the per-worker wall-clock cap is
- * 240s. Pearson r(project lookups, worker wall clock) = 0.909 over 24 tasks. 0-4
- * lookups never timed out; every worker at >=46 lookups burned the FULL restart
- * budget — 3 attempts, 720s, two of them discarded whole. The 240s ceiling and a
- * 46-call fan-out are jointly unsatisfiable, so the timeout is not a backstop
- * there, it is the guaranteed outcome.
- *
- * TWO WAYS TO MAKE THEM SATISFIABLE, and the A/B — not this comment — decides:
+ * THE FAULT THEY TARGET. `worker:apis` fans out `pi-worker-docs(module: ".")`
+ * project-source lookups, and each one spawns its own summarising child. Under a
+ * fixed wall-clock cap, a large enough fan-out cannot finish inside it — so the
+ * timeout is not a backstop there, it is the guaranteed outcome.
  *
  *   CAP     bound the fan-out to fit the ceiling. Told to the worker upfront
  *           (projectDocsBudgetNotice) and enforced in the tool
- *           (projectDocsBudgetExhausted), because a shows the prompt alone
- *           does not bind: the same worker is ALREADY told "be decisive" by
- *           WORKER_TIMEOUT_HINT on every restart.
- *   SCALE   bound the ceiling to fit the fan-out: each project-source lookup
- *           pushes the deadline out, up to a hard ceiling, so a worker that is
- *           making progress is not killed for making progress.
+ *           (projectDocsBudgetExhausted). The prompt alone does not bind: the same
+ *           worker is ALREADY told "be decisive" by WORKER_TIMEOUT_HINT
+ *           (pi-worker-core.ts) on every restart.
+ *   SCALE   bound the ceiling to fit the fan-out: each project-source lookup pushes
+ *           the deadline out, up to a hard ceiling, so a worker that is making
+ *           progress is not killed for making progress.
  *
- * The risk each carries, and why the A/B's quality invariant is load-bearing: CAP
- * can produce a faster worker that ships a THINNER APIS section, which is a
- * regression wearing a win's clothes (a
- * lever moved behaviour every time while fabricating part of it). SCALE can simply
- * spend the extra time and still time out, buying nothing.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * BOTH OF THE ABOVE ANSWER THE WRONG QUESTION. Kept for the record and for the
- * A/B's other arms, but they are not the fix.
- *
- * They argue about how long a worker may run. The actual defect is what happens
- * when it runs out: the attempt is killed and everything it produced is THROWN
- * AWAY, and the re-spawn is given a hint but no findings — so it re-reads the
- * same files against the same clock and dies in the same place. That is why
- * every worker at >=46 lookups burned the FULL budget rather than converging.
- * The r=0.909 correlation measures the amnesia, not an over-long task.
+ * BOTH ANSWER THE WRONG QUESTION. They argue about how long a worker may run. The
+ * defect is what happens when it runs out: the attempt is killed, everything it
+ * produced is THROWN AWAY, and the re-spawn gets a hint but no findings — so it
+ * re-reads the same files against the same clock and dies in the same place.
  *
  * Judged against "the worker must return its work", CAP makes the worker read
- * LESS — lowering the requirement so the metric goes green — and SCALE is a
- * per-file constant that dies on one big file, and, being wall-clock, makes
- * answer quality a function of the user's hardware: the same task on a slower
- * local model loses its work and degrades. No constant fixes that.
+ * LESS, lowering the requirement so the metric goes green; and SCALE is a per-file
+ * constant that dies on one big file and, being wall-clock, makes answer quality a
+ * function of the user's hardware — the same task on a slower model loses its work.
  *
- *   RESCUE  (pi-worker-core.ts) carry the killed attempt's findings into the
- *           next one and never return less than the best attempt produced, so a
- *           restart CONVERGES instead of repeating; and deadline on lack of
- *           PROGRESS rather than elapsed time, so "slow" and "stuck" stop being
- *           the same verdict. Being stuck is already detected separately and
- *           correctly by the output-stall probe (STALL_AFTER_MS), which resets
- *           on progress and only kills when the model endpoint is unreachable.
+ *   RESCUE  (pi-worker-core.ts) carry the killed attempt's findings into the next
+ *           one and never return less than the best attempt produced, so a restart
+ *           CONVERGES instead of repeating; and deadline on lack of PROGRESS rather
+ *           than elapsed time, so "slow" and "stuck" stop being the same verdict.
+ *           Being stuck is already detected separately by the output-stall probe
+ *           (STALL_AFTER_MS, worker-profiles.ts), which resets on progress.
  *
- * Its risk is its own, and the same quality invariant catches it: a half-written
- * entry replayed under "work already done" is exactly how a fabrication gets
- * laundered into a final answer. Hence the carry is framed as unverified, and
- * ungrounded-symbol and anti-synthesis counts gate the arm.
+ * The carry has a risk of its own: a half-written entry replayed under "work
+ * already done" is how a fabrication gets laundered into a final answer. That is
+ * why the carry is framed to the worker as unverified.
  */
 
 /** Max project-source (`module: "."`) docs lookups per worker ATTEMPT. Unset = no cap. */
@@ -104,12 +80,10 @@ export const RESEARCH_LEVER_ENVS: readonly string[] = [
  * The levers, read ONCE, as a reader the profile table can be handed.
  *
  * WHY A SNAPSHOT AND NOT `process.env`. Every worker in one research phase must
- * see the same arm. Resolving the three lever values once in
- * `phases.ts` and threaded down as three separate `ResearchWorkerRun` fields for
- * exactly that reason; moving the resolution into the `research` profile would
- * have moved the READ down to each worker with it, and a harness that flips a
- * var mid-phase would then half-apply its own arm. Freezing the reader keeps the
- * read-once property while letting the profile own what the values MEAN.
+ * see the same lever values. A profile that read `process.env` itself would move
+ * the read down to each worker, and a var flipped mid-phase would then apply to
+ * some workers and not others. Freezing the reader keeps the read-once property
+ * while letting the profile own what the values MEAN.
  */
 export function snapshotLeverEnv(env: Env = defaultEnv): Env {
     const snap = new Map<string, string | undefined>(RESEARCH_LEVER_ENVS.map(k => [k, env(k)]))
@@ -160,14 +134,10 @@ export function workerCarryForward(env: Env = defaultEnv): boolean {
 /**
  * The absolute backstop for the progress-based deadline.
  *
- * WHY THIS NUMBER. It is not a budget and it does not decide how long a worker
- * may take — the no-progress deadline does that, and it resets on every tool call.
- * This is the last-resort bound on a worker that never stops moving (an infinite
- * tool-call loop the loop detector somehow misses), so its only requirement is to
- * sit clear of the real workload. Measured on 42 progress-arm trials
- * (`~/tmp/research-fanout-ab-v3`): median 275s, p90 523s, **max 730s**. 20 minutes
- * is 1.6x the observed worst case, and 1.7x the 720s the SHIPPED path already
- * spends on a worker that burns all three attempts and returns nothing.
+ * It is not a budget and it does not decide how long a worker may take — the
+ * no-progress deadline does that, and it resets on every tool call. This is the
+ * last-resort bound on a worker that never stops moving (a tool-call loop the loop
+ * detector misses), so its only requirement is to sit clear of the real workload.
  *
  * A ceiling that never fires in production is the correct behaviour for a
  * backstop, not evidence it is untested: it fires under test
@@ -180,12 +150,7 @@ export const DEFAULT_WORKER_PROGRESS_CEILING_MS = 1_200_000
 /**
  * The progress-based deadline's ceiling, or null when the lever is OFF.
  *
- * SHIPPED ON as of  — the env var is now the OFF switch, not the on
- * switch. Measured baseline vs progress over 42 trials/arm on a calibrated
- * instrument: worker-timeout restarts and degrades both go to zero, and entries
- * are up on all four high-fan-out fixtures (a task
- * 11.0 → 25.5), quality invariants HOLD, every treatment-arm ungrounded flag
- * hand-verified as an instrument artifact rather than a fabrication.
+ * ON by default, so the env var is the OFF switch, not the on switch:
  *
  *     unset            ON at DEFAULT_WORKER_PROGRESS_CEILING_MS
  *     "0" | "off"      OFF — the fixed elapsed-time cap, exactly as before
@@ -205,9 +170,9 @@ export function workerProgressCeilingMs(env: Env = defaultEnv): number | null {
  * The upfront half of the CAP arm, appended to the APIS worker's prompt.
  *
  * Upfront and NUMERIC on purpose. The worker cannot ration a budget it learns
- * about only when it is spent, and "be decisive" — which it already receives on
- * every timeout restart — is exactly the unquantified version that a shows
- * it ignoring until the third attempt.
+ * about only when it is spent, and "be decisive" — WORKER_TIMEOUT_HINT, which it
+ * already receives on every timeout restart — is the unquantified version of the
+ * same ask.
  */
 export function projectDocsBudgetNotice(budget: number): string {
     return (
