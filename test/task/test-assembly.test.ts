@@ -7,11 +7,11 @@ import {
     type RepoFile
 } from '../../src/task/test-assembly.js'
 
-// The a F4 fixture, distilled to import shape. The production entry composes five
-// route leaves; test/photos.test.ts imports two of them (auth + photos) and mounts its
-// OWN app at a different prefix than production — wholly green while the shipped upload
-// path is dead. Its siblings (admin/invites/listings) do the same; auth.test imports one
-// leaf; the page test shares only utilities; the source-grep test asserts on strings.
+// The fixture, in import shape. The production entry composes five route leaves;
+// test/photos.test.ts imports two of them (auth + photos) and mounts its OWN app at
+// a different prefix than production — so it can be wholly green while the shipped
+// path is never exercised. Its siblings do the same; auth.test imports one leaf;
+// the page test shares only utilities; the source-grep test asserts on strings.
 const ENTRY: RepoFile = {
     path: 'src/server/index.ts',
     text: [
@@ -82,8 +82,9 @@ describe('relativeImports', () => {
     })
 
     test('does NOT match import-shaped strings inside assertions (source-grep tests)', () => {
-        // A test that reads a source file and asserts on its text — the import string is
-        // indented behind expect(), never at line start, so it must not be parsed.
+        // STATIC_IMPORT_RE anchors `import`/`export` as the first non-whitespace token
+        // on a line — indentation alone does not stop it. Inside an assertion the
+        // string sits after `expect(`, so nothing on that line matches.
         const text = [
             "import {expect} from 'bun:test'",
             '        expect(source).toContain("import {Link} from \'../wouter\'")',
