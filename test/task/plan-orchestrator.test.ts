@@ -131,9 +131,9 @@ describe('buildPlanDeps wiring', () => {
             'add rate limiting',
             new AbortController().signal
         )
-        // The fake ctx has no ui.custom, so the picker path rejects and ask()
-        // resolves undefined — what matters here is that it did NOT fall back to
-        // ui.input, which is how a picker-less prompt would present.
+        // The fake's ui.custom builds the REAL boxed component and, with nothing
+        // queued, cancels it. What matters is that ui.input was never reached,
+        // which is how a picker-less prompt would present.
         await deps.ask(buildIdleSpec())
         expect(h.captured.inputs).toHaveLength(0)
     })
@@ -205,8 +205,8 @@ describe('handleTaskPlan', () => {
     })
 
     // The plan session's children run with the host idle — the same window in
-    // which /task and /task-auto hold mid-run input. Left unbracketed, a line
-    // typed then went into pi's queue and fired after the plan.
+    // which /task and /task-auto hold mid-run input. Unbracketed, a line typed
+    // during it reaches pi's own queue and fires once the plan is over.
     test('the plan session owns the session: mid-run input is held for its duration', async () => {
         const cwd = await freshRepo()
         const h = makeFakeCtx(cwd)
@@ -251,9 +251,9 @@ describe('handleTaskPlan', () => {
         expect(frontMatter.reason).toContain('socket hang up')
     })
 
-    // A plan with no decisions still went THROUGH planning, and the request that
-    // opened it is routinely phrased as one ("lets plan X") — so the deliverable
-    // rule rides along even here; only the decisions block is absent.
+    // buildHandoffPrompt appends HANDOFF_DELIVERABLE_RULE before it looks at the
+    // decisions at all, so an empty entry list drops only the decisions block. The
+    // planning verb in the request leaks regardless of how much got settled.
     test('a plan with no decisions hands over the prompt plus the deliverable rule', async () => {
         const cwd = await freshRepo()
         const h = makeFakeCtx(cwd)
