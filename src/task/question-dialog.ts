@@ -7,26 +7,17 @@
  * display; decide whether the question is a binary fork; short-circuit under
  * YOLO; build `A: …` / `B: …` cards; call `ui.ask`; treat `undefined` as a
  * cancel; and map the reply back onto an answer — where an empty submit accepts
- * the recommendation, a bare "A"/"B" from a remote user (or the picker's
- * free-text fallback) maps back to the option's full text, and anything else is
- * taken verbatim.
+ * the recommendation, a bare "A"/"B" ON A FORK (from a remote user, or from the
+ * picker's free-text fallback) maps back to that option's full text, and anything
+ * else is taken verbatim.
  *
- * The mapping is the load-bearing part. Storing the literal letter "A" leaves the
- * next generation call a dangling reference it cannot decode, so getting it wrong
- * is not cosmetic.
+ * The mapping is the load-bearing part. The recorded answer is fed back into the
+ * next generation call, so storing the literal letter "A" would hand that call a
+ * dangling reference it cannot decode.
  *
- * It was written three times. The Plan session factored its copy into a pure
- * `resolveAnswer` returning a typed `AnswerSource`, and its own docstring said so
- * out loud — "Mirrors the identical mapping in phaseGrill and planAuto" — but the
- * two mirrors were never converted, and they had already drifted apart in three
- * ways (which of them stamps an accepted recommendation, which has a
- * single-option card branch, which handles a typed reply that equals an option).
- * None was a crash. The next edit to any of them is where the bug lands, which is
- * why they now share this.
- *
- * What stays at the call sites is POLICY, not mechanics: grill's auto-answer and
- * widget line, clarify's plan-shape and triage pre-emption, plan's control
- * actions. Those genuinely differ.
+ * What stays at the call sites is POLICY, not mechanics: grill's auto-answer
+ * (`phaseAutoAnswer`) and its widget line, clarify's plan-shape fork and
+ * answer-side triage, plan's control actions. Those genuinely differ.
  */
 
 import type {AnswerSource} from './plan-io.js'
@@ -53,8 +44,10 @@ export function isTwoOption(p: PendingQuestion): boolean {
 /**
  * The answer cards: the recommendation first (index 0 is the green RECOMMENDED
  * card), the alternative second when the question is a fork. `undefined` — not an
- * empty array — when there is nothing to recommend, because that is what makes
- * `ui.ask` fall back to a bare text prompt instead of an empty picker.
+ * empty array — when there is nothing to recommend, so a conditional spread of the
+ * result leaves the `options` key off the ask spec entirely. Either way the local
+ * side falls back to a bare text prompt: bridge.ts boxes only when
+ * `options.length > 0`.
  */
 export function buildOptionCards(
     p: PendingQuestion
@@ -75,14 +68,13 @@ export function buildOptionCards(
  * Map what the picker returned onto the answer that gets recorded, and say WHERE
  * the answer came from.
  *
- * The `source` is returned rather than baked into the string because the three
- * call sites disagree about provenance stamping, and that disagreement is real:
- * `/task-auto`'s clarify transcript marks an accepted recommendation
- * ("… (accepted recommendation)") while grill's does not, because grill's
- * transcript is fed back verbatim into the next grill-gen prompt and the stamp
- * would become model input. Keeping the stamp at the call site makes that a
- * one-line difference you can see instead of a divergence hidden inside two
- * six-branch ladders.
+ * The `source` is returned rather than baked into the string because each
+ * transcript owns its own provenance table — `QA_PROVENANCE` (qa-transcript.ts)
+ * for grill and clarify, `SOURCE_STAMP` (plan-io.ts) for the plan file — and they
+ * disagree. That disagreement is real: clarify marks an accepted recommendation
+ * "(accepted recommendation)" while grill marks nothing, because grill's
+ * transcript is fed back verbatim into the next grill-gen prompt, where the stamp
+ * would become model input rather than the answer.
  */
 export function resolveAnswer(
     p: PendingQuestion,
@@ -154,10 +146,8 @@ export type SettledKind = 'yolo' | 'yolo-skip' | 'accepted' | 'typed'
  * Settle one question: YOLO short-circuit, cards, ask, record.
  *
  * Returns `'cancelled'` rather than throwing, because that is the one thing the
- * two callers genuinely disagree about — grill throws `USER_CANCELLED` into the
- * phase ladder, clarify announces and returns null from the plan. Everything
- * before it was written out twice at ~50 lines each and had already drifted on
- * `recommended2`, harmless today only because the bridge re-guards it.
+ * two callers genuinely disagree about: grill throws `USER_CANCELLED` into the
+ * phase ladder, clarify announces and returns null from the plan.
  */
 export async function settleQuestion(input: SettleQuestionInput): Promise<'settled' | 'cancelled'> {
     const {ui, transcript, plain, shown, render, yolo} = input
