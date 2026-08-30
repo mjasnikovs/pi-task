@@ -25,12 +25,11 @@ function makeDeps(over: Partial<GateDeps> = {}): GateDeps {
 }
 
 /**
- * Route the collapsed `recordDebt` dep to per-ORIGIN sinks. A gate taking one
- * dep per debt class, and the tests used that to assert PROVENANCE — that an
- * unattended auto-pick records 'yolo-accepted' and never the 'accepted' class a human
- * decision earns. Filtering on the origin argument keeps exactly that discrimination:
- * a wrongly stamped origin lands in no sink (or the wrong one) and the test fails.
- * An origin with no sink is ignored, matching an absent per-class dep.
+ * Route the collapsed `recordDebt` dep to per-ORIGIN sinks, so a test can assert
+ * PROVENANCE: an unattended auto-pick records 'yolo-accepted', never the
+ * 'accepted' class a human decision earns. A wrongly stamped origin lands in no
+ * sink, or in the wrong one, and the test fails. An origin with no sink is
+ * ignored.
  */
 function debtSinks(
     sinks: Partial<Record<DebtOrigin, (taskId: string, reason: string) => void>>
@@ -290,8 +289,9 @@ test('runGatesForTask: ACCEPT with cross-task deletions records one debt per del
         handle.queueSelect(ACCEPT_LABEL)
         const r = await runGatesForTask(ctx, deps, baseParams({cwd: dir}))
         expect(r.kind).toBe('done')
-        // One debt per deletion, each carrying the machine-parseable reason the final
-        // gate's re-check reads back (path + owning task).
+        // One debt per deletion, in the fixed reason shape the run-end re-check
+        // parses: extractDeletedDebtPath pulls the path back out and resolves the
+        // debt only when that file is in the tree again.
         expect(deletionDebts).toEqual([
             {
                 taskId: 'TASK_0006',
@@ -479,9 +479,8 @@ test('runGatesForTask: an empty commit warns but still completes', async () => {
 })
 
 // ─── Gate trail (deps.record) ────────────────────────────────────────────────
-// The durable per-task record of every gate outcome. Motivated by the audit:
-// verdict text and enforce mode lived only in terminal notifies, so gate behavior
-// was unauditable from artifacts.
+// The durable per-task record of every gate outcome. Without it, verdict text
+// and enforce mode reach only the terminal notifies, which leave no artifact.
 
 test('record: clean pass path writes verify PASS, commit, enforce(edit) trail in order', async () => {
     await withTmpTaskDir(async dir => {
@@ -570,9 +569,9 @@ test('record: enforce regression is recorded as re-verify FAILED → REVERTED', 
     })
 })
 
-// item 3: the re-verify FAIL diagnosis must ALSO be persisted as a durable
-// defect (not only the per-task trail line that the final gate never re-reads), using
-// the verbatim one task text as fixture.
+// The re-verify FAIL diagnosis must ALSO be persisted as a durable defect. The
+// per-task trail line is not enough: the final gate reads `openDebts`, never the
+// trail.
 test('record: enforce-revert FAIL is persisted as a durable defect for the final gate', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
@@ -610,11 +609,10 @@ test('record: enforce-revert FAIL is persisted as a durable defect for the final
 
 // ─── Root-cause repair channel ───────────────────────────
 //
-// Two enforce-reverts in one run were both this shape: the
-// re-verify FAILed on a task's `test/teardown.ts` TRUNCATE bug, a file neither
-// the task's work nor the enforce pass ever touched, and the differential reverted
-// enforce's edits anyway — destroying good work over a fault it did not cause while
-// the actual cause stayed unscheduled. Verbatim one task text as the fixture.
+// The differential reverts enforce's edits whenever the re-verify FAILs. When
+// the FAIL names a file neither the task's work nor the enforce pass touched,
+// that destroys good work over a fault it did not cause, and leaves the real
+// cause unscheduled. The fixture below is a re-verify FAIL of that shape.
 const RUN14_TEARDOWN_FAIL =
     'work did not verify: The shipped `bun test test/photos.test.ts` exits with code 1 due to a '
     + 'pre-existing teardown bug in `test/teardown.ts` (created by TASK_0007) that uses parameterized '
@@ -714,7 +712,7 @@ test('enforce: unknown provenance / unreadable tree falls back to the REVERT pat
     for (const over of [
         {introducedBy: () => Promise.resolve(null)},
         {touchedFiles: () => Promise.resolve(null)},
-        // deps absent entirely (bare /task, older wiring)
+        // deps absent entirely (a bare /task)
         {touchedFiles: undefined, introducedBy: undefined}
     ] as Partial<GateDeps>[]) {
         await withTmpTaskDir(async dir => {
@@ -730,13 +728,11 @@ test('enforce: unknown provenance / unreadable tree falls back to the REVERT pat
 
 // ─── Enforce-differential ATTRIBUTION ──────────────
 //
-// A real enforce commit was one line — redundant parentheses removed in
-// `Admin.tsx` — and it was REVERTED over a Playwright CT failure in
-// `MyListings.spec.tsx`, a file that change cannot reach. The root-cause channel
-// above could not save it: the FAIL text names a BARE `MyListings.spec.tsx:186`
-// (no path separator, so no accused file) and carries no blame cue near a path. The
-// differential now also asks the purely mechanical question — does the failing check
-// name anything the ENFORCE COMMIT touched? Verbatim text as the fixture.
+// The root-cause channel above needs a blame cue beside a path. A FAIL naming a
+// BARE `MyListings.spec.tsx:186` — no path separator — accuses no file, so that
+// channel cannot save the edits. The differential therefore also asks a purely
+// mechanical question: does the failing check name anything the ENFORCE COMMIT
+// touched? The fixture below is a FAIL of that shape.
 const RUN18_CT_FAIL =
     'work did not verify: 1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186 — "toggle Mark as '
     + 'Sold / Undo Sold updates listing status in-place") due to a pre-existing flaky locator collision '
@@ -767,9 +763,9 @@ function attributionDeps(over: Partial<GateDeps> = {}): {
             trail.push(line)
             return Promise.resolve()
         },
-        // The two verifies are two fields now, not one field and a call counter.
-        // `verify` is the GATE (it must pass, or enforce never reaches edit mode);
-        // `reVerify` is the DIFFERENTIAL this suite is actually about.
+        // Two verify fields, not one field and a call counter. `verify` is the GATE
+        // (it must pass, or enforce never reaches edit mode); `reVerify` is the
+        // DIFFERENTIAL this suite is actually about.
         verify: () => Promise.resolve({ok: true}),
         reVerify: () => Promise.resolve({ok: false, reason: RUN18_CT_FAIL}),
         enforce: () => Promise.resolve({ok: true}),
@@ -1056,22 +1052,22 @@ test('enforce edits that REGRESS repo health (clean before → fail after) are d
         expect(reverted).toBe(0) // the commit+differential+revert cycle never ran
         // Only the task snapshot committed — never an ENFORCE GUIDELINES commit.
         expect(commits).toEqual(['task: A (TASK_0006)'])
-        // Trail names the REGRESSION and embeds the failing output (F8: was unexplainable
-        // because only the exit code was recorded).
+        // The trail names the REGRESSION and embeds the failing output — an exit
+        // code alone does not say what broke.
         const discardLine = trail.find(l => l.startsWith('enforce: edits discarded pre-commit'))
         expect(discardLine).toBeDefined()
         expect(discardLine).toContain('REGRESSED repo health')
         expect(discardLine).toContain('`bun run lint` exited 1')
         expect(discardLine).toContain('src/a.ts:3:1  error  Parsing error')
-        // P1b: verdict line no longer claims a bare "clean" when edits exist.
+        // The verdict line must not claim a bare "clean" while edits sit in the tree.
         expect(trail).toContain('enforce(edit): clean — edits in tree')
     })
 })
 
 test('enforce edits are KEPT when repo was ALREADY failing before the pass (run-8 F8)', async () => {
-    // F8: five enforce passes were discarded on `bun run lint` exited 2 — the linter was
-    // already CRASHING before enforce touched anything, so the absolute guard threw away
-    // good work for a fault it did not cause. The differential guard keeps such edits.
+    // The linter can be crashing before enforce touches anything. An absolute
+    // guard discards enforce's edits for a fault they did not cause; the
+    // differential guard keeps them.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1111,7 +1107,7 @@ test('enforce edits are KEPT when repo was ALREADY failing before the pass (run-
         expect(keptLine).toBeDefined()
         expect(keptLine).toContain('pre-existing, edits kept')
         expect(keptLine).toContain('`bun run lint` exited 2')
-        // The captured crash output rides into the trail so F8 is explainable.
+        // The captured crash output rides into the trail, so the keep is explainable.
         expect(keptLine).toContain('Cannot find module eslint-config')
     })
 })
@@ -1137,12 +1133,12 @@ test('enforce edits passing repo health commit + differential-guard as before', 
 })
 
 test('enforce with no code edits skips the enforce commit AND the differential re-verify', async () => {
-    // regression: enforce had nothing to do (no guideline files), yet the
-    // "enforce commit" was never empty — the .pi-tasks gate-trail lines made it real —
-    // so every task burned a full model re-verify of an UNCHANGED tree, and the 10
-    // genuine defect reports those re-verifies produced were "reverted" into the void
-    // (the revert dropped a bookkeeping-only commit) while the tasks stayed PASS.
-    // A KNOWN-clean tree (dirty ran and said false) must skip commit, re-verify, revert.
+    // An "enforce commit" is never empty even when enforce had nothing to do: the
+    // .pi-tasks gate-trail lines make it real. Left alone, every task would burn a
+    // full model re-verify of an UNCHANGED tree, and any defect that re-verify
+    // reported would be "reverted" into the void when the revert dropped a
+    // bookkeeping-only commit. A KNOWN-clean tree (dirty ran and said false) must
+    // skip commit, re-verify and revert.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1480,9 +1476,9 @@ test('runGatesForTask: without the flag the SAME FAIL still shows the picker', a
 })
 
 test('runGatesForTask: YOLO cannot exceed MAX_AUTO_AUTOFIX — it accepts, never re-enters autofix', async () => {
-    // The regression this pins: a central "auto-pick the recommended card" hook would
-    // answer AUTOFIX at the picker (AUTOFIX is still the recommended card there) and
-    // loop forever, defeating the very cap that exists to break a non-converging fix.
+    // A central "auto-pick the recommended card" hook would answer AUTOFIX at the
+    // picker — AUTOFIX is still the recommended card there — and loop forever,
+    // defeating the very cap that exists to break a non-converging fix.
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
         const {ctx, captured} = handle
@@ -1535,12 +1531,10 @@ test('runGatesForTask: the YOLO accept stamps the durable gate trail', async () 
     })
 })
 
-// ─── : the auto-ACCEPT trail names its real branch, and YOLO spends one
-//     unattended attempt before shipping a defect the judge merely blessed. ────
+// ─── The auto-ACCEPT trail names its real branch, and YOLO spends one ────────
+//     unattended attempt before shipping a defect the judge merely blessed.
 
 test('yoloAcceptReason: each of the four branches names ITSELF', () => {
-    // The line this replaces said "autofix budget spent" on all four. Measured
-    // false in 2709 of 2709 recorded accepts.
     expect(
         yoloAcceptReason({
             isUnobserved: true,
@@ -1585,8 +1579,8 @@ test('yoloAcceptReason: each of the four branches names ITSELF', () => {
 })
 
 test('runGatesForTask: YOLO spends ONE attempt before accepting a judge-blessed FAIL', async () => {
-    // The shape: recommend ACCEPT, no budget spent, defect shipped with
-    // nothing attempted — and a later single pass fixed it.
+    // Recommend ACCEPT with no budget spent would ship the defect having
+    // attempted nothing. One attempt runs first.
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1653,7 +1647,7 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
         })
         // ONE extra attempt, not MAX_AUTO_AUTOFIX.
         expect(runTaskCalls).toBe(1)
-        // inv-debt-preserved: same debt, same origin, same reason as before the lever.
+        // inv-debt-preserved: same debt, same origin, same reason.
         expect(yoloDebts).toEqual([{taskId: 'TASK_0006', reason: 'over-strict check'}])
         expect(captured.selects).toHaveLength(0)
         const accept = trail.find(l => /^resolution: auto-ACCEPTED/.test(l))
@@ -1663,8 +1657,8 @@ test('runGatesForTask: the rescue is bounded to ONE attempt, then accepts as bef
 })
 
 test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the budget after a rescue', async () => {
-    // The concern the old comment named: an ACCEPT recommendation must never
-    // bootstrap the full unattended loop from the site that terminates it.
+    // An ACCEPT recommendation must never bootstrap the full unattended loop from
+    // the site that terminates it.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         let runTaskCalls = 0
@@ -1689,8 +1683,8 @@ test('runGatesForTask: a recommender that flips to AUTOFIX cannot restart the bu
 })
 
 test('runGatesForTask: an UNOBSERVED FAIL never triggers the rescue', async () => {
-    // inv-no-unobserved-autofix. one task: an unattended re-run
-    // cannot install Docker.
+    // inv-no-unobserved-autofix: an unattended re-run cannot install the tooling
+    // whose absence made the check UNOBSERVED.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const trail: string[] = []
@@ -1777,19 +1771,17 @@ test('runGatesForTask: without YOLO the rescue never fires — the picker still 
     })
 })
 
-// ─── Reachable only now the halves are two ──────────────────────────────────
+// ─── runEnforcePass, called directly ────────────────────────────────────────
 //
-// Both branches below sit in the ENFORCE half and had no coverage: reaching them
-// meant driving the whole VERIFY loop first, and the two tests that would have
-// done it assert enforce never runs at all. With `runEnforcePass` addressable and
-// `reVerify` its own field, each is a direct call.
+// Both branches below sit in the ENFORCE half. Reaching them through
+// runGatesForTask means driving the whole VERIFY loop first. `runEnforcePass` is
+// exported and `reVerify` is its own dep field, so each is a direct call.
 describe('runEnforcePass — branches the joined function could not reach', () => {
     const params = baseParams({cwd: '/tmp', taskId: 'TASK_0031'})
 
     test('an enforce commit that commits NOTHING records the skip and re-verifies nothing', async () => {
-        // task-gates.ts: `enforce(edit): no fixes to commit`. The only
-        // non-committing-commit test in this file asserts enforce never runs, so
-        // the enforce commit was never even attempted.
+        // task-gates.ts records `enforce(edit): no fixes to commit` when the enforce
+        // pass edited something but the commit committed nothing.
         const trail: string[] = []
         let reVerifyCalls = 0
         await runEnforcePass(
@@ -1817,8 +1809,7 @@ describe('runEnforcePass — branches the joined function could not reach', () =
     })
 
     test('a re-verify FAIL with NO revert dep is recorded as left-in-place, not silently kept', async () => {
-        // task-gates.ts: the `deps.revert` ABSENT sub-branch. Every revert test in
-        // this file supplies `revert`, so this wording had never been produced.
+        // task-gates.ts: the `deps.revert` ABSENT sub-branch.
         const trail: string[] = []
         const debts: string[] = []
         await runEnforcePass(
@@ -1951,13 +1942,11 @@ describe('resolveVerifyGate — the verify half, without the enforce half', () =
 })
 
 /**
- * REGRESSION — a CANCELLED autofix re-run must not be reported as interrupted.
+ * A CANCELLED autofix re-run must not be reported as interrupted.
  *
- * `runGatesForTask` maps `cancelled` onto `interrupted`, whose TERMINAL_OUTCOMES
- * row demotes the task file with `markResumable` — which writes `state: 'failed'`
- * over the `cancelled` the cancel itself wrote. That is exactly the ledger lie
- * RUN_END_POLICY was introduced to stop; the first implementation run honours it
- * and this path does not.
+ * TERMINAL_OUTCOMES gives the `interrupted` row `markResumable: true`, which
+ * writes `state: 'failed'` over the `cancelled` the cancel itself wrote. So
+ * runGatesForTask carries its own `cancelled` kind instead.
  */
 test('runGatesForTask: an AUTOFIX re-run the USER cancelled is reported as cancelled', async () => {
     await withTmpTaskDir(async dir => {
