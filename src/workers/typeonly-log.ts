@@ -1,39 +1,33 @@
 /**
- * STAGE 1 INSTRUMENTATION for F-2 / PROMPT 2 — firing-rate observability, no behaviour.
+ * Firing-rate instrumentation for the TYPE-ONLY detector. Observability only; it
+ * changes no behaviour.
  *
- * WHY THIS EXISTS. The lever it was built for did not separate the arms,
- * and was written off as "the lever does not work". It was a broken EXPERIMENT, and it was
- * broken for a reason this module fixes: the metric counted ALL research terminations while
- * the lever touches only TYPE-ONLY answers, and nothing anywhere recorded how often a
- * type-only answer actually occurs. The causal claim "workers stop BECAUSE of type-only
- * answers" was asserted from one static corpus and never measured live. You cannot size an arm, pick a metric, or decide whether the lever is
- * a population fix or a single-case guard without that firing rate.
+ * WHY THIS EXISTS. "How often does a type-only answer occur" cannot be answered by
+ * counting the times the detector FIRED — a log of firings has no denominator. So
+ * every pi-worker-docs answer is recorded, flagged or not, and the rate is
+ * computable rather than inferable.
  *
- * WHAT IT DOES. When `PI_TASK_TYPEONLY_LOG` names a file, every pi-worker-docs answer — not
- * only the flagged ones — appends one JSON line there. Denominator and numerator both, from
- * the same channel, so a rate is computable rather than inferable. With the variable unset
- * this is a no-op and nothing is written.
+ * WHAT IT DOES. When `PI_TASK_TYPEONLY_LOG` names a file, each answer appends one
+ * JSON line there. Unset or blank and this is a no-op that writes nothing.
  *
- * MECHANICAL, NOT SELF-REPORT. The record is written at the TOOL layer from the verdict the
- * shipped detector just returned, next to the same `details` the caller receives. No model is
- * asked whether it thought the answer was a type signature.
+ * MECHANICAL, NOT SELF-REPORT. The record is written at the TOOL layer from the
+ * verdict the shipped detector just returned, next to the same `details` the caller
+ * receives. No model is asked whether it thought the answer was a type signature.
  *
- * BEHAVIOUR-NEUTRALITY IS THE WHOLE POINT — this lands in a stage that forbids src/ behaviour
- * change, so:
+ * BEHAVIOUR-NEUTRAL BY CONSTRUCTION:
  *   - it is called for its side effect only; nothing reads its return value;
- *   - every failure is swallowed (a full disk or an unwritable path must not turn a working
- *     docs lookup into an error — instrumentation that can break the thing it measures is
- *     worse than no instrumentation);
- *   - it appends synchronously, because the process that writes it (a pi child running the
- *     docs extension) can exit immediately after the tool returns and a queued async write
- *     would be lost.
+ *   - every failure is swallowed. A full disk or an unwritable path must not turn a
+ *     working docs lookup into an error — instrumentation that can break the thing
+ *     it measures is worse than none;
+ *   - it appends SYNCHRONOUSLY, because the process that writes it is a pi child
+ *     that can exit the moment the tool returns, and a queued async write would be
+ *     lost.
  *
- * THE FULL ANSWER TEXT IS RETAINED, deliberately. An audit cannot decide —
- * whether an `excerptVerified === false` was fabrication or a normaliser gap — because the
- * text it judged was kept nowhere. The same hole would make every stability question here
- * unanswerable: whether a question is type-only in EVERY rep or churns between identical
- * reps can only be settled by re-scoring the recorded answers. Cheap to keep, impossible to
- * reconstruct later.
+ * THE FULL ANSWER TEXT IS RETAINED, deliberately. Without it, an
+ * `excerptVerified === false` cannot afterwards be attributed to fabrication rather
+ * than to a normaliser gap, and "is this question type-only every time or does it
+ * churn between identical runs" cannot be settled at all — both need the recorded
+ * answers re-scored. Cheap to keep, impossible to reconstruct later.
  */
 import * as fs from 'node:fs'
 import type {ExcerptVerification} from '../shared/child-output.js'
@@ -64,12 +58,12 @@ export interface TypeOnlyLogRecord {
      * The FULL verification record behind `excerptVerified` — the normalised excerpt that was
      * searched for, plus a sha256 + length of the normalised content it was searched in.
      *
-     * This is the other half of the F-3(f) hole described above: retaining the answer text
-     * says WHAT was claimed, and this says what it was checked against, so a false verdict can
-     * be attributed to fabrication (the excerpt is nowhere near the content) rather than a
-     * normaliser gap (a markdown-escape variant of text that IS present) without re-running
-     * the lookup. All four focused-extractor call sites can keep it
-     * (workers/focused-extractor.ts). Optional — older records still parse.
+     * The other half of the retention above: the answer text says WHAT was claimed, and
+     * this says what it was checked against — so a false verdict can be attributed to
+     * fabrication (the excerpt is nowhere near the content) rather than to a normaliser
+     * gap (a markdown-escape variant of text that IS present) without re-running the
+     * lookup. focused-extractor.ts hands the struct to both of its call sites.
+     * Optional — older records still parse.
      */
     excerptCheck?: ExcerptVerification
     /**
@@ -92,8 +86,9 @@ export interface TypeOnlyLogRecord {
 /**
  * Append one record to the JSONL sink named by `PI_TASK_TYPEONLY_LOG`, if set.
  *
- * @param rec everything but `at` and `unclear`, which are derived here so every call site
- *            stamps them identically.
+ * @param rec everything but `at` (an ISO timestamp) and `unclear` (the abstention
+ *            predicate over `answer`), which are derived here so both call sites in
+ *            pi-worker-docs stamp them identically.
  */
 export function logDocsAnswer(
     rec: Omit<TypeOnlyLogRecord, 'at' | 'unclear'>,
@@ -114,7 +109,9 @@ export function logDocsAnswer(
     }
 }
 
-/** Parse a sink written by {@link logDocsAnswer}; malformed lines are skipped, not thrown. */
+/** Parse a sink written by {@link logDocsAnswer}. Blank lines are skipped and a
+ *  malformed one — including the truncated tail a killed process leaves — is dropped
+ *  rather than thrown. */
 export function readTypeOnlyLog(text: string): TypeOnlyLogRecord[] {
     const out: TypeOnlyLogRecord[] = []
     for (const line of text.split('\n')) {
