@@ -1,8 +1,8 @@
 /**
  * launch-config-gap tests — the four static conditions, one per test, plus the
- * shapes that must NOT fire. The dynamic fifth condition (the probe re-run) is
- * exercised end-to-end by a harness, where a real child
- * process is the only honest arbiter of "did the absence cause the exit".
+ * shapes that must NOT fire. The fifth condition, the probe re-run that decides
+ * whether the absence caused the exit, is not decidable from this module alone:
+ * it needs the gate's spawner, and final-gate.test.ts drives it there.
  */
 import {expect, test, describe} from 'bun:test'
 import * as fs from 'node:fs'
@@ -16,7 +16,8 @@ import {
     CONFIG_GAP_PROBE_VALUE
 } from '../../src/task/launch-config-gap.js'
 
-/** real seed.ts, trimmed to the part that decides the classification. */
+/** A seed script trimmed to the part that decides the classification: two
+ *  undefaulted `process.env` reads, each guarded by an exit. */
 const SEED = `const phone = process.env.ADMIN_PHONE;
 const password = process.env.ADMIN_PASSWORD;
 if (!phone) {
@@ -45,7 +46,7 @@ function withTree(files: Record<string, string>, fn: (cwd: string) => void): voi
 describe('bodySourceFiles', () => {
     const tracked = new Set(['src/server/seed.ts', 'src/server/migrate.ts', 'build.ts'])
 
-    test("mx5's shape: `bun run src/server/seed.ts` names the file", () => {
+    test('`bun run src/server/seed.ts` names the file', () => {
         expect(bodySourceFiles('bun run src/server/seed.ts', tracked)).toEqual([
             'src/server/seed.ts'
         ])
@@ -75,7 +76,7 @@ describe('findLaunchConfigGap — all four conditions must hold', () => {
         declared: new Set(['ADMIN_PHONE', 'ADMIN_PASSWORD', 'DATABASE_URL'])
     }
 
-    test('the mx5 run-20 case: all four hold → a gap naming both variables', () => {
+    test('all four hold → a gap naming both variables', () => {
         withTree({'src/server/seed.ts': SEED}, cwd => {
             const gap = findLaunchConfigGap({...base, cwd, env: {}})
             expect(gap).not.toBeNull()
@@ -179,7 +180,8 @@ describe('the record it leaves', () => {
         expect(n).toContain('ADMIN_PHONE')
         expect(n).toContain('ADMIN_PASSWORD')
         expect(n).toContain('UNOBSERVED')
-        // Never a PASS, and it says what a human should do next.
+        // The note ends by naming the command to re-run, so it is an instruction,
+        // not just a verdict.
         expect(n).toContain('bun run seed')
     })
 })
