@@ -1,53 +1,22 @@
 /**
- * PROMPT 4 / F-2(b) — the design document's own cited URLs, ranked as fetch candidates for
- * the APIS research worker.
+ * The design document's own cited URLs, ranked as fetch candidates for the APIS
+ * research worker.
  *
- * THE FACT THIS CLOSES. DESIGN/PROJECT.md is a literal reference list: §5 line 184
- * cites https://hono.dev/docs/guides/rpc and §13 lists four hono.dev URLs plus
- * https://bun.com/docs/runtime/sql. Neither of the two pages that document the semantics
- * behind a two fatal defects was ever fetched — worker:apis' 6 distinct fetches went
- * to bun.com/reference/*, tailwindcss.com/* and nothing on hono.dev at all. Measured
- * afterwards: 31 of 44 tasks asked pi-worker-docs about a package
- * for which the design cites a page, 215 (task, URL) pairs, and 15 of the 17 reachable cited
- * URLs were never fetched by anyone. The pages were named, in the project's own spec, and the
- * worker went looking somewhere else.
+ * A design that names its references by URL has already chosen which pages
+ * document the packages it uses. Nothing makes a research worker prefer them: it
+ * searches, and lands wherever the search lands. This module extracts the cited
+ * URLs, keeps the ones documenting a package THIS task touches, and renders them
+ * as a ranked prompt block.
  *
- * WHY THIS IS A POPULATION LEVER AND THE TYPE-ONLY GUARD WAS NOT. PROMPT 2's detector fires
- * on a tiny fraction of docs answers because it has to RECOGNISE something about an
- * answer. This one recognises nothing: the URLs are already sitting in the spec text, so its
- * reach is "every task whose design cites a page for a package the task uses" — most
- * above, measured before any of this was written.
+ * RANKING, NOT REPLACING. The block says the cited pages outrank a page the model
+ * would pick itself, and says in terms that they are not the only pages it may
+ * fetch. A worker that can no longer follow a question off the design's reference
+ * list has been narrowed, not improved.
  *
- * RANKING, NOT REPLACING. The block says the cited pages outrank a page the model would pick
- * itself, and says in terms that they are not the only pages it may fetch. A worker that can
- * no longer follow a question off the design's reference list has been narrowed, not
- * improved; PROMPT 4 invariant 3 asserts that explicitly in the A/B.
- *
- * ── *** NOT WIRED. THE LIVE A/B FAILED. READ THIS BEFORE RE-ENABLING IT. *** ─────────────
- *
- * Both arms in one process, real
- * phaseResearch, offline fixture web, metric = WHICH URL WAS FETCHED at the tool layer:
- *
- *     Pointing the worker at the exact page that answers the question did not
- *     change what it produced, on either fixture.
- *
- * Everything that could have made that a false negative was ruled out, not assumed:
- *   - the surgery held in every rep: the block was empty in one arm and non-empty in the other;
- *   - a positive control proved a real child can reach the stubbed pi-worker-fetch;
- *   - the block was proven to REACH the APIS prompt, not merely to be built — the prompt is
- *     19,473 chars and ends with the six ranked URLs
- *.
- * So the model reads the instruction and does not act on it.
- *
- * AND THE PREMISE ITSELF DID NOT SURVIVE. PROMPT 4 rests on a having fetched the WRONG
- * pages. Across all 40 reps the only URL any worker ever fetched, in either arm, was
- * https://hono.dev/docs/guides/rpc — the cited one. The worker does not choose badly between
- * pages; it almost never fetches at all (5 of 40 reps). A lever that improves URL RANKING is
- * aimed at a decision this worker rarely makes.
- *
- * The module is kept — deterministic, unit-tested against the real design text, and
- * the A/B harness's string surgery targets it — so the experiment can be re-run cheaply if
- * the fetch rate itself is ever moved. It is NOT called from phases.ts, deliberately.
+ * NOT WIRED. `buildSpecUrlBlock` has no production caller — phases.ts says so at
+ * the site where it would go. The module is kept deterministic and unit-tested
+ * against real design text so the experiment can be re-run cheaply, but nothing in
+ * a run reads it today.
  */
 
 /** Never candidates: a local dev URL is not documentation. */
@@ -55,10 +24,10 @@ const LOCAL_HOST = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|.*\.local)$/i
 const PLACEHOLDER_HOST = /^(example\.(com|org|net)|your-.*|<.*)$/i
 
 /**
- * How many cited pages the block may name. The design cites 21 URLs; listing all of them in
- * every APIS prompt would be prefill spent on pages the task has no use for, and a list long
- * enough to skim past is a list the model ignores. Eight is above the highest per-task
- * reachable count measured on a (5 hono.dev pages for a hono task) with headroom.
+ * How many cited pages the block may name. A design's whole reference list, repeated in
+ * every APIS prompt, is prefill spent on pages the task has no use for, and a list long
+ * enough to skim past is a list the model ignores. The ranking already drops every URL
+ * documenting nothing this task touches, so this only bounds a task that touches a lot.
  */
 export const MAX_SPEC_URLS = 8
 
@@ -107,7 +76,7 @@ export function packageTokens(pkg: string): string[] {
  * Does this cited URL document this package? Host OR path, deliberately: wouter's page is
  * github.com/molefrog/wouter#readme and @hono/zod-validator's is
  * github.com/honojs/middleware/tree/main/packages/zod-validator — both real associations that
- * live in the path. A host-only rule scored 0 tasks for either.
+ * live in the path, and a host-only rule matches neither.
  */
 export function urlDocumentsPackage(url: string, pkg: string): boolean {
     const toks = packageTokens(pkg)
@@ -156,12 +125,6 @@ export function rankSpecUrls(urls: string[], packages: string[]): RankedSpecUrl[
 
 /**
  * The prompt block, or '' when nothing is cited for anything this task uses.
- *
- * NOTE FOR ANYONE EDITING THE GUARD CLAUSE BELOW: scripts/live-spec-url-fetch-ab.ts strips
- * this lever for its baseline arm by replacing that exact statement in the compiled output,
- * and asserts it occurs exactly once. Reshaping it (an early `return` on the caller's side, a
- * ternary, a different variable name) silently makes both arms identical, which reads as
- * "the lever had no effect". Update the harness's anchor in the same commit.
  */
 export function buildSpecUrlBlock(urls: string[], packages: string[]): string {
     const ranked = rankSpecUrls(urls, packages)
@@ -195,14 +158,13 @@ export function buildSpecUrlBlock(urls: string[], packages: string[]): string {
 
 /**
  * The manifest dependencies this task's refined text actually names — the relevance signal
- * the ranking needs, and the reason the block does not simply list all 21 cited URLs.
+ * the ranking needs, and the reason the block does not simply list every cited URL.
  *
- * WHY NOT extractEnrichTargets. That parser is tuned for the EXTERNAL-DEPENDENCIES section
- * and, run over a real refined text, returns ["any", "api", "hc", "package.json",
- * "tsconfig.json", "eslint.config.js"] — and NOT "hono". Ranking off that would drop the one
- * package the task is about while promoting URL noise. The manifest is the authoritative list
- * of what the project actually depends on; matching it against the task text is both
- * deterministic and impossible to fool with prose.
+ * WHY NOT extractEnrichTargets (enrichment.ts). That parser is tuned for the
+ * EXTERNAL-DEPENDENCIES section, so over an ordinary refined text it returns whatever
+ * identifiers and config filenames the prose mentions rather than the packages the task is
+ * about. The manifest is the authoritative list of what the project actually depends on;
+ * matching it against the task text is deterministic and cannot be fooled by prose.
  *
  * Word-boundary matched, so `react` does not match inside `react-dom` or `@types/react`, and
  * a package genuinely named twice is still listed once.
