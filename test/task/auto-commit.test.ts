@@ -96,9 +96,10 @@ test('gitCommitAll: non-identity commit failure is reported, not thrown', async 
 })
 
 test('gitCommitAll: missing identity → retried with self-supplied fallback identity', async () => {
-    // The failure: a headless container with no gitconfig failed ALL 10
-    // per-task commits ("Author identity unknown"), silently disabling enforce and
-    // every commit-based guard. The fallback keeps the snapshot.
+    // A container with no gitconfig fails every commit — git answers
+    // "Author identity unknown" and exits non-zero. Without the retry that is
+    // silent: no snapshot commit means enforce and every other commit-based
+    // guard has nothing to compare against, and nothing says so.
     const seen: string[][] = []
     const spawn = fakeSpawnByPrompt(args => {
         seen.push([...args])
@@ -192,12 +193,13 @@ test('gitStashRef: sha when a stash exists, null when not', async () => {
     expect(await gitStashRef('/repo', undefined, noStash)).toBeNull()
 })
 
-// item 8: the enforce-revert path (`git reset --hard HEAD~1`) erased the
-// gate trail because .pi-tasks is TRACKED — several tasks lose their whole
-// post-snapshot trail (the "commit:"/"enforce(edit)"/resolution lines), so a
-// committed-then-reverted task looked as if it had never been committed. The revert
-// must undo CODE and preserve the forensic trail. Real repo — the reset touches
-// actual files, so a faked spawn would test nothing.
+// `.pi-tasks` is TRACKED, so a plain `git reset --hard HEAD~1` takes the gate
+// trail back with the code. Run in a throwaway repo: append a line to a tracked
+// .pi-tasks file, commit, reset --hard HEAD~1, and the appended line is gone. A
+// committed-then-reverted task then reads as if it had never been committed.
+//
+// The revert must undo CODE and preserve the trail. These use a REAL repo,
+// because the reset acts on actual files and a faked spawn would test nothing.
 function realRepo(): {dir: string; g: (...a: string[]) => string} {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-autocommit-'))
     const g = (...a: string[]): string =>
@@ -259,11 +261,11 @@ test('gitDropLastCommit preserves a nested .pi-tasks debug log across the reset'
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UNTRACKED TEST-RUNNER OUTPUT. a task's snapshot ran a bare
-// `git add -A` over a tree the Playwright run had just littered with three
-// `*-actual.png` FAILURE screenshots, committed them, and made them tracked
-// deliverables — after which two whole final-gate fix attempts were rejected for
-// deleting them.
+// UNTRACKED TEST-RUNNER OUTPUT. A bare `git add -A` snapshot cannot tell a
+// deliverable from litter. A test run that just failed leaves `*-actual.png`
+// screenshots, coverage output and report dirs in the tree; committing those
+// makes them TRACKED deliverables, and a later fix that cleans them up is then
+// rejected for deleting a sibling task's committed work.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('untrackedArtifacts: only untracked regenerable output, never build output', async () => {
@@ -320,7 +322,9 @@ test('gitCommitAll: excludes untracked artifacts from the stage and REPORTS them
         seen.push([...args])
         if (args[0] === 'rev-parse') return INSIDE
         if (args[0] === 'diff') return STAGED
-        // `ls-files -u` (unmerged) must stay empty; `ls-files --others` is ours.
+        // `git ls-files -u` lists UNMERGED (conflicted) paths and is empty in a
+        // clean tree; `git ls-files --others` lists untracked ones. Only the
+        // second is this function's business.
         if (args[0] === 'ls-files' && args.includes('--others')) {
             return {stdout: 'test-results/a-actual.png\0src/real.ts\0', exitCode: 0}
         }
