@@ -107,10 +107,11 @@ describe('html()', () => {
 
     it('reconnects immediately when the tab is refocused instead of waiting out the backoff', () => {
         const out = html('ws://localhost:7600/ws')
-        // A backgrounded phone throttles the retry timer and drops the radio, so
-        // reconnectDelay pins at 30s. Without a foreground trigger the user stares
-        // at the spinner (over an already-updated question) while the server is
-        // reachable now. Returning/regaining network must retry at once.
+        // A backgrounded phone throttles the retry timer and drops the radio, so the
+        // backoff walks up to its cap — `Math.min(reconnectDelay * 2, 30000)` in the
+        // client. Without a foreground trigger the user then stares at a spinner
+        // over an already-updated question while the server is reachable. Returning
+        // to the tab, or regaining network, must retry at once.
         expect(out).toContain("addEventListener('visibilitychange'")
         expect(out).toContain("addEventListener('online'")
         expect(out).toContain("addEventListener('focus'")
@@ -122,8 +123,8 @@ describe('html()', () => {
         expect(m![0]).toContain('reconnectDelay = 1000')
         expect(m![0]).toContain('WebSocket.CONNECTING')
         expect(m![0]).toContain('WebSocket.OPEN')
-        // The scheduled reconnect is now cancellable (tracked timer), so an early
-        // retry doesn't leave a second connect firing later.
+        // The scheduled reconnect must be cancellable — held in a tracked timer — so
+        // an early retry does not leave a second connect firing later.
         expect(out).toContain('reconnectTimer = setTimeout')
         // A superseded socket's late events must not touch the overlay/reconnect.
         expect(out).toContain('if (ws !== sock) return;')
@@ -150,12 +151,12 @@ describe('html()', () => {
 
     it('uses a single task-widget slot, not a per-key map', () => {
         const out = html('ws://localhost:7600/ws')
-        // One slot means a cleared widget always disappears; a per-key map could
-        // strand an orphan (the old two-/task-widget bug).
+        // ONE slot, so a cleared widget always disappears. A per-key map can strand
+        // an orphan: two widgets under different keys, one cleared, one left behind.
         expect(out).toContain('taskWidgetLines')
         expect(out).not.toContain('widgets[msg.key]')
         expect(out).not.toContain('delete widgets[')
-        // The widget delta no longer carries a key.
+        // The widget delta carries no key — one slot, so there is nothing to key on.
         const m = out.match(/case 'widget':[\s\S]*?break;/)
         expect(m).not.toBeNull()
         expect(m![0]).not.toContain('msg.key')
@@ -176,7 +177,7 @@ describe('html()', () => {
         expect(body).toContain('t.parts')
         expect(body).toContain("p.kind === 'text'")
         expect(body).toContain('renderToolPart')
-        // The old flat-tools rendering is gone.
+        // And must NOT fall back to a flat tools list appended after the text.
         expect(out).not.toContain('for (const tool of (t.tools')
     })
 
@@ -280,7 +281,7 @@ describe('html()', () => {
         const rule = m![1]
         expect(rule).not.toContain('var(--green)')
         expect(rule).not.toContain('animation')
-        // The old blink keyframes are gone.
+        // And must NOT ship a blink animation for it.
         expect(out).not.toContain('@keyframes blink')
     })
 
@@ -293,9 +294,9 @@ describe('html()', () => {
 
     it('keeps a long tool-call summary on one line with an ellipsis (full text on expand/hover)', () => {
         const out = html('ws://localhost:7600/ws')
-        // The summary is now a flex row; the label truncates with an ellipsis while
-        // the +N −M badge and elapsed time stay pinned right. (The old behavior hard-
-        // sliced the string at 64 chars mid-word — that must be gone.)
+        // The summary is a flex row: the label truncates with an ellipsis while the
+        // +N −M badge and the elapsed time stay pinned right. Slicing the string to a
+        // fixed length instead cuts mid-word, so no such slice may remain.
         const m = out.match(/\.tool-label \{([^}]*)\}/)
         expect(m).not.toBeNull()
         expect(m![1]).toContain('text-overflow: ellipsis')
