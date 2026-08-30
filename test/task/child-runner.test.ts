@@ -39,12 +39,11 @@ function depsWith(spawn: SpawnFn) {
 }
 
 describe('childArgs', () => {
-    // Regression: commit 4e34f96 silently dropped `--mode json` while splitting
-    // the orchestrator monolith. pi defaults to plain-text output; without this
-    // flag the json-events parser receives no JSON and every phase fails with
-    // "X child produced no output". Keep this test even if it looks trivial —
-    // it's the only thing pinning the contract between the spawn flags and the
-    // runChild parser mode.
+    // pi defaults to PLAIN-TEXT output. Drop `--mode json` and the json-events
+    // parser receives no JSON, so every phase fails with "X child produced no
+    // output" — a refactor can lose this flag and break everything while looking
+    // like a move. Keep this test even though it looks trivial: it is the only
+    // thing pinning the spawn flags to the parser mode runChild expects.
     test('includes --mode json so the child emits the event stream the parser expects', () => {
         const args = childArgs('read')
         const i = args.indexOf('--mode')
@@ -58,8 +57,9 @@ describe('childArgs', () => {
         const t = args.indexOf('--tools')
         expect(t).toBeGreaterThanOrEqual(0)
         expect(args[t + 1]).toBe('read,bash')
-        // The prompt must NOT be an argv element — it goes over stdin so a large
-        // prompt can't overflow the OS command line (issue #1: spawn ENAMETOOLONG).
+        // The prompt must NOT be an argv element. A single argv element past
+        // ~128 KiB fails the spawn outright with E2BIG, and a phase prompt with
+        // an inlined spec clears that easily, so it goes over stdin instead.
         expect(args).not.toContain('do the thing')
     })
 
@@ -198,9 +198,9 @@ describe('runPhaseChild', () => {
     })
 
     test('retries a connection-class model error and returns the later clean output', async () => {
-        // The one task grill-gen failure: one dropped fetch to a live single-slot
-        // local server reported as "Connection error.". It's transient — the
-        // re-spawn succeeds. Fail-fast here would have killed the whole task.
+        // One dropped socket to a single-slot local server surfaces as
+        // "Connection error.". It is transient and the re-spawn succeeds, so
+        // failing fast here would kill a whole task over one blip.
         const {spawn, prompts} = capturingQueue([{error: 'Connection error.'}, 'recovered output'])
         const out = await runPhaseChild(depsWith(spawn), 'grill-gen', 'read', 'ORIGINAL PROMPT')
         expect(out).toBe('recovered output')
@@ -236,7 +236,7 @@ describe('runPhaseChild', () => {
 
 describe('isConnectionError', () => {
     test('matches the exact provider string the user hit', () => {
-        // This is the literal errorMessage pi surfaced on one task grill-gen.
+        // The literal errorMessage pi surfaces for a dropped connection.
         expect(isConnectionError('Connection error.')).toBe(true)
     })
 
@@ -368,8 +368,8 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 },
                 '\n'
             )
-            // First strike yields no assistant text (transient empty turn); the
-            // re-spawn succeeds. This is the one task refine failure mode.
+            // First strike yields no assistant text — a transient empty turn —
+            // and the re-spawn succeeds.
             const {spawn, prompts} = ladderSpawn([
                 agentEndResponse(''),
                 agentEndResponse('refined content')
@@ -435,8 +435,8 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
                 },
                 '\n'
             )
-            // The one task grill-gen failure: a single "Connection error." against
-            // a live single-slot local server. Transient — the restart succeeds.
+            // A single "Connection error." against a single-slot local server.
+            // Transient — the restart succeeds.
             const {spawn, prompts} = ladderSpawn([
                 agentErrorResponse('Connection error.'),
                 agentEndResponse('grilled questions')
@@ -557,13 +557,14 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         })
     })
 
-    // ─── Context window reaches the child (GitHub issue #16) ────────────────
+    // ─── Context window reaches the child ───────────────────────────────────
     //
-    // pi's `--mode json` stream carries NO context window (verified against the
-    // 0.80.2 and 0.84.2 tarballs and pi's docs/json.md — see
-    // shared/json-event-sink.test.ts). The window is therefore something the
-    // PARENT must hand down, and until it did, every snapshot reported
-    // `contextWindow: 0`. Two things depended on it and both were dead.
+    // pi's `--mode json` stream carries NO context window: the string
+    // `context_usage` occurs nowhere in the installed pi packages, and none of
+    // the events docs/json.md documents carries one (see
+    // shared/json-event-sink.test.ts). So the window is something the PARENT must
+    // hand down. Without that every snapshot reports `contextWindow: 0`, and
+    // everything gated on a positive window is silently inert.
 
     test('the caller-supplied context window reaches the onContextUsage snapshot', async () => {
         const seen: ContextSnapshot[] = []
@@ -601,11 +602,12 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         expect(seen).toEqual([{tokens: 1000, contextWindow: 10_000, percent: 10}])
     })
 
-    // StallDetector's CONTEXT CHURN rule (task/stall-detector.ts rule 2) is
-    // gated on `contextWindow > 0`. Fed only zeros it could never fire, so the
-    // documented runaway backstop for a child that keeps re-reading a window it
-    // cannot hold was inert. Window 1000 tokens × CONTEXT_CHURN_FACTOR 2 ×
-    // 4 chars/token = 8000 chars of tool output before it must trip.
+    // StallDetector's CONTEXT CHURN rule (stall-detector.ts rule 2) is gated on
+    // a positive window — `churnTripped` returns false otherwise — so fed only
+    // zeros it can never fire, and the backstop for a child re-reading a window
+    // it cannot hold does nothing. The bound here: window 1000 tokens ×
+    // CONTEXT_CHURN_FACTOR (2) × CHARS_PER_TOKEN (4) = 8000 chars of tool output
+    // before it must trip.
     test('the context-churn stall rule arms once the child knows its window', async () => {
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(
@@ -658,13 +660,12 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         })
     })
 
-    // ─── degradeOnExhaustion ────────────────────────────────
-    // refine on a "write tests" task against a large existing codebase made the
-    // weak local model over-explore — re-reading source hunting for the impl
-    // until the loop budget was spent — and a hard-fail there killed the whole
-    // /task-auto run on every resume. The deliverable (a 4-section text rewrite)
-    // never needed a successful read, so the budget-exhausted phase now does ONE
-    // no-tools final attempt instead of throwing.
+    // ─── degradeOnExhaustion ────────────────────────────────────────────────
+    // A refine phase against a large existing codebase can spend its whole loop
+    // budget over-exploring — re-reading source hunting for an implementation —
+    // and a hard fail there kills the /task-auto run on every resume. But refine's
+    // deliverable is a text rewrite that never needed a successful read. So a
+    // budget-exhausted phase does ONE no-tools final attempt instead of throwing.
     describe('degradeOnExhaustion', () => {
         test('runs a no-tools final attempt after the budget is spent and returns its text', async () => {
             await withTmpTaskDir(async cwd => {
@@ -710,12 +711,11 @@ describe('runPhaseChild — the restart-verb call sites (was runPhaseWithLoopGua
         })
 
         test('the degrade attempt runs under the same wall clock as the strikes', async () => {
-            // BEHAVIOUR DELTA, and the reason `runChild` stopped taking thirteen
-            // positionals. Handed `deps.signal` RAW instead — the kind of drift
-            // that comes of writing bare `undefined`s to reach later slots — the
-            // single attempt made after a loop budget is spent would be the only
-            // attempt that can hang forever. Here it is killed by the same budget
-            // the strikes ran under.
+            // The degrade attempt must run under the SAME timeout the strikes ran
+            // under. Hand it `deps.signal` raw instead — the drift that comes of
+            // writing bare `undefined`s to reach later argument slots — and the
+            // one attempt made after a loop budget is spent becomes the only
+            // attempt that can hang forever.
             const procs: Array<ReturnType<typeof makeProc>> = []
             let i = 0
             const spawn = (() => {
@@ -1192,9 +1192,10 @@ describe('shared error-triage ladder', () => {
             })
 
             test('spends the same budget — 3 attempts — before giving up', async () => {
-                // MAX_LEAK_RETRIES and MAX_LOOP_RESTARTS are separate policies that
-                // happen to agree at 2 today. Both wrappers therefore attempts
-                // total; this pins the arithmetic (budget+1) on both sides.
+                // MAX_LEAK_RETRIES (leaked-tool-call.ts) and MAX_LOOP_RESTARTS
+                // (child-runner.ts) are separate policies that happen to agree at
+                // 2. Both wrappers therefore allow THREE attempts total; this
+                // pins that arithmetic — budget + 1 — on both sides.
                 const empty = ladderSpawn([agentEndResponse('')])
                 await expect(site.run(depsFor(empty.spawn), 'refine')).rejects.toThrow(
                     /refine child produced no output/
@@ -1217,35 +1218,21 @@ describe('shared error-triage ladder', () => {
     }
 })
 
-// ─── Regression: unguarded planning children ─────────────────────────────────
+// ─── Planning children need their own guards ─────────────────────────────────
 //
-// /task-auto's decompose child can run for many minutes and never return.
-// Observed while one was still alive:
+// A /task-auto planning child — decompose, say — can run indefinitely without
+// returning, re-reading design files it has already read to refill a context
+// window pi keeps compacting. From the host that is invisible: the process is
+// alive, the stream is busy, and the plan-debug log simply stops gaining lines.
 //
-//   • the child PID had been up the whole time, and .pi-tasks/plan-debug.log had
-//     not gained a line for that stretch — last entry "decompose-coverage
-//     round 1: INCOMPLETE".
-//   • the loader showed the child at 102k/120k, and the model server's slot
-//     reported n_prompt_tokens 117,370 against a 120,064-token window for the
-//     request it was serving.
-//   • polled over one minute, the child's context climbed 15k → 71k tokens —
-//     more tool output per minute than the whole DESIGN directory holds
-//     (64 KB across four files), so it was re-reading design files it had
-//     already read.
-//   • the last tool line on the loader was `read: DESIGN/marketplace.html`.
+// Neither existing guard catches it. Pass `undefined` for runChild's
+// `onToolCall` and no LoopDetector is constructed at all. And
+// `streamInactivityMs` fires only on SILENCE, while a child thrashing through
+// reads is the opposite of silent. Research workers carry both a loop guard and
+// a wall clock (RESEARCH_WORKER_TIMEOUT_MS, workers/worker-profiles.ts) for
+// exactly this failure.
 //
-// Nothing in the host could end it. runPhaseChild is the runner EVERY
-// /task-auto planning child goes through — clarify, decompose, coverage,
-// contract-extract — and it passes `undefined` for runChild's `onToolCall`, so
-// no LoopDetector was ever constructed for them; only the (now deleted)
-// runPhaseWithLoopGuard built one, and the planning seam did not call it. There
-// is no wall-clock
-// bound either: `streamInactivityMs` only fires on SILENCE, and a child
-// thrashing through reads is the opposite of silent. Research workers already
-// carry both guards (RESEARCH_WORKER_TIMEOUT_MS, workers/pi-worker-core.ts) for
-// exactly this failure; planning children carry neither.
-//
-// These two tests fail today. They are the contract the fix must satisfy.
+// The two tests below are the contract the planning seam has to satisfy.
 describe('runPhaseChild — planning-child runaway guards', () => {
     test('restarts a planning child that repeats one identical tool call', async () => {
         const {spawn, prompts} = ladderSpawn([
@@ -1332,10 +1319,11 @@ describe('runPhaseChild — planning-child runaway guards', () => {
         expect(out).toBe('clean answer')
     }, 2000)
 
-    // The wall clock above is OFF in production (PHASE_CHILD_TIMEOUT_MS = 0):
-    // measured healthy reasoning-on decompose runs take 610-927s, so any cap that
-    // catches the runaway also kills good work. The StallDetector replaces it, and
-    // this pins that it kills the same runaway with NO clock armed at all.
+    // The wall clock above is OFF in production — PHASE_CHILD_TIMEOUT_MS is 0
+    // (child-runner.ts:73). A healthy decompose and a runaway one occupy the same
+    // range of elapsed times, so any cap that catches the runaway also kills good
+    // work. The StallDetector replaces it, and this pins that it kills the same
+    // runaway with NO clock armed at all.
     test('kills a thrashing planning child with no wall clock armed', async () => {
         const prompts: string[] = []
         const procs: Array<ReturnType<typeof makeProc>> = []
@@ -1353,11 +1341,11 @@ describe('runPhaseChild — planning-child runaway guards', () => {
             queueMicrotask(() => {
                 prompts.push(p.stdinData)
                 if (first) {
-                    // The live shape: five design files cycled over and over.
-                    // In any 20-call window each path appears at most 4 times, so
-                    // neither of LoopDetector's rules (threshold 5) ever trips —
-                    // but across the WHOLE run nothing new is being read. Never
-                    // closes on its own.
+                    // Five files cycled over and over. In any 20-call window each
+                    // path appears at most 4 times, and LoopDetector's threshold
+                    // is 5 (loop-detector.ts:102), so neither of its rules ever
+                    // trips — yet across the whole run nothing new is read. The
+                    // cycle length equals the window, which is what hides it.
                     const paths = ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']
                     for (let n = 0; n < 40; n++) {
                         p.stdout!.emit(
@@ -1422,10 +1410,10 @@ describe('childArgs in-run guard extensions', () => {
 })
 
 describe('PhaseDeps.runChild seam', () => {
-    // The child's NAME is what a caller branches on. Before this seam it was
-    // discarded before reaching `spawn`, so a phase test had to recover it by
-    // matching prompt PROSE against prompts.ts — coupling the suite's routing to
-    // copy this codebase reworders and A/B's for a living.
+    // The child's NAME is what a caller branches on, so the seam has to carry it
+    // through to `spawn`. Discard it and a phase test can only recover the name
+    // by matching prompt PROSE against prompts.ts — coupling the suite's routing
+    // to copy that gets reworded all the time.
     const noSpawn: SpawnFn = () => {
         throw new Error('spawned a real child despite deps.runChild')
     }
