@@ -22,12 +22,13 @@ const spec = (...lines: string[]): string =>
         '  - `package.json` gains a `dev` script.'
     ].join('\n')
 
-/** Stands in for the git oracle: everything is a source file except the build
- *  output, which is what `git ls-files` reports on a real tree. */
+/** Stands in for `trackedSourceOracle`. That asks `git ls-files <path>`, which
+ *  prints nothing for a gitignored build output while listing tracked sources —
+ *  so a `dist/` path answers false here exactly as it would on a real tree. */
 const anySource = (p: string): boolean => !p.startsWith('dist')
 
 describe('findCategoryFreezes', () => {
-    test('reads the mx5 run-18 freeze and its single exemption', () => {
+    test('reads a category freeze and its single exemption', () => {
         const [f] = findCategoryFreezes(spec(CATEGORY_FREEZE))
         expect(f.exempt).toEqual(['package.json'])
     })
