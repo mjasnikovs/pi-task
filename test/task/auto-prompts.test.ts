@@ -6,9 +6,13 @@ test('clarify prompt embeds the feature, asks for ONE question + SUGGESTED + NON
     expect(p).toContain('add billing')
     expect(p).toContain('clarifying question')
     expect(p).toMatch(/single numbered line/i)
-    expect(p).toContain('SUGGESTED:') // matches parseClarifyList default-answer signal
-    expect(p).toContain('NONE') // matches parseClarifyList empty signal
-    expect(p).toContain('(none yet)') // empty prior-Q&A placeholder
+    // SUGGESTED_LINE_RE is /^\s*SUGGESTED:\s*(.*)$/i and attaches the value to
+    // the question above it, so the prompt has to ask for that exact token.
+    expect(p).toContain('SUGGESTED:')
+    // parseClarifyList returns [] on /^\s*NONE\s*$/m — the only way the loop ends.
+    expect(p).toContain('NONE')
+    // The placeholder the prior-Q&A slot carries on the first call.
+    expect(p).toContain('(none yet)')
 })
 
 test('clarify prompt carries the prior Q&A so the next question can adapt', () => {
@@ -28,6 +32,8 @@ test('decompose prompt embeds feature + clarifications and demands a checkbox li
     const p = AUTO_DECOMPOSE_PROMPT('add billing', 'Q1: store?\nA1: redis')
     expect(p).toContain('add billing')
     expect(p).toContain('A1: redis')
-    expect(p).toMatch(/- \[ \]/) // checkbox format parseDecomposeList accepts
+    // parseDecomposeList also accepts '- ', '1.' and '1)', but the prompt asks
+    // for the checkbox form because the plan file is written in it.
+    expect(p).toMatch(/- \[ \]/)
     expect(p).not.toContain('clarifying questions')
 })
