@@ -2,22 +2,22 @@
  * One-line startup hint shown when /task-config asks for a thinking level the
  * connected model will not honour.
  *
- * WHY IT HAS TO EXIST. pi never says it ignored or downgraded a level. Measured
- * live with a proxy on the request body: a model with `reasoning: false` given
- * `--thinking medium` sends no reasoning field at all, and a model whose
- * `thinkingLevelMap` nulls `off` given `--thinking off` is clamped UP to
- * `medium` — thinking stays on. Both are silent. A reasoning profile the user
- * set and the model erased is worse than no profile feature, because it looks
- * like it worked.
+ * WHY IT HAS TO EXIST. pi silently rewrites the level and says nothing. Its own
+ * `clampThinkingLevel` (pi-ai models.js) shows both halves: a model with
+ * `reasoning: false` supports only `["off"]`, so every requested level collapses
+ * there; and a level the model's `thinkingLevelMap` nulls is filtered out, after
+ * which the clamp scans UPWARD before downward — so asking for `off` on a model
+ * that nulls `off` gets the next level that IS available, and thinking stays on.
+ * A reasoning profile the user set and the model erased is worse than no profile
+ * feature, because it looks like it worked.
  *
  * ANTI-NAG. This warns once per session and clears on the first keystroke, and
  * that is the whole mechanism — deliberately no "already warned about model X"
  * file. Such a record goes stale the moment models.json is edited, and would
  * suppress the warning at exactly the moment a `/model` switch made it true.
- * brave-warning.ts nags every session for a standing misconfiguration and that
- * is correct; this is the same class. The real anti-nag is `inherit`: with the
- * shipped all-`inherit` table, `reasoningMismatches` returns empty for every
- * model and nothing renders at all.
+ * brave-warning.ts nags every session for a standing misconfiguration and that is
+ * correct; this is the same class. Setting a group back to `inherit` is what
+ * silences it: an all-`inherit` table yields no mismatches for any model.
  */
 
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'
@@ -34,9 +34,9 @@ const WIDGET_KEY = 'pi-task-reasoning-warning'
  *
  * Names the MODEL it checked, because children carry no `-m` and resolve pi's
  * default model, which need not be the host session's — a warning that does not
- * say what it looked at cannot be acted on. Names at most two groups; the count
- * carries the rest, since a line long enough to list seven is a line nobody
- * reads.
+ * say what it looked at cannot be acted on. Names at most two groups and appends
+ * `(+N more)` only when there are more than two, since a line long enough to list
+ * every group is a line nobody reads. Null when nothing mismatched.
  */
 export function formatReasoningWarning(
     modelName: string,
@@ -60,9 +60,10 @@ export function formatReasoningWarning(
  * The extra cause line, when the SERVER disagrees with models.json.
  *
  * This is the `/login llama.cpp` case and the only thing the host-side clamp
- * cannot see: pi's built-in llama.cpp provider hardcodes `reasoning: false`, so
- * a perfectly capable server is described to pi as having no reasoning at all.
- * Returns null whenever the two agree, or when there was nothing to compare.
+ * cannot see: pi ships llama.cpp as a built-in extension whose provider entry
+ * hardcodes `reasoning: false`, so a perfectly capable server is described to pi
+ * as having no reasoning at all. Returns null whenever the two agree, and null
+ * when the probe answered nothing, so an unreachable server adds no cause line.
  */
 export function formatCapabilityConflict(
     serverSupportsEffort: boolean | null,
@@ -106,9 +107,10 @@ export function registerReasoningWarning(
         const base = formatReasoningWarning(model?.name ?? model?.id ?? 'unknown', mismatches)
         if (base === null) return null
 
-        // Fire-and-forget: the server probe only ever REFINES the cause line, so
-        // it must not delay the warning or be able to prevent it. A 2s budget and
-        // a swallowed failure mean a non-llama.cpp backend costs nothing.
+        // Fire-and-forget: the server probe only ever REFINES the cause line, so it
+        // must not delay the warning or be able to prevent it. `probeChatTemplateCaps`
+        // carries its own short timeout and returns null on any failure, so a
+        // backend that does not answer `/props` costs nothing.
         const baseUrl = model?.baseUrl
         if (model === undefined || baseUrl === undefined || baseUrl === '') return {text: base}
         const declares = model.reasoning
