@@ -15,14 +15,10 @@ import {
 import {TASKS_DIR_NAME} from '../../src/task/task-types.js'
 
 /**
- * These assert the INPUT every run-level closure scan reads.
- *
- * They could not be written before: the walk lived twice as a private
- * `scanCandidates`, and the only door to either was a whole scan over a real
- * tree. `artifact-closure.test.ts` has 28 references to the pure extractors and 5
- * calls to the driver — and no test in the cluster asserted a skip set at all,
- * which is how `bench`/`benchmarks` came to be skipped by one copy and scanned by
- * the other.
+ * The skip sets asserted here are the input to both tree-walking closure
+ * scans: `serve-entry.ts` and `artifact-closure.ts` each build their file
+ * list by calling `shippedSources`. A skip set that drifts here drifts in
+ * both.
  */
 
 function tree(spec: Record<string, string>): string {
@@ -69,7 +65,6 @@ describe('isSkippedDir', () => {
         expect(isSkippedDir('.svelte-kit')).toBe(true)
     })
 
-    // Hardcoding it was part of a five-site literal with no compile link.
     test('the tasks dir is derived from TASKS_DIR_NAME, not retyped', () => {
         expect(isSkippedDir(TASKS_DIR_NAME)).toBe(true)
     })
@@ -114,7 +109,6 @@ describe('shippedSources', () => {
         fs.rmSync(dir, {recursive: true, force: true})
     })
 
-    // The drift itself: one copy skipped these, the other scanned them.
     test('a bench tree and a .bench file are scanned by NO closure scan', () => {
         const dir = tree({
             'bench/hot.ts': '',
