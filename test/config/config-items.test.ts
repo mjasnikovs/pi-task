@@ -6,12 +6,12 @@ import type {PiTaskConfig} from '../../src/config/config.js'
 const fresh = (): PiTaskConfig => structuredClone(DEFAULT_CONFIG)
 
 describe('every setting formats and parses its OWN value', () => {
-    // The property that could not be written before. `displayValue` and the
-    // `onChange` if/else chain were two hand-written ladders that had to agree,
-    // and neither failed to compile when a setting was missing from one of them:
-    // a missed format arm rendered `String(cfg[id])`, and a missed parse arm let
-    // the generic `else` write the boolean `newValue === 'on'` into an enum field.
-    // handleTaskConfig is not exported, so the dispatcher had no coverage at all.
+    // The round trip, driven off the ROW rather than off a dispatcher. Split
+    // across a format ladder and a parse ladder, neither fails to compile when a
+    // setting is missing from one of them: the format gap renders
+    // `String(cfg[id])` and the parse gap writes a boolean into an enum field.
+    // `handleTaskConfig` is not exported, so the dispatcher cannot be driven
+    // directly — every row's own `format`/`apply` pair can.
     for (const item of ITEMS) {
         const offered = item.values ?? ['on', 'off']
         test(`${item.id}: format(apply(cfg, v)) === v for every offered value`, () => {
@@ -25,10 +25,11 @@ describe('every setting formats and parses its OWN value', () => {
 })
 
 test('a value the panel never offers can never become the stored value', () => {
-    // The old generic `else` coerced anything to a boolean. A row must either
-    // ignore a label it does not recognise (the two ms settings and the search
-    // provider) or sanitise it to a real one (debugLogs) — never store it. Either
-    // way the field still renders as something the panel offers.
+    // A generic parse arm coerces anything to a boolean. A row must instead either
+    // IGNORE a label it does not recognise — searchProvider and the two ms
+    // settings leave the field untouched — or SANITISE it to a real one —
+    // reasoningMode and debugLogs fall back to their default. Never store it.
+    // Either way the field still renders as something the panel offers.
     for (const item of ITEMS) {
         if (item.values === undefined) continue
         const cfg = fresh()
@@ -56,8 +57,7 @@ test('the default config renders as an offered value for every setting', () => {
 })
 
 test('an enum setting never becomes a boolean', () => {
-    // The exact bug the deleted `else` branch could cause, and the reason
-    // debugLogs needed a comment explaining why it must not fall into it.
+    // The exact damage a generic boolean parse arm would do to an enum row.
     const cfg = fresh()
     for (const item of ITEMS) {
         if (item.values === undefined) continue
@@ -85,12 +85,12 @@ test('ids are unique — the onChange lookup must resolve to exactly one row', (
 })
 
 /**
- * The same properties, over EVERY row this session shows — the seven reasoning
- * groups and one row per live tool and installed extension included.
+ * The same properties, over EVERY row this session shows — the eleven reasoning
+ * groups plus one row per live tool and per installed extension.
  *
- * Those three families are the ones a prefix ladder would leave out: with a
- * builder, an apply function and a ladder arm each, none of the properties above
- * can see them, and only one of the three would end up with a round-trip test.
+ * Those three families are the ones a prefix ladder would leave out: they are
+ * BUILT at call time rather than listed in ITEMS, so none of the properties above
+ * reaches them.
  */
 describe('every DISCOVERED row obeys the same contract', () => {
     const tools = [
