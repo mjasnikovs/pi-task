@@ -7,8 +7,9 @@ import {
     splitBulletSpans
 } from '../../src/task/context-attribution.js'
 
-// Every bullet below is VERBATIM from a task files. The detector is judged
-// against real emitted text, not against text invented to make it pass.
+// The bullets below are kept at the length and register a worker actually emits.
+// The detector has to separate a laundered claim from a legitimate one inside
+// prose of this shape, so a shortened fixture would not exercise it.
 
 const PACKAGES = [
     'hono',
@@ -22,14 +23,17 @@ const PACKAGES = [
     'bun'
 ]
 
-/** The fatal bullet, verbatim from a real spec — the one that killed the product. */
+/** The laundering shape in one bullet: a citable fact (the pinned version) fused
+ *  in one sentence with an uncitable one (what the base URL MEANS), under a
+ *  shared attribution cue. The true half launders the false half. */
 const FATAL =
     '- The `hono` dependency is pinned at `^4.12.31` in package.json, and the external '
     + 'context confirms `hc<AppType>` pattern with base URL `/api` for same-origin '
     + 'relative paths works correctly (per Hono RPC docs LIVE data).'
 
-/** EXTERNAL CONTEXT as the task actually had it: an npm block, and no hono.dev fetch.
- *  F-2(b) verified ZERO hono.dev fetches in the whole run. */
+/** The EXTERNAL CONTEXT that accompanies it: an npm block and nothing else. Per
+ *  the module header's taxonomy a `### npm:` block carries version numbers only,
+ *  so it cannot support a claim about what a base URL means. */
 const EC_NPM_ONLY = `EXTERNAL CONTEXT
 ### npm: hono
 latest: 4.12.31
@@ -83,9 +87,9 @@ The hc client takes a base URL...`
     })
 
     test('a bullet with no attribution cue is never flagged, however wrong', () => {
-        // This is the OTHER one task bullet asserting the same false thing without
-        // claiming provenance. Out of scope by design: PROMPT 1 governs laundering,
-        // not correctness. Recorded so the boundary is deliberate, not an oversight.
+        // The same false claim asserted WITHOUT any provenance cue. Out of scope
+        // by design: this detector governs laundering, not correctness. Recorded
+        // so the boundary reads as deliberate rather than an oversight.
         const noCue =
             '- Auth endpoints use sessionMiddleware + cookie-based auth — the default '
             + '`hc` base URL must be relative (e.g., `/api`) for same-origin cookie sending.'
@@ -109,11 +113,11 @@ describe('findUnsourcedAttributions — legitimate bullets must NOT be flagged',
         expect(findUnsourcedAttributions(b, EC_NPM_ONLY, PACKAGES)).toHaveLength(0)
     })
 
-    // NAME CORRECTED when the detector was promoted into src/: this bullet is not saved
-    // by the service block (a service block is three search-result snippets and cannot
-    // source usage semantics — see the module header). It is saved because it is a
-    // VERSION claim carrying a single incidental semantics word ("supports"), which the
-    // version-only heuristic lets through. The assertion is unchanged and still holds.
+    // Note WHY this one passes. Not the service block — a service block is only a
+    // title, URL and one-line description per result, so it cannot source usage
+    // semantics (see the module header's taxonomy). It passes because it is a
+    // VERSION claim carrying a single incidental semantics word ("supports"),
+    // which the version-only heuristic lets through.
     test('TASK_0010: a version claim with one incidental semantics word is not flagged', () => {
         const b =
             '- Hono v4.x (project uses `^4.12.31`, live registry shows latest 4.12.31) '
@@ -150,10 +154,10 @@ c.req.ip() returns the client address`
 })
 
 describe('which EXTERNAL CONTEXT blocks can source a semantics claim', () => {
-    // a task's own enrichment produced exactly one block of this shape — verified by
-    // running extractEnrichTargets over the verbatim refined task: services=[Hono RPC
-    // client], urls=[], packages=[any, api, hc]. If a service block counted as a source,
-    // "Hono RPC client" would match the package `hono` and the fatal bullet would pass.
+    // A service block named after the package is the near-miss that matters: if
+    // one counted as a source, "Hono RPC client" would match the package `hono`
+    // and the fatal bullet above would pass. It must not, because a service block
+    // carries snippets, not semantics.
     test('a ### service block does NOT source a usage-semantics claim', () => {
         const ec = `${EC_NPM_ONLY}
 
