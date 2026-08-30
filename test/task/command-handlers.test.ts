@@ -5,10 +5,12 @@
  *
  * What is covered here is every branch that answers WITHOUT running a task —
  * the empty invocation, the listing, the not-found and nothing-to-do refusals,
- * the cancel with no run. Those are the paths a user hits most often and the
- * only ones that need no live model. The branches that go on to run work
- * (runSingleTask / runGatedTask / runAutoLoop) need a real pi child and are
- * covered by the A/B harnesses in scripts/.
+ * the cancel with no run. Those are the paths a user hits most often, and the
+ * only ones that need no live model.
+ *
+ * The branches that go on to run work — runSingleTask, runGatedTask,
+ * runAutoLoop — need a real pi child, so they are driven through injected deps
+ * in the orchestrator suites rather than from the command table.
  */
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -108,7 +110,8 @@ describe('/task-list', () => {
     test('lists tasks newest first, with state, phase and title', async () => {
         writeTask(cwd, 'TASK_0001', TASK('TASK_0001', 'completed', 'critique'))
         writeTask(cwd, 'TASK_0002', TASK('TASK_0002', 'in_progress', 'research'))
-        // mtime decides the order, not the id.
+        // The listing sorts newest-first on mtime (orchestrator.ts:889), so
+        // backdating this file must move it even though its id is lower.
         const older = path.join(cwd, '.pi-tasks', 'TASK_0002.md')
         fs.utimesSync(older, new Date(0), new Date(0))
 
