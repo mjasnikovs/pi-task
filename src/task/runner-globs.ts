@@ -2,18 +2,16 @@
  * runner-globs — deterministic detection of TWO TEST RUNNERS FIGHTING OVER THE SAME
  * FILES, checked as soon as a project declares both rather than discovered at run end.
  *
- * The failure this closes — SECOND occurrence, a AND 13: a project declares both
- * `bun test` and `playwright test`. Bun's runner scans the whole project for
- * `*.test.*` / `*.spec.*`; Playwright's component/e2e specs ARE `*.spec.tsx`. So
- * `bun test` imports Playwright spec files, which import `@playwright/test` outside a
- * Playwright runner, and the whole suite dies on a module it was never meant to load.
+ * The failure this closes: a project declares both `bun test` and
+ * `playwright test`. `bun test` with no arguments scans the whole project tree for
+ * `*.test.*` / `*.spec.*`, and Playwright's component/e2e specs ARE `*.spec.tsx`.
+ * So `bun test` imports Playwright spec files, which import `@playwright/test`
+ * outside a Playwright runner, and the whole suite dies on a module it was never
+ * meant to load.
  *
- * The final gate has found it, and then found it again — and the
- * fix (a `pathIgnorePatterns` line in bunfig.toml) was still sitting UNCOMMITTED in
- * the working tree when the run ended, so HEAD shipped with `bun run test` broken. A
- * defect that recurs across runs and survives its own fix is not a discovery problem;
- * it is a missing invariant. This module states the invariant so it can be checked the
- * moment both runners are declared:
+ * Finding that at the final gate is too late: the fix is a one-line config change
+ * that can still be sitting uncommitted when the run ends. So the invariant is
+ * checked the moment both runners are declared:
  *
  *     if two runners are declared, their file sets must be provably DISJOINT
  *
@@ -76,8 +74,9 @@ export function parsePathIgnorePatterns(bunfig: string | null): string[] | null 
 }
 
 /**
- * Playwright's `testMatch`, when the config states one. Null → the default, which
- * matches `*.spec.*` and `*.test.*` — precisely Bun's claimed set.
+ * Playwright's `testMatch`, when the config states one. Null when the config
+ * states none (or there is no config), in which case the NAMING form cannot be
+ * proven and `assessRunnerGlobs` falls through to the exclusion check.
  */
 export function parseTestMatch(playwrightConfig: string | null): string[] | null {
     if (playwrightConfig === null) return null
