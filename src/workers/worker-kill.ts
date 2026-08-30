@@ -1,31 +1,28 @@
 /**
  * The ROSTER of ways a worker child can die, and what each one implies.
  *
- * WHY IT EXISTS. One kill cause was named in six unlinked places: a
+ * WHY IT EXISTS. Without it, one kill cause is named in six unlinked places: a
  * `RunWorkerInput` guard option, a `RunWorkerResult` field, the
- * `WorkerRestartReason` union, a `RESTART_RULES` row, the `CARRY_FORWARD_REASONS`
- * set, and a `FAILURE_RULES` row. Adding one meant six coordinated edits, and
- * only two of them failed to compile if you skipped one. That is not
- * hypothetical: `worker-failure.ts`'s own header records the bug it cost —
- * *"`streamStalled` was added to the result and to `finalAttemptFailed`, but the
- * enforce ladder never grew an arm for it, so an enforcement child killed for a
- * hung model stream fell all the way through to `if (aborted) return
- * USER_CANCELLED`"*. That fix closed the READER side. This closes the author
- * side.
+ * `WorkerRestartReason` union, a `RESTART_RULES` row, the carry-forward set, and a
+ * `FAILURE_RULES` row. Adding a cause is six coordinated edits, and most of them
+ * still compile if one is skipped — so the new cause simply does not exist on
+ * whichever path was missed. `worker-failure.ts` closes the READER side of that;
+ * this closes the AUTHOR side.
  *
  * WHAT IS AND IS NOT UNIFIED. The roster is one table. The two ORDERINGS stay
  * two, because they genuinely disagree and each says so in its own prose: the
  * restart ladder puts `loop` first (its hint is the most specific thing to tell a
- * re-spawn), and the failure ladder puts `stalled` first (the diagnosis most
- * easily lost behind the `aborted` every kill path sets). Folding two
- * precedences into one row type would need an escape hatch per row — the same
- * objection that got a `WriteGuard` row table rejected. What the orderings gain
- * here is that neither can name a cause with no row, nor silently omit one.
+ * re-spawn), and the failure ladder puts `stalled` first (the diagnosis most easily
+ * lost behind the `aborted` every kill path sets). Folding two precedences into one
+ * row type would need an escape hatch per row. What the orderings gain here is that
+ * neither can name a cause with no row, nor silently omit one.
  *
- * Not every cause appears in both ladders, and that asymmetry is real:
- * `connection-error` is restartable but is reported as a `modelError`, never as a
- * kill; `stalled`, `aborted` and `exit` end an attempt outright and no hint would
- * help.
+ * Not every cause appears in both ladders, and that asymmetry is real. Six of the
+ * nine are `restartable` and those six are exactly RESTART_ORDER; eight are
+ * `reported` and those eight are exactly FAILURE_ORDER. `connection-error` is the
+ * one that restarts without ever being reported as a kill — it reaches the caller
+ * as a `modelError`. `stalled`, `aborted` and `exit` end an attempt outright, and
+ * no hint would help.
  */
 
 /** Every way a worker attempt can end other than by answering. */
@@ -48,18 +45,20 @@ export interface WorkerKill {
      * (`connection-error` arrives as `modelError`; `aborted` and `exit` are the
      * generic fields every kill path also sets).
      *
-     * A string rather than `keyof RunWorkerResult` so this module stays free of
-     * pi-worker-core's import graph; `worker-kill.test.ts` checks it against the
-     * real interface.
+     * Null for three rows: `connection-error`, `aborted` and `exit`. A string rather
+     * than `keyof RunWorkerResult` so this module stays out of pi-worker-core's
+     * import graph; worker-kill.test.ts checks every non-null one against a real
+     * result object.
      */
     resultField: string | null
     /**
      * Is a killed attempt's partial output worth carrying into the next one?
      *
-     * A clock kill, a hung tool, an idle stream and a dropped socket all discard
-     * work the model genuinely did. A loop kill and a leaked tool call do not —
-     * the first is by definition the same call repeated, the second is malformed
-     * protocol text, and replaying either would feed the failure back to itself.
+     * True for exactly four: a clock kill, a hung tool, an idle stream and a dropped
+     * socket all discard work the model genuinely did. A loop kill and a leaked tool
+     * call do not — the first is by definition the same call repeated, the second is
+     * malformed protocol text, and replaying either would feed the failure back to
+     * itself.
      */
     carryForward: boolean
     /** Does the restart ladder have a rule for this cause? */
