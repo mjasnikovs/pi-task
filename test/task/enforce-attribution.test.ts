@@ -1,7 +1,10 @@
 /**
- * enforce-attribution — unit coverage for the enforce-differential attribution
- * filter. The incident is the anchor fixture; the
- * rest pin the invariants that keep this from becoming a way to ignore regressions.
+ * enforce-attribution — the enforce-differential attribution filter.
+ *
+ * The question it answers: a re-verify FAILed after enforce edited the tree, so
+ * did ENFORCE break it, or was it already broken? Getting that wrong in one
+ * direction reverts good guideline edits; in the other it is a way to ignore a
+ * real regression. The cases below pin both edges.
  */
 import {expect, test, describe} from 'bun:test'
 import {
@@ -11,13 +14,14 @@ import {
     resolveNamedFile
 } from '../../src/task/enforce-attribution.js'
 
-/** Verbatim from a real `.pi-tasks/accept-debt.md` (origin `enforce-revert`). */
+/** A FAIL reason at the length one really arrives at: a named spec file with a
+ *  line number, a diagnosis, and a claim about what was NOT modified. */
 const RUN18_FAIL =
     'work did not verify: 1 of 51 Playwright CT tests fails (MyListings.spec.tsx:186 — "toggle Mark as '
     + 'Sold / Undo Sold updates listing status in-place") due to a pre-existing flaky locator collision '
     + "where getByText('SOLD', {exact: true}) resolves to 2 elements; however, this test file was NOT modified b"
 
-/** The enforce commit `ee65661`, in full. */
+/** The files an enforce pass touched. */
 const RUN18_ENFORCE = ['.pi-tasks/TASK_0024.md', 'src/client/pages/Admin.tsx']
 
 const RUN18_REPO = [
@@ -29,8 +33,11 @@ const RUN18_REPO = [
 
 describe('extractFailingFiles', () => {
     test('finds a BARE file name with a line number — the run-18 shape', () => {
-        // root-cause-repair.ts's path-token regex requires a separator and sees
-        // nothing here; that blindness is half of why could not attribute.
+        // root-cause-repair.ts's PATH_TOKEN_RE is
+        // `/(?:[\w.@-]+\/)+[\w.@-]+\.\w+/g` — it requires a `/`, so run against
+        // "MyListings.spec.tsx:186" it matches NOTHING. A filter reusing it would
+        // find no failing file and be unable to attribute at all, which is why
+        // this extractor accepts the bare-name-plus-line form too.
         expect(extractFailingFiles(RUN18_FAIL)).toEqual(['MyListings.spec.tsx'])
     })
 
@@ -41,8 +48,9 @@ describe('extractFailingFiles', () => {
     })
 
     test('does not mistake property access, versions or call chains for files', () => {
-        // `usersData.error` is literally what a enforce diff edited; an
-        // ungated name.ext regex would name it as the failing file.
+        // `usersData.error` has exactly the name.ext shape, and it is the kind of
+        // identifier an enforce diff edits — so an ungated regex would name it as
+        // the failing FILE and attribute the break to enforce.
         const text =
             "setApiError(usersData.error ?? 'x') at v1.2.3 — expect(component.getByText('SOLD')).toBeVisible()"
         expect(extractFailingFiles(text)).toEqual([])
