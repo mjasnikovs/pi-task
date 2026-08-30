@@ -6,8 +6,8 @@ import {writeTaskFile, readTaskFile} from '../../src/task/task-io.js'
 import type {GateDeps} from '../../src/task/task-gates.js'
 import type {TaskFrontMatter} from '../../src/task/task-types.js'
 
-/** A composed (done, completed-at-handoff) inner task file the gate reads its title
- *  from — mirrors what TaskRunner writes before the implementation turn. */
+/** The task file as it stands when the gate reads its title: TaskRunner writes
+ *  `{state: 'completed', phase: 'done'}` just before handing the spec off. */
 async function writeComposedTask(dir: string, id: string, title: string): Promise<void> {
     const now = new Date().toISOString()
     const fm: TaskFrontMatter = {
@@ -60,7 +60,8 @@ test('runGatedTask: implementation failed → task left resumable, error announc
                 })
         })
         await runGatedTask(ctx, dir, 'build a thing', {deps})
-        // Demoted from 'completed' (handoff) to a resumable state so /task-resume works.
+        // RUN_END_POLICY.failed is `resumable: true`, so the handoff's 'completed'
+        // is demoted and /task-resume can pick the task up.
         expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('failed')
         expect(
             captured.notifies.some(n => /stopped.*context overflow.*\/task-resume/.test(n.msg))
@@ -97,7 +98,7 @@ test('runGatedTask: clean run → gate commits with the task title, announces co
         // Commit message uses the task's front-matter title, not the raw prompt.
         expect(commits).toContain('task: My Feature (TASK_0006)')
         expect(captured.notifies.some(n => /complete — verified/.test(n.msg))).toBe(true)
-        // A clean done run is NOT demoted — it stays completed.
+        // TERMINAL_OUTCOMES.done is `markResumable: false`.
         expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('completed')
     })
 })
@@ -115,7 +116,8 @@ test('runGatedTask: verify FAIL + dismiss → task left resumable, dismissal ann
             verify: () => Promise.resolve({ok: false, reason: 'build exited 1'}),
             recommend: () => Promise.resolve({recommend: 'autofix', rationale: 'broken'})
         })
-        // No queueSelect → picker dismissed.
+        // The fake ctx's select returns undefined when nothing was queued, which is
+        // what a dismissed picker looks like.
         await runGatedTask(ctx, dir, 'build a thing', {deps})
         expect(commits).toEqual([]) // work not blessed
         expect((await readTaskFile(dir, 'TASK_0006')).frontMatter.state).toBe('failed')
@@ -126,13 +128,11 @@ test('runGatedTask: verify FAIL + dismiss → task left resumable, dismissal ann
 })
 
 /**
- * REGRESSION — a cancel inside the GATE must not be overwritten either.
- *
- * `RUN_END_POLICY` stops the FIRST implementation run's `cancelled` being rewritten
- * to `failed`. The gate's autofix re-run had no such row: it folded `cancelled` into
- * `interrupted`, whose TERMINAL_OUTCOMES entry demotes the task file — so a user who
- * cancelled a gate re-run got their `cancelled` replaced by `failed` and a red
- * "stopped — fix and run /task-resume". Same lie, one level down.
+ * A cancel inside the GATE must not be overwritten either. Two separate tables
+ * decide this: `RUN_END_POLICY` for the first implementation run, and
+ * `TERMINAL_OUTCOMES` for the gate's autofix re-run. Both carry a `cancelled` row
+ * that leaves the file alone; folding `cancelled` into `interrupted` would demote
+ * it to `failed`, replacing a deliberate stop with a red fault.
  *
  * Asserted on the FILE, not on the returned kind: the overwrite is the harm.
  */
@@ -145,7 +145,8 @@ test('runGatedTask: a cancelled AUTOFIX re-run leaves the file cancelled', async
             runTask: async () => {
                 turn++
                 if (turn === 1) return {taskId: 'TASK_0006', end: {kind: 'completed'}}
-                // What a real /task-cancel does before the run ends.
+                // classifyFailure maps a USER_CANCELLED throw to state 'cancelled',
+                // so the file already says so before the run end is handled.
                 const {frontMatter, body} = await readTaskFile(dir, 'TASK_0006')
                 await writeTaskFile(dir, {...frontMatter, state: 'cancelled'}, body)
                 return {taskId: 'TASK_0006', end: {kind: 'cancelled'}}
