@@ -3,19 +3,21 @@
  *
  * Three properties.
  *
- *  1. Given the EMPTY fragment, every builder produces argv byte-identical to
- *     the version before reasoning profiles existed. That is a property of the
- *     builders, and it holds whatever the table says.
- *  2. `childBaseArgs` never carries the flag. It is the one universal builder,
- *     shared by all four paths, so a flag placed there could not vary by role —
- *     and "just put it in the base args" is the refactor this pins against.
- *  3. WHAT THE SHIPPED TABLE ACTUALLY PUTS ON THE WIRE, group by group.
- *     "All-`inherit`, so nothing changed" was true when PR 1 shipped and is NOT
- *     true now: `gate` and `implementation` are measured `off`, so gate children
- *     really do carry `--thinking off` today. A cell is a behaviour change, and
- *     a behaviour change nobody asserts is one nobody notices — so the wire
- *     effect of every cell is pinned here, against DEFAULT_CONFIG rather than
- *     the live singleton.
+ *  1. Given the EMPTY fragment, every builder emits no `--thinking` at all, so
+ *     an `inherit` group leaves the child's argv exactly as it would be with no
+ *     reasoning table. That is a property of the builders and holds whatever
+ *     the table says.
+ *  2. `childBaseArgs` never carries the flag. It is the universal builder — the
+ *     three call sites outside its own module are child-runner.ts,
+ *     focused-extractor.ts and pi-worker-core.ts — so a flag placed there could
+ *     not vary by role. "Just put it in the base args" is the refactor this
+ *     pins against.
+ *  3. WHAT THE SHIPPED TABLE PUTS ON THE WIRE, group by group. Only one of the
+ *     eleven groups is `inherit`, so most children really do carry a
+ *     `--thinking` flag today. A cell is a behaviour change, and a behaviour
+ *     change nobody asserts is one nobody notices — so the wire effect of every
+ *     cell is pinned here, against DEFAULT_CONFIG rather than the live
+ *     singleton.
  */
 import {describe, expect, test} from 'bun:test'
 import {childBaseArgs} from '../../src/shared/child-extensions.js'
@@ -53,17 +55,21 @@ describe('childArgs', () => {
     })
 
     test('the flag lands after the -e pairs and before --mode', () => {
-        // Position matters only in that pi parses flags in any order, but a
-        // reader diffing two runs should see one contiguous insertion, not a
-        // flag threaded between the tool flags it has nothing to do with.
+        // Position does not matter to pi: its parser (dist/cli/args.js) is one
+        // flat loop of `else if (arg === "--x")` branches over argv, each
+        // consuming its own value, so any order parses the same. It matters to
+        // a reader diffing two runs, who should see one contiguous insertion
+        // rather than a flag threaded between the tool flags it is unrelated to.
         const args = childArgs('read', ['/ext.js'], ['--thinking', 'off'])
         const base = childBaseArgs(['/ext.js'])
         expect(args).toEqual([...base, '--thinking', 'off', '--mode', 'json', '--tools', 'read'])
     })
 
     test('a no-tools child still carries its level', () => {
-        // critique-triage and compress-label are --no-tools, and they are the
-        // children most likely to want a level of their own.
+        // critique-triage (phases.ts) and compress-label (title-label.ts) both
+        // pass '' for tools, which is what becomes --no-tools. They judge text
+        // they were handed, so a level of their own is exactly what they want —
+        // and the no-tools branch must not drop the flag on the way.
         const args = childArgs('', [], ['--thinking', 'medium'])
         expect(args).toContain('--thinking')
         expect(args).toContain('--no-tools')
@@ -110,13 +116,13 @@ describe('what the shipped table puts on the wire', () => {
         research: ['--thinking', 'medium'],
         // `research:files` is the one worker cell that does not follow `research`.
         'research:files': ['--thinking', 'off'],
-        // apis and context ship IDENTICAL to `research`: nothing was found that
-        // separates them, so the cell inherits the parent's decision. If one of
-        // these ever differs from the line above, it should say why.
+        // apis and context ship IDENTICAL to `research`. If one of these ever
+        // differs from the line above, it should say why.
         'research:apis': ['--thinking', 'medium'],
         'research:context': ['--thinking', 'medium'],
-        // `research:tooling` lands on the SAME value by a different route: it was
-        // compared directly. The wire byte is unchanged; the reason behind it is not.
+        // `research:tooling` lands on the same value as its parent, but has its
+        // own cell rather than falling through, so changing `research` does not
+        // silently move it.
         'research:tooling': ['--thinking', 'medium'],
         phase: ['--thinking', 'off'],
         planning: ['--thinking', 'medium'],
@@ -139,8 +145,10 @@ describe('what the shipped table puts on the wire', () => {
     }
 
     test('a gate child really carries the flag through childArgs', () => {
-        // Resolved through the same builder gate-deps and child-runner use, so
-        // this is the argv the model server sees, not a table lookup restated.
+        // The real path is gate-deps.ts calling groupThinkingArgs('gate'), whose
+        // fragment reaches childArgs at child-runner.ts:289. This composes the
+        // same two functions, so it is the argv the model server sees rather
+        // than a table lookup restated.
         const fragment = thinkingArgs(resolveReasoning('gate', DEFAULT_CONFIG))
         expect(childArgs('read', [], fragment)).toEqual([
             ...childBaseArgs([]),
@@ -154,10 +162,9 @@ describe('what the shipped table puts on the wire', () => {
     })
 
     test('an inherit group is still byte-identical to the pre-feature argv', () => {
-        // The half of the original claim that survives, now asserted where it
-        // is actually true: for a group the table leaves alone. `plan` is the
-        // only one left — /task-plan is interactive, so the level is the user's
-        // to pick and the table must not override it.
+        // Asserted for a group the table leaves alone. `plan` is the only
+        // `inherit` cell of the eleven — /task-plan is interactive, so the level
+        // is the user's to pick and the table must not override it.
         expect(DEFAULT_REASONING_TABLE.plan).toBe('inherit')
         const fragment = thinkingArgs(resolveReasoning('plan', DEFAULT_CONFIG))
         expect(childArgs('read', [], fragment)).toEqual([
