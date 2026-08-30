@@ -89,13 +89,16 @@ test('unobservedDebtReason: names the check and says it was never proven passing
     expect(r).toMatch(/unfalsifiable/)
 })
 
-// ─── : a demotion may never overrule an observation ──────────────
+// ─── A demotion may never overrule an observation ────────────────────────────
 //
-// The demote rule was a blind compensator for a probe limitation the probes have
-// self-reported since ELEVEN MINUTES before it landed (`b0f90a7` 23:34:05,
-// `dd3b0c3` 23:45:09, both 2026-07-19). Its only reachable effect was to overrule
-// a probe that DID look. is the one recorded instance and it released a
-// blank-page product as a `completed` run.
+// The demote rule guesses that an identical repeated failure means the CHECK is
+// unfalsifiable here. A probe that could not look already says so itself, and
+// never reaches `observedFailures`. So the only case the guess can still reach
+// is a probe that DID look and saw the defect — where demoting turns a real,
+// still-broken check into debt and lets the run report completed.
+//
+// Hence `observed` is tested FIRST in isNonProgress
+// (final-gate-progress.ts:135), before every other condition.
 
 test('19A: a failure a PROBE observed is never non-progress, however identical', () => {
     const detail =
@@ -123,17 +126,17 @@ test('19A: an UNobserved check with the same shape still demotes — run 14 is u
             observed: false
         })
     ).toBe(true)
-    // …and absent the flag entirely (a caller that never learned about it), the
-    // classifier behaves exactly as it did before 19A.
+    // …and absent the flag entirely — a caller that does not set it — the
+    // classifier falls through to the edited/previous-signature rule unchanged.
     expect(
         isNonProgress({previousSignature: sig(detail), currentDetail: detail, edited: true})
     ).toBe(true)
 })
 
 test('19A: `observed` is checked BEFORE edited/signature — it is not a tie-breaker', () => {
-    // No previous signature and no edit: the old rule would return false anyway.
-    // The point is that `observed` short-circuits, so no future reordering of the
-    // other conditions can resurrect the overrule.
+    // No previous signature and no edit, so the other conditions would return
+    // false here regardless. The point is that `observed` SHORT-CIRCUITS at the
+    // first line, so reordering the rest can never resurrect the overrule.
     expect(
         isNonProgress({previousSignature: null, currentDetail: 'x', edited: false, observed: true})
     ).toBe(false)
