@@ -2,25 +2,14 @@
  * The GUARD POLICY each kind of worker child runs under, keyed on the ways it
  * can die.
  *
- * WHY IT EXISTS. `RunWorkerInput` carried ten guard knobs in four different
- * shapes — two bare millisecond numbers, three `{...} | false` unions, an
- * optional object, a boolean and two counts — and three production callers each
- * hand-picked a different subset of them:
- *
- *   gate-child.ts      timeoutMs 0, a per-command watchdog, a stream watchdog,
- *                      and the path rule disabled. Everything else default.
- *   research-worker.ts a progress deadline and two off-by-default A/B levers.
- *                      NO command watchdog, NO stream watchdog. Everything else
- *                      default.
- *   pi-worker.ts       nothing at all — every default, silently.
- *
- * So "a gate child runs unbounded but with a per-command watchdog; a research
- * worker is the reverse" existed only as three option literals in three files,
- * and the reasoning was attached to whichever line happened to need defending.
- * `gate-child.ts` explained why it disables the path rule and said nothing about
- * why it takes no progress deadline. Nothing anywhere said that the ad-hoc
- * `pi-worker` tool is the strictest-clocked of the three. That was not a
- * decision; it was the residue of never having had a place to write one down.
+ * WHY IT EXISTS. As independent options on `RunWorkerInput`, ten guard knobs in
+ * four different shapes, each of the three production callers hand-picks its own
+ * subset — and "a gate child runs unbounded but with a per-command watchdog; a
+ * research worker is the reverse" then exists only as three option literals in
+ * three files. The reasoning attaches to whichever line happened to need
+ * defending, a caller that names nothing gets a full policy silently, and no file
+ * is the place to say which child is the strictest-clocked of the three. That is
+ * not a decision; it is the residue of having nowhere to write one down.
  *
  * WHY IT IS KEYED ON `WorkerKillId`. A guard exists to prevent a specific way a
  * child can die, so the roster of deaths (`worker-kill.ts`) is the correct key —
@@ -55,8 +44,8 @@
  *   silently re-level a gate child, which is the exact mistake
  *   `RunWorkerInput.thinking`'s comment already records.
  *
- *   `projectDocsBudget()` (the CAP arm, research-fanout-budget.ts) stays out. It
- *   bounds what a worker ASKS FOR, via its prompt and its tool, not how it dies.
+ *   `projectDocsBudget()` (research-fanout-budget.ts) stays out. It bounds what a
+ *   worker ASKS FOR, via its prompt and its tool, not how it dies.
  *
  *   `RESTART_ORDER` and `FAILURE_ORDER` are untouched. This is a third view of
  *   the same key, not a merge of the two orderings.
@@ -76,19 +65,21 @@ import type {WorkerKillId} from './worker-kill.js'
  * LoopDetector only catches *identical* repeated tool calls; a model that
  * thrashes with slightly-varied calls (different grep patterns each time) slips
  * past it and would otherwise run unbounded. This is the backstop for that case:
- * after this long with no clean exit, abort and restart with a hint. Sized well
- * above a healthy worker's observed runtime (~25-130s on the local backend) so
- * it never trips a legitimately slow run.
+ * after this long with no clean exit, abort and restart with a hint.
+ *
+ * A fixed elapsed-time cap is a poor bound on a read-only worker — see the
+ * `adhoc` profile's `why`, which is why that profile disables it. The two
+ * profiles that keep it pair it with a progress ceiling or accept the trade.
  */
 export const RESEARCH_WORKER_TIMEOUT_MS = 240_000
 
 /**
- * Output-stall window before the dead-backend probe fires (model
- * server died mid-gate-child, the child hung MUTE for 64 minutes). This is NOT
- * a wall-clock cap — output progress resets it, and even a fully stalled child
- * is only killed when the model endpoint is actually unreachable. Sized so a
- * long local prompt-processing pass (minutes of legitimate silence, server
- * alive) just gets probed and waits on.
+ * Output-stall window before the dead-backend probe fires: a model server that
+ * dies mid-child leaves it hung MUTE with nothing else to notice. This is NOT a
+ * wall-clock cap — output progress resets it, and even a fully stalled child is
+ * killed only when the model endpoint is actually unreachable. Sized so a long
+ * local prompt-processing pass, which is minutes of legitimate silence from a
+ * live server, gets probed and then waited on.
  */
 export const STALL_AFTER_MS = 180_000
 
@@ -123,8 +114,8 @@ export interface StalledGuard {
  * bigger file — and must not cost the user their answer; the second is a real
  * fault, and one the dead-backend probe already catches on its own terms.
  *
- * `fanout` is the SCALE arm of  and is OFF unless both its env vars
- * are set — see task/research-fanout-budget.ts for why it was not the fix.
+ * `fanout` is off unless BOTH of its env vars are set — `fanoutTimeoutPolicy`
+ * returns null when either the per-lookup or the ceiling value is missing.
  */
 export interface WorkerTimeoutGuard {
     /** 0 disables the wall clock entirely: the child runs until it exits. */
@@ -148,15 +139,13 @@ export interface WorkerTimeoutGuard {
  *
  * `detector` judges ARGUMENTS over a 20-call window, so a child that rotates
  * through MORE DISTINCT CALLS THAN THE WINDOW HOLDS is invisible to it — every
- * key occurs once per window and the count never reaches the threshold.
- * That is not hypothetical: a worker can make hundreds of calls over exactly as
- * many distinct files as the window holds, reading each of them dozens of times,
- * without either the exact rule or the path rule ever tripping. It then dies on
- * the absolute progress ceiling, having done seconds of useful work.
+ * key occurs once per window and the count never reaches the threshold. A worker
+ * rotating over as many distinct files as the window holds can re-read every one
+ * of them repeatedly without either the exact rule or the path rule tripping, and
+ * then die on the absolute deadline having produced almost nothing.
  *
- * `progress` judges RESULTS, which a rotating reader cannot vary. It was written
- * for exactly that class and was wired only into phase children until
- * `runWorker` grew an option for it.
+ * `progress` judges RESULTS, which a rotating reader cannot vary. It is the rule
+ * written for exactly that class.
  *
  * Either can be `false` independently — a pass that legitimately revisits one
  * file raises `pathThreshold`; a harness isolating one rule turns the other off.
@@ -196,20 +185,19 @@ interface WorkerGuardShapes {
     /**
      * Stream-inactivity ceiling, ms (shared/stream-watchdog.ts). 0 = off.
      *
-     * The dead-backend probe cannot catch a HUNG stream on a HEALTHY backend —
-     * it reads a reachable endpoint as proof of life, which is exactly what run
-     * 14's three hangs looked like. This one asks nothing of the backend: no
-     * output for this long, tool executions excluded, means kill and restart the
-     * attempt with `streamStallHint`, inside the same shared restart budget.
+     * The dead-backend probe cannot catch a HUNG stream on a HEALTHY backend: it
+     * reads a reachable endpoint as proof of life, which a hung stream leaves
+     * intact. This one asks nothing of the backend — no output for this long, tool
+     * executions excluded, means kill and restart the attempt with
+     * `streamStallHint`, inside the same shared restart budget.
      */
     'stream-stall': number
     'worker-timeout': WorkerTimeoutGuard
     /**
      * Connection-error restart budget. The SHARED restart counter is what
-     * actually binds — a worker that already spent the budget looping does not
-     * get extra lives here. 0 turns the retry off, which is how
-     * a measuring harness gets a baseline arm out of a build that
-     * already ships the retry.
+     * actually binds — a worker that already spent the budget looping does not get
+     * extra lives here. 0 turns the retry off entirely, which is how a harness
+     * obtains a no-retry arm from a build that ships the retry.
      */
     'connection-error': number
     loop: LoopGuard
@@ -273,7 +261,8 @@ export interface WorkerPolicyInputs {
     streamInactivityMs?: number
     /** research: only `worker:apis` fans out, so only it can be scaled. */
     fanoutBounded?: boolean
-    /** research: the A/B levers' env reader. Injectable for tests. */
+    /** research: the env reader the fanout and progress-ceiling levers use.
+     *  Injectable so a test does not depend on the machine's environment. */
     env?: (key: string) => string | undefined
 }
 
@@ -411,9 +400,10 @@ export function workerPolicy(
 /**
  * Lay whole rows over a resolved policy.
  *
- * For tests and A/B harnesses ONLY. Production code names a profile: an override
- * at a production call site is the exact "hand-pick a subset" this module exists
- * to stop, and `worker-profiles.test.ts` fails the build if one appears.
+ * For tests and harnesses ONLY. Production code names a profile: an override at a
+ * production call site is the exact "hand-pick a subset" this module exists to
+ * stop, and worker-profiles.test.ts scans src/ for a leading `override:` and fails
+ * on any hit.
  */
 export function applyOverride(
     policy: WorkerGuardPolicy,
@@ -421,11 +411,11 @@ export function applyOverride(
 ): WorkerGuardPolicy {
     if (override === undefined) return policy
     const {carryForward, ...rows} = override
-    // Present-but-`undefined` is DROPPED, not laid down. A conditional row is
-    // the natural way to write a swept arm — `{'command-timeout': on ? ms :
-    // undefined}` — and a plain spread would put `undefined` into the policy,
-    // which either disarms the guard silently or throws on `clock.timeoutMs`.
-    // The repo has no `exactOptionalPropertyTypes`, so the compiler allows it.
+    // Present-but-`undefined` is DROPPED, not laid down. A conditional row is the
+    // natural way to write one — `{'command-timeout': on ? ms : undefined}` — and a
+    // plain spread would put `undefined` into the policy, which either disarms the
+    // guard silently or throws on `clock.timeoutMs`. This tsconfig does not set
+    // `exactOptionalPropertyTypes`, so the compiler allows it through.
     const set = Object.fromEntries(Object.entries(rows).filter(([, v]) => v !== undefined))
     return {
         guards: {...policy.guards, ...set},
