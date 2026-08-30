@@ -1,47 +1,40 @@
 /**
  * verify-reconcile — deterministic reconciliation of a spec's VERIFY assertions
- * against the PLAN.
+ * against the plan. Wired as the `plan-contradiction` critique probe.
  *
- * The failure this closes: a task composed spec carried
- *   `if [ -f src/client/pages/admin.tsx ] || grep -rn 'Admin' src/client/pages/ …; then … exit 1`
- * — a NEGATIVE EXISTENCE assertion on a SIBLING task's pinned deliverable
- *. The
- * scope fence ("do NOT build other steps' work") leaked into the verify script
- * as "other steps' work must be ABSENT". Verify then correctly FAILed at run
- * end, the user accepted it as debt, and the final-gate autofix treated the
- * debt as an instruction and `rm`'d the sibling's deliverable.
+ * A sibling step's deliverable is a fact about the tree this task runs in, never
+ * a valid absence target. A VERIFY line asserting it is missing is a guaranteed
+ * run-end FAIL, and an automated fixer handed that FAIL can "resolve" it by
+ * deleting the sibling's work. The defect has to die at spec time instead.
  *
- * A sibling's deliverable is a CLAIM about the tree this task runs in — never a
- * valid absence target. The defect must die at SPEC time (a forced critique
- * rewrite, the skip-escape pattern), not surface as a run-end verify-FAIL.
+ * Two shapes read as "this must be absent":
+ *   - an `if` whose condition holds a POSITIVE existence probe (`[ -f P ]`,
+ *     `test -e P`, `grep PAT …`) and whose body reaches `exit <nonzero>`;
+ *   - a NEGATED probe anywhere else (`[ ! -f P ]`, `test ! -f P`,
+ *     `! grep PAT …`), `|| exit`-guarded or standing alone.
+ * `grep -v` / `--invert-match` is a filter, not a probe, and is skipped; so is
+ * a target starting with `-` or `$`.
  *
- * Detection is deterministic and shape-aware for how these specs actually write
- * absence checks:
- *   - `if <cond>; then … exit 1; fi` where <cond> contains a POSITIVE existence
- *     probe (`[ -f P ]`, `test -e P`, `grep PAT …`): P/PAT must be absent or the
- *     verify fails.
- *   - a standalone / `|| exit`-guarded NEGATED probe (`[ ! -f P ]`,
- *     `test ! -f P`, `! grep PAT …`): same meaning outside an if-header.
- * `grep -v` occurrences are filters, not probes, and are skipped.
- *
- * A detected absence target is a CONFLICT when the plan pins it elsewhere:
- *   - 'disk'     — the path already exists in the worktree at spec time (a
- *                  sibling shipped it; asserting its absence is a guaranteed
- *                  future FAIL);
+ * A detected target is a CONFLICT when the plan pins it elsewhere:
+ *   - 'disk'     — the path exists in the worktree at spec time;
  *   - 'sibling'  — a SIBLING task's title names it;
  *   - 'contract' — the cross-slice contract registry quotes it.
- * Matching: pattern targets by case-insensitive substring (all-words matching
- * false-fires on `bun:sql` vs a "Bun SQL connection" title); path targets by
- * full-path substring or a word-bounded basename. No similarity thresholds.
+ * The three are checked independently, so one assertion can raise all three.
  *
- * The finding is a PROBE, not a gate: it forces the critique rewrite and names
- * the reconciliation (delete-tasks legitimately assert absence — the rewrite
- * keeps the check when the GOAL explicitly deletes the artifact).
+ * Matching: pattern targets by case-insensitive substring; path targets by
+ * full-path substring or a word-bounded basename. No similarity thresholds and
+ * no all-words matching — all-words matches `bun:sql` against a "Bun SQL
+ * connection" title, where substring does not.
+ *
+ * The finding is a PROBE, not a gate: it only forces the critique rewrite, and
+ * `absenceProbeText` tells that rewrite to KEEP an absence check when the GOAL
+ * explicitly deletes the artifact.
  */
 import {parseVerifyBlock} from './spec-validation.js'
 
 export interface AbsenceAssertion {
-    /** The verify line carrying the assertion (trimmed). */
+    /** The trimmed fragment the assertion was read out of: the whole VERIFY
+     *  line, or only the condition when it came from an `if` header. */
     line: string
     /** The path or grep pattern asserted absent (quotes stripped). */
     target: string
@@ -51,7 +44,11 @@ export interface AbsenceAssertion {
 /** A quoted or bare shell word. */
 const SHELL_WORD = `"[^"]+"|'[^']+'|[^\\s\\]&|;)]+`
 
-/** Positive existence probes: `-f P` / `-e P` / `-d P` not preceded by `!`. */
+/**
+ * A `-f`/`-e`/`-d` existence probe, with or without a leading `test`. The three
+ * `(!?)` groups cover every place a negation can sit — before the `[`, inside
+ * it, and before the flag — so the caller can tell `[ ! -f P ]` from `[ -f P ]`.
+ */
 const EXIST_RE = new RegExp(
     `(!?)\\s*(?:\\[\\[?\\s*)?(!?)\\s*(?:test\\s+)?(!?)\\s*-[efd]\\s+(${SHELL_WORD})`,
     'g'
@@ -92,9 +89,11 @@ function assertionsInFragment(fragment: string, positiveMeansAbsent: boolean): A
 }
 
 /**
- * All absence assertions in the spec's VERIFY block. Scans the fenced commands:
- * `if` blocks whose body reaches `exit <nonzero>` contribute their condition's
- * POSITIVE probes; other lines contribute their NEGATED probes.
+ * All absence assertions in the spec's VERIFY block. An `if` line contributes
+ * its condition's POSITIVE probes only when a LATER line reaches
+ * `exit <nonzero>`: the body scan starts at the next command, so a one-line
+ * `if …; then exit 1; fi` yields nothing. Every other line contributes its
+ * NEGATED probes. Empty when the spec has no fenced VERIFY block.
  */
 export function findAbsenceAssertions(spec: string): AbsenceAssertion[] {
     const cmds = parseVerifyBlock(spec)
@@ -104,8 +103,10 @@ export function findAbsenceAssertions(spec: string): AbsenceAssertion[] {
     for (let i = 0; i < lines.length; i++) {
         const ifm = /^if\s+(.+?)(?:;\s*then\b.*)?$/.exec(lines[i])
         if (ifm) {
-            // Collect the block body up to the matching fi (flat scan — generated
-            // VERIFY blocks don't nest ifs; a nested one just extends the body).
+            // Collect the block body up to the matching `fi`, counting nested
+            // `if`s. A nested if is never scanned as a condition of its own —
+            // its lines just extend the outer body, so an `exit 1` inside it
+            // arms the OUTER condition.
             let depth = 1
             let body = ''
             let j = i + 1
@@ -163,7 +164,8 @@ function namesTarget(haystack: string, a: AbsenceAssertion): boolean {
     return new RegExp(`\\b${escapeRe(base)}\\b`, 'i').test(haystack)
 }
 
-/** Absence assertions that collide with the plan: the deterministic D lever. */
+/** Every absence assertion that collides with the plan. disk, sibling and
+ *  contract are tested independently, so one assertion can yield three. */
 export function findAbsenceConflicts(spec: string, ctx: AbsenceConflictContext): AbsenceConflict[] {
     const out: AbsenceConflict[] = []
     for (const a of findAbsenceAssertions(spec)) {
@@ -186,8 +188,8 @@ export function findAbsenceConflicts(spec: string, ctx: AbsenceConflictContext):
     return out
 }
 
-/** The forced critique-rewrite defect text (skip-escape pattern: MANDATORY,
- *  self-contained, names the reconciliation). */
+/** The defect block handed to the critique rewrite. Self-contained: it names
+ *  each conflict, why it is one, and the reconciliation to apply. */
 export function absenceProbeText(conflicts: AbsenceConflict[]): string {
     const what = {
         disk: 'ALREADY EXISTS in the worktree (a prior task shipped it)',
@@ -212,9 +214,10 @@ export function absenceProbeText(conflicts: AbsenceConflict[]): string {
     ].join('\n')
 }
 
-/** Parse SIBLING titles out of the scope-fence text (buildScopeFence's listing),
- *  excluding the "(THIS STEP)" line — a task may legitimately assert about its
- *  own deliverables. '' / undefined (bare /task, no plan) yields none. */
+/** Parse SIBLING titles out of `buildScopeFence`'s listing, whose rows read
+ *  `[N] head` and `[N] (THIS STEP) head`. The "(THIS STEP)" row is dropped — a
+ *  task may legitimately assert about its own deliverables. '' and undefined
+ *  (a bare /task with no plan) yield none. */
 export function siblingTitlesFromPlanContext(planContext: string | undefined): string[] {
     if (!planContext) return []
     const out: string[] = []

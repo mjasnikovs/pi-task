@@ -172,7 +172,7 @@ line counts as a comment line but opens no block.
 | `src/task/unknown-routing.ts` | 42 | 31 | 4 | true |
 | `src/task/user-directives.ts` | 125 | 45 | 10 | true |
 | `src/task/verify-quality.ts` | 225 | 77 | 18 | true |
-| `src/task/verify-reconcile.ts` | 229 | 68 | 18 | false |
+| `src/task/verify-reconcile.ts` | 229 | 68 | 18 |true |
 | `src/task/verify-resolution.ts` | 234 | 84 | 17 | false |
 | `src/task/verify-work.ts` | 1178 | 422 | 73 | false |
 | `src/task/widget.ts` | 387 | 69 | 27 | false |
