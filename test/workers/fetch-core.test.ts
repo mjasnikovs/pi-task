@@ -144,7 +144,7 @@ describe('fetchFocused', () => {
         expect(r.coverageMiss).toBe(true)
         // A coverage miss is a distinct outcome, NOT the ambiguity fallback.
         expect(r.answer.includes(UNCLEAR_ANSWER)).toBe(false)
-        // 14B: the miss carries the next step, not just the verdict.
+        // The miss carries the next step, not just the verdict.
         expect(r.nextStep).toContain('do not re-read it')
         expect(r.nextStep).toContain('https://example.com/')
     })
@@ -243,7 +243,7 @@ describe('fetchFocused', () => {
     })
 
     test('anchors a #fragment section past the head window, and reports which section', async () => {
-        // A page whose relevant section sits far past HEAD_CHARS (25k). Without fragment
+        // A page whose relevant section sits far past HEAD_CHARS. Without fragment
         // anchoring the head-truncation drops it; with it, the child sees the section.
         const filler = 'x'.repeat(40_000)
         const md =
@@ -294,8 +294,8 @@ describe('fetchFocused', () => {
         expect(prompt).toContain('INCLUDING a partial')
         expect(prompt).toContain(NOT_COVERED_ANSWER)
         expect(prompt).toContain(UNCLEAR_ANSWER)
-        // The pre-change rule 5 ("unclear ... or absent") must be gone — absence now routes to
-        // the coverage-miss channel, not to the ambiguity fallback.
+        // Absence routes to the coverage-miss channel, not the ambiguity fallback, so
+        // the prompt must not offer "unclear, ambiguous, or absent" as one verdict.
         expect(prompt).not.toContain('unclear, ambiguous, or absent')
     })
 
