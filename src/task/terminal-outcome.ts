@@ -2,19 +2,17 @@
  * What each way a gated task can END means for persistence and for what the user
  * is told — stated once, for both `/task` and `/task-auto`.
  *
- * `runGatesForTask` is already shared verbatim by the two commands, so both
- * consume the same five-kind outcome. What was NOT shared was the answer to the
- * three questions each kind raises: demote the inner task file? fail the parent
- * run file? what do we say, at what level? Those were two `switch`es 600 lines
- * apart with line-for-line correspondence — down to the identical
- * `reason.slice(0, 160)` truncation — differing only in the resume verb, whether
- * a parent run file exists to fail, and whether the message names the step.
+ * `runGatesForTask` is shared by the two commands, so both consume the same
+ * outcome union. Each kind raises the same three questions: demote the inner task
+ * file? fail the parent run file? what do we say, at what level? This table
+ * answers them once. It touches none of either loop's state — it is the
+ * outcome → (persistence, message) mapping and nothing else — and a new outcome
+ * kind is a compile error here rather than a silent fallthrough in whichever
+ * command was not updated.
  *
- * That is not the shared "task-runner base" CONTEXT.md rules out, and for the
- * same reason `runFinalGateStage` could leave `runAutoLoop`: this is the
- * outcome → (persistence, message) mapping, and it touches none of either loop's
- * state. Adding a sixth outcome kind is now a compile error in one place rather
- * than a silently-unhandled fallthrough in whichever command was not updated.
+ * The three things that genuinely differ per command are parameters: the resume
+ * verb, whether the message names a step (`/task` runs one task and passes an
+ * empty `at`), and whether a parent run file exists to fail.
  *
  * The PRE-gate outcomes (`res.sessionCancelled` / `res.interrupted` / `!res.ok`,
  * before the gate runs) are deliberately NOT here. Their wording genuinely
@@ -63,8 +61,8 @@ export interface TerminalOutcome {
 }
 
 /**
- * Truncate a failure reason for a one-line notification, or produce nothing.
- * Both commands did this identically and inline.
+ * Truncate a failure reason for a one-line notification, or produce nothing when
+ * there is no reason.
  */
 export function formatWhy(reason?: string): string {
     return reason ? ` — ${reason.slice(0, 160)}` : ''
