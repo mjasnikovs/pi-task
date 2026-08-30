@@ -78,11 +78,12 @@ describe('findForbiddenDeletions', () => {
         expect(findForbiddenDeletions(parseTreeChanges(' M src/a.ts\n?? src/b.ts'))).toEqual([])
     })
 
-    // Playwright FAILURE screenshots that a task's own
-    // `git add -A` had swept in read as deliverables, and two consecutive fix
-    // attempts were discarded whole over them — each losing a real
-    // `src/client/api.test.tsx` repair. The exempt list is a strict subset of the
-    // verdict-level artifact list; build output stays out of it.
+    // Without an exemption the guard is pure git, so a failure screenshot a task's
+    // own `git add -A` swept into a commit reads as a deliverable and its removal
+    // discards the whole attempt, repairs included. The deletion-exempt pattern in
+    // regenerable-artifacts.ts is a strict SUBSET of the verdict-level one: dist/,
+    // build/, .next/, .turbo/ and .svelte-kit/ stay out of it, because a committed
+    // build output can be the shipped artifact.
     test('run-20 shape: deleting tracked test-runner output is NOT forbidden', () => {
         const s = parseTreeChanges(
             ' M package.json\n M src/client/api.test.tsx\n'
@@ -164,10 +165,8 @@ describe('parseNameStatusChanges', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL. The pure half of the lever: which ignored
- * paths a gate may rule on, how a write is attributed to the child that made it,
- * and the record it produces. Every fixture here pins one A/B invariant
- *.
+ * IGNORED-PATH CHANNEL, pure half: which ignored paths a gate may rule on, how a
+ * write is attributed to the child that made it, and the record it produces.
  */
 describe('classifyIgnoredPath (inv-build-output-exempt)', () => {
     test('node_modules and its interior are a dependency tree, never a finding', () => {
@@ -218,9 +217,9 @@ describe('diffIgnoredSnapshots (attribution)', () => {
 })
 
 describe('the ignored-write record (inv-no-secret-echo)', () => {
-    // The channel exists because of a file full of credentials: every one of these
-    // takes PATHS and can therefore never carry contents. The fixture asserts the
-    // shape that makes that true.
+    // The canonical ignored write is a file of credentials, so the record must not
+    // be able to echo one. Every function here takes PATHS and is never handed the
+    // contents, so there is nothing to leak.
     const paths = ['.env']
     test('trail line names the path and says the write does not ship', () => {
         const line = ignoredWriteTrailLine(paths)
