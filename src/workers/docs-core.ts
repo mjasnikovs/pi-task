@@ -39,9 +39,9 @@ const NO_CACHE_MARKER = '\n\n[...content continues, truncated...]\n\n'
  * what the version is grounded in instead of leaving it buried in tool details.
  * - 'declared-range': install was pinned to the project's own package.json range
  *   (the resolved version therefore matches project intent).
- * - 'npm-latest': nothing in the project declared the dep, so the install fell
- *   back to whatever npm tags `latest` — which may be a newer MAJOR than the
- *   project targets (this is what a scaffolding task hits, and needs a banner).
+ * - 'npm-latest': nothing usable in the project declared the dep, so the install
+ *   fell back to whatever npm tags `latest` — which may be a newer MAJOR than the
+ *   project targets, which is what the banner warns about.
  */
 export interface AutoInstallPin {
     source: 'declared-range' | 'npm-latest'
@@ -179,9 +179,10 @@ export interface Declaration {
  * The names a declaration for `asked` can honestly live under, nearest first:
  * the package itself, its DefinitelyTyped package, and the terminal the type
  * resolution chain landed on. A project that uses Bun declares `@types/bun`, not
- * `bun`; asking only about the terminal `bun-types` finds nothing at all, which
- * is how 35 of a 48 banners came to report on a package nobody asked
- * about.
+ * `bun`; asking only about the terminal `bun-types` finds nothing at all, so a
+ * banner keyed on the terminal would report on a package nobody asked about. The
+ * terminal is deduped: `declarationChain('hono', 'hono')` is
+ * `['hono', '@types/hono']`.
  */
 export function declarationChain(asked: string, resolved?: string): string[] {
     const out = [asked]
@@ -328,10 +329,9 @@ export function ensureDocsModulesDir(dir: string): void {
 }
 
 /**
- * Options rather than a positional tail: `signal` and `versionRange` sat adjacent,
- * and reaching the range meant writing `undefined` into the signal slot — which is
- * exactly how the primary acquisition path lost its abort signal while the hop path
- * kept it.
+ * An options object, not a positional tail. Two adjacent optionals mean reaching
+ * the second requires writing `undefined` into the first — and an abort signal
+ * dropped that way is not a type error, so nothing catches it.
  */
 export interface AutoInstallOptions {
     signal?: AbortSignal | undefined
@@ -352,9 +352,7 @@ export async function runAutoInstall(
     // `--ignore-scripts` is not optional here. The package NAME is model-chosen —
     // it comes out of a worker's question, or out of a `/// <reference types="X" />`
     // line in someone else's declaration file — so a hallucinated or typosquatted
-    // name would otherwise run its preinstall/postinstall as the user. This cache
-    // has already run install hooks for `node`, `argon2`, `onnxruntime-node` and
-    // `sharp`, next to fetched names like `app.ts`, `pkg.json` and `tsconfig.json`.
+    // name would otherwise run its preinstall/postinstall hooks as the user.
     // Nothing is lost: the docs worker only ever READS `.d.ts` files and the README
     // out of the installed tree, and those ship in the tarball.
     const result = await runChild(
@@ -399,28 +397,20 @@ export interface AcquireInput {
  * `not_installed` install it — at the range the PROJECT declares when it declares
  * one — then resolve again from the install dir.
  *
- * One statement of the ladder, for both callers. It was written twice: inline in
- * `docsRaw` for the requested package, and in `tryResolveOrInstall` for each hop
- * of the type-redirect chain — and the copies had drifted on all three things
- * that matter.
+ * ONE statement of the ladder, for both callers: `docsRaw` for the requested
+ * package, and `tryResolveOrInstall` for each hop of the type-redirect chain.
+ * Three things must come out the same on either path, and each is silent when it
+ * does not — no test fails, the answer just gets worse:
  *
- *  - The abort signal. The hop copy passed it; the primary copy passed a bare
- *    `undefined` placeholder to reach the fourth positional, while
- *    `DocsRawInput.signal` was honoured on either side of that call. So a user
- *    cancel during the MAIN `npm install` of a model-chosen package was not
- *    delivered. `runAutoInstall` takes an options object now, so a hole like that
- *    cannot be typed.
- *  - The version pin. `findDeclaredRange` had exactly one call site — the primary
- *    copy. The hop copy installed `latest` unconditionally, on the hop most likely
- *    to be the declared one: `declarationChain` exists precisely because "a
- *    project that uses Bun declares `@types/bun`, not `bun`".
- *  - The provenance. `autoInstalled`/`autoInstallPin` were locals of `docsRaw`, so
- *    a package acquired only through a hop reported neither and got no version
- *    banner.
+ *  - the abort signal reaching the `npm install`, so a user cancel is delivered;
+ *  - the version pin, so a hop installs the project's declared range rather than
+ *    `latest` — and the hop is the LIKELIER one to be declared, since a project
+ *    that uses Bun declares `@types/bun`, not `bun`;
+ *  - the provenance (`autoInstalled` and the pin), without which a package
+ *    acquired only through a hop gets no version banner.
  *
- * CONTEXT.md records the redirect WALK as unified (`resolveTypeSource`) and its
- * `resolveHop` seam as "the one thing its two call sites disagree about". They
- * should disagree only about WHETHER to install, never about HOW.
+ * The redirect WALK itself is `resolveTypeSource` in docs-resolve.ts. Its two call
+ * sites should differ only about WHETHER to install, never about HOW.
  */
 export async function acquirePackage(input: AcquireInput): Promise<AcquireOutcome> {
     const {name, cwd, spawn, resolvePackage, signal} = input
@@ -488,9 +478,8 @@ async function resolveTypeSourceForDocs(
     signal: AbortSignal | undefined
 ): Promise<{pkg: ResolvedPackage; installed: boolean; pin?: AutoInstallPin}> {
     // A package acquired ONLY through a hop reports neither `autoInstalled` nor a
-    // pin unless this runs, so `pi-worker-docs` emits no version banner for it — while the
-    // banner's own text ("only its types are, as `@types/bun` `^1.2`") claims a
-    // range as provenance. Report the last hop that actually installed.
+    // pin unless this runs, so pi-worker-docs would emit no version banner for it.
+    // Report the last hop that actually installed.
     let installed = false
     let pin: AutoInstallPin | undefined
     const out = await resolveTypeSource(pkg, extractParentPackage(requested), next =>
@@ -525,8 +514,7 @@ export async function docsRaw(input: DocsRawInput): Promise<DocsRawResult> {
 
     // Step 1: acquire the package — resolve, or install-at-the-declared-range and
     // resolve again. The ladder is `acquirePackage`; this maps its stages onto the
-    // rich error results the docs tool reports. `input.signal` now reaches the
-    // install, which it never did while the range was a fourth positional.
+    // rich error results the docs tool reports.
     const got = await acquirePackage({
         name: requested,
         cwd: input.cwd,
@@ -838,18 +826,6 @@ export function buildPrompt(pkg: ResolvedPackage, query: string, content: string
     })
 }
 
-// ─── Backward-compatible wrappers (thin — delegates to shared/) ─────────────
-
-/** Thin wrapper so existing callers using the pkg-based signature still work. */
-/**
- * The provenance header a docs answer carries. Takes the HEADER, not a package:
- * the whole body is one string, and the project-source path — which has no
- * package — would have to fabricate a `ResolvedPackage`
- * (`{name, version: 'local', root, entryDts: null, readme: null}`) purely to make
- * this call compile, with three of the five fields existing only for that.
- */
-
-/** The header for an npm package answer. */
 /**
  * The PACKAGE corpus row: an npm package's `.d.ts` + README chunks.
  *
@@ -865,6 +841,7 @@ export function packageCorpus(pkg: ResolvedPackage): DocsCorpus {
     }
 }
 
+/** The provenance line that leads a package answer. */
 export function packageHeader(pkg: ResolvedPackage): string {
     return `Per ${pkg.name}@${pkg.version}:`
 }
