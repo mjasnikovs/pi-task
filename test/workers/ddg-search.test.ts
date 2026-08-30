@@ -2,7 +2,7 @@ import {expect, test} from 'bun:test'
 import {ddgSearch, DdgSearchError, parseDdgHtml} from '../../src/workers/ddg-search.js'
 import type {FetchLike} from '../../src/workers/exa-search.js'
 
-/** Mirrors the real html.duckduckgo.com markup (see the result__a/result__snippet shape). */
+/** The markup shape parseDdgHtml selects on: `a.result__a` and `.result__snippet`. */
 function resultRow(opts: {href: string; title: string; snippet: string; ad?: boolean}): string {
     return `
       <div class="result results_links results_links_deep web-result ${opts.ad ? 'result--ad' : ''}">
