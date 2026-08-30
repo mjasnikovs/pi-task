@@ -1,7 +1,8 @@
 /**
- * gate-deps tests — the tool-result log summary used by the gate debug log
- *. The summary is pure; the wiring that feeds it real tool
- * output is covered in json-event-sink.test.ts (the sink emits onToolResult).
+ * gate-deps tests — the pure tool-result log summary, then the impure collectors
+ * against real throwaway repos. The wiring that feeds the summary real tool output
+ * is covered in test/shared/json-event-sink.test.ts, where the sink emits
+ * onToolResult.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -92,10 +93,9 @@ describe('collectTaskTreeChanges (cross-task deletion probe input)', () => {
 })
 
 /**
- * IGNORED-PATH CHANNEL — the impure half, against real repos:
- * `--ignored=matching` collapsing, the exemption in situ, the degrade path, and
- * the dependency probe's move/restore discipline. Pins the A/B invariants
- * that need a worktree rather than a string.
+ * IGNORED-PATH CHANNEL, against real repos: what `git status --ignored=matching`
+ * reports, the built-output exemption, the no-repo degrade, and the dependency
+ * probe's move/restore discipline. None of it can be driven from a string.
  */
 describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
     const git = (dir: string, ...args: string[]): void => {
@@ -131,7 +131,8 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
 
         const snap = await collectIgnoredSnapshot(dir)
         expect(Object.keys(snap)).toEqual(['.env'])
-        // inv-no-secret-echo at the source: the snapshot fingerprints, never reads.
+        // The snapshot stores `mtimeMs:size` per path and never opens the file, so
+        // a secret in an ignored file cannot reach the trail through this channel.
         expect(JSON.stringify(snap)).not.toContain('hunter2')
     })
 
@@ -156,9 +157,9 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
     })
 
     test('a wholly-ignored DIRECTORY is one entry, fingerprinted without walking it', async () => {
-        // `--ignored=matching` collapses the directory, and a dir's own mtime moves
-        // when entries are added or removed — that is the whole fingerprint
-        // available without a walk, and a walk is the cost this channel refuses.
+        // `--ignored=matching` reports a wholly-ignored directory as ONE entry with a
+        // trailing slash, so the only fingerprint available without walking it is the
+        // directory's own mtime — which moves when an entry is added or removed.
         const dir = makeRepo({'.gitignore': 'logs/\n'})
         fs.mkdirSync(path.join(dir, 'logs'))
         fs.writeFileSync(path.join(dir, 'logs/a.log'), 'a\n')
@@ -225,7 +226,7 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
         expect(await gatePassesWithoutIgnored(dir, [], async () => ({ok: true}))).toBeNull()
         // a path that is not there cannot be moved aside
         expect(await gatePassesWithoutIgnored(dir, ['.env'], async () => ({ok: true}))).toBeNull()
-        // and a set this large is not a fix child's handful of files
+        // and this many exceeds MAX_IGNORED_PROBE_PATHS
         const many = Array.from({length: 21}, (_, i) => `f${i}`)
         expect(await gatePassesWithoutIgnored(dir, many, async () => ({ok: true}))).toBeNull()
     })
@@ -242,11 +243,12 @@ describe('collectIgnoredSnapshot / gatePassesWithoutIgnored', () => {
 })
 
 /**
- * The DIFF COLLECTORS — the git-shaped input every deterministic probe runs on.
- * All four share one discipline that only a real worktree can prove: pre-commit
- * they read the working tree, post-enforce (clean tree) they fall back to the
- * last commit, and every failure degrades to "nothing found" rather than
- * throwing, because a sharpener that can block a gate is a liability.
+ * The DIFF COLLECTORS — the git-shaped input the deterministic probes run on.
+ * Two disciplines only a real worktree can prove. `collectChangedFiles` and
+ * `collectAddedLines` read the working tree pre-commit and fall back to
+ * `HEAD~1..HEAD` on a clean one, which is what the post-enforce re-verify sees.
+ * And every collector here degrades to "nothing found" rather than throwing: a
+ * sharpener that can block a gate is a liability.
  */
 describe('gate-deps diff collectors', () => {
     const git = (dir: string, ...args: string[]): void => {
@@ -349,10 +351,9 @@ describe('gate-deps diff collectors', () => {
             expect(await collectAddedLines(noGit())).toEqual([])
         })
 
-        // FOUND BY THIS TEST: the header prefix is user-configurable, and the
-        // parser only knew `b/`. On a machine with either setting below, every
-        // added line was attributed to a path like `w/a.ts` — which exists
-        // nowhere — so the probes downstream read a diff of files not in the repo.
+        // The diff header prefix is user config, so a parser that only knows `b/`
+        // attributes every added line to a path like `w/a.ts`, which exists nowhere,
+        // and every probe downstream then reads a diff of files not in the repo.
         for (const [setting, value] of [
             ['diff.mnemonicPrefix', 'true'], // emits i/ and w/
             ['diff.noprefix', 'true'] // emits no prefix at all
@@ -371,7 +372,8 @@ describe('gate-deps diff collectors', () => {
     })
 
     describe('collectScriptEscapeFindings', () => {
-        /** A verbatim lint script — the true positive this exists for. */
+        /** A lint script whose typecheck arm can never fail: the `|| true` makes
+         *  that subshell exit 0 whatever tsc printed. */
         const NEUTERED =
             "prettier --write 'src/**/*.ts' && eslint --fix . "
             + "&& (tsc --noEmit 2>&1 | grep -qv 'TS18003' || true)"
@@ -455,8 +457,8 @@ describe('gate-deps diff collectors', () => {
     })
 
     describe('collectTestAssemblyFindings', () => {
-        // Distilled a F4: the production entry composes route leaves; the task's
-        // test re-mounts two of them itself and never imports the entry.
+        // The production entry composes the route leaves; the task's test re-mounts
+        // two of them itself and never imports that entry.
         const PRODUCTION = {
             'src/server/index.ts': [
                 "import {authRoutes} from './routes/auth'",
@@ -503,10 +505,10 @@ describe('gate-deps diff collectors', () => {
     })
 
     /**
-     * The sandbox-path-leak pass is the only probe that WRITES: it repairs what it
-     * can before the verify child runs, and reports only the rest. Both halves are
-     * asserted on the real worktree, because "the repair was written" is the part
-     * that cannot be inferred from the finding list.
+     * The only collector that WRITES: it repairs the leaked paths it can before the
+     * verify child runs, and reports only the rest. Both halves are asserted against
+     * the file on disk, because "the repair was written" cannot be read off the
+     * finding list.
      */
     describe('collectForeignPathFindings', () => {
         const LEAK = "export default {alias: {'@api': '/workspace/src/client/api.ts'}}\n"
@@ -533,8 +535,8 @@ describe('gate-deps diff collectors', () => {
 
             const findings = await collectForeignPathFindings(dir, undefined, m => log.push(m))
 
-            // Running as root defeats the read-only bit; then the repair succeeds and
-            // the case above is what ran. Only assert the branch we actually reached.
+            // The mode bits stop the write for an ordinary user, but not for a
+            // runner they do not restrict. Assert only the branch that ran.
             if (findings.length === 0) {
                 expect(log.join('\n')).toContain('repaired')
                 return
