@@ -8,15 +8,16 @@ import {
     scriptEscapeVerifyFindings
 } from '../../src/task/script-escape.js'
 
-/** The verbatim lint script — the true positive this module exists for. */
-const MX5_LINT =
+/** The true positive this module exists for: a lint script carrying BOTH escape
+ *  shapes at once, a `|| true` tail and an inverted grep. */
+const NEUTERED_LINT =
     "prettier --log-level warn --write --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' "
     + '&& eslint --fix --no-error-on-unmatched-pattern . '
     + "&& (tsc --noEmit 2>&1 | grep -qv 'TS18003' || true)"
 
-describe('the real mx5 run-13 true positive', () => {
+describe('a script carrying both escape shapes', () => {
     test('flags the neutered lint script for BOTH shapes', () => {
-        const f = judgeScript('lint', MX5_LINT)
+        const f = judgeScript('lint', NEUTERED_LINT)
         expect(f).not.toBeNull()
         // A: the `|| true` tail survives the closing paren.
         expect(f!.reason).toContain('`|| true`')
@@ -27,9 +28,9 @@ describe('the real mx5 run-13 true positive', () => {
 
     test('is found through the manifest text, as shipped', () => {
         const manifest = JSON.stringify({
-            name: 'mx5',
+            name: 'a-project',
             scripts: {
-                lint: MX5_LINT,
+                lint: NEUTERED_LINT,
                 test: 'AGENT=1 bun test',
                 'test:ct': 'bunx playwright test --config=playwright-ct.config.ts',
                 dev: 'bun run --watch src/server/index.ts & bunx tailwindcss --watch',
@@ -67,7 +68,8 @@ describe('shape A — always-zero tail', () => {
     })
 
     test('`|| exit 1` is a HARDENING, never an escape', () => {
-        // Verbatim from aiz-server's real package.json.
+        // `|| exit 1` FORCES a non-zero exit rather than hiding one, so it is the
+        // opposite of an escape however it is chained.
         expect(
             judgeScript('build', 'npm run build || exit 1 && node ./dist/src/index.js')
         ).toBeNull()
@@ -92,7 +94,8 @@ describe('shape B — inverted-grep laundering', () => {
     })
 
     test('formatters and reporters are not laundering', () => {
-        // Verbatim shape from aiz-server's real `tape` pipeline.
+        // A reporter on the right of the pipe formats the output; it does not
+        // filter the failing lines out of it.
         expect(
             judgeScript('test', 'node ./node_modules/tape/bin/tape ./dist/**/*.js | tap-spec')
         ).toBeNull()
@@ -121,7 +124,8 @@ describe('scope — only check-class scripts', () => {
 })
 
 describe('zero-FP on the real corpus', () => {
-    // Verbatim `scripts` from the real local repos. None may fire.
+    // Whole `scripts` blocks from four real projects — npm, vite, bun. None may
+    // fire, which is what makes the detector usable at all.
     const CORPORA: Record<string, Record<string, string>> = {
         'pi-task': {
             build: 'tsc -p tsconfig.build.json',
@@ -129,7 +133,7 @@ describe('zero-FP on the real corpus', () => {
             test: 'cross-env AGENT=1 bun test --isolate src/',
             prepublishOnly: 'bun run build'
         },
-        'aiz-server': {
+        'an npm/tsc server': {
             lint: "prettier --log-level warn --write 'src/**/*.{ts,tsx}' && eslint --fix src && npx tsc --noEmit",
             start: 'node --enable-source-maps ./dist/src/index.js',
             build: 'rm -rf ./dist && npm run codegen && npx tsc && npm run copy-fonts',
@@ -138,14 +142,14 @@ describe('zero-FP on the real corpus', () => {
             tape: 'node ./node_modules/tape/bin/tape ./dist/test/**/*.js | tap-spec',
             'copy-fonts': 'cp -r ./src/routing/pdf/*.ttf ./dist/src/routing/pdf/'
         },
-        'aiz-client': {
+        'a vite client': {
             dev: 'vite',
             build: 'tsc && vite build',
             bump: 'npm version patch && node versionBump.js',
             lint: "prettier --write 'src/**/*.{ts,tsx}' && eslint --fix --quiet src && tsc --noEmit",
             preview: 'vite preview'
         },
-        gofer: {
+        'a bun tool': {
             lint: "prettier --write 'src/**/*.ts' 'ingest/*.ts' && eslint --fix . && tsc --noEmit",
             test: 'bun run scripts/rerank-box.ts bun run test:evals',
             'test:evals': 'bun run eval:retrieval && bun run eval:coverage',
@@ -214,7 +218,7 @@ describe('manifest parsing', () => {
 
 describe('rendering', () => {
     test('verify findings name script, body, and reason', () => {
-        const [line] = scriptEscapeVerifyFindings([judgeScript('lint', MX5_LINT)!])
+        const [line] = scriptEscapeVerifyFindings([judgeScript('lint', NEUTERED_LINT)!])
         expect(line).toContain('`lint`')
         expect(line).toContain('grep -qv')
         expect(line).toContain('INVERTED grep')
