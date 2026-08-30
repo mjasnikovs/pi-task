@@ -35,13 +35,7 @@ import {
     type WorkerProfileId
 } from './worker-profiles.js'
 
-// `--mode json` makes pi emit structured events as they happen instead of
-// buffering the assistant text and flushing on exit. That matters for the
-// wait/work timing split: in text mode the first stdout chunk only arrives at
-// the very end, so onFirstByte fires moments before close and workMs is
-// effectively zero. With JSON events the first byte lands as soon as the
-// model starts producing — making waitMs the real queue/cold-start cost and
-// workMs the real generation+tool-call cost.
+/** The tool whitelist a caller gets when it names none. */
 const DEFAULT_TOOLS = 'read,grep,find,ls'
 
 /**
@@ -58,19 +52,20 @@ function contextWindowTokens(cw: number | 'unknown'): number {
  * command could be cited from. `pi-worker-docs` (the primary), `read` and `grep`
  * (project source), and the web escalations `pi-worker-search`/`pi-worker-fetch`.
  *
- * `ls` and `find` are deliberately EXCLUDED: they return file/directory NAMES,
- * and APIS owns symbols by name only, never paths (RESEARCH_APIS_PROMPT). Bare
- * enumeration cannot verify a signature, so a worker that fabricates its section
- * from memory does not launder itself grounded by calling `ls` once. That
- * exclusion is the anti-gaming property of any gate built on this count: "one
- * trivial `ls` then fabricate the rest" leaves groundingRetrievalCount at 0.
+ * `ls` and `find` are deliberately EXCLUDED: they return file and directory
+ * NAMES, and APIS owns symbols by name only, never paths (see
+ * RESEARCH_APIS_PROMPT in prompts.ts). Bare enumeration cannot verify a
+ * signature, so a worker that fabricates its section from memory cannot launder
+ * itself grounded by calling `ls` once — "one trivial `ls` then fabricate the
+ * rest" still leaves groundingRetrievalCount at 0.
+ *
+ * The set is DERIVED from WORKER_CHANNELS (worker-channels.ts), not hand-kept.
+ * Re-exported here only so worker-channels.test.ts can assert this module hands
+ * back the same predicate.
  */
-// The grounding set is derived from WORKER_CHANNELS (worker-channels.ts), not
-// hand-kept — this was a second copy of the four tool names. Re-exported because
-// several call sites and tests import it from here.
 export {isGroundingRetrieval} from './worker-channels.js'
 
-// RESEARCH_WORKER_TIMEOUT_MS and STALL_AFTER_MS live on the profile table now
+// RESEARCH_WORKER_TIMEOUT_MS and STALL_AFTER_MS live on the profile table
 // (worker-profiles.ts): they are the default VALUES of two guard rows, and a
 // default that lives apart from the table stating it is a second place to look.
 
@@ -88,30 +83,27 @@ const WORKER_TIMEOUT_HINT =
 /**
  * How much of a discarded attempt's answer is carried into the next one.
  *
- * A restart that hands the re-spawn nothing but a hint is why
- * WORKER_TIMEOUT_HINT above can tell a worker "do not re-explore ground you have
- * already covered" while giving it no record of what that ground was. It cannot
- * comply. The cost shows on lookup-heavy tasks: workers burn the FULL restart
- * budget, because every attempt
- * re-read the same files against the same clock and died in the same place.
+ * A restart that hands the re-spawn nothing but a hint is why WORKER_TIMEOUT_HINT
+ * above can tell a worker "do not re-explore ground you have already covered"
+ * while giving it no record of what that ground was. It cannot comply, so it
+ * re-reads the same files against the same clock and dies in the same place.
  *
- * Carrying the partial answer forward is what makes a restart converge instead
- * of repeat. The risk it takes is real and is the thing the A/B measures: a
- * half-written or speculative entry, replayed under "already established", is
- * exactly how a fabrication gets laundered into a final answer. That is what the
- * ungrounded-symbol and anti-synthesis guards are pointed at, so the carry is
- * framed as findings to VERIFY-or-DROP rather than as settled fact.
+ * Carrying the partial forward is what lets a restart converge instead of repeat.
+ * The risk is real: a half-written or speculative entry, replayed under "already
+ * established", is how a fabrication gets laundered into a final answer. That is
+ * why `formatCarryForward` frames it as findings to VERIFY-or-DROP rather than as
+ * settled fact.
  */
 const CARRY_FORWARD_LIMIT = 24_000
 
 /**
  * Restart reasons whose partial output is worth keeping.
  *
- * A clock kill (`worker-timeout`), a hung tool (`command-timeout`), an idle
- * stream (`stream-stall`) and a dropped socket (`connection-error`) all discard
- * work the model genuinely did. A loop kill and a leaked tool call do not — the
- * first is by definition the same call repeated, the second is malformed
- * protocol text, and replaying either would feed the failure back to itself.
+ * Exactly four, derived from WORKER_KILLS: `command-timeout`, `stream-stall`,
+ * `worker-timeout` and `connection-error` all discard work the model genuinely
+ * did. A loop kill and a leaked tool call do not — the first is by definition the
+ * same call repeated, the second is malformed protocol text, and replaying either
+ * would feed the failure back to itself.
  */
 const CARRY_FORWARD_REASONS: ReadonlySet<WorkerKillId> = CARRY_FORWARD_IDS
 
@@ -119,20 +111,18 @@ const CARRY_FORWARD_REASONS: ReadonlySet<WorkerKillId> = CARRY_FORWARD_IDS
  * Does this partial output carry ANSWER CONTENT, or is it the model clearing its
  * throat?
  *
- * Salvage originally kept the LONGEST partial, which is not the same question. On
- * the live carry arm, a task and a task both timed out on all three
- * attempts and salvage shipped this as the section:
+ * Keeping the LONGEST partial is not the same question, and it has an obvious
+ * failure: a preamble sentence like
  *
  *     "Now let me get more details on the specific APIs and components I need:"
  *
- * — a preamble sentence, which beats an empty string on length and carries
- * nothing. Both trials scored 2 entries and DEGRADED, against 22 and 5 for the
- * same fixtures in baseline.
+ * beats an empty string on length and carries nothing.
  *
  * A research worker's answer is a list of lines that each name something and
- * describe it. The test is therefore structural, not lexical: at least two lines
- * that look like entries — a name, then a gap, then a description. Prose wraps
- * at no particular column and does not repeat that shape.
+ * describe it. The test is therefore structural, not lexical: at least TWO lines
+ * that look like entries — a name, then a gap, then a description. Prose wraps at
+ * no particular column and does not repeat that shape; the sentence above scores
+ * zero entry lines.
  */
 export function hasAnswerContent(text: string): boolean {
     return text.split('\n').filter(isEntryLine).length >= 2
@@ -141,13 +131,15 @@ export function hasAnswerContent(text: string): boolean {
 /**
  * Is ONE line an entry — a name, a gap, then a description — rather than prose?
  *
- * Split out of `hasAnswerContent` so the same rule can decide what a line IS,
- * not just how many of them there are. A FILES section's paths are read back
- * with it, and a scorer that used its own idea of an entry counted a preamble
- * sentence and a leaked `</tool_call>` as invented paths.
+ * Split out of `hasAnswerContent` so the same rule can decide what a line IS, not
+ * just how many of them there are — a reader of a FILES section needs the same
+ * test, and its own idea of an entry would count a preamble sentence or a leaked
+ * `</tool_call>` as one.
  *
- * Prose wraps at no particular column, so it carries no two-space gap and no
- * spaced dash; when it does, it ends in `.` or `:` and an entry does not.
+ * A leading `-`, `*`, `•` or `1.`/`1)` bullet is stripped first. What remains must
+ * hold a two-space gap or a spaced dash and must NOT end in `.` or `:`. Prose
+ * wraps at no particular column, so it carries neither; when it does carry one, it
+ * ends in punctuation and an entry does not.
  */
 export function isEntryLine(raw: string): boolean {
     const l = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim()
@@ -212,34 +204,31 @@ export interface RunWorkerInput {
      * The worker child's context window in tokens, or `'unknown'` when the
      * caller genuinely has none.
      *
-     * REQUIRED, and required for the same reason `profile` below is. This was
-     * `contextWindow?: number`, and two of the three production call sites simply
-     * did not write it: `pi-worker.ts` and `research-worker.ts`. pi's event
-     * stream carries no window (issue #16), so `noteContext` only ever saw 0, and
-     * `StallDetector`'s CONTEXT CHURN rule — gated on a positive window
-     * (`stall-detector.ts`) — could never fire for the ad-hoc worker or for any
-     * of the four research workers. Nothing was red. The optional was the whole
-     * defect: a rule that silently does not exist reads exactly like a rule that
-     * exists and did not trip.
+     * REQUIRED, and required for the same reason `profile` below is. pi's event
+     * stream carries NO window — the string `context_usage` appears nowhere in any
+     * installed @earendil-works package, and its only usage-bearing JSON event is
+     * `message_update` — so this parameter is the only source there is. Left
+     * optional, a caller that omits it leaves `noteContext` seeing 0, and
+     * `StallDetector`'s CONTEXT CHURN rule is gated on a positive window, so the
+     * rule silently does not exist. That reads exactly like a rule that exists and
+     * did not trip.
      *
-     * WHY A WORD AND NOT `0` OR `null`. Both of those are what a caller types
-     * when it has not thought about the question, and both disarm the rule
-     * silently — which is the state this replaces. `'unknown'` cannot be typed by
-     * accident, is greppable, and shows up in a diff as a decision.
+     * WHY A WORD AND NOT `0` OR `null`. Both of those are what a caller types when
+     * it has not thought about the question, and both disarm the rule silently.
+     * `'unknown'` cannot be typed by accident, is greppable, and shows up in a diff
+     * as a decision.
      *
      * Two consumers read it: the churn rule, and the caller's progress bar, which
-     * shows a bare token count without a window. Both degrade exactly as before
-     * on `'unknown'`.
+     * shows a bare token count without a window. Both degrade on `'unknown'`.
      */
     contextWindow: number | 'unknown'
     /**
      * WHICH KIND of worker child this is — the whole guard policy, in one word.
      *
-     * REQUIRED, and required on purpose. The ten guard knobs this replaces used
-     * to sit here as independent optionals, so a caller that named none of them
-     * still got a full policy and nobody could see which one. That is how the
-     * ad-hoc `pi-worker` tool came to run the strictest wall clock of the three
-     * children without anyone deciding it should. See worker-profiles.ts.
+     * REQUIRED, and required on purpose. As independent optionals, a caller that
+     * named none of the guard knobs still got a full policy and nobody could see
+     * which one — so a child can end up running the strictest wall clock of the
+     * three without anyone deciding it should. See worker-profiles.ts.
      */
     profile: WorkerProfileId
     /**
@@ -248,10 +237,11 @@ export interface RunWorkerInput {
      */
     policyInputs?: WorkerPolicyInputs
     /**
-     * Whole guard rows laid over the profile's. TESTS AND A/B HARNESSES ONLY —
-     * an override at a production call site is the hand-picked subset this
-     * design exists to stop, and `worker-profiles.test.ts` fails the build if
-     * one appears under src/ outside a test.
+     * Whole guard rows laid over the profile's. TESTS AND HARNESSES ONLY — an
+     * override at a production call site is the hand-picked subset this design
+     * exists to stop. `worker-profiles.test.ts` enforces it: its "no production
+     * source file passes an `override` to runWorker" test scans src/ for a leading
+     * `override:` and fails on any hit.
      */
     override?: WorkerGuardOverride
     /**
@@ -260,9 +250,9 @@ export interface RunWorkerInput {
      *
      * WHY: asserting that a profile RESOLVES correctly proves nothing about
      * whether runWorker then READS it correctly — a rewiring that turns "0 means
-     * off" into "0 means on" leaves every profile assertion green. This hook is
-     * what lets a caller's own test (gate-child.test.ts) drive the REAL call
-     * site and check the REAL policy, instead of re-typing the table.
+     * off" into "0 means on" leaves every profile assertion green. This hook lets
+     * a test drive the REAL call site and read back the REAL policy instead of
+     * re-typing the table; worker-profiles.test.ts is where those assertions live.
      */
     onPolicy?: (policy: WorkerGuardPolicy) => void
     /** Backoff sleep, injectable so tests don't wait out the real delays. */
@@ -291,11 +281,10 @@ export interface RunWorkerInput {
      *
      * WHY: every restart branch below throws away a whole attempt's wall clock
      * along with its text, and `waitMs`/`workMs` describe the FINAL attempt only.
-     * With no hook here those attempts were structurally invisible: a * burned 30 wall-clock timeouts / 120 minutes of compute that appeared in no
-     * log and no timing widget, and 21 of the 23 affected workers reported
-     * `exit=0` — clean successes as far as the run could tell. The discrepancy
-     * was only recoverable by subtracting reported wait+work from the timestamps
-     * of the `start` and `done` lines around it.
+     * With no hook here a discarded attempt is structurally invisible — the worker
+     * still returns `exitCode` 0 and reads as a clean success, and the lost time is
+     * recoverable only by subtracting the reported wait+work from the timestamps
+     * around the call.
      */
     onRestart?: (restart: WorkerRestart) => void
 }
@@ -353,10 +342,10 @@ function workerTimeout(
     return {
         signal: ctrl.signal,
         timedOut: () => timedOut,
-        // SCALE arm of, inert unless a caller calls it: push the
-        // deadline out, never past `started + ceilingMs`. A disabled timeout
-        // (nothing armed) stays disabled — extending "never" is meaningless — and
-        // an already-fired timer is not resurrected.
+        // Push the deadline out, never past `started + ceilingMs`. Inert unless a
+        // caller calls it. A disabled timeout (nothing armed) stays disabled —
+        // extending "never" is meaningless — and an already-fired timer is not
+        // resurrected.
         extend: (byMs, ceilingMs) => {
             if (!armed || timedOut || ctrl.signal.aborted) return
             const next = Math.min(deadline + byMs, started + ceilingMs)
@@ -414,13 +403,9 @@ export interface WorkerRestart {
      * thrown away.
      *
      * Recorded whatever `carryForward` says, because the DISCARD is the thing a
-     * reader cannot otherwise see. A restart line reported how long an attempt
-     * ran and why it died, and never what died with it — so "the guards worked
-     * and the run still returned 52 characters" and "the guards worked and the
-     * run threw away a finished answer" print identically. Measured on the
-     * ad-hoc `pi-worker` corpus: T024 lost an attempt to a dropped model socket
-     * at 275s and returned 52 chars over 620s; nothing in the run said whether
-     * those 275s held anything.
+     * reader cannot otherwise see. Without it, "the guards worked and the run
+     * returned almost nothing" and "the guards worked and the run threw away a
+     * finished answer" print identically.
      *
      * It is an OBSERVATION, not a decision: harvesting into `salvage` is still
      * gated on the profile, and this number changes no behaviour.
@@ -437,9 +422,9 @@ export interface RunWorkerResult {
      * The provider-reported cause when the model turn itself failed (disconnect,
      * fetch failed, 5xx after pi's own retries): pi delivers it as an assistant
      * message with stopReason "error" and EMPTY text, exit code 0. Phase children
-     * have always surfaced this (child-runner.ts) — research workers did not, so a
-     * swallowed provider error reached the caller as an indistinguishable empty
-     * answer and was reported as the useless "produced no output" (issue #10).
+     * surface this through child-runner.ts; without it a swallowed provider error
+     * reaches the caller as an indistinguishable empty answer and gets reported as
+     * the useless "produced no output".
      * Only meaningful when `text` is empty: a turn that produced text after pi
      * recovered is a success, and the first-error capture must not relabel it.
      */
@@ -570,8 +555,9 @@ export interface RunWorkerResult {
  * the full ceiling. Only a hang after a hang is defiance.
  *
  * Floored at 30s so repeated halving cannot shrink the ceiling to something no
- * real command could finish inside — but never ABOVE the configured ceiling
- * itself, or a caller asking for 10s would silently get 30.
+ * real command could finish inside — but the floor is `min(base, 30s)`, never
+ * above the configured ceiling, so a caller asking for 10s keeps 10s at every
+ * hang count. A base of 0 or less disables the watchdog and stays 0.
  */
 export function commandCeilingForAttempt(baseMs: number, priorHangs: number): number {
     if (!(baseMs > 0)) return 0
@@ -591,7 +577,8 @@ interface RestartState {
     timedOut: boolean
     modelError?: string
     leaked: string | null
-    /** The cap this attempt actually died against — the SCALE arm moves it. */
+    /** The cap this attempt actually died against, not the configured one:
+     *  `extend`/`progress` can push the deadline out during the attempt. */
     effectiveCapMs: number
     /** The child's tool string, which decides whether its edits can persist. */
     tools: string
@@ -720,8 +707,8 @@ export const RESTART_RULES: readonly RestartRule[] = [
         reason: 'worker-timeout',
         detect: s =>
             s.timedOut && !s.loopHit && s.restartBudgetSpent < MAX_LOOP_RESTARTS ?
-                // The EFFECTIVE cap, which the SCALE arm moves — reporting the
-                // configured one would misname why this attempt died.
+                // The EFFECTIVE cap, which `extend`/`progress` can have moved —
+                // reporting the configured one would misname why this attempt died.
                 {detail: `cap ${s.effectiveCapMs}ms`}
             :   null,
         hint: () => WORKER_TIMEOUT_HINT,
@@ -729,22 +716,15 @@ export const RESTART_RULES: readonly RestartRule[] = [
     },
     {
         // A connection-class model error is restartable on the same budget, exactly
-        // as runPhaseChild already treats it — a research worker had no such
-        // retry, so one dropped fetch failed the whole task at research while the
-        // identical blip in refine/compose was absorbed.
+        // as runPhaseChild already treats it. Without it one dropped socket fails
+        // the whole task at research, while the identical blip in refine or compose
+        // is absorbed.
         //
-        // What this can and cannot buy, measured (flaky proxy in front of the local
-        // llama-server, dropping every connection for a fixed outage window): pi
-        // retries a failed turn itself, 4 attempts over ~15s, and a run that
-        // recovers no longer reports modelError at all (see JsonEventSink). So a
-        // surfaced connection error means pi's own ~15s budget is already spent, and
-        // a re-spawn only helps when the outage outlasts it. It does: at a 20s
-        // outage the baseline never recovers and this policy always does. Below
-        // about fifteen seconds pi absorbs the outage alone, so the retry neither
-        // helps nor costs there. Beyond ~46s
-        // (three spawns' combined budget) both arms fail. The price is paid only on
-        // a backend that is really gone: time-to-report goes ~15s → ~46s. Re-run:
-        // a controlled outage.
+        // pi retries a failed turn itself before reporting anything, and a run that
+        // recovers reports no modelError at all (see JsonEventSink). So a SURFACED
+        // connection error means pi's own budget is already spent, and a re-spawn
+        // only helps when the outage outlasts it. The price is paid only on a
+        // backend that is really gone: time-to-report grows by the extra spawns.
         //
         // Connection class ONLY. Auth, bad request and context overflow still fail
         // fast: re-issuing the same request cannot fix them, so spending the budget
@@ -791,11 +771,11 @@ interface CommandKill {
  * runChild turns into a process-GROUP kill — reaping the hung command itself,
  * not just the pi child holding it.
  *
- * LIMIT: the group kill only reaches processes still IN the group. A hung
- * command that detached a daemon (setsid/nohup dev server) leaves it running —
- * the fresh attempt can then hit a port the dead attempt's escapee still holds
- *. No cheap fix from
- * here; the restart hint's "check current state" line is the mitigation.
+ * LIMIT: the group kill only reaches processes still IN the group. A hung command
+ * that detached a daemon (setsid, nohup, a background dev server) leaves it
+ * running, so the fresh attempt can hit a port the dead attempt's escapee still
+ * holds. There is no cheap fix from here; the restart hint's "check current state"
+ * line is the mitigation.
  *
  * Returns null when the watchdog is off, so the caller keeps the plain timeout
  * signal and no per-call bookkeeping happens at all.
@@ -847,6 +827,13 @@ function commandWatch(timeoutMs: number): {
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
     const tools = input.tools ?? DEFAULT_TOOLS
+    // `--mode json` makes pi emit structured events as they happen instead of
+    // buffering the assistant text and flushing on exit. Its print-mode source
+    // shows both halves: under `json` a session subscriber writes every event to
+    // stdout as it arrives, while under `text` NOTHING is written until after the
+    // prompt resolves, when the last assistant message is printed once. That is
+    // what makes the wait/work split real — onFirstByte would otherwise fire
+    // moments before close and leave workMs at nearly zero.
     const baseArgs = [
         ...childBaseArgs(input.extensions ?? []),
         ...(input.thinking ?? []),
@@ -897,11 +884,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
     const salvage: {text: string | null} = {text: null}
     for (;;) {
         const carried = salvage.text === null ? null : formatCarryForward(salvage.text)
-        // Announce the INJECTION, not just the restart. Without this, "the carry
-        // reached the re-spawn" can only be inferred from entry counts — and
-        // inferring what a worker did from what it produced is the exact gap 5A
-        // exists to close. The prompt goes to the child on stdin, so no log
-        // downstream of here can show it.
+        // Announce the INJECTION, not just the restart. The prompt goes to the child
+        // on stdin, so no log downstream of here can show it — without this hook
+        // "the carry reached the re-spawn" could only be inferred from the answer,
+        // which is inferring what a worker did from what it produced.
         if (carried !== null) {
             input.onCarryForward?.({
                 attempt: restarts.length + 1,
@@ -934,8 +920,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                 null
             :   new StallDetector(guards.loop.progress.limit, guards.loop.progress.churnFactor)
         // Arm the churn rule BEFORE the first tool call. pi's stream carries no
-        // context event (issue #16), so waiting for one leaves the rule
-        // permanently disarmed. The parent knows the window at spawn time.
+        // context event at all, so waiting for one leaves the rule permanently
+        // disarmed. The parent knows the window at spawn time.
         stallDetector?.noteContext(contextWindowTokens(input.contextWindow))
         // Capture the hit the detector reports (it also returns it to the unified
         // runner, which kills the child on a hit). Without capturing it here the
@@ -983,7 +969,8 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         // caller opted into a progress-based deadline.
                         timeout.progress()
                         // Naming ONE tool and ONE of its parameters here would put
-                        // that knowledge in the generic runner. It asks the tool's own row.
+                        // that knowledge in the generic runner, so it asks the
+                        // tool's own row in WORKER_CHANNELS instead.
                         if (
                             clock.fanout
                             && workerChannel(call.name)?.isProjectSourceLookup?.(
@@ -1010,10 +997,10 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
                         input.onLine?.(line)
                     },
                     // Always wired, never conditional on the command watchdog: the
-                    // sink only emits tool_execution_end if a
-                    // handler exists, and a completed tool call is the clearest
-                    // progress signal there is. Without it a worker whose tool
-                    // calls all succeed would still look idle to the deadline.
+                    // sink only emits a tool-execution-end if a handler exists, and
+                    // a completed tool call is the clearest progress signal there
+                    // is. Without it a worker whose tool calls all succeed would
+                    // still look idle to the deadline.
                     onToolResult: r => {
                         timeout.progress()
                         cmdWatch?.onEnd(r.toolCallId)
@@ -1115,21 +1102,19 @@ export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult>
         // SALVAGE. Returning the LAST attempt's text unconditionally makes a
         // worker whose final attempt was killed early report nothing at all — even
         // when a discarded attempt produced a usable answer that was still in hand
-        // at the moment it was thrown away. A restart budget is
-        // meant to buy more chances at an answer, not to overwrite a good attempt
-        // with a worse one.
+        // at the moment it was thrown away. A restart budget is meant to buy more
+        // chances at an answer, not to overwrite a good attempt with a worse one.
         //
         // Gated on the final attempt having FAILED, not on it being shorter. A
         // worker that finished cleanly has answered, and a short answer is a
         // legitimate answer — length would let a long half-finished fragment
         // override a concise correct one, which is the opposite of the fix.
-        // ASK THE LADDER — do not restate it. This was an eight-term disjunction,
-        // a fifth hand-written statement of the taxonomy `worker-failure.ts` exists
-        // to own, and it had already drifted: `leakedToolCall` and a plain non-zero
-        // `exitCode` are rows in FAILURE_RULES and were missing here. Both are cases
-        // where an attempt that produced nothing usable counted as NOT failed, so
-        // salvage was skipped and a good earlier partial was overwritten — the exact
-        // outcome the comment above forbids.
+        // ASK THE LADDER — do not restate it. Hand-writing this test restates the
+        // taxonomy `worker-failure.ts` owns, and a restatement drifts: drop
+        // `leakedToolCall` or a plain non-zero `exitCode` from it and an attempt
+        // that produced nothing usable counts as NOT failed, so salvage is skipped
+        // and a good earlier partial is overwritten — the outcome the comment above
+        // forbids.
         //
         // The two non-kill terms stay explicit because `worker-failure.ts`
         // deliberately excludes them as CONSUMER policy: an empty answer and a
