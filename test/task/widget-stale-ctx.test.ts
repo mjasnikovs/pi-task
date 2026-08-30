@@ -1,25 +1,16 @@
 /**
- * Regression test for GitHub issue #15 ("stale ctx crashes the widget").
+ * A stale ctx must not crash the widget.
  *
- * Claim: after a /reload or session replacement the captured ctx is stale —
- * any access to ctx.ui throws the runtime's "stale after session replacement
- * or reload" error. The widget render loops guard `ctx.ui.setWidget` in a
- * try/catch but read `ctx.ui.theme` OUTSIDE that guard:
- *
- *     const lines = s ? buildWidgetLines(s, ctx.ui.theme) : undefined
- *
- * So with a stale ctx and a live (non-null) widget state the theme read throws
- * before the guard is ever entered. `render` runs from `setInterval`, so the
- * throw is an uncaughtException rather than a caught UI error: it takes the
- * whole pi process down. `flashTerminalWidget` has the same unguarded read.
- *
- * These tests assert the CORRECT behaviour — a stale ctx must not crash the
- * widget — and therefore FAIL against the current (buggy) code, RED-first
- * exactly like windows-portability.test.ts.
+ * After a /reload or a session replacement the captured ctx is stale: any access
+ * to `ctx.ui` throws the runtime's "stale after session replacement or reload"
+ * error. `render` runs from `setInterval`, so a throw there is an
+ * uncaughtException rather than a caught UI error — it takes the whole pi process
+ * down. So EVERY `ctx.ui` read on a render path sits inside the try/catch, the
+ * theme read that feeds buildWidgetLines included, and the catch latches a stale
+ * flag and clears the timer rather than swallowing the same throw each tick.
  *
  * Three sites, one per call: startWidget, startAutoLoader, flashTerminalWidget.
- * A fourth test covers the secondary claim: a ctx that goes stale AFTER the
- * timer is installed must not keep throwing on every subsequent tick.
+ * A fourth test covers a ctx that goes stale AFTER the timer is installed.
  */
 
 import {afterEach, describe, expect, test} from 'bun:test'
@@ -75,9 +66,9 @@ function goesStaleCtx(liveAccesses: number): ExtensionCommandContext {
 }
 
 // Non-null state on purpose: a null state makes
-// `s ? buildWidgetLines(s, ctx.ui.theme) : undefined` short-circuit and skip
-// the unguarded theme read entirely — the crash only reproduces while the
-// widget actually has something to render.
+// `s ? buildWidgetLines(s, ctx.ui.theme) : undefined` short-circuit and skip the
+// theme read entirely, so a stale ctx is only touched while the widget has
+// something to render.
 const widgetState: WidgetState = {
     taskId: 'TASK_0015',
     title: 'demo',
