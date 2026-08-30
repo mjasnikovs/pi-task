@@ -15,10 +15,11 @@ const ran = (over: Partial<CommandRun> = {}): CommandRun => ({
     ...over
 })
 
-// Every case below is a LITERAL. The three ladders this replaces could only be
-// exercised by spawning a real `node -e` child into a temp directory, and three
-// of their branches only by shadowing a binary on process.env.PATH and resetting
-// a module cache — order-sensitive, and carved out on Windows.
+// classifyCommandRun is pure: exit status, signal and output in, verdict out.
+// So every case below is a LITERAL. The same rules expressed as branches inside
+// each caller could only be exercised by spawning a real child into a temp
+// directory — and some of them only by shadowing a binary on PATH and resetting
+// a module cache, which is order-sensitive and not portable.
 
 test('exit 0 is the only pass', () => {
     expect(classifyCommandRun(ran())).toEqual({outcome: 'pass'})
@@ -49,9 +50,11 @@ describe('the env-gap contract — a command that told us nothing never fails a 
 })
 
 test('spawn-failed stays distinguishable from every other gap', () => {
-    // Load-bearing: only a genuine spawn failure feeds the gate's full-blindness
-    // guard. A 127 inside the script chain, a missing browser and a
-    // timeout all mean the runner demonstrably RAN.
+    // Load-bearing: `spawn-failed` is the ONLY gap that reaches the gate's
+    // blindness guard — final-gate.ts:417 passes `verdict.gap === 'spawn-failed'`
+    // through, and gate-tally separates "discovered but every one failed to
+    // spawn" from every other outcome. A 127 inside the script chain, a missing
+    // browser and a timeout all mean the runner demonstrably RAN.
     const spawnFailed = classifyCommandRun(ran({failedToStart: true, status: null}))
     expect(spawnFailed.outcome === 'gap' && spawnFailed.gap === 'spawn-failed').toBe(true)
     for (const run of [ran({status: null}), ran({status: 127, stderr: 'not found'})]) {
