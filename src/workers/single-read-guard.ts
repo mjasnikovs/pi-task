@@ -1,33 +1,30 @@
 /**
- * In-process thrash guards for the TOOLING research worker.
+ * In-process thrash guards, armed by single-read-extension.ts in the TOOLING
+ * research worker and the planning children.
  *
- * Two guards, one mechanism — deny a wasteful repeat *inside the run* (the
+ * Two guards, one mechanism — deny a wasteful repeat *inside the run*. The
  * extension returns the block from a `tool_call` handler, pi feeds `reason` back
- * as an error tool result, the worker continues). No kill, no restart: detect-
- * and-kill only re-spawns a model that deterministically re-thrashes.
+ * as an error tool result, and the child continues. No kill, no restart:
+ * detect-and-kill only re-spawns a model that deterministically re-thrashes.
  *
- *   - SingleReadGuard: "read each LINE of a file once". Validated against every
- *     recorded run — a healthy TOOLING worker reads each file exactly once,
- *     while a thrashing one re-reads a single file dozens of times.
+ *   - SingleReadGuard: "read each LINE of a file once".
  *
- *     Keying on the resolved path alone, blocking any second read "regardless of
- *     offset", makes a file bigger than one read into a trap. A planner asking
- *     for the first 80 lines of a 743-line design document — deliberately paging
- *     — has its request for offset 80 refused. It never
- *     reaches the end of the file, and spends the rest of the run asking for the
- *     remainder: 197 of 200 tool calls were this guard's own refusal. The guard
- *     did not stop a thrash, it CAUSED one.
+ *     Keying on the resolved path alone — blocking any second read regardless of
+ *     offset — turns a file bigger than one read into a TRAP. A child paging
+ *     deliberately, first 80 lines then the next 80, has its second request
+ *     refused; it never reaches the end of the file and spends the rest of the run
+ *     asking for the remainder. That guard does not stop a thrash, it causes one.
  *
- *     So the unit is the line range, not the file. A request that extends past
- *     the furthest line already delivered is forward paging and passes; one that
- *     lies entirely within ground already delivered is a re-read and is blocked.
+ *     So the unit is the line range, not the file. A request that extends past the
+ *     furthest line already delivered is forward paging and passes; one that lies
+ *     entirely within ground already delivered is a re-read and is blocked.
  *
- *   - RepeatedCallGuard: "no identical search twice", for grep/find/ls. a task
- *     also looped on grep({pattern:"^\\s*}",path:".../index.ts"}) ×5 — a path the
- *     read guard never covered, so the call fell back to the ineffective detect→
- *     restart path. Keyed on (toolName, stableStringify(args)) — the *same* key
- *     the LoopDetector uses — so only byte-identical repeats trip; a legitimately
- *     different grep pattern on the same file still passes.
+ *   - RepeatedCallGuard: "no identical search twice", for grep/find/ls — the
+ *     shapes the read guard cannot see, such as the same grep pattern re-run
+ *     against the same path. Keyed on `${toolName}\0${stableStringify(args)}`,
+ *     byte-identical to the key `LoopDetector.record` builds, so argument key
+ *     order never causes a miss and only an identical repeat trips. A different
+ *     pattern on the same file still passes.
  *
  * Pure logic, no I/O — the extension does path resolution and tool routing.
  */
@@ -43,10 +40,11 @@ export interface ReadBlock {
  * The error text the model receives in place of the re-read's contents.
  *
  * It must say what to do NEXT, and the honest next move depends on whether there
- * is any of the file left: with `covered` lines already delivered, asking for
- * line `covered + 1` is always allowed, so the message says so. The old wording
- * ("Do not read it again") was a dead end for a model that was mid-way through a
- * file — it had nowhere legal to go and kept asking anyway.
+ * is any of the file left: with `covered` lines already delivered, asking for line
+ * `covered + 1` is always allowed, so the message says so. A bare "do not read it
+ * again" is a dead end for a model mid-way through a file — it has nowhere legal
+ * to go and keeps asking anyway. A read that reached EOF has `covered` set to
+ * Infinity and gets the other wording, with no line to resume from.
  */
 export function singleReadReason(path: string, covered: number): string {
     if (!Number.isFinite(covered)) {
@@ -64,7 +62,8 @@ export function singleReadReason(path: string, covered: number): string {
     )
 }
 
-/** Default `limit` pi's read tool applies when the call names none. */
+/** pi's own read truncation ceiling (`DEFAULT_MAX_LINES` in its truncate.js): a
+ *  read that names no `limit` returns at most this many lines. */
 const DEFAULT_READ_LIMIT = 2000
 
 /** The 1-based line a read starts at (`offset` absent or junk means line 1). */
@@ -75,9 +74,11 @@ function startLine(offset: unknown): number {
 }
 
 /**
- * The last line a read reaches. A `limit` of exactly the tool default is treated
- * as "no limit given" — indistinguishable at this layer, and the safe reading is
- * the generous one, since blocking honest paging is the failure this guard had.
+ * The last line a read reaches, or Infinity when the read is unbounded. A `limit`
+ * at or above pi's own ceiling is treated as "no limit given" — indistinguishable
+ * at this layer — and so is a `limit` that is absent, zero, negative or not a
+ * number. The generous reading is the safe one, since blocking honest paging is
+ * the failure mode this guard has.
  */
 function endLine(start: number, limit: unknown): number {
     if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) return Infinity
