@@ -1,35 +1,17 @@
 /**
- * What counts as SHIPPED SOURCE — the input every run-level closure scan reads.
+ * What counts as SHIPPED SOURCE — the input the run-level closure scans read.
  *
- * `CLOSURE_SCANS` (final-gate.ts) deepened the DRIVER of these scans: the fault
- * isolation, the rank, the stage. It did not unify their INPUT, and the copies
- * had drifted.
+ * ONE walker, ONE skip set, ONE extension regex, ONE comment strip, shared by
+ * `serve-entry.ts` and `artifact-closure.ts`. Two copies of this drift: a skip set
+ * that gains a directory on one side makes a file a run-level finding for one scan
+ * while the sibling scan cannot see it at all, and nothing in either file would say
+ * so.
  *
- *  - `scanCandidates` existed twice, near-byte-identical — `serve-entry.ts` and
- *    `artifact-closure.ts` — same `readdirSync().sort()` → `statSync` → recurse,
- *    same 3000-file cap, same 400 KB per-file cap, same dot-dir rule.
- *  - The skip sets had diverged: serve-entry carried `bench|benchmarks` and
- *    `*.bench.*`; artifact-closure did not, so a dangling artifact reference in a
- *    benchmark file was a run-level finding while the same file was invisible to
- *    the sibling scan. Nothing in either file acknowledged the other.
- *  - The same extension regex was declared twice under two names (`SCAN_RE`,
- *    `SCAN_JS_RE`), and `stripCommentLines` was byte-identical in both.
- *  - `.pi-tasks` was hardcoded into both skip sets rather than derived from
- *    `TASKS_DIR_NAME`.
- *
- * The locality proof is in the suites: `artifact-closure.test.ts` has 28
- * references to the pure extractors and 5 calls to the driver, and NO test in the
- * cluster asserted a skip set at all. That is the shape recorded under
- * `resolveTypeSource` — pure functions extracted for testability while the real
- * logic stayed in how they are CALLED.
- *
- * NOT unified here: `env-template-closure.ts`. It asks a different question —
- * which TRACKED files could read an env var, including `.py`/`.go`, including
- * tests — and answering it over this walk would silently change which env
- * findings a run produces. Its comment rule is not this one either: it is a
- * per-line predicate that also treats `#` as a comment opener, which it must,
- * and which would be wrong for JS/TS. Recorded as a real divergence rather than
- * harmonised; changing it is an env-policy change with its own A/B.
+ * NOT unified here: `env-template-closure.ts`. It asks a different question — which
+ * TRACKED files could read an env var, `.py` and `.go` included, tests included —
+ * and answering it over this walk would silently change which env findings a run
+ * produces. Its comment rule differs too: a per-line predicate that also treats `#`
+ * as an opener, which it must, and which would be wrong for JS/TS.
  */
 
 import {readdirSync, statSync} from 'node:fs'
