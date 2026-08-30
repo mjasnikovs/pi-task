@@ -10,9 +10,9 @@ import type {TreeChangeSummary} from '../../src/task/write-guard.js'
 const empty: TreeChangeSummary = {modified: [], added: [], deleted: []}
 
 describe('PLAN_TOOLS', () => {
-    // The read-only guarantee is this one string. Widening it — to `read,edit`,
-    // to `read,bash`, to anything — is what would silently end it, so the value
-    // is pinned rather than merely commented.
+    // plan-orchestrator.ts passes this constant as the planning children's `tools`,
+    // so it IS the prevention half of the read-only contract. Widening it would end
+    // that silently, which is why the value is pinned here rather than described.
     test('is exactly one tool, and that tool is read', () => {
         expect(PLAN_TOOLS).toBe('read')
     })
