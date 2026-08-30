@@ -2,8 +2,8 @@
  * Display-label compression.
  *
  * A refined GOAL paragraph becomes the stored `title`, which the pipeline reads
- * in full — but it can run to 1000+ characters, which makes the widget head and
- * `/task list` unreadable. `compressTitle` spawns a tool-less local-model child
+ * in full — but a paragraph-long title makes the widget head and `/task list`
+ * unreadable. `compressTitle` spawns a tool-less local-model child
  * to distill that title into a short, identifying label that we store ALONGSIDE
  * (never replacing) the full title, purely for display. Every failure mode —
  * model error, empty output, leaked tool call, abort, an over-long answer —
@@ -18,8 +18,13 @@ import {COMPRESS_LABEL_PROMPT} from './prompts.js'
 
 /**
  * Reduce a raw model completion to a single clean label line: first non-empty
- * line, stripped of surrounding quotes/backticks and a leading "label:" echo,
- * whitespace collapsed. Returns '' when nothing usable remains.
+ * line, a leading "label:" echo removed, then quotes/backticks stripped from the
+ * ends, then whitespace collapsed. Returns '' when nothing usable remains.
+ *
+ * The quote strip runs BEFORE the collapse, so it anchors on the raw line: a quote
+ * sitting next to leading or trailing whitespace survives (`"X"  ` → `X"`). That
+ * only ever leaves one stray character in the label, and the label is display-only
+ * — `title` is what the pipeline reads.
  */
 export function sanitizeLabel(raw: string): string {
     const firstLine = raw.split('\n').find(l => l.trim().length > 0) ?? ''
