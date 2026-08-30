@@ -84,12 +84,14 @@ describe('CommandWatchdog', () => {
     })
 
     test('an exempt tool still running when a guarded sibling overruns is never itself fired', () => {
-        // pi runs sibling tool calls CONCURRENTLY (extensions docs: "sibling
-        // tool calls ... executed concurrently"), so the overlap is real, not
-        // hypothetical. The machine's guarantee is narrow and worth pinning: the
-        // exempt call is never the one reported. It is NOT spared the abort —
-        // ctx.abort() ends the whole agent operation (see shared/
-        // command-watchdog.ts) and there is no per-call cancellation channel.
+        // pi runs sibling tool calls CONCURRENTLY — its docs/extensions.md says
+        // they "are preflighted sequentially, then executed concurrently" — so
+        // the overlap is real, not hypothetical.
+        //
+        // The guarantee is narrow and worth pinning: the exempt call is never the
+        // one REPORTED. It is not spared the abort. pi types `abort()` as "Abort
+        // the current agent operation", and there is no per-call cancellation
+        // channel, so an exempt sibling still dies with the turn.
         const h = makeHarness(900_000, toolName => toolName !== 'fable_loop')
         h.watchdog.onStart('call-1', 'fable_loop')
         h.watchdog.onStart('call-2', 'bash')
@@ -168,8 +170,9 @@ describe('reminderMessage', () => {
     })
 
     test('tells the model the killed command produced no result (anti-fabrication)', () => {
-        // A live run showed the model claim the killed server was "now running";
-        // the reminder must explicitly deny any success/started-process claim.
+        // A model handed a killed command will otherwise narrate it as having
+        // succeeded — reporting the server it never started as "now running" —
+        // so the reminder has to deny the success claim explicitly.
         const msg = reminderMessage('bash', 300_000)
         expect(msg).toContain('produced NO result')
         expect(msg.toLowerCase()).toContain('do not claim')
@@ -185,10 +188,11 @@ describe('reminderMessage', () => {
 })
 
 describe('realTimerDeps', () => {
-    // Same measured windows failure as the stream watchdog's poll: under Bun an
-    // unref'd timer never fires once nothing ref'd is pending, and a child sitting
-    // in a hung command IS that state — so an unref'd ceiling silently disabled the
-    // guard on windows. Asserted on the handle, so it fails on any platform.
+    // Same rule as the stream watchdog's poll. An unref'd timer does not hold the
+    // event loop open, so once nothing else is pending it never fires — and a
+    // host waiting on a hung command IS that state, which would leave the ceiling
+    // silently disarmed. Asserted on the handle's hasRef() rather than by
+    // waiting, so it fails immediately and on any platform.
     test('schedules a REF’d timer — an unref’d one is dead on windows', () => {
         const h = realTimerDeps.schedule(() => {}, 60_000) as {hasRef?: () => boolean}
         try {
