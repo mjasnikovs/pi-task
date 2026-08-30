@@ -47,10 +47,11 @@ describe('gatherExternalContext', () => {
     })
 
     test('gives EVERY named dep a live npm version block, not just the docs-capped 3', async () => {
-        // Six named runtime deps — the real one task shape. The heavy docs
-        // fetch still caps at 3, but a version block must exist for all six so a
-        // later "which version?" question is grounded for tailwindcss too (the bug:
-        // deps past the cap fell back to the model's stale training-data version).
+        // Six named runtime deps — more than the docs cap, which is the case that
+        // matters. The heavy docs fetch still stops at 3, but a version block must
+        // exist for ALL six: without one, a later "which version?" question about
+        // the sixth is answered from training data, which can only name a version
+        // that existed when the model was trained.
         const docsCalls: string[] = []
         const versionCalls: string[] = []
         const out = await gatherExternalContext(
@@ -139,9 +140,12 @@ describe('gatherExternalContext', () => {
 })
 
 // The policy knobs are the whole reason there is ONE builder instead of two
-// near-duplicate ones: `gatherExternalContext` (research) and phaseAutoAnswer
-// (grill) disagree only here. Each test pins one knob's OFF and ON behaviour so
-// a future edit cannot silently give one call path the other's policy.
+// near-duplicate ones. The two call paths disagree in exactly three fields:
+// gatherExternalContext (external-context.ts) passes versionLookup,
+// subStepLabel: 'enrichment' and earlyReturnOnNoTargets: true, while
+// phaseAutoAnswer (phases.ts) passes none of them — only docs, url and search.
+// Each test below pins one knob OFF and ON, so an edit cannot silently give one
+// call path the other's policy.
 describe('buildExternalContext policy', () => {
     const lookups = (calls: {docs: string[]; url: string[]; search: string[]}) =>
         ({
