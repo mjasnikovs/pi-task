@@ -29,7 +29,6 @@ describe('formatServiceBlock', () => {
         expect(out).toContain('### service: Stripe\nQuery: Stripe webhooks\n')
         expect(out).toContain('- **A** — https://a\n  da')
         expect(out).toContain('- **B** — https://b\n  db')
-        // Bullets are joined with '\n' (no blank line between them).
         expect(out).toContain('da\n- **B**')
     })
 })
