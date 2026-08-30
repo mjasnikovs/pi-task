@@ -98,10 +98,8 @@ export interface GateDeps {
      * it has always been, so production wiring is untouched.
      *
      * Its own field because it answers a different question from the gate above.
-     * While the two shared one field the only way to answer them differently was to
-     * count invocations — a `verifyCalls` state machine whose FIRST return existed
-     * solely to unlock `mode === 'edit'`, re-invented in the suite and again in
-     * a replay of recorded enforce reverts.
+     * Sharing one field would leave a caller — or a test — no way to answer the two
+     * differently except by counting invocations.
      */
     reVerify?: (
         ctx: ExtensionCommandContext,
@@ -141,10 +139,10 @@ export interface GateDeps {
     /**
      * BOUNDED fix for a repo-health verify FAIL: a small read,edit,bash child fixes
      * exactly the static findings (revert-guarded — see lint-fix.ts), instead of the
-     * full implementation re-run AUTOFIX reaches for. Validated live: 64s/106s to
-     * lint-clean where the impl re-run burned 36–56 min and did not converge. Runs
-     * at most once per gate sequence; not-applied falls through to the picker.
-     * Absent → the loop goes straight to recommend/picker as before.
+     * full implementation re-run AUTOFIX reaches for. Smallest tool first: a static
+     * finding does not need the whole turn re-run to fix it. Runs at most once per
+     * gate sequence; not-applied falls through to the picker. Absent → the loop goes
+     * straight to recommend/picker.
      */
     lintFix?: (
         ctx: ExtensionCommandContext,
@@ -155,15 +153,15 @@ export interface GateDeps {
     ) => Promise<{ok: boolean; reason?: string}>
     /**
      * Deterministic whole-repo static check (repo-health), used as the PRE-COMMIT
-     * gate on an edit-mode enforce pass: live data shows enforce edits broke the
-     * repo's own lint in 11 of 16 tasks, each costing a commit + model re-verify +
-     * revert cycle. Checking before committing skips that cycle. Absent → the old
-     * commit-then-differential path runs unchanged.
+     * gate on an edit-mode enforce pass: an enforce edit that breaks the project's
+     * own lint would otherwise cost a commit, a model re-verify and a revert before
+     * anything noticed. Checking first skips that cycle. Absent → the
+     * commit-then-differential path runs on its own.
+     *
+     * Takes the live ctx and a label so the implementation can render a status line
+     * while it runs: it is as slow as the project's own lint, and a gate step that
+     * long with no widget is indistinguishable from a hang.
      */
-    /** Deterministic whole-repo static check for the enforce pre-commit gate. Takes
-     *  the live ctx and a label so the implementation can render a status line while
-     *  it runs — it is as slow as the project's own lint (15–69s measured), and a
-     *  gate step that long with no widget is indistinguishable from a hang. */
     repoHealth?: (
         ctx: ExtensionCommandContext,
         cwd: string,
@@ -179,10 +177,10 @@ export interface GateDeps {
      * Append one line to the task's durable gate trail (`## gates` in the task
      * file). Every gate outcome — each verify verdict, the user's FAIL resolution,
      * the commit result, enforce mode + verdict, the differential guard's decision —
-     * is recorded so the sequence is auditable from artifacts alone (the audit
-     * could not tell WHY 10 of 18 tasks show no enforce run: verdicts lived only in
-     * terminal notifies). Best-effort: absent in tests → skipped; failures are
-     * swallowed by the implementation, never by this sequence.
+     * is recorded so the sequence is auditable from artifacts alone. A verdict that
+     * lives only in a terminal notify cannot answer "why did enforce not run here?"
+     * after the fact. Best-effort: absent in tests → skipped; failures are swallowed
+     * by the implementation, never by this sequence.
      */
     record?: (cwd: string, taskId: string, line: string) => Promise<void>
     /**
@@ -220,8 +218,8 @@ export interface GateDeps {
      * verify site); `committed` = the files the task snapshot + the ENFORCE commit
      * changed (the post-commit enforce site); `enforce-commit` = the ENFORCE COMMIT
      * ALONE, which is the only correct authorship question at the enforce
-     * differential (/  — that differential decides whether to
-     * discard the enforce commit, so what the TASK touched is irrelevant to it).
+     * differential — that differential decides whether to discard the ENFORCE
+     * COMMIT, so what the TASK touched is irrelevant to it.
      * `null` means UNKNOWN (git unavailable) and stands the whole channel down —
      * inconclusive is never evidence, so an unreadable tree can only cost a repair
      * task, never spawn a wrong one or wrongly keep a regression.
@@ -251,9 +249,9 @@ export interface GateDeps {
     /**
      * Restore the given frozen paths to their committed (HEAD) state, discarding a
      * gate child's edits to them, and return the files actually reverted. Prompt
-     * framing is insufficient for this class (see frozen-path-guard.ts), so the
-     * deny is mechanical:
-     * the write is undone, not merely warned about. Absent → the guard warns only.
+     * framing is insufficient for this class (see frozen-path-guard.ts), so the deny
+     * is mechanical: the write is undone, not merely warned about. Absent → the
+     * guard warns only.
      */
     revertFrozenPaths?: (cwd: string, paths: string[]) => Promise<string[]>
 }
@@ -324,12 +322,12 @@ export interface YoloAcceptContext {
 /**
  * The reason an auto-ACCEPT is being written — NAMED, not assumed.
  *
- * The line this replaces asserted "autofix budget spent" on every branch, and it
- * was false on every recorded accept: the budget never reaches MAX_AUTO_AUTOFIX.
- * Accepts are either UNOBSERVED, where the research is not consulted at all, or
- * an ACCEPT recommendation with the budget fully untouched. A durable trail that
- * misstates why a defect shipped is worse than no trail: a task
- * reads as an exhausted fixer when nothing was ever attempted.
+ * Four disjoint branches reach the terminal auto-ACCEPT, and only ONE of them has
+ * spent the autofix budget. An UNOBSERVED FAIL never consults the research; a
+ * frozen-blocked one is a contradiction no re-run can resolve; an ACCEPT
+ * recommendation can arrive with the budget untouched. A single "autofix budget
+ * spent" line would be false on three of the four, and a durable trail that
+ * misstates why a defect shipped reads as an exhausted fixer that never tried.
  */
 export function yoloAcceptReason(c: YoloAcceptContext): string {
     if (c.isUnobserved)
@@ -379,8 +377,8 @@ export async function askVerifyResolution(
 /**
  * Run the verify + enforce gates against a task's just-finished implementation.
  *
- * Lifted verbatim from /task-auto's per-task loop so the two commands gate
- * identically. Returns a GateResult; `done` means the caller should proceed (the
+ * Both commands gate identically because both call this. Returns a GateResult;
+ * `done` means the caller should proceed (the
  * work is verified-or-accepted, checked off, committed, and enforced), every other
  * kind is a terminal stop the caller announces. Never throws for a gate outcome —
  * only a user cancel inside a gate child propagates (handled by the caller's
@@ -420,12 +418,10 @@ type VerifyGateStep =
  * recommendation → unattended autofix → picker) until it verifies, is accepted,
  * or terminates.
  *
- * Split out of `runGatesForTask` at the single boolean that crosses to the
- * ENFORCE half. It carries 8 mutable locals over ~290 lines and has four terminal
- * exits; enforce carries one local and always falls through. Joining them meant a
- * test of the enforce differential had to traverse this whole loop first, which is
- * why `deps.verify` was driven by an invocation counter whose first return existed
- * only to unlock `mode === 'edit'`.
+ * Split from `runGatesForTask` at the single boolean that crosses to the ENFORCE
+ * half (`cleanPass`). This loop has four terminal exits and carries the whole
+ * negotiation; enforce always falls through. Joined, a test of the enforce
+ * differential would have to traverse this entire loop first.
  */
 export async function resolveVerifyGate(
     ctxIn: ExtensionCommandContext,
@@ -461,9 +457,9 @@ export async function resolveVerifyGate(
         let autoFixCount = 0
         // Set when the bounded lint-fix reports the `frozen-path:` rejection: the
         // repo-health FAIL can only be fixed by editing a path THIS task's spec
-        // froze. An impl re-run is
-        // under the same freeze — rule 4b fails the task if it complies with the
-        // linter — so unattended AUTOFIX rounds CANNOT converge and are skipped;
+        // froze. An impl re-run happens under the same freeze — rule 4b fails the
+        // task if it complies with the linter — so unattended AUTOFIX rounds
+        // CANNOT converge and are skipped;
         // the picker is forced with the cross-task contradiction named, and the
         // defect is recorded as a durable debt for the final gate.
         let frozenContradiction: string | null = null
@@ -572,10 +568,9 @@ export async function resolveVerifyGate(
                 // AUTOFIX must not bootstrap the full budget from it.
                 && !yoloRescueUsed
             // YOLO, THE RESCUE BRANCH: the recommendation is ACCEPT, nobody can be
-            // asked, and the unattended budget is UNTOUCHED. Accepting here ships a
-            // defect having attempted nothing — a did exactly that twice,
-            // and the final-gate autofix later fixed one of the two in a single pass
-            // (`0 pass 130 fail` → `121 pass 0 fail`). So spend ONE attempt first.
+            // asked, and the unattended budget is UNTOUCHED. Accepting here would
+            // ship a defect having attempted nothing, on a judgement the human who
+            // would normally weigh it never saw. So spend ONE attempt first.
             // Bounded by construction: one, not MAX_AUTO_AUTOFIX, so an ACCEPT
             // recommendation can never restart a full loop; if it still FAILs the
             // next turn falls through to the same auto-ACCEPT and the same debt.
@@ -598,8 +593,8 @@ export async function resolveVerifyGate(
             if (yoloChoice !== null) {
                 choice = yoloChoice
                 // NAME the branch. This line is the durable record of why a defect
-                // shipped; asserting a spent budget on all four branches made run
-                // 19's zero-attempt accepts read as an exhausted fixer.
+                // shipped, and three of the four branches that reach it have spent
+                // no budget at all.
                 await rec(
                     `resolution: auto-ACCEPTED despite verify FAIL — ${yoloAcceptReason({
                         isUnobserved,
@@ -635,9 +630,9 @@ export async function resolveVerifyGate(
                 const byYolo = yoloChoice !== null
                 if (!byYolo) await rec('resolution: user ACCEPTED the work despite verify FAIL')
                 // Durable debt: the human blessed a FAILing artifact as-is, so the
-                // defect ships and nothing else revisits it (
-                // a task). Record it to the run ledger; the final integration gate
-                // re-checks it at run end and surfaces it if still open. Best-effort.
+                // defect ships and nothing else in this task revisits it. Record it
+                // to the run ledger; the final integration gate re-checks it at run
+                // end and surfaces it if still open. Best-effort.
                 // The frozen-blocked routing above already recorded this defect (with
                 // the contradiction named) — don't double-enter it in the ledger.
                 if (!frozenDebtRecorded) {
@@ -656,9 +651,8 @@ export async function resolveVerifyGate(
                     }
                 }
                 // ROOT CAUSE: an accepted FAIL that some OTHER task's file caused is
-                // not fixed by accepting it — a accepted this shape repeatedly
-                // and the causing bug outlived the whole run. Queue the scoped repair
-                // so the plan actually closes it.
+                // not fixed by accepting it — every later task keeps tripping over
+                // the same bug. Queue the scoped repair so the plan closes it.
                 await routeRootCause(failReason, recOutcome.rationale, 'worktree')
                 // Cross-task deletions the verify probe detected ship in the next
                 // commit with this ACCEPT — record each as its own durable debt so
@@ -688,11 +682,10 @@ export async function resolveVerifyGate(
             }
             // AUTOFIX: re-run the implementation turn with the failure (and any typed
             // guidance) prepended as a RE-ATTEMPT banner, then re-verify. The
-            // recommendation child already LOCATED the defect while deciding —
-            // it can name the exact bug and the teardown that hides it —
-            // hand that diagnosis to the re-run so it fixes the located cause
-            // instead of re-deriving it from the bare FAIL line. Skipped when there
-            // is no researched rationale beyond the failure text itself.
+            // recommendation child already LOCATED the defect while deciding, so
+            // hand its diagnosis to the re-run rather than making it re-derive the
+            // cause from the bare FAIL line. Skipped when there is no researched
+            // rationale beyond the failure text itself.
             // Only the picker branch may claim a person chose this: the two
             // unattended branches already recorded themselves one line above, and a
             // trail that says "user chose" when nobody was asked is the same lie the
@@ -760,8 +753,7 @@ export async function resolveVerifyGate(
  * then decide whether the pass\'s own commit survives.
  *
  * `reVerify` is deliberately NOT `deps.verify`. They answer two different
- * questions — the gate above, and this differential — and while they shared one
- * field the only way to answer them differently was to count invocations.
+ * questions — the gate above, and this differential — so they are two fields.
  *
  * Reads `active` and never reassigns it: nothing here can replace the live
  * session, unlike the autofix in the verify half.
@@ -783,10 +775,10 @@ export async function runEnforcePass(
         const mode: 'edit' | 'flag' = verifyCleanPass ? 'edit' : 'flag'
         // BASELINE repo health, captured BEFORE the edit pass touches the tree, so the
         // pre-commit gate below is DIFFERENTIAL: it can tell an enforce-CAUSED
-        // regression (was clean, now fails) from a repo that was ALREADY unhealthy
-        // (a F8: five enforce passes were discarded on a lint that was already
-        // crashing — exit 2 — before enforce edited anything; the discard threw away
-        // good work for a fault it did not cause). Only meaningful in edit mode (flag
+        // regression (was clean, now fails) from a repo that was ALREADY unhealthy.
+        // Without the baseline, a lint that was already crashing before the pass ran
+        // makes every enforce pass look like the cause, and its good work is
+        // discarded for a fault it did not commit. Only meaningful in edit mode (flag
         // makes no edits); the task's work is already committed so this reflects the
         // committed state the pass is about to build on.
         const healthBefore =
@@ -794,9 +786,9 @@ export async function runEnforcePass(
                 await deps.repoHealth(active, p.cwd, p.title)
             :   undefined
         const verdict = await deps.enforce(active, p.cwd, p.title, mode)
-        // FROZEN-PATH WRITE-DENY (mechanical, not prompt — the "MUST NOT edit"
-        // instruction is not reliable on a weak model): the enforce
-        // EDIT pass runs read,edit and has been seen mutating a path the spec froze.
+        // FROZEN-PATH WRITE-DENY (mechanical, not prompt — a "MUST NOT edit"
+        // instruction is not reliable): the enforce EDIT pass runs read,edit and can
+        // mutate a path the spec froze.
         // Before its edits are inspected/committed below, restore any frozen path it
         // touched to the committed task state, so the violating write cannot land in
         // the ENFORCE GUIDELINES commit regardless of what the model intended. The
@@ -833,20 +825,21 @@ export async function runEnforcePass(
                 'warning'
             )
         }
-        // PRE-COMMIT health gate on enforce edits: live data shows the edit pass broke
-        // the repo's own lint in most tasks, each burning a commit + model re-verify +
-        // revert cycle. A deterministic static check BEFORE committing skips the cycle
-        // and discards the bad edits outright. Only runs when the tree is actually
+        // PRE-COMMIT health gate on enforce edits: an edit pass that breaks the
+        // repo's own lint would otherwise burn a commit, a model re-verify and a
+        // revert before anything noticed. A deterministic static check BEFORE
+        // committing skips that cycle and discards the bad edits outright. Only runs
+        // when the tree is actually
         // dirty (or dirtiness is unknowable); the differential guard below still
         // catches behavioral regressions the static check cannot see.
         //
         // The gate is DIFFERENTIAL, not absolute: discard the edits only
         // when they REGRESSED the health signal — clean before, failing after. A repo
         // that was already failing before enforce ran is not enforce's fault, so its
-        // edits are KEPT (and the pre-existing failure is recorded, to be caught by the
-        // final integration gate, not blamed on this pass). The failing command's
-        // output is captured into the trail so the discard is explainable — F8 was
-        // unreproducible precisely because only the exit code was recorded.
+        // edits are KEPT (and the pre-existing failure is recorded, to be caught by
+        // the final integration gate, not blamed on this pass). The failing command's
+        // OUTPUT is captured into the trail, not just its exit code, so the discard
+        // is explainable after the run.
         let enforceEditsBlocked = false
         if (mode === 'edit' && deps.repoHealth && editsMade !== false) {
             const after = await deps.repoHealth(active, p.cwd, p.title)
@@ -883,16 +876,15 @@ export async function runEnforcePass(
             }
         }
         if (mode === 'edit' && !enforceEditsBlocked && editsMade === false) {
-            // KNOWN-clean tree (dirty dep ran and found no code edits): skip the
+            // KNOWN-clean tree (the dirty dep ran and found no code edits): skip the
             // enforce commit AND the differential re-verify outright. Without this
             // gate the commit is never empty — the .pi-tasks gate-trail lines written
-            // above make it real — so a burned a full model re-verify on an
-            // UNCHANGED tree for all ~29 tasks, and the 10 FAILs those re-verifies
-            // produced (all real, pre-existing defects) were "reverted" into the
-            // void: the revert dropped a bookkeeping-only commit and the defect
-            // reports were discarded while the tasks stayed PASS. No edits ⇒ nothing
-            // to guard ⇒ no commit, no re-verify, no revert. The trail lines ride
-            // along in the next ordinary commit.
+            // above make it real — so every task would burn a model re-verify on an
+            // UNCHANGED tree, and any FAIL it turned up would be "reverted" into the
+            // void: the revert drops a bookkeeping-only commit while the defect
+            // report is discarded and the task stays PASS. No edits ⇒ nothing to
+            // guard ⇒ no commit, no re-verify, no revert. The trail lines ride along
+            // in the next ordinary commit.
             await rec('enforce(edit): no code edits — enforce commit and re-verify skipped')
         } else if (mode === 'edit' && !enforceEditsBlocked) {
             // Commit whatever the pass fixed as its own snapshot. A no-op when it made
@@ -910,31 +902,28 @@ export async function runEnforcePass(
                         await differential(active, p.cwd, p.title, p.taskId)
                     :   ({ok: true} as VerifyOutcome)
                 const afterReason = after.reason ?? 'enforce re-verify failed'
-                // PRE-EXISTING-CAUSE KEEP PATH. Both of run
-                // 14's enforce-reverts were this shape: the re-verify FAILed on
-                // a task `test/teardown.ts` TRUNCATE bug — a file the enforce
-                // pass never touched — and the differential
-                // reverted enforce's edits anyway, destroying good work over a fault
-                // it did not cause AND leaving the actual cause unscheduled. When the
-                // FAIL is attributed to another task's untouched file, KEEP the edits
-                // and route the real defect to a repair task instead. Everything
-                // unknown (git unavailable, no provenance, this task touched the file,
-                // an environment-blamed FAIL) falls through to the revert below —
-                // the conservative pre-existing behavior.
+                // PRE-EXISTING-CAUSE KEEP PATH. A re-verify can FAIL on a file the
+                // enforce pass never touched — another task's bug this one merely
+                // ran into. Reverting there destroys good work over a fault it did
+                // not cause AND leaves the actual cause unscheduled. So when the FAIL
+                // is attributed to another task's untouched file, KEEP the edits and
+                // route the real defect to a repair task. Everything unknown (git
+                // unavailable, no provenance, this task touched the file, an
+                // environment-blamed FAIL) falls through to the revert below.
                 //
-                // The scope is `enforce-commit`, NOT the task's own commit (run
-                // 18 / ). This differential decides whether to discard the
-                // ENFORCE COMMIT, so the causal question is "could the enforce diff
-                // have caused this?" — asking what the TASK touched answers a
-                // question nobody at this seam is asking, and in a it answered
-                // it in a way that destroyed a correct one-line change.
+                // The scope is `enforce-commit`, NOT the task's own commit. This
+                // differential decides whether to discard the ENFORCE COMMIT, so the
+                // causal question is "could the enforce diff have caused this?".
+                // Asking what the TASK touched answers a question nobody at this seam
+                // is asking.
                 const rootCause =
                     after.ok ? null : await routeRootCause(afterReason, '', 'enforce-commit')
-                // ATTRIBUTION PRE-FILTER. The root-cause
-                // channel above needs a blame CUE, a path-separator token and known
-                // provenance; a FAIL text carried none of the three (it named
-                // a bare `MyListings.spec.tsx:186`), so it fell straight through to
-                // the revert. This filter asks only the mechanical question: does the
+                // ATTRIBUTION PRE-FILTER. The root-cause channel above needs a blame
+                // CUE, a path-separator token and known provenance. A FAIL text can
+                // carry none of the three — a bare `MyListings.spec.tsx:186` names a
+                // file with no directory and no blame wording — and then falls
+                // straight through to the revert. This filter asks only the
+                // mechanical question: does the
                 // failing check name any file the ENFORCE COMMIT touched? Disjoint =>
                 // the revert cannot repair the failure, so keep the edits and route
                 // the defect. Unknown diff, or a FAIL naming no file at all, still
@@ -960,17 +949,16 @@ export async function runEnforcePass(
                 } else if (!after.ok && attribution?.verdict === 'keep') {
                     // KEEP, mechanically justified: every file the failing check named
                     // is outside the enforce diff (and outside its companions — a
-                    // touched file's own spec/story counts as inside). Discarding the
-                    // enforce commit could not repair this, and in a doing so
-                    // cost a correct change that the final gate then re-made.
+                    // touched file's own spec/story counts as inside). Discarding
+                    // the enforce commit could not repair this, so doing so only
+                    // costs the correct change the pass made.
                     await rec(
                         `enforce: re-verify FAILED (${afterReason.slice(0, 200)}) but the failing check names only \`${attribution.named.join(', ')}\`, `
                             + `which the ENFORCE COMMIT does not touch (its diff: ${attribution.enforceDiff.join(', ') || '—'}) — `
                             + 'reverting it could not repair this, so the edits are KEPT and the defect is recorded as durable debt'
                     )
-                    // Keeping the edits must NOT lose the finding — that was run
-                    // 5's mistake. Same durability as the revert path; only the
-                    // disposition of the edits differs.
+                    // Keeping the edits must NOT lose the finding. Same durability
+                    // as the revert path; only the disposition of the edits differs.
                     await deps.recordDebt?.(p.cwd, p.taskId, afterReason, 'enforce-kept')
                     // …and, when the named file is somebody else's committed work,
                     // queue the scoped repair so something actually FIXES it.
@@ -1012,12 +1000,12 @@ export async function runEnforcePass(
                                 }]`
                             :   '')
                     )
-                    // Persist the FAIL as a durable defect. The
-                    // revert restores the tree the ORIGINAL verify already blessed, so
-                    // this re-verify caught a defect that verify's earlier PASS missed —
-                    // erasing it with the enforce edits buried the terminal fault 8.5h
-                    // before run end. The final gate re-checks/surfaces it (static-class
-                    // auto-closes if a later task fixed the statics; else stays open).
+                    // Persist the FAIL as a durable defect. The revert restores the
+                    // tree the ORIGINAL verify already blessed, so this re-verify
+                    // caught something that verify's earlier PASS missed — erasing it
+                    // along with the enforce edits would bury a real fault. The final
+                    // gate re-checks and surfaces it (static-class auto-closes if a
+                    // later task fixed the statics; otherwise it stays open).
                     await deps.recordDebt?.(
                         p.cwd,
                         p.taskId,
@@ -1063,8 +1051,9 @@ export async function runGatesForTask(
      * ROOT-CAUSE CHANNEL. Ask whether a FAIL was caused by a
      * pre-existing defect in a file some OTHER task created and this task never
      * touched. On a hit: record the durable debt (so the final gate surfaces it)
-     * and queue a scoped repair task (so something finally FIXES it — a * recorded the same `test/teardown.ts` cause twice and scheduled nothing, and
-     * the bug survived ~24h). Returns the candidate so the caller can also decide
+     * and queue a scoped repair task, so something finally FIXES it rather than
+     * recording the same cause once per task that trips over it. Returns the
+     * candidate so the caller can also decide
      * NOT to punish the current task for it. Never throws: any fault degrades to
      * null, i.e. exactly the pre-existing behavior.
      */
@@ -1111,10 +1100,10 @@ export async function runGatesForTask(
     if (commit.committed) {
         await rec(`commit: task snapshot committed${commit.note ? ` (${commit.note})` : ''}`)
         // SAY WHAT WAS LEFT OUT. The stage skips untracked regenerable test-runner
-        // output (a task `git add -A` swept in three Playwright
-        // failure screenshots and two later fix attempts were rejected for deleting
-        // them). A SILENT exclusion is the same failure class as the silent
-        // ignored-path write  closed, so it gets its own trail line.
+        // output, so a blind `git add -A` cannot make a screenshot a tracked
+        // deliverable that a later fix attempt is then rejected for deleting. A
+        // SILENT exclusion is the same failure class as a silent ignored-path write,
+        // so it gets its own trail line.
         if (commit.excluded && commit.excluded.length > 0) {
             await rec(
                 `commit: left ${commit.excluded.length} untracked test-runner artifact(s) out of the `
@@ -1128,8 +1117,8 @@ export async function runGatesForTask(
         await rec(`commit: skipped (${commit.reason ?? 'unknown'})`)
         // A benign skip ("nothing to commit", auto-commit off) is a warning. A real
         // git failure is louder: it silently disables enforce AND every commit-based
-        // guard — a lost all 10 commits (no container git identity) with only
-        // per-task warnings to show for it. "blocked" is the unmerged-index refusal
+        // guard, so a whole run can end with nothing committed and only per-task
+        // warnings to show for it. "blocked" is the unmerged-index refusal
         // (gitCommitAll) — the same severity: nothing can commit until it's resolved.
         const gitFailure = /^git (commit|add) (failed|blocked)/.test(commit.reason ?? '')
         active.ui.notify(
