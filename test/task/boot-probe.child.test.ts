@@ -4,15 +4,16 @@ import {runBootCheck, type BootChild, type BootDeps} from '../../src/task/boot-p
 /**
  * The boot state machine, driven through a SCRIPTED child.
  *
- * `BootDeps` injected nine things the check LOOKS AT and not the thing it looks
- * THROUGH: `spawn` was imported directly, so every branch below needed a real
- * process on a real clock. `boot-probe.test.ts` is 52 tests / ~13.6s of real
- * `process.execPath -e` children with 300–5000ms grace windows; this file covers
- * the exit ladder, the listener rules and the orphan-port branch in milliseconds.
+ * `boot-probe.test.ts` spawns REAL `process.execPath -e` children and waits out
+ * real grace windows, so its 52 tests cost real seconds. This file drives the
+ * same exit ladder, listener rules and orphan-port branch by handing
+ * `runBootCheck` a fake child and stepping it by hand.
  *
- * The seam is `BootChild`, defined from what `runBootCheck` CALLS — the same way
- * `driveSession(cdp: CdpLike, …)` was defined from the two `Cdp` methods it uses,
- * rather than from Node's `ChildProcess`.
+ * The seam that makes that possible is `spawnBoot`, one of BootDeps' twelve
+ * injectable fields, returning a `BootChild`. `BootChild` is declared from what
+ * `runBootCheck` CALLS — pid, unref, stdout/stderr, and an `on` overloaded for
+ * 'error' and 'exit' — not from Node's `ChildProcess`, the same way `CdpLike`
+ * (deep-render-check.ts) is declared from the two methods `driveSession` uses.
  */
 
 type Handlers = {
@@ -83,10 +84,10 @@ function fakeChild(o: FakeChildOptions = {}) {
 const CMD: [string, string[]] = ['bun', ['run', 'start']]
 
 /**
- * `runBootCheck` forces `expectServer` FALSE on win32 (there are no process
- * groups to attribute a listener to), so every served-app branch below is
- * unreachable there and degrades to the survival rule. Same convention as
- * `boot-probe.test.ts`'s `itPosix`.
+ * `runBootCheck` computes
+ * `expectServer = (opts.expectServer ?? false) && process.platform !== 'win32'`,
+ * so every served-app branch below is unreachable on win32 and degrades to the
+ * survival rule. Same convention as `boot-probe.test.ts`'s `itPosix`.
  */
 const IS_WINDOWS = process.platform === 'win32'
 const testPosix = IS_WINDOWS ? test.skip : test
@@ -166,9 +167,10 @@ describe('the served-app listener rule', () => {
         expect(r.outcome).toBe('pass')
     })
 
-    // A watcher (`dev` = tailwind --watch) stays alive forever without
-    // ever listening, and "still alive after the grace window = PASS" blessed a
-    // project that cannot serve a single request.
+    // A watcher — `dev` bound to something like `tailwind --watch` — stays alive
+    // forever and never listens. Under "still alive after the grace window =
+    // PASS" that blesses a project which cannot serve a single request, so a
+    // served app needs an observed LISTENER, not just survival.
     testPosix('alive but never listening FAILs when enumeration works', async () => {
         const f = fakeChild()
         const r = await runBootCheck('/tmp/x', CMD, 20, {
