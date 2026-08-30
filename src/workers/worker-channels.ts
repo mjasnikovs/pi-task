@@ -1,28 +1,19 @@
 /**
  * worker-channels — what a worker TOOL is, as data.
  *
- * `makeWorkerTool` already gives every worker tool one registration adapter, but
- * `spec.name` never left the registration closure. So the same four name strings
- * were re-typed as literals in three directories and had to agree by hand:
+ * `makeWorkerTool` gives every worker tool one registration adapter, but
+ * `spec.name` never leaves that closure. Without this table the three tool names
+ * are re-typed as literals wherever anything else needs them: the tools string
+ * and its matching `-e` path list, the grounding set, the debug-log summary and
+ * its per-tool parameter shape, and — worst for locality — the GENERIC child
+ * runner, which would have to name one tool AND one of its parameters to decide a
+ * fan-out deadline extension. Nothing links those edits at compile time. Here
+ * each tool is one row.
  *
- *   • `phases.ts` paired `'…,pi-worker-docs'` with `DOCS_EXTENSION_PATH`, and
- *     `',pi-worker-search,pi-worker-fetch'` with `SEARCH_EXTENSION_PATH` — a tools
- *     string and an `-e` path list that mean the same thing, written twice and
- *     kept in step by eye.
- *   • `GROUNDING_RETRIEVAL_TOOLS` was a second copy of the names.
- *   • `summarizeToolArgs` was a third, and also re-stated each tool's parameter
- *     shape (`module`/`query`, `query`, `url`).
- *   • Worst for locality: `runWorker` — the GENERIC child runner — hardcoded one
- *     tool's identity AND its parameter, `call.name === 'pi-worker-docs' &&
- *     args.module === '.'`, to decide a fan-out deadline extension.
- *
- * A rename or a new tool was five edits in three directories with no compile
- * error linking them. It is one row here now.
- *
- * What is NOT in a row: the tools string's non-worker members (`read`, `grep`,
- * `find`, `ls`) are pi's own built-ins, not channels — they appear in
- * {@link GROUNDING_RETRIEVAL_TOOLS} because grounding is about RETRIEVAL, not
- * about which extension supplies it.
+ * What is NOT a row: pi's own built-ins. `read` and `grep` are listed in
+ * {@link GROUNDING_RETRIEVAL_TOOLS} because grounding is about RETRIEVAL rather
+ * than about which extension supplies it, while `find` and `ls` return names only
+ * and are excluded from it.
  */
 
 import {fileURLToPath} from 'node:url'
@@ -93,8 +84,9 @@ export function workerChannel(toolName: string): WorkerChannel | undefined {
 
 /**
  * The tools string and the `-e` paths for a set of channels, together — they are
- * one fact, and two literals would drift. Entry paths are de-duplicated: search and
- * fetch ship in one extension file.
+ * one fact, and two literals would drift. The tools string preserves the order it
+ * was asked for; entry paths are de-duplicated, so asking for search AND fetch
+ * yields ONE path, since both ship in search-extension.js.
  */
 export function channelSet(names: readonly string[]): {tools: string; extensions: string[]} {
     // REFUSED, not dropped. Silently skipping an unrecognised name is the exact
