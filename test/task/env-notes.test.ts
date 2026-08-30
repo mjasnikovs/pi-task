@@ -1,8 +1,14 @@
 /**
  * env-notes tests — the per-run environment-facts cache gate children share.
- * Extraction, parsing, excuse-detection and the prompt block are pure;
- * read/append run against a real throwaway .pi-tasks dir (the artifact contract
- * is the point). Provenance + re-validation guards close a F7.
+ *
+ * Extraction, parsing, excuse-detection and the prompt block are pure, so they
+ * are asserted directly. read/append run against a real throwaway .pi-tasks
+ * dir, because the on-disk line shape IS the contract between runs.
+ *
+ * The hazard the provenance and re-validation guards exist for: a "fact" one
+ * task recorded is read by later ones as settled, so a false one — or a real one
+ * that has since been fixed — spreads. Hence every note names who recorded it,
+ * and the block tells a reader to re-validate rather than take it.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -63,7 +69,8 @@ describe('appendEnvNotes / readEnvNotes', () => {
         expect(await readEnvNotes(cwd)).toBe('')
         await appendEnvNotes(cwd, ['fact one', 'fact two'], 'TASK_0001')
         await appendEnvNotes(cwd, ['Fact One', 'fact three'], 'TASK_0005')
-        // "Fact One" is a case-insensitive duplicate — dropped, one task origin kept.
+        // "Fact One" is a case-insensitive duplicate of "fact one" — dropped, and
+        // the FIRST recorder's origin is the one kept.
         expect(parseEnvNotes(await readEnvNotes(cwd))).toEqual([
             {fact: 'fact one', origin: 'TASK_0001'},
             {fact: 'fact two', origin: 'TASK_0001'},
@@ -108,7 +115,8 @@ describe('appendEnvNotes / readEnvNotes', () => {
 
 describe('isExcuseNote', () => {
     test('flags standing-excuse wording (the run-8 F7 propagation smell)', () => {
-        // Verbatim a F7 false facts and the excused-but-real schema mismatch.
+        // The excuse shape: a real-sounding diagnosis whose function is to explain
+        // away a failure as pre-existing and out of scope.
         expect(
             isExcuseNote(
                 'The project build tree-shakes all route components from the minified bundle — a pre-existing issue affecting ALL pages'
