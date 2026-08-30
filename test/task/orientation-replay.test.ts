@@ -1,19 +1,17 @@
 /**
  * Log-replay validation for the orientation core (see orientation.ts).
  *
- * Ground truth: the per-worker `read:` sequences captured in a real /task-auto-run
- * over the codebase (28 tasks, 4 sequential research workers each), extracted
- * verbatim from the debug logs into a read-traces fixture along with each file's
- * real byte size. No live model is involved — we replay the reads the workers
- * actually issued and measure how many the orientation pre-supply would remove.
+ * The fixture holds the per-worker `read:` sequences from a recorded /task-auto
+ * run — 28 tasks, each with between one and four of the research workers — plus
+ * each read file's byte size. No model runs here: the reads are replayed and
+ * counted against the set orientation would have pre-supplied.
  *
- * The pre-supplied set is computed by the *actual shipping* buildOrientation,
- * driven by a reader that returns each file at its real recorded size — so the
- * real selection ranking, byte budget, per-file cap and file-count cap all apply
- * exactly as they would in production. A read is *eliminated* iff its path is in
- * that supplied set. Pre-supply is purely additive (nothing is blocked), so the
- * no-regression check is structural: every supplied path is a real tracked file
- * the workers actually read, so it can never hide a file a worker needed.
+ * That set comes from the shipping `buildOrientation`, driven by a reader that
+ * returns each file at its recorded size, so the real ranking, byte budget,
+ * per-file cap and file-count cap all apply. A read is eliminated iff its path is
+ * in the supplied set. Pre-supply is purely additive — nothing is blocked — so
+ * the no-regression check is structural: every supplied path must be a file the
+ * workers actually read, and then it cannot hide one they needed.
  */
 import {describe, expect, test} from 'bun:test'
 import {buildOrientation} from '../../src/task/orientation.js'
@@ -31,9 +29,11 @@ function allReads(): string[] {
     return out
 }
 
-// Orientation is applied only to the read-heavy workers (FILES, APIS) — verified
-// by live A/B that CONTEXT/TOOLING read ~0 files and only paid prefill. So the
-// reads it can remove are exactly those workers' reads. See phaseResearch.
+// phaseResearch hands the orientation block to FILES and APIS only: those two
+// explore by reading, so a pre-supplied core replaces reads they would make.
+// CONTEXT works from the inventory and grep and TOOLING is scoped to the GOAL
+// prose, so for them the block is prefill with no read to displace. The reads
+// orientation can remove are therefore exactly the FILES+APIS reads.
 const ORIENTED_WORKERS = new Set(['worker:files', 'worker:apis'])
 function orientedReads(): string[] {
     const out: string[] = []
@@ -53,7 +53,7 @@ const inventory = Object.keys(sizes)
 const sizeReader = async (p: string): Promise<string | null> =>
     p in sizes ? 'x'.repeat(sizes[p]) : null
 
-describe('current status (baseline from real mx5 run)', () => {
+describe('the recorded baseline', () => {
     test('workers re-read the same files: a large share of reads are repeats', () => {
         const total = allReads().length
         let crossWorkerRepeats = 0
@@ -71,8 +71,8 @@ describe('current status (baseline from real mx5 run)', () => {
                 }
             }
         }
-        // Recorded reality: 2067 reads, and hundreds are a different worker
-        // re-reading a file already read in the same task — the targeted waste.
+        // Both numbers are read off the fixture: the total, and how many reads are a
+        // SECOND worker in the same task re-reading a file a sibling already read.
         expect(total).toBe(2067)
         expect(crossWorkerRepeats).toBeGreaterThan(600)
     })
@@ -81,12 +81,9 @@ describe('current status (baseline from real mx5 run)', () => {
 describe('orientation pre-supply effect (replay through shipping buildOrientation)', () => {
     test('removes a meaningful share of the read-heavy workers reads', async () => {
         const {block, supplied} = await buildOrientation(inventory, sizeReader)
-        // Ceiling, not a measured speedup: how many reads issued by the oriented
-        // workers land on a pre-supplied file. Live A/B confirmed the model then
-        // does not re-read those (0 core re-reads), so this is the upper bound on
-        // reads removed. The wall-clock win is bimodal — biggest when a worker
-        // would otherwise spiral (FILES 19-22 reads, APIS 37 reads / 221s) — and
-        // is measured live, not here.
+        // A ceiling, not a speedup: how many reads the oriented workers issued that
+        // land on a pre-supplied file. Whether the model then skips such a read is
+        // not decidable from a replay, so this is an upper bound.
         const reads = orientedReads()
         const removable = reads.filter(p => supplied.has(p)).length
         const pct = Math.round((100 * removable) / reads.length)
