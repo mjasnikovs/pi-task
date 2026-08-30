@@ -92,7 +92,9 @@ describe('wilsonInterval', () => {
         expect(lo).toBeLessThan(5 / 48)
         expect(hi).toBeGreaterThan(5 / 48)
         expect(hi).toBeLessThan(1)
-        // A known-good pair: 5 of 48 at 95% gives roughly [4.5%, 22.2%].
+        // Checked against the Wilson formula by hand: 5 of 48 at 95% is
+        // [0.0453, 0.2217]. Asserting the interval — not just that lo < p < hi —
+        // is what catches a z-score or a continuity term drifting.
         expect(lo).toBeCloseTo(0.045, 2)
         expect(hi).toBeCloseTo(0.222, 2)
     })
