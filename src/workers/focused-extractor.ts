@@ -2,26 +2,23 @@
  * The **Focused extractor** — the one place a no-tools child pi is run to answer ONE question
  * over content already in hand, cite a verbatim `<excerpt>`, and have that citation checked.
  *
- * It had four copies: `fetchFocused` (fetch-core), `docsFocused` (docs-core), and both paths
- * of `pi-worker-docs` (project source, npm package) — the last two 17-of-20 lines identical
- * and 150 lines apart inside one function. Everything the four did around the child was
- * byte-identical: the `--no-tools` argv, `getPiInvocation`, `runChild`, `parseChildOutput`,
- * and no retry. What genuinely differed was DATA, and the copies hid it:
+ * Its two callers are `fetchFocused` (fetch-core) and `docsLookup` (docs-lookup), and
+ * everything they do around the child is the same: the `--no-tools` argv,
+ * `getPiInvocation`, `runChild`, `parseChildOutput`, and no retry. What genuinely differs is
+ * DATA, and each difference has a name here:
  *
- *   1. the prompt body — so {@link FocusedRequest.prompt} is a string the caller assembles;
+ *   1. the prompt body — {@link FocusedRequest.prompt} is a string the caller assembles;
  *   2. WHAT the excerpt is verified against — see {@link FocusedRequest.verifyAgainst};
  *   3. what the answer MEANS (fetch's coverage-miss sentinel) — left to the caller, because
  *      classifying an answer is the caller's domain, not the child runner's.
  *
- * Two things the copies got wrong, fixed here once:
- *   - **Failure.** `docsFocused` never called `formatChildFailure`, so a child that exited
- *     non-zero had its raw stdout parsed as if it were an answer (`parseChildOutput` returns
- *     the whole trimmed stdout when there is no `<answer>` tag) and handed to the caller.
- *     The result type below makes that unrepresentable: there is no `answer` on a failure.
- *   - **Evidence.** Only fetch kept the rich {@link ExcerptVerification}; the other three
- *     reduced it to a bare boolean, which is exactly the diagnostic gap typeonly-log.ts
- *     names — an `excerptVerified === false` that cannot afterwards be attributed to
- *     fabrication vs a normaliser gap. Every caller now gets the struct.
+ * Two invariants the result type enforces rather than documents:
+ *   - **Failure.** A child that aborted or exited non-zero has no `answer` field at all. It
+ *     cannot be read as one, which matters because `parseChildOutput` returns the whole
+ *     trimmed stdout when there is no `<answer>` tag — a crashed child's error dump.
+ *   - **Evidence.** Every caller gets the full {@link ExcerptVerification}, not a bare
+ *     boolean, so a false verdict can afterwards be attributed to fabrication rather than a
+ *     normaliser gap.
  */
 import {spawn as defaultSpawn} from 'node:child_process'
 import {getPiInvocation} from '../shared/pi-invocation.js'
@@ -31,9 +28,9 @@ import {parseChildOutput, verifyExcerpt, type ExcerptVerification} from '../shar
 import {formatChildFailure} from './shared.js'
 
 /**
- * The argv every focused extraction child runs with: the shared child base (whitelisted
- * extensions + `--print --no-session …`) plus `--no-tools`. This was three byte-identical
- * one-liners in fetch-core, docs-core and pi-worker-docs.
+ * The argv every focused extraction child runs with: the shared child base — any whitelisted
+ * extensions, then `--print --no-skills --no-extensions --no-prompt-templates
+ * --no-context-files --no-session` — then the caller's thinking fragment, then `--no-tools`.
  *
  * `--no-tools` is the contract, not a default: the child is given all the content it may use
  * inside its prompt, so a tool call could only reach for something unsourced.
@@ -48,11 +45,11 @@ export interface FocusedRequest {
     /** The fully assembled prompt, including the content block. Delivered on stdin. */
     prompt: string
     /**
-     * The text the cited excerpt is checked against — a NAMED knob, because the four call
+     * The text the cited excerpt is checked against — a NAMED knob, because the two call
      * sites deliberately disagree, and unnamed the disagreement is invisible.
      *
-     * `pi-worker-docs` and `docsFocused` pass exactly the concatenated chunks that went into
-     * the prompt. `fetchFocused` passes the FULL cleaned page while prompting with only the
+     * `docsLookup` passes exactly the concatenated chunks that went into the prompt.
+     * `fetchFocused` passes the FULL cleaned page while prompting with only the
      * anchored `#fragment` section: the slice is a substring of the page, so a genuine excerpt
      * still verifies, and an excerpt pulled from the model's memory still fails — fragment
      * anchoring therefore cannot change the hallucination detector's discrimination.
@@ -72,11 +69,10 @@ export interface FocusedRequest {
      * An already-resolved `['--thinking', level]` fragment, or `[]`/omitted to
      * inherit the session default.
      *
-     * Supplied by the CALLER even though all three call sites are the same
+     * Supplied by the CALLER even though both call sites resolve the same
      * `extraction` group. Resolving it inside this module would make
      * `focusedChildArgs` read ambient config, and a function that reads config
-     * internally cannot be tested without the developer's own machine state —
-     * which is exactly how a `getConfig()` assertion got into a unit test.
+     * internally cannot be tested without the developer's own machine state.
      */
     thinking?: readonly string[]
 }
@@ -86,7 +82,8 @@ interface FocusedChildEvidence {
     exitCode: number
     aborted: boolean
     stderr: string
-    /** The child's raw stdout, retained for A/B harnesses and failure diagnosis. */
+    /** The child's raw stdout, retained so a failure is diagnosable from the result alone —
+     *  it is the only place a crashed child's output survives. */
     stdout: string
 }
 
@@ -118,7 +115,7 @@ export type FocusedResult = FocusedFailure | FocusedAnswer
  * `<answer>`/`<excerpt>` and verify the excerpt against `verifyAgainst`.
  *
  * Never retries — a re-ask of a deterministic extraction over unchanged content is a second
- * bill for the same answer, and all four call sites already had it that way.
+ * bill for the same answer. Exactly one child is spawned per call.
  */
 export async function runFocusedExtraction(req: FocusedRequest): Promise<FocusedResult> {
     const spawn = req.spawn ?? (defaultSpawn as unknown as SpawnFn)
