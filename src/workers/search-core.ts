@@ -29,16 +29,14 @@ export type SearchCoreResult =
 /**
  * One engine, as an adapter: what to call, and what it needs.
  *
- * As a union with nothing behind it, `SearchProvider` makes every consumer branch
- * on it by hand — `search()` needs a brave special case plus a two-arm ternary,
- * the three engine functions arrive as three separate seams on `SearchCoreInput`,
- * the three error classes get reconciled by matching `err.name` as a STRING, and
- * brave's key requirement is stated a second time in
- * phases.ts. Adding an engine meant finding all of that.
+ * `SearchProvider` on its own is a bare union, and every consumer then branches on
+ * it by hand: a special case for the one engine that needs a key, one seam per
+ * engine function, and a `err.name` string match per error class. These rows are
+ * the whole of it instead.
  *
- * The rows below are the whole of it. `key` is `''` for a keyless engine and the
- * resolved key for brave — read from {@link searchProviderKey}, so the env pair is
- * declared once, beside the ids.
+ * `key` is `''` for a keyless engine and the resolved key for brave — read from
+ * {@link searchProviderKey}, so the env pair is declared once, beside the ids, and
+ * phases.ts does not restate it.
  */
 interface SearchAdapter {
     /** Run the engine. `key` is `''` when the engine is keyless. */
@@ -105,11 +103,13 @@ export async function search(input: SearchCoreInput): Promise<SearchCoreResult> 
         return {kind: 'ok', results}
     } catch (err) {
         // Which throws already carry a finished user-facing message is the engine's
-        // own fact, so it is a row. As an `err.name === 'BraveSearchError'` STRING
-        // match in a brave-only branch, the check exists only because brave is
-        // reached down a different path from the other two, and it is why a
-        // subclass rename would go
-        // unnoticed.
+        // own fact, so `errorName` is a row rather than an `err.name` check welded
+        // into a brave-only branch. It stays a STRING match either way — a class
+        // rename that leaves the row untouched goes unnoticed, and only the wrapped
+        // wording changes.
+        //
+        // No `errorName` means every throw's message is used verbatim; a name that
+        // does not match is passed through `wrapUnknownError`.
         const message = err instanceof Error ? err.message : String(err)
         const known =
             adapter.errorName === undefined
