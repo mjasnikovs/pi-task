@@ -18,20 +18,16 @@ export const NOT_COVERED_ANSWER = 'not covered by this page'
  * answer — anchored, not a substring search. A substring search misreads the opposite case:
  * rule 5 tells the child to answer partially and say what is missing, and it says it in the
  * prompt's own words ("… `obs_add_raw_audio_callback` and `obs_remove_raw_audio_callback`
- * are not covered by this page"). That is a sourced answer, and the loose match filed it as
- * a coverage miss. Observed repeatedly once the
- * rewrite started delivering pages that could half-answer; never in the 84 recorded corpus
- * fetches, where 11 of 11 sentinel answers are the bare sentinel — so tightening it changes
- * no recorded verdict.
+ * are not covered by this page"). That is a sourced answer, and a loose match would file it
+ * as a coverage miss.
  */
 const NOT_COVERED_RE = /^not covered by this page[.\s]*$/i
 
 /**
  * `github.com/{owner}/{repo}/blob/{ref}/{path}` renders the file through a client-side
- * viewer, so the HTML we clean carries GitHub chrome ("Sign in", "Appearance settings")
- * and none of the file. Every one of the 8 blob URLs in the three-project research-cache
- * corpus came back a non-answer for that reason. `raw.githubusercontent.com` serves the
- * same bytes as text/plain.
+ * viewer. The HTML carries GitHub chrome ("Sign in", "Appearance settings") and NOT the
+ * file: fetching one blob URL returns 282 KB of text/html that does not contain the file's
+ * bytes anywhere, while `raw.githubusercontent.com` returns the file itself as text/plain.
  *
  * Only the URL handed to the fetcher is rewritten — the caller's URL still keys the cache
  * and still supplies the #fragment — so a worker that retries the raw URL by hand hits the
@@ -74,10 +70,9 @@ export async function fetchRaw(input: FetchRawInput): Promise<FetchRawResult> {
 }
 
 /**
- * How the page content is turned into the child's prompt. Injectable so an A/B harness can
- * run the shipped strategy against a frozen legacy one in the SAME process, and assert per
- * rep that the two arms differ by exactly the lever.
- * Production always uses {@link shippedStrategy}.
+ * How the page content is turned into the child's prompt. A seam, so a harness can run a
+ * variant selection or prompt against the shipped one in the SAME process. Nothing in this
+ * repo overrides it: {@link shippedStrategy} is the only implementation.
  */
 export interface PromptStrategy {
     selectContent(markdown: string, requestedUrl: string): SelectedContent
@@ -106,25 +101,23 @@ export interface FetchFocusedResult {
     excerpt?: string
     excerptVerified?: boolean
     /**
-     * The page did not cover the asked-about version/topic — a DISTINCT outcome from
+     * The page did not cover the asked-about version or topic — a DISTINCT outcome from
      * `unclear from this page`, so the caller can pick a different URL instead of treating
-     * "page has no answer" and "answer is ambiguous" as the same thing (PROMPT-3 item 3).
+     * "page has no answer" and "answer is ambiguous" as the same thing.
      */
     coverageMiss: boolean
     /**
-     * What to do INSTEAD, present only on a coverage miss. `coverageMiss` was computed and
-     * stored and read nowhere, so the distinct channel it exists to provide never reached the
-     * worker: all it ever saw was the bare sentence "not covered by this page", which reads
-     * as "ask again, differently". It did — 9 of the 84 corpus fetches re-read a URL that had
-     * already returned a non-answer, one release-notes page three times with near-identical
-     * questions.
+     * What to do INSTEAD, present only on a coverage miss. Without it the worker sees only
+     * the bare sentence "not covered by this page", which reads as "ask again, differently"
+     * — and re-reading the same URL with a reworded question returns the same answer.
      */
     nextStep?: string
     /** The #fragment slug that was anchored, when the URL carried one and it was located. */
     anchoredSection?: string
     /** Retained evidence for a false `excerptVerified`, so it is diagnosable without re-fetch. */
     excerptCheck?: ExcerptVerification
-    /** The prompt actually handed to the child — the A/B asserts surgery against this per rep. */
+    /** The prompt actually handed to the child, returned so a caller can see exactly what
+     *  the selection and the strategy produced. */
     assembledPrompt: string
     /**
      * Set exactly when the child failed (aborted, or non-zero exit): the standard
@@ -243,10 +236,10 @@ function fragmentOf(url: string): string {
 /**
  * Slice a markdown page down to the section its heading-anchor #fragment names — the deep
  * link the caller actually asked for — instead of head-truncating the whole page and losing
- * a section that sits past the head window (PROMPT-3 item 2). Falls back to {@link truncate}
+ * a section that sits past the head window. Falls back to {@link truncate}
  * when the URL has no fragment, or the fragment names no heading in THIS content (e.g. the
- * page changed since the link was captured), so a fragment we cannot honour never degrades a
- * page we could otherwise read.
+ * page changed since the link was captured), so a fragment that cannot be honoured never
+ * degrades a page that could otherwise be read.
  */
 export function selectContent(markdown: string, requestedUrl: string): SelectedContent {
     const frag = fragmentOf(requestedUrl)
@@ -262,9 +255,10 @@ function escapeRegExp(s: string): string {
 }
 
 /** Find the heading whose anchor is `#<frag>` and return that heading's section: from the
- *  heading line up to the next heading of the same or higher level. Anchors are matched on
- *  the heading line in both the Docusaurus (`### Title[](#slug "…")`) and GitHub
- *  (`## [Title](#slug)`) shapes; `#foo` must not match `#foobar`. */
+ *  heading line up to the next heading of the same or HIGHER level, so a `##` section keeps
+ *  its `###` subsections. Anchors are matched on the heading line in both the Docusaurus
+ *  (`### Title[](#slug "…")`) and GitHub (`## [Title](#slug)`) shapes, and the trailing
+ *  `(?![a-z0-9-])` is what keeps `#foo` from matching `#foobar`. */
 function sliceSection(markdown: string, frag: string): string | undefined {
     const lines = markdown.split('\n')
     const anchor = new RegExp('#' + escapeRegExp(frag) + '(?![a-z0-9-])', 'i')
@@ -297,14 +291,16 @@ function truncate(md: string): string {
 }
 
 /**
- * The shipped extraction prompt. Rule 5 was recalibrated for PROMPT 3: the pre-change rule
- * sent the child to `unclear from this page` on ANY ambiguity, which threw away answers that
- * were on the page (measured: 5 of fetch's 10 failures were deterministic false-"unclear").
- * It now (5) answers from the content whenever the content supports one, even partially;
- * (6) reports a page-coverage MISS distinctly, so it is not conflated with ambiguity; and
- * (7) reserves `unclear` for genuinely-ambiguous content — never for absence, and never as
- * licence to invent. The abstention was relaxed WITHOUT relaxing rules 1-2 (verbatim
- * excerpt) — the fabrication guard the A/B scores is untouched.
+ * The shipped extraction prompt. Its three abstention rules are deliberately separate, and a
+ * child that collapses them loses information the caller needs:
+ *   5. answer from the content whenever it supports one, even partially — "unclear" is the
+ *      wrong response merely because coverage is incomplete;
+ *   6. a page about a DIFFERENT version or topic is a coverage MISS, `NOT_COVERED_ANSWER`,
+ *      which the caller turns into "try a different URL";
+ *   7. `UNCLEAR_ANSWER` is reserved for content that IS present but ambiguous — never for
+ *      absence, and never as licence to invent.
+ * Rules 1 and 2, the verbatim-excerpt requirement the fabrication check rests on, are
+ * independent of all three.
  */
 function buildPrompt(args: {
     query: string
