@@ -1,8 +1,8 @@
 import {afterEach, beforeEach, expect, mock, test} from 'bun:test'
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 
-// The push half of announceTerminal is a no-op under NODE_ENV=test, so observe
-// it at the module boundary instead of through the network.
+// pushNotify returns early when NODE_ENV is 'test', so the push half of
+// announceTerminal is observed at the module boundary rather than over the network.
 const pushes: Array<{title: string; body: string; tag?: string}> = []
 void mock.module('../../src/remote/push.js', () => ({
     pushNotify: async (title: string, body: string, tag?: string) => {
@@ -19,7 +19,8 @@ const {getBridge} = await import('../../src/remote/bridge.js')
 const {broadcast: wsBroadcast} = await import('../../src/remote/broadcast.js')
 const {reset: resetSessionState, _setSink} = await import('../../src/remote/session-state.js')
 
-/** Persistent remote errors go through the session-state sink, not the bridge. */
+/** An `error` level reaches publishLifecycleNotice, which routes it to addError —
+ *  and that writes to the session-state SINK, not to the bridge's broadcast. */
 const sunk: unknown[] = []
 
 type Handler = (data: string) => {consume?: boolean; data?: string} | undefined
