@@ -33,17 +33,18 @@ describe('granularityFloor', () => {
     })
 
     test('the XS regression: a one-line feature is never called too coarse', () => {
-        // Live (2026-07-28 size smoke): "Add a `--version` flag to the CLI that
-        // prints the package version and exits 0" — 78 chars — extracted THREE
-        // ownable requirements (flag, print, exit code), giving a floor of 2 for
-        // what is unambiguously ONE task. Both arms shipped 1 title, so the floor
-        // bought nothing and cost a split-retry child.
+        // Why the cut exists. "Add a `--version` flag to the CLI that prints the
+        // package version and exits 0" extracts THREE ownable requirements — the
+        // flag, the print, the exit code — for what is unambiguously ONE task.
+        // An ungated ceil(n/2) would demand two, so a chore this size would pay
+        // for a split-retry child and still ship one title.
         expect(granularityFloor(3)).toBe(0)
         expect(isTooCoarse(1, granularityFloor(3))).toBe(false)
     })
 
     test("mx5's real numbers: 31 ownable requirements demand at least 16 tasks", () => {
-        // The collapsed run shipped 11 for these 31; the healthy run shipped 41.
+        // At real breadth the floor discriminates: a plan of 11 for 31 ownable
+        // requirements is too coarse, one of 41 is not.
         expect(granularityFloor(31)).toBe(16)
         expect(isTooCoarse(11, granularityFloor(31))).toBe(true)
         expect(isTooCoarse(41, granularityFloor(31))).toBe(false)
@@ -60,7 +61,7 @@ describe('granularityFloor', () => {
 
 describe('isPlanShapeQuestion', () => {
     test('fires on the fork the triage kept answering for itself', () => {
-        // Both live runs, verbatim.
+        // Two wordings of the same fork, at the length a model actually asks it.
         expect(
             isPlanShapeQuestion(
                 'Should the task breakdown follow the 12 milestones in §12 as-is (one task per'
@@ -73,7 +74,7 @@ describe('isPlanShapeQuestion', () => {
                     + ' or should they be subdivided into smaller per-route/per-component tasks?'
             )
         ).toBe(true)
-        // Live STEP 0 draws of the same fork, other wordings.
+        // Further wordings of the same fork, so the match is not keyed to one phrasing.
         expect(
             isPlanShapeQuestion(
                 'Should each milestone step produce its own self-contained task, or should'
@@ -102,8 +103,10 @@ describe('isPlanShapeQuestion', () => {
 })
 
 describe('the host answer and the split hint state no target count', () => {
-    // Naming a target count made the model chase it: 66, then 81 and 85 titles on
-    // live draws, plus a 120k-context blowup. The floor stays host-side.
+    // Naming a target count makes the model CHASE it, into plans far larger than
+    // the spec needs and, at the top end, a context blowup. So the floor stays
+    // host-side and the answer names no number at all — which is what the last
+    // assertion here pins.
     test('the host answer cuts by deliverable and names no number', () => {
         expect(PLAN_SHAPE_ANSWER).toContain('per-deliverable')
         expect(PLAN_SHAPE_ANSWER).toContain('rather than one task per milestone')
