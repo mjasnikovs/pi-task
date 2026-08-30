@@ -45,17 +45,17 @@ test('retrieveChunks OR-joins multi-token queries', () => {
     }
 })
 
-// REGRESSION. Splitting on /\s+/ and then stripping punctuation INSIDE each
-// token, welding a multi-part identifier into one string that occurs nowhere in the
-// corpus: "UserService.list" -> "UserServicelist", "src/server/UserService.ts" ->
-// "srcserverUserServicets". buildFtsQuery ORs the tokens, so such a query produced NO
-// match and fell through to fallbackChunks() — which ignores the query entirely and
-// returns the first .d.ts + README slices. That costs a real share of project queries
-// any chunk from the file they named.
+// `tokenize` splits on any run of non-identifier characters. Splitting on /\s+/
+// instead and then stripping punctuation INSIDE each token welds a multi-part
+// identifier into one string that occurs nowhere in the corpus:
+// "UserService.list" -> "UserServicelist". buildFtsQuery ORs the tokens, so a
+// welded one contributes no MATCH, and a query made only of those falls through to
+// fallbackChunks(), which ignores the query and returns the first .d.ts + README.
 //
-// Asserting on content alone would NOT catch this: the fallback returns the fixture's only
-// .d.ts, which contains "UserService" regardless. The discriminator is `rank` —
-// fallbackChunks() emits rank 0 for every row, a real bm25() MATCH emits a negative rank.
+// Asserting on content alone would NOT catch that: the fallback returns the
+// fixture's only .d.ts, which contains "UserService" either way. The discriminator
+// is `rank` — fallbackChunks() selects a literal `0 AS rank` for every row, while a
+// real bm25() MATCH ranks negative.
 test('retrieveChunks matches dotted symbols instead of welding them into a dead token', () => {
     const {cache, pkg} = seed()
     try {
