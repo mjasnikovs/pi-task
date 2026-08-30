@@ -6,13 +6,20 @@ import {RepeatedCallGuard, SingleReadGuard} from './single-read-guard.js'
 const DEDUP_TOOLS = new Set(['grep', 'find', 'ls'])
 
 /**
- * Loaded via `-e` into the TOOLING research worker only. Two in-run thrash
- * blocks, each returning a reason the model receives as an error tool result
- * (agent-loop: block → createErrorToolResult) so the worker continues instead of
- * looping:
- *   - read: blocks a re-read of LINES already delivered; forward paging passes.
- *   - grep/find/ls: blocks an identical repeat of the same call (args-keyed).
- * See single-read-guard.ts for why this is scoped to TOOLING.
+ * Loaded via `-e` into two kinds of child, both of which have their source
+ * INLINED and so can only be thrashing when they re-read: the TOOLING research
+ * worker (phases.ts) and the planning children (auto-orchestrator.ts).
+ *
+ * Two in-run blocks. Each returns a `reason`, which pi turns into an error tool
+ * result — `agent-loop.js` does `createErrorToolResult(beforeResult.reason)` on a
+ * blocked call — so the child reads the explanation and continues instead of
+ * dying:
+ *   - read: blocks a re-read of LINES already delivered; forward paging passes,
+ *     and the reason names the line to resume from.
+ *   - grep/find/ls: blocks a byte-identical repeat, keyed on the args; a call
+ *     with any different argument passes.
+ * A tool outside this set is never touched. See single-read-guard.ts for why the
+ * read-once rule is safe only where it is armed.
  */
 export default function (pi: ExtensionAPI): void {
     const reads = new SingleReadGuard()
