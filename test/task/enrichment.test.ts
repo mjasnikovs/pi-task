@@ -27,10 +27,11 @@ describe('extractEnrichTargets', () => {
 
     test('versionPackages is a deduped superset past the docs cap (for cheap version lookups)', () => {
         const out = extractEnrichTargets('`a` `b` `c` `d` `e` `f` `a`')
-        // docs stay capped at 3…
+        // docs stay capped at ENRICH_CAP, which is 3 (enrichment.ts:29)…
         expect(out.packages).toEqual(['a', 'b', 'c'])
-        // …but every named dep (deduped, order-preserving) is available for a
-        // version lookup, so deps 4..N aren't silently dropped.
+        // …but every named dep, deduped and order-preserving, stays available for
+        // a version lookup up to ENRICH_VERSION_CAP — so deps past the docs cap
+        // get a version block rather than being silently dropped.
         expect(out.versionPackages).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
     })
 
@@ -133,9 +134,10 @@ describe('extractEnrichTargets — services', () => {
     })
 
     test('tolerates a duplicated EXTERNAL-DEPENDENCIES header with duplicated bullets', () => {
-        // Reproduces a real refine-model malformation: the section header and
-        // every bullet emitted twice. A repeated header is not a terminator,
-        // and duplicate bullets collapse by name — so the cap counts uniques.
+        // A malformation a refine model produces: the section header and every
+        // bullet emitted twice. A repeated header must not read as a terminator,
+        // and duplicate bullets collapse by name — so the cap counts UNIQUES, not
+        // lines, and a doubled section yields the same set as a clean one.
         const text = [
             'EXTERNAL-DEPENDENCIES',
             'EXTERNAL-DEPENDENCIES',
