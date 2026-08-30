@@ -1,6 +1,8 @@
 /**
- * The five A/B-1 invariants, pinned as fixtures, plus the two corpus shapes that
- * decided the closed negation set.
+ * The refutation detector, pinned on real spec text. Two properties matter and both
+ * are asserted mechanically: it may only DELETE (the output is a character
+ * subsequence of the input), and it may only fire on a NEGATION about a package,
+ * never on prose that merely contains a negative word.
  */
 import {describe, expect, test} from 'bun:test'
 
@@ -9,9 +11,10 @@ import {applyRefutations, detectRefutations, dropToken} from '../../src/task/ref
 const OWNED_STAMP =
     'owned requirement from the source design (AUTHORITATIVE; satisfy it in this task, do not narrow it)'
 
-/** The lead's own lines, verbatim from a real spec. */
+/** A manifest-preservation constraint of the shape this detector has to survive:
+ *  it names many packages, and only some of them are later refuted. */
 const LEAD_CONSTRAINT =
-    '- Preserve every existing field in `package.json`: name (`mx5-private`), private, type, all existing scripts'
+    '- Preserve every existing field in `package.json`: name (`the-project`), private, type, all existing scripts'
     + ' (`lint`, `test`). Add only new entries the task requires (e.g., `hono`, `bun-sql`-equivalent,'
     + ' `@hono/zod-validator`, `argon2`, `sharp`, `wouter`, `react`, `react-dom`, `tailwindcss`,'
     + ' `@playwright/experimental-ct-react`, `playwright`, and any other runtime/dev dependencies the spec pins).'
@@ -37,7 +40,7 @@ function isSubsequence(needle: string, haystack: string): boolean {
     return i === needle.length
 }
 
-describe('the lead — mx5 run 19 TASK_0001', () => {
+describe('the lead case', () => {
     const refined = refinedWith(LEAD_CONSTRAINT)
     const research = researchWith(LEAD_ARGON2_RESEARCH, LEAD_BUNSQL_RESEARCH)
 
@@ -125,9 +128,9 @@ describe('inv-noop-when-no-refutation', () => {
 })
 
 describe('inv-precision — the shapes STEP 0 rejected', () => {
-    // 300 of the first cut's 306 corpus hits were this: a MANIFEST-STATE bullet
-    // that says the dependency is missing and MUST BE ADDED. Dropping on it
-    // mutilated real constraints ("use  with the shared `loginSchema`").
+    // The dominant false-positive shape: a MANIFEST-STATE bullet saying the
+    // dependency is missing and MUST BE ADDED. It contains "no `X`", so a detector
+    // keying on that alone deletes the token out of a real constraint.
     test('"currently lists no `X` dependencies; they must be added" does NOT refute', () => {
         const refined = refinedWith(
             '- **Input validation:** use `@hono/zod-validator` with the shared `loginSchema` from `src/shared/schema.ts`.'
@@ -152,8 +155,8 @@ describe('inv-precision — the shapes STEP 0 rejected', () => {
         expect(applyRefutations(refined, research).trail).toHaveLength(0)
     })
 
-    // The doc's pre-registered risk: a bullet naming one package negatively and
-    // another positively must only ever refute the one inside the negation.
+    // A bullet naming one package negatively and another positively must refute
+    // only the one inside the negation.
     test('a negation of one package does not refute the alternative named beside it', () => {
         const refined = refinedWith('- Hash with `argon2`; do not use `@node-rs/argon2`.')
         const research = researchWith(
@@ -165,7 +168,8 @@ describe('inv-precision — the shapes STEP 0 rejected', () => {
         expect(out).not.toContain('`@node-rs/argon2`')
     })
 
-    // 412 corpus bullets carry "does not require" as ordinary behavioural prose.
+    // "does NOT require" is ordinary behavioural prose about an endpoint, not a
+    // claim that a dependency is unnecessary.
     test('behavioural "does NOT require" prose does not refute anything', () => {
         const refined = refinedWith('- The `mine` filter is applied only when `c.var.user` is set.')
         const research = researchWith(
