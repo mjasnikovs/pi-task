@@ -3,7 +3,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 
-// Unified synchronous SQLite interface — satisfied by both bun:sqlite and node:sqlite.
+// The synchronous SQLite surface this module uses, and the whole of it. Both
+// backends satisfy it as written: bun:sqlite's `Database` and node:sqlite's
+// `DatabaseSync` return the same shapes from get/all/run over the schema below,
+// FTS5 triggers and CHECK constraints included.
 export interface SyncStatement {
     get(...args: unknown[]): unknown
     all(...args: unknown[]): unknown[]
@@ -56,13 +59,16 @@ END;
 
 const req = createRequire(import.meta.url)
 
+// Branch on the RUNTIME, not on a try/catch: each builtin exists in exactly one
+// of them. Requiring `bun:sqlite` under node throws MODULE_NOT_FOUND, and
+// `node:sqlite` under bun throws ERR_UNKNOWN_BUILTIN_MODULE. `createRequire`
+// keeps both specifiers out of the static import graph, so neither bundler nor
+// type-checker has to resolve the one that is absent.
 function openDb(dbPath: string): SyncDb {
     if (typeof (globalThis as Record<string, unknown>).Bun !== 'undefined') {
-        // Bun runtime: use bun:sqlite
         const {Database} = req('bun:sqlite') as typeof import('bun:sqlite')
         return new Database(dbPath) as unknown as SyncDb
     }
-    // Node.js runtime: use node:sqlite
     const {DatabaseSync} = req('node:sqlite') as typeof import('node:sqlite')
     return new DatabaseSync(dbPath) as unknown as SyncDb
 }
