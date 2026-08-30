@@ -1,9 +1,9 @@
 /**
- * The docs tail, driven once instead of three times.
+ * The docs tail: concatenate → extract → verify → format.
  *
- * `pi-worker-docs`'s project arm, its package arm and `docs-core`'s `docsFocused`
- * each wrote out concatenate → extract → verify → format. Every property here
- * held for one of the three copies at best; the pin-drop below held for none.
+ * One implementation, `docsLookup`. `pi-worker-docs` runs it for both its arms —
+ * only the CORPUS differs — and `docs-core`'s `docsFocused` runs it for the
+ * package one. So a property proven here holds for every docs answer.
  */
 import {describe, expect, test} from 'bun:test'
 import {docsLookup, type DocsCorpus} from '../../src/workers/docs-lookup.js'
