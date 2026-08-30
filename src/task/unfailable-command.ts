@@ -4,37 +4,31 @@
  *
  * WHY THIS EXISTS. `recheckAcceptDebts` may auto-close an accepted debt on exactly
  * one piece of evidence: the debt named a VERIFY command, that command was re-run,
- * and it exited ZERO (accept-debt.ts — "the debt named a command, the command was
- * run, and it passed"). Filtering only on length and
- * control characters, so nothing asked whether a ZERO exit could ever mean
- * anything. Sixteen stored-eligible VERIFY lines in the corpus on this box cannot
- * exit non-zero no matter what the tree contains:
+ * and it exited ZERO (accept-debt.ts). Filtering the stored command on length and
+ * control characters alone never asks whether a ZERO exit could mean anything. Three
+ * shapes make it meaningless:
  *
- *     C  `test -f "$SO_LIB" && echo "PASS: …" || echo "FAIL: …"`     15  ← both
- *        branches that can be LAST are echoes, so the status is echo's: 0.
- *     A  `bun -e "console.assert(…)"`                                 1  ← measured
- *        in both runtimes: `console.assert(1===2,'X')` prints and exits 0.
- *     B  `npx tsc --noEmit 2>&1 | tail -5; test $? -eq 0 && …`        1  ← `$?` is
- *        tail's status, not tsc's.
- *
- * one real project (CMake / C++ / OBS plugin — no database, no frontend, no HTTP server)
- * carries 11 of the 16; one of its tasks is SEVEN consecutive `test -f … && echo
- * "PASS" || echo "FAIL"` lines standing in for a build verification.
+ *     C  `test -f "$SO_LIB" && echo "PASS: …" || echo "FAIL: …"`  ← both branches
+ *        that can run LAST are echoes, so the status is echo's: 0.
+ *     A  `bun -e "console.assert(…)"`  ← `console.assert` prints and continues; the
+ *        process still exits 0, in bun and in node alike.
+ *     B  `npx tsc --noEmit 2>&1 | tail -5; test $? -eq 0 && …`  ← `$?` is tail's
+ *        status, not tsc's.
  *
  * THE VERDICT IS A REFUSAL, NOT A CLAIM. An unfailable command is not stored, so
  * the debt stays OPEN and surfaced — the strictly smaller claim. Nothing here can
  * close a debt, fail a gate, or edit a spec.
  *
  * DECIDED ON SHELL SHAPE, NEVER ON THE VERB. `grep -q …` and `ctest …` set a real
- * status and are untouched; `test -f X || { echo …; exit 1; }` exits non-zero and
- * is untouched. Naming verbs is the mistake  already paid for
- * (command-shrink's guard compared NAMES) and 16B re-bought.
+ * status and are untouched; `test -f X || { echo …; exit 1; }` exits non-zero and is
+ * untouched. A rule keyed on command NAMES would have to know every checker that
+ * exists, and would still miss the shape — the same mistake command-shrink's guard
+ * made by comparing names.
  *
- * OUT OF SCOPE BY DESIGN: bare `|| true`. skip-escape.ts records the measurement
- * — across real historical VERIFY blocks almost every `||` use is teardown, setup
- * or a negative test rather than a skip-escape, so a blanket rule is almost all
- * false positives. `rm -rf build || true` classifies CAN-FAIL here and must
- * keep doing so.
+ * OUT OF SCOPE BY DESIGN: bare `|| true`. As skip-escape.ts explains, most `||`
+ * uses are teardown, setup or a negative test rather than an escape, so a blanket
+ * rule would be almost all false positives. `rm -rf build || true` classifies
+ * CAN-FAIL here and must keep doing so.
  *
  * THREE OUTCOMES, and `unknown` is a first-class answer: a shape this cannot
  * decide is never guessed at, it is left alone (which is today's behaviour).
@@ -138,8 +132,8 @@ function hasPipeline(seg: string): boolean {
  * EVERY remaining operator: `&&` skips what follows when the status is non-zero,
  * `||` skips it when the status is zero. A chain that mixes the two after `c_i`
  * therefore always runs on past it. For `A && B || C`: A is never terminal (the
- * `||` picks C up after A fails), B is terminal when it succeeds, C is terminal —
- * so the status is always an echo's, which is the shape.
+ * `||` picks C up after A fails), B is terminal when it succeeds, and C is
+ * terminal — so if B and C are both echoes the status is always an echo's.
  */
 function terminalIndices(ops: readonly string[], n: number): number[] {
     const out: number[] = []
@@ -181,7 +175,7 @@ function isPureEcho(cmd: string): boolean {
 }
 
 /**
- * RULE A — a `console.assert` check. Measured, not assumed, in both runtimes:
+ * RULE A — a `console.assert` check. Run it yourself in either runtime:
  *
  *     $ bun  -e "console.assert(1===2,'X'); console.log('end')"; echo $?   → 0
  *     $ node -e "console.assert(1===2,'X'); console.log('end')"; echo $?   → 0
