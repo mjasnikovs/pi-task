@@ -1,14 +1,13 @@
 /**
  * Detects when a freshly-generated clarifying question is a near-duplicate of one
  * already asked. The clarify/grill loops re-call the generator after every answer
- * and rely on a prompt instruction ("Never re-ask something already answered") to
- * stop repeats. A weaker local model ignores that and re-asks the same fork worded
- * differently (observed: a "Bun bundler vs Vite" question asked four ways across a
- * single run). This is a deterministic backstop so a model that won't self-police
- * can't barrage the user with the same decision.
+ * and rely on a prompt instruction — "Never re-ask something already answered",
+ * carried by both prompts.ts and auto-prompts.ts — to stop repeats. A model that
+ * ignores it re-asks the same fork worded differently, so this is a deterministic
+ * backstop against barraging the user with one decision.
  *
- * Pure logic, no I/O — trivially unit-testable, and validated against the actual
- * repeated questions from a real /task-auto run (see question-dedup.test.ts).
+ * Pure logic, no I/O: the module imports nothing. question-dedup.test.ts drives it
+ * against a recorded set of ten questions in which three restate one earlier fork.
  */
 
 // Function words plus the boilerplate the prompt makes every question share
@@ -143,11 +142,11 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
     return union === 0 ? 0 : inter / union
 }
 
-// Validated in question-dedup.test.ts against a recorded run: the re-asked
-// SPA-build/serve forks scored 0.152 / 0.275 / 0.421 against an earlier question,
-// while every genuinely-distinct subsystem question topped out at 0.077. 0.12 sits
-// in that gap — above the distinct ceiling, below the lowest true duplicate — so
-// it catches the repeats without suppressing a real question.
+// The similarity at which a question counts as a re-ask. It is low because the
+// stopword list has already stripped the scaffolding every generated question
+// shares, leaving only the salient nouns: two questions about the same fork overlap
+// on those, two different subsystems share almost none. question-dedup.test.ts pins
+// both sides — the re-asks must be caught, the distinct questions must not be.
 export const DEFAULT_DUP_THRESHOLD = 0.12
 
 /**
@@ -167,8 +166,8 @@ export function isDuplicateQuestion(
 
 // After this many consecutive near-duplicate questions, the question loop stops:
 // a model that can't produce a novel question after being told to move on has
-// nothing genuinely new left to ask. Shared by /task-auto's clarify loop and
-// /task's grill loop.
+// nothing genuinely new left to ask. Read by grill (phases.ts) and by the shared
+// question source (question-source.ts) that clarify and /task-plan both drive.
 export const MAX_DUP_STRIKES = 2
 
 // Reprompt injected when a duplicate is caught — tells the model the topic is
