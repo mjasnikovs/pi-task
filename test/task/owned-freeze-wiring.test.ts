@@ -1,13 +1,13 @@
 /**
- * The WIRED path: `resolveOwnedFreezeForThisTask` as `phases.ts`
- * calls it at critique, over a real `.pi-tasks` directory — the owned ledger on
- * disk and the spec the braces just produced.
+ * The WIRED path: `resolveOwnedFreezeForThisTask` exactly as `phases.ts` calls it
+ * at critique, over a real `.pi-tasks` directory and a real git tree — the owned
+ * ledger on disk and the spec the braces just produced.
  *
- * The fixture is one task: the §9 Build & run server clause owned
- * by the build-tooling task, whose own CONSTRAINTS freeze every file but
- * `package.json`. What the wired half must show is that the quote survives the
- * detach byte for byte, that it stops being this task's obligation, and that a
- * run without a ledger or without the pair is untouched.
+ * The fixture puts a design clause naming `src/server/index.ts` under the
+ * build-tooling task, whose own CONSTRAINTS freeze every file but `package.json`.
+ * The wired half has to show that the quote survives the detach byte for byte,
+ * that it stops being this task's obligation, and that a run with no ledger, or
+ * with no such pair, is left untouched.
  */
 import {afterEach, describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -68,8 +68,9 @@ function fixture(opts: FixtureOpts = {}): string {
         {title: SHELL, id: 'TASK_0016'},
         {title: CLIENT_API, id: 'TASK_0017'}
     ]
-    // a task's title states it CREATES the server file; a task's states it
-    // ADDS a route to it; one task only imports from it.
+    // Three different relations to `src/server/index.ts`, so `writeIntent` has to
+    // discriminate: one CREATES it, one ADDS a route to it, one only IMPORTS from
+    // it. Build tooling names no path at all.
     const intents = [
         `${SERVER_WIRING} — create \`src/server/index.ts\` mounting all five route groups`,
         BUILD_TOOLING,
@@ -199,7 +200,8 @@ describe('resolveOwnedFreezeForThisTask (wired, DETACH)', () => {
     })
 })
 
-/** one task refined prompt, reduced to the sentence that claims. */
+/** A refined prompt cut to the sentence `writeIntent` reads: it says the task adds
+ *  a route to the existing `src/server/index.ts`, so it should claim that path. */
 const CLAIMANT_REFINED =
     'Create `src/client/api.ts` with a typed Hono RPC client, and add an SPA fallback route to the'
     + ' existing server `src/server/index.ts` so that non-`/api` GET requests serve the built'
@@ -274,12 +276,11 @@ describe('claimOwnedFreezeForThisTask (wired, CLAIM)', () => {
 
 // ─── The ORDER, driven rather than retyped ───────────────────────────────────
 //
-// The two halves above are covered separately, and the order they run in was
-// asserted by a test that CALLED them in sequence — which proves the sequence the
-// test wrote, not the sequence the phase runs. `critiquePhase` is that row's whole
-// body now, so the order is drivable: the braces write the stamp, the detach reads
-// it, and a critique-time probe finds nothing because that stamp does not exist
-// yet. Reversing the two inside `critiquePhase` fails this test.
+// The two halves are covered separately above. A test that CALLED them in sequence
+// would only prove the sequence the test wrote. `critiquePhase` is the whole phase
+// row, so driving it proves the sequence the phase runs: appendOwnedConstraints
+// writes the stamp and resolveOwnedFreezeForThisTask reads it (phases.ts). Swap
+// those two lines and this test fails, because the detach would find no stamp.
 
 /** A compose draft with a runnable VERIFY, so triage may short-circuit the rewrite. */
 const DRAFT = [
