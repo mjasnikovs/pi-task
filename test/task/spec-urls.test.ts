@@ -1,12 +1,7 @@
 /**
- * Unit tests for the PROMPT 4 lever. Every fixture here is REAL text — the design's
- * own §13 reference list, the manifest actually shipped, the refined tasks that ran — so
- * a passing test means the lever behaves on the corpus it was measured against, not on
- * strings invented to make it pass.
- *
- * The live A/B measures whether the WORKER then fetches
- * the page. These tests measure only what this module deterministically produces, which is
- * the half that can be pinned.
+ * `spec-urls.ts` imports nothing and issues no request: it extracts, ranks and
+ * renders URLs as prompt text. These tests cover that text. Whether a worker
+ * then fetches a page is not observable from here.
  */
 import {test, expect, describe} from 'bun:test'
 import {
@@ -19,7 +14,7 @@ import {
     MAX_SPEC_URLS
 } from '../../src/task/spec-urls.js'
 
-/** The 21 URLs DESIGN/PROJECT.md cites, verbatim. */
+/** A design-shaped reference list: documentation URLs for the packages below. */
 const DESIGN_URLS = [
     'https://bun.com/docs/api/file-io',
     'https://bun.com/docs/api/hashing',
@@ -44,7 +39,7 @@ const DESIGN_URLS = [
     'https://zod.dev/'
 ]
 
-/** package.json dependencies + devDependencies, in manifest order. */
+/** A dependency list in manifest order — rankSpecUrls treats earlier as higher. */
 const MX5_MANIFEST = [
     '@radix-ui/react-dialog',
     '@radix-ui/react-select',
@@ -73,15 +68,14 @@ describe('extractSpecUrls', () => {
     })
 
     test('drops the trailing sentence period but keeps a #fragment', () => {
-        // The wouter reference is cited AS a fragment URL; normalising it away would point the
-        // worker at a 43 KB README instead of its readme anchor.
+        // The `#fragment` is part of the citation: strip it and the block names the
+        // whole page instead of the anchor that was cited.
         const got = extractSpecUrls('see https://github.com/molefrog/wouter#readme.')
         expect(got).toEqual(['https://github.com/molefrog/wouter#readme'])
     })
 
     test('drops localhost and placeholder hosts — a dev URL is not documentation', () => {
-        // A task's text can contain dozens of these (curl examples, redirect targets); ranking
-        // them as fetch candidates would send the worker at its own dev server.
+        // A localhost URL in a task is the run's own dev server, not a page to read.
         const text =
             'curl http://localhost:3000/api/auth/login and http://127.0.0.1:3911/admin '
             + 'and https://example.com/thing and https://hono.dev/docs/guides/rpc'
@@ -110,7 +104,6 @@ describe('packageTokens', () => {
     })
 
     test('drops segments of two characters or fewer', () => {
-        // `pg` as a token would match half the documentation web.
         expect(packageTokens('pg')).toEqual([])
     })
 
@@ -127,8 +120,6 @@ describe('urlDocumentsPackage', () => {
     })
 
     test('matches on the PATH too — the two associations a host-only rule loses', () => {
-        // Measured: a host-only rule scored these at 0 tasks each, and one of them is the
-        // second fixture's whole point.
         expect(urlDocumentsPackage('https://github.com/molefrog/wouter#readme', 'wouter')).toBe(
             true
         )
@@ -191,8 +182,6 @@ describe('buildSpecUrlBlock', () => {
     const TASK_28_PKGS = ['wouter', 'react']
 
     test('TASK_0027: names the page that would have prevented the fatal bug', () => {
-        // hono.dev/docs/guides/rpc documents what `hc`'s base URL MEANS. It was cited in §5
-        // and §13, never fetched, and its absence produced /api/api/... on every request.
         const block = buildSpecUrlBlock(DESIGN_URLS, TASK_27_PKGS)
         expect(block).toContain('https://hono.dev/docs/guides/rpc')
         expect(block).toContain('SPEC-CITED DOCUMENTATION')
@@ -207,25 +196,20 @@ describe('buildSpecUrlBlock', () => {
     })
 
     test('says in terms that the list is NOT exclusive — PROMPT 4 invariant 3', () => {
-        // Ranking spec URLs above model-chosen ones must not become "only spec URLs". This
-        // is the prompt half of the invariant the A/B asserts mechanically.
+        // Ranking cited pages first must not read as "only these pages". The block
+        // says so in words the worker sees.
         const block = buildSpecUrlBlock(DESIGN_URLS, TASK_27_PKGS)
         expect(block).toMatch(/NOT AN ALLOW-LIST/)
         expect(block).toMatch(/pi-worker-search/)
     })
 
     test('empty when the design cites nothing for anything this task uses', () => {
-        // The lever must be silent rather than noisy on the tasks it cannot help — that is
-        // what keeps its cost proportional to its reach.
         expect(buildSpecUrlBlock(DESIGN_URLS, ['better-sqlite3'])).toBe('')
         expect(buildSpecUrlBlock([], TASK_27_PKGS)).toBe('')
         expect(buildSpecUrlBlock(DESIGN_URLS, [])).toBe('')
     })
 
     test('the A/B baseline surgery target is reachable: a non-empty input yields a block', () => {
-        // A harness strips the lever by forcing this function to
-        // return ''. If this test ever fails, the harness's runtime verification would fail
-        // too — and an A/B whose treatment arm has no lever is unreadable.
         expect(
             buildSpecUrlBlock(['https://hono.dev/docs/guides/rpc'], ['hono']).length
         ).toBeGreaterThan(0)
