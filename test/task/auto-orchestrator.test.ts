@@ -64,9 +64,11 @@ test('planAuto: asks clarify questions, records answers, writes AUTO file with t
 })
 
 // Lay down a minimal resolvable `bun` types package so findPhantomImports can
-// prove `bun:sql` is phantom (the base `bun` module declares `class SQL`, but
-// there is no `declare module "bun:sql"`). Mirrors the real bun-types shape just
-// enough for resolveRuntimeTypesRoot → classifyRuntimeImport.
+// prove `bun:sql` is phantom. That is the real shape: bun-types declares
+// `class SQL` in sql.d.ts and ships a `bun:sqlite` module, but no
+// `declare module "bun:sql"` anywhere — so the specifier a spec confidently
+// writes does not exist. The stub mirrors it just far enough for
+// resolveRuntimeTypesRoot → classifyRuntimeImport to reach that verdict.
 async function stubBunTypes(dir: string): Promise<void> {
     const pkg = path.join(dir, 'node_modules', 'bun')
     await fsp.mkdir(pkg, {recursive: true})
@@ -181,19 +183,19 @@ test('planAuto: renders markdown in the prompt but stores plain text', async () 
     })
 })
 
-// Regression: on the real run the local model ignored "never re-ask" and
-// barraged the user with the same "how to build/serve the SPA (Bun bundler vs
-// Vite)" decision worded four ways (Q2/Q3/Q8/Q9 in TASK_AUTO_0001.md). The
-// duplicate backstop must suppress the re-asks and stop the loop, so the user is
-// only prompted for genuinely distinct decisions. Without the guard, all six
-// generated questions would be surfaced (captured.inputs.length === 6).
+// A model told "never re-ask" can still ask the SAME decision worded several
+// ways — here one build-tool choice arriving four times over. The instruction is
+// not a mechanism, so the duplicate backstop is: it suppresses the re-asks and
+// stops the loop, and only genuinely distinct decisions reach the user. Without
+// it every generated question is surfaced.
 test('planAuto: suppresses re-asked questions and stops after repeated dups', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured, queueInput} = makeFakeCtx(dir)
         queueInput('pg_trgm') // A1 (distinct: search)
         queueInput('single server, no vite') // A2 (distinct: SPA serve)
         queueInput('sharp resize') // A3 (distinct: image pipeline)
-        // Verbatim-shaped questions from the failing run, in the order it asked.
+        // Six questions in the order a model asks them: three distinct
+        // decisions, and three rewordings of the build-tool one.
         const d = seqDeps([
             "1. Should the search index use the PostgreSQL pg_trgm extension's similarity() function, or a simpler LIKE '%term%' approach to avoid the extension dependency?",
             "2. Should the Hono app's entry point (src/server/index.ts) serve the React SPA's index.html as a static catch-all, or should a separate frontend build step produce static assets served by an external tool like Vite dev server in development and nginx/Express in production?",
@@ -819,8 +821,9 @@ test('runAutoLoop: AUTOFIX loops back to the gate uncapped until the work verifi
             },
             verify: () => {
                 verifyCalls++
-                // FAIL the first THREE times — past any 2-attempt cap — then PASS,
-                // proving the autofix loop is uncapped (the user keeps picking it).
+                // FAIL three times, then PASS. The resolution loop has no attempt
+                // cap of its own: the bound is the user, who keeps choosing
+                // AUTOFIX from the picker.
                 return Promise.resolve(
                     verifyCalls <= 3 ?
                         {ok: false, reason: 'work did not verify: bun run build exited 1'}
@@ -1276,9 +1279,10 @@ test('expandFeatureMentions: dedupes repeated mentions, skips empty files', asyn
 
 test('expandFeatureMentions: strips trailing prose punctuation off the @-mention', async () => {
     // A user typing the feature inline naturally writes "@spec.md, reuse…" or
-    // "@spec.md." — the greedy [^\s]+ swallows the comma/period into the path, the
-    // file fails to resolve, and the spec is silently NOT inlined (the model then
-    // fabricates generic questions). Validated against a real 32KB design doc.
+    // "@spec.md." — a greedy [^\s]+ swallows the comma or period into the path, the
+    // file fails to resolve, and the spec is silently NOT inlined. Silently is the
+    // problem: nothing errors, and the model just plans against a feature line
+    // instead of the document.
     await withTmpTaskDir(async dir => {
         await fsp.writeFile(path.join(dir, 'spec.md'), '# Spec\n\nBuild the thing.\n')
         for (const f of [
@@ -1478,11 +1482,11 @@ test('coverage gate: a flaky shorter retry never replaces the longer list', asyn
 })
 
 test('coverage gate: an equal-length retry that closes the gap IS adopted', async () => {
-    // regression: the judge flagged the missing test-suite task, the hinted
-    // retry ADDED it but came back 29 titles vs the original 30, and strictly-longer
-    // retention discarded the better-informed list — round 2 then re-judged the same
-    // unchanged plan. A non-degenerate retry must be adopted regardless of length;
-    // the NEXT round's judge decides whether the gaps closed.
+    // A hinted retry can ADD the flagged area and still come back SHORTER, by
+    // merging two titles elsewhere. Under strictly-longer retention that better
+    // -informed list is discarded and the next round re-judges the same unchanged
+    // plan — the hint is spent for nothing. A non-degenerate retry must be adopted
+    // regardless of length; the NEXT round's judge decides whether the gaps closed.
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
         const d = coverageDeps(
@@ -1585,8 +1589,9 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
         )
         const id = await planAuto(ctx, dir, 'build the app', d)
         // 2 reprompt rounds: initial decompose + 2 retries. The judge scores every
-        // plan it might ship — the initial list AND each retry before adoption — so
-        // it is consulted 3× (was 2× when the final retry shipped unscored).
+        // plan it might ship — the initial list AND each retry before adoption —
+        // so it is consulted 3 times. A retry that shipped unscored would be a
+        // plan nothing ever judged.
         expect(d.calls.decompose).toBe(3)
         expect(d.calls.coverage).toBe(3)
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(3)
@@ -1595,11 +1600,11 @@ test('coverage gate: a judge that keeps flagging is bounded to MAX rounds', asyn
 
 // ─── Monotonic coverage replacement, end-to-end through planAuto ──
 //
-// The wired proof for the A/B in coverage-loop.test.ts: a full-stack-shaped run
+// The end-to-end counterpart to the unit tests in coverage-loop.test.ts: a run
 // whose initial plan covers an area (the --json output) that a later coverage
 // regeneration DROPS while chasing an un-ownable NEGATIVE requirement. The loop
-// must keep the good plan, not adopt the dropping one. Non-web archetype (a CLI)
-// on purpose — the fix is the class, not a web-app special case.
+// must keep the good plan, not adopt the dropping one. A CLI archetype on
+// purpose — the rule is general, not a web-app special case.
 const DEDUP_CLI_SPEC = [
     'Build a file-deduplication CLI.',
     '',
@@ -1688,17 +1693,17 @@ test('coverage gate: a regeneration that DROPS a covered area is rejected, good 
     })
 })
 
-// ─── #1/#2: judge-flagged carry + bonus round on late-exposed gap
+// ─── Judge-flagged carry + bonus round on a late-exposed gap ─────────────────
 //
-// The failure this pair proves closed: the 55-title plan was ADOPTED on the
-// final coverage round AND was the first plan whose holistic judge flagged §10's
-// test-infra setup — an area requirement-extraction never captured as a tracked
-// entry. The round cap fired the same instant, so (a) there was no round left to
-// chase it and (b) it had no carrier, so it was warned-about then silently dropped.
+// The bad case: the plan adopted on the FINAL coverage round is also the first
+// one whose holistic judge flags a new area — one that requirement-extraction
+// never captured, so no tracked entry carries it. The round cap fires the same
+// instant, so there is no round left to chase the gap AND nothing to carry it:
+// it is warned about, then silently dropped.
 //
-// The spec carries three grounded requirements the plan covers incrementally, and
-// a fourth area the judge names ONLY once the third requirement is covered — i.e.
-// exposed by the adoption that lands on the last allowed round.
+// The spec below carries three grounded requirements the plan covers
+// incrementally, plus a fourth area the judge names ONLY once the third is
+// covered — i.e. exposed by the adoption that lands on the last allowed round.
 const PIPELINE_SPEC = [
     'Build a data pipeline tool.',
     '',
@@ -1761,9 +1766,10 @@ function pipelineDeps(
 test('#2: an adoption at the round cap that exposes a new area buys one bonus round', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
-        // The bonus round's judge finally reports COMPLETE — the extra round chased
-        // the late-exposed gap to resolution, which MAX_COVERAGE_ROUNDS=2 alone
-        // (breaking the instant the 3rd requirement was covered) would have missed.
+        // The bonus round's judge finally reports COMPLETE — the extra round
+        // chased the late-exposed gap to resolution. MAX_COVERAGE_ROUNDS is 2, so
+        // without the bonus the loop breaks the instant the 3rd requirement is
+        // covered and never sees the gap that adoption exposed.
         const d = pipelineDeps('COVERAGE: COMPLETE')
         await planAuto(ctx, dir, PIPELINE_SPEC, d)
         // initial + 2 base retries + 1 bonus retry (no granularity split — the
@@ -1810,8 +1816,9 @@ test('#1: a judge-flagged area with no owning task is carried into requirements.
 
 // ─── Granularity floor ──────────────────────────────────────────
 
-// Four ownable requirements ⇒ floor 2. Verbatim-grounded in GRAN_FEATURE so
-// keepGroundedRequirements keeps them.
+// FIVE ownable requirements ⇒ a floor of 3: granularityFloor returns 0 below
+// MIN_REQUIREMENTS_FOR_PLAN_SHAPE (5) and ceil(n/2) at or above it. Each is
+// verbatim-grounded in GRAN_FEATURE so keepGroundedRequirements keeps them.
 const GRAN_FEATURE = [
     'Build the exporter service.',
     '- the parser reads yaml manifests',
@@ -2006,8 +2013,10 @@ test('plan-shape: a chore keeps the old triage path — the host never seizes it
             commit: () => Promise.resolve({committed: true})
         }
         const id = await planAuto(ctx, dir, 'rename the foo() helper', d)
-        // The triage still owns this fork, and no host directive reaches decompose —
-        // live smoke: seizing it turned a 1-requirement rename into a 6-task plan.
+        // The triage still owns this fork, and no host directive reaches
+        // decompose. Below the cut the fork is not load-bearing — the plan is one
+        // or two tasks either way — and seizing it inflates a chore into a
+        // multi-task plan (see MIN_REQUIREMENTS_FOR_PLAN_SHAPE's own comment).
         expect(asked).toContain('clarify-triage')
         expect(hints[0]).not.toContain('per-deliverable')
         expect(parseTaskList((await readTaskFile(dir, id!)).body).length).toBe(1)
@@ -2045,10 +2054,10 @@ test('distrust floor: a 1-title plan for a big spec is regenerated BEFORE the ju
 // An EMPTY decompose escapes the floor entirely if the predicate opens with
 // `titles.length > 0`: zero titles is not "suspect", no retry fires, the coverage
 // loop breaks on `titles.length === 0`, and the run aborts with "no tasks produced
-// from the feature". One degenerate generation kills the whole run —
-// while one title higher got a retry. Measured recurring: 13 empty draws across 24
-// reps of a 20KB spec (2026-07-28 smoke), including two back-to-back in one rep,
-// which is why an empty plan gets more than one attempt.
+// from the feature". One degenerate generation would kill the whole run, while a
+// plan one title larger got a retry — the least-useful draw treated the most
+// harshly. Empty draws also arrive back-to-back, so an empty plan gets more than
+// one attempt rather than exactly one.
 test('distrust floor: an EMPTY plan is retried, not silently fatal', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
@@ -2067,7 +2076,7 @@ test('distrust floor: an EMPTY plan is retried, not silently fatal', async () =>
 test('distrust floor: an empty plan gets more than one retry', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        // Two consecutive empty generations — the shape seen live — then a real one.
+        // Two consecutive empty generations, then a real one.
         // The third draw is deliberately ABOVE the suspect ceiling so this test
         // measures only the empty budget; a 2-title heal would additionally claim
         // the separate small-plan retry (covered by its own test above).
@@ -2170,13 +2179,14 @@ test('distrust floor: a shorter-or-equal suspect retry keeps the original list',
     })
 })
 
-// ─── Cross-slice contract extraction (F3) ───────────────────────────────────
+// ─── Cross-slice contract extraction ────────────────────────────────────────
 
 test('contract extraction: grounded quotes stored, fabrications dropped', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx} = makeFakeCtx(dir)
-        // A big feature that pins a real split contract; the extraction child emits
-        // one grounded quote and one fabricated mount table (the exact F3 bug).
+        // A big feature that pins a split contract across slices. The extraction
+        // child emits one grounded quote AND one fabricated mount table, which is
+        // the case the grounding check has to separate.
         const feature =
             'Photos API. Upload is POST /api/listings/:id/photos (nested under the listing). '
             + 'Detail line. '.repeat(300)
@@ -2404,10 +2414,10 @@ test('runAutoLoop: stash stack changed during a task → loud warning names the 
 
 // The guard's own message says an orphan stash "later pops as an unresolvable
 // conflict" — and a FAILED task is exactly when the user is told to run
-// /task-auto-resume and walk onto it. Sitting below its capture and three returns
-// down the fall-through, the check would run only when the task SUCCEEDED and the
-// gate said `done`. No test could tell "the guard ran and found nothing" from "the
-// guard never ran", because the only path that reached it was the clean one.
+// /task-auto-resume and walk onto it. So the check has to sit in a `finally`
+// beside its capture: on the fall-through, three returns down, it would run only
+// when the task SUCCEEDED, and no test could tell "the guard ran and found
+// nothing" from "the guard never ran".
 test('runAutoLoop: a stash left by a FAILED task is still reported', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
@@ -2521,18 +2531,18 @@ test('runAutoLoop: final gate PASS → run completes without a picker', async ()
         expect(gateRuns).toBe(1)
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
         expect(captured.notifies.some(n => /complete — all 1 tasks done/.test(n.msg))).toBe(true)
-        // item 7: a PASS is trailed (distinct from a never-run gate) and
-        // names the commands that ran.
+        // A PASS is trailed — distinct from a gate that never ran — and names
+        // the commands that produced it.
         expect(trail).toContain('final-gate: PASS — statics + `bun run test` passed')
     })
 })
 
-// one real project (validated 2026-07-27): a gate that discovered nothing shipped `PASS — no
-// integration command found (statics passed)` TWICE while the run carried 2 and 3
-// open verify-FAIL debts. The gate itself now labels that outcome UNOBSERVED; here
-// the RUN must stop presenting it as a pass — different trail word, a warning, a
-// durable debt for the next run's gate, and a completion notice that says the
-// statics were all that was checked.
+// A gate that discovered NOTHING to run must not report a pass. "PASS — no
+// integration command found (statics passed)" reads as a verdict on the app while
+// carrying open verify-FAIL debts, and a run can ship on it twice over. The gate
+// labels that outcome UNOBSERVED; here the RUN must stop presenting it as a pass
+// — a different trail word, a warning, a durable debt for the next run's gate,
+// and a completion notice saying the statics were all that was checked.
 test('runAutoLoop: an UNOBSERVED final gate completes the run but is never recorded as a PASS', async () => {
     await withTmpTaskDir(async dir => {
         const {ctx, captured} = makeFakeCtx(dir)
@@ -2579,9 +2589,10 @@ test('runAutoLoop: an UNOBSERVED final gate completes the run but is never recor
 })
 
 // The gate aggregates every section failure, ranked boot/render first.
-// The trail must carry EVERY entry and the picker question the full ranked list —
-// the user accepted a FAIL having seen only the 1 failing CT test while the
-// shadowed boot + render probe would have shown the app 404ing on every GET.
+// The trail must carry EVERY entry and the picker question the full ranked list.
+// Show only the first and a user can accept a FAIL on the strength of one failing
+// component test while a shadowed boot + render probe would have shown the app
+// 404ing on every GET — the decision is made on the wrong evidence.
 test('runAutoLoop: aggregated final-gate FAIL → every entry trailed, full list in the picker', async () => {
     await withTmpTaskDir(async dir => {
         const handle = makeFakeCtx(dir)
@@ -2689,9 +2700,9 @@ test('runAutoLoop: final-gate autofix is CAPPED — after 3 failed attempts the 
 
 // ── Stranded sub-fixes ──────────────────────────
 // A non-converging fix attempt KEEPS its edits (only a guard trip discards) and
-// deps.commit runs only on fix.ok — so a bunfig.toml repair, which made
-// the test command pass, was still uncommitted when the user accepted the
-// FAIL, leaving HEAD broken and the repair invisible.
+// deps.commit runs only on fix.ok. So a real repair made by an attempt that did
+// not fully converge sits uncommitted when the user accepts the FAIL: HEAD stays
+// broken and the repair is invisible to everything downstream.
 
 /** Deps for a run whose single autofix attempt does not converge but edits the tree.
  *  `commitResult` is what `deps.commit` reports back — a CommitResult and nothing
@@ -2834,10 +2845,10 @@ test('runAutoLoop: a pendingChanges failure is inconclusive — nothing is claim
 })
 
 // ── Non-progress / unfalsifiable check ───────────────────
-// A run can burn all three attempts on a boot check that cannot be observed in
-// its sandbox at ALL (no `ss`, no `lsof`), then leave real repairs uncommitted.
-// The A/B below is built on a SYNTHETIC always-failing check, deliberately not
-// coupled to the boot probe (whose own capability gap is fixed separately).
+// A run can burn every attempt on a check that cannot be observed in its sandbox
+// at ALL (no `ss`, no `lsof`), then leave real repairs uncommitted. The tests
+// below use a SYNTHETIC always-failing check rather than the boot probe, so they
+// pin the non-progress rule itself and not the probe's capability gap.
 
 /** Deps whose gate fails with `first` forever, plus optional extra failures that
  *  clear after the first attempt. Every attempt edits the tree. */
@@ -2900,7 +2911,8 @@ test('runAutoLoop: an identical failure across two tree-changing attempts is DEM
                 attempts
             })
         )
-        // BEFORE: 3 attempts, run failed, edits uncommitted. AFTER: stop at 2.
+        // The identical failure across two tree-changing attempts is the stop
+        // condition: a third attempt has nothing new to learn from.
         expect(attempts.n).toBe(2)
         expect(trail.some(l => /check DEMOTED to UNOBSERVED/.test(l))).toBe(true)
         expect(trail.some(l => /converged on all remaining checks/.test(l))).toBe(true)
@@ -3111,7 +3123,7 @@ test('runAutoLoop: a converged autofix RE-DERIVES the open debts and corrects th
         expect(trail.some(l => /re-check after autofix: 1 resolved, 0 still open/.test(l))).toBe(
             true
         )
-        // The run still completes — 6A corrects accounting, it never blocks.
+        // The run still completes — this corrects the accounting, never blocks.
         expect((await readTaskFile(dir, 'TASK_AUTO_0001')).frontMatter.state).toBe('completed')
         expect(captured.notifies.some(n => /STILL unresolved at run end/.test(n.msg))).toBe(true)
     })
@@ -3232,11 +3244,9 @@ test('runAutoLoop: without the recheck dep the converged path is byte-identical 
 })
 
 /**
- * IGNORED-PATH WRITES at the resolution loop. The fix pass reports
- * what it wrote to gitignored paths; this branch decides what the RUN does with
- * that — the gate record, the durable debt, and the set carried into the next
- * attempt. The A/B mirrors this branch rather than driving it, so these pin it
- * against drift.
+ * IGNORED-PATH WRITES at the resolution loop. The fix pass reports what it wrote
+ * to gitignored paths; this branch decides what the RUN does with that — the gate
+ * record, the durable debt, and the set carried into the next attempt.
  */
 test('runAutoLoop: a DEPENDENT ignored write is trailed, carried as debt, and lands UNOBSERVED', async () => {
     await withTmpTaskDir(async dir => {
@@ -3351,18 +3361,13 @@ test('runAutoLoop: ignored writes are CARRIED from a failed attempt into the nex
 // ─────────────────────────────────────────────────────────────────────────────
 // THE STRANDED-FIX COMMIT REPORTS WHAT ACTUALLY HAPPENED.
 //
-// A run's own TASK_AUTO file can end up carrying the literal text
-// `as [object Object]`.
+// Binding a CommitResult to a name like `sha` and interpolating it writes the
+// literal text `as [object Object]` into a run's own TASK_AUTO file.
 //
-// The call binds the CommitResult to `sha` and interpolates it. Worse than
-// cosmetic: `committed` was never read, and `gitCommitAll` returns
-// {committed:false} WITHOUT throwing on an unmerged index, so the catch could not
-// fire and the trail claimed a commit over changes still sitting in the tree.
-//
-// No A/B applies and this is why, recorded so nobody asks for one later: the
-// change has no behavioural arm. The commit succeeded or failed identically
-// before and after; only the sentence written about it changes. These two shapes
-// plus the line below are the complete proof available.
+// Worse than cosmetic. `gitCommitAll` returns {committed: false, reason} WITHOUT
+// throwing — on an unmerged index, on a clean tree, outside a repo — so a catch
+// block cannot fire and the trail claims a commit over changes still sitting in
+// the working tree. Reading `committed` is the whole fix.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('runAutoLoop: a stranded commit that did NOT happen is reported as not committed', async () => {
