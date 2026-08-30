@@ -154,10 +154,10 @@ describe('setTaskSection / readSection', () => {
     })
 
     test('stores content with $-sequences verbatim when replacing', async () => {
-        // Regression: `content` is untrusted model output. A replacement *string*
-        // expands `$`-patterns; a spec line like `^\+[1-9]\d{1,14}$` ends in the
-        // literal `` $` `` which silently mangled/truncated the stored section
-        // (dropping ACCEPTANCE/VERIFY → no_verify_block on every resume).
+        // `content` is untrusted model output. A replacement *string* expands
+        // `$`-patterns, so a spec line ending `...$` followed by a backtick puts a
+        // literal `` $` `` in the replacement and splices the preceding text in.
+        // setTaskSection passes a replacer FUNCTION, which never expands.
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## a\n\nA\n\n## spec\n\nold\n')
             const content = [
@@ -188,11 +188,10 @@ describe('setTaskSection / readSection', () => {
     })
 
     test('repeated rewrites do not grow a blank gap under the heading', async () => {
-        // Regression: sectionRegex group 1 used `\s*\n`, which greedily swallowed
-        // every blank line after the heading into the capture; setTaskSection then
-        // re-emitted that capture plus one more `\n`, so each rewrite added a blank
-        // line. A long /task-auto run (~2 rewrites/task) ballooned the `## tasks`
-        // section into a ~48-line empty gap. The body must stay stable.
+        // A capture that swallowed the blank line after the heading would be
+        // re-emitted plus one more `\n` on every rewrite, growing the gap one line
+        // per pass (see the note on sectionRegex in task-parsers.ts). One rewrite
+        // hides that; a run of them does not.
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## tasks\n\n- [ ] a\n- [ ] b\n')
             for (let i = 0; i < 20; i++) {
@@ -238,9 +237,9 @@ describe('appendGateRecord', () => {
     })
 
     test('keeps $-sequences literal and flattens multi-line reasons to one line', async () => {
-        // Regression class: setTaskSection once expanded `$`-patterns via a string
-        // replacement; gate reasons are model output and may contain them, plus
-        // embedded newlines that would break the one-line-per-record trail.
+        // Gate reasons are model output: they can carry `$`-patterns a replacement
+        // string would expand, and newlines that would break the one-record-per-
+        // line trail.
         await withTmpTaskDir(async cwd => {
             await writeTaskFile(cwd, makeFm('TASK_0001'), '\n## spec\n\nGOAL x\n')
             await appendGateRecord(
