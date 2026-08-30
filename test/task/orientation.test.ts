@@ -85,8 +85,9 @@ describe('buildOrientation', () => {
             perFileMax: ORIENTATION_PER_FILE_MAX
         })
         expect(supplied.size).toBe(2)
-        // The bound is on the *emitted* block (content + fences + wrapper), not
-        // just raw content — so it holds no matter how many files are packed in.
+        // buildOrientation seeds its running total with the header and trailer and
+        // adds each piece's fence bytes, so the bound is on the EMITTED block, not
+        // on raw content — it holds however many files are packed in.
         expect(Buffer.byteLength(block, 'utf8')).toBeLessThanOrEqual(25 * 1024)
         // The two that fit are the deterministically-ranked first two.
         expect([...supplied]).toEqual(['a/types.ts', 'b/types.ts'])
