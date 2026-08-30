@@ -2,20 +2,11 @@
  * root-cause-repair — turn a verify-FAIL that was CAUSED by another task's file
  * into a scoped repair task in the running plan.
  *
- * The failure class this closes, observed end-to-end: a task ships
- * `test/teardown.ts` with parameterized table names in its TRUNCATE statements.
- * That bug then FAILED two later, unrelated tasks —
- *
- *   a task  "test/teardown.ts has a pre-existing bug (parameterized table names
- *               in TRUNCATE statements) … despite all 10 actual tests passing"
- *   a task  "… due to a pre-existing teardown bug in `test/teardown.ts`
- *               … this task did not modify the teardown"
- *
- * — and BOTH ended in an enforce-revert, so the enforce pass's edits were destroyed
- * over a defect the current task did not create. The ledger recorded the root cause
- * twice and NOTHING ever scheduled a fix: the bug survived ~24h, until the final
- * gate's fix child happened to patch it, and it also generated the "2 pre-existing
- * failures / state pollution" excuse notes repeated across a task…0038.
+ * The failure class this closes: one task ships a broken shared file — a test
+ * teardown, say — and that file then FAILS later, unrelated tasks. Each of those
+ * FAILs is recorded as a debt naming the same root cause, and nothing schedules a
+ * fix: every later task keeps hitting it, and each one's enforce pass can be
+ * reverted over a defect it did not create.
  *
  * The channel here is deliberately narrow, because a false positive costs a whole
  * task slot and mutates a running plan. Three independent conditions must ALL hold:
@@ -23,25 +14,22 @@
  *   1. TEXT — the FAIL reason (or the resolution research's rationale) carries an
  *      explicit blame cue ("pre-existing", "created by TASK_nnnn", "bug in", "this
  *      task did not modify") and a path token near it. Merely MENTIONING a path is
- *      not blame: a task FAIL lists `src/server/db.ts` inside the
- *      spec's own "Preserve all existing files on disk" quote, and must not spawn
- *      a repair task for it.
+ *      not blame: a FAIL that quotes the spec's own "Preserve all existing files
+ *      on disk" alongside a path must not spawn a repair task for that path.
  *   2. PROVENANCE — the blamed file was introduced by a DIFFERENT task's commit
  *      (task-provenance.ts). Unknown provenance is never evidence.
  *   3. AUTHORSHIP — the current task's own work does not touch the blamed file. If
  *      this task edited it, the defect may well be its own and the ordinary
  *      autofix/revert path is right.
  *
- * Environment-attributed failures are vetoed outright ('s a task: "no
- * PostgreSQL database server is available in this environment"). No file edit can
- * repair a missing daemon, so a repair task would be a guaranteed non-converging
- * yolo-FAIL.
+ * Environment-attributed failures are vetoed outright ("no PostgreSQL database
+ * server is available in this environment"). No file edit repairs a missing
+ * daemon, so a repair task there would be a guaranteed non-converging FAIL.
  *
- * Everything downstream is deduplicated by FILE: N debts naming one root file yield
- * exactly ONE repair task per run (would otherwise have spawned two for
- * `test/teardown.ts`). The repair task itself is just an ordinary plan entry — if it
- * fails, it lands in the ledger like any other task and is never re-spawned, which
- * is what keeps this from looping.
+ * Everything downstream is deduplicated by FILE: N debts naming one root file
+ * yield exactly ONE repair task per run. The repair task itself is just an
+ * ordinary plan entry — if it fails, it lands in the ledger like any other task
+ * and is never re-spawned, which is what keeps this from looping.
  */
 import {makeLedger} from './ledger.js'
 
@@ -59,8 +47,9 @@ const BLAME_CUE_RE =
 
 /**
  * Failures the environment causes, not a file. No edit to any file repairs a
- * missing database server, so these must never open the repair channel — a * a task ("no PostgreSQL database server is available in this environment (no
- * binary, no Docker, no listener on port 5432)") is the canonical shape.
+ * missing database server, so these must never open the repair channel. The
+ * canonical shape is "no PostgreSQL database server is available in this
+ * environment (no binary, no Docker, no listener on port 5432)".
  */
 const ENVIRONMENT_BLAME_RE =
     /no (?:postgres|postgresql|mysql|database|redis|docker|network|internet|display)\b|not (?:installed|available|running|present) (?:in|on|for) (?:this |the )?(?:env|environment|sandbox|container|machine|image|system)|(?:environment|env|sandbox|container) (?:gap|limitation|lacks|has no|does not (?:have|provide))|no (?:binary|listener|daemon|server) (?:on|for|available)|missing (?:binary|executable|system (?:tool|package)|runtime)|is not installed|command not found/i
@@ -337,10 +326,11 @@ export interface MergedRepair {
 }
 
 /**
- * Collapse candidates by file — MANDATORY dedup: two debts naming the same
- * teardown file must yield exactly ONE repair task naming both. First
- * record wins for defect/command (they describe the same fault); blamed tasks
- * accumulate in first-seen order.
+ * Collapse candidates by file — MANDATORY dedup: two debts naming the same file
+ * must yield exactly ONE repair task naming both blamed tasks. Keyed on the
+ * NORMALISED path, so `./x.ts` and `x.ts` are one entry. First record wins for
+ * defect and command (they describe the same fault); blamed tasks accumulate in
+ * first-seen order.
  */
 export function mergeRepairCandidates(candidates: RepairCandidate[]): MergedRepair[] {
     const byFile = new Map<string, MergedRepair>()
@@ -400,11 +390,10 @@ export function planHasRepairFor(titles: string[], file: string): boolean {
 }
 
 /**
- * The extra scope fence a repair entry carries into refine. Without it, refine
- * re-expands "repair test/teardown.ts: parameterized table names in TRUNCATE"
- * into "overhaul the test infrastructure" — the /task-auto drift lesson. The
- * fence pins the single editable file and pins the VERIFY to the exact command
- * the debt failed on.
+ * The extra scope fence a repair entry carries into refine. A repair title names
+ * one file and one narrow defect, which refine will otherwise re-expand into
+ * "overhaul the test infrastructure". The fence pins the single editable file and
+ * pins the VERIFY to the exact command the debt failed on.
  */
 export function buildRepairScopeFence(file: string, verifyCommand?: string): string {
     return [
