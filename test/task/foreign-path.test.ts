@@ -38,8 +38,10 @@ const scan = (file: string, ...texts: string[]) =>
     )
 
 describe('findForeignPaths — the real mx5 run-13 true positive', () => {
-    // Verbatim from a real `playwright-ct.config.ts`, the leak that made
-    // `bun run test:ct` collect 63 tests and a (ENOENT at build time).
+    // A sandbox path baked into a `playwright-ct.config.ts`. The suite still
+    // COLLECTS — the config parses fine — and then fails at build time with an
+    // ENOENT on a directory that exists only in the sandbox. Nothing before this
+    // check looks at config files, so the leak ships.
     const CONFIG_LINES = [
         "          '../../shared': '/workspace/src/shared',",
         "          '../api': '/workspace/src/client/api',"
@@ -168,13 +170,13 @@ describe('findForeignPaths — false-positive guards', () => {
         expect(scan('package-lock.json', line)).toHaveLength(0)
     })
 
-    // The three classes the real-repo FP suite caught before wiring
-    //. Each is pinned here so a future pattern
-    // change cannot silently reintroduce it.
+    // Three false-positive classes a naive pattern hits. Each is pinned here so
+    // a future change to the matcher cannot silently reintroduce one — a check
+    // that cries wolf on ordinary source gets turned off.
     test('tool caches and reports are out of scope (FP suite catch #1)', () => {
-        // committed .playwright-cache/metainfo.json records the sandbox path
-        // of all 38 modules the CT runner compiled — a faithful log of a past
-        // build, not an authored decision.
+        // A committed .playwright-cache/metainfo.json records the sandbox path of
+        // every module the CT runner compiled. That is a faithful LOG of a past
+        // build, not an authored decision, so flagging it helps nobody.
         const line = '"filename": "/workspace/src/client/pages/Admin.tsx",'
         expect(scan('.playwright-cache/metainfo.json', line)).toHaveLength(0)
         expect(scan('test-results/out.json', line)).toHaveLength(0)
@@ -226,9 +228,10 @@ describe('findForeignPaths — false-positive guards', () => {
     })
 
     test('test files carry synthetic absolute paths as fixtures (catch #3)', () => {
-        // pi-task's single-read-guard.test.ts asserts on the literal string
-        // '/workspace/package.json'. Excluding tests is the safe direction: a leak
-        // that breaks a build lives in source or config.
+        // test/workers/single-read-guard.test.ts asserts on the literal string
+        // '/workspace/package.json' — a test that NEEDS a foreign-looking path.
+        // Excluding tests is the safe direction: a leak that breaks a build lives
+        // in source or config, not in an assertion.
         const line = "const msg = check('/workspace/src/shared')"
         expect(scan('src/workers/guard.test.ts', line)).toHaveLength(0)
         expect(scan('src/client/pages/Admin.spec.tsx', line)).toHaveLength(0)
