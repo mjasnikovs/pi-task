@@ -1,7 +1,10 @@
 import {describe, expect, test} from 'bun:test'
 import {findFrozenPathConflicts, frozenConflictProbeText} from '../../src/task/frozen-conflict.js'
 
-/** A real freeze-and-prose-surrender pair, verbatim shape. */
+/** The conflict in one spec: a CONSTRAINT freezes `tsconfig.json`, and a second
+ *  constraint then SURRENDERS in prose — accepting that the deliverable will not
+ *  typecheck because that file cannot be touched. Both sentences are reasonable
+ *  alone; together the task cannot be completed as written. */
 const MX5_SPEC = [
     'GOAL',
     'Create the Playwright component-testing scaffold: `playwright-ct.config.ts` at project',
@@ -88,9 +91,9 @@ describe('findFrozenPathConflicts', () => {
     })
 
     test('sentence scoping: a giant one-line GOAL with "must include" (response shape) three paths from the frozen one never fires', () => {
-        // The real one task false-positive shape: one enormous GOAL line where
-        // "must include `field`" (a response contract) coexists with frozen paths in
-        // OTHER sentences of the same line.
+        // The false-positive shape: one enormous line where a response contract
+        // ("must include `field`") sits in the same LINE as a frozen path named in
+        // a different sentence. A line-granular matcher reads them as one claim.
         const spec = [
             '  - Do NOT modify `src/server/index.ts` — the listings route module is already wired.',
             'The module must expose six Hono endpoints mounted under `/api/listings` (as already wired in `src/server/index.ts`). The `GET /api/listings/:id` response must include `seller_display_name` and `photo_ids` per `listingDetailResponseSchema`. All mutations must set `updated_at = now()`.'
@@ -133,7 +136,8 @@ describe('frozenConflictProbeText', () => {
         expect(text).toContain('`tsconfig.json`')
         expect(text).toContain('SCOPED OWNERSHIP')
         expect(text).toContain('DROP the creation')
-        // The live failure mode — prose surrender — must be named a non-resolution.
+        // Prose surrender must be named a NON-resolution: accepting the
+        // contradiction in words does not make the task completable.
         expect(text).toContain('NOT a resolution')
     })
 })
