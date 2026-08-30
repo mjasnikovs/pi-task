@@ -1,30 +1,25 @@
 /**
- * docs-chunk — cutting source text into retrievable chunks, for every corpus the
- * docs Worker tool indexes.
+ * docs-chunk — cutting source text into retrievable chunks, for both corpora the
+ * docs Worker tool indexes: an npm package's `.d.ts` + README (docs-index.ts),
+ * and the local project's own `.ts`/`.tsx` (docs-project.ts).
  *
- * There are two corpora — an npm package's `.d.ts` + README, and the local
- * project's own `.ts`/`.tsx` — and they were chunked by two copies of this code.
- * Not similar code: the same chunk-split regex, the same size cap, byte-identical
- * `chunkDts`/`chunkTs` bodies, and byte-identical `splitAtMatches`/`sliceBytes`,
- * in `docs-index.ts` and `docs-project.ts`. One copy had tests; the other
- * (`docs-project.ts`, 319 lines) had no test file at all and was only ever
- * reached incidentally through the worker's own suite.
+ * The chunk boundary is load-bearing for retrieval: a chunk that splits a
+ * declaration in half matches on neither half's terms, so one boundary rule for
+ * both corpora is the point of this module.
  *
- * The chunk boundary is load-bearing for retrieval quality — a chunk that splits
- * a declaration in half retrieves as neither — so having it in two places was two
- * places for it to drift.
- *
- * What is NOT unified: the two INDEX bodies. They key on genuinely different
- * provenance (a package is name+version with a content hash and keeps its old
- * versions; the project is a cwd key with a max-mtime version and drops its old
- * ones on every re-index), and collapsing them would change one of those
- * behaviours rather than describe them.
+ * What is NOT shared: the two INDEX bodies. They key on genuinely different
+ * provenance. A package is `(name, version)` with a content hash, and re-indexing
+ * runs `DELETE FROM chunks WHERE name = ? AND version = ?`, so older versions
+ * survive. The project is a cwd-hash name with a max-mtime version, and
+ * re-indexing runs `DELETE FROM chunks WHERE name = ?`, dropping every older
+ * version. Collapsing them would change one of those behaviours, not describe it.
  */
 
 /**
- * Chunk ceiling. Chosen against the retrieval budget: chunks are assembled into
- * a fixed character budget for the extraction child, so a chunk larger than this
- * would crowd out every other result.
+ * Chunk ceiling, in UTF-8 bytes. Sized against the retrieval budget: retrieved
+ * chunks are assembled into `RETRIEVE_CONTENT_BUDGET` (24,000 characters) before
+ * going to the extraction child, so this caps any one chunk at about a third of
+ * what the child will ever see.
  */
 export const MAX_CHUNK_BYTES = 8 * 1024
 
@@ -51,8 +46,10 @@ export function splitAtMatches(text: string, re: RegExp): string[] {
     while ((m = re.exec(text))) {
         if (m.index > lastIndex) parts.push(text.slice(lastIndex, m.index))
         lastIndex = m.index
-        // Advance by ONE, not by the match length: the next declaration can begin
-        // inside what this match consumed (`export default async function`).
+        // Advance by ONE, not by the match length. The regex's trailing `\s+` can
+        // span a newline, so the next line-anchored declaration may start INSIDE
+        // what this match consumed: `export\nfunction a(){}` is two chunks here
+        // and one if the scan resumes past the match.
         re.lastIndex = m.index + 1
     }
     if (lastIndex < text.length) parts.push(text.slice(lastIndex))
@@ -63,19 +60,17 @@ export function splitAtMatches(text: string, re: RegExp): string[] {
  * Cut a string into pieces of at most `maxBytes` UTF-8 bytes, never splitting a
  * character.
  *
- * The cut point is walked BACK to a UTF-8 lead byte first. Both copies of this
- * function must not cut at exactly `maxBytes` and rely on
- * `Buffer.toString('utf8')` to tidy up, which it does not: decoding a buffer that
- * ends mid-character yields a U+FFFD replacement character. That replacement is
- * 3 bytes wide, so measuring the advance by the decoded slice's byte length then
- * skipped PAST the straddling character. A `€`-dense chunk came out as
- * `€€€�€€€�…` — corrupted, and one character shorter per slice.
+ * The cut point is walked BACK to a UTF-8 lead byte first. Cutting at exactly
+ * `maxBytes` and letting `Buffer.toString('utf8')` tidy up does not work: decoding
+ * a buffer that ends mid-character yields U+FFFD. That replacement is 3 bytes
+ * wide, so the decoded slice measures LONGER than the cut — a 100-byte cut of
+ * `€`-dense text decodes to 102 bytes — and advancing by the decoded length then
+ * skips past the straddling character entirely.
  *
  * It matters beyond looking wrong: a chunk is quoted back as an `<excerpt>` and
- * checked verbatim against the source, and an excerpt carrying a replacement
- * character can never be found, so the answer is flagged as a possible
- * hallucination. Only reachable on non-ASCII text past the 8 KB chunk ceiling,
- * which is why two copies of it survived untested.
+ * checked verbatim against the source (`excerptVerified`), and an excerpt carrying
+ * a replacement character can never be found, so the answer is flagged as a
+ * possible hallucination. Only reachable on non-ASCII text past the chunk ceiling.
  */
 export function sliceBytes(s: string, maxBytes: number): string[] {
     const out: string[] = []
@@ -85,8 +80,9 @@ export function sliceBytes(s: string, maxBytes: number): string[] {
         // to cut before is one, so the cut lands on a character boundary.
         let end = maxBytes
         while (end > 0 && (buf[end] & 0xc0) === 0x80) end--
-        // A single character wider than the whole cap cannot be placed. Cut
-        // anyway rather than loop forever; unreachable for any cap >= 4.
+        // A single character wider than the whole cap cannot be placed. Cut anyway
+        // rather than loop forever — this is the one path that DOES emit U+FFFD.
+        // Unreachable for any cap >= 4: the widest UTF-8 character is 4 bytes.
         if (end === 0) end = maxBytes
         out.push(buf.subarray(0, end).toString('utf8'))
         buf = buf.subarray(end)
@@ -99,11 +95,11 @@ export function sliceBytes(s: string, maxBytes: number): string[] {
  * Chunk a declaration file (`.d.ts`, `.ts`, `.tsx`), one chunk per declaration,
  * each labelled with the file it came from.
  *
- * `relPath` is a MODEL-FACING label and is used exactly as given — the npm path
- * normalises it to POSIX first so an index is identical across platforms, while
- * the project path keeps the native separator. It is never re-joined to the
- * filesystem, so neither choice is wrong; passing it through keeps that decision
- * with the caller that has a reason for it.
+ * `relPath` is a MODEL-FACING label and is used exactly as given. docs-index.ts
+ * normalises it to POSIX (`.replace(/\\/g, '/')`) so a package index is identical
+ * across platforms; docs-project.ts passes `path.relative` through with the native
+ * separator. It is never re-joined to the filesystem, so neither is wrong — this
+ * leaves the choice with the caller that has a reason for it.
  */
 export function chunkDeclarations(content: string, relPath: string): string[] {
     const chunks: string[] = []
