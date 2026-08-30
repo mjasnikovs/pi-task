@@ -137,31 +137,39 @@ export function registerPiWorkerFetch(
             return new Text(text, 0, 0)
         },
 
-        // Cache fetch answers per run (the same page re-fetched across sibling tasks
-        // otherwise). The URL is kept verbatim (path case can matter); the query is
-        // normalised. Both parts key the entry — same page, different question is a
+        // Cache fetch answers per run, or the same page is re-fetched by every sibling
+        // task. Both parts key the entry: the URL trimmed but otherwise VERBATIM, since
+        // path case can matter, and the query lowercased with its whitespace collapsed
+        // so phrasing variants share an entry. Same page, different question is a
         // different answer.
         cacheKey: fetchCacheKey,
-        // Only a completed fetch (child exited 0) is a real answer; invalid-URL,
-        // fetch failures, and aborts omit childExitCode:0 and fall through.
-        // F-2(e), on the fetch channel. A child that ran fine and answered
-        // "unclear from this page" exits 0, so caching on process health alone
-        // memoised the NON-ANSWER and re-served it to every later sibling task —
-        // the same dead-end-paid-many-times shape pi-worker-docs already closed
-        // for packages, with escalation unable to re-fire because the miss never
-        // recurred. One predicate now covers every corpus (workers/abstention.ts).
+        // Only a completed fetch is a real answer; invalid-URL, fetch failures and
+        // aborts come back as `unavailable`, which makeWorkerTool refuses before the
+        // cache is consulted at all.
+        //
+        // Process health is NOT answer quality. A child that ran fine and answered
+        // "unclear from this page" exits 0, so caching on health alone memoises the
+        // NON-ANSWER and re-serves it to every later sibling task — one dead end paid
+        // for many times, with escalation unable to re-fire because the miss never
+        // recurs. One predicate covers every corpus (workers/abstention.ts).
         cacheable: fetchCacheable
     })
 }
 
 /**
- * The F-2(e) cache rule for the fetch channel, named for the same reason as
- * `docsCacheable`: pi-worker-fetch.test.ts carried a hand-retyped copy driving four
- * tests, which a change to the shipped rule would leave green.
+ * The cache rule for the fetch channel, named for the same reason as `docsCacheable`:
+ * left anonymous inside the adapter literal, a test can only hand-retype it, and then
+ * asserts against a copy a change to the shipped rule would leave green.
+ *
+ * A coverage MISS is cacheable. "not covered by this page" is a real, correct answer
+ * ABOUT that page, and re-fetching cannot change it — only the abstention sentinel is
+ * refused.
  */
 export function fetchCacheable(_d: Pick<FetchDetails, never>, text: string): boolean {
-    // Answer QUALITY only — see docsCacheable. `childExitCode === 0` leading this
-    // rule is true of an aborted child, so `"Fetch aborted."` would be cached.
+    // Answer QUALITY only — see docsCacheable. This predicate returns true for
+    // `"Fetch aborted."` on its own; what keeps an aborted fetch out of the cache is
+    // the `unavailable` outcome upstream. Leading the rule with `childExitCode === 0`
+    // would not, because an aborted child settles at exit code 0.
     return !isAbstention(text)
 }
 
