@@ -50,7 +50,7 @@ describe('impl-widget controller', () => {
         expect(last[0]).toBe('TASK_0007 · Add dark mode')
         expect(last[1]).toContain('implementing · ')
         expect(last[1]).toContain('48k/200k')
-        // Mirrored to the remote task slot too.
+        // render() also calls setTaskWidget, so the remote slot carries it too.
         expect(getState().taskWidget).not.toBeNull()
     })
 
@@ -59,13 +59,14 @@ describe('impl-widget controller', () => {
         const {ctx, widgets} = fakeCtx({tokens: 1, contextWindow: 200_000, percent: 0})
 
         armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: true})
-        handlers.get('agent_start')!({}, ctx) // immediate render: no trailer yet
+        handlers.get('agent_start')!({}, ctx) // startTimer renders once immediately
         expect(widgets.at(-1)).toHaveLength(2)
         handlers.get('tool_execution_start')!(
             {toolName: 'read', args: {path: 'src/index.ts'}, toolCallId: 'x'},
             ctx
         )
-        // The trailer lands on the periodic refresh, not on the tool event itself.
+        // tool_execution_start only assigns lastLine; the setInterval render is what
+        // paints it, so the trailer cannot appear before one refresh has elapsed.
         await new Promise(r => setTimeout(r, WIDGET_REFRESH_MS + 50))
         expect(widgets.at(-1)).toContain('↳ read src/index.ts')
     })
@@ -77,7 +78,7 @@ describe('impl-widget controller', () => {
         armImplWidget({taskId: 'TASK_0007', title: 'demo'}, {oneShot: true})
         handlers.get('agent_start')!({}, ctx)
         handlers.get('agent_end')!({}, ctx)
-        expect(widgets.at(-1)).toBeUndefined() // cleared
+        expect(widgets.at(-1)).toBeUndefined()
 
         // A later, unrelated turn must NOT bring the impl widget back.
         widgets.length = 0
@@ -94,7 +95,7 @@ describe('impl-widget controller', () => {
         handlers.get('agent_end')!({}, ctx)
         expect(widgets.at(-1)).toBeUndefined()
 
-        // Compaction-resume / steer turn: still armed, so it renders again.
+        // agent_end left the slot armed, so a second agent_start renders again.
         widgets.length = 0
         handlers.get('agent_start')!({}, ctx)
         expect(widgets.at(-1)).toBeDefined()
