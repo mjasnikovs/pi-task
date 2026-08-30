@@ -7,7 +7,6 @@ import {
 } from '../../src/task/user-directives.js'
 
 describe('extractUserDirectives — web search', () => {
-    // The exact raw prompt that refine silently stripped.
     const MX5_RAW =
         'Research Playwright best practices via web search — focus on E2E testing patterns for Next.js apps with auth sessions'
 
@@ -70,7 +69,6 @@ describe('directiveSurvives / enforceDirectives (the backstop lever)', () => {
     })
 
     test('a refined spec that DROPPED the directive gets it appended verbatim', () => {
-        // The real refined text: no web-search mention anywhere.
         const refined =
             'GOAL\n  Produce a concise research summary from the local files.\nCONSTRAINTS\n  - research-only\n'
         expect(directiveSurvives(refined, directive)).toBe(false)
@@ -78,7 +76,7 @@ describe('directiveSurvives / enforceDirectives (the backstop lever)', () => {
         expect(appended).toHaveLength(1)
         expect(text).toContain('USER TOOL DIRECTIVES')
         expect(text).toMatch(/pi-worker-search/i)
-        // And the appended text now itself survives the check (idempotent).
+        // The appended text itself survives the check, so enforcing twice appends once.
         expect(directiveSurvives(text, directive)).toBe(true)
         const second = enforceDirectives(text, [directive])
         expect(second.appended).toEqual([])
