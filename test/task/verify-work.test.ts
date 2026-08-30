@@ -70,14 +70,12 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('rule 3d forbids the verifier itself substituting a copy for the artifact', () => {
-        // Regression guard for the class: the VERIFY CHILD (not the work)
-        // wrote final_verify.ts into the worktree, re-implemented the photos handler
-        // "EXACTLY as in photos.ts", served the copy on a scratch port, and passed a
-        // route the shipped app could not even serve (no Bun.serve existed). Rule 3b
-        // only bound tests shipped BY THE WORK; 3d must bind the verifier too, keep
-        // its scratch out of the repo (the file leaked into the next checkpoint
-        // commit), and make "the real artifact cannot be exercised" a FAIL, not a
-        // license to substitute.
+        // The class: the VERIFY CHILD, not the work, stands up its own copy — writes
+        // a file into the worktree, re-implements the handler, serves it on a scratch
+        // port — and passes a route the shipped app cannot serve. Rule 3b binds only
+        // tests shipped BY THE WORK, so 3d must bind the verifier too, keep its
+        // scratch out of the worktree, and make "the real artifact cannot be
+        // exercised" a FAIL rather than a licence to substitute.
         const p = buildVerifyPrompt('GOAL\nx')
         expect(p).toContain('3d. SELF-SUBSTITUTION')
         expect(p).toContain('bind YOU')
@@ -89,10 +87,10 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('anchors verification to the project as-shipped, run unaided', () => {
-        // Regression guard for the validated work-around-to-pass class: the child has
-        // `bash` and can make almost anything go green by preparing the run (export an
-        // env var, source a file, run a different command, rebuild in a scratch dir).
-        // The prompt must forbid that and treat any such intervention as the defect.
+        // The work-around-to-pass class: the child has `bash`, so it can make almost
+        // anything go green by preparing the run — export an env var, source a file,
+        // run a different command, rebuild in a scratch dir. The prompt must forbid
+        // that and treat the intervention itself as the defect.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         // run the project's OWN command, unaided / as shipped
         expect(p).toContain("project's own")
@@ -112,12 +110,11 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids grep-theater: static-only checks are not a PASS when execution was possible', () => {
-        // Regression guard for the grep-theater class: a schema.sql with INVALID
-        // SQL was "verified" by grepping for its own (broken) text while a live
-        // Postgres sat reachable in the same container. The prompt must (a) say a
-        // grep-only VERIFY block does not cap the obligation to execute/apply the
-        // artifact, and (b) require PROBING a declared external service before
-        // invoking the absent-service exception — reachable ⇒ must run against it.
+        // The grep-theater class: an artifact with broken contents is "verified" by
+        // grepping for its own broken text, while the service that would have run it
+        // sits reachable. The prompt must (a) say a grep-only VERIFY block does not
+        // cap the obligation to execute or apply the artifact, and (b) require PROBING
+        // a declared external service before the absent-service exception applies.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         // the VERIFY block does not cap the obligation
         expect(p).toMatch(/verify block does not cap/)
@@ -130,9 +127,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids test-the-copy: substitution rule always present (A/B: rule + probe = 5/5)', () => {
-        // Regression guard for the test-the-copy class: "integration tests"
-        // re-implemented every protected route inline (own Bun.serve / fake Hono),
-        // ran wholly green, and a prompt without this rule false-PASSes it.
+        // The test-the-copy class: an "integration test" re-implements inline every
+        // route it claims to cover — its own server, its own app — and runs wholly
+        // green. A prompt without this rule reads that as a PASS.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('substitution')
         expect(p).toMatch(/proves only the copy/)
@@ -159,9 +156,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids violation excusal: a violated spec prohibition is a FAIL, no waiver authority', () => {
-        // Regression guard for the class (F5): the child saw "Do NOT modify
-        // server-side code" violated, waived it as "additive, tests pass with it", and
-        // PASSed. The verdict on a violated prohibition is not the verifier's to relax.
+        // The class: the child sees a spec prohibition visibly violated, waives it as
+        // "additive, tests pass with it", and PASSes. The verdict on a violated
+        // prohibition is not the verifier's to relax.
         const p = buildVerifyPrompt('GOAL\nx')
         expect(p).toContain('NO WAIVER AUTHORITY')
         expect(p).toMatch(/additive, small, harmless/)
@@ -312,10 +309,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('forbids test-authored repair: a suite that patches the product is not verification', () => {
-        // Regression guard for the class, checked live against a silent fixture —
-        // a suite green ONLY because its setup ALTERs the schema and seeds around a
-        // broken seed script. The shipped prompt false-PASSes it, the prompt with this rule
-        // never does, and names the exact gap; the honest fixture PASSes in both arms.
+        // The class: a suite is green ONLY because its own setup repairs the product
+        // — ALTERing the schema, seeding around a broken seed script. The prompt has
+        // to send the child into the suite's setup and make it name that gap.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('test-authored repair')
         expect(p).toMatch(/read its setup\/bootstrap/)
@@ -326,8 +322,8 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('external service STATE is as-shipped: schema surgery is forbidden', () => {
-        // Regression guard for the observed DB-repair loophole: children (and the
-        // live impl turn) ALTER TABLEd the shared test DB to make broken work pass.
+        // The DB-repair loophole: a child ALTER TABLEs the shared test database so
+        // broken work passes against it.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('alter table')
         expect(p).toMatch(/schema surgery[\s\S]*?is the\s*\n?\s*defect/)
@@ -335,10 +331,9 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('negative control: a success that cannot fail on wrong input is void evidence', () => {
-        // Regression guard: a catch-all fallback answered
-        // ANY method on ANY path with 200 + HTML, so the broken upload endpoint
-        // "succeeded" and the verify curl could not fail — the child false-PASSed.
-        // The rule must require a deliberately-wrong control and treat same-success on
+        // The class: a catch-all fallback answers ANY method on ANY path with 200, so
+        // a broken endpoint "succeeds" and the verifying command cannot fail. The rule
+        // must require a deliberately-wrong control and treat the same success on
         // garbage as UNVERIFIED, stack-agnostically (HTTP / CLI / library / schema).
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('negative control is mandatory')
@@ -362,12 +357,12 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('rule 5c: a spec-required check that self-skips or lacks tooling is UNOBSERVED, not PASS', () => {
-        // Regression guard: the only behavioral checks ever
-        // authored (browser smokes) were wrapped in `|| echo skipping`; the tool was
-        // absent, the checks silently skipped, and the verify child called it "correctly
-        // skipped" → PASS. The rule must (a) draw the line from rule 5's external-service
-        // env-gap, (b) name the skip-escape shapes, (c) route it to a distinct UNOBSERVED
-        // verdict, and (d) keep rule 6's "nothing to verify" case separate.
+        // The class: the spec's behavioural checks are wrapped in `|| echo skipping`,
+        // the tool is absent, the checks silently skip, and the verify child reads that
+        // as "correctly skipped" → PASS. The rule must (a) draw the line from rule 5's
+        // external-service env-gap, (b) name the skip-escape shapes, (c) route it to a
+        // distinct UNOBSERVED verdict, and (d) keep rule 6's "nothing to verify" case
+        // separate.
         const p = buildVerifyPrompt('GOAL\nx')
         expect(p).toContain('5c. A SPEC-REQUIRED CHECK THAT DID NOT ACTUALLY RUN IS NOT VERIFIED')
         expect(p).toMatch(
@@ -381,9 +376,8 @@ describe('buildVerifyPrompt', () => {
         expect(p).toMatch(/"nothing to verify" means the spec never demanded/)
         // the third verdict token is offered in the output contract
         expect(p).toContain('WORK-VERIFIED: UNOBSERVED')
-        // the crisp discriminator that keeps rule 5 (absent runtime SERVICE = env-gap)
-        // apart from rule 5c (absent observation HARNESS = UNOBSERVED) — the local model
-        // over-fired on external-service gaps until this either/or was made explicit.
+        // the discriminator that keeps rule 5 (absent runtime SERVICE = env-gap) apart
+        // from rule 5c (absent observation HARNESS = UNOBSERVED)
         expect(p).toContain('DISCRIMINATOR (rule 5 vs rule 5c)')
         expect(p).toMatch(/SERVICE the FINISHED PRODUCT itself[\s\S]*?connects to at runtime/)
         expect(p).toMatch(/HARNESS that[\s\S]*?exists only to OBSERVE or DRIVE the product/)
@@ -393,8 +387,8 @@ describe('buildVerifyPrompt', () => {
     })
 
     test('verdict discipline: an unmet acceptance criterion is a FAIL, not a warning', () => {
-        // Regression guard for verdict leniency: a live child enumerated two real
-        // acceptance violations as warnings and PASSed anyway.
+        // Verdict leniency: a child enumerates real acceptance violations as warnings
+        // and PASSes anyway.
         const p = buildVerifyPrompt('GOAL\nx').toLowerCase()
         expect(p).toContain('verdict discipline')
         expect(p).toMatch(/follow mechanically from your findings/)
@@ -416,7 +410,7 @@ describe('buildVerifyPrompt — the probe table preserves the measured layout', 
         })
         expect(positions.every(i => i > 0)).toBe(true)
         expect([...positions].sort((a, b) => a - b)).toEqual(positions)
-        // The band sits between rule 4 and rule 5, where it was hand-written.
+        // The band sits between rule 4 and rule 5.
         expect(p.indexOf('\n4. Treat the ACCEPTANCE')).toBeLessThan(positions[0])
         expect(p.indexOf('\n5. The ONLY thing')).toBeGreaterThan(positions[5])
     })
@@ -788,9 +782,9 @@ describe('runWorkVerification', () => {
     })
 
     test('no-verdict child → verify retried once, second verdict wins', async () => {
-        // A verdict-less child never judged the work (budget death mid-investigation,
-        // seen live) — re-running the IMPLEMENTATION on an unjudged artifact wasted a
-        // full impl turn. The retry stays inside the verify gate.
+        // A verdict-less child never judged the work at all, so re-running the
+        // IMPLEMENTATION would spend a whole turn over an artifact nobody judged. The
+        // retry stays inside the verify gate.
         let runs = 0
         const out = await runWorkVerification({
             cwd: '/x',
@@ -856,9 +850,9 @@ describe('runWorkVerification', () => {
     })
 
     test('mutated run → verdict discarded (even a PASS), retried once on the restored tree', async () => {
-        // The shape: the child stashed the work away and judged the wrong
-        // tree. The git-state guard restored the state; the first verdict must be
-        // discarded regardless of its direction and the verify re-run.
+        // The child stashed the work away and judged the wrong tree. The git-state
+        // guard restores it, and the first verdict is discarded whichever way it went,
+        // then verify re-runs.
         let runs = 0
         const out = await runWorkVerification({
             cwd: '/x',
@@ -1037,17 +1031,15 @@ describe('runWorkVerification', () => {
 
 // ─── The failure CLASS, as data ─────────────────────────────────────────────
 //
-// `unobserved` was always a typed field. Its siblings travelled as the PREFIX of
-// `reason`, recovered at three production sites by re-typing the literal with two
-// different matchers — so a reword of the mint disabled the graduated lint-fix
-// path AND the only auto-closing debt class, with no compile error.
+// `unobserved` is a typed field. Its siblings travel as the PREFIX of `reason`, so
+// a class is recovered by matching that literal. Reword the mint without rewording
+// the matcher and the routing stops silently — no compile error anywhere.
 
 describe('verify failure class', () => {
-    // The gap that let this registry ship ALREADY DRIFTED: the harness-fault
-    // prefix read `verify pass could not run:` while the only site minting that
-    // class emitted `verification pass could not run:`, so `failClassOfReason`
-    // returned undefined for it. Asserting the prefixes are non-empty did not
-    // catch that; asserting they round-trip does.
+    // Asserting the prefixes are non-empty proves nothing: a prefix can be
+    // well-formed and still not be the literal any site mints. Feeding every declared
+    // prefix back through failClassOfReason is what catches a mint and its matcher
+    // drifting apart.
     test('every declared prefix is recognised back as its own class', () => {
         for (const [cls, prefix] of Object.entries(VERIFY_FAIL_PREFIX)) {
             expect(failClassOfReason(`${prefix} something went wrong`)).toBe(cls as VerifyFailClass)
@@ -1111,9 +1103,9 @@ describe('verify failure class', () => {
         expect(verifyFailClass({})).toBeUndefined()
     })
 
-    // The run-level twin mints a DIFFERENT literal for the same concept, which is
-    // why `isStaticClassDebt` was structurally blind to every run-level static
-    // failure that reached the ledger.
+    // The run-level and task-level failures mint DIFFERENT literals for one concept,
+    // and `isStaticClassDebt` (accept-debt.ts) routes a debt by the class those
+    // literals resolve to — so both have to resolve to it.
     test('the run-level and task-level static failures are the same class', () => {
         expect(isStaticClass(failClassOfReason('repo health: `bun run lint` exited 1'))).toBe(true)
         expect(isStaticClass(failClassOfReason('static checks: `make lint` exited 2'))).toBe(true)
