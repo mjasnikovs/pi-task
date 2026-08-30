@@ -1,9 +1,9 @@
 /**
- * GateTally.verdict() — the final gate's verdict assembly, driven directly. No temp
- * dirs, no spawns: the sections' recordings are the premise here, and the point is
- * that PASS / FAIL / UNOBSERVED polarity, note ordering and debt attachment are
- * decidable without a tree. The behaviour oracle for the whole gate stays
- * final-gate.test.ts.
+ * GateTally, driven directly. Every recording a gate section would make is written
+ * by hand here, so no temp dir and no child process is needed: PASS / FAIL /
+ * UNOBSERVED polarity, note ordering, debt attachment, and silent()/blindness()
+ * are all decidable from the tally alone. The behaviour oracle for the whole gate
+ * stays final-gate.test.ts.
  */
 import {describe, expect, test} from 'bun:test'
 import {GateTally, unobservedVerdict} from '../../src/task/gate-tally.js'
