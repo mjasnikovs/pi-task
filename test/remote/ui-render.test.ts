@@ -2,8 +2,9 @@ import {describe, it, expect} from 'bun:test'
 import {renderModule} from '../../src/remote/ui-render.js'
 import {highlightModule} from '../../src/remote/ui-highlight.js'
 
-// renderMarkdown calls syntaxHighlight, so load both modules together and pull out
-// whichever function a test needs.
+// renderMarkdown calls syntaxHighlight, which lives in ui-highlight.ts, so both
+// module strings have to be evaluated together — as ui.ts concatenates them into
+// one <script>. Pull out whichever function a test needs.
 function load<T = (...a: unknown[]) => unknown>(name: string): T {
     const factory = new Function(
         renderModule() + '\n' + highlightModule() + '\n;return ' + name + ';'
@@ -14,10 +15,9 @@ const renderMarkdown = () => load<(t: string) => string>('renderMarkdown')
 const renderInline = () => load<(t: string) => string>('renderInline')
 const escHtml = () => load<(t: string) => string>('escHtml')
 
-// Unlike ui.test.ts (which only string-matches the template), these tests EXECUTE
-// the shipped client JS — the missing test class that let the dead-fence bug ship.
-// (The .code-block DOM assertion is covered by the chromium harness --dump-dom
-// grep against a rendered preview, which reports the live .code-block count.)
+// Unlike ui.test.ts, which string-matches the template, these tests EXECUTE the
+// shipped client JS. String-matching cannot tell a live branch from a dead one;
+// running it can.
 const BT = String.fromCharCode(96)
 const FENCE = BT + BT + BT
 
@@ -72,7 +72,8 @@ describe('parseBlocks (executed client code)', () => {
 
     it('is null-safe: empty/nullish input yields a single empty text block, never throws', () => {
         const parseBlocks = loadParseBlocks()
-        // An empty text block is harmless — setContent skips blocks with no content.
+        // An empty text block is harmless: renderMarkdown hands it to renderProse,
+        // which emits nothing, so renderMarkdown('') is the empty string.
         expect(parseBlocks('')).toEqual([{type: 'text', content: ''}])
         expect(parseBlocks(null as never)).toEqual([{type: 'text', content: ''}])
         expect(parseBlocks(undefined as never)).toEqual([{type: 'text', content: ''}])
