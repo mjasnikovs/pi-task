@@ -4,10 +4,10 @@
  * The grill phase generates one clarifying question per KNOWN-UNKNOWN and lets a
  * `grill-auto` child either auto-answer it (ANSWER → the user never sees it) or
  * surface it (UNKNOWN → asked). The dangerous class is an integration / build-
- * wiring unknown — "how is this plugin wired into the build", "should the import
- * structure in the HTML entry change" — which `grill-auto` happily auto-answers
- * with a GUESS that then ships as a silent landmine (a real run shipped an
- * unstyled build this way).
+ * wiring unknown — "how is this plugin wired into the build", "where does the
+ * loader hook in" — which `grill-auto` will happily auto-answer with a GUESS. A
+ * wrong guess there is structural: the build still runs, and ships something the
+ * wiring never actually connected.
  *
  * This classifier identifies that class so the orchestrator can route it: try to
  * resolve it from fetched docs first, and if nothing grounded the answer, surface
@@ -35,6 +35,12 @@ const WIRING_INTENT_RE =
  * surfaced to the user rather than auto-answered. Requires BOTH a tooling-surface
  * mention and wiring intent, so benign questions ("which log format?", "what
  * default page size?", "which file holds the auth handler?") do not trip it.
+ *
+ * Both factors are lexical, so the boundary is not exact in either direction. A
+ * bare `how is/are` counts as wiring intent, so "how is the plugin named?" trips
+ * it; and a wiring question phrased without one of the intent words — "should the
+ * import structure in the HTML entry change" — does not. Erring toward surfacing
+ * is the safe direction: the cost is one question the user waves through.
  */
 export function isIntegrationUnknown(question: string): boolean {
     if (!question) return false
