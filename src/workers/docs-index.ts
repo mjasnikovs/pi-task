@@ -100,9 +100,10 @@ function ingestBody(cache: CacheHandle, pkg: ResolvedPackage, contentHash: strin
         'INSERT INTO chunks (name, version, file_path, kind, content) VALUES (?, ?, ?, ?, ?)'
     )
     for (const abs of files.dts) {
-        // Store the file identifier POSIX-style so indexed docs are identical
-        // across platforms (this value is a model-facing label, never re-joined
-        // to the filesystem — node reads forward slashes fine on Windows too).
+        // Normalise the separator before storing, so the same package indexes to
+        // the same rows whatever built the path. The value is a MODEL-FACING
+        // label: chunkDeclarations turns it into the chunk's `// <path>` header,
+        // and nothing ever joins it back to the filesystem.
         const rel = path.relative(pkg.root, abs).replace(/\\/g, '/')
         let raw: string
         try {
