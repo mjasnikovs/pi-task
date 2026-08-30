@@ -1,27 +1,24 @@
 /**
  * repo-health-check — the deterministic, whole-repo half of the verify gate.
  *
- * The failure this closes: the verify gate ran only the
- * task's OWN composed VERIFY block, and that block is authored per-task by the local
- * model — so it is inconsistent. Some tasks lint the whole repo, some
- * ship a VERIFY of `tsc --noEmit` ONLY, with no lint at all. A/B on the live model,
- * On a real dirty tree a tsc-only task false-PASSes every time, while
- * `bun run lint` reported 11 errors. The model gate is only ever as good as the
+ * The failure this closes: the task's own composed VERIFY block is authored
+ * per-task by a model, so what it covers varies. One task lints the whole repo;
+ * the next ships a VERIFY of `tsc --noEmit` and no lint at all, and a lint-only
+ * regression then passes its gate. The model gate is only ever as good as the
  * VERIFY block it happened to be handed.
  *
  * This check does NOT depend on that block. It discovers the project's OWN
  * whole-repo static-analysis command (the one a fresh checkout / CI would run) and
  * lets its REAL exit code decide — no model, so there is no per-file narrowing and
- * no "those errors aren't in my files" gray area. A non-zero exit is a FAIL that the
- * caller turns into the existing verify-FAIL outcome (→ the AUTOFIX / ACCEPT /
- * dismiss picker; the user decides).
+ * no "those errors aren't in my files" gray area. A non-zero exit becomes the
+ * verify gate's `repo-health` FAIL (verify-work.ts), which reaches the
+ * AUTOFIX / ACCEPT picker in verify-resolution.ts.
  *
  * Scope is deliberately STATIC ANALYSIS ONLY (lint / typecheck / clippy / vet), never
  * `test`, `build`, `run`, or anything that boots a server or needs a database. Those
  * depend on external services the verify prompt already carves out as an environment
- * gap — running them here would re-introduce the false-FAIL that once wrongly blamed
- * code for a missing DB. Static analysis is hermetic: it needs no network, no service,
- * no fixtures, and it is exactly the class of the reported defect.
+ * gap, so running them here would blame code for a missing database. Static analysis
+ * is hermetic: it needs no network, no service and no fixtures.
  *
  * Absence is a PASS, two ways: (1) no recognised manifest at all (a pure-docs or
  * config-only repo has nothing that can regress); (2) a manifest with no static-check
@@ -44,11 +41,10 @@ export interface HealthOutcome {
     ecosystem: string | null
     /**
      * First lines of the failing command's combined stderr+stdout — captured so a
-     * FAIL is explainable from artifacts alone. Enforce passes get discarded on
-     * "`bun run lint` exited 2" and the cause is unreproducible after the run when
-     * only the exit code was recorded (exit 2 is the linter's
-     * CRASH class; findings exit 1 — the captured output is what tells them apart).
-     * Empty string on pass / skip.
+     * FAIL is explainable from artifacts alone. The exit code alone does not say
+     * what happened: eslint exits 1 for findings and 2 when it could not run at
+     * all (a missing config, say), so "`bun run lint` exited 2" is unreproducible
+     * after the fact unless the output was kept. Empty string on pass / skip.
      */
     output: string
 }
@@ -151,17 +147,14 @@ export type HealthProgress = (command: string) => void
  *    treated as an environment gap, not a fault.
  *  - A command that ran and exited non-zero → the first such failure is returned.
  *
- * This module owns DISCOVERY and its own output policy; running a command and
- * deciding what its ending MEANS is `command-run.ts`'s. Owning those too, it would —
- * `HealthRun`, `classifyHealthRun` and `spawnHealthCommand` were a second statement
- * of the gap ladder, with no injectable runner, so every classification case in the
- * suite spawned a real shell. `command-run.ts`'s own header notes that this module
- * "had solved exactly this shape years earlier" and the gate never adopted it; this
- * is the adoption, in the other direction.
+ * This module owns DISCOVERY and its own output policy. Running a command and
+ * deciding what its ending MEANS is `command-run.ts`'s — one statement of the
+ * env-gap ladder, with an injectable runner, so a classification case needs no
+ * real shell.
  *
  * `captureHealthOutput` stays this module's own: 40 lines of a linter's report is a
- * real difference from `outputTail`'s 400 characters, and that is a parameter, not a
- * thing to unify.
+ * real difference from `outputTail`'s 400-character default, and that is a
+ * parameter, not a thing to unify.
  *
  * `onCommand` lets the caller name the running command in a live status line — the
  * gate runs this immediately after the implementation turn ends, when the impl
