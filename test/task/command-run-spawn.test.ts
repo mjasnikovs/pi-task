@@ -1,15 +1,18 @@
 /**
- * REGRESSION — what `spawnCommand` must guarantee now that it is the ONLY bound
- * on every gate command, repo-health command and ACCEPT-debt VERIFY re-run.
+ * What `spawnCommand` must guarantee, given it is the ONLY bound on every gate
+ * command, repo-health command and ACCEPT-debt VERIFY re-run.
  *
- * These four cases were all covered, silently, by the `spawnSync` this replaced:
- * `spawnSync` closed the child's stdin, bounded its output at a 1 MB `maxBuffer`,
- * and returned at its own `timeout` regardless of who else held the pipe. The
- * async runner kept none of those and its tests are all pure classification
- * literals, so nothing in the suite spawns a real child any more.
+ * `spawnSync` supplied three of these for free, and an async runner has to
+ * re-earn each one. Run here to confirm:
+ *   - it hands the child a CLOSED stdin — a child reading fd 0 gets 0 bytes;
+ *   - it bounds output at a ~1 MB default `maxBuffer` — 2 MB of stdout comes
+ *     back truncated with ENOBUFS;
+ *   - and it returns at its own `timeout` no matter who else holds the pipe.
  *
- * Every case races the run against a deadline of its own: a runner that never
- * settles must FAIL the test, not hang the suite.
+ * These cases spawn REAL children, because a runner asserted only against
+ * classification literals never exercises any of that. Every one races the run
+ * against a deadline of its own: a runner that does not settle must FAIL the
+ * test, not hang the suite.
  */
 import {describe, expect, test} from 'bun:test'
 import {classifyCommandRun, outputTail, spawnCommand} from '../../src/task/command-run.js'
@@ -52,9 +55,10 @@ describe.skipIf(!posix)('spawnCommand settles on the CHILD, not on the pipe', ()
     })
 
     test('the deadline settles the run even when the pipe outlives the killed child', async () => {
-        // SIGKILL reaches the direct child only. The inherited pipe stays open, so
-        // a runner that waits for `close` never reports the timeout it just fired —
-        // the 900s gate cap becomes no cap at all.
+        // SIGKILL reaches the direct child only. The inherited pipe stays open,
+        // so a runner that waits for `close` never reports the timeout it just
+        // fired, and the gate's own cap (900_000ms, final-gate.ts:646) becomes
+        // no cap at all.
         const r = await within(
             2500,
             spawnCommand({
@@ -85,10 +89,11 @@ describe.skipIf(!posix)('spawnCommand settles on the CHILD, not on the pipe', ()
 
 describe.skipIf(!posix)("the child's stdin is closed, not left live", () => {
     test('a command that reads stdin gets EOF immediately', async () => {
-        // `spawnSync` gave the child a closed stdin. `spawn` with the default stdio
-        // gives it a live pipe nobody ever ends, so any check that reads stdin — a
-        // `cat`-style pipeline, a tool that prompts, a pager — now blocks until the
-        // kill timer: 600s for repo-health, 900s for a gate command.
+        // `spawnSync` gives the child a closed stdin; `spawn` with the default
+        // stdio gives it a live pipe nobody ever ends. So any check that reads
+        // stdin — a `cat`-style pipeline, a tool that prompts, a pager — blocks
+        // until the kill timer, which is 600_000ms for repo-health
+        // (repo-health-check.ts:186) and 900_000ms for a gate command.
         const r = await within(
             2000,
             spawnCommand({
@@ -105,9 +110,10 @@ describe.skipIf(!posix)("the child's stdin is closed, not left live", () => {
 
 describe.skipIf(!posix)('output is bounded', () => {
     test('a chatty command cannot grow an unbounded string in the host process', async () => {
-        // `spawnSync` bounded this at its 1 MB default `maxBuffer`. Under the 900s
-        // cap the async runner accumulates two unbounded strings in the HOST — the
-        // TUI process — for as long as the command talks.
+        // `spawnSync` bounds this at its default `maxBuffer`. Unbounded, the async
+        // runner accumulates two growing strings in the HOST — the TUI process —
+        // for as long as the command talks, which under a 900-second cap is a
+        // long time.
         const r = await within(
             30_000,
             spawnCommand({
@@ -126,11 +132,11 @@ describe.skipIf(!posix)('output is bounded', () => {
 })
 
 describe.skipIf(!posix)('nothing is lost on the way out', () => {
-    // MEASURED before choosing the drain: across 160 trials at 1 KiB / 64 KiB /
-    // 1 MiB / 8 MiB, idle and under eight spinning cores, ZERO bytes arrived after
-    // `exit` fired — the last chunk lands ~0.3ms BEFORE it. The runtime drains a
-    // pipe nobody else holds before it emits `exit`, so the drain window is
-    // headroom, not the thing correctness rests on.
+    // The runtime drains a pipe nobody else holds BEFORE it emits `exit`. Spawn a
+    // child that writes 1 KiB, 64 KiB, 1 MiB and 8 MiB and count bytes arriving
+    // after the `exit` event: zero at every size. So the drain window is headroom
+    // for the case where something else holds the pipe, not the thing correctness
+    // rests on.
     test('a large command that exits immediately keeps every character', async () => {
         const size = 512 * 1024 // under the cap: nothing may be elided
         const r = await within(
@@ -148,10 +154,11 @@ describe.skipIf(!posix)('nothing is lost on the way out', () => {
     })
 
     test('the cap keeps the HEAD the gap ladder reads and the TAIL the reason reads', async () => {
-        // Both ends are load-bearing and they are read by different code.
-        // `isCommandNotFound` and the two gap regexes match wording a runner prints
-        // FIRST; `outputTail` and every failure reason take the LAST 400 characters.
-        // A cap that keeps one end silently reclassifies the other's command.
+        // Both ends are load-bearing and different code reads each.
+        // `isCommandNotFound` and the two gap regexes match wording a runner
+        // prints FIRST; `outputTail` slices `-limit` with limit defaulting to 400
+        // (command-run.ts:310), so every failure reason reads the LAST 400
+        // characters. A cap that keeps one end reclassifies the other's command.
         const r = await within(
             30_000,
             spawnCommand({
@@ -191,22 +198,22 @@ describe.skipIf(!posix)('nothing is lost on the way out', () => {
             })
         )
         expect(r.status).toBe(0)
-        // MEASURED 72ms for 32 MiB. A tail kept by repeated `slice` of a growing
-        // string would be ~700 MB of copying; the ceiling here is deliberately
-        // loose, it only has to catch a real blow-up.
+        // A tail kept by repeatedly `slice`-ing a growing string copies the whole
+        // buffer on every chunk, which is quadratic and shows up at this size.
+        // The ceiling here is deliberately loose: it only has to catch a real
+        // blow-up, not pin a number that moves with the machine.
         expect(performance.now() - started).toBeLessThan(5000)
     })
 })
 
-// NOT skipped on Windows — this is the one case whose whole subject IS Windows,
-// and it spawns the runtime itself rather than a POSIX shell so CI (which runs
-// ubuntu-latest AND windows-latest) actually exercises it there.
+// NOT skipped anywhere, and it spawns the runtime itself rather than a POSIX
+// shell so it runs on every platform CI covers.
 describe('the deadline timer stays armed', () => {
     test('the deadline FIRES and bounds a long command — on every platform', async () => {
-        // The behavioural half. The unref'd timer was MEASURED in this repo never to
-        // fire on Windows (0/20s), and with `spawnSync`'s own `timeout` gone this
-        // timer is the only bound on every gate command. `sh` is not portable, so
-        // this spawns the runtime itself.
+        // The behavioural half. An unref'd timer does not hold the event loop
+        // open, so once nothing else is pending it never fires — and with
+        // `spawnSync`'s own `timeout` gone, this timer is the only bound left on
+        // every gate command. `sh` is not portable, so this spawns the runtime.
         const started = performance.now()
         const r = await within(
             5000,
@@ -223,10 +230,10 @@ describe('the deadline timer stays armed', () => {
     })
 
     test("it is not unref'd — an unref'd timer never fires at all on Windows", async () => {
-        // MEASURED in this repo: an unref'd timer does not fire on Windows (0/20s)
-        // while a ref'd one does. With `spawnSync`'s own `timeout` gone, this timer
-        // is the ONLY bound left on every gate command, so disarming it there means
-        // those commands run unbounded.
+        // An unref'd timer does not keep the event loop alive, so it can be
+        // skipped entirely. With `spawnSync`'s own `timeout` gone this timer is
+        // the ONLY bound left on every gate command, so unref-ing it means those
+        // commands run unbounded.
         const realSetTimeout = globalThis.setTimeout
         let unrefCalls = 0
         globalThis.setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
