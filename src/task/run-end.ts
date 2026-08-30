@@ -1,22 +1,14 @@
 /**
  * run-end — how a single /task run ENDED, named once.
  *
- * `TaskRunner.run` returned `void` and never threw, so `runSingleTask` learned
- * what it had just done by RE-READING the task file's front matter, narrowing
- * that to `ok: boolean`, and smuggling the rest out of the `withSession` closure
- * through three mutable captures. Both commands then re-derived a cause the
- * runner already had: `classifyFailure` names the ending exactly, and
- * `handleFailure` threw the name away.
+ * `TaskRunner.run` returns this, so a caller never has to re-derive the ending by
+ * re-reading the task file's front matter and narrowing it to a boolean. Reading
+ * the file back cannot tell a user cancel from a fault: `/task-cancel` writes
+ * `cancelled`, and anything that only asks "is the state completed?" then treats
+ * that stop as a failure and overwrites it.
  *
- * The live consequence was a wrong report. `/task-cancel` during a gated run
- * writes `cancelled` to the file; `ok` is `state === 'completed'`, so it is
- * false; `!res.ok` calls `markResumable`, which overwrites `cancelled` with
- * `failed`, and announces a red *"stopped — fix and run /task-resume"*.
- * `/task-auto` hits the same arm for the same input, because its cancel branch
- * only consults a module global that `/task-cancel` never sets.
- *
- * The file is still written — it is what a RESUME reads. What changed is that it
- * is no longer the channel this process uses to talk to itself.
+ * The file is still written — it is what a RESUME reads. It is just not the
+ * channel this process uses to talk to itself.
  */
 
 /** Why a run stopped. Exactly one of these is true of any finished run. */
@@ -37,14 +29,12 @@ export type RunEndKind = RunEnd['kind']
 /**
  * What a command does about each ending.
  *
- * `resumable` and `announce` are the two facts the two hand-written ladders
- * disagreed about, and the disagreement is where the cancel bug lived: a
- * `cancelled` run was falling into the `failed` arm and being marked resumable.
- * The WORDING stays per-command — `/task` says "resume with /task-resume" where
- * `/task-auto` says "/task-auto-resume" — so only the policy is shared.
+ * The POLICY is shared by /task's loop (orchestrator.ts) and /task-auto's
+ * (auto-orchestrator.ts). The WORDING stays per-command — /task says "resume with
+ * /task-resume" where /task-auto says "/task-auto-resume".
  */
 export interface RunEndPolicy {
-    /** Mark the task resumable (overwrites its state with `failed`). */
+    /** Mark the task resumable — `markResumable` writes `state: failed`. */
     resumable: boolean
     /**
      * Does this ending FAIL the plan that contains the task?
@@ -73,7 +63,7 @@ export const RUN_END_POLICY: Record<RunEndKind, RunEndPolicy> = {
     'no-session': {resumable: false, failsRun: false, level: 'warning'}
 }
 
-/** Did the run deliver a spec? The single question the old `ok` boolean answered. */
+/** Did the run deliver a spec? True for `completed` and nothing else. */
 export function runSucceeded(end: RunEnd): boolean {
     return end.kind === 'completed'
 }
