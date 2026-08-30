@@ -1,20 +1,22 @@
 /**
- * Tests for APIS_SEMANTICS_CONTRACT — the STAGE 2 lever text.
+ * Tests for APIS_SEMANTICS_CONTRACT, an output-contract clause for the APIS
+ * research prompt that is NOT wired in. See its module header for what it would
+ * change and why it is kept unwired.
  *
- * The lever is UNWIRED (its A/B FAILED invariant 2a; see src/task/prompts.ts and nexxtasks.txt
- * "STAGE 2"). The module and these tests are KEPT as the durable asset — the measurement rig is
- * re-runnable at ~3h of model time and no new code — the same way src/task/spec-urls.ts survived
- * PROMPT 4's failure. If anyone revisits this lever, these pin what the text must contain for the
- * A/B to be measuring what it claims; that prompts.test.ts asserts it is NOT in the shipped prompt
- * is the guard against an accidental re-wire.
+ * Nothing splices it into RESEARCH_APIS_PROMPT: the only references to it in the
+ * tree are this file and prompts.test.ts, which asserts the shipped prompt does
+ * NOT contain it. That assertion is the guard against an accidental re-wire;
+ * these three pin what the text must contain for it to be worth trying at all.
  */
 import {describe, expect, test} from 'bun:test'
 import {APIS_SEMANTICS_CONTRACT} from '../../src/task/apis-contract.js'
 
 describe('APIS_SEMANTICS_CONTRACT', () => {
     test('the lever is that a SIGNATURE does not complete an entry', () => {
-        // Stage 1's mechanism is completion-by-format: worker:apis stops when every entry has a
-        // signature. Without this sentence the block is advice and the mechanism is untouched.
+        // worker:apis treats an entry as finished once it has a SIGNATURE,
+        // because that is what its output format asks for. So a lever has to
+        // move the format's bar. Without this sentence the block is advice and
+        // the stopping rule is untouched.
         expect(APIS_SEMANTICS_CONTRACT).toContain('A TYPE SIGNATURE IS NOT A SEMANTICS CLAUSE')
         expect(APIS_SEMANTICS_CONTRACT).toContain('SEMANTICS')
     })
@@ -30,9 +32,10 @@ describe('APIS_SEMANTICS_CONTRACT', () => {
     })
 
     test('ABSTENTION IS MANDATORY — the fabrication guard the A/B proved the model ignores', () => {
-        // The A/B measured the model using this escape 0 times in 40 reps, fabricating instead.
-        // The text still MUST offer it: forbidding abstention is how F-1 manufactured the
-        // confident wrong claim (hc<AppType>('/api') -> /api/api/... -> the product API 404s).
+        // The escape must be offered even though a worker rarely reaches for it.
+        // A worker that may NOT abstain has nowhere to put an uncheckable fact
+        // except into a confident claim, and a plausible wrong claim about a base
+        // URL or a default is the most damaging thing this section can carry.
         expect(APIS_SEMANTICS_CONTRACT).toContain('THIS IS A CORRECT AND REQUIRED OUTCOME')
         expect(APIS_SEMANTICS_CONTRACT).toContain('NEVER fill this field from memory')
     })
