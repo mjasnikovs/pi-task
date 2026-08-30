@@ -137,9 +137,9 @@ describe('refineExistingFilesBlock', () => {
 })
 
 describe('scopedToolingGoal', () => {
-    // Shape of the failing one task refined prompt: a GOAL block whose tail is a
-    // long per-file edit checklist, then CONSTRAINTS. The checklist is what made
-    // the TOOLING worker spelunk source and loop.
+    // The shape scopedToolingGoal exists for: a GOAL whose tail is a long per-file
+    // edit checklist, then CONSTRAINTS. Handed whole, that checklist sends the
+    // TOOLING worker reading the named source files one by one.
     const bulletHeavy = [
         'GOAL',
         'Fix every lint violation. The work is done when `bun run lint` passes and',
@@ -418,9 +418,9 @@ describe('phaseResearch silent-retry gate (worker:context)', () => {
     test('a legitimately-empty section (NONE) is NOT retried', async () => {
         const {out, contextAttempts} = await runWith(() => agentEndResponse('NONE'))
         expect(contextAttempts).toBe(1) // gate did not fire
-        // The honest "nothing to surface" answer survives — recorded with the marker
-        // that says the worker RAN and found nothing (issue #10), rather than as the
-        // bare token, which reads the same as a section nobody wrote.
+        // The honest "nothing to surface" answer survives, recorded with the marker
+        // that says the worker RAN and found nothing rather than as the bare token,
+        // which reads the same as a section nobody wrote.
         expect(out).toContain('CONTEXT\n(none — the CONTEXT worker ran and reported no entries')
     })
 
@@ -432,12 +432,12 @@ describe('phaseResearch silent-retry gate (worker:context)', () => {
 })
 
 /**
- * The empty-section gate (issue #10) is the one research retry gate with no row field
- * behind it: it runs for EVERY worker, and it is the only one of the three whose retry
- * can change the phase's outcome from "section recorded" to "phase throws". These pin
- * all three of its exits, so the crash-propagation branch stops being invisible.
+ * The empty-section gate is the one research retry gate with no row field behind it:
+ * it runs for EVERY worker, and it is the only one of the three whose retry can turn
+ * the phase's outcome from "section recorded" into "phase throws". These pin all
+ * three of its exits, so the crash-propagation branch is not left invisible.
  */
-describe('phaseResearch empty-section gate (issue #10)', () => {
+describe('phaseResearch empty-section gate', () => {
     const TOOLING_MARKER = 'content of a TOOLING section'
     // A substring unique to EMPTY_SECTION_PREAMBLE, so the fake can tell the ONE
     // retry apart from the first attempt.
@@ -566,12 +566,11 @@ describe('phaseResearch per-worker persistence', () => {
             const spawn = fakeSpawnByPrompt(args => {
                 const which = classify(args)
                 spawns[which] = (spawns[which] ?? 0) + 1
-                // TOOLING (the last worker) hits a FATAL failure on a — a reported
-                // model error, the untrustworthy mode that still throws (unlike a
-                // runaway, which would degrade-and-cache, or a plain empty answer,
-                // which is now retried and accepted — issue #10). It fails the phase
-                // after FILES/APIS/CONTEXT answered cleanly, and is NOT cached, so the
-                // resume re-runs only it.
+                // TOOLING, the last worker, fails with a reported model error. That is
+                // the one mode that still throws: a runaway degrades and caches, and a
+                // plain empty answer is retried and accepted. It fails the phase after
+                // FILES/APIS/CONTEXT answered cleanly, and is NOT cached, so the resume
+                // re-runs only it.
                 if (which === 'tooling' && toolingShouldFail) {
                     return agentErrorResponse('fetch failed')
                 }
@@ -684,9 +683,9 @@ describe('phaseResearch per-worker persistence', () => {
     })
 })
 
-describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', () => {
-    // A plausible APIS section a real rep emitted having made ZERO tool calls — every
-    // signature recalled from memory.
+describe('phaseResearch APIS zero-retrieval gate', () => {
+    // A plausible-looking APIS section produced with ZERO tool calls: every signature
+    // recalled from memory rather than retrieved.
     const FROM_MEMORY =
         'hono/client  hc<AppType> creates a typed client; $get/$post methods per route\n'
         + 'AppType  export type AppType = typeof app from src/index.ts'
@@ -815,10 +814,10 @@ describe('phaseResearch APIS zero-retrieval gate (mx5 run-15 F-1, distinct)', ()
     })
 })
 
-describe('phaseResearch CONTEXT post-check (mx5 run-15 F-1)', () => {
-    // Verbatim from one task.md — the bullet that killed the run. worker:context has
-    // read+grep only, so the base-URL half necessarily came from model memory; fused with
-    // the true pinned-version half under one attribution it read as sourced.
+describe('phaseResearch CONTEXT post-check', () => {
+    // The shape the post-check exists for. worker:context has read+grep only, so the
+    // base-URL half cannot have been retrieved; fused with a true pinned-version half
+    // under one "the external context confirms" attribution, it reads as sourced.
     const FATAL =
         '- The `hono` dependency is pinned at `^4.12.31` in package.json, and the external '
         + 'context confirms `hc<AppType>` pattern with base URL `/api` for same-origin '
@@ -968,11 +967,10 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
             return apisPrompt
         }
 
-        // BOTH halves pin the flag, and the finally restores what was there. Reading
-        // the ambient value for the serial half made this test fail on any machine
-        // whose ~/.config/pi-task/config.json turns parallel workers ON (the map only
-        // rides along in serial mode) — and restoring a hardcoded `false` silently
-        // rewrote that user's setting in the process.
+        // BOTH halves set the flag and the finally restores whatever was there. The
+        // map rides along only in serial mode, so reading the ambient value would make
+        // this test depend on the user's own config file — and restoring a hardcoded
+        // `false` would rewrite their setting.
         const cfg = getConfig()
         const prev = cfg.parallelResearchWorkers
         try {
@@ -991,14 +989,10 @@ describe('phaseResearch APIS worker gets the FILES map (serial mode)', () => {
     })
 })
 
-// item 5 — GUARANTEE the never-before-exercised search path stays wired.
-// Live validation showed the provider dispatch is healthy (exa + ddg return real
-// results) and the model DOES invoke pi-worker-search when the task needs a
-// fresh fact and the hint is present; the "0 search calls" across runs traced to the
-// TASK never signalling a web need (item 4's dropped directive), not a broken path.
-// This deterministic guard fails if a refactor ever drops search from the APIS worker
-// (tool whitelist, extension, or the trigger hint), which WOULD silently re-break it.
-describe('phaseResearch search-path wiring (run 9 item 5)', () => {
+// The search path reaches the APIS worker through three independent pieces: the
+// tool whitelist, the `-e` extension, and the trigger hint in the prompt. Drop any
+// one and the worker simply never searches — nothing errors. This asserts all three.
+describe('phaseResearch search-path wiring', () => {
     test('APIS worker gets pi-worker-search + fetch tools, the search extension, and the trigger hint', async () => {
         let apisArgs: ReadonlyArray<string> = []
         let apisPrompt = ''
@@ -1131,8 +1125,8 @@ describe('phaseResearch parallel workers (opt-in flag)', () => {
                 const spawn = fakeSpawnByPrompt(args => {
                     const which = classify(args)
                     spawns[which] = (spawns[which] ?? 0) + 1
-                    // APIS fails fatally on while the others succeed
-                    // slower — allSettled must still persist all three.
+                    // APIS fails fatally while the others finish more slowly, so the
+                    // allSettled must still persist the three that answered.
                     if (which === 'apis' && apisShouldFail)
                         return agentErrorResponse('fetch failed')
                     // A healthy APIS worker retrieves, so the zero-retrieval gate leaves it
@@ -2291,7 +2285,7 @@ describe('phaseCritique conditional rewrite', () => {
         })
     })
 
-    test('a deterministic skip-escape overrides CLEAN triage and forces the rewrite (run-8 F2)', async () => {
+    test('a deterministic skip-escape overrides CLEAN triage and forces the rewrite', async () => {
         await withTmpTaskDir(async cwd => {
             const escapeSpec =
                 'GOAL\n  ship a page\n\nCONSTRAINTS\n  - a\n\nACCEPTANCE\n  - renders\n\nVERIFY:\n```sh\nuismoke smoke.spec.js || echo "skipping browser smoke (uismoke not installed)"\n```\n'
@@ -2448,8 +2442,8 @@ describe('phaseCritique conditional rewrite', () => {
 })
 
 describe('phaseCompose VERIFY block gate', () => {
-    // The exact shape that failed one task: GOAL/CONSTRAINTS/ACCEPTANCE all
-    // present, but the `VERIFY:` header has no fenced command block after it.
+    // GOAL/CONSTRAINTS/ACCEPTANCE all present, but the `VERIFY:` header has no
+    // fenced command block after it.
     // validateSpecShape accepts this (header exists); parseVerifyBlock rejects
     // it (no runnable commands). Compose must apply the stricter bar so it never
     // hands a header-only draft to the downstream gates that reject it.
@@ -3251,7 +3245,7 @@ test('searchConfigured mirrors the search-core contract (keyless providers alway
     expect(searchConfigured(() => undefined, 'ddg')).toBe(true)
 })
 
-describe('empty-vs-failed distinction (issue #10)', () => {
+describe('empty-vs-failed distinction', () => {
     test('isBareNoneAnswer matches a lone "nothing" token in the shapes workers write', () => {
         for (const s of [
             '(none)',
@@ -3290,7 +3284,7 @@ describe('empty-vs-failed distinction (issue #10)', () => {
     })
 })
 
-describe('extractToolingCommands ignores section markers (issue #10)', () => {
+describe('extractToolingCommands ignores section markers', () => {
     test('an empty TOOLING section yields no commands, not a marker-shaped one', () => {
         const research = `FILES\nsrc/a.ts  x\n\nTOOLING\n${emptySectionBody('TOOLING')}\n`
         expect(extractToolingCommands(research)).toBeNull()
@@ -3305,14 +3299,12 @@ describe('extractToolingCommands ignores section markers (issue #10)', () => {
 })
 
 /**
- * DELIVERY CHECK for the 5B CAP arm's prompt half (see task/research-fanout-budget.ts).
- *
- * The lever is two halves that must agree: the tool refuses past the budget, and the
- * worker is told the number up front. A live A/B cannot see the assembled prompt, and a
- * cap enforced without its notice reads to the worker as a broken tool — so the delivery
- * is proven here, deterministically, instead of being assumed by the harness.
+ * The fan-out budget (task/research-fanout-budget.ts) is two halves that must agree:
+ * the tool refuses past the budget, and the worker is told the number up front. A cap
+ * enforced without its notice reads to the worker as a broken tool, so the notice's
+ * delivery is asserted here rather than assumed.
  */
-describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadline shipped)', () => {
+describe('phaseResearch fan-out levers', () => {
     const promptFor = async (
         cwd: string,
         marker: string
@@ -3381,9 +3373,8 @@ describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadl
         })
     })
 
-    //  — the plumbing test for the ONE lever in this file that shipped.
     // `workerProgressCeilingMs()`'s default and `runWorker`'s behaviour under a
-    // ceiling both have their own unit tests; this covers the line between them,
+    // ceiling both have their own unit tests. This covers the line BETWEEN them,
     // which is the only place the wiring can silently come undone.
     test('the progress deadline is applied by default, and the log says so', async () => {
         const saved = process.env[WORKER_PROGRESS_CEILING_ENV]
@@ -3436,7 +3427,7 @@ describe('phaseResearch fan-out levers (5B: CAP/SCALE unwired; 9: progress deadl
     })
 })
 
-describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
+describe('refuted-constraint drop at the compose seam', () => {
     const taskMeta = {
         id: 'TASK_0001',
         state: 'in_progress' as const,
@@ -3506,8 +3497,8 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
 
             await runPhaseRow(composePhase(), deps as never, pc)
 
-            // The context's refined task no longer requires the refuted token —
-            // this is what critique is handed as GROUND TRUTH one phase later.
+            // The refuted token is gone from the context's refined task, which is
+            // what critique is handed as GROUND TRUTH one phase later.
             expect(pc.refined).not.toContain('`argon2`')
             expect(pc.refined).toContain('`hono`')
             expect(pc.refined).toContain('`sharp`')
@@ -3572,12 +3563,10 @@ describe('refuted-constraint drop at the compose seam (nexttask 8)', () => {
 })
 
 describe('PhaseResearchDeps.runWorker seam', () => {
-    // Every decision runSpec makes is a pure function of RunWorkerResult fields.
-    // Without this seam, reaching one means driving a fake process that emits JSON events —
-    // including a forged tool_execution_start, because otherwise the APIS
-    // zero-retrieval gate fired and broke the spawn counts of unrelated tests.
-    // With the seam the fields are stated directly, and workers are told apart by
-    // LABEL rather than by a marker sentence lifted out of prompts.ts.
+    // Every decision runSpec makes is a pure function of RunWorkerResult fields, so
+    // the seam lets a test state those fields instead of driving a fake process that
+    // emits the JSON events they are derived from — including a forged
+    // tool_execution_start, without which the APIS zero-retrieval gate fires.
     const result = (over: Partial<RunWorkerResult> = {}): RunWorkerResult => ({
         text: '- a real finding',
         exitCode: 0,
@@ -3658,8 +3647,8 @@ describe('PhaseResearchDeps.runWorker seam', () => {
     })
 
     test('a worker that never spoke is a FAILURE, not an empty section', async () => {
-        // sawOutput:false means the child died at startup. One boolean; before the
-        // seam this needed a process that exits without writing a byte.
+        // sawOutput:false is how a child that died at startup arrives: one boolean
+        // here, a process that exits without writing a byte through the spawn seam.
         await expect(
             runWithWorkers((label): RunWorkerResult =>
                 label === 'worker:tooling' ?
@@ -3672,10 +3661,10 @@ describe('PhaseResearchDeps.runWorker seam', () => {
 
 // ─── The grill transcript's two renderings ──────────────────────────────────
 //
-// phaseGrill kept two arrays whose only documented difference was provenance
-// stamping — and the YOLO branch pushed `${answer} (YOLO)` into the array the
-// rule forbade it in, twelve lines above the comment stating the rule. These
-// drive the loop and read what the NEXT grill-gen call was actually handed.
+// One QaTranscript, two renderings: `forRecord()` goes to compose and critique,
+// `forGenerator()` is what the next grill-gen call sees. They differ only in the
+// provenance suffixes, which is exactly why they can drift apart unnoticed. These
+// tests drive the loop and read what grill-gen was actually handed.
 
 describe('phaseGrill transcript', () => {
     const REFINED = 'GOAL\nBuild it.\n'
