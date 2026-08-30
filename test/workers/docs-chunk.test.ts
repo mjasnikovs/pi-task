@@ -8,9 +8,6 @@ import {
     MAX_CHUNK_BYTES
 } from '../../src/workers/docs-chunk.js'
 
-// The chunker was written twice — once in docs-index.ts and once, byte-identical,
-// in docs-project.ts, which had NO test file. It is tested once now.
-
 describe('splitAtMatches', () => {
     const decl = (): RegExp => new RegExp(DECL_SPLIT_RE.source, 'gm')
 
