@@ -2,8 +2,9 @@ import {describe, it, expect} from 'bun:test'
 import {renderModule} from '../../src/remote/ui-render.js'
 import {toolsModule} from '../../src/remote/ui-tools.js'
 
-// The tools module depends on escHtml (ui-render.ts); eval both together and pull
-// out the requested function.
+// The tools module calls escHtml, which lives in ui-render.ts, so both module
+// strings have to be evaluated together — as ui.ts concatenates them into one
+// <script>. Pull out the requested function.
 function load<T>(name: string): T {
     const factory = new Function(
         renderModule() + '\n' + toolsModule() + '\n;return ' + name + ';'
