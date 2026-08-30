@@ -1,20 +1,19 @@
 /**
  * script-escape — deterministic detection of CHECK SCRIPTS THAT CANNOT FAIL.
  *
- * The failure this closes: the shipped package.json
- * declared, verbatim,
+ * The failure this closes: a package.json declaring
  *     "lint": "prettier … && eslint --fix … && (tsc --noEmit 2>&1 | grep -qv 'TS18003' || true)"
  * The typecheck is neutered twice over — its output is piped into an INVERTED grep
  * (so the status becomes "some line did not match", never tsc's verdict), and the
  * whole group is closed with `|| true` (so the script exits 0 unconditionally). Every
  * consumer of that script — the repo-health verify gate, the final integration gate,
- * a human reading a green CI line — is reading a constant, not a measurement.
+ * a human reading a green CI line — is reading a constant, not a measurement. It
+ * looks fine for exactly as long as the checker happens to be clean.
  *
- * It was harmless in a only by luck: tsc happened to be clean (validated). The
- * class is not harmless — this is the same defect as a F2 skip-escape, moved
- * one level out. findSkipEscapes (skip-escape.ts) scans a spec's own VERIFY block;
- * nothing scanned the SCRIPT DEFINITIONS those VERIFY blocks then invoke by name, so
- * `bun run lint` could be authored into a no-op and every gate would salute it.
+ * This is a skip-escape moved one level out. `findSkipEscapes` (skip-escape.ts)
+ * scans a spec's own VERIFY block; nothing else scans the SCRIPT DEFINITIONS those
+ * VERIFY blocks then invoke by name, so `bun run lint` can be authored into a no-op
+ * and every gate salutes it.
  *
  * TWO SHAPES, both crisp, both scoped to CHECK-CLASS script names:
  *
@@ -27,9 +26,8 @@
  *      "Some line of the output does NOT match X" is never a checker's verdict; it
  *      is true of virtually any non-empty output, including a wall of errors.
  *
- * Deliberately NOT flagged, because each is legitimate and FP-measured against the
- * real corpus:
- *   - `|| exit 1` — a HARDENING, the opposite of an escape (aiz-server).
+ * Deliberately NOT flagged, because each is legitimate:
+ *   - `|| exit 1` — a HARDENING, the opposite of an escape.
  *   - any `||`/pipe in a NON-check script (`clean`, `dev`, `start`, `copy-fonts`) —
  *     a teardown `rm -rf dist || true` is correct and common.
  *   - pipes into formatters/reporters (`| tap-spec`, `| tee`) — those propagate
@@ -73,7 +71,8 @@ const INVERTED_GREP_RE = /\|\s*grep\s+(?:-\w*v\w*|-\w+\s+-\w*v\w*)/
 
 /**
  * Strip trailing subshell/group closers and separators so the tail patterns see the
- * real last command. script ends `… || true)` — without this the `)` hides it.
+ * real last command: a script ending `… && (tsc --noEmit || true)` hides its tail
+ * behind the `)`.
  */
 function tailOf(body: string): string {
     let s = body.trim()
