@@ -37,9 +37,10 @@ export function emitFrontMatter(fm: TaskFrontMatter): string {
 
 export function parseFrontMatter(content: string): TaskFrontMatter | null {
     // `\r?\n` throughout so a CRLF/Windows task file parses too. Reads normally
-    // pass through readTextFile (which normalizes to LF), but tolerating CRLF at
-    // the parser itself is the safety net for any read site that forgets to —
-    // exactly the class of miss that shipped in 0.17.8. See shared/fs-text.ts.
+    // pass through readTextFile (which normalizes CRLF and lone CR to LF), but
+    // tolerating CRLF at the parser itself is the safety net for any read site
+    // that forgets to. A lone CR still needs the normalization — no regex here
+    // matches it, because every one requires an `\n`. See shared/fs-text.ts.
     const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content)
     if (!m) return null
     const obj: Record<string, string> = {}
