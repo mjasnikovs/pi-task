@@ -2,20 +2,15 @@
  * serve-entry — the project builds a server app, expects to SERVE, and nothing in
  * the tree ever starts a listener.
  *
- * THE FAILURE THIS CLOSES. The shipped `src/server/index.ts`
- * is 28 lines that construct a Hono app, mount five `/api` routers, add an SPA
- * fallback reading `Bun.file('dist/index.html')` — and end at `export {app}`. There
- * is no `Bun.serve`, no `export default app`, no `serve()` from an adapter, no
- * `start` script. Running the entry directly exits 0 in milliseconds:
+ * THE FAILURE THIS CLOSES. A `src/server/index.ts` constructs a Hono app, mounts
+ * its `/api` routers, adds an SPA fallback reading `Bun.file('dist/index.html')` —
+ * and ends at `export {app}`. No `Bun.serve`, no `export default app`, no `serve()`
+ * from an adapter. Running that entry exits 0 immediately: the product cannot be
+ * started at all.
  *
- *     $ DATABASE_URL=… timeout 15 bun run src/server/index.ts   → EXIT=0
- *
- * The product could not be started at all, and the run shipped green: the gate's
- * boot command resolved to a `docker compose up` orchestrator, docker was absent in
- * the sandbox, and the boot SKIPPED. This is the SECOND run to lose this exact
- * clause — a shipped a server that never served the client bundle
- * — so a dynamic-only gate has now
- * failed to catch it twice.
+ * A dynamic gate does not necessarily catch it. If the boot command resolves to an
+ * orchestrator the environment cannot run, the boot SKIPS under the env-gap
+ * contract and the run ships green.
  *
  * WHY STATIC. The check needs no runtime, no browser, no docker, no database and no
  * model: the tree either contains a bind or it does not. It runs in milliseconds and
@@ -64,9 +59,9 @@ const CONSTRUCT_PATTERNS: Array<{re: RegExp; construct: string}> = [
     {re: /(?:^|[^.\w])express\s*\(\s*\)/, construct: 'express()'},
     {re: /(?:^|[^.\w])[Ff]astify\s*\(/, construct: 'fastify()'},
     {re: /(?:^|[^.\w])polka\s*\(/, construct: 'polka()'}
-    // `connect()` (the middleware framework) is deliberately absent: another project's
-    // src/store/db.ts calls `connect()` on a DATABASE, and a construct signal that
-    // cannot tell a server from a db handle is not a construct signal.
+    // `connect()` (the middleware framework) is deliberately absent: `connect()` is
+    // also what a database module calls, and a construct signal that cannot tell a
+    // server from a db handle is not a construct signal.
 ]
 
 /**
@@ -88,7 +83,8 @@ const BIND_PATTERNS: Array<{re: RegExp; what: string}> = [
  *  Vercel) starts whatever is exported. A default-exported config object
  *  (`export default defineConfig({…})`) is not one of them, and neither is a React
  *  component — hence the identifier must be a name the tree BOUND to a server-app
- *  construction (aiz-client's `export default App` is a component, not a listener). */
+ *  construction. `export default App` on a component names nothing this scan
+ *  constructed, so it is not a bind. */
 function defaultExportBind(src: string, appNames: Set<string>): string | null {
     for (const m of src.matchAll(/export\s+default\s+([A-Za-z_$][\w$]*)/g)) {
         if (appNames.has(m[1])) return `export default ${m[1]}`
@@ -210,8 +206,8 @@ export function opaqueLauncher(cwd: string): string | null {
 }
 
 // The tree walk, the caps, the skip sets and the comment strip live in
-// task/shipped-source.ts — this scan and artifact-closure's were the same walker
-// written twice, and their skip sets had drifted apart on `bench`/`benchmarks`.
+// task/shipped-source.ts, shared with artifact-closure's scan so the two cannot
+// drift apart on which directories they skip.
 const scanCandidates = (cwd: string): string[] => shippedSources(cwd, {ext: SOURCE_JS_RE})
 
 /** A `/…/flags` literal whose body carries a regex METACHARACTER — `[`, `\`, `+`,
@@ -222,10 +218,11 @@ const METACHAR_RE = /[\\[\]+*?^$|(){}]/
 /**
  * Blank out regex literals. A project that MATCHES on `new Hono` — a linter, a
  * codemod, this very module — does not construct one, and a source scanner that
- * cannot tell the two apart reports every detector as an app (pi-task scanned
- * itself and found "9 server apps", all of them pattern tables). Only literals
- * carrying a metacharacter are stripped, so `'/api/v1'` is untouched, and because
- * stripping can only REMOVE matches it is safe in the FP direction by construction.
+ * cannot tell the two apart reports every detector as an app. With this in place
+ * `scanServeEntry` finds ZERO apps in pi-task's own tree, whose pattern tables name
+ * every construct it looks for. Only literals carrying a metacharacter are
+ * stripped, so `'/api/v1'` is untouched, and because stripping can only REMOVE
+ * matches it is safe in the FP direction by construction.
  */
 function stripRegexLiterals(src: string): string {
     return src.replace(REGEX_LITERAL_RE, (whole, body: string) =>
