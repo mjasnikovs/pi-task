@@ -29,8 +29,8 @@ test('cleanHtml strips ads and sidebars', () => {
 
 test('cleanHtml returns empty markdown for SPA shell with no content', () => {
     const result = cleanHtml(fixture('spa-empty.html'), 'https://example.com/app')
-    // Empty or near-empty markdown is the signal the tool layer uses
-    // to return the "No readable content" error.
+    // A client-rendered page has nothing in its HTML, so cleanHtml has nothing to
+    // turn into markdown. The near-empty result is the whole signal there is.
     expect(result.markdown.length).toBeLessThan(50)
 })
 
