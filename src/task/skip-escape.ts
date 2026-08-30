@@ -3,20 +3,16 @@
  *
  * A skip-escape is a `||` fallback that lets a REQUIRED check pass SILENTLY when
  * its tool is absent or it fails — e.g. `playwright test … || echo "skipping"`.
- * shipped a blank/dead app partly because its only behavioral smoke
- * tests were wrapped this way: the tool was absent, the check silently skipped,
- * and the verify child blessed it as "correctly skipped".
+ * A spec whose only behavioural check is wrapped that way passes its gate on a
+ * machine without the tool, and the verify child reads it as "correctly skipped".
  *
- * FP-MEASURED on the historical VERIFY blocks: a
- * blanket `|| true` flag is almost all false positives — teardown (`kill … || true`,
- * `docker compose down … || true`), setup (`… install … || true`), and negative
- * tests (`… && exit 1 || true`, where `|| true` catches an EXPECTED failure). Of
- * 45 `||` uses, exactly one was the real F2 skip-escape, and it ANNOUNCED the skip
- * ("Playwright not available — skipping browser smoke test"). So the crisp,
- * ~zero-FP signal is a fallback whose text ADMITS it is dodging the check — that is
- * the actionable finding here. Bare `|| true` is left to the verify child's runtime
- * rule 5c, which can actually observe whether the check ran (a static scan cannot
- * tell a required-check `|| true` from a teardown `|| true`).
+ * Flagging every `|| true` would be almost all false positives: teardown
+ * (`kill … || true`, `docker compose down … || true`), setup (`… install
+ * … || true`) and negative tests (`… && exit 1 || true`, where `|| true` catches
+ * an EXPECTED failure) are all legitimate, and a static scan cannot tell a
+ * required-check `|| true` from a teardown one. The crisp signal is narrower: a
+ * fallback whose TEXT admits it is dodging the check. Bare `|| true` is left to
+ * the verify child's runtime rule 5c, which can observe whether the check ran.
  *
  * Pure shell-shape / text analysis; no stack or tool-name assumptions.
  */
