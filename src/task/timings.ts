@@ -2,9 +2,11 @@
  * Phase timing data — captures how long each pipeline phase took so we can
  * spot regressions and target future speed improvements.
  *
- * Top-level entries are the five phases (refine, research, grill, compose,
- * critique). Each phase may attach optional sub-step children (e.g. research
- * → workers + verify-tooling, grill → gen + auto-answers + user input).
+ * Top-level entries are the five phases of PHASE_ORDER (refine, research, grill,
+ * compose, critique). Each phase may attach optional sub-step children, recorded
+ * through `deps.recordSubStep`: research reports `workers` and `verify-tooling`,
+ * grill `gen` and `auto-answer`, critique `triage` and `rewrite`, and every phase
+ * child reports its own `<name> wait` / `<name> work` split.
  *
  * `formatTimings` produces the human-readable block we write to the
  * `## phase timings` section of the TASK_NNNN.md file.
