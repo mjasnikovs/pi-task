@@ -1,11 +1,10 @@
 import {describe, expect, test} from 'bun:test'
 import {isDuplicateQuestion, jaccard, tokenizeQuestion} from '../../src/task/question-dedup.js'
 
-// The exact 10 questions /task-auto asked on the real run (.pi-tasks/
-// TASK_AUTO_0001.md). The user's complaint: it kept re-asking the same
-// "Bun bundler vs Vite / how to build+serve the SPA" decision. Q2, Q3, Q8 and Q9
-// are all that same fork worded differently; Q1/Q4/Q5/Q6/Q7/Q10 are genuinely
-// distinct subsystems. This fixture is the ground truth the detector must split.
+// Ten clarify questions from one run. Four of them — Q2, Q3, Q8 and Q9 — are the
+// same "Bun bundler vs Vite, how do we build and serve the SPA" fork worded four
+// ways; the other six open genuinely different subsystems. That split is what the
+// detector has to reproduce.
 const Q = [
     /* Q1 */ "Should the search index use the PostgreSQL pg_trgm extension's similarity() function, or should we use a simpler approach like LIKE '%term%' to avoid the extension dependency?",
     /* Q2 */ "Should the Hono app's entry point (src/server/index.ts) also serve the React SPA's index.html as a static catch-all, or should a separate frontend build step produce static assets served by an external tool like Vite dev server in development and nginx/Express in production?",
@@ -19,13 +18,13 @@ const Q = [
     /* Q10 */ 'Should the image upload endpoint use Multer middleware to parse multipart/form-data in the Hono route handler, or should we implement streaming multipart parsing natively without an external middleware layer?'
 ]
 
-// Indices (0-based) the user flagged as redundant re-asks of the SPA build/serve
-// fork. Each should be caught as a duplicate of an EARLIER question.
+// 0-based indices of the SPA build/serve re-asks. Q2 is not here: it is the fork's
+// FIRST appearance, so there is no earlier question for it to duplicate.
 const REDUNDANT = [2, 7, 8] // Q3, Q8, Q9
 // These open genuinely different decisions and must NOT be suppressed.
 const DISTINCT = [0, 3, 4, 5, 9] // Q1, Q4, Q5, Q6, Q10
 
-describe('question-dedup against the real mx5 /task-auto run', () => {
+describe('question-dedup over one run of clarify questions', () => {
     test('flags the repeated SPA-build/serve questions as duplicates', () => {
         for (const i of REDUNDANT) {
             const prior = Q.slice(0, i)
