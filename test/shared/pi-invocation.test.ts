@@ -1,8 +1,12 @@
 /**
- * How a child pi is invoked. Getting this wrong does not fail loudly — it
- * spawns the WRONG binary, or re-invokes the test file as if it were pi (the
- * measured `bun test` failure the PI_BIN override exists for), so every branch
- * is pinned here.
+ * How a child pi is invoked. Getting this wrong does not fail loudly: it spawns
+ * the WRONG binary, so every branch is pinned here.
+ *
+ * The sharpest case is the test runner itself. Under `bun test`,
+ * `process.argv[1]` is the `.test.ts` file and it exists on disk, so the
+ * re-invoke-current-script branch would hand back `bun <that test file>` as the
+ * command — the runner re-running a test file, not pi. `PI_BIN` exists to
+ * short-circuit that, which is why it is checked first.
  */
 
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test'
@@ -39,7 +43,7 @@ describe('getPiInvocation', () => {
     })
 
     test('re-invokes the current script under the current runtime when it exists', () => {
-        process.argv[1] = 'package.json' // any real file; only existence is checked
+        process.argv[1] = 'package.json' // any real file: the branch calls existsSync
         expect(getPiInvocation(ARGS)).toEqual({
             command: process.execPath,
             args: ['package.json', ...ARGS],
@@ -65,8 +69,10 @@ describe('getPiInvocation', () => {
 
     test('falls back to the pi shim on PATH under a generic runtime', () => {
         process.argv[1] = '/nope/does-not-exist.js'
-        // Upper-cased and .exe forms too: the check lowercases and allows .exe
-        // so a windows runtime is recognised as generic, not as a pi binary.
+        // Upper-cased and .exe forms too. The check is
+        // `/^(node|bun)(\.exe)?$/` over a lowercased basename, so BUN.EXE and
+        // Node.exe are generic runtimes; only a basename that is neither is
+        // treated as a pi binary to run directly.
         for (const runtime of ['/usr/bin/node', '/usr/bin/bun', '/w/BUN.EXE', '/w/Node.exe']) {
             process.execPath = runtime
             expect(getPiInvocation(ARGS).command).toBe('pi')
@@ -84,7 +90,10 @@ describe('getPiInvocation', () => {
     })
 
     test('threads the stdin prompt through unchanged on every branch', () => {
-        const prompt = 'x'.repeat(300_000) // too big for argv — that is the point
+        // Too big for argv — that is the point. A single argv element over
+        // ~128 KiB fails the spawn outright with E2BIG (measured here: 131071
+        // bytes spawns, 131072 does not), so a large prompt has to go over stdin.
+        const prompt = 'x'.repeat(300_000)
         process.env.PI_BIN = '/opt/pi/bin/pi'
         expect(getPiInvocation(ARGS, prompt).stdin).toBe(prompt)
 
