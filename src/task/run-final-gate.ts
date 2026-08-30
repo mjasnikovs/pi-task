@@ -3,14 +3,14 @@
  *
  * task-gates.ts gates ONE task against its own spec. This gates the WHOLE REPO once,
  * when every task in a /task-auto run is checked off and BEFORE the run is declared
- * complete: every task passed its own per-slice gates, but per-slice green has shipped
- * a dead app twice. So
- * the project's OWN whole-repo commands run once here, unaided.
+ * complete. Every task passing its own per-slice gate does not prove the assembled
+ * whole works, so the project's OWN whole-repo commands run once here, unaided.
  *
  * The stage owns four things the per-task gate has no equivalent of:
  *
  *   1. THREE verdicts, not two — PASS / FAIL / UNOBSERVED. A gate that observed
- *      nothing dynamic is never announced as a pass (final-gate.ts unobservedVerdict).
+ *      nothing dynamic is never announced as a pass (gate-tally.ts
+ *      `unobservedVerdict`).
  *   2. The run-end ACCEPT-debt report — every defect a task was allowed to ship with,
  *      surfaced at the last moment anyone will look, and RE-DERIVED against the final
  *      tree after a converged autofix so the last word is about the tree that shipped.
@@ -38,9 +38,6 @@ import {isYoloMode, yoloFinalGateChoice, YOLO_STAMP} from './yolo.js'
 import {ignoredWriteTrailLine, ignoredWriteDebtReason} from './write-guard.js'
 import {readOwnedRequirements, type OwnedRequirement} from './requirements.js'
 import {unclaimedPendingRequirements} from './owned-freeze-reassign.js'
-// `final-gate-progress.ts`'s five pure functions are `AutofixLedger`'s internals
-// now — each was called from exactly ONE site inside this loop, extracted for
-// testability while the ordering and carry-forward decisions stayed out here.
 import {
     classifyFinalGateAnswer,
     MAX_FINAL_GATE_AUTOFIX,
@@ -76,20 +73,19 @@ export interface FinalGateStageDeps {
     finalGateFix?: FinalGateFixFn
     /**
      * Paths currently uncommitted in the working tree (`git status` shape), used to
-     * detect SUB-FIXES a non-converging fix pass left behind (* 3). Every task is committed by the time this stage runs, so anything dirty here
-     * is the fix pass's own work. Absent → the stranded-fix handling is skipped
+     * detect SUB-FIXES a non-converging fix pass left behind (item 4 in the header).
+     * Every task is committed by the time this stage runs, so anything dirty here is
+     * the fix pass's own work. Absent → the stranded-fix handling is skipped
      * entirely (prior behavior).
      */
     pendingChanges?: (cwd: string) => Promise<string[]>
     /**
      * Re-derive the still-open ACCEPT-debt ledger against the tree AS IT IS NOW
-     * (final-gate.ts `deriveOpenDebts`). Needed because the run's "N recorded
-     * verify-FAIL defect(s) are STILL unresolved" report would otherwise be built from the
-     * FIRST gate result and the converged-autofix path then rebuilt the gate outcome
-     * as a bare `{ok, reason}` — so `openDebts` was not merely un-actioned, it was GONE
-     * from the value, and no code path could ever clear, re-check or act on it (run
-     * 18: four defects reported STILL OPEN at 14:58, one of them fixed by the autofix
-     * that converged at 15:03, and the report never moved).
+     * (`deriveOpenDebts`, defined in accept-debt.ts and re-exported by
+     * final-gate.ts). Needed because the run's "N recorded verify-FAIL defect(s) are
+     * STILL unresolved" report is built from the FIRST gate result: without this, an
+     * autofix that converged after that report would leave the run's last word about
+     * a tree that no longer exists.
      *
      * `staticOk` is the caller's PROOF about the current statics, never a guess: it is
      * passed true only where the gate itself just passed them. Absent (tests) → the
@@ -129,7 +125,9 @@ export interface FinalGateStageParams {
     /** The parent /task-auto id: trail target, notify prefix, commit-message tag. */
     runId: string
     /** The parent plan (the task list), handed to the gate so it can tell a served app
-     *  from a CLI — the boot check requires a listener only for the former (*  a CSS watcher satisfied "still alive"). */
+     *  from a CLI — the boot check requires a listener only for the former. Without
+     *  that distinction any long-lived process, a file watcher included, satisfies
+     *  "still alive". */
     planText: string
     /** How many tasks the run completed — for the completion announcement only. */
     taskCount: number
@@ -196,10 +194,9 @@ function completedResult(
 /**
  * Run the whole-repo gate and resolve its verdict with the user.
  *
- * Lifted verbatim out of /task-auto's run loop, which it never shared state with:
- * the stage reads no per-task variable and writes none. Never throws for a gate
- * outcome — only a user cancel inside a gate child propagates (the caller's
- * USER_CANCELLED path handles it).
+ * Shares no state with /task-auto's run loop: the stage reads no per-task variable
+ * and writes none. Never throws for a gate outcome — only a user cancel inside a
+ * gate child propagates (the caller's USER_CANCELLED path handles it).
  */
 export async function runFinalGateStage(
     active: ExtensionCommandContext,
@@ -241,9 +238,8 @@ export async function runFinalGateStage(
             // recording must never break the gate
         }
     }
-    // Trail EVERY aggregated failure entry: the gate runs all sections
-    // and ranks the list; a single sliced reason line would re-hide everything past
-    // the first entry.
+    // Trail EVERY aggregated failure entry: the gate runs all sections and ranks the
+    // list, so a single sliced reason line would hide everything past the first.
     const trailGateFail = async (f: {reason: string; failures?: string[]}): Promise<void> => {
         const list = f.failures ?? [f.reason]
         if (list.length <= 1) {
@@ -258,14 +254,12 @@ export async function runFinalGateStage(
         }
     }
     let fin: FinalGateOutcome = await deps.finalGate(cwd, planText)
-    // Record the outcome symmetrically: only FAIL was ever
-    // trailed, so a PASSing gate was indistinguishable from a gate that never ran. The
-    // PASS reason names the commands that were run. THREE verdicts, not two
-    // (final-gate.ts unobservedVerdict): a gate that observed nothing dynamic is
-    // UNOBSERVED, never PASS — one real project shipped `PASS — no integration command found`
-    // twice while carrying open verify-FAIL debt. It does not block (justified there),
-    // but it is labelled here, warned about, and recorded as durable debt so the next
-    // run's gate re-surfaces it.
+    // Record the outcome SYMMETRICALLY — trailing only FAIL would leave a passing
+    // gate indistinguishable from a gate that never ran, and the PASS reason names
+    // the commands that were run. THREE verdicts, not two (gate-tally.ts
+    // `unobservedVerdict`): a gate that observed nothing dynamic is UNOBSERVED, never
+    // PASS. It does not block, but it is labelled here, warned about, and recorded as
+    // durable debt so the next run's gate re-surfaces it.
     if (fin.ok && fin.unobserved) {
         unobservedNote = fin.unobserved
         await recGate(`final-gate: UNOBSERVED — ${fin.reason.slice(0, 300)}`)
@@ -281,9 +275,8 @@ export async function runFinalGateStage(
     } else {
         await trailGateFail(fin)
     }
-    // ACCEPT-debt re-check surfacing: tasks the user
-    // accepted despite a verify-FAIL that the gate could not prove resolved against the
-    // current tree. Surface them at the gate moment — on PASS or FAIL — so a run never
+    // ACCEPT-debt surfacing: tasks the user accepted despite a verify-FAIL that the
+    // gate could not prove resolved against the current tree. Surface them at the gate moment — on PASS or FAIL — so a run never
     // completes silently carrying an accepted defect. Informational: the per-task
     // ACCEPT was already a human decision, so this reports, it does not re-fail.
     const debtKey = (d: AcceptDebt): string => `${d.taskId}\t${d.reason}`
@@ -305,10 +298,10 @@ export async function runFinalGateStage(
     // rather than blindly re-printed.
     let reportedDebts: AcceptDebt[] = fin.openDebts ?? []
     await surfaceOpenDebts(reportedDebts)
-    // An owned obligation a task DETACHED (its own spec froze the only file that could
-    // satisfy it, ) and no later task claimed. Detach never deletes the
-    // quote, so the run ends holding it — say so, or the resolution would be a quieter
-    // version of the deletion it exists to prevent.
+    // An owned obligation a task DETACHED — its own spec froze the only file that
+    // could satisfy it — and no later task claimed. Detach never deletes the quote, so
+    // the run ends holding it. Say so, or the detach becomes a quieter version of the
+    // deletion it exists to prevent.
     const unclaimed = unclaimedPendingRequirements(
         await (deps.ownedRequirements ?? readOwnedRequirements)(cwd).catch(() => [])
     )
@@ -328,12 +321,11 @@ export async function runFinalGateStage(
         )
     }
     /**
-     * . The lines above are emitted from the FIRST gate result;
-     * the converged-autofix paths below rebuild `fin` as `{ok, reason}`, so
-     * `openDebts` did not survive the fix pass — the run's last word on its own defects
-     * was a snapshot of a tree that no longer existed, and no code path could clear,
-     * re-check or act on it. Re-derive here, against the tree the run actually ends
-     * with, and correct the record.
+     * Re-derive the debt report against the tree the run actually ends with.
+     *
+     * The lines above are emitted from the FIRST gate result, so without this the
+     * run's last word on its own defects describes a tree the autofix has since
+     * changed.
      *
      * FP-safe by inheritance: `deriveOpenDebts` auto-closes only what a deterministic
      * check can stand behind (a static-class debt when the statics provably pass, a
@@ -398,16 +390,15 @@ export async function runFinalGateStage(
                 + `${fresh.openDebts.length} still open (re-derived against the FINAL tree)`
         )
     }
-    // Resolution loop: Leave-failed (recommended) / Autofix (bounded, model-driven fix
-    // pass + gate re-run — a gap: the picker had NO automated fix path) /
-    // Accept. The user always decides; after MAX_FINAL_GATE_AUTOFIX attempts that
-    // still FAIL the autofix card is withdrawn so the loop cannot run unbounded.
-    // What this loop RECORDS, and the decisions that record makes: the attempt
-    // count and its bound, the accumulated gitignored writes, the stranded
+    // Resolution loop: Leave-failed (recommended) / Autofix (bounded, model-driven
+    // fix pass + gate re-run) / Accept. The user always decides; after
+    // MAX_FINAL_GATE_AUTOFIX attempts that still FAIL the autofix card is withdrawn,
+    // so the loop cannot run unbounded.
+    //
+    // Everything the loop remembers lives in the ledger, not in closure locals: the
+    // attempt count and its bound, the accumulated gitignored writes, the stranded
     // sub-fixes, the previous failure signature, the demoted set and the
-    // rejected-edits flag. Six closure-threaded locals before, and the
-    // non-progress rule applied downstream from the evidence it judges — the shape
-    // `final-gate-progress.ts`'s own comment names as the defect.
+    // rejected-edits flag. That keeps the non-progress rule where its evidence is.
     // `GateTally`'s twin, one altitude up (autofix-ledger.ts).
     const ledger = new AutofixLedger(MAX_FINAL_GATE_AUTOFIX)
     const refreshStranded = async (): Promise<void> => {
@@ -420,9 +411,8 @@ export async function runFinalGateStage(
         }
     }
     // Commit whatever guard-clean repairs the fix passes left, on ANY terminal
-    // non-converged outcome. A run can end on LEAVE with real repairs dirty in the
-    // tree after an unattended run — the next checkout would have destroyed them
-    // silently.
+    // non-converged outcome. A run that ends on LEAVE can hold real repairs dirty in
+    // the tree, and the next checkout would destroy them silently.
     const commitStranded = async (outcome: 'accepted' | 'left-failed'): Promise<void> => {
         const stranded = ledger.stranded()
         if (stranded.length === 0) return
@@ -434,13 +424,11 @@ export async function runFinalGateStage(
             )
             return
         }
-        // REPORT WHAT ACTUALLY HAPPENED. This bound the CommitResult to
-        // `sha` and interpolated it, so the trail read "committed 5 stranded fix-pass
-        // change(s) as [object Object]". Worse than cosmetic: `commit` returns
-        // {committed, reason?, note?} and NEVER a sha, the `committed` field was never
-        // read, and gitCommitAll returns {committed:false} WITHOUT throwing on an
-        // unmerged index — so on that path the catch below never fires and the trail
-        // claimed a commit over changes that were still sitting in the working tree.
+        // REPORT WHAT ACTUALLY HAPPENED, which means reading `committed`. A
+        // CommitResult is {committed, reason?, note?} and carries NO sha, and
+        // gitCommitAll answers {committed:false} WITHOUT throwing — so a trail line
+        // written from the catch alone would claim a commit over changes still sitting
+        // in the working tree.
         const notCommitted = async (why: string): Promise<void> => {
             await recGate(
                 `final-gate: could NOT commit ${stranded.length} stranded fix-pass `
@@ -466,9 +454,9 @@ export async function runFinalGateStage(
     }
     while (!fin.ok) {
         const canAutofix = deps.finalGateFix !== undefined && ledger.canAutofix()
-        // The picker question shows the debts (the HUMAN weighs them); the autofix seed
-        // below deliberately does not — a fix child executed a debt claim as
-        // an `rm` instruction.
+        // The picker question shows the debts, because the HUMAN weighs them. The
+        // autofix seed below deliberately does not: a debt claim is prose about a
+        // defect, and a write-enabled child reads prose as an instruction.
         const question =
             `Final integration gate FAILED for ${id}.\n\n${fin.reason}${fin.debtNote ?? ''}\n\n`
             + 'All tasks are checked off — this is the whole-repo check '
@@ -476,16 +464,14 @@ export async function runFinalGateStage(
             + (ledger.attempts() > 0 ?
                 `\n\nAutofix attempts so far: ${ledger.attempts()}/${MAX_FINAL_GATE_AUTOFIX}.`
             :   '')
-            // Never let a partial repair be invisible at the moment the human decides
-            // (a config fix that made the test command pass was stranded
-            // by an ACCEPT).
+            // Never let a partial repair be invisible at the moment the human
+            // decides — an ACCEPT here would otherwise strand a real fix.
             + strandedFixNote([...ledger.stranded()])
         // YOLO: keep autofixing WHILE the card is still offered — the loop withdraws it
         // after MAX_FINAL_GATE_AUTOFIX, so the cap that bounds a non-converging fix pass
         // still bounds this — then LEAVE the run failed. Never 'accept': an unattended
         // run that could not green the whole-repo gate has not produced a working
-        // project, and a shows what an accepted FAIL looks like afterwards (a
-        // shipped app that 404s at `/`).
+        // project, and nobody is there to judge the FAIL it would be accepting.
         const yoloFinal = yoloFinalGateChoice(isYoloMode(), canAutofix)
         if (yoloFinal !== null) {
             await recGate(`final-gate: auto-chose ${yoloFinal.action.toUpperCase()} ${YOLO_STAMP}`)
@@ -560,10 +546,9 @@ export async function runFinalGateStage(
                     `${id}: final integration gate ${fix.unobserved ? 'is UNOBSERVED' : 'PASSES'} after autofix — ${fix.reason.slice(0, 140)}`,
                     fix.unobserved ? 'warning' : 'info'
                 )
-                // The gate's own outcome, whole, with this door's reason on it. It
-                // as a two-key literal, `openDebts` and `observedFailures`
-                // were dropped and `reconcileDebts` was the only thing putting one of
-                // them back — the recorded defect.
+                // The gate's own outcome, WHOLE, with this door's reason on it.
+                // Rebuilding it as a two-key literal would drop `openDebts` and
+                // `observedFailures` from the value entirely.
                 fin = {...(fix.gate ?? fin), ok: true, reason: fix.reason}
                 // The gate itself just passed, statics included, so `staticOk` here is
                 // proof rather than assumption.
@@ -593,12 +578,12 @@ export async function runFinalGateStage(
                 `${id}: final-gate autofix did not converge — ${fix.reason.slice(0, 140)}`,
                 'warning'
             )
-            // NON-PROGRESS CLASSIFIER. An attempt that changed the
-            // tree, re-ran the gate, and got back the SAME ranked-first failure as the
-            // previous such attempt is evidence about the CHECK, not the fix:
-            // burned all three attempts on a boot probe that could not observe a
-            // listener in that sandbox at all. Demote that one check to
-            // UNOBSERVED-with-debt and let the REMAINING checks decide.
+            // NON-PROGRESS CLASSIFIER. An attempt that changed the tree, re-ran the
+            // gate, and got back the SAME ranked-first failure as the previous such
+            // attempt is evidence about the CHECK, not about the fix — a check that
+            // cannot observe anything in this environment answers identically however
+            // the tree moves. Demote that one check to UNOBSERVED-with-debt and let
+            // the REMAINING checks decide.
             //
             // The judgement, the observed check and the signature carry-forward are
             // the ledger's — made where the evidence is, not downstream from it.
@@ -654,12 +639,10 @@ export async function runFinalGateStage(
             // next picker and the next fix seed target only what is still falsifiable —
             // never re-aiming the child at the check the classifier just proved it
             // cannot move.
-            // Outcome to outcome. The base is the FRESH gate outcome when the fix
-            // pass got as far as re-running it, otherwise the one we already hold —
-            // and either way it arrives whole, so nothing (`openDebts`,
-            // `observedFailures`) is dropped by the assignment. As a
-            // literal with four keys, and the field it omitted is the recorded
-            // defect.
+            // Outcome to outcome, WHOLE. The base is the FRESH gate outcome when the
+            // fix pass got as far as re-running it, otherwise the one we already hold;
+            // either way it is spread rather than rebuilt, so no field (`openDebts`,
+            // `observedFailures`) is dropped by the assignment.
             const base = fix.gate ?? fin
             const carried = base.failures === undefined ? undefined : ledger.remaining(base)
             fin = {
@@ -688,9 +671,9 @@ export async function runFinalGateStage(
             :   'final-gate: left failed (user)'
         )
         // Leaving the run failed is TERMINAL for an unattended run, so the fix passes'
-        // guard-clean repairs are committed here too — a left 13 of them dirty for
-        // a `git checkout` to destroy. The user
-        // still owns the outcome; they own it with the work in HEAD, named in the trail.
+        // guard-clean repairs are committed here too, rather than left dirty for a
+        // `git checkout` to destroy. The user still owns the outcome; they own it with
+        // the work in HEAD, named in the trail.
         await commitStranded('left-failed')
         return {
             kind: 'failed',
