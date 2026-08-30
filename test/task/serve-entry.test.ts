@@ -13,7 +13,6 @@ import {
     serveEntryGateFailureText
 } from '../../src/task/serve-entry.js'
 
-/** The shipped entry, verbatim in shape. */
 const RUN18_ENTRY =
     "import {Hono} from 'hono'\n"
     + "import {admin} from './routes/admin'\n"
@@ -52,8 +51,8 @@ describe('findAppConstructions', () => {
     })
 
     test('a construct NAMED in a string is not a construct', () => {
-        // pi-task scanned itself and found seven "server apps" — all of them the
-        // human-readable labels in this module's own pattern table.
+        // A module that NAMES the constructs — a detector, a doc, the scanner's
+        // own pattern table — is not a module that builds one.
         expect(findAppConstructions("const label = 'new Hono()'")).toEqual([])
         expect(findAppConstructions('describe("express()", () => {})')).toEqual([])
     })
@@ -78,7 +77,6 @@ describe('findBindEvidence', () => {
 
     test('`export default X` binds only when X is an app the tree constructed', () => {
         expect(findBindEvidence('export default app', new Set(['app']))).toBe('export default app')
-        // aiz-client's `export default App` is a React component, not a listener.
         expect(findBindEvidence('export default App', new Set())).toBeNull()
         expect(findBindEvidence('export default defineConfig({plugins: []})')).toBeNull()
     })
