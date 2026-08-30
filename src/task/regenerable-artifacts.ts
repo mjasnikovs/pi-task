@@ -1,14 +1,10 @@
 /**
  * The one place that knows which repo paths are regenerable machine OUTPUT.
  *
- * This module exists because the knowledge was in exactly one module and two
- * others needed it. `git-state-guard.ts` knew `test-results/` was
- * regenerable and used it for VERDICT decisions only; `write-guard.ts`'s deletion
- * guard did not, so it rejected two whole fix attempts over three Playwright
- * failure screenshots — taking each attempt's real `src/client/api.test.tsx`
- * repair with them — and `auto-commit.ts` did not, so its blind `git add -A` is
- * how the screenshots became tracked in the first place. Three modules, one fact,
- * shared with neither of the two that needed it. Import from here; do not copy.
+ * Three call sites need the fact and all three import it from here rather than
+ * keeping a copy: `git-state-guard.ts` (verdicts), `write-guard.ts` (whether a
+ * deletion rejects the whole fix attempt) and `auto-commit.ts` (what the commit
+ * may newly track). Import from here; do not copy.
  *
  * TWO LISTS, and the split between them is the whole point.
  *
@@ -21,26 +17,12 @@
  * deliverable, so it is narrower, and `dist/`, `build/`, `.next/`, `.turbo/` and
  * `.svelte-kit/` are deliberately NOT in it.
  *
- * Measured over a few hundred git work trees on one machine:
- *
- *     trees tracking any artifact path      33   (all of them have .pi-tasks)
- *     test-results/                         33 trees / 33 files
- *.last-run.json                        33 trees / 33 files  ← the SAME 33 files
- *     dist/, build/,.next/,.turbo/,.svelte-kit/, playwright-report/,
- *     coverage/,.nyc_output/, *.tsbuildinfo      0 trees
- *
- * So `test-results/` and `.last-run.json` are exempt on MEASUREMENT — they are the
- * only artifact paths this corpus tracks at all, and the one real episode is
- * exactly a tracked `test-results/` deletion. `playwright-report/`, `coverage/`,
- * `.nyc_output/` and `*.tsbuildinfo` are exempt BY CONSTRUCTION with zero corpus
- * evidence either way: none of the four has a hand-authored form, so there is no
- * version of them that is a deliverable. `dist/` and its family have exactly the
- * hand-authored form the other six lack — a published package's `dist/` IS the
- * shipped artifact — and with 0 tracked instances here the exemption would never
- * fire anyway, so it would buy nothing while carrying that risk.
- *
- * 32 of the 33 trees are one A/B harness's delivery trees built from a single * DESIGN/PROJECT.md: 32 independent RUNS of one project shape, which is evidence
- * of reproducibility and not of breadth. The 33rd is itself.
+ * The line between the two lists is whether the path has a HAND-AUTHORED form.
+ * `test-results/`, `playwright-report/`, `coverage/`, `.nyc_output/`,
+ * `.last-run.json` and `*.tsbuildinfo` have none — no version of them is
+ * somebody's deliverable — so deleting one can never destroy work. `dist/` and
+ * its family do: a published package's `dist/` IS the shipped artifact, so a
+ * delete there can.
  */
 
 /** Directory prefixes and file names that are regenerable test/build output. */
@@ -63,7 +45,8 @@ export const DELETION_EXEMPT_ARTIFACT_PATTERNS: readonly RegExp[] = [
     /\.tsbuildinfo$/
 ]
 
-/** Human-readable form of the exempt list, for trail lines and pathspecs. */
+/** Human-readable form of the exempt list. Nothing in this repo reads it today;
+ *  the guards go through {@link isDeletionExemptArtifact}. */
 export const DELETION_EXEMPT_ARTIFACT_GLOBS: readonly string[] = [
     'test-results/',
     'playwright-report/',
