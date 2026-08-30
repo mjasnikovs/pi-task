@@ -19,16 +19,16 @@ const env =
     (k: string): string | undefined =>
         vars[k]
 
-describe('research fan-out budget (5B: CAP/SCALE unwired; 9: progress deadline shipped)', () => {
-    test('CAP and SCALE are OFF by default — both were rejected, not measured', () => {
+describe('research fan-out budget', () => {
+    test('CAP and SCALE are OFF by default', () => {
         expect(projectDocsBudget(env({}))).toBeNull()
         expect(fanoutTimeoutPolicy(env({}))).toBeNull()
     })
 
-    // : the progress deadline is the one lever here that SHIPPED, so its
-    // env var flipped meaning — it is the off switch now. These four cases are the
-    // whole contract, and the last one is the one that bites: a run that means to
-    // measure the old behaviour must SPELL it.
+    // The progress deadline is the one lever here that is ON by default, so its env
+    // var is an OFF switch rather than an on switch. These four cases are its whole
+    // contract; the last is the one that bites, because turning it off has to be
+    // spelled out explicitly.
     test('the progress ceiling is ON by default, and the env var turns it OFF', () => {
         expect(workerProgressCeilingMs(env({}))).toBe(DEFAULT_WORKER_PROGRESS_CEILING_MS)
         expect(workerProgressCeilingMs(env({[WORKER_PROGRESS_CEILING_ENV]: ''}))).toBe(
@@ -53,10 +53,9 @@ describe('research fan-out budget (5B: CAP/SCALE unwired; 9: progress deadline s
         }
     })
 
-    test('carry-forward is still OFF by default — only the progress half shipped', () => {
-        // The full 2x2 attributed the win to the progress deadline alone. Carry
-        // alone was HARMFUL (one task: exit=143 on all three attempts where
-        // baseline's third completed) and produced the only observed fabrication.
+    test('carry-forward is OFF by default', () => {
+        // The two levers are independent: the progress deadline defaults ON,
+        // carry-forward defaults OFF and needs its env var set to exactly '1'.
         expect(workerCarryForward(env({}))).toBe(false)
         expect(workerCarryForward(env({[WORKER_CARRY_FORWARD_ENV]: '1'}))).toBe(true)
     })
