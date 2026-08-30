@@ -12,12 +12,10 @@ import {DEFAULT_LOOP_DETECTOR, DEFAULT_LOOP_PROGRESS} from '../../src/workers/wo
 /**
  * CHILD-side command watchdog (the gate-child half of shared/command-watchdog.ts).
  *
- * The regression these cover: the watchdog shipped in v0.18.26 hooks host
- * extension events, but every child pi runs `--no-extensions`, so a hung command
- * inside a verify / lint-fix / recommend / final-fix child was unguarded. Proven
- * live before the fix — a gate child ran a never-returning `./verify.sh` and was
- * still running 240s later with `timedOut=false stalled=false`, killed only by
- * the harness's own outer cap.
+ * The host-side watchdog hooks pi extension events, and every child pi is spawned
+ * `--no-extensions` (CHILD_BASE_ARGS in shared/child-process.ts). So a command
+ * that never returns inside a verify / lint-fix / recommend / final-fix child has
+ * nothing watching it but this.
  *
  * The hung-command cases use fakeSpawnKillable, whose child never closes on its
  * own — so if the watchdog fails to fire, the test hangs rather than fails.
@@ -43,8 +41,8 @@ describe('commandCeilingForAttempt', () => {
         expect(commandCeilingForAttempt(base, 0)).toBe(base)
         expect(commandCeilingForAttempt(base, 1)).toBe(base / 2)
         expect(commandCeilingForAttempt(base, 2)).toBe(base / 4)
-        // The point of the halving: bound the worst case well under 3× the
-        // ceiling, which is what a model ignoring the hint would otherwise cost.
+        // The point of the halving: three attempts at the full ceiling would cost
+        // 3× it. Halving keeps the worst case under 2×.
         const worstCase = [0, 1, 2].reduce((t, n) => t + commandCeilingForAttempt(base, n), 0)
         expect(worstCase).toBeLessThan(base * 2)
     })
@@ -72,7 +70,8 @@ describe('command watchdog — child side', () => {
         const prompts: string[] = []
         const r = await runWorker({
             prompt: 'verify the task',
-            // as the gate children run: unbounded worker
+            // as the gate children run: no whole-worker clock, so the command
+            // watchdog is the only thing that can end this
             profile: 'adhoc',
             contextWindow: 'unknown',
             override: {
