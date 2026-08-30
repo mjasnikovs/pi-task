@@ -14,6 +14,9 @@ interface Call {
 }
 
 // Records every command and returns canned output keyed by a subcommand label.
+// The label is derived from the argv, not taken from it: `status`,
+// `serve-status`, `serve-off`, `serve-set`, else `args[0]`. An unmapped label
+// answers exit 0 with empty output.
 function recordingRun(map: Record<string, {stdout?: string; stderr?: string; exitCode?: number}>): {
     run: Run
     calls: Call[]
