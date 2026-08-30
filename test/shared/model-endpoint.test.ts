@@ -1,7 +1,10 @@
 /**
- * model-endpoint tests — discovery reads a real fixture agent dir; the probe
- * runs against real sockets (a live Bun server, a closed port, a server that
- * never answers), because its whole value is faithfulness to real reachability.
+ * Nothing here is mocked. Discovery reads a models.json written into a real
+ * temp dir; every probe test runs against a real socket — a live Bun server, a
+ * port bound then closed, a server that accepts and never answers.
+ *
+ * The module's whole value is that it reports what is actually reachable, so a
+ * faked transport would test the fake.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -99,7 +102,8 @@ describe('probeModelEndpoints', () => {
 })
 
 describe('probeChatTemplateCaps', () => {
-    /** A /props body in the shape llama-server b10618 actually returns. */
+    /** The shape llama-server's /props really returns: `build_info`, `model_path`,
+     *  `chat_template` and `chat_template_caps` are all top-level keys on it. */
     const PROPS = (caps: Record<string, boolean>, template: string): string =>
         JSON.stringify({
             build_info: 'b10618-1efd800e9',
@@ -134,10 +138,11 @@ describe('probeChatTemplateCaps', () => {
     })
 
     test('a /v1 base URL still reaches /props, not /v1/props', async () => {
-        // THE PATH TRAP. Every configured llama.cpp baseUrl ends in /v1 (the
-        // OpenAI-compatible prefix) while /props lives at the server root, so a
-        // relative 'props' would resolve to /v1/props, 404, and report `null` —
-        // a silent loss of the better signal rather than a visible bug.
+        // /props lives at the SERVER ROOT while a configured llama.cpp baseUrl
+        // carries the OpenAI-compatible /v1 prefix, so the request must not
+        // inherit it. `seen` is what proves it: the probe hit /props and nothing
+        // else. A /v1/props would 404 and report `null`, losing the better
+        // signal silently instead of failing visibly.
         const seen: string[] = []
         const srv = Bun.serve({
             port: 0,
@@ -172,9 +177,10 @@ describe('probeChatTemplateCaps', () => {
     })
 
     test('null — never a throw — for every backend that is not llama.cpp', async () => {
-        // `null` is a first-class result, not an error: it is what EVERY other
-        // server returns, and the caller must degrade to the models.json view
-        // rather than warn about a server it could not read.
+        // `null` is a first-class result, not an error. Three ways a non-llama.cpp
+        // server says "no /props here" — 404, a non-JSON 200, and JSON without a
+        // `chat_template_caps` — all have to land on it, so the caller degrades to
+        // the models.json view instead of warning about a server it could not read.
         const notFound = Bun.serve({port: 0, fetch: () => new Response('x', {status: 404})})
         const notJson = Bun.serve({port: 0, fetch: () => new Response('<html>')})
         const noCaps = Bun.serve({port: 0, fetch: () => new Response(JSON.stringify({a: 1}))})
@@ -192,9 +198,9 @@ describe('probeChatTemplateCaps', () => {
     test('null for an unreachable endpoint, without hanging the caller', async () => {
         const srv = Bun.serve({port: 0, fetch: () => new Response('x')})
         const port = srv.port
-        // AWAITED, not voided: the point of the test is that the port is closed
-        // before the probe runs. A backgrounded stop would race the probe
-        // against a still-listening socket and pass for the wrong reason.
+        // AWAITED, not voided. Run against a server that is still listening, this
+        // probe also returns null — the body `x` is not JSON — so the assertion
+        // below PASSES either way. Only awaiting the stop makes it test closure.
         await srv.stop(true)
         expect(await probeChatTemplateCaps(`http://127.0.0.1:${port}`, 500)).toBeNull()
     })
