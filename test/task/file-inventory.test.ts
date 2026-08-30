@@ -52,8 +52,9 @@ describe('getFileInventory', () => {
     })
 
     test('returns tracked files from a real git repo', async () => {
-        // Skip if git isn't on PATH — the helper deliberately swallows errors
-        // and returns '', so testing the success path requires git.
+        // Skip if git is not on PATH. The helper collapses EVERY failure to ''
+        // — non-git tree, missing git, cancelled run — because '' is the signal
+        // both callers branch on. So without git this would pass vacuously.
         if (spawnSync('which', ['git']).status !== 0) return
         await withTmpTaskDir(async cwd => {
             spawnSync('git', ['init', '-q'], {cwd})
@@ -92,9 +93,10 @@ describe('getFileInventory', () => {
 })
 
 /**
- * `getFileInventory` receives the run-long orchestrator signal, so — exactly as
- * in runChild (GitHub issue #9) — a listener left behind by a normally finished
- * `git ls-files` would retain that child for the rest of the run.
+ * `getFileInventory` is handed the run-long orchestrator signal, and ONE
+ * AbortController is shared across a whole run. So a listener left attached by a
+ * `git ls-files` that finished normally retains that child for the rest of the
+ * run — once per call, silently. Detaching on settle is what stops it.
  */
 describe('getFileInventory abort-listener lifecycle', () => {
     test('detaches its abort listener once git finishes', async () => {
