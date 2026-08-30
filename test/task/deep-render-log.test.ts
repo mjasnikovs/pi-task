@@ -1,10 +1,13 @@
 /**
- * The request-log half of deep-render-check: the derivation that replaced the two
- * counters, and the two rules that read the log those counters would hide.
+ * The request-log half of deep-render-check.
  *
- * The verdict table for everything else lives in deep-render-check.test.ts and is
- * unchanged — these are the cases that could not be expressed before, because the
- * facts carried two integers and one request.
+ * `deriveLegacyFacts` reduces the whole log to what the rest of the judge needs:
+ * the auth request, and two counters — post-phase XHRs attempted, and how many
+ * returned 2xx. Those counters cannot see WHAT came back, so the two rules here
+ * read the log itself.
+ *
+ * The verdict table for everything else lives in deep-render-check.test.ts.
+ * These are the cases the counters alone cannot express.
  */
 import {describe, expect, test} from 'bun:test'
 import {
@@ -119,9 +122,11 @@ describe('rule A — a status that means the route is not mounted', () => {
 })
 
 describe('rule B — an XHR answered with the SPA shell', () => {
-    // The mut-one-of-eight shape: sign-in and /api/auth/me are healthy JSON,
-    // the listings route is unmounted, and the catch-all answers its XHR with
-    // index.html at 200. Both counters say healthy; the app is not.
+    // One route of several is broken: sign-in and /api/auth/me answer healthy
+    // JSON, the listings route is not mounted, and the SPA catch-all answers its
+    // XHR with index.html at 200. `postAuthDataAttempted` and `postAuthData2xx`
+    // both count that as a success, so the counters say healthy and the app is
+    // not. Only the content-type on the log entry gives it away.
     test('200 text/html on an XHR FAILS even when every counter is green', () => {
         const f = session([
             login(200),
