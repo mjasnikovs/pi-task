@@ -10,11 +10,10 @@ import type {ReconcileResult, GitStateSnapshot} from '../../src/task/git-state-g
 import {ChildStatus, type ChildStatusDeps} from '../../src/task/child-status.js'
 
 /**
- * None of this was reachable before. The runner lived inside buildGateDeps'
- * ~700-line closure, which no test calls, so the git-state-guard wiring — the
- * mechanism that discards a verify verdict computed on a tree the child mutated
- * — could only be observed indirectly through a fake `mutationCheck`
- * one layer up. `runWorker` and the git helpers are injected now.
+ * `makeGateChild` takes `runWorker`, the git helpers and the status object as
+ * injected deps, so these tests assert the parts that are otherwise only visible
+ * from inside a running gate: the capture/worker/reconcile ORDER, the trail lines
+ * the guard writes, and the throwing-child path.
  */
 
 const workerResult = (over: Partial<RunWorkerResult> = {}): RunWorkerResult =>
@@ -71,8 +70,8 @@ function harness(over: Partial<GateChildDeps> = {}): {
         logPath: '/repo/.pi-tasks/verify-debug.log',
         commandTimeoutMs: 900_000,
         streamInactivityMs: 120_000,
-        // Default harness runs at 'inherit' — the shipped state, so every
-        // existing assertion still describes the argv it was written against.
+        // `[]` is the fragment `groupThinkingArgs` returns for `inherit`: no
+        // `--thinking` flag, so the child keeps the session default.
         thinking: [],
         status: status(() => () => order.push('loader-stopped')),
         runWorker: input => {
@@ -134,11 +133,8 @@ test('enforce writes its OWN end marker, and is not guarded', async () => {
 })
 
 test('enforce now logs its tree changes too — it is a WRITE-capable child', () => {
-    // Deliberate consequence of the capability rule. The old inline enforce copy
-    // had no tree-change block at all, so a read,edit child rewrote files with no
-    // record of what it touched — the same invisibility the rule was written for
-    // after the final-fix child's `rm`. Exempting enforce by KIND
-    // would reintroduce exactly the per-phase exception the rule replaces.
+    // Enforce is unguarded but still WRITE-capable, so the tree-change block
+    // reaches it through the tools test below, not through a row in the table.
     expect(GATE_CHILD_KINDS.enforce.guarded).toBe(false)
 })
 
@@ -186,8 +182,8 @@ describe('the git-state guard', () => {
     })
 
     test('BENIGN cleanup is trailed but never notified — the verdict stands', async () => {
-        // Most guard firings are pure test-results churn. Notifying
-        // on those trains the user to ignore the warning that matters.
+        // `verdictTainted: false` is the regenerable test-runner output a child
+        // left behind. Notifying on it would drown the tainted-verdict warning.
         const {deps, log, notices} = harness({
             reconcileGitState: () =>
                 Promise.resolve({
@@ -216,8 +212,8 @@ describe('the git-state guard', () => {
 })
 
 describe('tree-change capture keys on TOOLS, not on kind', () => {
-    // A final-fix child's `rm` runs invisibly otherwise. Deciding by capability
-    // rather than by phase is what stops a future write-capable kind repeating it.
+    // makeGateChild matches `/\b(?:edit|bash|write)\b/` against the tools string,
+    // so a new write-capable kind is covered without adding a row to the table.
     for (const tools of ['read,edit', 'read,bash', 'read,write']) {
         test(`${tools} logs its tree changes`, async () => {
             const {deps, log} = harness()
@@ -271,14 +267,13 @@ test('tool results are logged for verify and withheld for enforce', async () => 
 })
 
 /**
- * The four callbacks handed to runWorker and startAutoLoader. Each is a closure
- * the harness above never invoked, and each one is the ONLY way a piece of
- * live state reaches the user: the widget's step and trailer, the discarded
- * attempts a restart otherwise hides, and the context gauge.
+ * The four closures makeGateChild hands out — the loader's frame getter, `onLine`,
+ * `onContextUsage` and `onRestart`. The default harness above returns without
+ * calling any of them, so nothing else in this file exercises their bodies.
  */
 describe('the live-state callbacks', () => {
-    /** A harness whose fake loader captures the state getter so the test can
-     *  render a frame at any point, exactly as the 100ms tick does. */
+    /** A harness whose fake loader captures the state getter, so a test can render
+     *  a frame at any point the way the loader's refresh interval does. */
     function loaderHarness(over: Partial<GateChildDeps> = {}) {
         let snapshot: (() => unknown) | null = null
         const capturing = status((_ctx, getState) => {
@@ -342,8 +337,8 @@ describe('the live-state callbacks', () => {
             }
         })
         await makeGateChild(deps)('read', 'x')
-        // The status was reset before the child, so there is no previous window
-        // to prefer: the parent's 200k is the fallback.
+        // makeGateChild calls status.reset() first, clearing any previous usage,
+        // so resolveContextUsage falls through to the parent window.
         expect(frame()?.contextUsage).toEqual({tokens: 4_000, contextWindow: 200_000, percent: 2})
     })
 
@@ -377,12 +372,9 @@ describe('the live-state callbacks', () => {
 /**
  * THE CALL SITE NAMES THE PROFILE.
  *
- * The other half of the no-behaviour-change proof lives in
- * `workers/worker-profiles.test.ts`, which checks that the `gate` profile
- * RESOLVES to what this call site would otherwise spell out inline. That says nothing
- * about whether this call site still asks for `gate`, or still hands it the two
- * config ceilings — which is the mistake a refactor actually makes. This closes
- * the chain: call site -> profile -> policy -> behaviour.
+ * `workers/worker-profiles.test.ts` asserts what the `gate` profile RESOLVES to.
+ * That is silent on whether this call site still asks for `gate` and still feeds
+ * it the two config ceilings, which is what these two tests pin.
  */
 describe('gate child guard policy', () => {
     test('asks for the `gate` profile and feeds it the two configured ceilings', async () => {
@@ -397,10 +389,9 @@ describe('gate child guard policy', () => {
     })
 
     test('names no guard of its own — the profile IS the whole policy', async () => {
-        // An override here would be the hand-picked subset WORKER_PROFILES
-        // exists to stop. `worker-profiles.test.ts` fails the build if one
-        // appears anywhere in production source; this says it about the one
-        // call site that would otherwise carry four guard literals.
+        // `worker-profiles.test.ts` fails the build if `override:` appears in any
+        // production source file. This asserts it from the other end: the input
+        // this call site actually builds carries none.
         const h = harness()
         await makeGateChild(h.deps)('read,edit', 'do it')
         expect(h.seenInput[0]!.override).toBeUndefined()
