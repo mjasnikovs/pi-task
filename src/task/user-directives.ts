@@ -3,14 +3,11 @@
  * directives a user writes into a raw task prompt, so a downstream rewrite (refine)
  * cannot silently drop them.
  *
- * The failure this closes: the raw prompt was
- *   "Research Playwright best practices VIA WEB SEARCH — focus on E2E testing…"
- * Refine rewrote the task well in every other respect (it correctly killed a wrong
- * "Next.js" framing) but the "via web search" instruction vanished from the refined
- * spec entirely — and the whole 2-run session then made ZERO pi-worker-search and
- * ZERO pi-worker-fetch calls. A user who explicitly asks for web search must get
- * web search; the model's paraphrase is not allowed to quietly demote it to
- * "research from local files".
+ * The failure this closes: a raw prompt saying "research X VIA WEB SEARCH" can be
+ * rewritten well in every other respect while the "via web search" instruction
+ * vanishes from the refined spec. Nothing downstream then asks for web search, so
+ * none happens. A user who explicitly names a tool must get that tool; a
+ * paraphrase is not allowed to quietly demote it to "research from local files".
  *
  * The mechanism is the lever, the prompt is the belt: refine is HANDED the
  * directives as a MUST-PRESERVE block (prompt), and — because a weak model still
