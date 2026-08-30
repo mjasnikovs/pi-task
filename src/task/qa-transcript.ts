@@ -3,25 +3,18 @@
  * (`/task-auto`) — and the one place its numbering, its formatting and its
  * provenance policy live.
  *
- * `question-dialog.ts` unified the ANSWER side of these loops: the picker cards
- * and the reply mapping. It did not unify what the loop RECORDS, and that was
- * eight retyped push sites across two files, each choosing a suffix by hand
- * according to which branch of an `if/else` it stood in.
+ * `question-dialog.ts` owns the ANSWER side of these loops — the picker cards and
+ * the reply mapping. This owns what the loop RECORDS.
  *
- * The cost is written into the code. `phases.ts` states the invariant in a
- * comment — *"No provenance stamp here, unlike clarify's transcript: this string
- * is fed back VERBATIM into the next grill-gen prompt, so a `(accepted
- * recommendation)` suffix would become model input"* — and TWELVE LINES ABOVE it,
- * the YOLO branch pushes `${answer} ${YOLO_STAMP}` into that very array. The rule
- * was violated inside the loop body that declares it, because the rule lived in
- * prose and the decision lived at each push.
- *
- * Here it is a property of a value: an entry states its KIND, and the policy says
- * where that kind's provenance is allowed to appear.
+ * Provenance is a property of a value here, not a decision taken at each push
+ * site: an entry states its KIND, and the policy says where that kind's
+ * provenance is allowed to appear. The two renderings below differ ONLY in those
+ * suffixes, which is how a hand-stamped transcript drifts apart unnoticed.
  *
  * NOT unified here: `plan-session.ts`'s `PlanEntry` transcript. It is a different
- * shape — decisions vs advisory notes, persisted to its own task file, with no
- * `Qn:`/`An:` numbering — and folding it in would be a rename, not a deepening.
+ * shape — model decisions, advisory notes and user-stated decisions in one list,
+ * persisted to its own task file — and folding it in would be a rename, not a
+ * deepening.
  */
 
 import {YOLO_STAMP} from './yolo.js'
@@ -69,7 +62,6 @@ export interface QaPolicy {
      * becomes model input describing how the answer was obtained rather than what
      * it was. Clarify deliberately shows its generator the provenance, so a
      * question the triage already settled reads as settled and is not re-asked.
-     * An option, not a unification — it is observable either way.
      */
     generatorSeesProvenance: boolean
 }
@@ -78,10 +70,11 @@ export interface QaPolicy {
  * GRILL: stamps `auto` and both YOLO kinds in the record, and shows the generator
  * nothing.
  *
- * `accepted` is deliberately NOT in the record set. Grill's record reaches
- * `COMPOSE_PROMPT` and `CRITIQUE_PROMPT`, where it is named GROUND TRUTH; clarify's
- * reaches a decompose prompt. Whether those two should agree is a prompt question
- * with its own A/B, so today's answer is preserved rather than harmonised here.
+ * `accepted` is deliberately NOT in the record set, and clarify's policy below
+ * disagrees. Grill's record is handed to `COMPOSE_PROMPT` and `CRITIQUE_PROMPT`
+ * (the latter names the Q&A GROUND TRUTH); clarify's is handed to
+ * `AUTO_DECOMPOSE_PROMPT`. Whether the two should agree is a question about those
+ * prompts, so each keeps its own answer here.
  */
 export const GRILL_QA_POLICY: QaPolicy = {
     record: new Set<QaKind>(['auto', 'yolo', 'yolo-skip']),
@@ -120,7 +113,7 @@ export class QaTranscript {
         return this._entries
     }
 
-    /** Record one answered question. The number is assigned here, not by the caller. */
+    /** Record one answered question. Position IS the number; no caller supplies one. */
     add(kind: QaKind, question: string, answer: string): void {
         this._entries.push({kind, question, answer})
     }
