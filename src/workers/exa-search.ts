@@ -1,11 +1,14 @@
 /**
- * Web search via Exa's public MCP endpoint — no API key required.
+ * Web search via Exa's public MCP endpoint. No API key: search-types.ts gives
+ * `exa` an empty env-var list, and the endpoint answers an unauthenticated POST.
  *
- * Exa hosts https://mcp.exa.ai/mcp as an intentionally keyless entry point: a
- * single JSON-RPC `tools/call` of `web_search_exa` returns search results with
- * content snippets. The response is SSE-framed (`data:` lines) or plain JSON,
- * and the result payload is one text blob of `Title:`/`URL:`/`Text:` blocks
- * separated by `---`, which we parse back into structured results.
+ * One JSON-RPC `tools/call` of `web_search_exa` against https://mcp.exa.ai/mcp
+ * returns the results. The response comes back `text/event-stream` — an
+ * `event: message` line and one `data:` frame — and `parseRpcBody` also accepts a
+ * plain JSON body. Inside the RPC result is a single text blob of blocks
+ * separated by `---`, each carrying `Title:`, `URL:`, and then either a `Text:`
+ * label or a `Highlights:` line. `parseResultBlocks` turns that back into
+ * structured results.
  */
 
 import {httpRequest, HttpRequestError, type FetchLike} from './http-request.js'
@@ -17,8 +20,9 @@ const MAX_COUNT = 20
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_DESCRIPTION_CHARS = 400
 
-// `FetchLike` is the request seam's (http-request.ts); re-exported because
-// ddg-search and several tests import it from here.
+// `FetchLike` belongs to the request seam (http-request.ts). Re-exported because
+// ddg-search.test.ts and exa-search.test.ts import the type from here; the
+// ddg-search MODULE takes it straight from http-request.
 export type {FetchLike}
 
 export interface ExaSearchOpts {
@@ -61,7 +65,10 @@ export async function exaSearch(query: string, opts: ExaSearchOpts = {}): Promis
     )
 }
 
-/** The Exa-specific half: its argv, its status policy, its error type. */
+/** The Exa-specific half: the JSON-RPC body it posts, its status policy, and its
+ *  error type. Every failure leaves here as an ExaSearchError — `http` for a
+ *  non-2xx, `protocol` for an RPC error / an `isError` result / no text content /
+ *  an unparseable body, and `network` or `aborted` for a transport fault. */
 async function request(
     bounds: {timeoutMs: number; signal?: AbortSignal; fetchImpl?: FetchLike},
     count: number,
@@ -134,9 +141,10 @@ async function request(
 }
 
 /**
- * The endpoint answers either as a text/event-stream (`data: {json}` lines) or
- * as a plain JSON body; accept both and take the first frame carrying a
- * JSON-RPC result or error.
+ * The endpoint answers as a text/event-stream (`data: {json}` lines) in practice,
+ * but a plain JSON body parses too. Take the FIRST `data:` frame that carries a
+ * JSON-RPC `result` or `error` — frames without either (a bare
+ * `{"jsonrpc":"2.0"}`) are skipped, not treated as the answer.
  */
 function parseRpcBody(body: string): ExaMcpRpcResponse {
     for (const line of body.split('\n')) {
@@ -162,8 +170,12 @@ function parseRpcBody(body: string): ExaMcpRpcResponse {
 /**
  * Split the tool's text payload into `Title:`/`URL:` blocks. The per-result
  * content lives after a `Text:` label (full text) or a `Highlights:` line
- * (snippet mode); either becomes the description, whitespace-collapsed and
- * capped so a result line stays a snippet, not a page dump.
+ * (snippet mode); either becomes the description, whitespace-collapsed, its
+ * trailing `---` removed, and capped at MAX_DESCRIPTION_CHARS so a result line
+ * stays a snippet, not a page dump.
+ *
+ * A block with no `URL:` is dropped entirely. A block with an empty `Title:`
+ * keeps the URL as its title, so a result is never nameless.
  */
 function parseResultBlocks(text: string): SearchResult[] {
     const blocks = text.split(/(?=^Title: )/m).filter(b => b.trim().length > 0)
