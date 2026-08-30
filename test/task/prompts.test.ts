@@ -143,21 +143,20 @@ describe('research prompts enforce relevance / size discipline', () => {
     test('APIS prompt tells the worker to verify runtime builtin imports, not echo them', () => {
         const p = RESEARCH_APIS_PROMPT('task')
         expect(p).toContain('RUNTIME BUILTINS')
-        // Names the concrete phantom and its real replacement so the worker emits
-        // the canonical import instead of the spec doc's invented colon-specifier.
+        // `bun:sql` does not resolve on the installed bun; `import { sql } from "bun"`
+        // does. Naming both in the prompt is what stops the worker echoing the
+        // colon-specifier a spec doc invented.
         expect(p).toContain('bun:sql')
         expect(p).toContain('import { sql } from "bun"')
         expect(p.toLowerCase()).toContain('do not echo')
     })
 
     /**
-     * STAGE 2 — the APIS OUTPUT CONTRACT lever is UNWIRED. Its A/B (scripts/
-     * drove behaviour-class package queries from almost none to nearly all — the one
-     * lever of three that moved worker:apis at all — but FAILED invariant 2a: the ungrounded-
-     * symbol rate rose several-fold because the model filled every semantics field
-     * and used the mandatory `UNVERIFIED:` abstention zero times. So the shipped APIS prompt
-     * must NOT carry it. This test is a regression guard against an accidental re-wire; the
-     * contract's own text is tested on the module in src/task/apis-contract.test.ts.
+     * APIS_SEMANTICS_CONTRACT is deliberately NOT wired into the shipped APIS
+     * prompt: it mandates a semantics field per symbol, and a model that fills
+     * every field rather than abstaining with `UNVERIFIED:` reports more ungrounded
+     * symbols, not fewer. The module and its text are exercised on their own in
+     * test/task/apis-contract.test.ts; this only guards against a re-wire.
      */
     test('APIS prompt does NOT carry the (failed, unwired) semantics contract', () => {
         const p = RESEARCH_APIS_PROMPT('task')
