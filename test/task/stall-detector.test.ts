@@ -14,8 +14,8 @@ const read = (path: string, offset?: number) => ({
 describe('StallDetector — no-new-ground rule', () => {
     test('forward paging through one big file never trips, however many pages', () => {
         const d = new StallDetector()
-        // The live shape this must not kill: a 25 KB design file the child can
-        // only see 100 lines at a time. Every page returns bytes it has not seen.
+        // The shape this must not kill: a file too big to read whole, paged
+        // forward. Every page returns bytes the child has not seen.
         for (let n = 0; n < 200; n++) {
             expect(d.record(read('DESIGN/marketplace.html', n * 100 + 1))).toBeNull()
             d.noteResult(`page ${n}`)
@@ -41,9 +41,9 @@ describe('StallDetector — no-new-ground rule', () => {
     })
 
     test('a refused read is dead ground however the offset varies', () => {
-        // The measured live thrash: the single-read guard refuses 197 of 200
-        // calls, each at a different RISING offset. By arguments that is textbook
-        // forward paging; by result it is the same refusal over and over.
+        // A guard that refuses the read returns the SAME text at every offset.
+        // By arguments this is textbook forward paging; noteResult sees one
+        // identical refusal after another.
         const d = new StallDetector()
         const refusal =
             'You already read a.md earlier in this run — its contents are in your context.'
@@ -72,7 +72,7 @@ describe('StallDetector — no-new-ground rule', () => {
             d.noteResult('same bytes')
         }
         d.record(read('b.md'))
-        d.noteResult('brand new bytes') // progress
+        d.noteResult('brand new bytes')
         for (let n = 0; n < NO_PROGRESS_LIMIT - 1; n++) {
             expect(d.record(read('a.md', 900 + n))).toBeNull()
             d.noteResult('same bytes')
@@ -138,16 +138,14 @@ describe('formatStallHint', () => {
 })
 
 /**
- * The case that put this detector into runWorker.
+ * A rotation whose cycle length equals LoopDetector's window is invisible to
+ * it: every key occurs exactly once per window, so neither of its rules can
+ * count a repeat. `loop-detector.test.ts` asserts that directly — a
+ * `LoopDetector(20, 5, 5)` returns null for every call of a 20-file cycle.
  *
- * worker:tooling rotated through 20 distinct files, ~36 reads each, 550 calls,
- * for 20 minutes. LoopDetector(20, 5, 5) returned null on every one of them —
- * asserted in loop-detector.test.ts — because a cycle as long as the window
- * leaves every key occurring once per window.
- *
- * This detector cannot be fooled that way: the second lap returns bytes the
- * child has already been handed, and dead ground is dead ground whatever path
- * it came from.
+ * This detector is not fooled that way: the second lap returns bytes the child
+ * has already been handed, and dead ground is dead ground whatever path it
+ * came from.
  */
 describe('StallDetector — the window-length rotation LoopDetector cannot see', () => {
     const ROTATION = [
@@ -182,8 +180,8 @@ describe('StallDetector — the window-length rotation LoopDetector cannot see',
             // A file re-read returns the same bytes. That is the whole signal.
             else d.noteResult(`contents of ${path}`)
         }
-        // First lap is all new ground. The kill lands NO_PROGRESS_LIMIT calls
-        // into the second, long before the 20-minute ceiling the real run hit.
+        // The first lap is all new ground, so the kill can only land in the
+        // second — NO_PROGRESS_LIMIT calls into it.
         expect(killedAt).toBeGreaterThanOrEqual(ROTATION.length)
         expect(killedAt).toBeLessThan(ROTATION.length + NO_PROGRESS_LIMIT + 2)
     })
