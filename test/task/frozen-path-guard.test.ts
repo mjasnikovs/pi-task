@@ -1,10 +1,8 @@
 /**
- * frozen-path-guard tests. The pure functions (spec → frozen paths, porcelain
- * parsing) are unit-tested directly; revertFrozenPaths is exercised BOTH with a
- * fake git (deterministic call-shape assertions) and against a REAL throwaway git
- * repo (the live repro: a write-capable pass edits a spec-frozen file and the
- * guard undoes it before it could be committed), since the module's job is faithful
- * git plumbing.
+ * frozen-path-guard tests. frozenPathsFromSpec and parseChangedFrozenFiles are
+ * pure, so they are called directly. revertFrozenPaths is run twice: with a fake
+ * git, asserting the exact argv it issues, and against a real throwaway repo,
+ * asserting what is left on disk afterwards.
  */
 import {describe, expect, test} from 'bun:test'
 import {execFileSync} from 'node:child_process'
@@ -31,7 +29,7 @@ describe('frozenPathsFromSpec', () => {
             '- **Do NOT modify** `src/server/index.ts` or `./config/schema.ts`.',
             '- Never touch `src/server/` — it is frozen.'
         ].join('\n')
-        // ./ stripped, trailing / stripped, de-duplicated across lines.
+        // Leading `./` stripped, trailing `/` stripped, de-duplicated across lines.
         expect(frozenPathsFromSpec(spec).sort()).toEqual([
             'config/schema.ts',
             'src/server',
@@ -89,7 +87,8 @@ describe('revertFrozenPaths (fake git)', () => {
             return {stdout: '', exitCode: 0}
         }
         expect(await revertFrozenPaths(['src/server/index.ts'], git)).toEqual([])
-        // Only the status probe ran; no checkout/clean when nothing changed.
+        // Only the status probe ran: revertFrozenPaths returns before it reaches
+        // checkout/clean when status names no changed file.
         expect(calls).toEqual([['status', '--porcelain', '--', 'src/server/index.ts']])
     })
 
@@ -115,16 +114,17 @@ describe('revertFrozenPaths (fake git)', () => {
     })
 })
 
-// ─── Live repro on a real throwaway git repo ────────────────────────────────
+// ─── Against a real throwaway git repo ──────────────────────────────────────
 
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@t'] as const
 function gitCli(cwd: string, ...args: string[]): string {
     return execFileSync('git', [...IDENTITY, ...args], {cwd, encoding: 'utf8'}).trim()
 }
 function realGit(cwd: string): FrozenGit {
-    // Raw stdout, NOT trimmed: git porcelain uses fixed status columns, so the
-    // leading space of a ` M path` line is significant — exactly what the real
-    // auto-commit git helper returns (runChild text mode does not trim).
+    // Raw stdout, NOT trimmed, matching the real git helper: its runChild text
+    // mode preserves both the leading space and the trailing newline. Porcelain
+    // uses fixed status columns, so trimming shifts every line by one and the
+    // parse silently yields wrong paths — ` M mod.ts` trimmed parses as `od.ts`.
     return async args => {
         try {
             const stdout = execFileSync('git', [...IDENTITY, ...args], {cwd, encoding: 'utf8'})
@@ -136,14 +136,12 @@ function realGit(cwd: string): FrozenGit {
     }
 }
 
-/** A repo whose committed HEAD is the "verified task": a frozen contract file, a
- *  frozen directory, and an ordinary file the enforce pass is free to edit. */
+/** A repo whose committed HEAD stands in for the finished task: a frozen file, a
+ *  frozen directory, and an ordinary file the edit pass is free to change. */
 function makeRepo(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-frozen-test-'))
     gitCli(dir, 'init', '-q', '-b', 'main')
-    // Pin line endings so LF fixtures round-trip byte-for-byte through git on
-    // Windows CI (which defaults to core.autocrlf=true). Repo-level so the
-    // product's revert git calls honor it too.
+    // Repo-level, so the product's own revert git calls honor it too.
     gitCli(dir, 'config', 'core.autocrlf', 'false')
     fs.writeFileSync(path.join(dir, 'schema.ts'), 'export const price = positive\n')
     fs.mkdirSync(path.join(dir, 'src'))
@@ -157,19 +155,16 @@ function makeRepo(): string {
 describe('revertFrozenPaths (real git — live repro)', () => {
     test('undoes a gate pass edit to a frozen file, keeps its edit to a free file', async () => {
         const dir = makeRepo()
-        // Simulate the enforce EDIT pass: it mutates the frozen contract AND an
-        // ordinary file.
+        // The edit pass writes to the frozen file AND to an ordinary one.
         fs.writeFileSync(path.join(dir, 'schema.ts'), 'export const price = nonnegative\n')
         fs.writeFileSync(path.join(dir, 'app.ts'), 'export const app = 2 // enforce fix\n')
 
         const reverted = await revertFrozenPaths(['schema.ts'], realGit(dir))
 
         expect(reverted).toEqual(['schema.ts'])
-        // Frozen file restored to the committed state; the write did not land.
         expect(fs.readFileSync(path.join(dir, 'schema.ts'), 'utf8')).toBe(
             'export const price = positive\n'
         )
-        // The pass's legitimate edit to the free file is untouched.
         expect(fs.readFileSync(path.join(dir, 'app.ts'), 'utf8')).toBe(
             'export const app = 2 // enforce fix\n'
         )
@@ -177,7 +172,8 @@ describe('revertFrozenPaths (real git — live repro)', () => {
 
     test('a frozen DIRECTORY covers files created and modified under it', async () => {
         const dir = makeRepo()
-        // Modify a tracked file under the frozen dir and create a new one in it.
+        // One tracked file modified, one untracked file created: `checkout -f HEAD`
+        // covers the first, `clean -fdq` the second.
         fs.writeFileSync(path.join(dir, 'src', 'server.ts'), 'export const boot = 999\n')
         fs.writeFileSync(path.join(dir, 'src', 'sneaky.ts'), 'export const x = 1\n')
 
@@ -187,7 +183,6 @@ describe('revertFrozenPaths (real git — live repro)', () => {
         expect(fs.readFileSync(path.join(dir, 'src', 'server.ts'), 'utf8')).toBe(
             'export const boot = 1\n'
         )
-        // The untracked file the pass created under the frozen dir is gone.
         expect(fs.existsSync(path.join(dir, 'src', 'sneaky.ts'))).toBe(false)
     })
 
@@ -195,7 +190,6 @@ describe('revertFrozenPaths (real git — live repro)', () => {
         const dir = makeRepo()
         fs.writeFileSync(path.join(dir, 'app.ts'), 'export const app = 2\n')
         expect(await revertFrozenPaths(['schema.ts', 'src'], realGit(dir))).toEqual([])
-        // The free-file edit survives.
         expect(fs.readFileSync(path.join(dir, 'app.ts'), 'utf8')).toBe('export const app = 2\n')
     })
 })
