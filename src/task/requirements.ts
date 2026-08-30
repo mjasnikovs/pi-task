@@ -1,15 +1,12 @@
 /**
- * requirements — requirement-level coverage accounting for /task-auto planning
- *.
+ * requirements — requirement-level coverage accounting for /task-auto planning.
  *
- * The failure this closes: the design's §10 Testing section REQUIRES test-first
- * cadence, Playwright CT with screenshot baselines, a `test:ct` script, a
- * separate test DB, and a `test/` dir — and got ZERO tasks and ZERO per-task
- * injection. The coverage gate asked one holistic question ("do these tasks
- * cover the whole feature?"), and a task list that mirrors the spec's own
- * milestone list is structurally parity-complete, so the judge said COMPLETE in
- * round 1. Milestone-parity coverage is structurally blind to sections that
- * aren't milestones.
+ * The failure this closes: a single holistic coverage question ("do these tasks
+ * cover the whole feature?") is answerable YES by any task list that mirrors the
+ * spec's own milestone headings. Such a list is structurally parity-complete, so
+ * the sections that are NOT milestones — a Testing section demanding a test
+ * script, a test database, a test directory — can produce zero tasks and zero
+ * per-task injection while the judge still says COMPLETE.
  *
  * Mechanism (spec-shape-agnostic, contracts.ts pattern):
  *   1. EXTRACT requirement units as VERBATIM quotes from whatever structure the
@@ -25,10 +22,10 @@
  *      pattern: content travels, not a pointer); requirements still unmapped
  *      after the retry rounds are recorded user-visibly, never silently dropped.
  *
- * Goal C rides the same channel: when the spec mandates a verification
- * methodology ("a test lands in the same change as each new route"), that quote
- * is exactly what gets injected, and compose's VERIFY rules fold it into every
- * applicable task's runnable verification.
+ * A mandated verification methodology rides the same channel: when the spec says
+ * "a test lands in the same change as each new route", that quote is exactly what
+ * gets injected, and compose's VERIFY rules fold it into every applicable task's
+ * runnable verification.
  */
 import {normalise} from './contracts.js'
 import {makeLedger} from './ledger.js'
@@ -116,16 +113,12 @@ export function keepGroundedRequirements(
 }
 
 /**
- * Bound the list WITHOUT doc-order truncation. Two measured failure shapes drive
- * the rule:
- *  - an eager model extracts 40+ items top-down (every §1 decision row), so a
- *    plain first-N cap systematically drops the TAIL sections — exactly where
- *    keeps its testing obligations;
- *  - "given order" as the tie-break re-creates the same tail bias one level up
- *    (measured live: the model emitted 185 requirements, 178
- *    grounded — INCLUDING §9's "serves `/api` + static `dist/`", the clause
- *    whose loss shipped a permanently blank app — and the cap's doc-order fill
- *    cut all 138 past the cap, every one from the design's tail).
+ * Bound the list WITHOUT doc-order truncation. An extractor that works top-down
+ * yields more entries than the cap from the doc's early sections alone, so a
+ * plain first-N cap drops the TAIL sections wholesale — and a spec keeps its
+ * testing and deployment obligations at the end. "Given order" as the tie-break
+ * re-creates the same bias one level up.
+ *
  * Rule (deterministic priority, not a knob): entries quoting an obligation-
  * marked passage survive first; the remaining budget is filled ROUND-ROBIN
  * across the source doc's sections (each section's entries in doc order), so
@@ -138,9 +131,9 @@ export function capRequirements(
     entries: RequirementEntry[],
     passages: string[],
     sourceDoc?: string,
-    /** A/B seam: `false` reproduces the pre-budget rule, so an offline harness can
-     *  score the shipped rule against the one it replaced without transcribing
-     *  sectionFairFill and letting the copy drift. Production never passes it. */
+    /** `false` skips the low-value deprioritisation, so a caller can compare the
+     *  two fills without transcribing sectionFairFill. Production never passes it
+     *  — auto-orchestrator.ts calls this with three arguments. */
     deprioritiseLowValue = true
 ): RequirementEntry[] {
     if (entries.length <= MAX_REQUIREMENTS) return entries
@@ -158,10 +151,8 @@ export function capRequirements(
     // "MUST log every request" is 22 characters and every length-based rule reads
     // it as a fragment. Filtering ahead of the marked/rest split deleted it.
     //
-    // INSURANCE, not a demonstrated win: on the specs measured here, almost
-    // nothing is both low-value and marked. The layering matters for specs whose
-    // obligations are SHORT. Do not cite it as the reason tail coverage holds —
-    // tail coverage is identical with the filter applied before the split.
+    // The ordering only matters for specs whose obligations are SHORT; it is not
+    // what makes tail coverage hold. That is sectionFairFill below.
     const pool = deprioritiseLowValue ? budgetedByObligation(rest, budget, sourceDoc) : rest
     return [...marked.slice(0, MAX_REQUIREMENTS), ...sectionFairFill(pool, budget, sourceDoc)]
 }
@@ -174,7 +165,8 @@ const MAX_PIN_LENGTH = 80
 
 /** Cut mid-expression: an unbalanced fence or bracket, or a trailing separator.
  *  NOT `;` — a complete clause legitimately ends with one, and dropping on `;`
- *  discarded a runnable `lint` = `prettier … && eslint … && tsc --noEmit` line. */
+ *  would discard a runnable line like `lint` = `prettier … && eslint … && tsc
+ *  --noEmit`. */
 function isTruncatedQuote(q: string): boolean {
     if ((q.match(/`/g) ?? []).length % 2 === 1) return true
     for (const [open, close] of [
@@ -234,19 +226,14 @@ export function isLowValueQuote(quote: string): boolean {
  * Deprioritising the obligation-free quotes reverses that.
  *
  * BUDGETED, not absolute. Below the cap no slot is contested, so dropping there
- * destroys information and buys nothing; a run that filtered 55 quotes down to 20
- * lost its only carrier of the Argon2id obligation — a DDL row that was correctly
- * classified as one — while 20 slots sat empty. So the low-value entries come back
- * in source-doc order until the list reaches the cap.
- *
- * Absolute filtering scored marginally higher on raw count (24 gains vs 22 across
- * both pools) and was rejected anyway: its extra gains are one more obligation in
- * an already-populated list, while its one loss is an obligation vanishing from a
- * run outright. Those are not the same size of mistake.
+ * destroys information and buys nothing — a filter that runs unconditionally can
+ * leave slots empty while discarding the only carrier of a real obligation the
+ * lexical rules misread. So the low-value entries come back in source-doc order
+ * until the list reaches the cap.
  *
  * Doc order for the restore is the neutral choice: which entries return only
  * matters when more were dropped than there are free slots, and ordering by
- * anything fitted to an observed loss would be tuning the rule to one pool.
+ * anything else would fit the rule to one spec.
  */
 function budgetedByObligation(
     entries: RequirementEntry[],
@@ -334,11 +321,11 @@ function sectionFairFill(
 /**
  * DETERMINISTIC RECALL FLOOR (same medicine as the launch-contract checklist):
  * paragraphs carrying an obligation marker (word-bounded "required"/"must").
- * Extraction recall over a 20KB doc is the weak model's, and it is variance-
- * prone — measured live, 1 of 5 runs kept 16 quotes with ZERO §10 items. The
- * host enumerates the marked passages; the prompt lists their head lines as a
- * checklist, and uncoveredPassages() below turns "a marked passage produced no
- * quote" into hard evidence for one forced re-extraction.
+ * Extraction recall over a long doc is the model's, and it varies run to run, so
+ * an entire section can come back with no quotes at all. The host enumerates the
+ * marked passages; the prompt lists their head lines as a checklist, and
+ * uncoveredPassages() below turns "a marked passage produced no quote" into hard
+ * evidence for one forced re-extraction.
  */
 export function enumerateObligationPassages(doc: string): string[] {
     const out: string[] = []
@@ -433,11 +420,10 @@ export type ReqMapping = {kind: 'task'; task: number} | {kind: 'cross'} | {kind:
  * NOT exist or happen — there is no task that "delivers" an absence) or a GLOBAL
  * POLICY (a product-wide rule every slice obeys, not one slice's deliverable). The
  * per-task coverage map maps both to NONE forever, so left in the `unmapped` set
- * they kept the decompose loop's verdict INCOMPLETE and forced it to regenerate
- * the whole plan endlessly (3 un-ownable NEGATIVE requirements drove a
- * complete full-stack plan to be overwritten by a backend-only one). These belong
- * in the CROSS-CUTTING carry — injected verbatim into every task — never fed back
- * as a missing area.
+ * they hold the decompose loop's verdict at INCOMPLETE and make it regenerate the
+ * whole plan every round — which can replace a good plan with a worse one. These
+ * belong in the CROSS-CUTTING carry, injected verbatim into every task, never fed
+ * back as a missing area.
  *
  * Deterministic and precision-biased: it only reclassifies clear prohibitions and
  * clearly product-global policies. It does NOT need to catch every un-ownable line
@@ -567,13 +553,13 @@ function formatEntry(e: RequirementEntry, marker?: string): string {
  *   • `unresolved`   — grounded requirements still unmapped after the retry rounds.
  *   • `judgeFlagged` — free-text areas the holistic coverage judge flagged as
  *     uncovered that requirement-extraction never captured as a tracked entry, so
- *     the grounded channels above are structurally blind to them (*     §10's test-infra setup was seen ONLY by the judge and, having no carrier,
- *     was warned-about then dropped). These are plain strings, not quotes of the
- *     source; marked distinctly so a task can tell an inferred area from a verbatim
- *     obligation.
+ *     the grounded channels above are structurally blind to them: without this
+ *     channel such an area is warned about once and then dropped. These are plain
+ *     strings, not quotes of the source; marked distinctly so a task can tell an
+ *     inferred area from a verbatim obligation.
  *   • `danglingArtifacts` — runtime files the spec references but nothing
- *     produces (the served `index.html` no task, tree entry, or
- *     build output ever created), still unclaimed by any title at coverage
+ *     produces (an `index.html` the server serves that no task, tree entry or
+ *     build output ever creates), still unclaimed by any title at coverage
  *     exhaustion. Deterministically extracted (artifact-closure.ts), so like
  *     judge areas they are host-authored strings, not source quotes.
  */
@@ -604,8 +590,10 @@ export async function appendCarriedRequirements(
 
 /**
  * The read-only block refine/compose receive when carried requirements exist.
- * Verbatim content travels with every task (the directive pattern that works),
- * and the VERIFY mandate is explicit — goal C rides here.
+ * Verbatim content travels with every task — the REFINE_PRESERVE_DIRECTIVE
+ * pattern in phases.ts, content rather than a pointer — and the VERIFY mandate is
+ * spelled out, so a mandated verification methodology reaches every applicable
+ * task's runnable checks.
  */
 export function buildRequirementsBlock(requirements: string): string {
     if (requirements.trim().length === 0) return ''
@@ -627,17 +615,15 @@ export function buildRequirementsBlock(requirements: string): string {
     ].join('\n')
 }
 
-// ─── Owned (task-mapped) requirements — the channel gap ──────────────
+// ─── Owned (task-mapped) requirements ────────────────────────────────
 //
-// Of a 40 kept requirements only the 6 CROSS-CUTTING ones were persisted
-// and injected; the 33 TASK-MAPPED ones rode the decompose ledger (shaping the
-// title list) and then vanished — nothing ever showed a task its OWN mapped
-// obligations. a task refine read §9's "serves `/api` + static `dist/`",
-// quoted it in a grill question, and still narrowed the composed spec to
-// "SPA fallback serves index.html"; the shipped server never served the client
-// bundle and the app was permanently blank. An obligation the coverage map
-// assigned to a task must travel INTO that task as verbatim authoritative text,
-// exactly like the cross-cutting channel that measurably works.
+// The CROSS-CUTTING requirements are persisted and injected into every task. The
+// TASK-MAPPED ones only ride the decompose ledger, which shapes the title list —
+// so without this channel nothing ever shows a task its OWN mapped obligations,
+// and a refine that merely READ the clause can still narrow it away in the
+// composed spec. An obligation the coverage map assigned to a task travels INTO
+// that task here, as verbatim authoritative text, on the same channel the
+// cross-cutting requirements use.
 
 const OWNED_REQUIREMENTS_FILE = 'requirements-owned.md'
 
@@ -744,40 +730,17 @@ export function buildOwnedRequirementsBlock(owned: OwnedRequirement[]): string {
 }
 
 /**
- * BRACES for the owned channel (the PROMPT-1 pattern): deterministically append
- * each owned obligation the composed spec does not already carry as a
- * CONSTRAINTS bullet. With the belt block alone, compose rarely folds the clause
- * into CONSTRAINTS or ACCEPTANCE — it is an instruction the model mostly ignores.
- * A host-side append cannot be ignored. "Already carries" = the normalised
- * quote appears anywhere in the spec — belt-obeying reps aren't double-stated.
- * No CONSTRAINTS section (shape-invalid spec) → returned unchanged; this runs
- * only on specs the shape gate already accepted.
+ * The host-side belt for the owned channel: deterministically append each owned
+ * obligation the composed spec does not already carry as a CONSTRAINTS bullet.
+ * The injected block alone is an instruction compose can ignore; an append
+ * cannot be. "Already carries" = the normalised quote appears anywhere in the
+ * spec, so a spec that DID fold the clause in is not double-stated. No
+ * CONSTRAINTS section → returned unchanged; this runs only on specs the shape
+ * gate already accepted.
  *
- * NOT EXTENDED TO CONSUMER TASKS — considered and refuted. The proposal was to
- * classify owned requirements INVARIANT (prohibition-shaped) vs DELIVERABLE and
- * propagate the INVARIANTs from here to every task whose spec names the same
- * symbol or file. The motivating case is real: one task receives every obligation
- * about a typed client and complies perfectly, while the consumer tasks that
- * never saw them hand-write casts and ship dead call sites.
- *
- * Two things kill it.
- *
- *  1. IT DOES NOT GENERALIZE. Prohibition-shaped requirements mostly do not land
- *     OWNED in the first place. The reason is in accountCoverage right here: a
- *     prohibition the map leaves unowned is already carried cross-cutting to
- *     every task. The ones that reach an owner reached it because the model
- *     mapped them to a task, which is not a property of the requirement.
- *  2. THE TARGETING RULE MISSES ITS OWN MOTIVATING CASE. Symbol or file relevance
- *     would not have reached the violators for the clause they actually broke
- *     ("If a call isn't fully typed end-to-end via `hc`, fix the route
- *     chaining/export, don't paper over it…") — its only extractable symbol is
- *     `chaining/export`, which no consumer spec contains. Its siblings would have
- *     reached them, and would also have attached to a large fraction of every
- *     other task in the plan, which is its own failure.
- *
- * A future attempt needs a stack where prohibition-shaped requirements actually
- * land OWNED, and a targeting rule that survives a clause whose symbols are
- * prose.
+ * Scoped to the OWNING task only. A prohibition the coverage map leaves unowned is
+ * already carried cross-cutting to every task by `accountCoverage` above, so the
+ * owned channel is not the place to reach a requirement's other readers.
  */
 export function appendOwnedConstraints(spec: string, owned: OwnedRequirement[]): string {
     if (owned.length === 0) return spec
@@ -796,8 +759,9 @@ export function appendOwnedConstraints(spec: string, owned: OwnedRequirement[]):
     return `${spec.slice(0, insertAt)}\n${bullets}${spec.slice(insertAt)}`
 }
 
-/** The decompose-prompt ledger block (goal E's belt): the grounded requirement
- *  list rides into decompose so structure-mirroring can't discharge it. */
+/** The decompose-prompt ledger block: the grounded requirement list rides into
+ *  decompose so a title list that mirrors the spec's own headings cannot
+ *  discharge it. */
 export function buildRequirementsLedger(requirements: RequirementEntry[]): string {
     if (requirements.length === 0) return ''
     return [
