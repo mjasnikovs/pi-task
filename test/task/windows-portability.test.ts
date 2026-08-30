@@ -1,22 +1,14 @@
 /**
- * Regression tests for GitHub issue #1 ("Error starting any task").
+ * Portability regressions for GitHub issue #1 ("Error starting any task").
  *
- * A Windows user hit `spawn ENAMETOOLONG` on every `/task-auto` task, then —
- * after patching around it — `malformed front matter in TASK_AUTO_0001.md`.
- * Both are Windows-specific portability defects that never trip on the
- * maintainer's Linux box:
+ * Two of them, both invisible on a box with a generous argv limit and LF files:
  *
- *   1. The phase prompt (which inlines the ~29K+ design doc) is passed as the
- *      last argv element to the child `pi` process. Windows CreateProcessW caps
- *      the ENTIRE command line at 32767 chars; on overflow Node throws
- *      `spawn ENAMETOOLONG` synchronously. Linux allows 128KB per arg, so it
- *      never trips there.
- *   2. parseFrontMatter's regex/`split` assume `\n` line endings; a task file
- *      with CRLF endings (Windows editor / git autocrlf) parses as null →
- *      "malformed front matter".
- *
- * These tests are written RED-first: they assert the CORRECT cross-platform
- * behaviour and therefore fail against the current code, confirming the bugs.
+ *   1. A phase prompt inlines the design doc and rides as the last argv element
+ *      to the child `pi`. Past whatever the OS allows on a command line, the
+ *      spawn throws SYNCHRONOUSLY — before any stream or exit handler exists —
+ *      so it must be caught at the call, not awaited.
+ *   2. A task file with CRLF endings must read and parse the same as one with
+ *      LF, at the read boundary and in each pure parser.
  */
 
 import {describe, expect, test} from 'bun:test'
@@ -42,12 +34,11 @@ function depsWith(spawn: SpawnFn) {
 }
 
 /**
- * Wrap a spawn fake so it models the Windows CreateProcessW limit: the whole
- * command line (command + every argv element) must fit in 32767 chars, else
- * Node throws `spawn ENAMETOOLONG` synchronously — the exact failure the issue
- * reporter saw. Empirically confirmed both Node and Bun throw this class of
- * error synchronously (Linux surfaces it as E2BIG), so the message propagates
- * up to the task-failure formatter as reported.
+ * Wrap a spawn fake so it enforces a command-line budget: command plus every
+ * argv element must fit, or the wrapper THROWS instead of returning a process.
+ * That is the shape a real over-long spawn takes — on this box, spawning
+ * /bin/echo with a multi-megabyte argument throws synchronously with code
+ * E2BIG — so the caller has to survive a throw, not a failed child.
  */
 const WINDOWS_CMDLINE_LIMIT = 32767
 function windowsLimitedSpawn(inner: SpawnFn): SpawnFn {
@@ -74,8 +65,7 @@ function windowsLimitedSpawn(inner: SpawnFn): SpawnFn {
 
 describe('issue #1: spawn ENAMETOOLONG — large prompt overflows the OS command line', () => {
     test('a phase prompt carrying the inlined design doc must not overflow argv on Windows', async () => {
-        // A real /task-auto phase prompt inlines the design doc; ~40K chars is
-        // representative (memory notes a 29K design + composed spec + context).
+        // A phase prompt inlines the design doc, so it is far past the budget above.
         const bigPrompt = 'DESIGN DOC\n' + 'x'.repeat(40000)
         const spawn = windowsLimitedSpawn(fakeSpawnQueue([agentEndResponse('ok')]))
 
@@ -91,11 +81,11 @@ describe('issue #1: spawn ENAMETOOLONG — large prompt overflows the OS command
 })
 
 /**
- * The CRLF defect is systemic across the task-file I/O layer — every parser
- * hangs off the same disk read and assumes `\n`. These tests write a CRLF file
- * to disk (as a Windows editor or `git` autocrlf checkout would) and exercise
- * the read boundary + each downstream parser. The fix normalizes newlines once
- * on read, so all of these must pass without touching the individual parsers.
+ * Every task-file parser hangs off one disk read and assumes `\n`, so the
+ * normalisation lives at that boundary: readTaskFile pulls the file through
+ * `readTextFile` (shared/fs-text.ts), which folds CRLF/CR to LF. These tests
+ * write a CRLF file and exercise the read boundary plus each parser downstream
+ * of it.
  */
 const FM: TaskFrontMatter = {
     id: 'TASK_0001',
@@ -159,10 +149,9 @@ describe('issue #1 follow-up: CRLF task files must read/parse the same as LF', (
 })
 
 /**
- * Safety net: the parsers themselves must tolerate CRLF, not only content that
- * happened to pass through readTextFile. A read site that forgets to normalize
- * (as the no-arg /task-resume scan did in 0.17.8) then still works. These pin
- * the pure functions directly on raw CRLF input.
+ * The parsers themselves must tolerate CRLF, not only content that came through
+ * readTextFile — a read site that forgets to normalise then still works. These
+ * pin the pure functions on raw CRLF input.
  */
 describe('issue #1 follow-up: parsers are intrinsically CRLF-tolerant', () => {
     const rawLF =
