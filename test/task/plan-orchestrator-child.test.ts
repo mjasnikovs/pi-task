@@ -192,8 +192,9 @@ describe('the planning children', () => {
 })
 
 describe('the read-only contract', () => {
-    /** The plan file exists before the first child runs — handleTaskPlan
-     *  allocates it up front so a crash mid-session still leaves the record. */
+    /** The plan file exists before the first child runs: handleTaskPlan calls
+     *  writeTaskFile before runPlanCommand, so a crash mid-session still leaves
+     *  a record on disk. */
     async function seedPlanFile(cwd: string): Promise<void> {
         const now = new Date(0).toISOString()
         await writeTaskFile(
@@ -296,7 +297,7 @@ describe('the default handoff', () => {
         expect(gated).toHaveLength(1)
         expect(gated[0].prompt).toContain('add rate limiting')
         expect(single).toEqual([])
-        // runGatedTask never surfaces an inner task id, so nothing is linked.
+        // runGatedTask returns void, so the caller has no inner task id to link.
         expect(await readSection(cwd, PLAN_ID, 'handoff')).not.toContain('task:')
     })
 
