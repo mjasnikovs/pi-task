@@ -1,72 +1,40 @@
 /**
- * Work verification for /task-auto.
+ * Work verification: the model half of the post-implementation gate.
  *
- * The root failure this addresses: pi-task never *runs* any verification. Each
- * task's composed spec carries a VERIFY block (and ACCEPTANCE criteria), but that
- * block is only authored and presence-checked — never executed. The task is then
- * marked `completed` at handoff. So a task whose implementation does not actually
- * work (a SPA that won't build, a route wired to a dead stub, a CI file nobody
- * runs) is indistinguishable from one that does.
+ * A composed spec carries a VERIFY block and ACCEPTANCE criteria, but authoring
+ * that block and presence-checking it proves nothing. This pass RUNS it. It hands
+ * the just-committed spec (GOAL / CONSTRAINTS / ACCEPTANCE / VERIFY) to a fresh
+ * child with a `read` and a `bash` tool in the real workspace, and turns the
+ * child's verdict line into a PASS / FAIL / UNOBSERVED outcome.
  *
- * This pass closes that gap WITHOUT assuming any particular shape of project. It
- * does NOT hardcode `build`, an HTTP probe, a server boot, or a test command —
- * many tasks have none of those. Instead it hands the just-committed spec (GOAL /
- * ACCEPTANCE / VERIFY) to a fresh child of the SAME local model, gives it a `read`
- * and a `bash` tool in the real workspace, and lets the model do its job: run the
- * verification the spec already declares, observe the REAL output, and report a
- * PASS / FAIL verdict. If the spec's VERIFY is legitimately a no-op (config-only
- * change, re-read of a file), the model says so and that is a PASS.
+ * Nothing about a project's shape is hardcoded — no `build`, no HTTP probe, no
+ * server boot, no test command. The spec names the checks; the child runs them.
+ * When a spec's VERIFY is legitimately a no-op (a docs or config change), saying
+ * so is a PASS (rule 6).
  *
- * It must verify the REAL deliverable AS SHIPPED, not a run the verifier itself
- * prepared into passing. The failure class is broader than a bad VERIFY block: the
- * child has `bash`, so it can quietly make almost anything go green — export an env
- * var, source a config file, run a different command, rebuild in a scratch dir,
- * fabricate the artifact by hand — and then report PASS, masking a defect a fresh
- * checkout or CI run would hit. (This is exactly what sank an run: the verify
- * child `export`ed the test DB URL its own shell, watched the suite go green, and
- * passed a project whose documented command failed unaided.) The prompt therefore
- * anchors the child to ONE principle: run the project's own commands verbatim in the
- * tree as found, and treat any preparation/repair/substitution it had to perform to
- * reach green as ITSELF the defect — while still distinguishing a genuinely-absent
- * EXTERNAL service (an environment gap, not a code fault) from the project mis-wiring
- * how it connects. This generalises across languages and toolchains and assumes no
- * tests, build, or particular runtime.
+ * The prompt anchors the child to ONE principle: run the project's own commands
+ * verbatim in the tree as found, and treat any preparation, repair or
+ * substitution it had to perform to reach green as ITSELF the defect. A child
+ * holding `bash` can make almost anything go green — export an env var, source a
+ * config file, rebuild in a scratch dir, fabricate the artifact by hand — and
+ * then report PASS on a defect a fresh checkout would hit. Rule 5 keeps the one
+ * genuine exception, an EXTERNAL service absent from this machine, and makes the
+ * child PROBE for that service first: reachable means the real verification must
+ * run against it.
  *
- * A/B'd on a live local model against a work-around-to-pass fixture — the
- * documented command fails unaided, and a greppable env file makes it pass. The
- * prompt below catches it and names the unwired config; a prompt without these
- * rules passes it. Three guards held: a healthy project still PASSes, a
- * genuinely-broken shipped build still FAILs, and a genuine external-service gap
- * — which the weaker prompt blamed on the code — now correctly PASSes.
+ * It runs as a GATE right after the implementation turn, before the task is
+ * checked off or committed, for both /task and /task-auto — they build these
+ * children through the same gate-deps.ts. A FAIL does not end the run:
+ * task-gates.ts routes it through verify-resolution.ts into an unattended AUTOFIX
+ * re-run or the human picker.
  *
- * The sibling failure class is GREP-THEATER: the composed VERIFY
- * block was grep-only, so the child "verified" a schema.sql containing INVALID SQL by
- * grepping for its own broken text — while a live PostgreSQL sat reachable in the same
- * container, never touched. The prompt now (a) says a grep-only VERIFY block does not cap
- * the obligation to execute/apply an executable artifact, and (b) requires PROBING a
- * declared external service before invoking the absent-service exception — reachable ⇒
- * the real verification must run against it. A/B'd on a faithful fixture: an
- * invalid schema, a grep-only VERIFY block, an unadvertised database reachable on
- * its default port and no connection string set. The weaker prompt passes it; this
- * one FAILs and names the real syntax error. Guards: the explicit-URL variant is
- * unchanged, a valid schema PASSes (no
- * paranoia), and an unreachable database mostly PASSes via the env-gap exception,
- * failing conservatively when it does not — and that FAIL still named the genuine
- * SQL defect, which is the safe direction. Only a false PASS trashes work.
+ * Tools: `read` + `bash`, no `edit`/`write`. Observing is the CONTRACT, not the
+ * capability — `bash` writes — so gate-child.ts runs this kind `guarded` and
+ * `mutationCheck` below discards a verdict computed on a tree the child moved.
  *
- * It runs as a GATE right after the implementation turn, BEFORE the task is
- * checked off or committed. A FAIL stops the /task-auto run exactly like an
- * implementation failure: the task is left unchecked and uncommitted so
- * /task-auto-resume re-runs it, rather than blessing work that does not run.
- *
- * Tools: `read` + `bash` only. No `edit`/`write` — verification observes, it does
- * not fix (fixing committed work is the enforcement pass's job, and a verify pass
- * that also edits would blur "did it work" with "make it work"). `bash` is what
- * makes this real: it is the difference between reading the VERIFY block and
- * RUNNING it.
- *
- * Gated by the `verifyWork` config flag. With the flag off, or with no spec to
- * verify, this is a pass (ok: true).
+ * The `verifyWork` config flag gates the whole pass, in gate-deps.ts. Inside here
+ * a missing or empty spec is a pass (ok: true) — but `repoHealth` runs FIRST and
+ * can FAIL before the spec is looked at.
  */
 import {USER_CANCELLED} from './child-runner.js'
 import {buildEnvNotesBlock, ENV_NOTE_EMIT_INSTRUCTION, extractEnvNotes} from './env-notes.js'
@@ -84,9 +52,9 @@ import {crossTaskDeletionVerifyFindings, type CrossTaskDeletion} from './task-pr
  *  - `read` lets it inspect a file the VERIFY output points at (a build error's
  *    source line, a config it just validated) to characterise a failure precisely.
  *  - No `edit`/`write`: this pass reports a verdict, it does not change the tree.
- *    Keeping it read-only means a verify run can never itself introduce a change
- *    that needs re-verifying, and never scaffolds the junk-file runaway that the
- *    enforce pass had to drop `write` to stop.
+ *    That is a CONTRACT, not a capability — `bash` can write — so the git-state
+ *    guard backs it up and `mutationCheck` throws away a verdict reached on a
+ *    mutated tree. The enforce pass, whose job IS editing, runs `read,edit`.
  */
 const VERIFY_TOOLS = 'read,bash'
 
@@ -113,27 +81,23 @@ export interface VerifyOutcome {
     /**
      * WHICH KIND of FAIL this is, as data. Only meaningful when ok === false.
      *
-     * `unobserved` was already carried as a typed field and read as one. Its
-     * siblings were not: the repo-health class travelled only as the `repo health:`
-     * PREFIX of `reason`, and three independent production sites recovered it by
-     * re-typing that literal with two different matchers — the graduated lint-fix
-     * gate, the frozen-blocked contradiction test, and the ONE auto-closing debt
-     * class. A reword of the mint disabled all three, with no compile error and a
-     * green suite. This is the `observedFailures` finding one altitude down: the
-     * outcome CLASS never travelled with the failure TEXT, so every classifier
-     * downstream had to guess.
+     * Without it the class travels only as the PREFIX of `reason`, and every
+     * downstream classifier has to recover it by re-typing that literal — a
+     * reword of the mint would then disarm them with no compile error.
+     * `VERIFY_FAIL_PREFIX` owns the strings so mint and match cannot drift, and
+     * `verifyFailClass` prefers this field over the prefix.
      */
     failClass?: VerifyFailClass
 }
 
 /**
- * The kinds of verify FAIL. A new member is a compile error until it declares a
- * display prefix below.
+ * The kinds of verify FAIL. `VERIFY_FAIL_PREFIX` below is a
+ * `Record<VerifyFailClass, string>`, so a new member here is a compile error
+ * (TS2741, "Property 'x' is missing") until it declares a display prefix.
  *
- * `static-checks` is the RUN-level twin of `repo-health`: `final-gate.ts` mints
- * `static checks: …` for the same concept at the other altitude, which is why
- * `isStaticClassDebt` was structurally blind to every run-level static failure
- * that reached the ledger.
+ * `static-checks` is the RUN-level twin of `repo-health`: final-gate.ts mints
+ * `VERIFY_FAIL_PREFIX['static-checks']` for the same concept at the other
+ * altitude, and `isStaticClass` answers true for both.
  */
 export type VerifyFailClass =
     'repo-health' | 'static-checks' | 'unobserved' | 'model-verdict' | 'harness-fault'
@@ -157,10 +121,10 @@ export const VERIFY_FAIL_PREFIX: Record<VerifyFailClass, string> = {
  * The class of a FAIL — from the typed field when it is there, else from the
  * prefix the registry above owns.
  *
- * The prefix test survives in exactly ONE place instead of three. It has to
- * survive somewhere: `GateDeps.verify` is a seam, a debt read back off disk is a
- * bare string with no outcome attached, and the run-level gate mints its own
- * `static checks:` line through a different path entirely.
+ * The prefix test has to survive somewhere: `GateDeps.verify` is a seam, a debt
+ * read back off disk is a bare string with no outcome attached, and final-gate.ts
+ * mints its `static checks:` line through a different path entirely. This is the
+ * only place in src/ that tests a reason against a prefix.
  */
 export function verifyFailClass(
     o: Pick<VerifyOutcome, 'failClass' | 'reason'>
@@ -187,10 +151,11 @@ export function isStaticClass(cls: VerifyFailClass | undefined): boolean {
 
 /**
  * Slice the delivered spec (GOAL / CONSTRAINTS / ACCEPTANCE / VERIFY) out of a
- * task file body. The composed spec lives under a `## spec` header and runs until
- * the next top-level `## ` section (`## phase timings`). Returns null when no spec
- * section is present (e.g. a task that never reached compose), which the caller
- * treats as a pass — there is nothing to verify against.
+ * task file body. The compose and critique phases write the section named `spec`,
+ * so the composed spec lives under `## spec` and runs to the next line matching
+ * `## ` plus non-space (`## phase timings`); a `### ` subheading stays inside.
+ * Returns null when there is no spec section or it is blank (a task that never
+ * reached compose), which the caller treats as a pass — nothing to verify against.
  */
 export function extractSpecForVerification(taskBody: string): string | null {
     const lines = taskBody.split('\n')
@@ -216,38 +181,31 @@ export function extractSpecForVerification(taskBody: string): string | null {
 /**
  * ─────────────────────────── THE PROBE TABLE ───────────────────────────
  *
- * Every deterministic probe that sharpens this prompt costs the same
- * ritual in four places: a `let x = []` + try/catch in runWorkVerification, a
- * positional parameter on buildVerifyPrompt, a `const xBlock =` ternary, and a
- * spread into the assembled prompt — plus its hand-numbered rule. Adding one
- * meant editing all of them and hoping none was missed; the ninth would not
- * even fit the signature (hence a `projectSurface` bag to group
- * three of them).
+ * Each deterministic probe is one ADAPTER row carrying only what is specific to
+ * it: its key (which names the thunk it reads from `deps.probes`), the empty
+ * value it degrades to, how its raw result becomes finding lines, the notice
+ * block those lines produce, and the numbered rule the notice routes the child
+ * to. The loop in `runWorkVerification` owns the ritual, so adding a probe is a
+ * `ProbeRaw` line, a row here, and a binding line in gate-deps — nothing else.
+ * (Same shape as `LOCKFILE_CHECKS` in final-gate.ts, where a whole package
+ * ecosystem is one row.)
  *
- * Each probe is now an ADAPTER: one row carrying only what is specific to it —
- * its key (which names the thunk it reads from `deps.probes`), the empty value it
- * degrades to, how its raw result becomes finding lines, the notice block those
- * lines produce, and the numbered rule the notice routes the child to. The loop
- * owns the ritual. (Same shape as
- * LOCKFILE_CHECKS in final-gate.ts, where a whole package ecosystem is one row.)
- *
- * THIS PROMPT IS A MEASURED ARTIFACT — its wording is A/B-tested on the live
- * local model, so the table
- * must emit BYTE-IDENTICAL text for the same findings. Two orders are
- * load-bearing and they are NOT the same order:
+ * TWO ORDERS ARE LOAD-BEARING AND THEY ARE NOT THE SAME ORDER:
  *   - NOTICE BLOCKS are emitted in TABLE order (the order the rows appear below).
- *   - RULES are emitted sorted by `ruleId`, because the 4b…4g band was
- *     hand-numbered long before this table existed and its numbering is what the
- *     notices cite ("rule 4b applies").
- * A row whose rule is woven into the numbered narrative elsewhere (3b inside the
- * substitution rules, 3f, 5c) carries `ruleId` for the reader and no `rule` text.
+ *   - RULES are emitted sorted by `ruleId`, because the 4b…4g band is
+ *     hand-numbered and that numbering is what the notices cite ("rule 4b
+ *     applies").
+ * A row whose rule is woven into the numbered narrative elsewhere (3b, 3f, 5c)
+ * carries `ruleId` for the reader and no `rule` text.
  */
 
 /**
  * What each probe channel's RAW probe returns — the one place a channel's shape
- * is declared. `ProbeKey` is derived from it, so a channel exists exactly when it
- * has a row here; delete one and the compiler names its table row and its single
- * binding line in gate-deps' `buildVerifyProbes`.
+ * is declared. `ProbeKey` is `keyof ProbeRaw`, so a channel exists exactly when
+ * it has a line here. Deleting one is a compile error at BOTH of its other sites:
+ * the table row's `key` ("not assignable to type 'keyof ProbeRaw'") and the
+ * binding line in gate-deps' `buildVerifyProbes` ("does not exist in type
+ * 'VerifyProbes'").
  */
 export interface ProbeRaw {
     substitution: string[]
@@ -371,17 +329,14 @@ function probeAdapter<K extends ProbeKey>(row: {
 /** Identity transform for the rows whose probe already returns finding lines. */
 const asLines = (raw: string[]): string[] => raw
 
-/**
- * The table. ROW ORDER IS THE NOTICE-BLOCK ORDER IN THE PROMPT — do not reorder
- * without re-running the byte-identity check.
- */
+/** The table. ROW ORDER IS THE NOTICE-BLOCK ORDER IN THE PROMPT: `buildVerifyPrompt`
+ *  flatMaps this array to build the notices, so reordering rows reorders the prompt. */
 const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     /**
-     * Deterministic self-verification probe (see substitution-probe.ts): the
-     * TEST-THE-COPY class is caught reliably only when the prompt carries both the
-     * rule (3b) AND a concrete finding naming the suspect file. The rule alone
-     * rarely gets the model's attention. The findings are pure git shape (test files the
-     * task itself changed), so the mandate is language- and framework-agnostic.
+     * Deterministic self-verification probe (see substitution-probe.ts): test
+     * files this task itself authored or changed, with their added-line counts.
+     * Pure git shape, so the mandate is language- and framework-agnostic. Rule 3b
+     * lives in the numbered narrative, so this row carries no `rule` text.
      */
     probeAdapter({
         key: 'substitution',
@@ -403,17 +358,11 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     }),
     /**
      * Deterministic prohibition probe (see prohibition-probe.ts): spec-forbidden
-     * paths the task's diff modified anyway. Same probe+rule design, same reason:
-     * the VIOLATION-EXCUSAL class (child saw "Do NOT modify server-side
-     * code" violated, waived it as "additive, tests pass", PASSed) needs both the
-     * no-waiver rule (4b) AND the concrete diff fact — the baseline child usually
-     * never runs `git diff` at all, so without the finding it cannot even SEE the
-     * violation. On a violated-but-working fixture — everything green, forbidden
-     * file modified additively — the rule alone PASSes, and will affirmatively
-     * claim the forbidden file was untouched. Rule plus finding FAILs and names the
-     * constraint. Guard: an honest-clean fixture, with the prohibition in the spec
-     * and the probe silent, still PASSes.
-     * Reverted-violation ≡ clean at the diff level (no entry → no finding).
+     * paths the task's diff modified anyway, paired with the no-waiver rule 4b.
+     * The finding matters because a child left to itself rarely runs `git diff`,
+     * so it cannot even SEE the violation. Findings are computed from the diff's
+     * changed-file list, so a fully REVERTED violation leaves no entry there and
+     * produces no finding.
      */
     probeAdapter({
         key: 'prohibition',
@@ -448,10 +397,11 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic cross-task deletion probe (see task-provenance.ts, a * PROMPT 2): tracked files the task's diff DELETES whose introducing task (git
-     * provenance) differs from the current task. The only row whose probe does NOT
-     * return finding lines — the structured value also rides on a FAIL outcome so
-     * an ACCEPT records each deletion as a durable debt.
+     * Deterministic cross-task deletion probe (see task-provenance.ts): tracked
+     * files the task's diff DELETES whose introducing task (git provenance)
+     * differs from the current task. The only row whose probe does NOT return
+     * finding lines — the structured value also rides on a FAIL outcome so an
+     * ACCEPT records each deletion as a durable debt.
      */
     probeAdapter({
         key: 'crossTaskDeletion',
@@ -487,9 +437,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic probe-gaming probe: added lines
-     * whose stated purpose is to make a CHECK pass instead of meeting the
-     * requirement it stands for ("return 401 so the verification test passes").
+     * Deterministic probe-gaming probe (see probe-gaming.ts): added lines whose
+     * stated purpose is to make a CHECK pass instead of meeting the requirement it
+     * stands for ("return 401 so the verification test passes").
      */
     probeAdapter({
         key: 'probeGaming',
@@ -530,11 +480,10 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     /**
      * DETERMINISTIC skip-escape finding, computed purely from the spec's own VERIFY
      * block (see skip-escape.ts): a required check wrapped in a skip-announcing `||`
-     * fallback. Injected so rule 5c fires reliably — the model does not self-discover
-     * a graceful skip-escape from the rule alone, but acts on a finding naming
-     * the exact line, per the proven probe+rule pattern. Pure text analysis over
-     * `deps.spec`, so this row needs no dep and reports no stage: it is the one probe
-     * that is never absent and never costs a git call.
+     * fallback, injected so rule 5c has an exact line to name. Pure text analysis
+     * over `deps.spec`, so this row binds no dep and declares no stage — it is the
+     * one probe that is never absent and never costs a git call, and the one key
+     * excluded from `BoundProbeKey`.
      */
     probeAdapter({
         key: 'skipEscape',
@@ -558,10 +507,10 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic sandbox-path-leak probe (see foreign-path.ts, a PROMPT
-     * 4 item 1): absolute paths this task committed that exist only inside the
-     * authoring child's own environment — `/workspace/src/shared` in a vite alias —
-     * while the real file sits at `src/shared` here.
+     * Deterministic sandbox-path-leak probe (see foreign-path.ts): absolute paths
+     * this task committed that exist only inside the authoring child's own
+     * environment — `/workspace/src/shared` in a vite alias — while the real file
+     * sits at `src/shared` here.
      */
     probeAdapter({
         key: 'foreignPath',
@@ -599,10 +548,11 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic neutered-check-script probe (see script-escape.ts, a * PROMPT 4 item 4): check-class scripts in a manifest THIS task changed whose
-     * exit status cannot be non-zero (`… || true`, an inverted-grep launder). The
-     * damage is second-order — the script still "passes" — which is exactly why the
-     * child cannot discover it by running the check.
+     * Deterministic neutered-check-script probe (see script-escape.ts): check-class
+     * scripts in a manifest THIS task changed whose exit status cannot be non-zero
+     * (`… || true`, an inverted-grep launder). The damage is second-order — the
+     * script still "passes" — which is exactly why the child cannot discover it by
+     * running the check.
      */
     probeAdapter({
         key: 'scriptEscape',
@@ -637,10 +587,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
         ]
     }),
     /**
-     * Deterministic test-runner glob-collision probe (see runner-globs.ts, runs
-     * 7 AND 13, PROMPT 4 item 2): the manifest declares two runners whose file sets
-     * are not provably disjoint, so the scanning one imports the other's specs and
-     * dies during COLLECTION.
+     * Deterministic test-runner glob-collision probe (see runner-globs.ts): the
+     * manifest declares two runners whose file sets are not provably disjoint, so
+     * the scanning one imports the other's specs and dies during COLLECTION.
      */
     probeAdapter({
         key: 'runnerGlob',
@@ -673,8 +622,9 @@ const PROBE_ADAPTERS: readonly ProbeAdapter[] = [
     /**
      * Deterministic test-assembly probe (see test-assembly.ts): authored test files
      * that rebuild production WIRING — importing the leaf modules the shipped entry
-     * composes and assembling their own copy instead of the real assembly — under
-     * rule 3f (F4 test-the-copy, 3rd recurrence). Pure import-graph shape.
+     * composes and assembling their own copy instead of the real assembly. Pure
+     * import-graph shape; rule 3f lives in the numbered narrative, so this row
+     * carries no `rule` text.
      */
     probeAdapter({
         key: 'testAssembly',
@@ -715,8 +665,8 @@ export const BOUND_PROBE_KEYS: readonly BoundProbeKey[] = PROBE_ADAPTERS.filter(
  * workspace, judge against ACCEPTANCE, and end on exactly one verdict line.
  *
  * `findings` is the probe bag: one key per PROBE_ADAPTERS row (see the table
- * above for what each channel means and the A/B evidence behind it). A key that
- * is absent or empty emits no block — the probes are independently optional.
+ * above for what each channel means). A key that is absent or empty emits no
+ * block — the probes are independently optional.
  */
 export function buildVerifyPrompt(
     spec: string,
@@ -937,9 +887,11 @@ export function buildVerifyPrompt(
 }
 
 /**
- * Parse the child's verdict. Scans for the LAST `WORK-VERIFIED: PASS|FAIL|UNOBSERVED`
- * marker (the model discusses before concluding, and bash output may echo the word
- * "VERIFY", so a distinct token and last-match win matter).
+ * Parse the child's verdict out of the LAST `WORK-VERIFIED: PASS|FAIL|UNOBSERVED`
+ * marker, case-insensitively. Last match wins: the model discusses before
+ * concluding, and a bash command it runs can print the token back, so an earlier
+ * occurrence is not the verdict. A marker with no trailing text gets a stock
+ * detail, so FAIL and UNOBSERVED are never bare.
  *
  * UNOBSERVED (rule 5c) is a distinct third outcome: a spec-required behavioral check
  * could not run because its observation tooling is absent, so the behavior is neither
@@ -994,8 +946,8 @@ export interface VerificationDeps {
      * `probes` below, all of which run BEFORE the child (and therefore before the
      * child's own status widget exists). Called with a short label as each step
      * starts, so the caller can keep a live line on screen through what was
-     * otherwise the run's longest stretch of dead air (MEASURED at 15–69s per
-     * repo-health run). ABSENT → no progress reporting, same behaviour as before. */
+     * otherwise a long stretch of dead air. Wrapped in a try/catch by the caller,
+     * so a throwing hook cannot break the gate. ABSENT → no progress reporting. */
     onStage?: (stage: string) => void
     /**
      * The DETERMINISTIC probes, one optional thunk per channel (see `PROBE_ADAPTERS`
@@ -1030,25 +982,26 @@ export interface VerificationDeps {
      * Per-run cross-slice contract registry (see contracts.ts): `read` supplies the
      * verbatim interface facts the SOURCE design pins that more than one slice
      * touches, injected so the verify child checks THIS slice's boundary against
-     * them (F3 seam bugs are locally right but globally wrong). ABSENT/empty → no
-     * block (single `/task` runs, or a design pinning no shared boundary), unchanged.
+     * them rather than only against itself. ABSENT/empty → no block (single
+     * `/task` runs, or a design pinning no shared boundary).
      */
     contracts?: () => Promise<string>
 }
 
 /**
- * Run the verification pass for one task. A missing spec is a pass. Otherwise run
- * the child against the real workspace and turn its verdict into an ok/blocked
- * outcome. Never throws (except a user cancel, which propagates so the loop's
- * USER_CANCELLED handler reports a clean "cancelled — resume").
+ * Run the verification pass for one task. `repoHealth` runs first and can FAIL on
+ * its own; after it, a missing or empty spec is a pass. Otherwise the child runs
+ * against the real workspace and its verdict becomes an ok/blocked outcome. Never
+ * throws except on a user cancel, which propagates so the loop's USER_CANCELLED
+ * handler reports a clean "cancelled — resume".
  */
 export async function runWorkVerification(deps: VerificationDeps): Promise<VerifyOutcome> {
     // DETERMINISTIC gate FIRST: run the project's own whole-repo static analysis and
-    // let its exit code decide, before spending a model turn. This catches the class
-    // the model gate misses — a task whose composed VERIFY block never lints, which
-    // false-PASSes every time — because it does not depend on that block. A fail is the
-    // ordinary verify-FAIL outcome, so it flows into the existing resolution picker.
-    // Absent dep, or a no-op result (no tooling to run), falls through to the model.
+    // let its exit code decide, before spending a model turn. It catches what the
+    // model gate structurally cannot — a task whose composed VERIFY block never
+    // lints — precisely because it does not read that block. A fail is the ordinary
+    // verify-FAIL outcome, so it flows into the existing resolution picker. Absent
+    // dep, or an ok result, falls through to the spec check and the model.
     const stage = (label: string): void => {
         try {
             deps.onStage?.(label)
@@ -1101,10 +1054,10 @@ export async function runWorkVerification(deps: VerificationDeps): Promise<Verif
             contracts = ''
         }
     }
-    // A child that emits NO verdict never judged the work (budget/context death mid-
-    // investigation — seen live: an 11-minute verify wandered, died verdict-less, and
-    // the resulting FAIL burned a full implementation re-run on an unjudged artifact).
-    // That is a verify-side fault, so retry the VERIFY once before reporting a FAIL.
+    // A child that emits NO verdict never judged the work — it died mid-investigation
+    // on budget or context. That is a verify-side fault, and the resulting FAIL would
+    // otherwise spend a full implementation re-run on an artifact nobody judged, so
+    // the VERIFY is retried once before the FAIL is reported.
     for (let attempt = 1; ; attempt++) {
         let text: string
         try {
