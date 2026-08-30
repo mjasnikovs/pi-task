@@ -2,26 +2,25 @@
  * runner-resolve — make the deterministic gates able to SPAWN the project's own
  * runner when the host PATH lost it.
  *
- * The failure this closes: pi was launched inside the
- * sandbox through a LOGIN shell, whose /etc/profile reset PATH and dropped
- * ~/.bun/bin — so `bun` was unspawnable in every gate spawn. Under the env-gap
- * contract (ENOENT / exit 127 → skip, deliberately, so a missing tool is never a
- * code fault) EVERY dynamic check silently skipped: bun test, the boot of
- * `bun run dev`, and therefore the render check built for exactly the blank-page
- * class the run shipped. The gate converged on static checks alone and stamped
- * the run green while the binary sat at ~/.bun/bin/bun the whole time.
+ * The failure this closes: a host whose PATH lost the runner — pi launched
+ * through a login shell whose profile rebuilt PATH without `~/.bun/bin`, say.
+ * `bun` is then unspawnable in every gate spawn, and under the env-gap contract
+ * (ENOENT / exit 127 → skip, deliberately, so a missing tool is never a code
+ * fault) EVERY dynamic check silently skips: the test command, the boot of
+ * `bun run dev`, and therefore the render check too. The gate converges on static
+ * checks alone and stamps the run green while the binary sits in a directory
+ * nothing looked in.
  *
  * Resolution is discovery, never installation: try the bare name first (PATH
  * serves it → nothing changes), then probe well-known install locations. Each
  * probe is a real `<candidate> --version` spawn — an existing but broken binary
  * must not count as resolved.
  *
- * The PATH PREFIX matters as much as the binary: a resolved `bun run test` still
- * re-invokes `bun` (and the repo's own bins) INSIDE the script chain, and those
- * inner calls exit 127 without the runner's directory on PATH — the same silent
- * blindness one level down ('s final-fix child hit exactly this and had to
- * hand-export PATH). Spawn sites must therefore use runnerEnv(), not just the
- * resolved binary.
+ * {@link runnerEnv} prepends the resolved directory to PATH for the spawned
+ * script chain. Spawn sites should use it rather than the resolved binary alone:
+ * a `bun run test` re-invokes commands INSIDE the script, and a runner that does
+ * not put itself within reach of those inner calls would fail them for the same
+ * reason the outer spawn failed.
  */
 import {spawnSync} from 'node:child_process'
 import {existsSync} from 'node:fs'
@@ -108,13 +107,12 @@ export function resolveRunner(
  * Output shapes a RUNNER emits when the command inside a script chain does not
  * exist, on platforms where that is not reported as exit 127.
  *
- * 127 is a POSIX-SHELL convention: on Linux/macOS bun hands the script to
- * /bin/sh, the shell prints `…: command not found` and exits 127, and the whole
- * env-gap contract keys off that number. On Windows there is no such shell —
- * bun runs the script in its own built-in shell, which reports the miss itself
- * (`bun: command not found: X`) and exits **1**, indistinguishable by status
- * alone from a real code fault. cmd.exe (9009) and PowerShell have their own
- * wording. Recognising the shape restores one env-gap contract on all three.
+ * 127 is a POSIX-SHELL convention: bun hands the script to a shell, the shell
+ * prints `…: command not found` and exits 127, and the whole env-gap contract
+ * keys off that number. Where no such shell runs the script, the runner reports
+ * the miss itself (`bun: command not found: X`) and the status alone cannot be
+ * told from a real code fault. cmd.exe (9009) and PowerShell have their own
+ * wording. Recognising the shape restores the env-gap contract there.
  *
  * Deliberately narrow: only wordings a RUNNER/SHELL produces, never the bare
  * phrase. A suite that prints "command not found" inside a failing assertion is
@@ -127,8 +125,9 @@ export const COMMAND_NOT_FOUND_OUTPUT_RE =
  * Did this command fail because the thing it tried to run does not exist here,
  * rather than because the code is wrong? Exit 127 (POSIX shell) or 9009
  * (cmd.exe) say so outright; anything else needs the runner's own wording (see
- * COMMAND_NOT_FOUND_OUTPUT_RE) — a Windows `bun run dev` on a missing binary
- * exits 1. Callers treat a true here as an environment gap → skip, never FAIL.
+ * COMMAND_NOT_FOUND_OUTPUT_RE), because a runner that resolves the command
+ * itself can report the miss and still exit 1. Callers treat a true here as an
+ * environment gap → skip, never FAIL.
  */
 export function isCommandNotFound(status: number | null, output = ''): boolean {
     if (status === 127 || status === 9009) return true
