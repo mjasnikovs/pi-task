@@ -1,17 +1,15 @@
 /**
  * THE GUARD THAT MAKES THE KILL ROSTER TRUE.
  *
- * A kill cause would otherwise be named in six unlinked places, and only two of them
- * failed to compile if you forgot one. `worker-failure.ts`'s own header records
- * what that cost: `streamStalled` reached the result and the restart ladder but
- * never grew an arm in the enforce ladder, so a child killed for a hung model
- * stream was reported to the user as a cancel.
+ * worker-kill.ts's own header lists the unlinked places one kill cause would
+ * otherwise be named. Two of those links are types — `WorkerRestartReason` is
+ * `(typeof RESTART_ORDER)[number]`, and every `WorkerFailureKind` must be a
+ * `WorkerKillId` — so the compiler holds them. The rest are held here: that both
+ * ladders cover exactly their declared order, that every id has a row, and that
+ * each row's `resultField` names a real `RunWorkerResult` field.
  *
- * Two of the six links are now types (`WorkerRestartReason` is derived from
- * `RESTART_ORDER`; every `WorkerFailureKind` must be a `WorkerKillId`). The rest
- * are checked here: that both ladders cover exactly their declared order, that
- * every id has a row, and that each row's `resultField` names a real
- * `RunWorkerResult` field.
+ * A missing link fails silently: the consumer that lacks an arm for a cause falls
+ * through to `if (aborted)` and reports a kill as a user cancel.
  */
 import {describe, expect, test} from 'bun:test'
 import {
@@ -38,8 +36,8 @@ describe('the roster', () => {
     })
 
     test('a carried-forward cause is one whose partial output is real work', () => {
-        // The rule stated in prose beside the old hand-kept set. A loop kill is
-        // the same call repeated and a leaked call is malformed protocol text;
+        // The rule, as a set: a cause whose partial output is real work. A loop kill
+        // is the same call repeated and a leaked call is malformed protocol text, so
         // replaying either feeds the failure back to itself.
         expect([...CARRY_FORWARD_IDS].sort()).toEqual([
             'command-timeout',
@@ -50,8 +48,8 @@ describe('the roster', () => {
     })
 
     test("each row's resultField names a real RunWorkerResult field", () => {
-        // The roster cannot import the interface without a cycle, so the link is
-        // checked here instead of by the compiler.
+        // pi-worker-core.ts imports worker-kill.ts, so the roster cannot import
+        // `RunWorkerResult` back without a cycle. The link is checked here instead.
         const probe: RunWorkerResult = {
             text: '',
             exitCode: 0,
@@ -85,8 +83,8 @@ describe('the two ladders, against the one roster', () => {
     })
 
     test('the restart ladder is exactly RESTART_ORDER, in order', () => {
-        // The half that was never checked at all. A rule added out of order, or a
-        // roster id with no rule, silently changes which hint a re-spawn gets.
+        // A rule added out of order, or a roster id with no rule, silently changes
+        // which hint a re-spawn is given.
         expect(RESTART_RULES.map(r => r.reason)).toEqual([...RESTART_ORDER])
     })
 
@@ -133,7 +131,7 @@ describe('the two ladders, against the one roster', () => {
 
 describe('the bug the roster exists to prevent', () => {
     /**
-     * The shipped defect, restated as a property: a specific cause must never be
+     * The property the whole roster exists for: a specific cause must never be
      * reported as the generic `aborted` that every kill path also sets.
      */
     const killed = (over: Record<string, unknown>): WorkerKillId | undefined =>
