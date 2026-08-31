@@ -1,10 +1,10 @@
 /**
- * The table is the single statement of what a worker tool is.
+ * The table is the single statement of what a worker tool is: its name, the `-e`
+ * entry that registers it, whether a call to it retrieves grounding, and how the
+ * debug log summarises its arguments. Held apart, those are four literals with
+ * nothing linking them at compile time, and a rename touches each separately.
  *
- * These names would otherwise be four literals in three directories — a tools string
- * paired by eye with an `-e` path list, a grounding set, and a debug-log
- * summariser that also re-stated each tool's parameter shape. A rename was five
- * edits with no compile error linking them.
+ * These tests are the four consumers reading the one table.
  */
 import {describe, expect, test} from 'bun:test'
 import * as fs from 'node:fs'
@@ -20,12 +20,11 @@ import {isGroundingRetrieval as fromCore} from '../../src/workers/pi-worker-core
 describe('WORKER_CHANNELS', () => {
     test('every row names an entry file that exists', () => {
         // The `-e` path is what actually registers the tool into a child pi. A row
-        // whose entry is missing registers nothing, and the child then has a tools
-        // string naming a tool it does not have — the STRUCTURAL failure that made
-        // three audited runs issue 0 search calls.
+        // whose entry is missing registers nothing, and the child is then handed a
+        // tools string naming a tool it does not have — with no error either side.
         //
-        // The path is resolved against the MODULE, so it is `.js` under `dist/` and
-        // has a `.ts` sibling in the source tree; accept either.
+        // `entryPath` is built with `new URL(..., import.meta.url)`, so it is a `.js`
+        // path under `dist/` and has a `.ts` sibling in the source tree. Accept either.
         for (const c of WORKER_CHANNELS) {
             const source = c.entryPath.replace(/\.js$/, '.ts')
             expect(fs.existsSync(c.entryPath) || fs.existsSync(source)).toBe(true)
@@ -35,8 +34,8 @@ describe('WORKER_CHANNELS', () => {
     test('channelSet derives the tools string and the -e paths from the same rows', () => {
         const set = channelSet(['pi-worker-docs', 'pi-worker-search', 'pi-worker-fetch'])
         expect(set.tools).toBe('pi-worker-docs,pi-worker-search,pi-worker-fetch')
-        // search + fetch ship in ONE extension file — the paths are de-duplicated,
-        // which the hand-written literal did by the author remembering to.
+        // search + fetch both name SEARCH_ENTRY (search-extension.ts registers the two
+        // of them), so three tools resolve to two `-e` paths. `channelSet` de-duplicates.
         expect(set.extensions).toHaveLength(2)
         expect(new Set(set.extensions).size).toBe(2)
     })
@@ -49,12 +48,10 @@ describe('WORKER_CHANNELS', () => {
         expect(withSearch.extensions).toContain(withoutSearch.extensions[0])
     })
 
-    // REGRESSION — the FLIP of "an unknown name contributes nothing". Dropping it
-    // silently is the exact failure this table was built to eliminate: a typo or a
-    // half-finished rename yields a shorter tools string AND a shorter `-e` list
-    // with no compile error and no runtime error, and the child just quietly loses
-    // a tool. That is indistinguishable, at every call site, from asking for fewer
-    // channels on purpose.
+    // An unknown name must THROW, not contribute nothing. Dropped silently, a typo or a
+    // half-finished rename yields a shorter tools string AND a shorter `-e` list, with no
+    // compile error and no runtime error — indistinguishable, at every call site, from
+    // asking for fewer channels on purpose.
     test('an unknown name is refused, not silently dropped', () => {
         expect(() => channelSet(['pi-worker-docs', 'not-a-tool'])).toThrow(/not-a-tool/)
         // A known set still resolves untouched.
