@@ -64,10 +64,10 @@ describe('logDocsAnswer', () => {
         expect(rows[1].unclear).toBe(false)
     })
 
-    // A project-source lookup is instructed to abstain with "unclear from this PROJECT"
-    // (docs-project.ts:310), not "package". Matching only the package wording scored every
-    // project-source abstention as a valid answer — and project-source is the majority of
-    // what worker:apis asks, so the miss is not a corner case.
+    // A project-source lookup is instructed to abstain with "unclear from this PROJECT",
+    // not "package": `buildProjectPrompt` (docs-project.ts) passes `kind: 'project'` to
+    // `buildExtractionPrompt`. `unclear` is derived by `isAbstention`, whose regex is
+    // built from the same NOUNS table, so all three corpora match.
     test('derives `unclear` from the project-source wording too', () => {
         const sink = tmpSink()
         const env = (k: string): string | undefined => (k === TYPEONLY_LOG_ENV ? sink : undefined)
