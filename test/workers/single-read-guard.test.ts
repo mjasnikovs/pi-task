@@ -47,9 +47,9 @@ describe('SingleReadGuard', () => {
         expect(msg.toLowerCase()).toContain('write your final answer')
     })
 
-    // The measured failure this guard caused: a 743-line design file the planner
-    // paged deliberately (`limit: 80`), whose second page was refused. It never
-    // reached the end and spent 197 of 200 calls asking for the rest.
+    // The trap a path-keyed guard would set. A file bigger than one read is paged
+    // deliberately; refuse the second page and the child never reaches the end, and
+    // has nowhere legal to go but ask again. The unit is the line range, not the file.
     test('forward paging through a big file is never blocked', () => {
         const g = new SingleReadGuard()
         expect(g.check('/DESIGN/marketplace.html', undefined, 80)).toBeNull()
