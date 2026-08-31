@@ -1,11 +1,12 @@
 /**
- * The startup-hint lifecycle, driven through the one interface both hints use.
+ * The startup-hint lifecycle, driven through the one interface both hints use —
+ * brave-warning and reasoning-warning are its only callers.
  *
- * The REFINE half is the reason this file exists. It was written in
- * reasoning-warning.ts and reachable by no test there — every test model lacked
- * a `baseUrl`, so the branch that repaints after a server probe never ran. The
- * rule it enforces (never repaint a widget the user has already dismissed) was a
- * closure variable in one of the two hints; here it is asserted.
+ * The REFINE half is the reason this file exists. `registerSessionHint` guards a
+ * repaint with `cleared || !painted || text === null`, so a refinement can never
+ * bring back a widget the user has already dismissed, and can never remove a
+ * warning it was only meant to sharpen. That rule belongs to the shared module,
+ * not to either hint, and this is where it is asserted.
  */
 import {describe, expect, test} from 'bun:test'
 import type {ExtensionAPI, ExtensionContext} from '@earendil-works/pi-coding-agent'
@@ -185,10 +186,10 @@ describe('a hint that refines itself later', () => {
     })
 
     test('a rejected refinement is handled even when the FIRST PAINT failed', async () => {
-        // `compose` builds the refine promise EAGERLY — the reasoning hint kicks
-        // its probe off inside it — so attaching the handler after the paint bail
-        // orphans the rejection on exactly the path the paint's try/catch exists
-        // for: a stale ctx after a session switch.
+        // `compose` builds the refine promise EAGERLY — the reasoning hint kicks its
+        // probe off inside it — so registerSessionHint attaches the `.catch` BEFORE the
+        // paint can bail. Attaching it after would orphan the rejection on exactly the
+        // path the paint's try/catch exists for: a stale ctx after a session switch.
         const rejections: unknown[] = []
         const onUnhandled = (e: unknown): void => {
             rejections.push(e)
