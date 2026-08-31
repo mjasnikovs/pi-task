@@ -1,10 +1,9 @@
 /**
  * The reasoning-mismatch startup hint.
  *
- * Like brave-warning, almost everything that matters is a REFUSAL: it must not
- * paint outside a TUI, when every group inherits, when no model has resolved, or
- * when the model honours what was asked. A hint that fires wrongly tells a
- * working setup it is broken.
+ * Like brave-warning, most of what matters here is a REFUSAL: it must not paint
+ * outside a TUI, when no model has resolved, or when the model honours what was
+ * asked. A hint that fires wrongly tells a working setup it is broken.
  *
  * The one thing it must do is fire on the shape nobody else can see: a level the
  * user set and the model will silently change.
@@ -80,9 +79,9 @@ function fakeCtx(mode: string, model: unknown, throwOn?: 'setWidget'): FakeUi {
     }
 }
 
-/** A model with no reasoning at all — the strongest mismatch source there is. */
+/** A model with no reasoning at all: every non-`inherit` level mismatches. */
 const DEAD_MODEL = {name: 'Local GGUF', reasoning: false}
-/** The live Qwen3.8 entry from this machine's models.json. */
+/** A reasoning model whose map answers `medium` with `medium`. */
 const GOOD_MODEL = {
     name: 'Qwen3.8 27B',
     reasoning: true,
@@ -91,8 +90,8 @@ const GOOD_MODEL = {
 
 describe('when it stays silent', () => {
     test('the SHIPPED config warns about nothing on a model that can reason', () => {
-        // The anti-nag, on the machine the table was measured on: nobody who has
-        // not opted in ever sees this.
+        // The anti-nag: the SHIPPED table on a model that honours it says nothing, so
+        // nobody who has not opted into a level ever sees this hint.
         const ui = fakeCtx('tui', GOOD_MODEL)
         sessionStartHandler(DEFAULT_CONFIG)({}, ui.ctx)
         expect(ui.widgets).toHaveLength(0)
@@ -102,13 +101,11 @@ describe('when it stays silent', () => {
 
 describe('when the shipped table itself is the mismatch', () => {
     /**
-     * BEHAVIOUR DELTA. Asserting silence on DEAD_MODEL
-     * too, and the reason it held was that every WRITTEN cell was `off` — a
-     * level a model without reasoning already honours, so there was nothing to
-     * warn about. `planning: 'medium'` is the first cell that ASKS for thinking,
-     * so on a model that cannot think the shipped default is now itself a
-     * mismatch the user never chose. Firing is correct: the plan child will
-     * silently get no thinking whatever the table says.
+     * An `off` cell is a level a model without reasoning already honours, so a table
+     * of nothing but `off` would have nothing to warn about. The shipped table asks
+     * for `medium` in several groups, so on a model that cannot think the DEFAULT is
+     * itself a mismatch the user never chose — and those children will silently get
+     * no thinking whatever the table says. Firing here is correct.
      */
     test('the SHIPPED config warns on a model with no reasoning at all', () => {
         const ui = fakeCtx('tui', DEAD_MODEL)
@@ -188,7 +185,7 @@ describe('formatReasoningWarning', () => {
         }))
         const line = formatReasoningWarning('m', many)!
         expect(line).toContain(`+${REASONING_GROUPS.length - 2} more`)
-        // A line long enough to list seven groups is a line nobody reads.
+        // A line long enough to list every group is a line nobody reads.
         expect(line).toContain(`${REASONING_GROUPS[0]} medium→off`)
         expect(line).not.toContain(`${REASONING_GROUPS[3]} medium→off`)
     })
@@ -214,9 +211,10 @@ describe('formatCapabilityConflict', () => {
     })
 
     test('names the /login llama.cpp dead-knob case explicitly', () => {
-        // The one failure the host-side clamp cannot see: a capable server
-        // described to pi as having no reasoning, because pi's built-in
-        // llama.cpp provider hardcodes reasoning:false.
+        // The one failure the host-side clamp cannot see: a capable server described
+        // to pi as having no reasoning. pi's llama.cpp provider builds every model with
+        // `reasoning: false` and `compat.supportsReasoningEffort: false`, whatever the
+        // server actually does — see its `toPiModel` in the installed pi package.
         const line = formatCapabilityConflict(true, false)!
         expect(line).toContain('/login llama.cpp')
         expect(line).toContain('models.json')
@@ -229,10 +227,9 @@ describe('formatCapabilityConflict', () => {
 
 describe('the server probe that refines the cause line', () => {
     /**
-     * This whole describe was unreachable before the hint became an adapter over
-     * `session-hint`: the probe was called inline on `model.baseUrl`, and no test
-     * model here carries one. `formatCapabilityConflict` had four pure tests
-     * while the branch that USES it had none.
+     * `formatCapabilityConflict` is pure and tested above. These cover the branch that
+     * CALLS it, which needs a model carrying a `baseUrl` — no other model in this file
+     * has one, so the probe would never run.
      */
     const SERVED_MODEL = {...DEAD_MODEL, baseUrl: 'http://127.0.0.1:8080'}
 
