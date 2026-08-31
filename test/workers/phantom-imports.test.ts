@@ -44,7 +44,8 @@ test('classifyRuntimeImport: a declared submodule is real', () => {
 test('classifyRuntimeImport: an undeclared submodule is phantom and finds the base symbol', () => {
     const v = classifyRuntimeImport('bun:sql', 'bun', 'sql', TYPES)
     expect(v.real).toBe(false)
-    // Case-insensitive: matches `const sql` or `class SQL`.
+    // The base-symbol match is case-insensitive, so `const sql` and `class SQL`
+    // both match the `sql` leaf; the casing returned is whichever matched first.
     expect(v.baseSymbol?.toLowerCase()).toBe('sql')
     expect(v.realModules).toEqual(['bun:ffi', 'bun:sqlite', 'bun:test'])
 })
@@ -93,7 +94,9 @@ test('formatApiOverrideBanner: top banner that supersedes the doc, or empty when
     expect(banner).toContain('declare module') // the explicit "never add a shim" clause
 })
 
-// Lay down a resolvable `bun` types stub so the REAL loader flags bun:sql as phantom.
+// `findDeliveryPhantoms` takes no injectable loader, so it needs a real resolvable
+// `bun` on disk. This stub shadows any bun install on the machine, and its types
+// declare only `bun:test` — which makes `bun:sql` phantom and `SQL` the correction.
 async function withStubbedBun(fn: (dir: string) => void | Promise<void>): Promise<void> {
     const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'phantom-deliv-'))
     const pkg = nodePath.join(dir, 'node_modules', 'bun')
@@ -126,7 +129,7 @@ test('findDeliveryPhantoms: flags bun:sql reached only via an @-referenced desig
             nodePath.join(dir, 'DESIGN.md'),
             '# Design\nDB access via `bun:sql` built-in driver.'
         )
-        // The spec itself is clean — the phantom lives only in the doc pi re-expands.
+        // The spec text names no phantom: without DESIGN.md this returns [].
         const phantoms = await findDeliveryPhantoms('Implement the DB layer per @DESIGN.md', dir)
         expect(phantoms.map(p => p.spec)).toEqual(['bun:sql'])
     })
