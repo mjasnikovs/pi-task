@@ -124,9 +124,11 @@ test('store is best-effort — an unwritable tasks dir does not throw', async ()
     expect(await lookupResearch(cwd, 'r', 'k')).toBeUndefined()
 })
 
-// ─── resume reuse ─────
-// ─── per-package invalidation (a greenfield run installs as it goes,
-//     so a whole-file freshness gate wiped the cache on all five of its resumes) ──
+// ─── resume reuse, per-package invalidation ──────────────────────────────────
+//
+// A run that installs packages as it goes changes package.json repeatedly, so a
+// whole-file freshness gate would discard the whole cache on every resume. The
+// gate is per entry: only a docs entry whose OWN package moved is dropped.
 
 const DOCS_HONO = 'pi-worker-docs hono::hc client'
 const DOCS_ZOD = 'pi-worker-docs zod::parse'
@@ -181,7 +183,7 @@ test('a resume drops ONLY the docs entries whose own package moved, keeping the 
     await storeResearch(cwd, 'run-orig', DOCS_ZOD, 'zod answer', {}, 'zod')
     await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
 
-    // zod bumps; hono untouched. Pre-fix (whole-file fingerprint) this wiped all three.
+    // zod bumps; hono untouched. A whole-file fingerprint would wipe all three.
     await writeManifest(cwd, {hono: '^4.6.0', zod: '^3.24.0'})
     const res = await resumeResearchRun(cwd, true)
     expect(res).toMatchObject({reused: true, runId: 'run-orig', entries: 2, dropped: 1})
@@ -200,7 +202,7 @@ test('ADDING a package invalidates nothing — the run-14 failure mode', async (
     const cwd = tmpCwd()
     await seed(cwd, {hono: '^4.6.0'})
     await storeResearch(cwd, 'run-orig', SEARCH_KEY, 'search answer', {})
-    // A later task installs shadcn/playwright, as every greenfield run does.
+    // A later task installs more packages. Nothing already cached is invalidated.
     await writeManifest(cwd, {hono: '^4.6.0', zod: '^3.23.0', '@playwright/test': '^1.48.0'})
     expect(await resumeResearchRun(cwd, true)).toMatchObject({
         reused: true,
@@ -246,8 +248,7 @@ test('a mid-run install is stamped at STORE time, so its own digest survives the
     // A task installs sharp mid-run and a digest is taken against the installed version.
     await writeManifest(cwd, {hono: '^4.6.0', sharp: '^0.33.0'})
     await storeResearch(cwd, 'run-orig', 'pi-worker-docs sharp::resize', 'a2', {}, 'sharp')
-    // Both entries describe the current manifest ⇒ both survive (the old frozen
-    // whole-file fingerprint denied reuse outright here).
+    // Both entries describe the current manifest, so both survive.
     expect(await resumeResearchRun(cwd, true)).toMatchObject({
         reused: true,
         entries: 2,
@@ -256,8 +257,8 @@ test('a mid-run install is stamped at STORE time, so its own digest survives the
 })
 
 test('a resume takes a FRESH id when the cache predates package provenance', async () => {
-    // No `pkgv` marker (written by an older version) ⇒ docs entries are indistinguishable
-    // from search entries, so nothing can be pruned selectively.
+    // With no `pkgv` marker on any entry, a docs entry cannot be told from a search
+    // entry, so nothing can be pruned selectively and the whole cache is abandoned.
     const legacy = tmpCwd()
     await fsp.mkdir(path.dirname(researchCacheFile(legacy)), {recursive: true})
     await fsp.writeFile(
@@ -283,11 +284,11 @@ test('resume with caching disabled clears the token and reuses nothing', async (
 // ─── concurrent writers ──────────────────────────────────────────────────────
 //
 // storeResearch is a read-modify-write over one file, and its writers are
-// concurrent on two axes: the research tools are registered executionMode
-// 'parallel' (one child issues 4-6 docs calls in the same millisecond) and the
-// research phase runs four worker children as separate PROCESSES. Both axes are
-// covered below; an in-process-only fix passes the first test and fails the
-// second, which is the one that matches production.
+// concurrent on two axes: makeWorkerTool registers every research tool with
+// `executionMode: 'parallel'`, so one child's calls overlap; and phases.ts runs
+// its four worker specs through Promise.allSettled, so they are separate
+// PROCESSES. Both axes are covered below, and an in-process-only lock passes the
+// first test while failing the second.
 
 const CONCURRENT = 40
 
@@ -353,11 +354,11 @@ test('an ABANDONED lock is reclaimed, so a crashed writer cannot wedge the run',
     expect(await lookupResearch(cwd, 'r', 'k')).toEqual({text: 'v', details: {}})
 })
 
-// The Windows hole behind CI's "39 of 40": a `mkdir` against a lock directory another
-// process is deleting fails with EPERM/EACCES/EBUSY, not EEXIST. Reading any of those
-// as fatal skipped the store silently — no throw, no log, exit 0, one entry missing.
-// This pins the CLASS, which is the decision; the retry loop itself is covered by the
-// held-lock and abandoned-lock tests either side of it.
+// A lock `mkdir` does not only ever answer EEXIST. When it answers with one of the
+// contention codes below instead, treating that as fatal skips the store silently —
+// no throw, no log, exit 0, one entry missing. This pins which codes are contention
+// and which are real; the retry loop itself is covered by the held-lock and
+// abandoned-lock tests either side of it.
 test('a delete-pending lock error is retryable, not fatal', () => {
     for (const code of ['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY']) {
         expect(isRetryableFsError(Object.assign(new Error(code), {code}))).toBe(true)
@@ -386,8 +387,8 @@ test('the lock is released after a store, leaving nothing behind', async () => {
 
 test('eviction still keeps the newest MAX_ENTRIES by write time', async () => {
     const cwd = tmpCwd()
-    // 260 sequential stores: the cap is 250, so the ten oldest must be gone and
-    // the newest must all be present.
+    // More sequential stores than MAX_ENTRIES: the oldest past the cap must be gone
+    // and the newest must all be present.
     for (let i = 0; i < 260; i++) await storeResearch(cwd, 'r', `k${i}`, `v${i}`, {})
     expect(entryCount(cwd)).toBe(250)
     expect(await lookupResearch(cwd, 'r', 'k0')).toBeUndefined()
