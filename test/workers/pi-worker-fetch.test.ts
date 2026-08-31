@@ -186,8 +186,8 @@ test('pi-worker-fetch truncates oversized markdown with bookend marker', async (
         {url: 'https://example.com/huge', query: 'q'}
     )
     expect(promptSeen).toContain('[...page continues, truncated...]')
-    // The prompt contains the first 25k + marker + last 5k = 30k+marker of content,
-    // wrapped in a longer surrounding prompt template.
+    // fetch-core keeps HEAD_CHARS from the front and TAIL_CHARS from the end with
+    // TRUNCATION_MARKER between them, all inside the surrounding prompt template.
     expect(result.content[0]).toBeDefined()
 })
 
@@ -245,10 +245,10 @@ test('pi-worker-fetch returns Worker exited message on child non-zero exit', asy
 })
 
 test('pi-worker-fetch description is trigger-framed toward integration/wiring intent', () => {
-    // Regression guard for the reachability fix: the local model selects tools by
-    // surface framing, so the description must lead the model to reach for fetch
-    // when it needs to know how something is configured/wired and installed docs
-    // don't cover it — not just "use after search / with a known URL".
+    // The description is the only thing a model reads when choosing this tool, so it
+    // has to name the trigger — needing to know how something is configured or wired,
+    // where installed-package docs do not cover it — and not only the mechanics of
+    // "use after search, with a known URL".
     const registered: Array<{description?: string}> = []
     registerPiWorkerFetch({
         registerTool: (t: {description?: string}) => registered.push(t)
@@ -259,10 +259,11 @@ test('pi-worker-fetch description is trigger-framed toward integration/wiring in
     expect(desc).toMatch(/do NOT guess/i)
 })
 
-// ─── cacheable — the F-2(e) non-answer rule, on the fetch channel ─────────────
+// ─── cacheable — the non-answer rule, on the fetch channel ───────────────────
 
-// The SHIPPED predicate, imported rather than mirrored. Copying it is how the
-// package/project/page matchers drifted apart in the first place.
+// The shipped predicate, imported rather than retyped. abstention.ts builds the
+// package/project/page sentinels and their matcher from one table for the same
+// reason: a retyped copy is asserted against itself.
 
 test('fetch cacheable: a real answer is cached', () => {
     expect(fetchCacheable({childExitCode: 0}, 'The endpoint accepts POST with a JSON body.')).toBe(
@@ -271,11 +272,9 @@ test('fetch cacheable: a real answer is cached', () => {
 })
 
 test('fetch cacheable: "unclear from this page" is NOT cached, though the child exited 0', () => {
-    // pi-worker-docs documents this failure (F-2e) and closed it for PACKAGES:
-    // a non-answer exits 0, so it was memoised and re-served to every sibling task
-    // — one dead end paid for many times, with escalation unable to re-fire
-    // because the miss never recurred. The fetch channel cached on childExitCode
-    // alone and reproduced it exactly, for pages.
+    // A non-answer exits 0 like any other, so a rule keyed on exit code would memoise
+    // it and re-serve the dead end to every later sibling, leaving nothing to re-trigger
+    // an escalation. The same rule closes this for packages in docsCacheable.
     expect(fetchCacheable({childExitCode: 0}, 'unclear from this page')).toBe(false)
     expect(fetchCacheable({childExitCode: 0}, '<answer>Unclear from this page.</answer>')).toBe(
         false
@@ -283,8 +282,9 @@ test('fetch cacheable: "unclear from this page" is NOT cached, though the child 
 })
 
 test('fetch cacheable: a partial "not covered by this page" answer IS still cached', () => {
-    // The sibling sentinel is a COVERAGE miss inside a sourced answer, not a
-    // refusal — it must not be swallowed by the abstention rule.
+    // "not covered by this page" is fetch-core's separate, anchored sentinel: a
+    // coverage miss NAMED inside a sourced answer, not a refusal. isAbstention matches
+    // "unclear from this page" as a substring and must not reach this.
     expect(
         fetchCacheable(
             {childExitCode: 0},
