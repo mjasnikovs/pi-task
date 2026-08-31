@@ -138,7 +138,8 @@ test('pi-worker-search returns auth-error message on 401', async () => {
         {
             provider: 'brave',
             braveSearch: () => {
-                // mimic BraveSearchError-shaped object without importing the real one
+                // search-core matches on `err.name === adapter.errorName`, never
+                // `instanceof`, so an Error carrying the right name is enough here.
                 const e = new Error(
                     'Brave Search rejected the key (HTTP 401). Check BRAVE_SEARCH_API_KEY.'
                 )
