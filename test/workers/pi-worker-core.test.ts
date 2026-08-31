@@ -18,14 +18,15 @@ import {
 } from '../test-utils/fake-spawn.js'
 import {DEFAULT_LOOP_DETECTOR, DEFAULT_LOOP_PROGRESS} from '../../src/workers/worker-profiles.js'
 
-// A tool call the model wrote as text instead of invoking — never executed.
+// The markup `detectLeakedToolCall` flags: a `<tool_call>` wrapper in what should
+// be plain assistant text.
 const LEAKED =
     '<tool_call>\n<function=bash>\n<parameter=command>grep foo</parameter>\n</function>\n</tool_call>'
 
 describe('runWorker', () => {
     test('returns text, exitCode, stderr', async () => {
-        // Pure shape test — does not actually spawn pi.
-        // Cancel immediately via aborted signal so this exits fast.
+        // Shape only. The pre-aborted signal ends the attempt at once — a child is
+        // still spawned, it is just killed before it can answer.
         const ctrl = new AbortController()
         ctrl.abort()
         const result = await runWorker({
@@ -90,9 +91,8 @@ describe('runWorker', () => {
     })
 
     test('workMs is zero when the child never produces stdout', async () => {
-        // A child that exits without emitting stdout — onFirstByte never fires,
-        // so all elapsed time is bucketed as wait, not work. This is the shape
-        // we want when surfacing queue-vs-generation splits later.
+        // A child that exits without emitting stdout: `onFirstByte` never fires, so
+        // the split is `waitMs` = whole elapsed, `workMs` = 0.
         const spawn = fakeSpawnByPrompt(() => ({stdout: '', stderr: 'silent', exitCode: 1}))
         const r = await runWorker({
             prompt: 'x',
@@ -134,7 +134,8 @@ describe('runWorker', () => {
         expect(r.leakedToolCall).toBeTruthy()
     })
 
-    // ── groundingRetrievalCount — the zero-retrieval gate's handle ──────────────
+    // ── groundingRetrievalCount — what task/research-worker.ts's
+    // `zeroRetrievalRetry` reads ────────────────────────────────────────────────
     const withToolCalls = (
         toolNames: ReadonlyArray<string>,
         text = 'done'
@@ -185,8 +186,8 @@ describe('runWorker', () => {
     })
 
     test('groundingRetrievalCount stays 0 for the one-trivial-ls dodge', async () => {
-        // The anti-gaming property: a worker that lists a directory once and then
-        // fabricates the rest has retrieved nothing an APIS signature can cite.
+        // `ls` returns names, not content. A worker that lists a directory once and
+        // writes the rest from memory has retrieved nothing it can cite.
         const spawn = fakeSpawnByPrompt(() => withToolCalls(['ls']))
         const r = await runWorker({
             prompt: 'x',
@@ -199,8 +200,8 @@ describe('runWorker', () => {
     })
 
     test('groundingRetrievalCount reflects the FINAL attempt, not the sum across restarts', async () => {
-        // First attempt leaks a tool call (retried); the clean retry made one docs
-        // call. The count must be the retry's 1, not 1+0 accumulated.
+        // The counter is reset per attempt, so this reports the retry's single docs
+        // call — not a sum across the leaked attempt and the retry.
         const spawn = fakeSpawnQueue([
             agentEndResponse(LEAKED),
             withToolCalls(['pi-worker-docs'], 'clean output')
@@ -226,9 +227,9 @@ describe('runWorker', () => {
     })
 
     test('restarts a loop-killed worker with a hint and returns the clean retry', async () => {
-        // First spawn thrashes the same grep 6× → trips LoopDetector(20,5) → the
-        // unified runner SIGTERMs it. The worker must re-spawn (with a loop hint)
-        // rather than surface the kill as a failure, like every other phase does.
+        // The repeated grep passes LOOP_THRESHOLD inside LOOP_WINDOW, so onToolCall
+        // returns a hit and runChild SIGTERMs the child. A loop kill is a restart
+        // reason, not a failure: RESTART_RULES re-spawns it with a loop hint.
         const spawn = fakeSpawnQueue([
             loopResponse('grep', {pattern: 'glorptube'}, 6),
             agentEndResponse('clean output')
@@ -245,8 +246,8 @@ describe('runWorker', () => {
     })
 
     test('surfaces loopHit when the worker loops through every restart', async () => {
-        // 3 attempts (initial + MAX_LOOP_RESTARTS) all loop → give up, but report
-        // the loop so the caller emits a precise error instead of a bare exit code.
+        // Every attempt the budget allows loops, so the hit is surfaced rather than
+        // swallowed: the caller gets the offending call, not a bare exit code.
         const spawn = fakeSpawnQueue([
             loopResponse('grep', {pattern: 'glorptube'}, 6),
             loopResponse('grep', {pattern: 'glorptube'}, 6),
@@ -265,15 +266,14 @@ describe('runWorker', () => {
     })
 
     /**
-     * A worker can make hundreds of tool calls over exactly
-     * distinct files, ~36 reads each, for 20 minutes, and LoopDetector(20,5,5)
-     * returned null on every one of them — a cycle as long as the window leaves
-     * every key occurring once per window (asserted in loop-detector.test.ts).
-     * It died on the absolute progress ceiling having done 25s of useful work.
+     * The rotation neither of the two argument rules can see. A cycle exactly as
+     * long as LOOP_WINDOW leaves every key occurring once per window, so the exact
+     * rule never counts a repeat and the path rule never counts a revisit
+     * (asserted in loop-detector.test.ts).
      *
-     * The 240s worker timeout could not save it either: with a progress ceiling
-     * configured that 240s is a NO-PROGRESS deadline that re-arms on every tool
-     * call, and a looping worker is calling tools the whole time.
+     * A no-progress deadline does not catch it either: `progress()` re-arms on
+     * every tool call, and a rotating worker is calling tools the whole time.
+     * What catches it is the StallDetector, which judges RESULTS.
      */
     const ROTATION_20 = [
         'package.json',
@@ -298,7 +298,7 @@ describe('runWorker', () => {
         'test/helpers/test-db.ts'
     ]
 
-    /** The recorded shape: read a file, get its bytes back, move to the next. */
+    /** Read a file, get its bytes back, move to the next. */
     const rotationResponse = (laps: number, trailingText?: string) => {
         const events: Array<Record<string, unknown>> = []
         for (let n = 0; n < laps * ROTATION_20.length; n++) {
@@ -366,25 +366,22 @@ describe('runWorker', () => {
     })
 
     /**
-     * The gate path (task/gate-child.ts) reaches the model through runWorker, so
-     * it inherits this guard. That is DELIBERATE and it closes the worst hole in
-     * the tree: a gate child runs with `timeoutMs: 0` and
-     * `pathThreshold: Infinity`, so before this guard existed a varied-args
-     * thrash there had no bound at all — not a clock, not a path rule, and the
-     * stream watchdog is suspended for the duration of every tool call.
+     * task/gate-child.ts reaches the model through runWorker on the `gate`
+     * profile, which resolves to `timeoutMs: 0` and `pathThreshold: Infinity`
+     * (workers/worker-profiles.ts). So a gate child has no clock and no path
+     * rule, and the stream watchdog is suspended for the duration of every tool
+     * call — leaving the stall guard as its bound.
      *
-     * The reason gate-child.ts disabled the OTHER guards does not apply here.
-     * They mislabelled an edit pass because they judge ARGUMENTS, and re-reading
-     * one file IS the job. This one judges RESULTS: an edit
-     * changes the bytes, so the read that follows it is new ground and the streak
-     * resets. This test is that claim, asserted.
+     * The gate disables the argument rules because they judge ARGUMENTS, and
+     * re-reading one file IS its job. The stall guard judges RESULTS: an edit
+     * changes the bytes, so the read that follows is new ground and the streak
+     * resets. That is what this test asserts.
      *
-     * The reads below carry an offset so they are DISTINCT calls. That is not
-     * cosmetic: a gate child re-reading one file with byte-identical args five
-     * times in a 20-call window is killed by the loop detector's EXACT rule,
-     * which `pathThreshold: Infinity` does not disable. Pre-existing behaviour,
-     * unrelated to this guard, and isolating it here is what makes the assertion
-     * below about the stall guard rather than about that.
+     * The reads carry an offset so they are DISTINCT calls. Byte-identical args
+     * repeated past LOOP_THRESHOLD inside one window still trip the loop
+     * detector's exact rule, which `pathThreshold: Infinity` does not disable —
+     * the offset keeps that out of the way so the assertion is about the stall
+     * guard alone.
      */
     test('an edit pass revisiting one file is never killed by the stall guard', async () => {
         const events: Array<Record<string, unknown>> = []
@@ -429,7 +426,8 @@ describe('runWorker', () => {
             },
             cwd: process.cwd(),
             spawn
-            // The gate's own options, verbatim (gate-child.ts:178-186).
+            // What the `gate` profile resolves to (workers/worker-profiles.ts):
+            // no wall clock, path-revisit rule off.
         })
         expect(r.text).toBe('PASS')
         expect(r.loopHit).toBeUndefined()
@@ -437,9 +435,9 @@ describe('runWorker', () => {
     })
 
     test('a gate child thrashing varied greps is now bounded, where it was not', async () => {
-        // No `path` key, so the loop detector's path rule cannot participate even
-        // when enabled; a varying pattern defeats the exact rule; timeoutMs 0
-        // means no clock. Before the stall guard this ran forever.
+        // No `path` key, so the path rule cannot participate even when enabled; a
+        // varying pattern defeats the exact rule; `timeoutMs: 0` means no clock.
+        // The stall guard is the only bound left.
         const events: Array<Record<string, unknown>> = []
         for (let n = 0; n < 200; n++) {
             events.push({
@@ -489,9 +487,8 @@ describe('runWorker', () => {
     })
 
     test('loop: false disables the detector — a thrashing worker runs to completion', async () => {
-        // 8 identical greps would trip LoopDetector(20,5) and get SIGTERMed; with
-        // the guard off the worker is left alone and returns its own result. This
-        // is what the /task-auto enforcement fix pass relies on.
+        // These identical greps pass LOOP_THRESHOLD and would be SIGTERMed; with the
+        // detector off the worker is left alone and returns its own result.
         const spawn = fakeSpawnByPrompt(() =>
             loopResponse('grep', {pattern: 'glorptube'}, 8, {trailingText: 'all fixed'})
         )
@@ -508,8 +505,8 @@ describe('runWorker', () => {
     })
 
     test('timeoutMs: 0 disables the wall-clock timeout — a slow worker still completes', async () => {
-        // A 50ms-delayed close with the timeout OFF must be waited out, not aborted
-        // (contrast the timeoutMs:15 test below, which aborts an 80ms close).
+        // With the timeout off no timer is armed at all, so a delayed close must be
+        // waited out — contrast the armed-timeout test below.
         const spawn = fakeSpawnByPrompt(() => ({
             ...agentEndResponse('slow but done'),
             closeDelayMs: 50
@@ -527,8 +524,8 @@ describe('runWorker', () => {
     })
 
     test('restarts on a per-worker wall-clock timeout and returns the retry', async () => {
-        // First spawn keeps running past the timeout (delayed close, no answer);
-        // the deliberate per-worker timeout must abort it and re-spawn.
+        // The first spawn never answers and closes only after the cap, so the
+        // per-worker timeout is what ends it — and it re-spawns rather than fails.
         const spawn = fakeSpawnQueue([
             {events: [], closeDelayMs: 80},
             agentEndResponse('clean output')
@@ -546,10 +543,10 @@ describe('runWorker', () => {
     })
 
     test('restarts on a connection-class model error and returns the retry', async () => {
-        // Measured live: pi already retries a connection failure 4× over ~15s, so a
-        // surfaced "Connection error." means an outage that outlasted pi's own
-        // budget. A phase child re-spawns there (runPhaseChild); a research
-        // worker would fail the whole task instead.
+        // pi retries a retryable model error itself, with exponential backoff, before
+        // surfacing it (its `retry` settings). So a surfaced "Connection error." is an
+        // outage that outlasted pi's own budget, and the restart here is the second
+        // line — without it a research worker would fail the whole task.
         const slept: number[] = []
         const spawn = fakeSpawnQueue([
             agentErrorResponse('Connection error.'),
@@ -565,7 +562,7 @@ describe('runWorker', () => {
         })
         expect(r.text).toBe('clean output')
         expect(r.modelError).toBeUndefined()
-        // Same backoff schedule as the phase child: 500ms, then 1s.
+        // The phase child's own schedule: `connectionRetryBackoffMs` (child-runner.ts).
         expect(slept).toEqual([500])
     })
 
@@ -612,8 +609,9 @@ describe('runWorker', () => {
     })
 
     test('a NON-connection model error fails fast — no restart, no backoff', async () => {
-        // Auth/bad-request/context-overflow are repeatable: re-issuing the same
-        // request cannot fix them, so burning the budget only delays the report.
+        // `isConnectionError` (child-runner.ts) does not match this, and everything it
+        // does not match is repeatable: re-issuing the same request cannot fix an auth
+        // or bad-request error, so spending the budget only delays the report.
         let spawns = 0
         const spawn = ((cmd: string, args: ReadonlyArray<string>, opts: unknown) => {
             spawns++
@@ -700,9 +698,9 @@ describe('runWorker', () => {
     })
 
     // ── restart accounting ────────────────────────────────────────
-    // Wall-clock timeouts discard hours of compute, and most of the
-    // 23 affected workers returning exit=0. None of it was visible from the result
-    // or any log — waitMs/workMs describe the FINAL attempt only.
+    // `waitMs`/`workMs` describe the FINAL attempt only, and a discarded attempt
+    // can still return exit=0. `restarts` is the only place a thrown-away attempt
+    // is visible.
     describe('restart accounting', () => {
         test('a clean run reports attempts=1, no restarts, and never calls onRestart', async () => {
             const seen: unknown[] = []
@@ -718,13 +716,13 @@ describe('runWorker', () => {
             expect(r.attempts).toBe(1)
             expect(r.restarts).toEqual([])
             expect(seen).toEqual([])
-            // The clean case is the one where the old fields must still add up.
+            // One attempt, so the final attempt's split is the whole run's.
             expect(r.totalWallMs).toBeGreaterThanOrEqual(r.waitMs + r.workMs)
         })
 
         test('a wall-clock timeout is reported as a discarded attempt on a clean result', async () => {
-            // The exact shape: attempt 1 times out, attempt 2 answers, and
-            // the caller sees exit=0 with nothing to say an attempt was thrown away.
+            // Attempt 1 times out, attempt 2 answers. `exitCode` is 0, so `restarts`
+            // is the only record that an attempt was discarded.
             const spawn = fakeSpawnQueue([
                 {events: [], closeDelayMs: 80},
                 agentEndResponse('clean output')
@@ -832,10 +830,10 @@ describe('runWorker', () => {
     })
 
     /**
-     * A restart is supposed to buy another chance at an answer. Before this it
-     * also THREW AWAY everything the killed attempt had produced, which is why a
-     * high-fan-out worker re-read the same files against the same clock and died
-     * in the same place every time.
+     * A restart discards the killed attempt's text. With `carryForward` on, a
+     * partial from a reason in CARRY_FORWARD_REASONS is framed and handed to the
+     * next attempt, and kept as a salvage candidate if the final attempt fails.
+     * These tests cover both halves, and the default-off path.
      */
     describe('carry-forward and salvage', () => {
         /** An attempt that produces real output and is then killed by the clock. */
@@ -966,8 +964,7 @@ describe('runWorker', () => {
         })
 
         test('OFF by default: the shipped path still discards and still returns the last attempt', async () => {
-            // The A/B's baseline arm depends on this being byte-for-byte the old
-            // behaviour. Without this test "default off" is an unverified claim.
+            // `carryForward` is off unless a caller asks for it; this pins that.
             const prompts: string[] = []
             // A realistic partial section: entry-shaped lines, which is what
             // hasAnswerContent requires before salvage will keep anything.
@@ -1042,10 +1039,8 @@ describe('runWorker', () => {
         })
 
         test('salvage refuses a partial that is only preamble (live carry-arm regression)', async () => {
-            // The exact text salvage shipped as an APIS section on one task and
-            // one task of the live carry arm: all three attempts timed out, the
-            // longest partial was one filler sentence, and both fixtures scored 2
-            // entries and DEGRADED against 22 and 5 in baseline.
+            // A filler sentence carries no entry lines, so `hasAnswerContent` rejects
+            // it however long it is. Length alone would let it become the answer.
             const preamble =
                 'Now let me get more details on the specific APIs and components I need:'
             expect(hasAnswerContent(preamble)).toBe(false)
@@ -1100,11 +1095,9 @@ describe('runWorker', () => {
             expect(prompts[0]).not.toContain('WORK ALREADY DONE')
         })
 
-        // As an inline eight-term disjunction, `finalAttemptFailed` is a
-        // fifth statement of the taxonomy `worker-failure.ts` owns — and it was
-        // missing two of FAILURE_RULES' rows. A crashed final attempt with a
-        // non-empty tail counted as NOT failed, so salvage was skipped and a good
-        // discarded partial was overwritten by the crash's leftovers.
+        // `finalAttemptFailed` asks `classifyWorkerFailure` rather than restating the
+        // taxonomy inline, so every row of FAILURE_RULES — the `exit` row included —
+        // admits salvage. A restated disjunction would drift from that list silently.
         test('a CRASHED final attempt still admits salvage (the missing `exit` rung)', async () => {
             const long = [
                 'openDb  (path: string) => Database — open the sqlite handle',
@@ -1113,8 +1106,8 @@ describe('runWorker', () => {
             ].join('\n')
             const spawn = fakeSpawnQueue([
                 partialThenTimeout(long),
-                // Non-zero exit, nothing killed it, and the text is NOT empty —
-                // the one combination the old disjunction had no term for.
+                // Non-zero exit, nothing killed it, and the text is NOT empty: only
+                // the `exit` row of FAILURE_RULES matches this.
                 agentEndResponse('error: could not open module graph', 1)
             ])
             const r = await runWorker({
@@ -1168,8 +1161,8 @@ describe('runWorker', () => {
         })
 
         test('a worker that keeps working is not killed for being slow', async () => {
-            // Twelve reads paced past the 40ms no-progress window: total elapsed
-            // runs far beyond it, but the worker is never idle for a whole window.
+            // Reads paced closer together than the no-progress window: total elapsed
+            // runs past that window, but the worker is never idle for a whole one.
             const events = [
                 ...Array.from({length: 12}, (_, i) => toolCall(i)),
                 {
@@ -1198,8 +1191,7 @@ describe('runWorker', () => {
         })
 
         test('the same worker IS killed by the same window when it goes quiet', async () => {
-            // Identical config, identical first events — only the silence differs.
-            // Without this the change would just be "the timeout is longer now".
+            // Identical config and identical first events. Only the silence differs.
             const spawn = pacedSpawn([toolCall(0), toolCall(1)], 30, 900)
             const r = await runWorker({
                 prompt: 'x',
@@ -1240,8 +1232,8 @@ describe('runWorker', () => {
         })
 
         test('without the ceiling the fixed cap is unchanged', async () => {
-            // The opt-in must be exactly that: callers that do not set it keep
-            // the old behaviour, progress or no progress.
+            // With no ceiling, `progress()` returns immediately (see workerTimeout), so
+            // `timeoutMs` stays a total-elapsed cap however much the worker does.
             const spawn = pacedSpawn(
                 Array.from({length: 100}, (_, i) => toolCall(i)),
                 30
@@ -1261,16 +1253,11 @@ describe('runWorker', () => {
             expect(r.timedOut).toBe(true)
         })
 
-        // inv-no-unbounded-worker. The progress deadline SHIPPED ON,
-        // so "a worker that is progressing may run to 20 minutes" is now the
-        // default path, and the question stops being hypothetical: what bounds a
-        // worker whose model endpoint is simply gone?
-        //
-        // Two independent bounds, and the point of the test is that neither one
-        // needs the ceiling. A hung child emits nothing, so it never calls
-        // progress() and the deadline never re-arms — it dies at `timeoutMs`
-        // exactly as it did before the lever. And the stall probe kills it sooner
-        // still. A ceiling 20 minutes out is reached by neither.
+        // What bounds a worker whose model endpoint is simply gone, once a progress
+        // ceiling is configured? Two bounds, and neither is the ceiling. A hung child
+        // emits nothing, so it never calls progress() and the deadline never re-arms:
+        // it dies at `timeoutMs`. The stall probe kills it sooner still. These two
+        // tests take each bound in turn.
         test('a hung endpoint is still killed fast with the ceiling ON', async () => {
             const spawn = (() => {
                 const p = makeProc()
@@ -1296,8 +1283,8 @@ describe('runWorker', () => {
                 },
                 cwd: process.cwd(),
                 spawn
-                // The real ratio, scaled: the ceiling is ~5000x the no-progress
-                // window here, as 1_200_000 is ~5x the shipped 240_000.
+                // The ceiling is set far beyond both other bounds on purpose: if it
+                // were ever what killed this child, the test would prove nothing.
             })
             expect(r.stalled).toBe(true)
             expect(Date.now() - started).toBeLessThan(5_000)
@@ -1331,8 +1318,9 @@ describe('runWorker', () => {
         })
     })
 
-    describe('nexttask 5B levers', () => {
-        // ── SCALE arm of  (UNWIRED; see task/research-fanout-budget.ts) ──
+    describe('fan-out timeout levers', () => {
+        // Off unless PI_TASK_FANOUT_TIMEOUT_* is set — see
+        // task/research-fanout-budget.ts. Exercised here through `override`.
         test('fanoutTimeout extends the deadline on a project-source docs call', async () => {
             const docsCall = {
                 type: 'tool_execution_start',
@@ -1349,7 +1337,7 @@ describe('runWorker', () => {
                 ],
                 closeDelayMs: 90
             }
-            // Same child, same 40ms cap, twice: the only difference is the policy.
+            // The same child and the same cap, twice. Only the fanout policy differs.
             const withoutPolicy = await runWorker({
                 prompt: 'x',
                 profile: 'adhoc',
