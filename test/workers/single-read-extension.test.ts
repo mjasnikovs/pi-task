@@ -28,7 +28,8 @@ describe('single-read-extension', () => {
         expect(handler!(ev)).toBeUndefined()
         const blocked = handler!(ev) as {block?: boolean; reason?: string}
         expect(blocked.block).toBe(true)
-        // The guard keys on the resolved absolute path (native separators on Windows).
+        // The guard keys on `resolve(process.cwd(), path)`, so the reason names the
+        // absolute path, not the string the caller passed.
         expect(blocked.reason).toContain(resolve(process.cwd(), '/tmp/x.ts'))
     })
 
