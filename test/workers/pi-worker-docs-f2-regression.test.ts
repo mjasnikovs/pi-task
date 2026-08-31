@@ -1,43 +1,23 @@
 /**
- * The TARGETED REGRESSION TEST for the type-only answer guard, and the reason it
- * exists instead of an A/B.
+ * The targeted regression test for the type-only answer guard.
  *
- * ── WHY THIS FILE REPLACES AN EXPERIMENT ──────────────────────────────────────
+ * WHAT IS PROVEN HERE. For a type-only answer the docs tool marks the result
+ * UNANSWERED, demotes the retrieved declaration from "the answer" to context,
+ * and hands back the `@see` URL to fetch. The guard also stands down on the two
+ * neighbouring shapes this file pins: a behavioural answer to the same question,
+ * and an explicit "unclear" abstention. (A signature question that a signature
+ * legitimately answers is pinned in task/type-only-answer.test.ts, not here.)
  *
- * An A/B on this lever measured no difference and recorded it as "did not move
- * the metric". That was a broken EXPERIMENT, not broken code. The thing the
- * experiment never measured is how often the lever can fire at all — and it is a
- * fraction of one percent of docs answers, because the whole population is TWO
- * questions out of a couple of hundred: one that flags every time, and one that
- * flags intermittently.
+ * WHAT IS NOT PROVEN, and is not claimed anywhere: that the worker then actually
+ * escalates. The banner is an instruction to a model. Whether it is obeyed is
+ * not something this file can assert.
  *
- * A lever reaching that few answers cannot move an aggregate, and no arm size
- * fixes it. Running another A/B would spend hours to produce another null. So the
- * lever is not claimed as a population fix. It is a TARGETED GUARD, and this file
- * is its proof: blast radius of one deterministic case plus one intermittent one.
- *
- * ── WHAT IS AND IS NOT PROVEN HERE ────────────────────────────────────────────
- *
- * PROVEN: for the recorded case the tool marks the answer UNANSWERED, refuses to
- * present the type as the answer, and hands back the `@see` URL to fetch. Also
- * proven: the guard does not fire on the neighbouring shapes — a behavioural
- * answer, an explicit "unclear", a signature question that a signature
- * legitimately answers.
- *
- * NOT PROVEN, and deliberately not claimed anywhere: that the worker then
- * ACTUALLY escalates. That is a model behaviour, it happens on its own only some
- * of the time, and the lever fires too rarely for any affordable experiment to
- * attribute a change in it. The banner is an instruction; whether the model obeys
- * is unmeasured.
- *
- * ── WHY THE POSITIVES ARE EIGHT LIVE VARIANTS, NOT ONE FROZEN STRING ──────────────────────
- *
- * The corpus lowercases and whitespace-collapses its cache keys, and the model re-words its
- * answer every rep. Pinning one recorded string would prove only that a regex matches a
- * string. The eight answers below are the eight DISTINCT phrasings the live model actually
- * produced for the same question across the eight reps — every one caught. That is the
- * property worth defending: robustness to the model re-wording the same type-only answer.
- * Verbatim from ~/tmp/typeonly-baserate/answers.jsonl.
+ * WHY THE POSITIVES ARE EIGHT PHRASINGS, NOT ONE STRING. `docsCacheKey`
+ * lowercases the question and collapses its whitespace, so phrasing variants of
+ * one question share a cache entry — and the model re-words its answer freely
+ * inside that entry. Pinning a single string would prove only that a regex
+ * matches a string. Eight distinct phrasings of the same type-only answer, all
+ * caught, is the property worth defending.
  */
 import {test, expect, describe} from 'bun:test'
 import * as path from 'node:path'
@@ -53,14 +33,14 @@ import {isTypeOnlyAnswer} from '../../src/task/type-only-answer.js'
 
 const FIXTURES = path.resolve(__dirname, '__fixtures__')
 
-/** The query verbatim, as asked it and as all 8 live reps re-asked it. */
+/** The question all nine answers below were produced for. */
 const HC_QUERY = 'hc factory function signature base url parameter types exported from hono/client'
 
 /**
- * The eight answers the live model produced for HC_QUERY, one per rep, 2026-07-22. Every
- * clause in every one is type-level: they name `baseUrl`'s TYPE (`Prefix`, itself an opaque
- * type variable) and never say what `baseUrl` MEANS. That is precisely why the worker
- * accepted them as complete and stopped.
+ * Eight phrasings of the same answer to HC_QUERY. Every clause in every one is
+ * type-level: they name `baseUrl`'s TYPE (`Prefix`, itself an opaque type variable)
+ * and never say what `baseUrl` MEANS. A reader gets a complete-looking answer that
+ * cannot be acted on.
  */
 const HC_LIVE_ANSWERS: string[] = [
     'The `hc` factory function is exported from `hono/client` and takes two parameters: `baseUrl` of generic type `Prefix extends string = string`, and an optional `options` of type `ClientRequestOptions`. It returns a `UnionToIntersection<Client<T, Prefix>>` where `T` extends `Hono`.',
@@ -74,8 +54,8 @@ const HC_LIVE_ANSWERS: string[] = [
 ]
 
 /**
- * The ORIGINAL cache entry, kept alongside the live variants. It is the answer that
- * actually shipped the bug, so it must never stop being caught, whatever later reps say.
+ * A ninth phrasing, pinned on its own so it keeps being caught independently of
+ * the eight above. It is also the answer the tool-seam tests below feed in.
  */
 const HC_RECORDED_ANSWER =
     'The `hc` factory function exported from `hono/client` accepts a generic type `T` '
@@ -96,8 +76,8 @@ describe('F-2 blast radius, case 1 of 2 — the hc answer (8/8 reps live)', () =
     })
 
     test('all eight live phrasings are genuinely distinct strings, not one answer repeated', () => {
-        // Otherwise "eight reps" would be a single observation wearing eight hats, and the
-        // robustness claim above would be unearned.
+        // Otherwise the eight would be one observation wearing eight hats, and the
+        // robustness claim in the header would be unearned.
         expect(new Set(HC_LIVE_ANSWERS).size).toBe(8)
     })
 
@@ -114,12 +94,11 @@ describe('F-2 blast radius, case 1 of 2 — the hc answer (8/8 reps live)', () =
 })
 
 /**
- * The second fatal defect of the class. Note carefully which channel it belongs to: the
- * docs worker answered the bun-SQL USAGE question with an explicit "unclear from this
- * package", which is the HONEST non-answer and is NOT type-only. The type-only shape appears
- * on the neighbouring TYPE question, intermittently. Both are
- * pinned, and the boundary between them is pinned, because conflating the two channels is
- * what would make the guard fire on honest abstentions.
+ * The two bun-SQL questions sit either side of the boundary. The TYPE question gets a
+ * type-listing answer, which IS type-only. The USAGE question gets an explicit
+ * "unclear from this package", which is the honest non-answer and is NOT. Both are
+ * pinned, because conflating the channels is what would make the guard fire on
+ * honest abstentions.
  */
 describe('F-2 blast radius, case 2 of 2 — the bun-SQL shape', () => {
     const TYPE_QUERY =
@@ -127,8 +106,8 @@ describe('F-2 blast radius, case 2 of 2 — the bun-SQL shape', () => {
         + 'type, connect method how to use'
 
     test('the live type-listing answer (1/8 reps) is caught', () => {
-        // Verbatim from the live run. Every clause is an interface/type restatement, and the
-        // method names are identifiers inside declarations — not statements of behaviour.
+        // Every clause is an interface/type restatement, and the method names are
+        // identifiers inside declarations — not statements of behaviour.
         const answer =
             'The `sql.query` type is defined as the `SQL.Query<T>` interface, which extends '
             + '`Promise<T>` and includes methods like `cancel()`, `simple()`, `execute()`, '
@@ -141,9 +120,8 @@ describe('F-2 blast radius, case 2 of 2 — the bun-SQL shape', () => {
     })
 
     test('the recorded "unclear" non-answer is NOT type-only — it is a different channel', () => {
-        // Routing an honest abstention through the type-only banner would double-report it
-        // and, worse, would let the type-only counter absorb the unclear population and
-        // fake a base rate far above the real one.
+        // An abstention already has its own channel. Routing it through the type-only
+        // banner too would report the same gap twice, in two different vocabularies.
         const v = isTypeOnlyAnswer(
             'unclear from this package',
             'what is the bun sql api? how does `import { sql } from "bun"` work?'
@@ -183,11 +161,11 @@ const textOf = (r: AgentToolResult<unknown>): string =>
     (r.content[0] as {type: 'text'; text: string}).text
 
 /**
- * End-to-end at the seam that matters: the real tool, real resolve/index/retrieve against a
- * fixture package shaped like hono/client, with only the child summariser and the npm
- * registry call stubbed. The `@see` pointer is NOT injected — it is pulled out of the
- * declarations the retriever actually returned, which is the whole point of F-2(d): the URL
- * was already in hand and was never used.
+ * End-to-end at the seam that matters: the real tool, real resolve/index/retrieve
+ * against a fixture package shaped like hono/client, with only the child summariser
+ * and the npm registry call stubbed. The `@see` pointer is NOT injected — `seeLinks`
+ * pulls it out of the declarations the retriever returned, so the URL the worker is
+ * sent to fetch was already in hand.
  */
 describe('the docs tool marks the recorded case UNANSWERED and names what to fetch', () => {
     test('type-only answer ⇒ UNANSWERED banner, retained type, and the @see URL to fetch', async () => {
@@ -204,8 +182,8 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
 
         // 1. The answer is not presented as an answer.
         expect(text).toContain('UNANSWERED — TYPE-ONLY')
-        // 2. The worker is told, in terms, not to close the gap from memory — which is
-        //    exactly what worker:context did in a (F-1).
+        // 2. The worker is told, in terms, not to close the gap from memory. A model
+        //    handed a named gap and no instruction will fill it from memory.
         expect(text).toMatch(/Do NOT answer from memory/i)
         // 3. It is handed the pointer that was sitting in the retrieved text all along.
         expect(text).toContain('https://hono.dev/docs/guides/rpc')
@@ -238,8 +216,8 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
     })
 
     test('a type-only answer is never memoised, so the next asker can still escalate', async () => {
-        // F-2(e): cached its non-answers, so one dead end was re-served to every
-        // later sibling task and the miss never recurred to trigger an escalation.
+        // A cached type-only answer would be re-served to every later asker, so the
+        // miss would never recur and nothing would ever trigger an escalation.
         const cache = openCache(':memory:')
         const result = await runTool(
             {
@@ -250,8 +228,9 @@ describe('the docs tool marks the recorded case UNANSWERED and names what to fet
             {module: 'rpc-client-pkg', query: HC_QUERY}
         )
         const d = result.details as {typeOnly?: boolean; childExitCode?: number}
-        // The child ran clean, so this IS an answer — and an answer carries no exit
-        // code at all now. Cacheability keys on the ANSWER, and nothing else can.
+        // The child ran clean, so this IS an answer, and an answer carries no exit code.
+        // `docsCacheable` therefore keys on the answer's own shape — typeOnly,
+        // excerptVerified, abstention — and has nothing else available to key on.
         expect(d.childExitCode).toBeUndefined()
         expect(d.typeOnly).toBe(true)
         const body = result.content[0]
