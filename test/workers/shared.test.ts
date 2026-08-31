@@ -44,21 +44,18 @@ test('formatChildFailure caps the stderr tail at 500 chars', () => {
 })
 
 /**
- * THE DEFECT THESE PIN.
+ * WHAT THESE PIN.
  *
- * Answering `if (aborted) return abortedMessage`, `formatChildFailure` would
- * every kill path also sets `aborted` — so a 240s wall-clock kill, a hung
- * command, a dead model backend and a user pressing ESC all printed the same
- * four words. Measured cost: across 53 recorded `pi-worker` invocations in eight
- * repos, 14 failed and NOTHING in the transcript said which of them ran out of
- * time. The bound recoverable from timestamps alone was "between 0 and 8".
- *
- * The cause was never missing — `classifyWorkerFailure` computed it exactly, one
- * line later, into a debug trail a user never reads.
+ * child-process.ts has ONE kill path, shared by user-abort and every guard kill,
+ * and it sets `aborted`. So `aborted` is true for a wall-clock kill, a hung
+ * command, a dead model backend and a user pressing ESC alike, and a
+ * `formatChildFailure` that answered `if (aborted)` first would print the same
+ * words for all four. The cause is available either way —
+ * `classifyWorkerFailure` computes it — but only the message reaches the user.
  */
 test('a wall-clock kill says it ran out of time, not "aborted"', () => {
-    // A real timed-out RunWorkerResult: the kill path sets `aborted` TOO, which is
-    // precisely why the old `if (aborted)` first-line answer swallowed it.
+    // A real timed-out RunWorkerResult. The kill set `aborted` as well, so `aborted`
+    // alone cannot be what decides the message.
     const msg = formatChildFailure(
         {aborted: true, exitCode: 143, stderr: '', timedOut: true},
         'Worker aborted.'
@@ -97,8 +94,8 @@ test('each kill cause gets its OWN message, and names its detail', () => {
 })
 
 test('a caller with only a ChildOutcome is unchanged — no kill flags, same words', () => {
-    // focused-extractor passes exactly this shape. The ladder falls through to
-    // aborted/exit, so its messages must be byte-identical to the old function's.
+    // focused-extractor passes exactly this shape: the plain `runChild` outcome, with
+    // none of the kill flags. The ladder falls through to aborted/exit.
     expect(formatChildFailure({aborted: true, exitCode: 0, stderr: 'x'}, 'Docs aborted.')).toBe(
         'Docs aborted.'
     )
@@ -183,7 +180,7 @@ test('makeWorkerTool delegates renderCall to the spec', () => {
     expect(rendered).toBeInstanceOf(Text)
 })
 
-// ─── makeWorkerTool per-run research cache (F10) ──────────────────────────────
+// ─── makeWorkerTool per-run research cache ──────────────────────────────
 
 const savedRunId = process.env[RESEARCH_RUN_ID_ENV]
 afterEach(() => {
@@ -310,18 +307,17 @@ test('a different run id does not see the prior run cache (isolation through the
 
 // ─── An `unavailable` outcome is never stored ────────────────────────────────
 //
-// This is the rule the four `cacheable` predicates would each carry as
-// `childExitCode === 0`, and got wrong: `runChild` reports `code ?? 0`, so a
-// SIGTERM-killed child arrives with exit code 0, every clause passed, and
-// "Docs lookup aborted." was memoised for the whole run and re-served to every
-// later sibling — with escalation unable to re-fire because the miss never
-// recurred. The outcome states it now, so no rule has to derive it.
+// Availability is stated by the outcome's `kind`, so no `cacheable` predicate has
+// to derive it. A predicate that tried would have to read the exit code, and
+// `runChild` reports a killed child as `code ?? 0` — so an aborted lookup arrives
+// looking clean, gets memoised for the whole run, and is re-served to every later
+// sibling, leaving nothing to re-trigger an escalation.
 
 test('makeWorkerTool never caches an `unavailable`, even when cacheable() says yes', async () => {
     const cwd = tmpCwd()
     process.env[RESEARCH_RUN_ID_ENV] = 'run-unavailable'
     const {registered, calls} = cachingTool({
-        // The old rule, faithfully: "the child exited 0, so cache it."
+        // The most permissive rule a tool could write: cache everything.
         cacheable: () => true,
         outcome: (text, details) => workerUnavailable(text, details, 'aborted')
     })
@@ -355,8 +351,8 @@ test('an `answer` with the same tool and rule IS cached (the control)', async ()
 })
 
 test('childFailureReason names the kill through the one ordered ladder', () => {
-    // A SIGTERM kill sets `aborted` and leaves exitCode 0 — the shape that made
-    // the old exit-code derivation say "success".
+    // A SIGTERM kill sets `aborted` and leaves exitCode 0 — the shape an exit-code
+    // check would read as success.
     expect(childFailureReason({exitCode: 0, aborted: true})).toBe('aborted')
     // A specific cause outranks the generic abort it also sets.
     expect(childFailureReason({exitCode: 0, aborted: true, timedOut: true})).toBe('worker-timeout')
