@@ -216,7 +216,7 @@ line counts as a comment line but opens no block.
 | `src/workers/single-read-guard.ts` | 137 | 64 | 9 | true |
 | `src/workers/typeonly-log.ts` | 129 | 82 | 17 | true |
 | `src/workers/worker-channels.ts` | 129 | 58 | 14 | true |
-| `src/workers/worker-failure.ts` | 220 | 106 | 10 | true |
+| `src/workers/worker-failure.ts` | 220 | 106 | 10 | false |
 | `src/workers/worker-kill.ts` | 171 | 76 | 11 | true |
 | `src/workers/worker-profiles.ts` | 434 | 233 | 32 | true |
 | `test/config/config-items.test.ts` | 153 | 26 | 7 | true |
@@ -440,5 +440,5 @@ line counts as a comment line but opens no block.
 | `test/workers/typeonly-log.test.ts` | 107 | 11 | 5 | true |
 | `test/workers/worker-channels.test.ts` | 102 | 27 | 9 | true |
 | `test/workers/worker-failure.test.ts` | 93 | 5 | 2 | true |
-| `test/workers/worker-kill.test.ts` | 154 | 32 | 7 | false |
+| `test/workers/worker-kill.test.ts` | 152 | 31 | 7 | true |
 | `test/workers/worker-profiles.test.ts` | 413 | 75 | 14 | false |
