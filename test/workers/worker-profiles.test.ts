@@ -28,17 +28,15 @@ import {agentEndResponse, fakeSpawnByPrompt} from '../test-utils/fake-spawn.js'
 import {SRC_ROOT, srcPath} from '../test-utils/src-tree.js'
 
 /**
- * THE DEFAULTS, WRITTEN OUT LONGHAND.
+ * THE BASELINE GUARDS, WRITTEN OUT LONGHAND.
  *
- * What `runWorker` filled in around a caller that named no guards at all, back
- * when `RunWorkerInput` carried the knobs. Written out in full — not built from a
- * helper — because a literal is the only form that can disagree with the table it
- * is checking.
+ * Written out in full, not built from a helper: a literal is the only form that
+ * can disagree with the table it is checking.
  *
- * It is no longer any profile's resolved policy: `adhoc` deliberately departs
- * from it on the clock (no wall clock, a silence bound instead). It stays as the
- * reference the other rows are diffed against, so a change to any guard OTHER
- * than the one we meant to change still fails a test.
+ * It is no profile's resolved policy — `adhoc` departs from it on the clock, and
+ * gate and research each depart elsewhere. It is the reference every row below is
+ * diffed against, so a change to any guard OTHER than the one a test meant to
+ * change still fails that test.
  */
 const ADHOC: WorkerGuardPolicy = {
     guards: {
@@ -60,11 +58,10 @@ const ADHOC: WorkerGuardPolicy = {
 
 describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
     test('adhoc has NO WALL CLOCK, and is bounded by SILENCE instead', () => {
-        // The change of record. A fixed elapsed-time cap on a read-only worker is
-        // a hardware test, not a work test — the same prompt on slower hardware
-        // loses its work, and no constant fixes that. The replay corroborates
-        // rather than decides: after nothing but a MODEL swap on the same machine,
-        // 5 of 28 valid trials ran past the "~25-130s" this was sized against.
+        // A fixed elapsed-time cap on a read-only worker is a hardware test, not a
+        // work test: the same prompt on slower hardware loses its work, and no
+        // constant fixes that. What bounds it instead is SILENCE, which needs no
+        // calibration.
         const g = workerPolicy('adhoc', {streamInactivityMs: 1_800_000}).guards
         expect(g['worker-timeout']).toEqual({
             timeoutMs: 0,
@@ -255,13 +252,6 @@ describe('applyOverride — whole rows, tests only', () => {
     })
 
     /**
-     * The other half of the same rule, and the only cover `pi-worker.ts` has:
-     * it registers a tool rather than exposing a seam, so no harness can drive
-     * its call site. A production caller that names no profile would not compile
-     * — `profile` is required — but one that names the WRONG kind of thing, or a
-     * fourth caller added without a profile row, is caught here.
-     */
-    /**
      * `adhoc` has no wall clock, so `stream-stall` is the ONLY thing bounding it.
      * A call site that names the profile and forgets the setting gets a worker
      * that can never be killed for going quiet — and `pi-worker.ts` registers a
@@ -288,6 +278,11 @@ describe('applyOverride — whole rows, tests only', () => {
         expect(offenders).toEqual([])
     })
 
+    /**
+     * The other half of the same rule. A production caller that names no profile
+     * would not compile — `profile` is required — but one that names the WRONG kind
+     * of thing, or a new caller added without a profile row, is caught only here.
+     */
     test('every production runWorker call site names a profile', () => {
         const root = SRC_ROOT
         const defs = new Set([
@@ -388,12 +383,12 @@ describe('snapshotLeverEnv — one arm per research phase', () => {
     })
 
     /**
-     * `RESEARCH_LEVER_ENVS`' own docstring claims it "cannot drift from the
-     * levers". Nothing made that true: the test below asks the snapshot which
-     * keys it reads, which is true by construction. A sixth lever read through
-     * `inputs.env` would compile, pass every unit test (they inject their own
-     * env fn), and be silently unset in production — strictly worse than the
-     * live `process.env` read it replaced. This is what makes the claim true.
+     * `RESEARCH_LEVER_ENVS`' own docstring says it exists so `snapshotLeverEnv`
+     * "cannot drift from the levers". The other test below cannot establish that:
+     * asking the snapshot which keys it reads is true by construction. A new lever
+     * read through `inputs.env` but left out of the list would compile, pass every
+     * unit test (they inject their own env fn), and be silently unset in
+     * production. This test reads the module's own declarations instead.
      */
     test('the list covers every lever constant the module declares', () => {
         const src = readFileSync(srcPath('task', 'research-fanout-budget.ts'), 'utf8')
