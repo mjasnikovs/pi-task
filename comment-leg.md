@@ -201,7 +201,7 @@ line counts as a comment line but opens no block.
 | `src/workers/npm-version.ts` | 128 | 25 | 5 | true |
 | `src/workers/phantom-imports.ts` | 320 | 88 | 26 | true |
 | `src/workers/pi-worker-core.ts` | 1186 | 594 | 109 | true |
-| `src/workers/pi-worker-docs.ts` | 538 | 137 | 25 | true |
+| `src/workers/pi-worker-docs.ts` | 538 | 137 | 25 | false |
 | `src/workers/pi-worker-fetch.ts` | 172 | 28 | 7 | true |
 | `src/workers/pi-worker-search.ts` | 103 | 8 | 3 | true |
 | `src/workers/pi-worker.ts` | 103 | 20 | 4 | true |
@@ -426,7 +426,7 @@ line counts as a comment line but opens no block.
 | `test/workers/pi-worker-core.test.ts` | 1427 | 168 | 59 | true |
 | `test/workers/pi-worker-docs-f2-regression.test.ts` | 240 | 85 | 18 | true |
 | `test/workers/pi-worker-docs-typeonly.test.ts` | 85 | 22 | 7 | true |
-| `test/workers/pi-worker-docs.test.ts` | 416 | 36 | 8 | false |
+| `test/workers/pi-worker-docs.test.ts` | 413 | 37 | 8 | true |
 | `test/workers/pi-worker-fetch.test.ts` | 295 | 16 | 6 | false |
 | `test/workers/pi-worker-search.test.ts` | 155 | 1 | 1 | false |
 | `test/workers/reasoning-warning.test.ts` | 308 | 46 | 13 | false |
