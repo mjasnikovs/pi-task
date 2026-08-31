@@ -5,10 +5,12 @@
  * Why this module exists. `RunWorkerResult` reports each kill cause as its own
  * optional field (`loopHit`, `timedOut`, `stalled`, `commandTimedOut`,
  * `streamStalled`, `leakedToolCall`, `aborted`, `exitCode`), and every kill path
- * ALSO sets `aborted` and a non-zero exit — killProc flips those on every route
- * out. So a consumer cannot read the fields in any order it likes: the specific
- * causes must be matched before the generic `aborted`/`exitCode` ones, or a dead
- * backend is reported to the user as "you cancelled".
+ * ALSO sets the two generic ones. `killProc` sets `aborted` on every route out,
+ * and pi's own print/json mode installs a SIGTERM handler that exits 143, so a
+ * terminated child carries a non-zero exit too. So a consumer cannot read the
+ * fields in any order it likes: the specific causes must be matched before the
+ * generic `aborted`/`exitCode` ones, or a dead backend is reported to the user as
+ * "you cancelled".
  *
  * Written as prose, or as the source order of each consumer's own hand-rolled
  * ladder, that rule gets a fresh chance to drift per consumer — and the failure is
@@ -29,10 +31,10 @@ import type {WorkerKillId} from './worker-kill.js'
 /**
  * The subset of a finished child result this classification reads.
  *
- * Structural on purpose: `runWorker` returns a superset, and
- * `EnforceChildResult` is a hand-written narrowing of the same shape. Typing the
- * input as what is actually READ lets both pass without either importing the
- * other's interface.
+ * Structural on purpose: `runWorker` returns a superset, and `EnforceChildResult`
+ * extends this interface with the one field enforcement adds. Typing the input as
+ * what is actually READ lets both pass without either importing the other's
+ * interface.
  */
 export interface WorkerFailureInput {
     exitCode: number
@@ -50,9 +52,9 @@ export interface WorkerFailureInput {
  *
  * Note what is NOT here: an empty answer, and a reported `modelError` on a run
  * that still produced text. Neither is a kill — whether they count as a failure
- * is the consumer's policy (research accepts a genuinely empty section; the gate
- * does not), so folding them in would move a decision out of the module that
- * owns it.
+ * is the consumer's policy — research-worker.ts, for one, accepts an explicit
+ * empty section after a retry — so folding them in would move a decision out of
+ * the module that owns it.
  */
 export type WorkerFailure =
     | {kind: 'stalled'}
@@ -93,9 +95,8 @@ void _kindsAreKills
  *     class of event: a watchdog, not the model, ended the attempt.
  *  4. `worker-timeout` — the wall-clock backstop.
  *  5. `loop` — killed for repeating one tool call past threshold. After the
- *     timeouts, matching the enforce ladder this replaces; in practice the two
- *     cannot both fire, since a loop kill stops the attempt before its own timer
- *     can expire.
+ *     timeouts: a loop kill ends the attempt, so its own timer does not go on to
+ *     expire as well.
  *  6. `leaked-tool-call` — the model wrote a call as prose instead of invoking
  *     it. Only ever set on an otherwise clean run.
  *  7. `aborted` — no specific cause survived, so this really is a cancel.
@@ -149,7 +150,7 @@ export const FAILURE_RULES: ReadonlyArray<{
  *
  * A switch, not a table: `WorkerFailure` is a discriminated union carrying a
  * different payload per arm, so the exhaustiveness check is the compiler's and a
- * ninth arm cannot be added without a message.
+ * new arm cannot be added without a message.
  */
 export function describeWorkerFailure(
     f: WorkerFailure,

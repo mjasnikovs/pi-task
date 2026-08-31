@@ -11,9 +11,8 @@ const clean = (over: Partial<WorkerFailureInput> = {}): WorkerFailureInput => ({
     ...over
 })
 
-/** A killed child. `killProc` sets `aborted` on every kill path; the non-zero exit
- *  here is the fixture's, so each case below outranks BOTH generic rows at once. A
- *  real SIGTERM arrives with exitCode 0 — runChild reports node's null as `code ?? 0`. */
+/** A killed child: `killProc` sets `aborted`, and pi's print/json mode exits 143 on
+ *  SIGTERM, so both generic rows match too. Every case below has to outrank both. */
 const killed = (over: Partial<WorkerFailureInput>): WorkerFailureInput =>
     clean({aborted: true, exitCode: 143, ...over})
 
