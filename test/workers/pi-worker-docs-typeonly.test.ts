@@ -2,18 +2,18 @@ import {test, expect, describe} from 'bun:test'
 import {extractSeeUrls, docsCacheable} from '../../src/workers/pi-worker-docs.js'
 
 /**
- * PROMPT 2, DO items 2 and 4 at the docs-tool seam.
+ * The two type-only pieces wired at the docs-tool seam: pulling the `@see` pointer
+ * out of retrieved text, and the cacheability predicate that stops a non-answer
+ * being memoised.
  *
- * DO item 1's detector has its own suite (src/task/type-only-answer.test.ts, 18 tests,
- * calibrated so exactly 1 of the 150 valid answers flags). These cover the two
- * pieces wired HERE: pulling the `@see` pointer out of retrieved text, and the cacheability
- * predicate that stops a non-answer being memoised.
+ * The detector itself — `isTypeOnlyAnswer` — has its own suite in
+ * test/task/type-only-answer.test.ts.
  */
 
 describe('extractSeeUrls — the free pointer (F-2d)', () => {
     test('pulls the URL out of a real JSDoc @see {@link …} block', () => {
-        // The shape hono's .d.ts actually ships, and the reason this exists:
-        // hono.dev appeared in cache values ONLY inside excerpts like this, never fetched.
+        // The shape the pointer arrives in: a JSDoc block above the declaration, so it
+        // is already inside the excerpt the retriever hands back.
         const dts = `
 /**
  * Creates a typed RPC client.
@@ -50,24 +50,22 @@ export declare const hc: <T extends Hono>(baseUrl: string) => Client<T>
     })
 })
 
-// The SHIPPED predicate, imported. Hand-retyped here under a
-// "keep in sync" comment, so a change to the real rule left these six tests green.
+// The shipped predicate itself, not a local copy of the rule.
 const cacheable = docsCacheable
 
 // The rule is about answer QUALITY only. Whether there IS an answer is the
 // outcome's `kind`, and `makeWorkerTool` refuses an `unavailable` before this
-// runs — see shared.test.ts. Opening the rule with `childExitCode === 0`,
-// which a SIGTERM-killed child satisfies (`code ?? 0`), so `"Docs lookup
-// aborted."` passed every clause and was memoised for the whole run.
+// runs (workers/shared.ts). Process health must not enter: runChild reports a
+// killed child as `code ?? 0`, so any rule keyed on exit code would read a
+// SIGTERMed lookup as a clean one and memoise its aborted text.
 describe('cacheable — a poor answer must never be memoised (F-2e)', () => {
     test('a real answer is cached', () => {
         expect(cacheable({excerptVerified: true}, 'Per hono@4: hc takes …')).toBe(true)
     })
 
     test('"unclear from this package" is NOT cached', () => {
-        // This is the exact defect: 52 cached entries were "unclear" with
-        // hitCache true, so one dead end was paid for many times and escalation could
-        // never re-fire because the miss never recurred.
+        // A cached abstention is served to every later asker, so the miss never
+        // recurs and nothing ever re-triggers an escalation.
         expect(cacheable({}, 'unclear from this package')).toBe(false)
     })
 
