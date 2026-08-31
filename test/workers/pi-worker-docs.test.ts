@@ -122,7 +122,8 @@ test('pi-worker-docs returns clear error for un-installed package', async () => 
         {
             openCache: () => cache,
             npmVersionLookup: async () => null,
-            // autoInstall will attempt `npm install does-not-exist`; simulate failure
+            // The package does not resolve, so acquirePackage runs
+            // `npm install --ignore-scripts …` first. This makes that install fail.
             spawn: fakeSpawnSimple('', 1, 'npm ERR! 404 Not Found')
         },
         {module: 'does-not-exist', query: 'q'}
@@ -204,7 +205,7 @@ test('pi-worker-docs prepends live npm version block and surfaces it in details'
         {module: 'tiny-pkg', query: 'enumerate users'}
     )
     const text = (result.content[0] as {type: 'text'; text: string}).text
-    // npm block leads the output so the agent sees live registry data first.
+    // Position, not just presence: the npm block is the first thing in the text.
     expect(text.indexOf('### npm: tiny-pkg')).toBe(0)
     expect(text).toContain('latest: 19.0.0 (published 2026-04-10)')
     expect(text).toContain('Per tiny-pkg@1.0.0:')
@@ -246,16 +247,13 @@ test('packageRootOf maps a subpath specifier to its package.json key', () => {
 })
 
 /**
- * INSTRUMENTATION COVERAGE for the project-source branch.
+ * The `module: "."` branch returns before the package path's `logDocsAnswer` call,
+ * so it needs its own. Without one, the sink's last row is not the worker's last
+ * answer whenever that answer came from this branch.
  *
- * `module: "."` is the MAJORITY of what worker:apis asks — 13 of 17 docs calls in a * fatal task, 7 of 12 in the first live termination-diagnostic rep — and that branch returns
- * long before the package path's logDocsAnswer call. With it uninstrumented, "the last docs
- * answer before the worker stopped" was unanswerable: the sink's last row was routinely not
- * the worker's last answer, and every project-source abstention scored as a valid answer.
- *
- * The record must also say that the type-only detector was NOT applied here, because it is
- * not: inventing a verdict on this path would let a firing rate computed off this sink count
- * answers the PROMPT 2 lever never reaches.
+ * The row must also say the type-only detector was NOT applied here, because it is
+ * not: a sink that recorded an invented verdict would let anything counted off it
+ * include answers the detector never reaches.
  */
 test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-project-log-'))
@@ -296,12 +294,11 @@ test('a project-source lookup is recorded in the PI_TASK_TYPEONLY_LOG sink', asy
 })
 
 /**
- * CAP arm of  (src/task/research-fanout-budget.ts) — UNWIRED: the
- * budget is off unless PI_TASK_PROJECT_DOCS_BUDGET is set, which only
- * a fan-out budget harness does.
+ * The project-docs budget is off unless PI_TASK_PROJECT_DOCS_BUDGET is set
+ * (task/research-fanout-budget.ts), so this test sets it.
  *
- * The property that matters is where the refusal happens: BEFORE the child spawn.
- * The cost this lever exists to remove is the summarising model pass each
+ * The property that matters is WHERE the refusal happens: before the child spawn.
+ * The cost the budget exists to remove is the summarising model pass each
  * project-source lookup runs, so a refusal that still spawns saves nothing.
  */
 test('a project-docs budget refuses further "." lookups without spawning', async () => {
@@ -379,12 +376,12 @@ test('the budget counts ONLY project-source lookups — package docs are untouch
 })
 
 test('a docs ERROR still reports the auto-install provenance its siblings report', async () => {
-    // BUG FIX. `docsRaw` records `autoInstallPin` on three of its five error
-    // returns, and both the `no_chunks` and `ok` arms flatten it into details —
-    // the error arm did not. So a package that was auto-installed AT A DECLARED
-    // RANGE and then failed lost the `versionSource`/`declaredRange` that says
-    // which range was pulled: the provenance the last defect in this area was
-    // about, missing on the one path where it explains the failure.
+    // `docsRaw` sets `autoInstallPin` on the error returns that follow an
+    // auto-install, and all three arms — `ok`, `no_chunks` and `error` — flatten it
+    // into details through `pinDetails`. Without it on the error arm, a package
+    // auto-installed AT A DECLARED RANGE and then failed loses the
+    // `versionSource`/`declaredRange` saying which range was pulled — on the one
+    // path where that is the explanation.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-docs-pin-'))
     fs.writeFileSync(
         path.join(dir, 'package.json'),
