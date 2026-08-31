@@ -74,8 +74,8 @@ interface DocsDetails {
 /**
  * Pull `@see {@link https://…}` pointers out of retrieved .d.ts/README text.
  *
- * The answer to a type-only lookup is often not in the package at all — it lives at the
- * `@see` URL the very excerpt being returned already carries. Surfacing that link costs
+ * When the answer to a type-only lookup is not in the package, it is often at the
+ * `@see` URL the excerpt being returned already carries. Surfacing that link costs
  * nothing: the pointer is already in hand.
  *
  * Matches `{@link URL}` and a bare `@link URL`, case-insensitively; strips a trailing
@@ -109,10 +109,9 @@ function pinDetails(pin?: AutoInstallPin): Pick<DocsDetails, 'versionSource' | '
 }
 
 /**
- * The tool result for a focused-extraction child that failed, shared by both docs paths —
- * the last chunk they still held in common after the extractor seam took the child running.
- * The paths differ only in `prefix`: the npm path leads every result, failures included, with
- * its version banner and npm-version header; the project path has neither.
+ * The tool result for a focused-extraction child that failed, shared by both docs paths.
+ * They differ only in `prefix`: the npm path leads every result, failures included, with
+ * its version banner and npm-version header; the project path passes ''.
  *
  * It says UNAVAILABLE, so the cache cannot take it. Writing a non-zero `childExitCode`
  * and letting `docsCacheable` re-derive the verdict would fail on the case it matters
@@ -341,7 +340,7 @@ export function registerPiWorkerDocs(
                     // that WAS auto-installed and then failed to re-resolve loses its
                     // `versionSource`/`declaredRange`, and the answer cannot say what
                     // version it is grounded in. `docsRaw` sets `autoInstallPin` on
-                    // three of its five error returns.
+                    // every error return that follows an auto-install.
                     ...pinDetails(rawResult.autoInstallPin),
                     ...npmDetails
                 }
@@ -373,7 +372,6 @@ export function registerPiWorkerDocs(
                 )
             }
 
-            // kind === 'ok'
             const {pkg, chunks, hitCache, indexingMs, cacheError, autoInstalled} = rawResult
             const versionBanner = buildVersionBanner(
                 rawResult.autoInstallPin,
@@ -430,11 +428,10 @@ export function registerPiWorkerDocs(
                     + body
             }
 
-            // STAGE 1 INSTRUMENTATION — off unless PI_TASK_TYPEONLY_LOG names a sink, and
-            // side-effect only: nothing below reads it, and every failure inside is
-            // swallowed. It records EVERY answer, flagged or not, because the open question
-            // is a RATE — how often this fires — and a log of firings alone has no
-            // denominator. See typeonly-log.ts.
+            // Off unless PI_TASK_TYPEONLY_LOG names a sink, and side-effect only: nothing
+            // below reads it, and every failure inside is swallowed. It records EVERY
+            // answer, flagged or not — a log of firings alone would have no denominator to
+            // read a rate against. See typeonly-log.ts.
             //
             // It sits AFTER `text` is final, not above `text`'s first assignment,
             // so the record carries what the worker was actually handed, banner and cited
@@ -481,16 +478,12 @@ export function registerPiWorkerDocs(
         // matched against package.json verbatim (npm names are case-sensitive), unlike
         // the cache key, which normalises for phrasing collisions.
         cachePkg: docsCachePkg,
-        // Only a completed lookup (child exited 0) is a real answer; not-installed,
-        // no-chunks, resolve/cache errors, and aborts omit childExitCode:0 and fall
-        // through to a live retry next time.
-        //
-        // Process health is NOT answer quality. A child that ran fine and answered
-        // "unclear from this package" exits 0, so caching on exit code alone memoises the
-        // NON-ANSWER and re-serves it as a hit to every later sibling task — one dead end
-        // paid for many times, with escalation unable to re-fire because the miss never
-        // recurs. A non-answer is therefore never stored: the next task that asks pays
-        // for a real lookup and can escalate.
+        // Process health is NOT answer quality, and this rule only judges quality.
+        // not-installed, resolve and cache errors, and aborts return `unavailable`, which
+        // makeWorkerTool refuses before reaching here. What is left is real answers, and a
+        // child that ran fine and answered "unclear from this package" exits 0 — so a rule
+        // keyed on exit code would memoise that non-answer and re-serve it as a hit to
+        // every later sibling, with nothing left to re-trigger an escalation.
         //
         // `text` is supplied by makeWorkerTool (shared.ts) alongside details, so the
         // content check needs no new plumbing.
@@ -502,9 +495,10 @@ export function registerPiWorkerDocs(
  * The cache rule for the docs channel, as a NAMED export rather than an anonymous
  * property of an adapter literal.
  *
- * Reachable only through `registerTool → execute()`, a test has to hand-retype it —
- * and then asserts against a copy that a change to the shipped rule would leave green.
- * That is the same drift class the rule itself exists to prevent; see abstention.ts.
+ * As a property of the adapter literal it would be reachable only through
+ * `registerTool → execute()`, so a test would have to retype the rule and would then
+ * assert against its own copy — green even after the shipped rule changed. Exported,
+ * the test imports the rule it is checking.
  */
 export function docsCacheable(
     d: Pick<DocsDetails, 'typeOnly' | 'excerptVerified'>,
