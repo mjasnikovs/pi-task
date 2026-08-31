@@ -184,22 +184,42 @@ Green, then commit, then flip the row.
 
 ## Done
 
-`git grep -niE 'mx5|nexttask|gofer-pixel|/home/edgars'` returns nothing outside
-this file and `comment-leg.md`.
-
 Every row in `comment-leg.md` reads `verified = true`.
+
+`git grep -niE 'mx5|nexttask|gofer-pixel|/home/edgars'` is NOT clean, and cannot
+be while this pass is comments-only. Every remaining hit is a STRING, not a
+comment:
+
+- test titles and `describe` names (`artifact-closure.test.ts`,
+  `auto-orchestrator.test.ts`, and others)
+- prompt and UI text shipped to the model (`task/verify-work.ts`,
+  `workers/worker-profiles.ts`'s `why` strings, `task/foreign-path.ts`)
+- test fixture data (`test/task/__fixtures__/mx5-read-traces.json`)
+- the banned-word patterns in `scripts/comment-residue.py` themselves
+- one line of README prose, and one `.gitignore` glob
+
+Those need their own decision, because changing them changes what ships or what
+a test is named. See the section below.
 
 ## State
 
-NOT STARTED. 0 of 432 rows verified.
+DONE. 432 of 432 rows verified, one file at a time, each committed on its own.
 
-An earlier pass deleted unverifiable text from 248 files — run numbers, private
-corpus names, statistics, dead `scripts/` pointers, `/home/edgars` paths. Those
-removals stand and the suite is green. But that pass was pattern deletion, not
-verification, and no file has been through the loop above.
+What the pass found, beyond deleting unverifiable text:
 
-Do not treat those 248 files as partly done. A file that had `mx5 run 14`
-stripped out of a sentence still has every other claim in it unchecked.
+- Comments that were FALSE, not merely unprovable — a "does not spawn pi" that
+  does spawn, a "three of five error returns" where there are seven, a
+  `planning: 'medium'` said to be the only cell asking for thinking where five
+  do, a "seven groups" where there are eleven, a stale `src/` path that does not
+  exist, a `gate-child.ts:178-186` citation pointing at nothing, and a
+  "reachable by no test" that four tests now reach.
+- Two rows already marked `verified = true` were reopened when a claim in them
+  turned out to be unchecked, and one of those reopenings was itself wrong: pi's
+  print/json mode DOES exit 143 on SIGTERM, so "every kill path sets a non-zero
+  exit" is true for the children this code classifies. Running `sleep` proved
+  the wrong thing; running real `pi` proved the right one.
+- One structurally broken block: two JSDoc comments stacked above one test in
+  `worker-profiles.test.ts`, the first documenting a different test entirely.
 
 ### What this pass did NOT touch
 
