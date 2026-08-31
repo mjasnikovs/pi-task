@@ -15,7 +15,8 @@ test('every provider has a distinct display label that round-trips back to its i
 
 test('providerForLabel rejects unknown labels; isSearchProvider guards the stored ids', () => {
     expect(providerForLabel('Google')).toBeUndefined()
-    // Display labels are NOT valid stored values — the config keeps short ids.
+    // Labels are display-only. config.ts validates the stored value with
+    // `isSearchProvider`, so a label written into the config file is rejected.
     expect(isSearchProvider('DuckDuckGo')).toBe(false)
     expect(isSearchProvider('ddg')).toBe(true)
 })
