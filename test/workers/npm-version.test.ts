@@ -136,11 +136,9 @@ describe('npmVersionLookup', () => {
     })
 
     test('a user cancel THROWS — it is not a missing version', async () => {
-        // This module was the copy of the request ritual that never grew a
-        // `userAborted` flag, so a cancelled lookup returned `null`, exactly like a
-        // registry that is down. Every caller wraps this in `.catch(() => null)`, so
-        // the degraded answer is unchanged — what changed is that a caller CAN now
-        // tell the two apart.
+        // A cancel rejects; a registry that is down resolves `null`. Both callers
+        // (`workers/docs-core.ts`, `task/external-context.ts`) wrap the call in
+        // `.catch(() => null)`, so telling the two apart is opt-in.
         const controller = new AbortController()
         controller.abort()
         const restore = mockFetch(req => {
