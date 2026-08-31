@@ -11,7 +11,9 @@ const clean = (over: Partial<WorkerFailureInput> = {}): WorkerFailureInput => ({
     ...over
 })
 
-/** Every kill path also aborts and exits non-zero — killProc flips both. */
+/** A killed child. `killProc` sets `aborted` on every kill path; the non-zero exit
+ *  here is the fixture's, so each case below outranks BOTH generic rows at once. A
+ *  real SIGTERM arrives with exitCode 0 — runChild reports node's null as `code ?? 0`. */
 const killed = (over: Partial<WorkerFailureInput>): WorkerFailureInput =>
     clean({aborted: true, exitCode: 143, ...over})
 
@@ -22,8 +24,8 @@ test('a child that finished under its own power has no failure', () => {
 })
 
 test('an empty answer is NOT a failure — whether it counts is the caller policy', () => {
-    // Research accepts a genuinely empty section; the gate does not. Folding
-    // that decision in here would move it out of the module that owns it.
+    // FAILURE_RULES has no row for empty text, so this module never decides it.
+    // research-worker.ts does, and accepts an explicit empty section after one retry.
     expect(classifyWorkerFailure(clean())).toBeUndefined()
 })
 
