@@ -107,7 +107,8 @@ import {
     prependHint,
     USER_CANCELLED,
     CommandTimeoutError,
-    type PhaseDeps
+    type PhaseDeps,
+    isFatalChildCause
 } from './child-runner.js'
 import {
     runResearchWorker,
@@ -452,6 +453,7 @@ export async function phaseVerifyTooling(deps: PhaseDeps, research: string): Pro
             VERIFY_TOOLING_PROMPT(toolingList)
         )
     } catch (e) {
+        if (isFatalChildCause(e)) throw e
         // The fallback ships the tooling list UNVERIFIED, which is the right
         // degrade for a child that merely failed. A hung command is different: it
         // cost the ceiling on every strike and says the SPEC named something
@@ -1034,7 +1036,8 @@ export async function phaseAutoAnswer(
                         prependHint(synthesizedApiReaskHint(synth, research), basePrompt)
                     )
                     if (autoAnswerHasTag(text2)) reasked = parseAutoAnswer(text2)
-                } catch {
+                } catch (e) {
+                    if (isFatalChildCause(e)) throw e
                     reasked = null
                 }
                 if (
@@ -1349,7 +1352,8 @@ export async function phaseCritique(
                 '',
                 CRITIQUE_TRIAGE_PROMPT(spec, refined, qa, contractsBlock)
             )
-        } catch {
+        } catch (e) {
+            if (isFatalChildCause(e)) throw e
             verdict = null
         }
         deps.recordSubStep?.('triage', Date.now() - tTriage)

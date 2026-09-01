@@ -53,7 +53,7 @@ import {
 import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {BackendDownError, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {isFatalChildCause, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {refineExistingFilesBlock, SINGLE_READ_EXTENSION_PATH} from './phases.js'
@@ -685,8 +685,7 @@ export async function orientFeature(
         // ESC or a dead backend: planning would continue on an EMPTY ledger, moving
         // the granularity floor and shipping a degraded plan instead of a cancel or
         // a failure. Same rule as verify-resolution.ts.
-        if (e instanceof BackendDownError) throw e
-        if (e instanceof Error && e.message === USER_CANCELLED) throw e
+        if (isFatalChildCause(e)) throw e
         // Best-effort, but not silent: nothing else records a guard kill here.
         logPlanDebug(cwd, `requirement extraction: skipped — ${(e as Error).message}`)
     }

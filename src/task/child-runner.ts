@@ -184,6 +184,21 @@ export class CommandTimeoutError extends Error {
     }
 }
 
+/**
+ * Causes a best-effort `catch` must NOT absorb.
+ *
+ * A phase child that merely answered badly should degrade — that is what those
+ * catches are for. These two are different in kind: the run is over either way,
+ * and swallowing them ships a half-built spec while every later phase dies
+ * against the same dead backend, or turns a user's ESC into silent progress.
+ * `failure-classifier.ts` has a verdict for both; a catch that eats them makes it
+ * unreachable.
+ */
+export function isFatalChildCause(e: unknown): boolean {
+    if (e instanceof BackendDownError) return true
+    return e instanceof Error && e.message === USER_CANCELLED
+}
+
 // ─── Connection-error retry ──────────────────────────────────────────────────
 
 /**
@@ -217,9 +232,13 @@ export class CommandTimeoutError extends Error {
  * MISSES. Every one is a REMOTE-provider failure, which is why a local llama.cpp
  * setup never surfaced the gap. The errno spellings are pi-task's own: a child
  * reports them through stderr, and pi never sees them.
+ *
+ * pi's bare `timeout` is deliberately NOT reproduced. It matched a provider 400
+ * that merely echoed a `timeout` field back, turning a fail-fast into a full
+ * retry budget, and it caught nothing the `timed out` spellings above miss.
  */
 const CONNECTION_ERROR_RE =
-    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|socket connection was closed|fetch failed|network (?:error|timeout)|premature close|terminated|unreachable|getaddrinfo|enotfound|upstream.?connect|reset before headers|timed? out|timeout|ended without|stream ended before message_stop|websocket.?(?:closed|error))\b/i
+    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|socket connection was closed|fetch failed|network (?:error|timeout)|premature close|terminated|unreachable|getaddrinfo|enotfound|upstream.?connect|reset before headers|timed? out|ended without|stream ended before message_stop|websocket.?(?:closed|error))\b/i
 
 export function isConnectionError(cause: string): boolean {
     return CONNECTION_ERROR_RE.test(cause)

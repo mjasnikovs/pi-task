@@ -507,12 +507,22 @@ export class TaskRunner {
         }
         armImplWidget(meta, {oneShot: true})
         armImplementationGuard({oneShot: true})
+        // Same reason as the awaited path's `delivered` flag: this send can throw
+        // SYNCHRONOUSLY — the loader gates every ExtensionAPI action behind
+        // `assertActive()` — and a guard left armed over a turn that never starts
+        // is inherited by the next one, which it can terminate.
         // Always name a delivery mode. pi's `prompt()` consults `streamingBehavior`
         // only inside `if (this.isStreaming)`, so naming one is inert on an idle
         // session and queues on a busy one — correct in both cases, where an
         // isIdle() check is a check-then-act race that loses to any turn starting
         // in between.
-        piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
+        try {
+            piApi.sendUserMessage(spec, {deliverAs: 'followUp'})
+        } catch (e) {
+            disarmImplWidget()
+            disarmImplementationGuard()
+            throw e
+        }
     }
 
     /**

@@ -1,5 +1,10 @@
 import {describe, expect, test} from 'bun:test'
-import {TaskRunner, runSingleTask, type TaskRunnerOptions} from '../../src/task/orchestrator.js'
+import {
+    TaskRunner,
+    registerTask,
+    runSingleTask,
+    type TaskRunnerOptions
+} from '../../src/task/orchestrator.js'
 import {
     CONTINUE_AFTER_COMPACTION,
     MAX_COMPACTION_RESUMES
@@ -209,6 +214,41 @@ describe('implementation guard lifetime', () => {
      * skips the disarm, so the guard survives into the user's NEXT, unrelated turn,
      * where it can now block calls and terminate the turn outright.
      */
+    /**
+     * The fallback path hands the spec to `piApi.sendUserMessage`, which the
+     * extension loader gates behind a SYNCHRONOUS `assertActive()` — a stale or
+     * unloaded extension throws before the message is ever queued. Without a catch
+     * the guard stays armed over a turn that never starts, and the user's next,
+     * unrelated turn inherits one that can terminate it outright.
+     */
+    test('a synchronous send that throws leaves nothing armed', async () => {
+        disarmImplementationGuard()
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            let armedAtDelivery = false
+            // registerTask is the only way to fill the module-level `piApi` slot the
+            // fallback path uses, so the stand-in has to satisfy its whole
+            // registration pass — the same surface test/index.test.ts records.
+            registerTask({
+                on: () => {},
+                registerCommand: () => {},
+                registerTool: () => {},
+                registerShortcut: () => {},
+                getThinkingLevel: () => 'off',
+                setThinkingLevel: () => {},
+                sendUserMessage: () => {
+                    armedAtDelivery = implementationGuardArmed()
+                    throw new Error('Extension is no longer active.')
+                }
+            } as unknown as Parameters<typeof registerTask>[0])
+            // No sendSpec: this is the fire-and-forget path that reaches piApi.
+            const runner = new TaskRunner({ctx, cwd, rawPrompt: 'run lint', seams: happy()})
+            await runner.run().catch(() => {})
+            expect(armedAtDelivery).toBe(true)
+            expect(implementationGuardArmed()).toBe(false)
+        })
+    })
+
     test('a delivery that throws leaves nothing armed', async () => {
         disarmImplementationGuard()
         await withTmpTaskDir(async cwd => {

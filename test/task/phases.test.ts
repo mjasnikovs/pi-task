@@ -23,6 +23,7 @@ import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
 import {readSection, readTaskFile} from '../../src/task/task-io.js'
 import {agentErrorResponse} from '../test-utils/fake-spawn.js'
+import {BackendDownError, USER_CANCELLED} from '../../src/task/child-runner.js'
 import {parseVerifyToolingOutput} from '../../src/task/parsers.js'
 import {
     agentEndResponse,
@@ -3752,4 +3753,44 @@ describe('phaseGrill transcript', () => {
         )
         expect(out).toBe('(no questions produced)')
     })
+})
+
+describe('a best-effort catch must not absorb a fatal cause', () => {
+    /**
+     * These catches exist so a child that merely ANSWERED BADLY degrades instead of
+     * ending the run. A dead backend and a user ESC are different in kind: every
+     * later phase dies against the same backend, and failure-classifier.ts has a
+     * verdict for both that a swallowing catch makes unreachable. The spec that
+     * comes out of a degraded pipeline looks finished and is not.
+     *
+     * Only TRIAGE fails here. Every other child answers, so a swallowed cause lets
+     * the phase run to completion and RETURN a spec — which is exactly the silent
+     * degrade being tested for, and what makes a bare `rejects.toThrow()` on an
+     * all-failing seam vacuous.
+     */
+    const spec =
+        'GOAL\n  do the thing\n\nCONSTRAINTS\n  - keep x\n\nACCEPTANCE\n  - y works\n\nVERIFY:\n```sh\nnpm test\n```\n'
+
+    for (const [label, make] of [
+        ['a dead backend', () => new BackendDownError('critique-triage')],
+        ['a user cancel', () => new Error(USER_CANCELLED)]
+    ] as const) {
+        test(`critique triage propagates ${label}`, async () => {
+            await withTmpTaskDir(async cwd => {
+                const {runChild} = scriptedChildren({critique: spec})
+                const deps = {
+                    cwd,
+                    taskId: 'TASK_TEST',
+                    signal: new AbortController().signal,
+                    runChild: (name: string, tools: string, prompt: string) =>
+                        name === 'critique-triage' ?
+                            Promise.reject(make())
+                        :   runChild(name, tools, prompt)
+                }
+                await expect(phaseCritique(deps, spec, 'refined', 'qa')).rejects.toThrow(
+                    label === 'a user cancel' ? USER_CANCELLED : /did not answer a probe/
+                )
+            })
+        })
+    }
 })

@@ -12,6 +12,8 @@ import {
     PhaseTimeoutError,
     CommandTimeoutError,
     BackendDownError,
+    isFatalChildCause,
+    USER_CANCELLED,
     guardKillError,
     phasePolicy
 } from '../../src/task/child-runner.js'
@@ -1741,5 +1743,22 @@ describe('isConnectionError — the transport classes pi retries', () => {
     ]
     test('every transport class pi retries is retried here', () => {
         for (const c of retryable) expect([c, isConnectionError(c)]).toEqual([c, true])
+    })
+})
+
+describe('isFatalChildCause', () => {
+    test('a dead backend and a user cancel are fatal', () => {
+        expect(isFatalChildCause(new BackendDownError('refine'))).toBe(true)
+        expect(isFatalChildCause(new Error(USER_CANCELLED))).toBe(true)
+    })
+
+    test('a child that merely answered badly is not', () => {
+        // These are what the best-effort catches exist to absorb.
+        expect(isFatalChildCause(new Error('refine child produced no output'))).toBe(false)
+        expect(
+            isFatalChildCause(new CommandTimeoutError('t', {toolName: 'bash', timeoutMs: 1}))
+        ).toBe(false)
+        expect(isFatalChildCause(undefined)).toBe(false)
+        expect(isFatalChildCause('a bare string')).toBe(false)
     })
 })
