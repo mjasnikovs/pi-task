@@ -21,15 +21,15 @@
  *
  *   - RepeatedCallGuard: "no identical search twice", for grep/find/ls — the
  *     shapes the read guard cannot see, such as the same grep pattern re-run
- *     against the same path. Keyed on `${toolName}\0${stableStringify(args)}`,
- *     byte-identical to the key `LoopDetector.record` builds, so argument key
- *     order never causes a miss and only an identical repeat trips. A different
- *     pattern on the same file still passes.
+ *     against the same path. Keyed with `loopKey`, the same identity
+ *     `LoopDetector.record` uses, so argument key order never causes a miss and
+ *     only an identical repeat trips. A different pattern on the same file still
+ *     passes.
  *
  * Pure logic, no I/O — the extension does path resolution and tool routing.
  */
 
-import {stableStringify} from '../task/loop-detector.js'
+import {loopKey} from '../task/loop-detector.js'
 
 export interface ReadBlock {
     block: true
@@ -124,11 +124,11 @@ export class RepeatedCallGuard {
     /**
      * Record a `toolName` call with `args`. Returns a ReadBlock the second time
      * the same (toolName, stable-stringified args) pair is seen (and every time
-     * after), else null on the first. Uses the LoopDetector's stableStringify so
-     * argument key-order never causes a miss; only byte-identical calls collapse.
+     * after), else null on the first. Shares the LoopDetector's key, so argument
+     * key-order never causes a miss; only byte-identical calls collapse.
      */
     check(toolName: string, args: unknown): ReadBlock | null {
-        const key = `${toolName}\x00${stableStringify(args)}`
+        const key = loopKey({name: toolName, args})
         if (this.seen.has(key)) {
             return {block: true, reason: repeatedCallReason(toolName)}
         }

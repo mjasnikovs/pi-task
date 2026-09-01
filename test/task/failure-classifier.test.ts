@@ -1,5 +1,6 @@
 import {describe, expect, test} from 'bun:test'
 import {classifyFailure} from '../../src/task/failure-classifier.js'
+import {BackendDownError, CommandTimeoutError} from '../../src/task/child-runner.js'
 import {
     LoopExhaustedError,
     LeakedToolCallError,
@@ -84,5 +85,26 @@ describe('classifyFailure', () => {
         const c = classifyFailure('plain string', false)
         expect(c.state).toBe('failed')
         expect(c.notify).toContain('plain string')
+    })
+})
+
+describe('the terminal guard kills', () => {
+    /**
+     * REGRESSION (review finding 2). A dead-backend kill is the ONE case where we
+     * positively know the model server did not answer. It must reach the user as
+     * "model unreachable", with a flash id — not as a generic failure whose flash
+     * is the first 80 characters of an English sentence.
+     */
+    test('a dead-backend kill is reported as model_unreachable', () => {
+        const c = classifyFailure(new BackendDownError('refine'), false)
+        expect(c.flash).toBe('model_unreachable')
+    })
+
+    test('a command-ceiling kill carries a flash id, not a sentence fragment', () => {
+        const c = classifyFailure(
+            new CommandTimeoutError('verify-tooling', {toolName: 'bash', timeoutMs: 900_000}),
+            false
+        )
+        expect(c.flash).not.toContain(' ')
     })
 })

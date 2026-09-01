@@ -89,6 +89,8 @@ describe('the pi-task extension entry point', () => {
             'session_start', // remote + brave-key warning
             'session_shutdown', // remote, command watchdog, stream watchdog
             'tool_execution_start', // command watchdog + impl widget
+            'tool_call', // implementation guards
+            'agent_settled', // implementation guards — the disarm boundary
             'before_provider_request', // stream watchdog
             'message_end' // stream watchdog + remote
         ]) {

@@ -9,9 +9,13 @@ import {
     childArgs,
     isConnectionError,
     connectionRetryBackoffMs,
-    LOOP_THRESHOLD,
-    PhaseTimeoutError
+    PhaseTimeoutError,
+    CommandTimeoutError,
+    BackendDownError,
+    guardKillError,
+    phasePolicy
 } from '../../src/task/child-runner.js'
+import {LOOP_THRESHOLD} from '../../src/task/loop-detector.js'
 import {
     fakeSpawnSimple,
     agentEndResponse,
@@ -20,12 +24,16 @@ import {
     fakeSpawnByPrompt,
     loopResponse,
     makeProc,
-    type SpawnResponse
+    fakeSpawnKillable,
+    type SpawnResponse,
+    type SpawnResponseJsonEvents
 } from '../test-utils/fake-spawn.js'
 import type {ContextSnapshot, ProcLike, SpawnFn} from '../../src/shared/child-process.js'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
 import {writeTaskFile, readSection} from '../../src/task/task-io.js'
 import {EventEmitter} from 'node:events'
+import {getConfig} from '../../src/config/config.js'
+import {MAX_LEAK_RETRIES} from '../../src/shared/leaked-tool-call.js'
 
 function depsWith(spawn: SpawnFn) {
     return {
@@ -1480,5 +1488,258 @@ describe('PhaseDeps.runChild seam', () => {
                 'prompt'
             )
         ).rejects.toThrow(/refine child produced no output/)
+    })
+})
+
+/**
+ * Before the `phase` row was wired in, a hung command in verify-tooling
+ * (`read,bash`) could not be ended by anything but a user ESC.
+ *
+ * The second test carries the weight: a kill reports exit 0, so one that is not
+ * mapped to a named cause is returned as a SUCCESSFUL answer with truncated text.
+ */
+/**
+ * `guardKillError` is the shared answer to "was this child killed by a guard?",
+ * and BOTH spawn paths in child-runner.ts must ask it — the strike loop and the
+ * no-tools degrade that rescues it.
+ *
+ * The `stalled` branch is unit-only: its probe needs STALL_AFTER_MS of real
+ * silence and child-runner exposes no seam for it. The commandKill branch is
+ * covered end-to-end above.
+ */
+describe('runPhaseChild — a guard kill on the no-tools degrade attempt', () => {
+    /**
+     * The degrade is the one spawn path that is not the strike loop, and it is
+     * reached only after the budget is spent. `runChild` arms commandWatch from
+     * the profile with no reference to `tools` and calls onStart before it checks
+     * for a handler, so the watchdog is live here despite `--no-tools`.
+     *
+     * The PARTIAL TEXT is what makes this able to fail: with no text the mutant
+     * falls through to LoopExhaustedError, which still rejects.
+     */
+    test('a command kill on the degrade is thrown, never returned as the answer', async () => {
+        const original = getConfig().requestTimeoutMs
+        getConfig().requestTimeoutMs = 30
+        try {
+            const argvs: Array<ReadonlyArray<string>> = []
+            const spawn = ((_cmd: string, args: ReadonlyArray<string>) => {
+                const p = makeProc()
+                argvs.push(args)
+                if (args.includes('--no-tools')) {
+                    p.kill = () => {
+                        if (p.killed) return true
+                        p.killed = true
+                        p.emit('close', 143)
+                        return true
+                    }
+                    queueMicrotask(() => {
+                        p.stdout!.emit(
+                            'data',
+                            Buffer.from(
+                                JSON.stringify(agentEndResponse('HALF A SPEC').events[0]) + '\n'
+                            )
+                        )
+                        p.stdout!.emit(
+                            'data',
+                            Buffer.from(
+                                JSON.stringify({
+                                    type: 'tool_execution_start',
+                                    toolCallId: 'c1',
+                                    toolName: 'bash',
+                                    args: {command: 'bun run dev'}
+                                }) + '\n'
+                            )
+                        )
+                    })
+                } else {
+                    queueMicrotask(() => {
+                        for (const e of loopEvents('Read', {path: '/foo'}, LOOP_THRESHOLD)) {
+                            p.stdout!.emit('data', Buffer.from(JSON.stringify(e) + '\n'))
+                        }
+                        p.emit('close', 0)
+                    })
+                }
+                return p
+            }) as unknown as SpawnFn
+
+            const outcome = await runPhaseChild(
+                {cwd: '/tmp', taskId: 'TASK_TEST', signal: new AbortController().signal, spawn},
+                'refine',
+                'read',
+                'PROMPT',
+                {degradeOnExhaustion: true, verb: 'restart'}
+            ).then(
+                text => ({returned: text}),
+                (e: unknown) => ({threw: e})
+            )
+
+            expect(argvs.length).toBe(MAX_LEAK_RETRIES + 2)
+            expect(argvs[MAX_LEAK_RETRIES + 1]).toContain('--no-tools')
+            expect('returned' in outcome).toBe(false)
+            // The CLASS, not just "it rejected" — that is what the earlier
+            // attempt got wrong.
+            expect((outcome as {threw: unknown}).threw).toBeInstanceOf(CommandTimeoutError)
+        } finally {
+            getConfig().requestTimeoutMs = original
+        }
+    })
+})
+
+describe('guardKillError', () => {
+    const clean = {text: 'an answer', exitCode: 0, stderr: ''}
+
+    test('a command kill and a dead backend each get their own named error', () => {
+        expect(
+            guardKillError('verify-tooling', {
+                ...clean,
+                commandKill: {toolName: 'bash', timeoutMs: 30}
+            })
+        ).toBeInstanceOf(CommandTimeoutError)
+        expect(guardKillError('refine', {...clean, stalled: true})).toBeInstanceOf(BackendDownError)
+    })
+
+    test('an ordinary result is not a kill', () => {
+        expect(guardKillError('refine', clean)).toBeNull()
+    })
+
+    /**
+     * The reason this helper exists. child-process.ts reports `exitCode: code ?? 0`
+     * and a signal kill gives null, so a killed child looks clean by exit code and
+     * carries whatever text it had streamed. A caller that tests the exit code
+     * instead of asking here ships that text as the phase's answer.
+     */
+    test('a kill is invisible to an exit-code test — it reports 0 WITH text', () => {
+        const killed = {...clean, exitCode: 0, stalled: true}
+        expect(killed.exitCode).toBe(0)
+        expect(killed.text.length).toBeGreaterThan(0)
+        expect(guardKillError('refine', killed)).not.toBeNull()
+    })
+})
+
+describe('runPhaseChild — command watchdog', () => {
+    /** A child that starts a tool call and then blocks forever, emitting no end. */
+    const hung = (command: string): SpawnResponseJsonEvents => ({
+        events: [
+            {type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'bash', args: {command}}
+        ],
+        exitCode: 0
+    })
+
+    // The ceiling is the user's own `requestTimeoutMs`, so a test drives it the
+    // same way test/task/command-watchdog.test.ts already does.
+    const withCeiling = async (ms: number, run: () => Promise<void>): Promise<void> => {
+        const original = getConfig().requestTimeoutMs
+        getConfig().requestTimeoutMs = ms
+        try {
+            await run()
+        } finally {
+            getConfig().requestTimeoutMs = original
+        }
+    }
+
+    test('kills a hung command instead of hanging the phase forever', async () => {
+        await withCeiling(30, async () => {
+            const prompts: string[] = []
+            // fakeSpawnKillable never closes on its own: if the watchdog fails to
+            // fire this test HANGS rather than fails, which is the production
+            // symptom exactly.
+            const deps = depsWith(fakeSpawnKillable([hung('bun run dev')], p => prompts.push(p)))
+            await expect(runPhaseChild(deps, 'verify-tooling', 'read,bash', 'go')).rejects.toThrow(
+                CommandTimeoutError
+            )
+            // Initial attempt plus the leak/restart budget, same as any other
+            // restartable phase cause.
+            expect(prompts.length).toBe(MAX_LEAK_RETRIES + 1)
+        })
+    })
+
+    test('a watchdog kill is NEVER returned as a successful answer', async () => {
+        await withCeiling(30, async () => {
+            const deps = depsWith(fakeSpawnKillable([hung('bun run dev')]))
+            const outcome = await runPhaseChild(deps, 'verify-tooling', 'read,bash', 'go').then(
+                text => ({returned: text}),
+                (e: unknown) => ({threw: e})
+            )
+            // The whole point: no branch may hand this back as phase output.
+            expect('returned' in outcome).toBe(false)
+            expect(outcome).toHaveProperty('threw')
+        })
+    })
+
+    test('the restart hint names the command, so the retry can bound it', async () => {
+        await withCeiling(30, async () => {
+            const prompts: string[] = []
+            const deps = depsWith(fakeSpawnKillable([hung('bun run dev')], p => prompts.push(p)))
+            await runPhaseChild(deps, 'verify-tooling', 'read,bash', 'go').catch(() => {})
+            expect(prompts[1]).toContain('bun run dev')
+        })
+    })
+
+    test('the hint warns about surviving side effects only for a bash child', async () => {
+        await withCeiling(30, async () => {
+            const bashPrompts: string[] = []
+            await runPhaseChild(
+                depsWith(fakeSpawnKillable([hung('bun run build')], p => bashPrompts.push(p))),
+                'verify-tooling',
+                'read,bash',
+                'go'
+            ).catch(() => {})
+            // verify-tooling is the ONLY phase child with bash, and a command kill
+            // is by construction a bash overrun — a half-written node_modules or a
+            // still-listening server survives the kill.
+            expect(bashPrompts[1]).toMatch(/still in the working tree/)
+        })
+    })
+
+    test('off means off: a 0 ceiling arms no watchdog', async () => {
+        await withCeiling(0, async () => {
+            const deps = depsWith(
+                fakeSpawnSimple(
+                    agentEndResponse('answered')
+                        .events!.map(e => JSON.stringify(e))
+                        .join('\n')
+                )
+            )
+            // A healthy child is unaffected either way; this pins that resolving the
+            // policy did not make the guard unconditional.
+            expect(phasePolicy().guards['command-timeout']).toBe(0)
+            await runPhaseChild(deps, 'refine', 'read', 'go').catch(() => {})
+        })
+    })
+})
+
+describe('isConnectionError — the transport classes pi retries', () => {
+    /**
+     * The pattern REPRODUCES the transport half of pi's `isRetryableAssistantError`
+     * (@earendil-works/pi-ai, `dist/utils/retry.js`) rather than importing it —
+     * pi-ai is in none of the three dependency lists, the reason
+     * shared/reasoning-capability.ts records. A reproduction stays honest only by
+     * re-comparison, so these cases ARE the comparison.
+     *
+     * MEASURED: everything from `The operation timed out.` down was a MISS before
+     * this. Each is a REMOTE-provider failure, which is why a local llama.cpp setup
+     * never surfaced the gap.
+     *
+     * NOT reproduced, deliberately: pi also retries the provider-LOAD family (429,
+     * 5xx, rate limit, overloaded). `does NOT match real, non-transient faults`
+     * below states the opposite policy for this repo, and this backoff starts at
+     * 500ms — too fast to answer a throttle with. That disagreement is open.
+     */
+    const retryable = [
+        'connection refused',
+        'fetch failed',
+        'socket hang up',
+        'ECONNREFUSED 127.0.0.1:8080',
+        'The operation timed out.',
+        'getaddrinfo ENOTFOUND api.anthropic.com',
+        'upstream connect error',
+        'reset before headers',
+        'socket connection was closed',
+        'Anthropic stream ended before message_stop',
+        'stream ended without a terminal event',
+        'websocket closed'
+    ]
+    test('every transport class pi retries is retried here', () => {
+        for (const c of retryable) expect([c, isConnectionError(c)]).toEqual([c, true])
     })
 })

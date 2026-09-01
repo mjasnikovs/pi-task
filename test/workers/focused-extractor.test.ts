@@ -179,6 +179,32 @@ describe('runFocusedExtraction — the invariant part of the four copies', () =>
         expect(args).toContain('--no-extensions')
     })
 
+    /**
+     * A dropped provider exits 0 with empty text, and TEXT mode never sets
+     * `modelError`. Returned as an empty answer both caches keep it and re-serve a
+     * dead socket as a real answer for the whole run.
+     */
+    test('exit 0 with no output is a FAILURE, not an empty answer', async () => {
+        let spawns = 0
+        const spawn = ((): ProcLike => {
+            spawns++
+            const p = makeProc()
+            queueMicrotask(() => p.emit('close', 0))
+            return p
+        }) as unknown as SpawnFn
+        const r = await runFocusedExtraction({
+            prompt: 'p',
+            verifyAgainst: 'c',
+            cwd: CWD,
+            spawn,
+            abortedMessage: 'nope'
+        })
+        expect(r.ok).toBe(false)
+        expect(r.exitCode).toBe(0)
+        // Still one child: this reclassifies an outcome, it does not re-ask.
+        expect(spawns).toBe(1)
+    })
+
     test('never retries — a failed extraction spawns exactly one child', async () => {
         let spawns = 0
         const spawn = ((): ProcLike => {

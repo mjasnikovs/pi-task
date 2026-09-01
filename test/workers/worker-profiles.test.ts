@@ -13,7 +13,7 @@ import {
     type WorkerProfileId
 } from '../../src/workers/worker-profiles.js'
 import {WORKER_KILLS} from '../../src/workers/worker-kill.js'
-import {MAX_LOOP_RESTARTS} from '../../src/task/child-runner.js'
+import {MAX_LOOP_RESTARTS} from '../../src/task/loop-detector.js'
 import {
     DEFAULT_WORKER_PROGRESS_CEILING_MS,
     FANOUT_TIMEOUT_CEILING_ENV,
@@ -125,6 +125,48 @@ describe('WORKER_PROFILES — the shipped policy of each worker child', () => {
         })
     })
 
+    /**
+     * Whole-object equality against ADHOC so the diff is a short list: two
+     * config-driven ceilings, and nothing else moved.
+     */
+    test('phase arms both config ceilings and departs from adhoc in nothing else', () => {
+        expect(
+            workerPolicy('phase', {commandTimeoutMs: 900_000, streamInactivityMs: 600_000})
+        ).toEqual({
+            guards: {
+                ...ADHOC.guards,
+                'command-timeout': 900_000,
+                'stream-stall': 600_000,
+                // No wall clock, same as gate and adhoc. PHASE_CHILD_TIMEOUT_MS
+                // already settled that for a FIXED cap; the research row's
+                // progress-based ceiling is a different instrument and is not
+                // claimed here.
+                'worker-timeout': {timeoutMs: 0, progressCeilingMs: null, fanout: null}
+            },
+            carryForward: false
+        })
+    })
+
+    test('phase: a caller that hands no ceilings arms neither guard', () => {
+        // Off is off. A harness must not silently acquire a watchdog, and 0 is the
+        // value both `commandCeilingForAttempt` and the stream watchdog test for.
+        const g = workerPolicy('phase').guards
+        expect(g['command-timeout']).toBe(0)
+        expect(g['stream-stall']).toBe(0)
+    })
+
+    test('phase keeps the path-revisit rule its read-only children can afford', () => {
+        // gate disables it (pathThreshold Infinity) because gate children EDIT and
+        // legitimately revisit one file. No phase or planning call site passes
+        // `edit` or `write`, so the rule stays armed here.
+        const g = workerPolicy('phase').guards
+        expect(g.loop).toEqual({
+            detector: {...DEFAULT_LOOP_DETECTOR},
+            progress: {...DEFAULT_LOOP_PROGRESS}
+        })
+        expect(workerPolicy('gate').guards.loop.detector).not.toEqual({...DEFAULT_LOOP_DETECTOR})
+    })
+
     test('research: only a fanoutBounded worker can be handed a fan-out policy', () => {
         const env = (k: string): string | undefined =>
             k === FANOUT_TIMEOUT_PER_LOOKUP_ENV ? '400'
@@ -184,7 +226,7 @@ describe('WORKER_PROFILES — the roster is the key', () => {
     })
 
     test('a profile row cannot leave the roster: ids match the table keys', () => {
-        expect(Object.keys(WORKER_PROFILES).sort()).toEqual(['adhoc', 'gate', 'research'])
+        expect(Object.keys(WORKER_PROFILES).sort()).toEqual(['adhoc', 'gate', 'phase', 'research'])
         for (const [key, p] of Object.entries(WORKER_PROFILES)) expect<string>(p.id).toBe(key)
     })
 })
@@ -279,6 +321,31 @@ describe('applyOverride — whole rows, tests only', () => {
     })
 
     /**
+     * `adhoc` has no command watchdog, so a hung command in one is unkillable —
+     * the silence bound fires on silence, and a blocking command is not silence.
+     * Safe today only because pi-worker.ts passes no `tools`; nothing in the type
+     * system says it must. This is the cover.
+     */
+    test('a production `adhoc` call site must not hand its child a shell', () => {
+        const offenders: string[] = []
+        const walk = (dir: string): void => {
+            for (const e of readdirSync(dir, {withFileTypes: true})) {
+                const full = join(dir, e.name)
+                if (e.isDirectory()) {
+                    walk(full)
+                    continue
+                }
+                if (!e.name.endsWith('.ts') || e.name.includes('.test.')) continue
+                const src = readFileSync(full, 'utf8')
+                if (!/^\s*profile: 'adhoc',?$/m.test(src)) continue
+                if (/^\s*tools:.*\bbash\b/m.test(src)) offenders.push(full)
+            }
+        }
+        walk(SRC_ROOT)
+        expect(offenders).toEqual([])
+    })
+
+    /**
      * The other half of the same rule. A production caller that names no profile
      * would not compile — `profile` is required — but one that names the WRONG kind
      * of thing, or a new caller added without a profile row, is caught only here.
@@ -306,7 +373,7 @@ describe('applyOverride — whole rows, tests only', () => {
                 // a call with an object literal anywhere in its arguments, and
                 // still skips `runWorker(input)` pass-through adapters.
                 if (!/runWorker\([^)]{0,120}\{/.test(src)) continue
-                if (!/^\s*profile: '(research|gate|adhoc)',?$/m.test(src)) missing.push(full)
+                if (!/^\s*profile: '(research|gate|adhoc|phase)',?$/m.test(src)) missing.push(full)
             }
         }
         walk(root)
@@ -404,5 +471,21 @@ describe('snapshotLeverEnv — one arm per research phase', () => {
             return undefined
         })
         expect(asked.sort()).toEqual([...RESEARCH_LEVER_ENVS].sort())
+    })
+})
+
+describe('the phase row against the code it describes', () => {
+    /**
+     * REGRESSION (review finding 5). A profile's `why` is the documented single
+     * source of truth for how its children may die, and this one asserts the
+     * children are read-only in order to justify leaving the path-revisit rule ON.
+     * `phases.ts` passes `read,bash` at one call site, which the same string names
+     * four lines later.
+     */
+    test('the phase why does not claim read-only while a call site holds bash', () => {
+        const src = readFileSync(new URL('../../src/task/phases.ts', import.meta.url), 'utf8')
+        const holdsBash = /runPhaseChild\([^)]*?'read,bash'/s.test(src)
+        expect(holdsBash).toBe(true)
+        expect(WORKER_PROFILES.phase.why).not.toContain('Read-only')
     })
 })

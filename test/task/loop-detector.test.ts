@@ -1,5 +1,26 @@
 import {describe, expect, test} from 'bun:test'
-import {LoopDetector, stableStringify, type ToolCall} from '../../src/task/loop-detector.js'
+import {
+    LoopDetector,
+    loopKey,
+    stableStringify,
+    type ToolCall
+} from '../../src/task/loop-detector.js'
+
+describe('loopKey', () => {
+    // Shared with implementation-guards.ts and single-read-guard.ts, which key
+    // their own maps on it: a drift here silently unbinds all three.
+    test('argument key order does not change the identity', () => {
+        expect(loopKey({name: 'read', args: {a: 1, b: 2}})).toBe(
+            loopKey({name: 'read', args: {b: 2, a: 1}})
+        )
+    })
+
+    test('the tool name is part of the identity', () => {
+        expect(loopKey({name: 'read', args: {a: 1}})).not.toBe(
+            loopKey({name: 'grep', args: {a: 1}})
+        )
+    })
+})
 
 describe('stableStringify', () => {
     test('produces identical output for objects with reordered keys', () => {

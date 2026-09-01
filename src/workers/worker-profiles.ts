@@ -51,7 +51,10 @@
  *   the same key, not a merge of the two orderings.
  */
 
-import {LOOP_THRESHOLD, LOOP_WINDOW, MAX_LOOP_RESTARTS} from '../task/child-runner.js'
+// From loop-detector.ts, NOT child-runner.ts: child-runner reads this table, and
+// these are evaluated at module top level below, so that import would close a
+// cycle whose only symptom is a TDZ ReferenceError on import order.
+import {LOOP_THRESHOLD, LOOP_WINDOW, MAX_LOOP_RESTARTS} from '../task/loop-detector.js'
 import {CONTEXT_CHURN_FACTOR, NO_PROGRESS_LIMIT} from '../task/stall-detector.js'
 import {
     fanoutTimeoutPolicy,
@@ -248,16 +251,16 @@ export const DEFAULT_LOOP_PROGRESS = {
     churnFactor: CONTEXT_CHURN_FACTOR
 } as const
 
-export type WorkerProfileId = 'research' | 'gate' | 'adhoc'
+export type WorkerProfileId = 'research' | 'gate' | 'adhoc' | 'phase'
 
 /**
  * The facts a profile needs that are NOT policy: user config, and which of the
  * four research workers is the docs-capable one.
  */
 export interface WorkerPolicyInputs {
-    /** gate: `config.requestTimeoutMs`. */
+    /** gate, phase: `config.requestTimeoutMs`. */
     commandTimeoutMs?: number
-    /** gate: `config.streamInactivityMs`. */
+    /** gate, phase: `config.streamInactivityMs`. */
     streamInactivityMs?: number
     /** research: only `worker:apis` fans out, so only it can be scaled. */
     fanoutBounded?: boolean
@@ -380,6 +383,36 @@ export const WORKER_PROFILES = {
             // The silence bound that replaces it — the user's own setting, not a
             // new one. 0 when the caller hands none, which is off, exactly as
             // before: a harness must not silently acquire a guard.
+            guards['stream-stall'] = inputs.streamInactivityMs ?? 0
+            return {guards, carryForward: false}
+        }
+    },
+    phase: {
+        id: 'phase',
+        why:
+            'The spec-pipeline and planning children (runPhaseChild). Every call site '
+            + "but one passes `read` or `''`, and none of them EDITS, so the "
+            + 'path-revisit rule stays ON, unlike gate: re-reading one file here is '
+            + 'the thrash it was written for, not the job. '
+            + 'THE COMMAND WATCHDOG IS WHY THIS ROW EXISTS. verify-tooling holds '
+            + '`read,bash`, and a hung command there was unkillable: the stream '
+            + 'watchdog SUSPENDS for the duration of a tool call, the dead-backend '
+            + 'probe reads a reachable endpoint as alive, and both runaway detectors '
+            + 'wait on a result that never arrives. Only a user ESC could end it. '
+            + 'The wall clock stays OFF as PHASE_CHILD_TIMEOUT_MS decided for a FIXED '
+            + "cap; that does not settle research's progress-based ceiling. "
+            + 'PARTIALLY CONSUMED: runPhaseChild has its own strike loop and reads '
+            + 'only `command-timeout`, `stream-stall`, `stalled` and `loop`, so '
+            + 'setting `worker-timeout` or `connection-error` here does NOTHING.',
+        resolve: inputs => {
+            const guards = baseGuards()
+            // INERT for this profile — runPhaseChild never reads it. Zeroed anyway
+            // so the row cannot be mistaken for research's armed 240s cap.
+            guards['worker-timeout'] = {timeoutMs: 0, progressCeilingMs: null, fanout: null}
+            // Both ceilings are the user's own settings, as they are for gate: the
+            // number is theirs, the decision to arm it is this row's. 0 from a
+            // caller that hands none, so a harness cannot silently acquire a guard.
+            guards['command-timeout'] = inputs.commandTimeoutMs ?? 0
             guards['stream-stall'] = inputs.streamInactivityMs ?? 0
             return {guards, carryForward: false}
         }

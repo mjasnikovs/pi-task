@@ -50,6 +50,7 @@ import {
 } from './task-io.js'
 import {startWidget, type WidgetState} from './widget.js'
 import {armImplWidget, disarmImplWidget, setupImplWidget} from './impl-widget.js'
+import {armImplementationGuard, disarmImplementationGuard} from './implementation-guards.js'
 import {publishViewer, publishNotify, registerBridgeCommand, getBridge} from '../remote/bridge.js'
 import {pushNotify} from '../remote/push.js'
 import {getConfig} from '../config/config.js'
@@ -481,10 +482,23 @@ export class TaskRunner {
         }
         if (this._sendSpec) {
             armImplWidget(meta, {oneShot: !this._implAwaited})
+            // Same lifetime as the widget, and for the same reason: an awaited run
+            // spans resume and steer turns, a fire-and-forget one does not.
+            armImplementationGuard({oneShot: !this._implAwaited})
+            let delivered = false
             try {
                 await this._sendSpec(spec)
+                delivered = true
             } finally {
-                if (this._implAwaited) disarmImplWidget()
+                // Arming precedes delivery because the turn can begin inside it. So a
+                // delivery that THREW leaves a guard watching a turn that will never
+                // run: pi's `prompt` rejects on a compaction already in progress, a
+                // missing model, or a failed auth. The next unrelated turn would
+                // inherit it, and this guard can end a turn outright.
+                if (this._implAwaited || !delivered) {
+                    disarmImplWidget()
+                    disarmImplementationGuard()
+                }
             }
             return
         }
@@ -492,6 +506,7 @@ export class TaskRunner {
             throw new Error('extension not initialised (no ExtensionAPI captured)')
         }
         armImplWidget(meta, {oneShot: true})
+        armImplementationGuard({oneShot: true})
         // Always name a delivery mode. pi's `prompt()` consults `streamingBehavior`
         // only inside `if (this.isStreaming)`, so naming one is inert on an idle
         // session and queues on a busy one — correct in both cases, where an

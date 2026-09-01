@@ -8,6 +8,8 @@ import {updateTaskFrontMatter} from './task-io.js'
 import {flashTerminalWidget} from './widget.js'
 import {publishLifecycleNotice} from '../remote/bridge.js'
 import {
+    BackendDownError,
+    CommandTimeoutError,
     LoopExhaustedError,
     LeakedToolCallError,
     ModelError,
@@ -32,6 +34,30 @@ export function classifyFailure(err: unknown, aborted: boolean): FailureClass {
     const msg = err instanceof Error ? err.message : String(err)
     if (aborted || msg === USER_CANCELLED) {
         return {state: 'cancelled', notify: 'cancelled.', level: 'warning'}
+    }
+    // Classified by TYPE, above the message-sniffing branch below: this is the one
+    // case where the probe positively established the endpoint did not answer, and
+    // its message names no errno for that branch to match.
+    if (err instanceof BackendDownError) {
+        return {
+            state: 'failed',
+            reason: `model_unreachable: ${err.message}`,
+            flash: 'model_unreachable',
+            notify: 'failed: model unreachable — restart the model, then resume.',
+            level: 'error'
+        }
+    }
+    // The fix is in the SPEC, not the model, so the notify says which command.
+    if (err instanceof CommandTimeoutError) {
+        return {
+            state: 'failed',
+            reason: err.message.slice(0, 200),
+            flash: 'command_timeout',
+            notify:
+                `failed: \`${err.kill.toolName}\` never returned on any attempt. `
+                + `Resume to bound it in VERIFY.`,
+            level: 'error'
+        }
     }
     if (err instanceof LoopExhaustedError) {
         return {

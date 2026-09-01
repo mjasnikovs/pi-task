@@ -115,7 +115,8 @@ export type FocusedResult = FocusedFailure | FocusedAnswer
  * `<answer>`/`<excerpt>` and verify the excerpt against `verifyAgainst`.
  *
  * Never retries — a re-ask of a deterministic extraction over unchanged content is a second
- * bill for the same answer. Exactly one child is spawned per call.
+ * bill for the same answer. Exactly one child is spawned per call, on every path including
+ * the empty-output failure below.
  */
 export async function runFocusedExtraction(req: FocusedRequest): Promise<FocusedResult> {
     const spawn = req.spawn ?? (defaultSpawn as unknown as SpawnFn)
@@ -131,6 +132,17 @@ export async function runFocusedExtraction(req: FocusedRequest): Promise<Focused
 
     const failure = formatChildFailure(child, req.abortedMessage)
     if (failure !== null) return {ok: false, failure, ...evidence}
+
+    // A dropped provider exits 0 with empty text, and TEXT mode never populates
+    // `modelError`. Returned as an empty answer it is MEMOISED: both caches keep
+    // it and re-serve a dead socket as a real answer for the rest of the run.
+    if (child.stdout.trim().length === 0) {
+        return {
+            ok: false,
+            failure: 'Worker exited 0 without writing anything — no answer to parse',
+            ...evidence
+        }
+    }
 
     const parsed = parseChildOutput(child.stdout)
     const excerptCheck =

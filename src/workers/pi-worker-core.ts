@@ -3,20 +3,21 @@ import {
     runChildDefault,
     type ContextSnapshot,
     type LoopHit,
-    type SpawnFn,
-    type ToolCall
+    type SpawnFn
 } from '../shared/child-process.js'
-import {CommandWatchdog, commandTimeoutHint, realTimerDeps} from '../shared/command-watchdog.js'
+import {
+    commandCeilingForAttempt,
+    commandTimeoutHint,
+    commandWatch,
+    type CommandKill
+} from '../shared/command-watchdog.js'
+
+export {commandCeilingForAttempt} from '../shared/command-watchdog.js'
 import {isGroundingRetrieval as isGrounding, workerChannel} from './worker-channels.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
-import {LoopDetector} from '../task/loop-detector.js'
+import {LoopDetector, MAX_LOOP_RESTARTS} from '../task/loop-detector.js'
 import {StallDetector, formatStallHint} from '../task/stall-detector.js'
-import {
-    MAX_LOOP_RESTARTS,
-    formatLoopHint,
-    isConnectionError,
-    connectionRetryBackoffMs
-} from '../task/child-runner.js'
+import {formatLoopHint, isConnectionError, connectionRetryBackoffMs} from '../task/child-runner.js'
 import {
     detectLeakedToolCall,
     leakedToolCallHint,
@@ -538,34 +539,6 @@ export interface RunWorkerResult {
 }
 
 /**
- * The per-command ceiling for attempt N, halving each time a hang recurs.
- *
- * The first attempt gets the full configured ceiling — a genuinely slow build or
- * test suite deserves it. But every hang-caused restart carries
- * commandTimeoutHint, which tells the model in as many words to bound its
- * command; a SECOND hang means it ignored an explicit instruction, and a third
- * means it ignored it twice. Giving a non-complying child the full ceiling again
- * makes the worst case three times the ceiling, resting entirely on the model
- * obeying prose. Halving bounds it at under twice the ceiling while costing a
- * complying child nothing.
- *
- * `priorHangs` counts watchdog kills specifically, NOT total restarts — the
- * restart budget is shared with loop kills, and a child restarted for LOOPING
- * never received the bound-your-command hint, so its first hang still deserves
- * the full ceiling. Only a hang after a hang is defiance.
- *
- * Floored at 30s so repeated halving cannot shrink the ceiling to something no
- * real command could finish inside — but the floor is `min(base, 30s)`, never
- * above the configured ceiling, so a caller asking for 10s keeps 10s at every
- * hang count. A base of 0 or less disables the watchdog and stays 0.
- */
-export function commandCeilingForAttempt(baseMs: number, priorHangs: number): number {
-    if (!(baseMs > 0)) return 0
-    const floor = Math.min(baseMs, 30_000)
-    return Math.max(floor, Math.round(baseMs / 2 ** priorHangs))
-}
-
-/**
  * Everything the restart ladder reads about one finished attempt, plus the
  * budgets it draws on. Assembled once per attempt so the rules below can be
  * module-level data instead of six `if` blocks welded into `runWorker`'s closure.
@@ -755,75 +728,6 @@ export const RESTART_RULES: readonly RestartRule[] = [
         counters: {leak: true}
     }
 ]
-
-/** What the command watchdog recorded when it killed an attempt. */
-interface CommandKill {
-    toolName: string
-    timeoutMs: number
-    /** The command line itself, when the tool carried one — quoted into the hint
-     *  so the fresh child knows which call it must not repeat unbounded. */
-    detail?: string
-}
-
-/**
- * Build the child-side command watchdog for ONE attempt: a per-tool-call timer
- * machine (shared with the main session) whose `onFire` aborts `signal`, which
- * runChild turns into a process-GROUP kill — reaping the hung command itself,
- * not just the pi child holding it.
- *
- * LIMIT: the group kill only reaches processes still IN the group. A hung command
- * that detached a daemon (setsid, nohup, a background dev server) leaves it
- * running, so the fresh attempt can hit a port the dead attempt's escapee still
- * holds. There is no cheap fix from here; the restart hint's "check current state"
- * line is the mitigation.
- *
- * Returns null when the watchdog is off, so the caller keeps the plain timeout
- * signal and no per-call bookkeeping happens at all.
- */
-function commandWatch(timeoutMs: number): {
-    onStart: (call: ToolCall) => void
-    onEnd: (toolCallId: string | undefined) => void
-    killed: () => CommandKill | undefined
-    signal: AbortSignal
-    clear: () => void
-} | null {
-    if (!(timeoutMs > 0)) return null
-    const ctrl = new AbortController()
-    // pi's toolCallId pairs start↔end. When it is absent (a fake stream in a
-    // test, an older pi), fall back to one shared slot: tool executions in a
-    // child are sequential, so a single slot is still correctly paired.
-    const key = (id: string | undefined): string => id ?? 'anon'
-    const details = new Map<string, string>()
-    let killed: CommandKill | undefined
-
-    const watchdog = new CommandWatchdog({
-        getTimeoutMs: () => timeoutMs,
-        ...realTimerDeps,
-        onFire: (toolCallId, toolName, ms) => {
-            killed = {
-                toolName,
-                timeoutMs: ms,
-                ...(details.has(toolCallId) ? {detail: details.get(toolCallId)!} : {})
-            }
-            ctrl.abort()
-        }
-    })
-
-    return {
-        onStart: call => {
-            const id = key(call.toolCallId)
-            const args = call.args as {command?: unknown} | undefined
-            if (typeof args?.command === 'string') {
-                details.set(id, args.command.slice(0, 120))
-            }
-            watchdog.onStart(id, call.name)
-        },
-        onEnd: id => watchdog.onEnd(key(id)),
-        killed: () => killed,
-        signal: ctrl.signal,
-        clear: () => watchdog.clearAll()
-    }
-}
 
 export async function runWorker(input: RunWorkerInput): Promise<RunWorkerResult> {
     const tools = input.tools ?? DEFAULT_TOOLS

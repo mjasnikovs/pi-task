@@ -16,7 +16,7 @@ import {
     type LoopHit
 } from '../shared/child-process.js'
 import {childBaseArgs} from '../shared/child-extensions.js'
-import {LoopDetector} from './loop-detector.js'
+import {LoopDetector, MAX_LOOP_RESTARTS} from './loop-detector.js'
 import {StallDetector, formatStallHint} from './stall-detector.js'
 import {
     detectLeakedToolCall,
@@ -25,6 +25,17 @@ import {
 } from '../shared/leaked-tool-call.js'
 import {readSection, setTaskSection} from './task-io.js'
 import {streamStallCause} from '../shared/stream-watchdog.js'
+import {
+    commandCeilingForAttempt,
+    commandTimeoutHint,
+    commandWatch,
+    type CommandKill
+} from '../shared/command-watchdog.js'
+import {discoverModelEndpoints, probeModelEndpoints} from '../shared/model-endpoint.js'
+// VALUE import, and it is only safe because worker-profiles.ts reads its loop
+// constants from loop-detector.ts. Point those back at this file and the graph
+// closes into a TDZ ReferenceError that no compile step catches.
+import {workerPolicy, type WorkerGuardPolicy} from '../workers/worker-profiles.js'
 import {getConfig} from '../config/config.js'
 import {groupThinkingArgs} from '../config/reasoning-args.js'
 import {reasoningGroupForChild} from '../config/reasoning.js'
@@ -37,15 +48,6 @@ import type {docsRaw, docsFocused} from '../workers/docs-core.js'
 import type {fetchRaw, fetchFocused} from '../workers/fetch-core.js'
 import type {npmVersionLookup} from '../workers/npm-version.js'
 import type {SearchCoreInput, SearchCoreResult} from '../workers/search-core.js'
-
-// ─── Loop detection constants ────────────────────────────────────────────────
-// Defined here (not in phases.ts) to avoid a circular dependency:
-//   phases.ts → child-runner.ts → phases.ts
-
-export const LOOP_WINDOW = 20
-export const LOOP_THRESHOLD = 5
-export const MAX_LOOP_RESTARTS = 2 // 3 strikes total (initial attempt + 2 restarts)
-// MAX_LEAK_RETRIES lives in shared/leaked-tool-call.ts (imported above).
 
 // ─── Phase-child wall-clock cap ──────────────────────────────────────────────
 
@@ -135,6 +137,53 @@ export class PhaseTimeoutError extends Error {
     }
 }
 
+/**
+ * The terminal error for a guard kill, or null when the child was not killed.
+ *
+ * Both spawn paths must ask. A kill reports `exitCode: 0` (child-process.ts uses
+ * `code ?? 0`, and a signal gives null), so a path that tests the exit code
+ * instead returns the truncated text as the phase's answer.
+ */
+export function guardKillError(name: string, r: PhaseRunResult): Error | null {
+    if (r.commandKill) return new CommandTimeoutError(name, r.commandKill)
+    if (r.stalled) return new BackendDownError(name)
+    return null
+}
+
+/**
+ * The dead-backend probe killed a phase child. NOT restartable — `worker-kill.ts`
+ * records `stalled` that way, and re-spawning against a backend that answered no
+ * probe buys three identical deaths.
+ */
+export class BackendDownError extends Error {
+    constructor(readonly childName: string) {
+        super(
+            `${childName} child killed: no output for the stall window and the model `
+                + `endpoint did not answer a probe`
+        )
+        this.name = 'BackendDownError'
+    }
+}
+
+/**
+ * A phase child spent every attempt on a command that never returned. Its own
+ * class because the fix is in the SPEC, not the model's exploration: a VERIFY
+ * block naming an unbounded `dev` command re-hangs every attempt.
+ */
+export class CommandTimeoutError extends Error {
+    constructor(
+        readonly childName: string,
+        readonly kill: CommandKill
+    ) {
+        super(
+            `${childName} child ran \`${kill.toolName}\``
+                + `${kill.detail ? ` (${kill.detail})` : ''} past its `
+                + `${Math.round(kill.timeoutMs / 1000)}s ceiling on every attempt`
+        )
+        this.name = 'CommandTimeoutError'
+    }
+}
+
 // ─── Connection-error retry ──────────────────────────────────────────────────
 
 /**
@@ -151,8 +200,26 @@ export class PhaseTimeoutError extends Error {
  * provider 5xx that names a real fault) still fails fast: re-spawning against
  * the same request won't fix it, so burning the budget only delays the report.
  */
+/**
+ * Transport-level failures worth another attempt.
+ *
+ * SCOPE, and it is deliberate: connection classes only. pi's own
+ * `isRetryableAssistantError` (@earendil-works/pi-ai, `dist/utils/retry.js`) also
+ * retries the provider-LOAD family — `429`, `5xx`, `rate limit`, `overloaded` —
+ * which `does NOT match real, non-transient faults` in child-runner.test.ts
+ * explicitly rejects. That disagreement is real and OPEN; it is not settled here,
+ * because this backoff starts at 500ms and a 429 answered that fast is a retry
+ * storm, not a recovery.
+ *
+ * MEASURED against pi before widening: the transport entries added here — a bare
+ * `timed out`, `getaddrinfo ENOTFOUND`, `upstream connect`, `reset before
+ * headers`, a truncated Anthropic stream and a closed websocket — were all
+ * MISSES. Every one is a REMOTE-provider failure, which is why a local llama.cpp
+ * setup never surfaced the gap. The errno spellings are pi-task's own: a child
+ * reports them through stderr, and pi never sees them.
+ */
 const CONNECTION_ERROR_RE =
-    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|fetch failed|network (?:error|timeout)|premature close|request timed out|terminated|unreachable)\b/i
+    /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|socket connection was closed|fetch failed|network (?:error|timeout)|premature close|terminated|unreachable|getaddrinfo|enotfound|upstream.?connect|reset before headers|timed? out|timeout|ended without|stream ended before message_stop|websocket.?(?:closed|error))\b/i
 
 export function isConnectionError(cause: string): boolean {
     return CONNECTION_ERROR_RE.test(cause)
@@ -178,6 +245,18 @@ export interface PhaseRunResult {
     leakedToolCall?: string
     /** Set when the child's final turn failed with stopReason "error" (model/provider failure). */
     modelError?: string
+    /**
+     * Set when the per-command watchdog killed the child: one tool call outran
+     * `requestTimeoutMs`. RESTARTABLE (worker-kill.ts) — a hung command is a
+     * mistake the next attempt can be told not to repeat.
+     */
+    commandKill?: CommandKill
+    /**
+     * Set when the dead-backend probe killed the child: no output for the stall
+     * window AND the model endpoint unreachable. NOT restartable (worker-kill.ts):
+     * re-spawning against a backend that is down buys nothing.
+     */
+    stalled?: boolean
 }
 
 // ─── Spawn helpers ───────────────────────────────────────────────────────────
@@ -270,6 +349,27 @@ export interface ChildRun {
      * group, or `[]`/omitted to inherit the session default as before.
      */
     thinking?: readonly string[]
+    /**
+     * This attempt's per-command ceiling, already halved for prior hangs by the
+     * caller's strike loop. Omitted -> the `phase` row's full configured ceiling,
+     * which is the right value for a single-attempt caller.
+     */
+    commandCeilingMs?: number
+}
+
+/**
+ * The `phase` row of WORKER_PROFILES, resolved with this machine's config.
+ *
+ * Read here rather than at module load so a /task-config change reaches the next
+ * child, the same contract childBaseArgs already keeps. Both spawn paths in this
+ * file go through it, so the degraded final attempt cannot drift from the ordinary
+ * one — the mislabel class runDegradedFinalAttempt's own comment warns about.
+ */
+export function phasePolicy(): WorkerGuardPolicy {
+    return workerPolicy('phase', {
+        commandTimeoutMs: getConfig().requestTimeoutMs,
+        streamInactivityMs: getConfig().streamInactivityMs
+    })
 }
 
 export async function runChild({
@@ -284,37 +384,69 @@ export async function runChild({
     extensions,
     onToolResult,
     contextWindow,
-    thinking
+    thinking,
+    commandCeilingMs
 }: ChildRun): Promise<PhaseRunResult> {
     const invocation = getPiInvocation(childArgs(tools, extensions, thinking), prompt)
     let loopHit: LoopHit | undefined
+    const guards = phasePolicy().guards
+    // Null when the user set the ceiling to `off`. Why a phase child needs this at
+    // all is the `phase` row's `why` in worker-profiles.ts.
+    const cmdWatch = commandWatch(commandCeilingMs ?? guards['command-timeout'])
+    const childSignal = cmdWatch ? AbortSignal.any([signal, cmdWatch.signal]) : signal
 
-    const result = await runChildUnified(
-        spawnFn ?? (spawn as unknown as SpawnFn),
-        invocation,
-        cwd,
-        signal,
-        {
-            mode: 'json-events',
-            // A hung model stream reports nothing at all, so without this the
-            // phase child waits forever. The kill
-            // is reported below as a connection-class cause, which routes it into
-            // the retry/backoff path this file already has for a LOUD disconnect.
-            streamInactivityMs: getConfig().streamInactivityMs,
-            onLine,
-            onContextUsage,
-            ...(contextWindow && contextWindow > 0 ? {contextWindow} : {}),
-            onToolResult: onToolResult ? r => onToolResult(r.text, r.isError) : undefined,
-            onToolCall: call => {
-                if (!onToolCall) return null
-                const hit = onToolCall(call)
-                if (hit && !loopHit) {
-                    loopHit = hit
+    let result
+    try {
+        result = await runChildUnified(
+            spawnFn ?? (spawn as unknown as SpawnFn),
+            invocation,
+            cwd,
+            childSignal,
+            {
+                mode: 'json-events',
+                // A hung model stream reports nothing at all, so without this the
+                // phase child waits forever. The kill
+                // is reported below as a connection-class cause, which routes it into
+                // the retry/backoff path this file already has for a LOUD disconnect.
+                streamInactivityMs: guards['stream-stall'],
+                ...(guards.stalled === false ?
+                    {}
+                :   {
+                        stall: {
+                            afterMs: guards.stalled.afterMs,
+                            probe:
+                                guards.stalled.probe
+                                ?? (() => probeModelEndpoints(discoverModelEndpoints()))
+                        }
+                    }),
+                onLine,
+                onContextUsage,
+                ...(contextWindow && contextWindow > 0 ? {contextWindow} : {}),
+                // ALWAYS wired, never conditional on the caller wanting results:
+                // the sink emits a tool-execution-end only when a handler exists,
+                // and without that end the command watchdog's timer is never
+                // disarmed — every healthy tool call would then look hung.
+                onToolResult: r => {
+                    cmdWatch?.onEnd(r.toolCallId)
+                    onToolResult?.(r.text, r.isError)
+                },
+                onToolCall: call => {
+                    // Before the detectors: a call they let through still needs its
+                    // clock started.
+                    cmdWatch?.onStart(call)
+                    if (!onToolCall) return null
+                    const hit = onToolCall(call)
+                    if (hit && !loopHit) {
+                        loopHit = hit
+                    }
+                    return hit // propagate to unified runner so it can kill
                 }
-                return hit // propagate to unified runner so it can kill
             }
-        }
-    )
+        )
+    } finally {
+        cmdWatch?.clear()
+    }
+    const commandKill = cmdWatch?.killed()
 
     // Use `||` (not `??`) so an empty string from json-events mode falls
     // back to raw stdout. Without this, a child that exits 0 but emits no
@@ -330,14 +462,16 @@ export async function runChild({
         ?? (result.streamStalled ? streamStallCause(result.streamStalled.idleMs) : undefined)
     return {
         text,
-        // WE killed this child, so its exit status describes our own SIGTERM, not
-        // the child's verdict. Report 0 and let `modelError` carry the cause —
-        // otherwise the wrappers' `exitCode !== 0` guard throws a bare "child
-        // failed" before the connection-error retry ever gets to look.
-        exitCode: result.streamStalled ? 0 : result.exitCode,
+        // WE killed this child, so its exit status is our own SIGTERM. Report 0
+        // and let the named cause carry it. EVERY guard kill must be listed: one
+        // omitted here arrives as exit 0 with partial text, and triageChildResult
+        // returns it as a successful answer.
+        exitCode: result.streamStalled || result.stalled || commandKill ? 0 : result.exitCode,
         stderr: result.stderr.trim(),
         loopHit,
         modelError,
+        ...(commandKill ? {commandKill} : {}),
+        ...(result.stalled ? {stalled: true} : {}),
         // A tool call the model wrote as text (wrong dialect) never executed and
         // sailed past the structured-event guards above; flag it so the wrappers
         // can re-prompt instead of accepting the unexecuted call. Only meaningful
@@ -623,7 +757,9 @@ export function thinkingForChild(name: string): string[] {
 function phaseChildRun(
     deps: PhaseDeps,
     over: Pick<ChildRun, 'tools' | 'prompt' | 'signal' | 'thinking'>
-        & Partial<Pick<ChildRun, 'onContextUsage' | 'onToolCall' | 'onToolResult'>>
+        & Partial<
+            Pick<ChildRun, 'onContextUsage' | 'onToolCall' | 'onToolResult' | 'commandCeilingMs'>
+        >
 ): ChildRun {
     return {
         cwd: deps.cwd,
@@ -654,16 +790,34 @@ export async function runPhaseChild(
     let hint: string | null = null
     const loopHistory: LoopHit[] = []
     const budgetMs = deps.timeoutMs ?? PHASE_CHILD_TIMEOUT_MS
+    // From the `phase` row, not from literals here, so the table is the one place
+    // that answers "how may this child die". The row resolves to the same
+    // DEFAULT_LOOP_DETECTOR / DEFAULT_LOOP_PROGRESS this file used to hard-code.
+    const loopGuard = phasePolicy().guards.loop
+    // Watchdog kills, NOT total strikes: a loop restart never saw the
+    // bound-your-command hint. Without the halving, three attempts at the default
+    // ceiling cost 45 minutes and nothing else bounds this path.
+    let hangKills = 0
     for (let attempt = 0; attempt <= MAX_LEAK_RETRIES; attempt++) {
         // A cancel between attempts must not buy another spawn.
         if (deps.signal.aborted) throw new Error(USER_CANCELLED)
-        const detector = new LoopDetector(LOOP_WINDOW, LOOP_THRESHOLD)
-        const stall = new StallDetector()
+        const detector =
+            loopGuard.detector === false ?
+                null
+            :   new LoopDetector(
+                    loopGuard.detector.window,
+                    loopGuard.detector.threshold,
+                    loopGuard.detector.pathThreshold
+                )
+        const stall =
+            loopGuard.progress === false ?
+                null
+            :   new StallDetector(loopGuard.progress.limit, loopGuard.progress.churnFactor)
         // Arm the churn rule BEFORE the first tool call. pi's stream carries no
         // context WINDOW, so a detector that waited to be told one would sit at 0,
         // and the churn rule returns false on a non-positive window. The parent
         // knows the value at spawn time — say it then, not later.
-        stall.noteContext(deps.contextWindow ?? 0)
+        stall?.noteContext(deps.contextWindow ?? 0)
         const clock = phaseTimeout(deps.signal, budgetMs)
         let r: PhaseRunResult
         try {
@@ -678,11 +832,15 @@ export async function runPhaseChild(
                         // why the parent's value must be supplied at spawn — a
                         // stream that only ever reports 0 leaves the churn rule
                         // permanently disarmed.
-                        stall.noteContext(snapshot.contextWindow)
+                        stall?.noteContext(snapshot.contextWindow)
                         deps.onContextUsage?.(snapshot)
                     },
-                    onToolCall: call => detector.record(call) ?? stall.record(call),
-                    onToolResult: (text, isError) => stall.noteResult(text, isError)
+                    commandCeilingMs: commandCeilingForAttempt(
+                        phasePolicy().guards['command-timeout'],
+                        hangKills
+                    ),
+                    onToolCall: call => detector?.record(call) ?? stall?.record(call) ?? null,
+                    onToolResult: (text, isError) => stall?.noteResult(text, isError)
                 })
             )
         } finally {
@@ -720,6 +878,31 @@ export async function runPhaseChild(
             hint = r.loopHit.stall ? formatStallHint(r.loopHit.stall) : formatLoopHint(r.loopHit)
             continue
         }
+        // Ordered after the loop rule and before the clock, matching RESTART_ORDER
+        // (worker-kill.ts): the loop hint names the offending call and is the more
+        // specific thing to tell a re-spawn, and a watchdog kill leaves the phase
+        // clock's own flag false, so the two cannot be confused.
+        if (r.commandKill) {
+            hangKills++
+            if (attempt === MAX_LEAK_RETRIES) {
+                throw new CommandTimeoutError(name, r.commandKill)
+            }
+            deps.logDebug?.(
+                `${name}: ${r.commandKill.toolName} outran `
+                    + `${Math.round(r.commandKill.timeoutMs / 1000)}s — `
+                    + `${verb} ${attempt + 1}/${MAX_LEAK_RETRIES}`
+            )
+            // Tracks the TOOLS, not the phase: verify-tooling holds `read,bash`,
+            // and a half-written node_modules survives the kill.
+            hint = commandTimeoutHint(r.commandKill.toolName, r.commandKill.timeoutMs, {
+                ...(r.commandKill.detail ? {commandDetail: r.commandKill.detail} : {}),
+                editsMayPersist: /\b(?:bash|edit|write)\b/.test(tools)
+            })
+            continue
+        }
+        // Not restartable, so it ends the phase here rather than spending a strike.
+        const killed = guardKillError(name, r)
+        if (killed) throw killed
         if (clock.timedOut()) {
             if (attempt === MAX_LEAK_RETRIES) {
                 throw new PhaseTimeoutError(name, budgetMs, MAX_LEAK_RETRIES + 1)
@@ -866,6 +1049,11 @@ async function runDegradedFinalAttempt(
     } finally {
         clock.cleanup()
     }
+    // BEFORE the exit-code test, not inside it: a guard kill reports exit 0, so
+    // asking afterwards would already have returned the truncated text as this
+    // phase's deliverable.
+    const killed = guardKillError(name, r)
+    if (killed) throw killed
     if (r.exitCode !== 0 || r.modelError || r.text.trim().length === 0) {
         // A wall-clock kill is NOT a loop. Without this check a child that outran
         // its budget is reported as "loop budget exhausted", carrying a loop

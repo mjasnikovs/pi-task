@@ -13,6 +13,10 @@ import {broadcast as wsBroadcast} from '../../src/remote/broadcast.js'
 import type {PhaseDeps, PhaseSeams} from '../../src/task/child-runner.js'
 import type {RunWorkerResult} from '../../src/workers/pi-worker-core.js'
 import {RUN_END_POLICY} from '../../src/task/run-end.js'
+import {
+    implementationGuardArmed,
+    disarmImplementationGuard
+} from '../../src/task/implementation-guards.js'
 
 // ─── Phase children: routed by NAME through the `runChild` seam ───────────────
 
@@ -194,6 +198,40 @@ async function runOnce(
     await runner.run()
     return {runner, sent}
 }
+
+describe('implementation guard lifetime', () => {
+    /**
+     * REGRESSION (review finding 4). `_deliverSpec` arms the guard BEFORE handing
+     * the spec over, because the turn can begin inside that call. When delivery
+     * rejects — `sendUserMessage` awaits pi's `prompt`, which throws on a
+     * compaction already in progress, a missing model, or a failed auth — no
+     * implementation turn ever runs. On the fire-and-forget path the `finally`
+     * skips the disarm, so the guard survives into the user's NEXT, unrelated turn,
+     * where it can now block calls and terminate the turn outright.
+     */
+    test('a delivery that throws leaves nothing armed', async () => {
+        disarmImplementationGuard()
+        await withTmpTaskDir(async cwd => {
+            const {ctx} = makeFakeCtx(cwd)
+            let armedAtDelivery = false
+            const runner = new TaskRunner({
+                ctx,
+                cwd,
+                rawPrompt: 'run lint',
+                // implAwaited defaults to false: the fire-and-forget /task shape.
+                sendSpec: () => {
+                    armedAtDelivery = implementationGuardArmed()
+                    return Promise.reject(new Error('Agent is already processing.'))
+                },
+                seams: happy()
+            })
+            await runner.run().catch(() => {})
+            // Without this the assertion below passes on a run that never delivered.
+            expect(armedAtDelivery).toBe(true)
+            expect(implementationGuardArmed()).toBe(false)
+        })
+    })
+})
 
 describe('TaskRunner — happy path', () => {
     test('refine fills title and refined section', async () => {

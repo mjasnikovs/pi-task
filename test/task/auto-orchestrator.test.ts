@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 import {withTmpTaskDir} from '../test-utils/tmp-task-dir.js'
+import {USER_CANCELLED, BackendDownError} from '../../src/task/child-runner.js'
 import {makeFakeCtx} from '../test-utils/fake-ctx.js'
 import {
     flushPlanDebug,
@@ -3496,5 +3497,42 @@ test("coverage loop: an adopted plan whose coverage-map FAULTS does not inherit 
             if (/scans a directory/i.test(o.quote)) expect(o.title).toContain('Scan')
             if (/summary report/i.test(o.quote)) expect(o.title).toContain('summary report')
         }
+    })
+})
+
+/**
+ * REGRESSION (review finding 6). `orientFeature`'s extraction catch is
+ * best-effort by design, but it is bare: a user ESC and a dead model backend are
+ * both logged as "skipped" and planning continues with an EMPTY requirement
+ * ledger. That silently changes the granularity floor and ships a degraded plan
+ * instead of a cancel or a failure. `verify-resolution.ts:226` is the pattern.
+ */
+test('orientFeature: a user cancel during extraction is not swallowed', async () => {
+    await withTmpTaskDir(async dir => {
+        const d: AutoDeps = {
+            runChild: () => Promise.reject(new Error(USER_CANCELLED)),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const err = await orientFeature(dir, 'Photos feature.\n- upload accepts files.', d).then(
+            () => null,
+            e => e as Error
+        )
+        expect(err?.message).toBe(USER_CANCELLED)
+    })
+})
+
+test('orientFeature: a dead backend during extraction is not swallowed', async () => {
+    await withTmpTaskDir(async dir => {
+        const d: AutoDeps = {
+            runChild: () => Promise.reject(new BackendDownError('requirement-extract')),
+            runTask: () => Promise.resolve({taskId: 'TASK_0001', end: {kind: 'completed'}}),
+            commit: () => Promise.resolve({committed: true})
+        }
+        const err = await orientFeature(dir, 'Photos feature.\n- upload accepts files.', d).then(
+            () => null,
+            e => e as Error
+        )
+        expect(err).toBeInstanceOf(BackendDownError)
     })
 })

@@ -12,7 +12,22 @@
  *
  * Either pattern returns a LoopHit so the caller can kill the child and re-spawn
  * with a hint. No I/O. No imports from index.ts. Trivially unit-testable.
+ *
+ * The three tuning constants live here rather than in child-runner.ts because
+ * worker-profiles.ts reads them at module top level to build DEFAULT_LOOP_DETECTOR.
+ * From child-runner.ts that is a cycle — child-runner → worker-profiles →
+ * child-runner — and the failure is a TDZ ReferenceError on import order, which
+ * no compile step catches. This module imports nothing, so it cannot close one.
  */
+
+/** Recent tool calls the exact-repeat rule looks back over. */
+export const LOOP_WINDOW = 20
+
+/** Repeats of one key within the window that trip the detector. */
+export const LOOP_THRESHOLD = 5
+
+/** Re-spawns allowed after a loop kill — 3 attempts total with the initial one. */
+export const MAX_LOOP_RESTARTS = 2
 
 export interface ToolCall {
     name: string
@@ -38,6 +53,15 @@ export function stableStringify(value: unknown): string {
         }
         return sorted
     })
+}
+
+/**
+ * The exact-match identity of a tool call. Exported because implementation-guards.ts
+ * keys its own per-call strike count on it, and a second hand-written copy of this
+ * expression is free to drift away from the one `record` uses.
+ */
+export function loopKey(call: ToolCall): string {
+    return `${call.name}\x00${stableStringify(call.args)}`
 }
 
 /**
@@ -98,15 +122,15 @@ export class LoopDetector {
     private readonly buf: Entry[] = []
 
     constructor(
-        private readonly window: number = 20,
-        private readonly threshold: number = 5,
+        private readonly window: number = LOOP_WINDOW,
+        private readonly threshold: number = LOOP_THRESHOLD,
         /** Revisits of one path needed to trip; defaults to the exact threshold. */
         private readonly pathThreshold: number = threshold
     ) {}
 
     /** Record a tool call. Returns LoopHit if either threshold is breached, else null. */
     record(call: ToolCall): LoopHit | null {
-        const key = `${call.name}\x00${stableStringify(call.args)}`
+        const key = loopKey(call)
         const offset = readOffset(call.args)
         this.buf.push({key, path: primaryPath(call.args), offset, end: readEnd(call.args, offset)})
         if (this.buf.length > this.window) this.buf.shift()

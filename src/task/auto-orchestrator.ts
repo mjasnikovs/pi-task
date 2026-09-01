@@ -53,7 +53,7 @@ import {
 import {readTextFile} from '../shared/fs-text.js'
 import {findPhantomImports, rewritePhantomSpecifiers} from '../workers/phantom-imports.js'
 import type {TaskFrontMatter} from './task-types.js'
-import {prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
+import {BackendDownError, prependHint, USER_CANCELLED, type PhaseDeps} from './child-runner.js'
 import {requestCancel, resetCancel, isCancelRequested, cancelCheckpoint} from './cancel-points.js'
 import {withRun, announceTerminal} from './run-bracket.js'
 import {refineExistingFilesBlock, SINGLE_READ_EXTENSION_PATH} from './phases.js'
@@ -680,8 +680,15 @@ export async function orientFeature(
             cwd,
             `requirement extraction: ${reqEntries.length} grounded requirement(s) kept`
         )
-    } catch {
-        // best-effort channel
+    } catch (e) {
+        // Best-effort covers a child that answered badly. It must NOT cover a user
+        // ESC or a dead backend: planning would continue on an EMPTY ledger, moving
+        // the granularity floor and shipping a degraded plan instead of a cancel or
+        // a failure. Same rule as verify-resolution.ts.
+        if (e instanceof BackendDownError) throw e
+        if (e instanceof Error && e.message === USER_CANCELLED) throw e
+        // Best-effort, but not silent: nothing else records a guard kill here.
+        logPlanDebug(cwd, `requirement extraction: skipped — ${(e as Error).message}`)
     }
 
     // Granularity floor: without it the plan's task COUNT is set by an
@@ -1492,8 +1499,12 @@ function defaultDeps(
 
     const phaseDeps: PhaseDeps = {
         cwd,
+        // No task file, so appendLoopEvent swallows its ENOENT. Its docblock
+        // allows that because "the kill is already reported through the debug
+        // log" — which is why logDebug below is not optional here.
         taskId: '',
         signal,
+        logDebug: msg => logPlanDebug(cwd, msg),
         // IN-RUN thrash guard for the planning children: without it a decompose
         // child can re-read its design document until it fills the whole context
         // window, and never return. Every planning child
