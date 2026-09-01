@@ -1,14 +1,14 @@
 import type {ExtensionAPI, ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {getKeybindings, SettingsList, visibleWidth, wrapTextWithAnsi} from '@earendil-works/pi-tui'
-import type {Component, SelectItem, SettingItem, SettingsListTheme} from '@earendil-works/pi-tui'
+import type {Component, SettingItem, SettingsListTheme} from '@earendil-works/pi-tui'
 import {
     clampToModel,
     supportedThinkingLevels,
     type LadderLevel,
     type ReasoningModelFacts
 } from '../shared/reasoning-capability.js'
-import {isModelSpec, MODEL_INHERIT, splitSpec} from './group-models.js'
-import {OptionPicker} from './option-picker.js'
+import {MODEL_INHERIT, splitSpec} from './group-models.js'
+import {PairPicker, type PairOptions} from './option-picker.js'
 import {registerBridgeCommand} from '../remote/bridge.js'
 import {readPkgVersion} from '../shared/pkg-version.js'
 import {
@@ -31,8 +31,7 @@ import {
     CHILD_GROUPS,
     REASONING_MODES,
     sanitizeReasoningMode,
-    REASONING_GROUP_HELP,
-    MODEL_GROUP_HELP,
+    STEP_GROUP_HELP,
     REASONING_SETTINGS,
     effectiveReasoning,
     resolveReasoning,
@@ -121,7 +120,7 @@ class BorderedBox implements Component {
 export interface ConfigItem {
     /**
      * The row's id. A `keyof PiTaskConfig` for a fixed setting; a prefixed
-     * string (`reason:`, `tool:`, `ext:`) for a DISCOVERED one.
+     * string (`step:`, `tool:`, `ext:`) for a DISCOVERED one.
      *
      * It is `string`, not `keyof PiTaskConfig`, and that is what lets the three
      * dynamic families BE rows instead of bypassing them — so the round-trip
@@ -150,7 +149,7 @@ export interface ConfigItem {
      * `values` stays the STATIC complete vocabulary, because that is what the
      * round-trip property in config-items.test.ts quantifies over.
      */
-    submenu?: (cfg: PiTaskConfig) => SelectItem[]
+    picker?: (cfg: PiTaskConfig) => PairOptions
     /** What the panel shows for the current value. */
     format: (cfg: PiTaskConfig) => string
     /** Write the chosen label back. A value it does not recognise is ignored. */
@@ -175,7 +174,7 @@ export type Section =
     | 'session'
     | 'checks'
     | 'research'
-    | 'models'
+    | 'profile'
     | 'reasoning'
     | 'timeouts'
     | 'unattended'
@@ -187,12 +186,20 @@ export const SECTIONS: ReadonlyArray<{key: Section; title: string}> = [
     {key: 'session', title: 'session'},
     {key: 'checks', title: 'after each task'},
     {key: 'research', title: 'research'},
-    // Immediately before `reasoning`, and a BLOCK of its own rather than a
-    // second column on the think: rows. Interleaving would double one block to
-    // 22 rows and print the `├─ files` tree branches twice, meaning two
-    // different things a line apart.
-    {key: 'models', title: 'models'},
-    {key: 'reasoning', title: 'reasoning'},
+    // The global override gets its own heading, so it cannot be mistaken for a
+    // twelfth step. It is one row, and `renderRows` drops an empty section, so
+    // this costs a header and a blank line and nothing else.
+    //
+    // Both titles are SHORT on purpose. `SettingsList` sizes its label column
+    // from the widest item it holds — headers included — so a long heading is
+    // taken straight out of every row's value column, and the first thing to
+    // fall off the right is the thinking level.
+    {key: 'profile', title: 'profile'},
+    // ONE block for both dials. They shipped as two parallel blocks of eleven,
+    // which put a step's two settings eleven rows apart and hid the coupling
+    // between them: choosing a model re-clamps that step's thinking level, and
+    // nobody could see it happen.
+    {key: 'reasoning', title: 'steps'},
     {key: 'unattended', title: 'unattended'},
     {key: 'logging', title: 'logging'},
     {key: 'extensions', title: 'child extensions'},
@@ -392,16 +399,18 @@ export const ITEMS: ConfigItem[] = [
     ),
     {
         id: 'reasoningMode',
-        section: 'reasoning',
-        label: 'reasoning',
+        // Its OWN section, above the per-step block it governs. Sitting inside
+        // that block it read as a twelfth step called `reasoning` — a global
+        // override disguised as one more per-step row.
+        section: 'profile',
+        label: 'profile',
         description:
-            'How much the helper sessions think before answering. "default" uses the '
-            + 'per-step table pi-task has measured, "on" and "off" force one answer '
-            + 'everywhere, and "custom" is whatever you set in the "think:" rows below. '
-            + 'Those rows always show what each step actually runs at, and changing one '
-            + 'switches this to custom. A step left on "inherit" uses whatever thinking '
-            + 'level pi itself is set to, which is what every step did before this setting '
-            + 'existed',
+            'How much every step below thinks, in one word. "default" uses the per-step '
+            + 'table pi-task has measured, "on" and "off" force one answer everywhere and '
+            + 'IGNORE the rows below, and "custom" is whatever those rows say. They always '
+            + 'show what each step actually runs at, so changing one switches this to '
+            + 'custom. A step left on "inherit" uses whatever thinking level pi itself is '
+            + 'set to, which is what every step did before this setting existed',
         values: [...REASONING_MODES],
         format: cfg => String(cfg.reasoningMode),
         apply: (cfg, chosen) => {
@@ -528,10 +537,10 @@ export function applyToolToggle(
  *    though the custom table underneath is untouched, which is the honest
  *    answer to "what will my next child do".
  */
-const REASON_ID_PREFIX = 'reason:'
+const STEP_ID_PREFIX = 'step:'
 
 /**
- * The label for one `think:` row.
+ * The label for one step row.
  *
  * A group whose name carries a colon is a CHILD of the group before the colon —
  * `research:files` is one of the four workers `research` fans out to. Rendered
@@ -540,22 +549,24 @@ const REASON_ID_PREFIX = 'reason:'
  * parent is also a row.
  *
  * So a child is drawn as a tree branch under its parent and loses the repeated
- * `think: research:` prefix, the same text at the head of four consecutive
- * lines. `└─` on the last child, `├─` on the rest, decided from the group's
- * position in {@link CHILD_GROUPS} rather than a hand-kept list — adding a
- * fifth worker moves the corner on its own.
+ * `research:` prefix, the same text at the head of four consecutive lines. `└─`
+ * on the last child, `├─` on the rest, decided from the group's position in
+ * {@link CHILD_GROUPS} rather than a hand-kept list — adding a fifth worker
+ * moves the corner on its own.
+ *
+ * A parentless group is its own bare name. It carried a `think: ` prefix while
+ * there were two families to tell apart; with one row per step there is nothing
+ * to disambiguate, and the prefix was the widest thing in the column.
  *
  * Leading spaces survive: SettingsList pads the label right, never trims it.
  */
-export function reasoningRowLabel(group: ChildGroup): string {
+export function stepRowLabel(group: ChildGroup): string {
     const colon = group.indexOf(':')
-    if (colon < 0) return `think: ${group}`
+    if (colon < 0) return group
     const parent = group.slice(0, colon)
     const nextIsSibling = CHILD_GROUPS[CHILD_GROUPS.indexOf(group) + 1]?.startsWith(`${parent}:`)
     return `   ${nextIsSibling ? '├─' : '└─'} ${group.slice(colon + 1)}`
 }
-
-const MODEL_ID_PREFIX = 'model:'
 
 /**
  * What this machine can offer a model row, and what each offer can DO.
@@ -577,72 +588,6 @@ export interface ModelCatalog {
 /** No registry reachable. Every row still renders; nothing narrows. */
 export const EMPTY_CATALOG: ModelCatalog = {specs: [], facts: () => undefined}
 
-export function modelItems(catalog: ModelCatalog): ConfigItem[] {
-    return CHILD_GROUPS.map(group => ({
-        id: MODEL_ID_PREFIX + group,
-        section: 'models' as Section,
-        label: reasoningRowLabel(group).replace('think: ', 'model: '),
-        headlessLabel: `model: ${group}`,
-        description: MODEL_GROUP_HELP[group],
-        // The COMPLETE accepted vocabulary, which is what the round-trip
-        // property quantifies over. With nothing discovered it is `['inherit']`:
-        // length 1, still selectable, still not a header. No degenerate case.
-        values: [MODEL_INHERIT, ...catalog.specs],
-        submenu: () => [
-            {value: MODEL_INHERIT, label: MODEL_INHERIT, description: "pi's own default"},
-            ...catalog.specs.map(spec => ({
-                value: spec,
-                label: spec,
-                ...(catalog.note?.(spec) === undefined ? {} : {description: catalog.note(spec)!})
-            }))
-        ],
-        // VERBATIM, even when absent from `values` — the vanished-model case,
-        // where the row must still say what the config holds so the hint that
-        // names it has something to point at.
-        format: cfg => cfg.groupModels[group],
-        apply: (cfg, chosen) => applyGroupModel(cfg, group, chosen, catalog)
-    }))
-}
-
-/**
- * Write a group's model, and RE-CLAMP its thinking cell in the same write.
- *
- * Narrowing the picker does nothing about a level already stored from before the
- * model was chosen: on its own it would freeze a lie into a cell it has just
- * made unconfigurable. `syncRows` re-renders every row, so the user sees the
- * level move.
- *
- * The clamp reads `resolveReasoning`, NOT `cfg.reasoningLevels[group]`. In mode
- * `on` or `off` the stored table is ignored entirely, so a user in `on` who
- * picks a non-reasoning model has a stored cell that says nothing and an
- * effective `medium` the model will erase — and comparing the stored cell would
- * see no clamp and stay silent about a real lie.
- *
- * Guarded on the clamp actually MOVING something, because `applyReasoningLevel`
- * flips the whole table to `custom`, and picking a fully-capable model must not
- * do that as a side effect.
- */
-export function applyGroupModel(
-    cfg: PiTaskConfig,
-    group: ChildGroup,
-    chosen: string,
-    catalog: ModelCatalog
-): void {
-    // MEMBERSHIP, not just shape. A stored spec naming a vanished model must
-    // survive — that is the sanitizer's job, and `format` still renders it — but
-    // it may only ever ARRIVE here from the picker, which offers exactly these.
-    // Without this, the panel could write a spec this machine cannot resolve.
-    if (!isModelSpec(chosen)) return
-    if (chosen !== MODEL_INHERIT && !catalog.specs.includes(chosen)) return
-    cfg.groupModels = {...cfg.groupModels, [group]: chosen}
-    const facts = catalog.facts(chosen)
-    if (facts === undefined) return
-    const wanted = resolveReasoning(group, cfg)
-    if (wanted === 'inherit') return
-    const clamped = clampToModel(facts, wanted)
-    if (clamped !== wanted) applyReasoningLevel(cfg, group, clamped)
-}
-
 /**
  * The levels a row may offer, given the model that row's group will run on.
  *
@@ -657,30 +602,182 @@ export function offeredLevels(facts: ReasoningModelFacts | undefined): GroupSett
     return REASONING_SETTINGS.filter(s => s === 'inherit' || supported.includes(s as LadderLevel))
 }
 
-export function reasoningItems(catalog: ModelCatalog = EMPTY_CATALOG): ConfigItem[] {
+/** The separator between a step row's two halves. */
+const PAIR_SEP = ' \u00b7 '
+
+/**
+ * `level · provider/id`, the one string a step row shows and accepts.
+ *
+ * THE LEVEL COMES FIRST, and that is a display decision with teeth.
+ * `SettingsList` truncates a value from the RIGHT, so whatever is last is what
+ * silently disappears — and a real local model id (`local/Qwen3.8-27B-UD-Q4_K_XL
+ * .gguf`) is wide enough to consume the whole column on its own. Level-first
+ * means the half that falls off is the one still identifiable from its head, and
+ * the levels line up as a column you can read down.
+ */
+export function formatStepValue(spec: string, level: GroupSetting): string {
+    return `${level}${PAIR_SEP}${spec}`
+}
+
+/**
+ * The two halves back out, or `undefined` for anything not of that shape.
+ *
+ * Split on the FIRST separator, because the level leads and is a closed set,
+ * while a `provider/id` could conceivably contain one.
+ */
+export function parseStepValue(value: string): {spec: string; level: GroupSetting} | undefined {
+    const at = value.indexOf(PAIR_SEP)
+    if (at <= 0) return undefined
+    const level = value.slice(0, at)
+    const spec = value.slice(at + PAIR_SEP.length)
+    if (spec === '' || !REASONING_SETTINGS.includes(level as GroupSetting)) return undefined
+    return {spec, level: level as GroupSetting}
+}
+
+/**
+ * One row per step, carrying BOTH dials.
+ *
+ * They were two parallel blocks of eleven, and the coupling between them was
+ * invisible: choosing a model re-clamps that step's thinking level, but the row
+ * that moved was eleven rows away from the row you touched. One row shows the
+ * pair, and the two-step picker shows the clamp happening.
+ *
+ * `values` is the LEGAL cross product — every model against only the levels that
+ * model declares. Nothing renders it: the picker offers two short lists, and the
+ * round-trip property in config-items.test.ts is its only reader. Building it
+ * from `offeredLevels` rather than the full ladder is what makes the property
+ * true, because a pair the model cannot honour would be clamped by `apply` and
+ * would not round-trip.
+ */
+export function stepItems(catalog: ModelCatalog = EMPTY_CATALOG): ConfigItem[] {
+    const specs = [MODEL_INHERIT, ...catalog.specs]
     return CHILD_GROUPS.map(group => ({
-        id: REASON_ID_PREFIX + group,
+        id: STEP_ID_PREFIX + group,
         section: 'reasoning' as Section,
-        label: reasoningRowLabel(group),
-        headlessLabel: `think: ${group}`,
-        description: REASONING_GROUP_HELP[group],
-        values: [...REASONING_SETTINGS],
-        // A submenu, not a cycle, because what this row may offer depends on the
-        // model row above it — which the user can change while the panel is
-        // open. `values` is static and computed when the rows are built, and
-        // `syncRows` can only re-ask `format`; a factory runs at Enter-time.
-        submenu: (cfg: PiTaskConfig) =>
-            offeredLevels(catalog.facts(cfg.groupModels[group])).map(level => ({
-                value: level,
-                label: level
-            })),
-        // The EFFECTIVE level, not cfg.reasoningLevels[group]: in default/on/off
-        // the stored table is not what runs, and a row that shows a value the
-        // run does not use is worse than no row. As a FUNCTION rather than a
-        // snapshot, so `syncRows` can re-ask after any change.
-        format: cfg => resolveReasoning(group, cfg),
-        apply: (cfg, chosen) => applyReasoningLevel(cfg, group, chosen)
+        label: stepRowLabel(group),
+        headlessLabel: `step: ${group}`,
+        description: STEP_GROUP_HELP[group],
+        values: specs.flatMap(spec =>
+            offeredLevels(catalog.facts(spec)).map(level => formatStepValue(spec, level))
+        ),
+        // Built at ENTER-time from the LIVE draft, not when the rows were made:
+        // stage two narrows to the model chosen in stage one, and the user can
+        // have changed another row since the panel opened.
+        picker: cfg => stepPicker(group, cfg, catalog),
+        // The model half VERBATIM even when the catalog no longer offers it — the
+        // vanished-model case, where the row is the only place the user can see
+        // what their config actually holds. The thinking half is the EFFECTIVE
+        // level, not the stored cell: in mode default/on/off the stored table is
+        // not what runs, and a row showing a value the run does not use is worse
+        // than no row.
+        format: cfg => formatStepValue(cfg.groupModels[group], resolveReasoning(group, cfg)),
+        apply: (cfg, chosen) => applyStepValue(cfg, group, chosen, catalog)
     }))
+}
+
+/**
+ * The two lists behind one step row.
+ *
+ * Stage two is where the coupling becomes visible. It offers only the levels the
+ * chosen model declares, and it OPENS on the level that will actually run — the
+ * current one when that model can honour it, otherwise the clamp, with the
+ * reason written beside it. Picking a model that cannot think is therefore not a
+ * silent downgrade discovered later; it is the option the cursor is already on.
+ */
+function stepPicker(group: ChildGroup, cfg: PiTaskConfig, catalog: ModelCatalog): PairOptions {
+    const held = cfg.groupModels[group]
+    // The row's CURRENT model leads stage one when the catalog cannot offer it.
+    // Without this, opening the row to nudge only the level would silently
+    // rewrite the model to `inherit`: `FilterList` falls back to index 0 when
+    // the preselect matches nothing, and the two dials are one row now, so there
+    // is no way to touch the level without confirming a model. That would erase
+    // a spec set on the user's other machine — the one thing the loader, the
+    // format function and the startup hint all go out of their way to preserve.
+    const missing = held !== MODEL_INHERIT && !catalog.specs.includes(held)
+    return {
+        first: [
+            ...(missing ?
+                [{value: held, label: held, description: 'not available here — kept as-is'}]
+            :   []),
+            {value: MODEL_INHERIT, label: MODEL_INHERIT, description: "pi's own default"},
+            ...catalog.specs.map(spec => ({
+                value: spec,
+                label: spec,
+                ...(catalog.note?.(spec) === undefined ? {} : {description: catalog.note(spec)!})
+            }))
+        ],
+        second: spec => {
+            const facts = catalog.facts(spec)
+            const offered = offeredLevels(facts)
+            const wanted = resolveReasoning(group, cfg)
+            const clamped =
+                facts === undefined || wanted === 'inherit' ?
+                    wanted
+                :   (clampToModel(facts, wanted) as GroupSetting)
+            // Back inside the menu's own vocabulary. `clampToModel` walks UP
+            // first and knows the whole ladder, so a model declaring `xhigh`
+            // can land on a level `offeredLevels` deliberately excludes — and
+            // then stage two would open on `inherit` with the explanation
+            // attached to no row at all.
+            const runs = offered.includes(clamped) ? clamped : (offered.at(-1) ?? 'inherit')
+            return {
+                options: offered.map(level => ({
+                    value: level,
+                    label: level,
+                    ...(level === runs && runs !== wanted ?
+                        {description: `${spec} cannot do ${wanted}`}
+                    :   {})
+                })),
+                preselect: runs
+            }
+        },
+        firstOf: value => parseStepValue(value)?.spec ?? value,
+        join: (spec, level) => formatStepValue(spec, level as GroupSetting)
+    }
+}
+
+/**
+ * Write both halves of a step row, atomically.
+ *
+ * Atomically matters for the round-trip property, which starts from a FRESH
+ * config every iteration: a value that wrote only one half would leave the other
+ * at its default and render as something else.
+ *
+ * The level is re-clamped even though the picker only ever offers legal pairs.
+ * The picker is not the only door — `values` is built when the panel opens, and
+ * a registry that moved underneath it would otherwise let an unhonourable level
+ * through.
+ */
+export function applyStepValue(
+    cfg: PiTaskConfig,
+    group: ChildGroup,
+    chosen: string,
+    catalog: ModelCatalog
+): void {
+    const pair = parseStepValue(chosen)
+    if (pair === undefined) return
+    // MEMBERSHIP, not just shape: the panel may only ever write what the picker
+    // showed. That is `inherit`, the catalog's own specs, and — when the catalog
+    // cannot offer it — the spec this cell ALREADY holds, which stage one keeps
+    // at its head precisely so the level can be changed without discarding it.
+    // Re-writing the value that is already there is not a new unresolvable spec.
+    if (
+        pair.spec !== MODEL_INHERIT
+        && pair.spec !== cfg.groupModels[group]
+        && !catalog.specs.includes(pair.spec)
+    ) {
+        return
+    }
+    cfg.groupModels = {...cfg.groupModels, [group]: pair.spec}
+    const facts = catalog.facts(pair.spec)
+    const level =
+        facts === undefined || pair.level === 'inherit' ?
+            pair.level
+        :   (clampToModel(facts, pair.level) as GroupSetting)
+    // Only when it MOVES something: `applyReasoningLevel` flips the whole table
+    // to `custom`, and picking a pair the config already runs must not do that
+    // as a side effect.
+    if (level !== resolveReasoning(group, cfg)) applyReasoningLevel(cfg, group, level)
 }
 
 /**
@@ -781,13 +878,13 @@ export type PanelItem = {
      * {@link createSettingsPanel} is where a theme exists, so it is where these
      * options become a component.
      */
-    submenuOptions?: () => SelectItem[]
+    pickerOptions?: () => PairOptions
     /**
      * What the headless one-line rendering calls this row, when `label` reads
      * only in the panel. A tree branch means nothing on a line of `|`-joined
-     * rows: `├─ files` there names no parent, where `think: research:files`
-     * does. Set by the reasoning rows; every other row leaves it off and its
-     * `label` is used.
+     * rows: `├─ files` there names no parent, where `step: research:files`
+     * does. Set by the step rows; every other row leaves it off and its `label`
+     * is used.
      */
     headlessLabel?: string
 }
@@ -880,10 +977,10 @@ export function createSettingsPanel(
      * Called with the row's id, its new value, and the LIST ITSELF.
      *
      * The list is handed back because some rows change what OTHER rows display:
-     * flipping `reasoning` to off means every `think:` row now runs at off, and
-     * a row's `currentValue` is a snapshot taken when the panel was built.
-     * Without a way to write the others back, the menu would show
-     * `reasoning off` beside rows still claiming `inherit`.
+     * flipping `profile` to off means every `step:` row now runs at off, and a
+     * row's `currentValue` is a snapshot taken when the panel was built. Without
+     * a way to write the others back, the menu would show `profile off` beside
+     * rows still claiming `inherit`.
      */
     onChange: (id: string, newValue: string, list: SettingsList) => void,
     onCancel: () => void
@@ -900,13 +997,13 @@ export function createSettingsPanel(
      * crosses a section boundary.
      */
     let submenuOpen = false
-    const settingItems: SettingItem[] = items.map(({submenuOptions, ...row}) =>
-        submenuOptions === undefined ? row : (
+    const settingItems: SettingItem[] = items.map(({pickerOptions, ...row}) =>
+        pickerOptions === undefined ? row : (
             {
                 ...row,
                 submenu: (currentValue, done) => {
                     submenuOpen = true
-                    return new OptionPicker(submenuOptions(), currentValue, theme, v => {
+                    return new PairPicker(pickerOptions(), currentValue, theme, v => {
                         submenuOpen = false
                         done(v)
                     })
@@ -927,7 +1024,7 @@ export function createSettingsPanel(
             items.map(
                 i =>
                     !isSectionRow(i)
-                    && ((i.values?.length ?? 0) > 0 || i.submenuOptions !== undefined)
+                    && ((i.values?.length ?? 0) > 0 || i.pickerOptions !== undefined)
             ),
             () => submenuOpen
         ),
@@ -963,13 +1060,7 @@ export function configRows(
     // The discovered rows carry a section like every other row — the per-tool
     // watchdog exemptions under `timeouts` (they are exemptions FROM that
     // timeout), and the per-extension toggles under their own heading.
-    return [
-        ...ITEMS,
-        ...modelItems(catalog),
-        ...reasoningItems(catalog),
-        ...toolItems(tools),
-        ...extensionItems(installed)
-    ]
+    return [...ITEMS, ...stepItems(catalog), ...toolItems(tools), ...extensionItems(installed)]
 }
 
 /** Render `rows` for the current config, grouped under their section headers. */
@@ -984,7 +1075,7 @@ export function renderRows(cfg: PiTaskConfig, rows: readonly ConfigItem[]): Pane
                 description: i.description,
                 currentValue: i.format(cfg),
                 values: i.values ?? ['on', 'off'],
-                ...(i.submenu === undefined ? {} : {submenuOptions: () => i.submenu!(cfg)}),
+                ...(i.picker === undefined ? {} : {pickerOptions: () => i.picker!(cfg)}),
                 ...(i.headlessLabel === undefined ? {} : {headlessLabel: i.headlessLabel})
             }))
         // An empty section prints no header. `extensions` has no fixed rows at
@@ -1011,7 +1102,7 @@ export function panelItems(
  *
  * A row's `currentValue` in the live list is a snapshot taken when the panel was
  * built, and rows describe each other: cycling `reasoning` to `off` changes what
- * every `think:` row runs at, and cycling one group row flips the mode, which
+ * every `step:` row runs at, and setting one step row flips the profile, which
  * changes all the others.
  *
  * This runs after ANY change, over EVERY row. Re-reading a `format` costs
@@ -1023,7 +1114,7 @@ export function syncRows(cfg: PiTaskConfig, rows: readonly ConfigItem[], list: S
 }
 
 /**
- * The model rows' offer list, read live when the menu opens.
+ * The step rows' model offer list, read live when the menu opens.
  *
  * `getAvailable()`, never `getAll()`: an unauthed model would spawn a child that
  * exits 1 on every phase of that group, and offering it would be offering a

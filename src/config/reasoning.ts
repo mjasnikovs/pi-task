@@ -164,14 +164,25 @@ export function thinkingArgs(setting: GroupSetting): string[] {
     return setting === 'inherit' ? [] : ['--thinking', setting]
 }
 
-/** One honest sentence per group, for the /task-config rows. */
-export const REASONING_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
+/**
+ * One honest sentence per step, for the merged /task-config rows.
+ *
+ * ONE table, not the model help and the reasoning help concatenated. The panel
+ * sizes every frame from its tallest description (`settingsBodyHeight`), so
+ * gluing two paragraphs together for `implementation` would permanently add
+ * about six rows to the whole menu — for a row most users never open.
+ *
+ * What survives the merge is the part that is not guessable: which children the
+ * step actually spawns, what was MEASURED about its thinking level, and the one
+ * cost that is paid per turn rather than per change.
+ */
+export const STEP_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
     research:
-        'The pi-worker subagent tool, and the fallback for any research worker below '
-        + 'whose own level is unset. Read-only exploration loops.',
+        'The pi-worker subagent tool, and the fallback for any research worker below. '
+        + 'Long read-only loops, where a cheap fast model pays off.',
     'research:files':
         'Research worker 1 of 4: maps which files the task will touch. Read-heavy. '
-        + 'Measured: the two arms tie, so it runs without thinking.',
+        + 'Measured: the two thinking arms tie, so it runs without.',
     'research:apis':
         'Research worker 2 of 4: the symbols and signatures the task must call. '
         + 'Read-heavy, docs- and search-capable.',
@@ -193,35 +204,7 @@ export const REASONING_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
         'The small no-tools children that pull one answer out of a fetched page or '
         + 'a docs chunk.',
     implementation:
-        'The main session turn that actually writes the code. Changing this briefly '
-        + "changes pi's own thinking level, and puts it back afterwards."
-}
-
-/**
- * One honest sentence per model row.
- *
- * They are NOT the reasoning help reworded. A model cell answers a different
- * question — which machine does this work — and one of them costs money every
- * turn rather than once per change, which is a thing the row has to say.
- */
-export const MODEL_GROUP_HELP: Readonly<Record<ChildGroup, string>> = {
-    research:
-        'The pi-worker subagent tool, and the fallback for any research worker below. '
-        + 'Long read-only loops: a cheap fast model pays off here.',
-    'research:files': 'Research worker 1 of 4: maps which files the task will touch.',
-    'research:apis': 'Research worker 2 of 4: the symbols and signatures the task must call.',
-    'research:context': 'Research worker 3 of 4: how the project is put together.',
-    'research:tooling': 'Research worker 4 of 4: the commands that build, test and run it.',
-    phase:
-        'Refining your request, generating and answering the clarifying questions, '
-        + 'writing the spec, and critiquing it.',
-    planning: "/task-auto's planners: splitting a design document into tasks.",
-    plan: "/task-plan's interactive question-and-answer children.",
-    gate: 'The checks that run after code is written: verify, enforce, lint-fix, autofix.',
-    extraction: 'The small no-tools children that pull one answer out of a page or a docs chunk.',
-    implementation:
-        'The main session turn that writes the code — YOUR session, switched for the turn and '
-        + 'switched back. Unlike every row above, this one is not free: a model switch re-bills '
-        + 'the whole prompt as a cache miss, twice per task. Leave it on inherit unless you '
-        + 'want a different model than the one you are reading this in.'
+        'The main session turn that writes the code — YOUR session, moved for the turn and '
+        + 'moved back. Unlike every step above, the model half here is not free: a switch '
+        + 're-bills the whole prompt as a cache miss, twice per task.'
 }

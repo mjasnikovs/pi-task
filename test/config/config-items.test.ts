@@ -104,7 +104,7 @@ describe('every DISCOVERED row obeys the same contract', () => {
 
     test('the discovered families are actually in there', () => {
         // Guards against a vacuous suite: every assertion below iterates `rows`.
-        for (const prefix of ['reason:', 'model:', 'tool:', 'ext:']) {
+        for (const prefix of ['step:', 'tool:', 'ext:']) {
             expect(
                 rows.some(r => r.id.startsWith(prefix)),
                 prefix
@@ -149,5 +149,55 @@ describe('every DISCOVERED row obeys the same contract', () => {
     test('every row belongs to a section the menu actually renders', () => {
         const shown = new Set(panelItems(fresh(), installed, tools).map(i => i.id))
         for (const item of rows) expect(shown, item.id).toContain(item.id)
+    })
+})
+
+describe('the step rows round-trip over a REAL cross product', () => {
+    /**
+     * The properties above run against `configRows`' default catalog, where the
+     * only offerable model is `inherit` — six values per step row. That never
+     * exercises the composite itself.
+     *
+     * Here the cross product is real: two models, one of which cannot reason, so
+     * `values` holds three different shapes and `apply` must write both halves
+     * atomically from a fresh config every time.
+     */
+    const catalog = {
+        specs: ['acme/small', 'acme/big'],
+        facts: (spec: string) =>
+            spec === 'acme/small' ? {reasoning: false}
+            : spec === 'acme/big' ? {reasoning: true}
+            : undefined
+    }
+    const rows = configRows([], [], catalog).filter(r => r.id.startsWith('step:'))
+
+    test('there are step rows to quantify over', () => {
+        expect(rows.length).toBeGreaterThan(0)
+        expect(rows.some(r => r.values!.some(v => v.endsWith('acme/small')))).toBe(true)
+    })
+
+    test('format(apply(cfg, v)) === v for every legal pair', () => {
+        for (const item of rows) {
+            for (const value of item.values!) {
+                const cfg = fresh()
+                item.apply(cfg, value)
+                expect(item.format(cfg), `${item.id} := ${value}`).toBe(value)
+            }
+        }
+    })
+
+    test('no two legal pairs render identically', () => {
+        for (const item of rows) {
+            expect(new Set(item.values).size, item.id).toBe(item.values!.length)
+        }
+    })
+
+    test('a pair the model cannot honour is not offered in the first place', () => {
+        // If it were, `apply` would clamp it and the round trip above would fail.
+        // That is the whole reason `values` is built from `offeredLevels`.
+        for (const item of rows) {
+            const forSmall = item.values!.filter(v => v.endsWith(' acme/small'))
+            expect(forSmall, item.id).toEqual(['inherit · acme/small', 'off · acme/small'])
+        }
     })
 })
