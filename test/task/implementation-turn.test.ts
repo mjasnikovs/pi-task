@@ -9,6 +9,7 @@ import {
     turnDepsFor,
     CONTINUE_AFTER_COMPACTION,
     MAX_COMPACTION_RESUMES,
+    GUARD_TERMINATED,
     type ImplementationTurnDeps,
     type SessionEntryLike,
     type SteerCtx,
@@ -148,6 +149,8 @@ interface Script {
     /** Answers to successive steer prompts. */
     answers?: Array<string | undefined>
     consume?: () => boolean
+    /** The runaway guard ended this turn. */
+    guardTerminated?: () => boolean
 }
 
 function fakeDeps(script: Script) {
@@ -172,7 +175,8 @@ function fakeDeps(script: Script) {
             asks++
             return Promise.resolve(answers.shift())
         },
-        watchdog: {consume: script.consume ?? (() => false), graceMs: 50, pollMs: 5}
+        watchdog: {consume: script.consume ?? (() => false), graceMs: 50, pollMs: 5},
+        consumeGuardTermination: script.guardTerminated ?? (() => false)
     }
     return {deps, sent, idles: () => idles, asks: () => asks}
 }
@@ -337,5 +341,25 @@ describe('superviseWith — the whole sequence', () => {
         })
         expect(f.sent).toEqual([])
         expect(f.asks()).toBe(0)
+    })
+})
+
+describe('a turn the runaway guard stopped', () => {
+    /**
+     * `terminate` lets the agent loop finish NORMALLY — the last assistant message
+     * keeps `stopReason: "toolUse"` (captured from a real guard-terminated run), so
+     * classifyTurnEnd reads `'stop'` and nothing else in the session says the work
+     * was cut off. Without this the caller verifies a half-done implementation and
+     * re-delivers to a model that deterministically re-thrashes.
+     */
+    test('is reported as an error, not a clean finish', async () => {
+        const f = fakeDeps({turns: [[assistantEntry('stop')]], guardTerminated: () => true})
+        const out = await superviseWith(f.deps)
+        expect(out.error).toBe(GUARD_TERMINATED)
+    })
+
+    test('a turn it did not stop still reports nothing', async () => {
+        const f = fakeDeps({turns: [[assistantEntry('stop')]], guardTerminated: () => false})
+        expect((await superviseWith(f.deps)).error).toBeUndefined()
     })
 })

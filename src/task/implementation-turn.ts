@@ -19,6 +19,7 @@
 import type {ExtensionCommandContext} from '@earendil-works/pi-coding-agent'
 import {SessionUI} from '../remote/bridge.js'
 import {consumeWatchdogAbort, WATCHDOG_CANCEL_MARKER} from './command-watchdog.js'
+import {consumeGuardTermination} from './implementation-guards.js'
 
 // ─── Turn-end classification ─────────────────────────────────────────────────
 
@@ -164,6 +165,8 @@ const STEER_WATCHDOG_DEFAULTS: SteerWatchdogDeps = {
 export interface ImplementationTurnDeps {
     /** The live session entries — the only thing the classifier reads. */
     entries: () => ReadonlyArray<SessionEntryLike>
+    /** Test seam over the module-level one-shot; the real reader is the default. */
+    consumeGuardTermination?: () => boolean
     /** Queue a follow-up user turn on the (idle) session. */
     send: (text: string) => Promise<void>
     /** Wait for the session to go idle again. */
@@ -251,6 +254,11 @@ export const CONTINUE_AFTER_COMPACTION =
  * lets the verify gate and `/task-auto-resume` catch any leftover incompleteness.
  */
 export const MAX_COMPACTION_RESUMES = 20
+
+/** How a guard-stopped turn is reported. Named so a caller can tell it from a
+ *  provider error: the fix is a different task, not a retry of this one. */
+export const GUARD_TERMINATED =
+    'the runaway guard stopped this turn: one tool call was repeated past every warning'
 
 /**
  * Resume an implementation turn that went idle at a threshold-compaction boundary.
@@ -379,6 +387,14 @@ export async function superviseWith(deps: ImplementationTurnDeps): Promise<Imple
     const interrupted = await steerUntilDone(deps)
     // A user-declined steer (interrupted) is its own paused path; otherwise
     // inspect how the turn actually ended.
-    const error = interrupted ? undefined : turnErrorMessage(deps.entries())
+    // The runaway guard ends a turn WITHOUT an error stopReason, so classifyTurnEnd
+    // reads `'stop'` and the caller would verify a half-done implementation and
+    // re-deliver to a model that deterministically re-thrashes. Consumed here
+    // because this is the one place that reports how the turn really ended.
+    const guardEnded = deps.consumeGuardTermination?.() ?? consumeGuardTermination()
+    const error =
+        interrupted ? undefined
+        : guardEnded ? GUARD_TERMINATED
+        : turnErrorMessage(deps.entries())
     return {interrupted, error, resumes}
 }

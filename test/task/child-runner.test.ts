@@ -274,8 +274,11 @@ describe('isConnectionError', () => {
             'invalid request: messages too long',
             'model not found',
             '401 unauthorized',
-            'rate limit exceeded',
-            'internal server error'
+            // Load classes moved OUT of this list — see PROVIDER_LOAD_RE. 53f0488's
+            // own message names only context overflow, bad request and auth as
+            // fail-fast; a throttle rode along in a list written for a local server.
+            'insufficient_quota',
+            '429 GoUsageLimitError'
         ]) {
             expect(isConnectionError(cause)).toBe(false)
         }
@@ -1598,6 +1601,26 @@ describe('guardKillError', () => {
             })
         ).toBeInstanceOf(CommandTimeoutError)
         expect(guardKillError('refine', {...clean, stalled: true})).toBeInstanceOf(BackendDownError)
+    })
+
+    /**
+     * The probe cannot tell "the backend is gone" from "the ONE endpoint I know
+     * about is gone": `discoverModelEndpoints` reads every provider in models.json,
+     * not the one this child's model uses, so a stopped local server condemns a run
+     * against a healthy cloud backend. A single verdict is therefore not enough —
+     * three failed probes cost ~15s, one wrong verdict costs the run.
+     */
+    test('a dead-backend verdict is only final once every attempt has produced it', () => {
+        const stalled = {...clean, stalled: true}
+        expect(guardKillError('refine', stalled, {finalAttempt: false})).toBeNull()
+        expect(guardKillError('refine', stalled, {finalAttempt: true})).toBeInstanceOf(
+            BackendDownError
+        )
+    })
+
+    test('a command kill is final on every attempt — the SPEC named it, not the model', () => {
+        const kill = {...clean, commandKill: {toolName: 'bash', timeoutMs: 30}}
+        expect(guardKillError('t', kill, {finalAttempt: false})).toBeInstanceOf(CommandTimeoutError)
     })
 
     test('an ordinary result is not a kill', () => {

@@ -122,6 +122,24 @@ export function terminalCallReason(): string {
 }
 
 /**
+ * One-shot: the guard ended a turn, and nothing in the session state says so.
+ *
+ * `terminate` lets the agent loop finish normally — the last assistant message
+ * keeps `stopReason: "toolUse"`, so `classifyTurnEnd` reads `'stop'` and the run
+ * reports a clean finish over work that was cut off mid-task. Verified against a
+ * live model: a real guard-terminated turn ends exactly that way. Same shape as
+ * `consumeWatchdogAbort`, and consumed for the same reason — one reader, then it
+ * is gone.
+ */
+let terminatedTurn = false
+
+export function consumeGuardTermination(): boolean {
+    const hit = terminatedTurn
+    terminatedTurn = false
+    return hit
+}
+
+/**
  * Inert until armed. Registering ANY `tool_call` handler switches on pi's
  * `beforeToolCall` for every call in the session, so the armed check comes first.
  */
@@ -142,7 +160,19 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
             const mutating = MUTATING_TOOLS.has(event.toolName)
             const hit = mutating ? state.edits.record(call) : state.loop.record(call)
             if (!hit) {
-                if (mutating) state.loop = freshDetector()
+                if (mutating) {
+                    state.loop = freshDetector()
+                    // Strikes go with the window. Keeping them made a LATER episode
+                    // terminate on its first hit, skipping both warnings, because an
+                    // earlier one had part-spent the budget. MEASURED over 494 real
+                    // turns: this loses no catch — the incident still ends at call
+                    // 173 of 6,760, both live-model loops still end — and drops one
+                    // termination of a turn that was editing between episodes.
+                    // A determined model is still bounded: three hits inside ONE
+                    // episode terminate, which is the runaway shape (it makes no
+                    // edits at all).
+                    state.strikes.clear()
+                }
                 return
             }
             const key = loopKey(call)
@@ -152,6 +182,7 @@ export function registerImplementationGuards(pi: ExtensionAPI): void {
             // next identical call.
             if (strikes > MAX_LOOP_RESTARTS) {
                 state.terminating = true
+                terminatedTurn = true
                 return {block: true, terminate: true, reason: terminalCallReason()}
             }
             return {block: true, reason: blockedCallReason(event.toolName, hit.count)}

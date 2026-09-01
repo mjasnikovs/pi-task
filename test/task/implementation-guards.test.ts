@@ -227,31 +227,42 @@ describe('termination', () => {
     })
 })
 
-describe('the strike budget is per TURN, not per episode', () => {
+describe('the strike budget follows the window', () => {
     /**
-     * A deliberate asymmetry, not an oversight: `state.loop` is reset by a mutating
-     * call, `state.strikes` is not. Decaying strikes on an edit would make the
-     * terminate path defeatable by one edit per episode — the wedge the sticky flag
-     * exists to close.
+     * A mutating call resets the loop window because it proves progress; the strike
+     * budget goes with it, or an earlier part-spent episode makes a LATER one
+     * terminate on its first hit with no warning at all.
      *
-     * MEASURED before deciding: 494 real turns from every session on this machine
-     * (14,113 tool calls) replayed through this guard. Six terminate; every one
-     * spends its three strikes inside a 2-12 call span — a single continuous
-     * episode. Turns that pool strikes across widely separated episodes, which is
-     * what this test constructs: ZERO.
+     * MEASURED over 494 real turns (14,113 calls) before changing it: no catch is
+     * lost. The recorded incident still terminates at call 173 of 6,760 — it makes
+     * ZERO edits, so nothing resets — and both live-model loops still terminate.
+     * One termination is dropped, of a turn that was editing between episodes.
      */
-    test('three separated episodes do spend the budget — the accepted cost', () => {
+    test('a later episode still gets its warnings', () => {
         const f = armed()
-        let last: Block | undefined
-        for (let episode = 0; episode < 3; episode++) {
-            for (let i = 0; i < LOOP_THRESHOLD; i++) last = f.emit('tool_call', bash('bun test'))
-            expect(last?.block).toBe(true)
-            for (let k = 0; k < 6; k++) {
-                f.emit('tool_call', edit(`/src/e${episode}.ts`, `v${k}`))
-                f.emit('tool_call', {toolName: 'read', input: {path: `/src/r${episode}${k}.ts`}})
-            }
+        let v: Block | undefined
+        // Episode A spends two strikes.
+        for (let i = 0; i < LOOP_THRESHOLD + 1; i++) v = f.emit('tool_call', bash('bun test'))
+        expect(v?.block).toBe(true)
+        expect(v?.terminate).toBeUndefined()
+        // Then unambiguous progress.
+        for (let k = 0; k < 30; k++) {
+            f.emit('tool_call', edit(`/src/f${k}.ts`, `a${k}`))
+            f.emit('tool_call', {toolName: 'read', input: {path: `/src/r${k}.ts`}})
         }
-        expect(last?.terminate).toBe(true)
+        // Episode B warns rather than ending the turn outright.
+        for (let i = 0; i < LOOP_THRESHOLD; i++) v = f.emit('tool_call', bash('bun test'))
+        expect(v?.block).toBe(true)
+        expect(v?.terminate).toBeUndefined()
+    })
+
+    test('a turn that never edits is still terminated — the runaway shape', () => {
+        const f = armed()
+        let v: Block | undefined
+        for (let i = 0; i < LOOP_THRESHOLD + MAX_LOOP_RESTARTS + 1; i++) {
+            v = f.emit('tool_call', bash('bun test'))
+        }
+        expect(v?.terminate).toBe(true)
     })
 })
 

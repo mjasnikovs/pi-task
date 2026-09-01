@@ -144,16 +144,29 @@ export class PhaseTimeoutError extends Error {
  * `code ?? 0`, and a signal gives null), so a path that tests the exit code
  * instead returns the truncated text as the phase's answer.
  */
-export function guardKillError(name: string, r: PhaseRunResult): Error | null {
+export function guardKillError(
+    name: string,
+    r: PhaseRunResult,
+    opts: {finalAttempt?: boolean} = {}
+): Error | null {
     if (r.commandKill) return new CommandTimeoutError(name, r.commandKill)
-    if (r.stalled) return new BackendDownError(name)
+    // A dead-backend verdict is only trusted once every attempt has produced it.
+    // `discoverModelEndpoints` reads EVERY provider in models.json, not the one
+    // this child's model uses, so a stopped local server can condemn a run against
+    // a healthy cloud backend. The asymmetry settles it: a backend that really is
+    // down costs three 5s probes, a wrong verdict costs the whole run.
+    if (r.stalled) return opts.finalAttempt === false ? null : new BackendDownError(name)
     return null
 }
 
 /**
- * The dead-backend probe killed a phase child. NOT restartable — `worker-kill.ts`
- * records `stalled` that way, and re-spawning against a backend that answered no
- * probe buys three identical deaths.
+ * The dead-backend probe killed a phase child on its LAST attempt.
+ *
+ * Reaching this means every attempt found no endpoint answering, not one. The
+ * single-probe verdict is not trusted on its own: `discoverModelEndpoints` reads
+ * every provider in models.json rather than the one this child's model uses, so a
+ * stopped local server can condemn a run against a healthy cloud backend. Three
+ * failed probes cost ~15s; one wrong verdict costs the run.
  */
 export class BackendDownError extends Error {
     constructor(readonly childName: string) {
@@ -240,8 +253,34 @@ export function isFatalChildCause(e: unknown): boolean {
 const CONNECTION_ERROR_RE =
     /\b(?:connection error|connection (?:lost|closed|reset|refused|aborted)|econnreset|econnrefused|econnaborted|epipe|etimedout|enetunreach|enetdown|eai_again|socket hang up|socket connection was closed|fetch failed|network (?:error|timeout)|premature close|terminated|unreachable|getaddrinfo|enotfound|upstream.?connect|reset before headers|timed? out|ended without|stream ended before message_stop|websocket.?(?:closed|error))\b/i
 
+/**
+ * Provider LOAD, which is transient in a different way: the server is up and
+ * saying "not now". pi retries all of these; 53f0488 did not, but its own message
+ * names only "context overflow, bad request, auth" as the fail-fast set — a
+ * throttle was never argued for, it just rode along in a list written for a LOCAL
+ * server, where none of these can occur.
+ *
+ * Words carry no trailing \b (`overloaded_error` joins on `_`, which is a word
+ * character); the bare status codes carry one, or `500` matches inside `15000`.
+ */
+const PROVIDER_LOAD_RE =
+    /(?:overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|internal.?error|provider.?returned.?error)|\b(?:429|500|502|503|504|524)\b/i
+
+/**
+ * Account facts, not liveness: a budget does not refill on a retry. Checked FIRST,
+ * because these arrive worded as a throttle — `429 GoUsageLimitError` is a
+ * subscription limit, not a queue.
+ */
+const NON_RETRYABLE_RE =
+    /\b(?:insufficient_quota|quota exceeded|out of budget|billing|usage limit reached|available balance|GoUsageLimitError|FreeUsageLimitError)\b/i
+
+/**
+ * Retry budget is three attempts at 500ms/1s/2s — three requests over 3.5s, which
+ * is not a storm even against a throttle. pi's own ladder is three at 2s/4s/8s.
+ */
 export function isConnectionError(cause: string): boolean {
-    return CONNECTION_ERROR_RE.test(cause)
+    if (NON_RETRYABLE_RE.test(cause)) return false
+    return CONNECTION_ERROR_RE.test(cause) || PROVIDER_LOAD_RE.test(cause)
 }
 
 /** Exponential backoff before a connection-error retry: 500ms, 1s, 2s, …, so a
@@ -919,9 +958,17 @@ export async function runPhaseChild(
             })
             continue
         }
-        // Not restartable, so it ends the phase here rather than spending a strike.
-        const killed = guardKillError(name, r)
+        // A dead-backend kill spends a strike like the others; guardKillError says
+        // when the verdict has been earned.
+        const killed = guardKillError(name, r, {finalAttempt: attempt === MAX_LEAK_RETRIES})
         if (killed) throw killed
+        if (r.stalled) {
+            deps.logDebug?.(
+                `${name}: no output for the stall window and no endpoint answered — `
+                    + `${verb} ${attempt + 1}/${MAX_LEAK_RETRIES}`
+            )
+            continue
+        }
         if (clock.timedOut()) {
             if (attempt === MAX_LEAK_RETRIES) {
                 throw new PhaseTimeoutError(name, budgetMs, MAX_LEAK_RETRIES + 1)
